@@ -1,0 +1,611 @@
+from dataclasses import dataclass
+from enum import Enum
+import typing
+from typing import Any, Final, Generic, Iterable, Mapping, MutableSequence, Optional, Sequence, Tuple, TypeVar, Union
+
+from fltk import dchelpers
+from fltk.iir.typemodel import ParamType, Type as Type, TYPE as TYPE
+from fltk.iir.typemodel import Argument as TypeArgument
+from fltk.iir.typemodel import TypeKey as TypeKey
+from fltk.iir.py import reg as pyreg
+
+_T = TypeVar("_T")
+
+# "Built-in" types
+#
+
+Void: Final = Type.make(cname='Void')
+pyreg.register_type(pyreg.TypeInfo(typ=Void, module=pyreg.Builtins, name="None"))
+
+Auto: Final = Type.make(cname='Auto')
+
+
+@dataclass
+class PrimitiveType(Type):
+    pass
+
+
+UInt64: Final = PrimitiveType.make(cname="uint64")
+pyreg.register_type(pyreg.TypeInfo(typ=UInt64, module=pyreg.Builtins, name="int"))
+
+Bool: Final = PrimitiveType.make(cname="bool")
+pyreg.register_type(pyreg.TypeInfo(typ=Bool, module=pyreg.Builtins, name="bool"))
+
+Maybe: Final = Type.make(cname="Maybe", params=dict(value_type=TYPE))
+
+GenericImmutableSequence: Final = Type.make(cname="ImmutableSequence", params=dict(value_type=TYPE))
+GenericMutableSequence: Final = Type.make(cname="MutableSequence", params=dict(value_type=TYPE))
+
+#
+# Expression/Statement base classes
+#
+
+
+class Expr:
+    @property
+    def fld(self) -> "FieldLookupProxy":
+        return FieldLookupProxy(self, mutable=False)
+
+    @property
+    def mut_fld(self) -> "FieldLookupProxy":
+        return FieldLookupProxy(self, mutable=True)
+
+    @property
+    def method(self) -> "MethodLookupProxy":
+        return MethodLookupProxy(self)
+
+
+@dataclass
+class Statement:
+    parent_block: Optional["Block"]
+
+
+#
+# Scopes and blocks
+#
+
+Nameable = Any  # placeholder until I constrain this more
+
+
+class Scope:
+    def __init__(self, parent: Optional["Scope"] = None) -> None:
+        self.parent = parent
+        self.identifiers: dict[str, Nameable] = {}
+
+    def define(self, name: str, entity: Nameable) -> None:
+        if name in self.identifiers:
+            raise ValueError(f"Attempt to redefine identifier {name} from {self.identifiers[name]} to {entity}")
+        self.identifiers[name] = entity
+
+    def lookup(self, name: str, recursive: bool = True) -> Optional[Nameable]:
+        try:
+            return self.identifiers[name]
+        except KeyError:
+            pass
+        if recursive and self.parent is not None:
+            return self.parent.lookup(name)
+        return None
+
+    def lookup_as(self, name: str, typ: type[_T], recursive: bool = True) -> _T:
+        result = self.lookup(name=name, recursive=recursive)
+        if result is None or not isinstance(result, typ):
+            raise ValueError(f"Expected {typ} but got {result}")
+        return result
+
+
+@dataclass
+class Block(Statement):
+    inner_scope: Optional[Scope]
+    body: MutableSequence[Statement]
+
+    def get_leaf_scope(self) -> Scope:
+        """Retrieve the innermost scope that applies to this block.
+
+        If this block does not have its own inner scope, this will be a scope belonging to an ancestor block.
+
+        Preconditions:
+            A scope must apply to this block directly or in the ancestor chain.
+
+        Raises:
+            ValueError: If there is no applicable scope.
+
+        Returns: The innermost applicable scope.
+        """
+        if self.inner_scope is not None:
+            return self.inner_scope
+        if self.parent_block is not None:
+            return self.parent_block.get_leaf_scope()
+        raise ValueError("No scope associated with block.")
+
+    def var(
+        self,
+        name: str,
+        typ: Type,
+        ref_type: "RefType",
+        mutable: bool = False,
+        init: Optional[Expr] = None
+    ) -> "Var":
+        result = Var(name=name, typ=typ, ref_type=ref_type, mutable=mutable)
+        self.get_leaf_scope().define(name, result)
+        self.body.append(VarDef(var=result, parent_block=self, init=init))
+        return result
+
+    def assign(self, target: "Store", expr: Expr) -> "AssignStatement":
+        result = AssignStatement(parent_block=self, target=target, expr=expr)
+        self.body.append(result)
+        return result
+
+    def expr_stmt(self, expr: Expr) -> "ExprStatement":
+        result = ExprStatement(parent_block=self, expr=expr)
+        self.body.append(result)
+        return result
+
+    def if_(self, condition: Expr) -> "If":
+        result = If(
+            parent_block=self,
+            condition=condition,
+            block=Block(parent_block=self,
+                        body=[],
+                        inner_scope=Scope(parent=self.get_leaf_scope())),
+            orelse=None
+        )
+        self.body.append(result)
+        return result
+
+    def while_(self, condition: Expr) -> "WhileLoop":
+        result = WhileLoop(
+            parent_block=self,
+            condition=condition,
+            block=Block(parent_block=self,
+                        body=[],
+                        inner_scope=Scope(parent=self.get_leaf_scope()))
+        )
+        self.body.append(result)
+        return result
+
+    def return_(self, expr: Expr) -> "Return":
+        self.body.append(ret := Return(expr=expr, parent_block=self))
+        return ret
+
+
+_ModuleSubclass = TypeVar("_ModuleSubclass", bound="Module")
+
+
+@dataclass
+class Module():
+    name: str
+    scope: Scope
+    block: Block
+
+    @classmethod
+    def make(cls: type[_ModuleSubclass], name: str) -> _ModuleSubclass:
+        scope = Scope()
+        block = Block(parent_block=None, inner_scope=scope, body=[])
+        return cls(name=name, scope=scope, block=block)
+
+    def class_def(self, klass: "ClassType") -> "ClassDef":
+        result = ClassDef(parent_block=self.block, klass=klass)
+        if klass.cname is None:
+            raise ValueError(f"Module-level class definitions cannot be anonymous: {klass}")
+        self.scope.define(klass.cname, klass)
+        self.block.body.append(result)
+        return result
+
+
+#
+# Variables and variable load/store/move
+#
+
+
+class RefType(Enum):
+    VALUE = 0
+    BORROW = 1
+    MUT_BORROW = 2
+    OWNING = 3
+    SHARED = 4
+    SELF = 5
+
+
+@dataclass
+class Var:
+    name: str
+    typ: Type
+    ref_type: RefType
+    mutable: bool
+
+    def load(self) -> "Load":
+        return Load(self, mutable=False)
+
+    def load_mut(self) -> "Load":
+        assert self.mutable
+        return Load(self, mutable=True)
+
+    def store(self) -> "Store":
+        return Store(self)
+
+    def move(self) -> "Move":
+        return Move(self)
+
+
+@dataclass
+class VarDef(Statement):
+    var: Var
+    init: Optional[Expr] = None
+
+
+@dataclass
+class Load(Expr):
+    var: Var
+    mutable: bool
+
+
+@dataclass
+class Move(Expr):
+    var: Var
+
+
+@dataclass
+class Store(Expr):
+    var: Var
+
+
+@dataclass
+class Construct(Expr):
+    typ: Type
+    args: Mapping[str, Any]
+
+    @classmethod
+    def make(cls: type["Construct"], typ: Type, **args: Any) -> "Construct":
+        return cls(typ=typ, args=args)
+
+
+@dataclass
+class IsEmpty(Expr):
+    var: Var
+
+
+class SelfExpr(Expr):
+    pass
+
+
+@dataclass
+class Success(Expr):
+    result_type: Type
+    expr: Expr
+
+
+@dataclass
+class Failure(Expr):
+    result_type: Type
+
+
+@dataclass
+class Constant(Expr, Generic[_T]):
+    typ: Type
+    val: _T
+
+
+TrueBool: Final = Constant(typ=Bool, val=True)
+FalseBool: Final = Constant(typ=Bool, val=False)
+
+
+@dataclass(frozen=True, eq=True, slots=True)
+class LiteralString(Expr):
+    value: str
+
+
+@dataclass(frozen=True, eq=True, slots=True)
+class LiteralInt(Expr):
+    typ: Type
+    value: int
+
+
+#
+# Class member access
+#
+
+
+@dataclass
+class MemberAccess:
+    member_name: str
+    bound_to: Expr
+
+
+@dataclass
+class MethodAccess(MemberAccess):
+    def call(self, *args: Expr, **kwargs: Expr) -> "MethodCall":
+        return MethodCall(self, args=args, kwargs=kwargs)
+
+
+@dataclass
+class MethodCall(Expr):
+    bound_method: MethodAccess
+    args: Sequence[Expr]
+    kwargs: Mapping[str, Expr]
+
+
+@dataclass
+class Field(Var):
+    in_class: "ClassType"
+
+
+@dataclass
+class FieldAccess(MemberAccess, Var):
+    pass
+
+
+#
+# Functions/Methods
+#
+
+
+@dataclass
+class Param(Var):
+    pass
+
+
+@dataclass
+class Function:
+    name: Optional[str]
+    params: Sequence[Param]
+    return_type: Type
+    block: Block
+    doc: Optional[str]
+
+    def __post_init__(self) -> None:
+        assert self.block.inner_scope is not None
+        for param in self.params:
+            self.block.inner_scope.define(param.name, param)
+
+    def get_param(self, name: str) -> Param:
+        assert self.block.inner_scope is not None
+        result = self.block.inner_scope.lookup(name)
+        assert isinstance(result, Param)
+        assert result in self.params
+        return result
+
+
+@dataclass
+class Method(Function):
+    in_class: "ClassType"
+    mutable_self: bool
+    self_expr: SelfExpr
+
+
+#
+# Classes
+#
+
+_ClassTypeSubclass = TypeVar("_ClassTypeSubclass", bound="ClassType")
+
+
+@dataclass(kw_only=True)
+class ClassType(Type):
+
+    defined_in: Module
+    block: Block
+    doc: Optional[str]
+    base_classes: Sequence[Type]
+    constructor: Optional["Constructor"]
+
+    @classmethod
+    def make(  # type: ignore[override]
+        cls: type[_ClassTypeSubclass],
+        *,
+        cname: Optional[str] = None,
+        params: Optional[Mapping[str,
+                                 ParamType]] = None,
+        instantiates: Optional["Type"] = None,
+        arguments: Optional[Mapping[str,
+                                    TypeArgument]] = None,
+        defined_in: Module,
+        doc: Optional[str] = None,
+        outer_scope: Optional[Scope] = None
+    ) -> _ClassTypeSubclass:
+        scope = Scope(parent=outer_scope)
+        block = Block(parent_block=None, body=[], inner_scope=scope)
+        return cls(
+            cname=cname,
+            instantiates=None,
+            arguments=(arguments if arguments is not None else dict()),
+            params=(params if params is not None else dict()),
+            block=block,
+            base_classes=(),
+            constructor=None,
+            defined_in=defined_in,
+            doc=doc
+        )
+
+    def get_attr(self, name: str) -> Union[Field, Method]:
+        result = self.block.get_leaf_scope().lookup(name, recursive=False)
+        if not isinstance(result, (Field, Method)):
+            raise ValueError(f"Class contains invalid member type {name} = {result}")
+        return result
+
+    def get_field(self, name: str) -> Field:
+        result = self.block.get_leaf_scope().lookup(name, recursive=False)
+        if not isinstance(result, Field):
+            raise ValueError(f"Expected field at {name} but got {result}")
+        return result
+
+    def get_method(self, name: str) -> Method:
+        result = self.block.get_leaf_scope().lookup(name, recursive=False)
+        if not isinstance(result, Method):
+            raise ValueError(f"Expected method at {name} but got {result}")
+        return result
+
+    def get_fields(self) -> Iterable[Field]:
+        for attr in self.block.get_leaf_scope().identifiers.values():
+            if isinstance(attr, Field):
+                yield attr
+        return
+
+    def get_methods(self) -> Iterable[Method]:
+        for attr in self.block.get_leaf_scope().identifiers.values():
+            if isinstance(attr, Method):
+                yield attr
+        return
+
+    def def_field(self, name: str, *, typ: Type, ref_type: RefType = RefType.VALUE, mutable: bool = False) -> Field:
+        fld = Field(name=name, in_class=self, typ=typ, ref_type=ref_type, mutable=mutable)
+        self.block.get_leaf_scope().define(name, fld)
+        return fld
+
+    def def_constructor(
+        self,
+        *,
+        params: Iterable[Param],
+        doc: Optional[str] = None,
+        init_list: Iterable[Tuple[Field,
+                                  "InitListExpr"]] = ()
+    ) -> "Constructor":
+        if self.constructor is not None:
+            raise AssertionError(f"Constructor already defined for class {self.cname}")
+        self.constructor = Constructor(
+            in_class=self,
+            doc=doc,
+            params=list(params),
+            init_list=list(init_list),
+            mutable_self=True
+        )
+        return self.constructor
+
+    def def_method(
+        self,
+        name: str,
+        *,
+        params: Iterable[Param],
+        return_type: Type,
+        doc: Optional[str] = None,
+        mutable_self: bool = False,
+        using_self: Optional[SelfExpr] = None
+    ) -> Method:
+        method = Method(
+            name=name,
+            in_class=self,
+            params=list(params),
+            return_type=return_type,
+            doc=doc,
+            mutable_self=mutable_self,
+            block=Block(parent_block=self.block,
+                        inner_scope=Scope(parent=self.block.inner_scope),
+                        body=[]),
+            self_expr=using_self or SelfExpr(),
+        )
+        self.block.get_leaf_scope().define(name, method)
+        return method
+
+
+@dataclass
+class ClassDef(Statement):
+    klass: ClassType
+
+
+class FieldLookupProxy:
+    def __init__(self, bind_to: Expr, mutable: bool) -> None:
+        self.bind_to = bind_to
+        self.mutable = mutable
+
+    def __getattr__(self, name: str) -> FieldAccess:
+        return FieldAccess(
+            member_name=name,
+            bound_to=self.bind_to,
+            name=f"bound field {name}",
+            typ=Auto,
+            ref_type=RefType.BORROW,
+            mutable=self.mutable
+        )
+
+    __getitem__ = __getattr__
+
+
+class MethodLookupProxy:
+    def __init__(self, bind_to: Expr) -> None:
+        self.bind_to = bind_to
+
+    def __getattr__(self, name: str) -> MethodAccess:
+        return MethodAccess(name, self.bind_to)
+
+    __getitem__ = __getattr__
+
+
+class InitFromParamType():
+    pass
+
+
+INIT_FROM_PARAM: Final = InitFromParamType()
+
+InitListExpr = Union[Expr, InitFromParamType]
+
+
+class Constructor(Method):
+    def __init__(self, *, init_list: Iterable[Tuple[Field, InitListExpr]], **kws: Any):
+        super().__init__(**kws)
+        self.init_list = list(init_list)
+
+
+#
+# Statements
+#
+
+
+@dataclass
+class If(Statement):
+    condition: Expr
+    block: Block
+    orelse: Optional[Union["If", Block]]
+
+
+@dataclass
+class WhileLoop(Statement):
+    condition: Expr
+    block: Block
+
+
+@dataclass
+class AssignStatement(Statement):
+    target: Store
+    expr: Expr
+
+
+@dataclass
+class Return(Statement):
+    expr: Expr
+
+
+@dataclass
+class ExprStatement(Statement):
+    expr: Expr
+
+
+#
+# Operators
+#
+
+
+@dataclass
+class BinOp(Expr):
+    lhs: Expr
+    rhs: Expr
+    op: str
+
+
+@dataclass
+class GreaterThan(BinOp):
+    op: str = ">"
+
+
+@dataclass
+class Subtract(BinOp):
+    op: str = "-"
+
+
+#
+# Other expressions
+#
+
+
+@dataclass
+class CheckAndExtractResult(Expr):
+    result: Expr
+    var: Var

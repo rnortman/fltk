@@ -1,0 +1,35 @@
+grammar := (rules:rule | vars:var)+;
+
+# class Grammar:
+#     class Label(Enum):
+#         rules
+# 	vars
+#     Child = Union[Rule, Var]
+#     children: Tuple[Child, ...]
+#     labels: Tuple[Optional[Label], ...]
+#     def labeled_children(self) -> Iterable[Tuple[Optional[Label], Child]]: ...
+#     def label_rules(self) -> Iterable[Rule]: ...
+#     def label_vars(self) -> Iterable[Var]: ...
+#     def type_rule(self) -> Iterable[Rule]: ...
+#     def type_var(self) -> Iterable[Var]: ...
+
+rule := name:identifier , ("(" , options:rule_options , ")")? , ":=" , !alternatives , ";" ,;
+
+# class Rule:
+#     Child = Union[Identifier, WS, TOKEN, RuleOptions, Sequence]
+#     children: Tuple[Child, ...]
+#     labels: ...
+#     _idx_name: int
+#     def label_name(self) -> Identifier: ...
+#     def label_options(self) -> Optional[RuleOptions]: ...
+#     def label_alternatives(self) -> Iterable[Sequence]: ...
+
+alternatives := alternatives:sequence , ("|" , alternatives:sequence)* ;
+sequence := items:item? , (sep:(concat_no_ws:"." | concat:",") , items:item)* ,;
+item := (label:identifier . ":")? . disposition? . term . quantifier? ,;
+term := invocation | identifier | literal | "/" . regex:raw_string . "/" | "(" , !alternatives , ")";
+disposition := suppress:"%" | include:"$" | inline:"!"
+quantifier := optional:"?" | one_or_more:"+" | zero_or_more:"*";
+invocation := method:identifier . "(" , expression? , ")";
+expression := add:(lhs:expression , '+' , rhs:expression) | invocation | identifier
+var := "let" , identifier , ":" , "Stack" , "[" , "String" , "]" , (":=", init_value:literal)? , ";";

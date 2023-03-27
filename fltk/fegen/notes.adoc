@@ -1,0 +1,4 @@
+A grammar produces a Parser class.
+A rule produces a method and a node class
+A rule method calls methods for each alternative
+An alternative produces a method (and a node class?)
