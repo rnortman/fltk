@@ -2,3 +2,18 @@ A grammar produces a Parser class.
 A rule produces a method and a node class
 A rule method calls methods for each alternative
 An alternative produces a method (and a node class?)
+
+
+== CST Data Model
+
+The Parser directly produces a CST (Concrete Syntax Tree) where each node in the tree has a span to the source text.
+Some syntax elements may be suppressed depending on the grammar options (e.g., whitespace and some literals) so there may be gaps between the spans of sibling nodes.
+
+Nodes are expected to keep references only to their children, not to their parent nor siblings.
+This eliminates potential problems of cyclic references and even makes it possible to eliminate shared and weak references, at some cost of ease of navigation.
+Generally when traversing the tree you'll want a reference to both the "current" node and its parent so that you can traverse to siblings.
+
+One node class is generated per named rule in the grammar.
+When there are sub-expressions, we will generate separate sub-expression parsing functions, but they will use the node class of their containing rule to hold their results.
+
+Each node class has a limited number of potential child node types and has methods for finding children by label, which then return only the specific child type(s) associated with that label to avoid requiring users to do a lot of runtime casting.

@@ -1,58 +1,58 @@
 """Grammar Semantic Model (GSM) for fltk.fegen"""
 
 from abc import ABC, abstractmethod
-from collections import abc
 import dataclasses
 from enum import Enum
-from typing import Final, Optional, Sequence, Union
+from typing import Final, Mapping, Optional, Sequence, Union
 
 
 @dataclasses.dataclass(frozen=True, slots=True)
 class Grammar:
     rules: Sequence["Rule"]
     vars: Sequence["Var"]
-    identifiers: abc.Mapping[str, Union["Rule", "Var"]]
+    identifiers: Mapping[str, Union["Rule", "Var"]]
 
 
 @dataclasses.dataclass(frozen=True, slots=True)
 class Rule:
     name: str
     alternatives: Sequence["Items"]
-    labels: abc.Mapping[str, Sequence[int]]  # Mapping from label to indices of alternatives with that label
 
 
 @dataclasses.dataclass(frozen=True, slots=True)
 class Items:
     items: Sequence["Item"]
-    labels: abc.Mapping[str, int]  # Mapping from label to index of that item in items
+    ws_after: Sequence[bool]
 
 
 @dataclasses.dataclass(frozen=True, slots=True)
 class Item:
     label: Optional[str]
-    disposition: Optional["Disposition"]
+    disposition: "Disposition"
     term: "Term"
     quantifier: "Quantifier"
 
 
-# class TermType:
-#     class Regex(RawString):
-#         pass
-
-
+@dataclasses.dataclass(frozen=True, eq=True, slots=True)
 class Identifier:
-    pass
+    value: str
 
 
 @dataclasses.dataclass(frozen=True, eq=True, slots=True)
 class Literal:
     value: str
 
+
+@dataclasses.dataclass(frozen=True, eq=True, slots=True)
+class Regex:
+    value: str
+
+
 Term = Union[
     "Invocation",
-    Identifier,                 # This must be a rule name
+    Identifier,  # This must be a rule name
     Literal,
-    # TermType.Regex,
+    Regex,
     Sequence[Items],
 ]
 
@@ -77,6 +77,15 @@ class Quantifier(ABC):
     @abstractmethod
     def max(self) -> Arity:
         ...
+
+    def is_optional(self) -> bool:
+        return self.min() == Arity.ZERO
+
+    def is_required(self) -> bool:
+        return not self.is_optional()
+
+    def is_multiple(self) -> bool:
+        return self.max() == Arity.MULTIPLE
 
 
 class Required(Quantifier):

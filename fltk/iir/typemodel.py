@@ -40,7 +40,13 @@ _TypeSubclass = typing.TypeVar("_TypeSubclass", bound="Type")
 
 
 def _freeze_args(args: Mapping[str, Argument]) -> tuple[tuple[str, KeyArgument], ...]:
-    return tuple((name, arg.key if isinstance(arg, Type) else arg) for name, arg in args.items())
+    return tuple(
+        (name, arg.key if isinstance(arg, Type) else arg) for name, arg in args.items()
+    )
+
+
+def lookup_type(type_key: TypeKey) -> "Type":
+    return _type_registry[type_key]
 
 
 @dataclass(kw_only=True)
@@ -56,38 +62,39 @@ class Type:
         cls: typing.Type[_TypeSubclass],
         *,
         cname: Optional[str] = None,
-        params: Optional[Mapping[str,
-                                 ParamType]] = None,
+        params: Optional[Mapping[str, ParamType]] = None,
         instantiates: Optional["Type"] = None,
-        arguments: Optional[Mapping[str,
-                                    Argument]] = None
+        arguments: Optional[Mapping[str, Argument]] = None,
     ) -> _TypeSubclass:
         return cls(
             cname=cname,
             params=(params if params is not None else dict()),
             instantiates=instantiates,
-            arguments=(arguments if arguments is not None else dict())
+            arguments=(arguments if arguments is not None else dict()),
         )
 
     def __post_init__(self) -> None:
         self.key = TypeKey(
             cname=self.cname,
-            params=tuple((name,
-                          typ) for name,
-                         typ in self.params.items()),
+            params=tuple((name, typ) for name, typ in self.params.items()),
             instantiates=self.instantiates.key if self.instantiates else None,
             arguments=_freeze_args(self.arguments),
         )
         if self.key in _type_registry:
-            raise KeyError(f"Type with key {self.key} already registered")
+            # raise KeyError(f"Type with key {self.key} already registered")
+            pass
         _type_registry[self.key] = self
 
     def instantiate(self, **arguments: Argument) -> "Type":
         for name in arguments:
             if name not in self.params:
                 raise KeyError(f"Param {name} is not present in type {self}")
-        free_params = {name: param for name, param in self.params.items() if name not in arguments}
-        return Type(cname=self.cname, params=free_params, instantiates=self, arguments=arguments)
+        free_params = {
+            name: param for name, param in self.params.items() if name not in arguments
+        }
+        return Type(
+            cname=self.cname, params=free_params, instantiates=self, arguments=arguments
+        )
 
     def root_type(self) -> "Type":
         if self.instantiates is None:
