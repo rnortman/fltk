@@ -1,7 +1,21 @@
 from abc import abstractmethod
 from dataclasses import dataclass
 import logging
-from typing import cast, Callable, Dict, Final, Generic, List, MutableMapping, Optional, Protocol, Set, Tuple, TypeVar, Union
+from typing import (
+    cast,
+    Callable,
+    Dict,
+    Final,
+    Generic,
+    List,
+    MutableMapping,
+    Optional,
+    Protocol,
+    Set,
+    Tuple,
+    TypeVar,
+    Union,
+)
 
 LOG: Final = logging.getLogger(__name__)
 
@@ -75,25 +89,17 @@ class Packrat(Generic[RuleId, PosType]):
 
     def apply(
         self,
-        rule_callable: RuleCallable[PosType,
-                                    ResultType],
+        rule_callable: RuleCallable[PosType, ResultType],
         rule_id: RuleId,
-        rule_cache: CacheType[PosType,
-                              RuleId,
-                              ResultType],
-        pos: PosType
-    ) -> Optional[ApplyResult[PosType,
-                              ResultType]]:
-        """Apply a parser rule with memoization and left-recursion support.
-        """
+        rule_cache: CacheType[PosType, RuleId, ResultType],
+        pos: PosType,
+    ) -> Optional[ApplyResult[PosType, ResultType]]:
+        """Apply a parser rule with memoization and left-recursion support."""
         LOG.debug("apply_rule %d at %s", rule_id, pos)
         start_pos = pos
-        memo: Optional[MemoEntry[RuleId,
-                                 PosType,
-                                 ResultType]] = self._recall(rule_callable,
-                                                             rule_id,
-                                                             rule_cache,
-                                                             start_pos)
+        memo: Optional[MemoEntry[RuleId, PosType, ResultType]] = self._recall(
+            rule_callable, rule_id, rule_cache, start_pos
+        )
         LOG.debug("apply_rule memo %s", memo)
         if memo is not None:
             if isinstance(memo.result, Poison):
@@ -108,7 +114,11 @@ class Packrat(Generic[RuleId, PosType]):
                 return None
             # Nominal case: Use cached result and pos
             LOG.debug("apply_rule %d result %s", rule_id, memo)
-            return ApplyResult(memo.final_pos, memo.result) if memo.result is not None else None
+            return (
+                ApplyResult(memo.final_pos, memo.result)
+                if memo.result is not None
+                else None
+            )
 
         # No cache yet; poison the cache and run the parser function
         poison: Poison[RuleId] = Poison(recursion_info=None)
@@ -151,22 +161,19 @@ class Packrat(Generic[RuleId, PosType]):
             return None
 
         LOG.debug("apply_rule %d poison %s", rule_id, poison)
-        grow_result = self._grow_seed(rule_callable, start_pos, memo, poison.recursion_info)
+        grow_result = self._grow_seed(
+            rule_callable, start_pos, memo, poison.recursion_info
+        )
         LOG.debug("apply_rule %d memo %s poison %s", rule_id, memo, poison)
         return grow_result
 
     def _recall(
         self,
-        rule_callable: RuleCallable[PosType,
-                                    ResultType],
+        rule_callable: RuleCallable[PosType, ResultType],
         rule_id: RuleId,
-        rule_cache: CacheType[PosType,
-                              RuleId,
-                              ResultType],
-        start_pos: PosType
-    ) -> Optional[MemoEntry[RuleId,
-                            PosType,
-                            ResultType]]:
+        rule_cache: CacheType[PosType, RuleId, ResultType],
+        start_pos: PosType,
+    ) -> Optional[MemoEntry[RuleId, PosType, ResultType]]:
         """Retrieve cache entries with seed-growing support.
 
         In the nominal case (no growth cycle in progress), this just returns a cache entry if one exists, or else None.
@@ -183,12 +190,18 @@ class Packrat(Generic[RuleId, PosType]):
             # Nominal case
             return memo
 
-        if memo is None and rule_id is not recursion.rule_id and rule_id not in recursion.involved:
+        if (
+            memo is None
+            and rule_id is not recursion.rule_id
+            and rule_id not in recursion.involved
+        ):
             # This case is part of the paper but I don't understand why and I'm unable to create a test case
             # that exercises this code path.  It's better to fail than to execute untested, poorly understood code.
             #
             # FWIW, the paper's algorithm would return a failure MemoEntry here (with result=None).
-            raise NotImplementedError("Untested corner case; see source code for more information.")  # pragma: nocover
+            raise NotImplementedError(
+                "Untested corner case; see source code for more information."
+            )  # pragma: nocover
 
         # A growth cycle is active and the original recursion involves this rule; therefore we know there must be a
         # cache entry.
@@ -215,7 +228,9 @@ class Packrat(Generic[RuleId, PosType]):
         """
         LOG.debug("setup_recursion %d poison %s", rule_id, poison)
         assert poison.recursion_info is None
-        poison.recursion_info = RecursionInfo(rule_id=rule_id, involved=set(), eval_set=set())
+        poison.recursion_info = RecursionInfo(
+            rule_id=rule_id, involved=set(), eval_set=set()
+        )
         LOG.debug("setup_recursion %d poison %s", rule_id, poison)
         LOG.debug("setup_recursion stack %s", self.invocation_stack)
         assert self.invocation_stack
@@ -229,15 +244,11 @@ class Packrat(Generic[RuleId, PosType]):
 
     def _grow_seed(
         self,
-        rule_callable: RuleCallable[PosType,
-                                    ResultType],
+        rule_callable: RuleCallable[PosType, ResultType],
         start_pos: PosType,
-        memo: MemoEntry[RuleId,
-                        PosType,
-                        ResultType],
+        memo: MemoEntry[RuleId, PosType, ResultType],
         recursion: RecursionInfo[RuleId],
-    ) -> ApplyResult[PosType,
-                     ResultType]:
+    ) -> ApplyResult[PosType, ResultType]:
         """Grow a recursive seed until it stops growing.
 
         In the paper, this is called "GROW-LR".
@@ -250,7 +261,11 @@ class Packrat(Generic[RuleId, PosType]):
             recursion.eval_set = set(recursion.involved)
             call_result = rule_callable(start_pos)
             LOG.debug("grow_seed %s", call_result)
-            new_pos, result = (call_result.pos, call_result.result) if call_result else (start_pos, None)
+            new_pos, result = (
+                (call_result.pos, call_result.result)
+                if call_result
+                else (start_pos, None)
+            )
             if result is None or new_pos <= memo.final_pos:
                 LOG.debug("grow_seed done %s %s", new_pos, memo.final_pos)
                 break

@@ -1,7 +1,19 @@
 from dataclasses import dataclass
 from enum import Enum
 import typing
-from typing import Any, Final, Generic, Iterable, Mapping, MutableSequence, Optional, Sequence, Tuple, TypeVar, Union
+from typing import (
+    Any,
+    Final,
+    Generic,
+    Iterable,
+    Mapping,
+    MutableSequence,
+    Optional,
+    Sequence,
+    Tuple,
+    TypeVar,
+    Union,
+)
 
 from fltk import dchelpers
 from fltk.iir.typemodel import ParamType, Type as Type, TYPE as TYPE
@@ -14,10 +26,10 @@ _T = TypeVar("_T")
 # "Built-in" types
 #
 
-Void: Final = Type.make(cname='Void')
+Void: Final = Type.make(cname="Void")
 pyreg.register_type(pyreg.TypeInfo(typ=Void, module=pyreg.Builtins, name="None"))
 
-Auto: Final = Type.make(cname='Auto')
+Auto: Final = Type.make(cname="Auto")
 
 
 @dataclass
@@ -28,13 +40,55 @@ class PrimitiveType(Type):
 UInt64: Final = PrimitiveType.make(cname="uint64")
 pyreg.register_type(pyreg.TypeInfo(typ=UInt64, module=pyreg.Builtins, name="int"))
 
+IndexInt: Final = PrimitiveType.make(cname="IndexInt")
+pyreg.register_type(pyreg.TypeInfo(typ=IndexInt, module=pyreg.Builtins, name="int"))
+
+SignedIndexInt: Final = PrimitiveType.make(cname="SignedIndexInt")
+pyreg.register_type(
+    pyreg.TypeInfo(typ=SignedIndexInt, module=pyreg.Builtins, name="int")
+)
+
 Bool: Final = PrimitiveType.make(cname="bool")
 pyreg.register_type(pyreg.TypeInfo(typ=Bool, module=pyreg.Builtins, name="bool"))
 
-Maybe: Final = Type.make(cname="Maybe", params=dict(value_type=TYPE))
+String: Final = Type.make(cname="string")
+pyreg.register_type(pyreg.TypeInfo(typ=String, module=pyreg.Builtins, name="str"))
 
-GenericImmutableSequence: Final = Type.make(cname="ImmutableSequence", params=dict(value_type=TYPE))
-GenericMutableSequence: Final = Type.make(cname="MutableSequence", params=dict(value_type=TYPE))
+
+Maybe: Final = Type.make(cname="Maybe", params=dict(value_type=TYPE))
+pyreg.register_type(
+    pyreg.TypeInfo(typ=Maybe, module=pyreg.Module(("typing",)), name="Optional")
+)
+
+GenericImmutableSequence: Final = Type.make(
+    cname="ImmutableSequence", params=dict(value_type=TYPE)
+)
+pyreg.register_type(
+    pyreg.TypeInfo(
+        typ=GenericImmutableSequence,
+        module=pyreg.Module(["typing"]),
+        name="Sequence",
+        concrete_name="list",
+    )
+)
+GenericMutableSequence: Final = Type.make(
+    cname="MutableSequence", params=dict(value_type=TYPE)
+)
+
+GenericImmutableHashmap: Final = Type.make(
+    cname="ImmutableHashmap", params=dict(key_type=TYPE, value_type=TYPE)
+)
+GenericMutableHashmap: Final = Type.make(
+    cname="MutableHashmap", params=dict(key_type=TYPE, value_type=TYPE)
+)
+pyreg.register_type(
+    pyreg.TypeInfo(
+        typ=GenericMutableHashmap,
+        module=pyreg.Module(("collections", "abc")),
+        name="MutableMapping",
+        concrete_name="dict",
+    )
+)
 
 #
 # Expression/Statement base classes
@@ -74,7 +128,9 @@ class Scope:
 
     def define(self, name: str, entity: Nameable) -> None:
         if name in self.identifiers:
-            raise ValueError(f"Attempt to redefine identifier {name} from {self.identifiers[name]} to {entity}")
+            raise ValueError(
+                f"Attempt to redefine identifier {name} from {self.identifiers[name]} to {entity}"
+            )
         self.identifiers[name] = entity
 
     def lookup(self, name: str, recursive: bool = True) -> Optional[Nameable]:
@@ -123,14 +179,14 @@ class Block(Statement):
         typ: Type,
         ref_type: "RefType",
         mutable: bool = False,
-        init: Optional[Expr] = None
+        init: Optional[Expr] = None,
     ) -> "Var":
         result = Var(name=name, typ=typ, ref_type=ref_type, mutable=mutable)
         self.get_leaf_scope().define(name, result)
         self.body.append(VarDef(var=result, parent_block=self, init=init))
         return result
 
-    def assign(self, target: "Store", expr: Expr) -> "AssignStatement":
+    def assign(self, target: Expr, expr: Expr) -> "AssignStatement":
         result = AssignStatement(parent_block=self, target=target, expr=expr)
         self.body.append(result)
         return result
@@ -140,26 +196,44 @@ class Block(Statement):
         self.body.append(result)
         return result
 
-    def if_(self, condition: Expr) -> "If":
+    def if_(
+        self, condition: Expr, let: Optional["Var"] = None, orelse: bool = False
+    ) -> "If":
         result = If(
             parent_block=self,
             condition=condition,
-            block=Block(parent_block=self,
-                        body=[],
-                        inner_scope=Scope(parent=self.get_leaf_scope())),
-            orelse=None
+            block=Block(
+                parent_block=self,
+                body=[],
+                inner_scope=Scope(parent=self.get_leaf_scope()),
+            ),
+            orelse=Block(
+                parent_block=self,
+                body=[],
+                inner_scope=Scope(parent=self.get_leaf_scope()),
+            )
+            if orelse
+            else None,
         )
+        if let:
+            result.block.get_leaf_scope().define(let.name, let)
+            result.condition = LetExpr(var=let, result=result.condition)
         self.body.append(result)
         return result
 
-    def while_(self, condition: Expr) -> "WhileLoop":
+    def while_(self, condition: Expr, let: Optional["Var"] = None) -> "WhileLoop":
         result = WhileLoop(
             parent_block=self,
             condition=condition,
-            block=Block(parent_block=self,
-                        body=[],
-                        inner_scope=Scope(parent=self.get_leaf_scope()))
+            block=Block(
+                parent_block=self,
+                body=[],
+                inner_scope=Scope(parent=self.get_leaf_scope()),
+            ),
         )
+        if let:
+            result.block.get_leaf_scope().define(let.name, let)
+            result.condition = LetExpr(var=let, result=result.condition)
         self.body.append(result)
         return result
 
@@ -172,7 +246,7 @@ _ModuleSubclass = TypeVar("_ModuleSubclass", bound="Module")
 
 
 @dataclass
-class Module():
+class Module:
     name: str
     scope: Scope
     block: Block
@@ -186,7 +260,9 @@ class Module():
     def class_def(self, klass: "ClassType") -> "ClassDef":
         result = ClassDef(parent_block=self.block, klass=klass)
         if klass.cname is None:
-            raise ValueError(f"Module-level class definitions cannot be anonymous: {klass}")
+            raise ValueError(
+                f"Module-level class definitions cannot be anonymous: {klass}"
+            )
         self.scope.define(klass.cname, klass)
         self.block.body.append(result)
         return result
@@ -207,17 +283,13 @@ class RefType(Enum):
 
 
 @dataclass
-class Var:
-    name: str
-    typ: Type
-    ref_type: RefType
-    mutable: bool
-
+class ValRef(Expr):
     def load(self) -> "Load":
         return Load(self, mutable=False)
 
     def load_mut(self) -> "Load":
-        assert self.mutable
+        if hasattr(self, "mutable"):
+            assert self.mutable
         return Load(self, mutable=True)
 
     def store(self) -> "Store":
@@ -228,25 +300,44 @@ class Var:
 
 
 @dataclass
+class Var(ValRef):
+    name: str
+    typ: Type
+    ref_type: RefType
+    mutable: bool
+
+
+@dataclass
+class VarByName(Var):
+    pass
+
+
+@dataclass
 class VarDef(Statement):
     var: Var
     init: Optional[Expr] = None
 
 
 @dataclass
-class Load(Expr):
+class VarDefExpr(Expr):
     var: Var
+    init: Expr
+
+
+@dataclass
+class Load(Expr):
+    ref: ValRef
     mutable: bool
 
 
 @dataclass
 class Move(Expr):
-    var: Var
+    ref: ValRef
 
 
 @dataclass
 class Store(Expr):
-    var: Var
+    ref: ValRef
 
 
 @dataclass
@@ -261,7 +352,7 @@ class Construct(Expr):
 
 @dataclass
 class IsEmpty(Expr):
-    var: Var
+    expr: Expr
 
 
 class SelfExpr(Expr):
@@ -316,6 +407,9 @@ class MethodAccess(MemberAccess):
     def call(self, *args: Expr, **kwargs: Expr) -> "MethodCall":
         return MethodCall(self, args=args, kwargs=kwargs)
 
+    def bind(self) -> "BoundMethod":
+        return BoundMethod(self)
+
 
 @dataclass
 class MethodCall(Expr):
@@ -325,12 +419,18 @@ class MethodCall(Expr):
 
 
 @dataclass
-class Field(Var):
-    in_class: "ClassType"
+class BoundMethod(Expr):
+    bound_method: MethodAccess
 
 
 @dataclass
-class FieldAccess(MemberAccess, Var):
+class Field(Var):
+    in_class: "ClassType"
+    init: Optional[Expr]
+
+
+@dataclass
+class FieldAccess(MemberAccess, ValRef):
     pass
 
 
@@ -381,7 +481,6 @@ _ClassTypeSubclass = TypeVar("_ClassTypeSubclass", bound="ClassType")
 
 @dataclass(kw_only=True)
 class ClassType(Type):
-
     defined_in: Module
     block: Block
     doc: Optional[str]
@@ -393,14 +492,12 @@ class ClassType(Type):
         cls: type[_ClassTypeSubclass],
         *,
         cname: Optional[str] = None,
-        params: Optional[Mapping[str,
-                                 ParamType]] = None,
+        params: Optional[Mapping[str, ParamType]] = None,
         instantiates: Optional["Type"] = None,
-        arguments: Optional[Mapping[str,
-                                    TypeArgument]] = None,
+        arguments: Optional[Mapping[str, TypeArgument]] = None,
         defined_in: Module,
         doc: Optional[str] = None,
-        outer_scope: Optional[Scope] = None
+        outer_scope: Optional[Scope] = None,
     ) -> _ClassTypeSubclass:
         scope = Scope(parent=outer_scope)
         block = Block(parent_block=None, body=[], inner_scope=scope)
@@ -413,7 +510,7 @@ class ClassType(Type):
             base_classes=(),
             constructor=None,
             defined_in=defined_in,
-            doc=doc
+            doc=doc,
         )
 
     def get_attr(self, name: str) -> Union[Field, Method]:
@@ -446,8 +543,23 @@ class ClassType(Type):
                 yield attr
         return
 
-    def def_field(self, name: str, *, typ: Type, ref_type: RefType = RefType.VALUE, mutable: bool = False) -> Field:
-        fld = Field(name=name, in_class=self, typ=typ, ref_type=ref_type, mutable=mutable)
+    def def_field(
+        self,
+        name: str,
+        *,
+        typ: Type,
+        init: Optional[Expr],
+        ref_type: RefType = RefType.VALUE,
+        mutable: bool = False,
+    ) -> Field:
+        fld = Field(
+            name=name,
+            in_class=self,
+            typ=typ,
+            init=init,
+            ref_type=ref_type,
+            mutable=mutable,
+        )
         self.block.get_leaf_scope().define(name, fld)
         return fld
 
@@ -456,8 +568,7 @@ class ClassType(Type):
         *,
         params: Iterable[Param],
         doc: Optional[str] = None,
-        init_list: Iterable[Tuple[Field,
-                                  "InitListExpr"]] = ()
+        init_list: Iterable[Tuple[Field, "InitListExpr"]] = (),
     ) -> "Constructor":
         if self.constructor is not None:
             raise AssertionError(f"Constructor already defined for class {self.cname}")
@@ -466,7 +577,12 @@ class ClassType(Type):
             doc=doc,
             params=list(params),
             init_list=list(init_list),
-            mutable_self=True
+            mutable_self=True,
+            block=Block(
+                parent_block=self.block,
+                inner_scope=Scope(parent=self.block.inner_scope),
+                body=[],
+            ),
         )
         return self.constructor
 
@@ -478,7 +594,7 @@ class ClassType(Type):
         return_type: Type,
         doc: Optional[str] = None,
         mutable_self: bool = False,
-        using_self: Optional[SelfExpr] = None
+        using_self: Optional[SelfExpr] = None,
     ) -> Method:
         method = Method(
             name=name,
@@ -487,9 +603,11 @@ class ClassType(Type):
             return_type=return_type,
             doc=doc,
             mutable_self=mutable_self,
-            block=Block(parent_block=self.block,
-                        inner_scope=Scope(parent=self.block.inner_scope),
-                        body=[]),
+            block=Block(
+                parent_block=self.block,
+                inner_scope=Scope(parent=self.block.inner_scope),
+                body=[],
+            ),
             self_expr=using_self or SelfExpr(),
         )
         self.block.get_leaf_scope().define(name, method)
@@ -510,10 +628,6 @@ class FieldLookupProxy:
         return FieldAccess(
             member_name=name,
             bound_to=self.bind_to,
-            name=f"bound field {name}",
-            typ=Auto,
-            ref_type=RefType.BORROW,
-            mutable=self.mutable
         )
 
     __getitem__ = __getattr__
@@ -529,7 +643,7 @@ class MethodLookupProxy:
     __getitem__ = __getattr__
 
 
-class InitFromParamType():
+class InitFromParamType:
     pass
 
 
@@ -540,8 +654,42 @@ InitListExpr = Union[Expr, InitFromParamType]
 
 class Constructor(Method):
     def __init__(self, *, init_list: Iterable[Tuple[Field, InitListExpr]], **kws: Any):
-        super().__init__(**kws)
+        super().__init__(name="", return_type=Void, self_expr=SelfExpr(), **kws)
         self.init_list = list(init_list)
+
+
+@dataclass(kw_only=True)
+class EnumType(Type):
+    defined_in: Module
+    doc: Optional[str]
+    fields: MutableSequence[str]
+
+    @classmethod
+    def make(  # type: ignore[override]
+        cls,
+        *,
+        cname: Optional[str] = None,
+        defined_in: Module,
+        doc: Optional[str] = None,
+        outer_scope: Optional[Scope] = None,
+        fields: Iterable[str] = (),
+    ) -> "EnumType":
+        return cls(
+            cname=cname,
+            fields=list(fields),
+            instantiates=None,
+            arguments=dict(),
+            params=dict(),
+            defined_in=defined_in,
+            doc=doc,
+        )
+
+    def add_field(self, field: str, ignore_if_exists: bool = False) -> None:
+        if field not in self.fields:
+            self.fields.append(field)
+        elif not ignore_if_exists:
+            raise ValueError(f"Field {field} already exists in enum {self}")
+        return
 
 
 #
@@ -564,7 +712,7 @@ class WhileLoop(Statement):
 
 @dataclass
 class AssignStatement(Statement):
-    target: Store
+    target: Expr
     expr: Expr
 
 
@@ -600,12 +748,18 @@ class Subtract(BinOp):
     op: str = "-"
 
 
+@dataclass
+class Subscript(Expr):
+    target: Expr
+    index: Expr
+
+
 #
 # Other expressions
 #
 
 
-@dataclass
-class CheckAndExtractResult(Expr):
+@dataclass(kw_only=True)
+class LetExpr(Expr):
     result: Expr
     var: Var

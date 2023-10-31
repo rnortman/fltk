@@ -1,4 +1,4 @@
-from typing import Final, Sequence
+from typing import Final, Optional, Sequence
 
 # Python type and handler registries
 
@@ -20,9 +20,12 @@ class TypeInfo:
     typ: Type
     module: Module
     name: str
+    concrete_name: Optional[str] = None
 
-    def import_name(self) -> str:
-        return '.'.join(list(self.module.import_path) + [self.name])
+    def import_name(self, concrete: bool = False) -> str:
+        if concrete and self.concrete_name:
+            return self.concrete_name
+        return ".".join(list(self.module.import_path) + [self.name])
 
 
 _type_registry: dict[TypeKey, TypeInfo] = {}
@@ -31,7 +34,9 @@ _type_registry: dict[TypeKey, TypeInfo] = {}
 def register_type(type_info: TypeInfo) -> None:
     try:
         existing_type = _type_registry[type_info.typ.key]
-        raise ValueError(f"Cannot register {type_info}: Type already registered as {existing_type}")
+        raise ValueError(
+            f"Cannot register {type_info}: Type already registered as {existing_type}"
+        )
     except KeyError:
         pass
     _type_registry[type_info.typ.key] = type_info
