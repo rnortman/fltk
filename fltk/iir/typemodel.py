@@ -123,5 +123,4 @@ class Type:
         raise KeyError(f"No argument for parameter {name} provided")
 
     def get_args(self) -> Mapping[str, Argument]:
-        print(self)
         return {param: self.get_arg(param) for param in self.root_type().params}

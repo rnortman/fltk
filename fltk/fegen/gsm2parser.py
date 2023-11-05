@@ -106,6 +106,18 @@ class ParserGenerator:
             init=iir.Construct.make(ErrorTracker),
         )
 
+        self.parser_class.def_field(
+            name="rule_names",
+            typ=(
+                rule_names_type := iir.GenericImmutableSequence.instantiate(
+                    value_type=iir.String
+                )
+            ),
+            init=iir.LiteralSequence(
+                [iir.LiteralString(rule.name) for rule in self.grammar.rules]
+            ),
+        )
+
         self.parser_class.def_constructor(
             params=[
                 iir.Param(
@@ -627,7 +639,7 @@ class ParserGenerator:
             if item.disposition == gsm.Disposition.INLINE:
                 raise NotImplementedError("Inline items not yet supported: {item}")
             # Create an item parser
-            item_name = item.label if item.label else f"item{item_idx}"
+            item_name = f"item{item_idx}"
             item_parser = self.gen_item_parser(path + (item_name,), node_type, item)
             item_result_var = iir.Var(
                 name=item_name,
@@ -669,7 +681,7 @@ class ParserGenerator:
                 assert isinstance(item_if.orelse, iir.Block)
                 item_if.orelse.return_(iir.Failure(return_type))
 
-            if alternative.ws_after[item_idx]:
+            if sep := alternative.sep_after[item_idx] != gsm.Separator.NO_WS:
                 item_ws_var = iir.Var(
                     name=f"ws_after__{item_name}",
                     typ=ApplyResultType.instantiate(
@@ -679,12 +691,16 @@ class ParserGenerator:
                     ref_type=iir.RefType.VALUE,
                     mutable=True,
                 )
-                alt_parser.block.if_(
+                sep_if = alt_parser.block.if_(
                     condition=iir.SelfExpr().method.consume_regex.call(
                         pos=alt_pos_var.load(), regex=iir.LiteralString(r"\s+")
                     ),
                     let=item_ws_var,
-                ).block.assign(alt_pos_var.store(), item_ws_var.fld.pos.move())
+                    orelse=sep == gsm.Separator.WS_REQUIRED,
+                )
+                sep_if.block.assign(alt_pos_var.store(), item_ws_var.fld.pos.move())
+                if sep == gsm.Separator.WS_REQUIRED:
+                    sep_if.orelse.return_(iir.Failure(return_type))
 
         # If we did not return early, then we succeeded.
         alt_parser.block.assign(

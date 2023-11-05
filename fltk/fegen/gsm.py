@@ -19,10 +19,16 @@ class Rule:
     alternatives: Sequence["Items"]
 
 
+class Separator(Enum):
+    NO_WS = "NO_WS"
+    WS_REQUIRED = "WS_REQUIRED"
+    WS_ALLOWED = "WS_ALLOWED"
+
+
 @dataclasses.dataclass(frozen=True, slots=True)
 class Items:
     items: Sequence["Item"]
-    ws_after: Sequence[bool]
+    sep_after: Sequence[Separator]
 
 
 @dataclasses.dataclass(frozen=True, slots=True)

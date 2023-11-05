@@ -14,7 +14,6 @@ def _strip_module(mod: ast.Module, expect: type[_T]) -> _T:
     result = mod.body[0]
     if not isinstance(result, expect):
         raise ValueError(f"Expected {expect} but got {result}")
-    print(f"\n\nstrip\n\n{astor.dump_tree(mod)}\n\n")
     return result
 
 

@@ -1,6 +1,6 @@
 from collections.abc import Sequence
 
-import bootstrap_cst as cst
+import fltk_cst as cst
 from fltk.fegen import gsm
 
 
@@ -30,15 +30,17 @@ class Cst2Gsm:
     def visit_items(self, items: cst.Items) -> gsm.Items:
         gsm_items = []
         sep_after = []
-        for (item_label, item), (ws_label, ws) in zip(
+        for (item_label, item), (sep_label, ws) in zip(
             items.children[::2], items.children[1::2]
         ):
             assert item_label == cst.Items.Label.ITEM and isinstance(item, cst.Item)
             gsm_items.append(self.visit_item(item))
-            if ws_label == cst.Items.Label.WS:
+            if sep_label == cst.Items.Label.WS_REQUIRED:
+                sep_after.append(gsm.Separator.WS_REQUIRED)
+            elif sep_label == cst.Items.Label.WS_ALLOWED:
                 sep_after.append(gsm.Separator.WS_ALLOWED)
             else:
-                assert ws_label == cst.Items.Label.NO_WS
+                assert sep_label == cst.Items.Label.NO_WS
                 sep_after.append(gsm.Separator.NO_WS)
         if (len(items.children) % 2) != 0:
             item_label, item = items.children[-1]

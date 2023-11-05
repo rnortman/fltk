@@ -70,7 +70,6 @@ class CstGenerator:
         iir_types = [
             self.iir_type_for_model_type(model_type) for model_type in model_types
         ]
-        print(model_types, iir_types)
         assert len(iir_types) > 0
         py_types = sorted(
             pycompiler.iir_type_to_py_annotation(typ) for typ in iir_types
@@ -106,9 +105,8 @@ class CstGenerator:
         label_enum = pygen.klass(name="Label", bases=["enum.Enum"])
         labels = sorted(model.labels.keys())
         for label in labels:
-            label_enum.body.append(pygen.stmt(f"{label} = enum.auto()"))
+            label_enum.body.append(pygen.stmt(f"{label.upper()} = enum.auto()"))
         klass.body.append(label_enum)
-        print(class_name, model)
         child_annotation = self.py_annotation_for_model_types(
             model.types, in_module=True
         )
@@ -171,7 +169,9 @@ class CstGenerator:
                 "None",
             )
             append_fn.body.append(
-                pygen.stmt(f"self.children.append(({class_name}.Label.{label}, child))")
+                pygen.stmt(
+                    f"self.children.append(({class_name}.Label.{label.upper()}, child))"
+                )
             )
             klass.body.append(append_fn)
 
@@ -182,7 +182,7 @@ class CstGenerator:
             )
             extend_fn.body.append(
                 pygen.stmt(
-                    f"self.children.extend(({class_name}.Label.{label}, child) for child in children)"
+                    f"self.children.extend(({class_name}.Label.{label.upper()}, child) for child in children)"
                 )
             )
             klass.body.append(extend_fn)
@@ -194,7 +194,7 @@ class CstGenerator:
             )
             children_fn.body.append(
                 pygen.stmt(
-                    f"return (typing.cast({child_annotation_by_labels[label]}, child) for label, child in self.children if label == {class_name}.Label.{label})"
+                    f"return (typing.cast({child_annotation_by_labels[label]}, child) for label, child in self.children if label == {class_name}.Label.{label.upper()})"
                 )
             )
             klass.body.append(children_fn)
@@ -245,7 +245,8 @@ class CstGenerator:
 
     def model_for_item(self, item: gsm.Item, inline_stack: list[str]) -> ItemsModel:
         if isinstance(item.term, gsm.Identifier):
-            assert item.term.value in self.grammar.identifiers
+            if item.term.value not in self.grammar.identifiers:
+                raise ValueError(f"Identifier {item.term.value} not in grammar")
             return ItemsModel(types={item.term.value})
         if isinstance(item.term, (gsm.Literal, gsm.Regex)):
             return ItemsModel(types={Span.key})
