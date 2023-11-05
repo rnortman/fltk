@@ -171,8 +171,6 @@ def compile_class(klass: iir.ClassType) -> ast.ClassDef:
         isinstance(attr, (iir.Field, iir.Method))
         for attr in klass.block.get_leaf_scope().identifiers.values()
     )
-
-    print(astor.to_source(result_ast))
     return result_ast
 
 
@@ -199,7 +197,6 @@ def compile_function(function: iir.Function) -> ast.FunctionDef:
 
     for stmt in function.block.body:
         _ensure_in_function(stmt)
-        print("\n\n\nfn stmt:\n\n\n", stmt, "\n\n\n")
         result_ast.body.extend(compile_stmt(stmt))
 
     return result_ast
@@ -221,8 +218,6 @@ def compile_stmt(stmt: iir.Statement) -> Iterator[ast.stmt]:
         yield from compile_assign(stmt)
         return
     if isinstance(stmt, iir.Return):
-        print(stmt.expr)
-        print(repr(compile_expr(stmt.expr)))
         yield ast.Return(pygen.expr(compile_expr(stmt.expr)))
         return
     if isinstance(stmt, iir.VarDef):
@@ -315,13 +310,15 @@ def compile_expr(expr: iir.Expr) -> str:
     if isinstance(expr, iir.BoundMethod):
         return f"{compile_expr(expr.bound_method.bound_to)}.{expr.bound_method.member_name}"
     if isinstance(expr, iir.Construct):
-        return f"{iir_type_to_py_constructor(expr.typ.root_type())}({_format_args(args=(), kwargs=expr.args)})"
+        return f"{iir_type_to_py_constructor(expr.typ.root_type())}({_format_args(args=expr.args, kwargs=expr.kwargs)})"
     if isinstance(expr, iir.Failure):
         return "None"
     if isinstance(expr, iir.Success):
         return compile_expr(expr.expr)
     if isinstance(expr, (iir.LiteralString, iir.LiteralInt)):
         return repr(expr.value)
+    if isinstance(expr, iir.LiteralSequence):
+        return f"[{', '.join(compile_expr(e) for e in expr.values)}]"
     if isinstance(expr, (iir.VarByName, iir.Var)):
         return expr.name
     if isinstance(expr, iir.IsEmpty):
@@ -329,4 +326,4 @@ def compile_expr(expr: iir.Expr) -> str:
     if isinstance(expr, iir.Subscript):
         return f"({compile_expr(expr.target)}[{compile_expr(expr.index)}])"
 
-    assert False, expr
+    assert False, repr(expr)

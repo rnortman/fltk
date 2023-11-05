@@ -14,7 +14,7 @@ rules = [
                         gsm.ONE_OR_MORE,
                     )
                 ],
-                ws_after=[False],
+                sep_after=[gsm.Separator.NO_WS],
             )
         ],
     ),
@@ -49,11 +49,11 @@ rules = [
                         quantifier=gsm.REQUIRED,
                     ),
                 ],
-                ws_after=[
-                    True,
-                    True,
-                    True,
-                    True,
+                sep_after=[
+                    gsm.Separator.WS_ALLOWED,
+                    gsm.Separator.WS_ALLOWED,
+                    gsm.Separator.WS_ALLOWED,
+                    gsm.Separator.WS_ALLOWED,
                 ],
             )
         ],
@@ -89,15 +89,18 @@ rules = [
                                         gsm.REQUIRED,
                                     ),
                                 ],
-                                ws_after=[True, False],
+                                sep_after=[
+                                    gsm.Separator.WS_ALLOWED,
+                                    gsm.Separator.NO_WS,
+                                ],
                             ),
                         ],
                         quantifier=gsm.ZERO_OR_MORE,
                     ),
                 ],
-                ws_after=[
-                    True,
-                    False,
+                sep_after=[
+                    gsm.Separator.WS_ALLOWED,
+                    gsm.Separator.NO_WS,
                 ],
             )
         ],
@@ -133,7 +136,7 @@ rules = [
                                                         gsm.REQUIRED,
                                                     )
                                                 ],
-                                                ws_after=[False],
+                                                sep_after=[gsm.Separator.NO_WS],
                                             ),
                                             gsm.Items(
                                                 items=[
@@ -144,7 +147,7 @@ rules = [
                                                         gsm.REQUIRED,
                                                     )
                                                 ],
-                                                ws_after=[False],
+                                                sep_after=[gsm.Separator.NO_WS],
                                             ),
                                         ],
                                         gsm.REQUIRED,
@@ -156,7 +159,10 @@ rules = [
                                         gsm.REQUIRED,
                                     ),
                                 ],
-                                ws_after=[True, False],
+                                sep_after=[
+                                    gsm.Separator.WS_ALLOWED,
+                                    gsm.Separator.NO_WS,
+                                ],
                             ),
                         ],
                         gsm.ZERO_OR_MORE,
@@ -174,7 +180,7 @@ rules = [
                                         gsm.REQUIRED,
                                     )
                                 ],
-                                ws_after=[False],
+                                sep_after=[gsm.Separator.NO_WS],
                             ),
                             gsm.Items(
                                 items=[
@@ -185,16 +191,16 @@ rules = [
                                         gsm.REQUIRED,
                                     )
                                 ],
-                                ws_after=[False],
+                                sep_after=[gsm.Separator.NO_WS],
                             ),
                         ],
                         gsm.NOT_REQUIRED,
                     ),
                 ],
-                ws_after=[
-                    True,
-                    True,
-                    True,
+                sep_after=[
+                    gsm.Separator.WS_ALLOWED,
+                    gsm.Separator.WS_ALLOWED,
+                    gsm.Separator.WS_ALLOWED,
                 ],
             )
         ],
@@ -224,7 +230,7 @@ rules = [
                                         gsm.REQUIRED,
                                     ),
                                 ],
-                                ws_after=[False, False],
+                                sep_after=[gsm.Separator.NO_WS, gsm.Separator.NO_WS],
                             )
                         ],
                         gsm.NOT_REQUIRED,
@@ -248,7 +254,12 @@ rules = [
                         gsm.NOT_REQUIRED,
                     ),
                 ],
-                ws_after=[False, False, False, True],
+                sep_after=[
+                    gsm.Separator.NO_WS,
+                    gsm.Separator.NO_WS,
+                    gsm.Separator.NO_WS,
+                    gsm.Separator.WS_ALLOWED,
+                ],
             )
         ],
     ),
@@ -265,7 +276,7 @@ rules = [
                         gsm.REQUIRED,
                     )
                 ],
-                ws_after=[False],
+                sep_after=[gsm.Separator.NO_WS],
             ),
             gsm.Items(
                 items=[
@@ -276,7 +287,7 @@ rules = [
                         gsm.REQUIRED,
                     )
                 ],
-                ws_after=[False],
+                sep_after=[gsm.Separator.NO_WS],
             ),
             gsm.Items(
                 items=[
@@ -293,7 +304,11 @@ rules = [
                         None, gsm.Disposition.SUPPRESS, gsm.Literal("/"), gsm.REQUIRED
                     ),
                 ],
-                ws_after=[False, False, False],
+                sep_after=[
+                    gsm.Separator.NO_WS,
+                    gsm.Separator.NO_WS,
+                    gsm.Separator.NO_WS,
+                ],
             ),
             gsm.Items(
                 items=[
@@ -310,7 +325,11 @@ rules = [
                         None, gsm.Disposition.SUPPRESS, gsm.Literal(")"), gsm.REQUIRED
                     ),
                 ],
-                ws_after=[True, True, False],
+                sep_after=[
+                    gsm.Separator.WS_ALLOWED,
+                    gsm.Separator.WS_ALLOWED,
+                    gsm.Separator.NO_WS,
+                ],
             ),
         ],
     ),
@@ -327,7 +346,7 @@ rules = [
                         gsm.REQUIRED,
                     )
                 ],
-                ws_after=[False],
+                sep_after=[gsm.Separator.NO_WS],
             ),
             gsm.Items(
                 items=[
@@ -338,7 +357,7 @@ rules = [
                         gsm.REQUIRED,
                     )
                 ],
-                ws_after=[False],
+                sep_after=[gsm.Separator.NO_WS],
             ),
             gsm.Items(
                 items=[
@@ -349,7 +368,7 @@ rules = [
                         gsm.REQUIRED,
                     )
                 ],
-                ws_after=[False],
+                sep_after=[gsm.Separator.NO_WS],
             ),
         ],
     ),
@@ -366,7 +385,7 @@ rules = [
                         gsm.REQUIRED,
                     )
                 ],
-                ws_after=[False],
+                sep_after=[gsm.Separator.NO_WS],
             ),
             gsm.Items(
                 items=[
@@ -377,7 +396,7 @@ rules = [
                         gsm.REQUIRED,
                     )
                 ],
-                ws_after=[False],
+                sep_after=[gsm.Separator.NO_WS],
             ),
             gsm.Items(
                 items=[
@@ -388,7 +407,7 @@ rules = [
                         gsm.REQUIRED,
                     )
                 ],
-                ws_after=[False],
+                sep_after=[gsm.Separator.NO_WS],
             ),
         ],
     ),
@@ -405,7 +424,7 @@ rules = [
                         gsm.REQUIRED,
                     )
                 ],
-                ws_after=[False],
+                sep_after=[gsm.Separator.NO_WS],
             )
         ],
     ),
@@ -422,7 +441,7 @@ rules = [
                         gsm.REQUIRED,
                     )
                 ],
-                ws_after=[False],
+                sep_after=[gsm.Separator.NO_WS],
             )
         ],
     ),
@@ -439,7 +458,7 @@ rules = [
                         gsm.REQUIRED,
                     )
                 ],
-                ws_after=[False],
+                sep_after=[gsm.Separator.NO_WS],
             )
         ],
     ),
@@ -483,5 +502,3 @@ if __name__ == "__main__":
     cst_mod = cstgen.gen_py_module()
     with open(cst_filename, "w") as cst_file:
         cst_file.write(astor.to_source(cst_mod))
-
-    print(cstgen.rule_models)

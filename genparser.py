@@ -5,23 +5,32 @@ import astor  # type: ignore
 
 from fltk import pygen
 from fltk.fegen import gsm, gsm2parser, gsm2tree
-from fltk.fegen.pyrt import terminalsrc
+from fltk.fegen.pyrt import terminalsrc, errors
 from fltk.iir.py import compiler
 from fltk.iir.py import reg as pyreg
 
-import bootstrap_cst
-import bootstrap_parser
-import bootstrap2gsm
+import fltk_cst
+import fltk_parser
+import fltk2gsm
 
 
 def parse_grammar() -> gsm.Grammar:
     with open(sys.argv[1], "r") as grammarfile:
         terminals = terminalsrc.TerminalSource(grammarfile.read())
-    parser = bootstrap_parser.Parser(terminalsrc=terminals)
+    parser = fltk_parser.Parser(terminalsrc=terminals)
     result = parser.apply__parse_grammar(0)
     assert result
-    assert result.pos == len(terminals.terminals)
-    cst2gsm = bootstrap2gsm.Cst2Gsm(terminals.terminals)
+    if not result or result.pos != len(terminals.terminals):
+        print(
+            errors.format_error_message(
+                parser.error_tracker,
+                terminals,
+                lambda rule_id: parser.rule_names[rule_id],
+            ),
+            file=sys.stderr,
+        )
+        sys.exit(1)
+    cst2gsm = fltk2gsm.Cst2Gsm(terminals.terminals)
     grammar = cst2gsm.visit_grammar(result.result)
     return grammar
 

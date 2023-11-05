@@ -129,7 +129,7 @@ class Scope:
     def define(self, name: str, entity: Nameable) -> None:
         if name in self.identifiers:
             raise ValueError(
-                f"Attempt to redefine identifier {name} from {self.identifiers[name]} to {entity}"
+                f"Attempt to redefine identifier {name}\n\nfrom\n{self.identifiers[name]}\n\nto\n{entity}"
             )
         self.identifiers[name] = entity
 
@@ -343,11 +343,14 @@ class Store(Expr):
 @dataclass
 class Construct(Expr):
     typ: Type
-    args: Mapping[str, Any]
+    args: Sequence[Expr]
+    kwargs: Mapping[str, Expr]
 
     @classmethod
-    def make(cls: type["Construct"], typ: Type, **args: Any) -> "Construct":
-        return cls(typ=typ, args=args)
+    def make(
+        cls: type["Construct"], typ: Type, *args: Expr, **kwargs: Expr
+    ) -> "Construct":
+        return cls(typ=typ, args=args, kwargs=kwargs)
 
 
 @dataclass
@@ -389,6 +392,11 @@ class LiteralString(Expr):
 class LiteralInt(Expr):
     typ: Type
     value: int
+
+
+@dataclass(frozen=True, eq=True, slots=True)
+class LiteralSequence(Expr):
+    values: Sequence[Expr]
 
 
 #

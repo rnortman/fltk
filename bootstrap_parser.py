@@ -14,6 +14,19 @@ class Parser:
         self.error_tracker: fltk.fegen.pyrt.errors.ErrorTracker[
             int
         ] = fltk.fegen.pyrt.errors.ErrorTracker()
+        self.rule_names: typing.Sequence[str] = [
+            "grammar",
+            "rule",
+            "alternatives",
+            "items",
+            "item",
+            "term",
+            "disposition",
+            "quantifier",
+            "identifier",
+            "raw_string",
+            "literal",
+        ]
         self._cache__parse_grammar: collections.abc.MutableMapping[
             int, fltk.fegen.pyrt.memo.MemoEntry[int, int, bootstrap_cst.Grammar]
         ] = dict()
@@ -95,15 +108,15 @@ class Parser:
         result: bootstrap_cst.Grammar = bootstrap_cst.Grammar(
             span=fltk.fegen.pyrt.terminalsrc.Span(start=pos, end=-1)
         )
-        if rule := self.parse_grammar__alt0__rule(pos=pos):
-            pos = rule.pos
-            result.children.extend(rule.result.children)
+        if item0 := self.parse_grammar__alt0__item0(pos=pos):
+            pos = item0.pos
+            result.children.extend(item0.result.children)
         else:
             return None
         result.span = fltk.fegen.pyrt.terminalsrc.Span(start=result.span.start, end=pos)
         return fltk.fegen.pyrt.memo.ApplyResult(pos=pos, result=result)
 
-    def parse_grammar__alt0__rule(
+    def parse_grammar__alt0__item0(
         self, pos: int
     ) -> typing.Optional[fltk.fegen.pyrt.memo.ApplyResult[int, bootstrap_cst.Grammar]]:
         result: bootstrap_cst.Grammar = bootstrap_cst.Grammar(
@@ -140,26 +153,26 @@ class Parser:
         result: bootstrap_cst.Rule = bootstrap_cst.Rule(
             span=fltk.fegen.pyrt.terminalsrc.Span(start=pos, end=-1)
         )
-        if name := self.parse_rule__alt0__name(pos=pos):
-            pos = name.pos
-            result.append_name(child=name.result)
+        if item0 := self.parse_rule__alt0__item0(pos=pos):
+            pos = item0.pos
+            result.append_name(child=item0.result)
         else:
             return None
-        if ws_after__name := self.consume_regex(pos=pos, regex="\\s+"):
-            pos = ws_after__name.pos
+        if ws_after__item0 := self.consume_regex(pos=pos, regex="\\s+"):
+            pos = ws_after__item0.pos
         if item1 := self.parse_rule__alt0__item1(pos=pos):
             pos = item1.pos
         else:
             return None
         if ws_after__item1 := self.consume_regex(pos=pos, regex="\\s+"):
             pos = ws_after__item1.pos
-        if alternatives := self.parse_rule__alt0__alternatives(pos=pos):
-            pos = alternatives.pos
-            result.append_alternatives(child=alternatives.result)
+        if item2 := self.parse_rule__alt0__item2(pos=pos):
+            pos = item2.pos
+            result.append_alternatives(child=item2.result)
         else:
             return None
-        if ws_after__alternatives := self.consume_regex(pos=pos, regex="\\s+"):
-            pos = ws_after__alternatives.pos
+        if ws_after__item2 := self.consume_regex(pos=pos, regex="\\s+"):
+            pos = ws_after__item2.pos
         if item3 := self.parse_rule__alt0__item3(pos=pos):
             pos = item3.pos
         else:
@@ -169,7 +182,7 @@ class Parser:
         result.span = fltk.fegen.pyrt.terminalsrc.Span(start=result.span.start, end=pos)
         return fltk.fegen.pyrt.memo.ApplyResult(pos=pos, result=result)
 
-    def parse_rule__alt0__name(
+    def parse_rule__alt0__item0(
         self, pos: int
     ) -> typing.Optional[
         fltk.fegen.pyrt.memo.ApplyResult[int, bootstrap_cst.Identifier]
@@ -183,7 +196,7 @@ class Parser:
     ]:
         return self.consume_literal(pos=pos, literal=":=")
 
-    def parse_rule__alt0__alternatives(
+    def parse_rule__alt0__item2(
         self, pos: int
     ) -> typing.Optional[
         fltk.fegen.pyrt.memo.ApplyResult[int, bootstrap_cst.Alternatives]
@@ -226,20 +239,20 @@ class Parser:
         result: bootstrap_cst.Alternatives = bootstrap_cst.Alternatives(
             span=fltk.fegen.pyrt.terminalsrc.Span(start=pos, end=-1)
         )
-        if items := self.parse_alternatives__alt0__items(pos=pos):
-            pos = items.pos
-            result.append_items(child=items.result)
+        if item0 := self.parse_alternatives__alt0__item0(pos=pos):
+            pos = item0.pos
+            result.append_items(child=item0.result)
         else:
             return None
-        if ws_after__items := self.consume_regex(pos=pos, regex="\\s+"):
-            pos = ws_after__items.pos
+        if ws_after__item0 := self.consume_regex(pos=pos, regex="\\s+"):
+            pos = ws_after__item0.pos
         if item1 := self.parse_alternatives__alt0__item1(pos=pos):
             pos = item1.pos
             result.children.extend(item1.result.children)
         result.span = fltk.fegen.pyrt.terminalsrc.Span(start=result.span.start, end=pos)
         return fltk.fegen.pyrt.memo.ApplyResult(pos=pos, result=result)
 
-    def parse_alternatives__alt0__items(
+    def parse_alternatives__alt0__item0(
         self, pos: int
     ) -> typing.Optional[fltk.fegen.pyrt.memo.ApplyResult[int, bootstrap_cst.Items]]:
         return self.apply__parse_items(pos=pos)
@@ -267,9 +280,9 @@ class Parser:
             return None
         if ws_after__item0 := self.consume_regex(pos=pos, regex="\\s+"):
             pos = ws_after__item0.pos
-        if items := self.parse_alternatives__alt0__item1__alts__alt0__items(pos=pos):
-            pos = items.pos
-            result.append_items(child=items.result)
+        if item1 := self.parse_alternatives__alt0__item1__alts__alt0__item1(pos=pos):
+            pos = item1.pos
+            result.append_items(child=item1.result)
         else:
             return None
         result.span = fltk.fegen.pyrt.terminalsrc.Span(start=result.span.start, end=pos)
@@ -282,7 +295,7 @@ class Parser:
     ]:
         return self.consume_literal(pos=pos, literal="|")
 
-    def parse_alternatives__alt0__item1__alts__alt0__items(
+    def parse_alternatives__alt0__item1__alts__alt0__item1(
         self, pos: int
     ) -> typing.Optional[fltk.fegen.pyrt.memo.ApplyResult[int, bootstrap_cst.Items]]:
         return self.apply__parse_items(pos=pos)
@@ -324,13 +337,13 @@ class Parser:
         result: bootstrap_cst.Items = bootstrap_cst.Items(
             span=fltk.fegen.pyrt.terminalsrc.Span(start=pos, end=-1)
         )
-        if item := self.parse_items__alt0__item(pos=pos):
-            pos = item.pos
-            result.append_item(child=item.result)
+        if item0 := self.parse_items__alt0__item0(pos=pos):
+            pos = item0.pos
+            result.append_item(child=item0.result)
         else:
             return None
-        if ws_after__item := self.consume_regex(pos=pos, regex="\\s+"):
-            pos = ws_after__item.pos
+        if ws_after__item0 := self.consume_regex(pos=pos, regex="\\s+"):
+            pos = ws_after__item0.pos
         if item1 := self.parse_items__alt0__item1(pos=pos):
             pos = item1.pos
             result.children.extend(item1.result.children)
@@ -344,7 +357,7 @@ class Parser:
         result.span = fltk.fegen.pyrt.terminalsrc.Span(start=result.span.start, end=pos)
         return fltk.fegen.pyrt.memo.ApplyResult(pos=pos, result=result)
 
-    def parse_items__alt0__item(
+    def parse_items__alt0__item0(
         self, pos: int
     ) -> typing.Optional[fltk.fegen.pyrt.memo.ApplyResult[int, bootstrap_cst.Item]]:
         return self.apply__parse_item(pos=pos)
@@ -369,9 +382,9 @@ class Parser:
             return None
         if ws_after__item0 := self.consume_regex(pos=pos, regex="\\s+"):
             pos = ws_after__item0.pos
-        if item := self.parse_items__alt0__item1__alts__alt0__item(pos=pos):
-            pos = item.pos
-            result.append_item(child=item.result)
+        if item1 := self.parse_items__alt0__item1__alts__alt0__item1(pos=pos):
+            pos = item1.pos
+            result.append_item(child=item1.result)
         else:
             return None
         result.span = fltk.fegen.pyrt.terminalsrc.Span(start=result.span.start, end=pos)
@@ -396,17 +409,17 @@ class Parser:
         result: bootstrap_cst.Items = bootstrap_cst.Items(
             span=fltk.fegen.pyrt.terminalsrc.Span(start=pos, end=-1)
         )
-        if no_ws := self.parse_items__alt0__item1__alts__alt0__item0__alts__alt0__no_ws(
+        if item0 := self.parse_items__alt0__item1__alts__alt0__item0__alts__alt0__item0(
             pos=pos
         ):
-            pos = no_ws.pos
-            result.append_no_ws(child=no_ws.result)
+            pos = item0.pos
+            result.append_no_ws(child=item0.result)
         else:
             return None
         result.span = fltk.fegen.pyrt.terminalsrc.Span(start=result.span.start, end=pos)
         return fltk.fegen.pyrt.memo.ApplyResult(pos=pos, result=result)
 
-    def parse_items__alt0__item1__alts__alt0__item0__alts__alt0__no_ws(
+    def parse_items__alt0__item1__alts__alt0__item0__alts__alt0__item0(
         self, pos: int
     ) -> typing.Optional[
         fltk.fegen.pyrt.memo.ApplyResult[int, fltk.fegen.pyrt.terminalsrc.Span]
@@ -419,17 +432,17 @@ class Parser:
         result: bootstrap_cst.Items = bootstrap_cst.Items(
             span=fltk.fegen.pyrt.terminalsrc.Span(start=pos, end=-1)
         )
-        if ws := self.parse_items__alt0__item1__alts__alt0__item0__alts__alt1__ws(
+        if item0 := self.parse_items__alt0__item1__alts__alt0__item0__alts__alt1__item0(
             pos=pos
         ):
-            pos = ws.pos
-            result.append_ws(child=ws.result)
+            pos = item0.pos
+            result.append_ws(child=item0.result)
         else:
             return None
         result.span = fltk.fegen.pyrt.terminalsrc.Span(start=result.span.start, end=pos)
         return fltk.fegen.pyrt.memo.ApplyResult(pos=pos, result=result)
 
-    def parse_items__alt0__item1__alts__alt0__item0__alts__alt1__ws(
+    def parse_items__alt0__item1__alts__alt0__item0__alts__alt1__item0(
         self, pos: int
     ) -> typing.Optional[
         fltk.fegen.pyrt.memo.ApplyResult[int, fltk.fegen.pyrt.terminalsrc.Span]
@@ -441,7 +454,7 @@ class Parser:
     ) -> typing.Optional[fltk.fegen.pyrt.memo.ApplyResult[int, bootstrap_cst.Items]]:
         return self.parse_items__alt0__item1__alts__alt0__item0__alts(pos=pos)
 
-    def parse_items__alt0__item1__alts__alt0__item(
+    def parse_items__alt0__item1__alts__alt0__item1(
         self, pos: int
     ) -> typing.Optional[fltk.fegen.pyrt.memo.ApplyResult[int, bootstrap_cst.Item]]:
         return self.apply__parse_item(pos=pos)
@@ -473,15 +486,15 @@ class Parser:
         result: bootstrap_cst.Items = bootstrap_cst.Items(
             span=fltk.fegen.pyrt.terminalsrc.Span(start=pos, end=-1)
         )
-        if no_ws := self.parse_items__alt0__item2__alts__alt0__no_ws(pos=pos):
-            pos = no_ws.pos
-            result.append_no_ws(child=no_ws.result)
+        if item0 := self.parse_items__alt0__item2__alts__alt0__item0(pos=pos):
+            pos = item0.pos
+            result.append_no_ws(child=item0.result)
         else:
             return None
         result.span = fltk.fegen.pyrt.terminalsrc.Span(start=result.span.start, end=pos)
         return fltk.fegen.pyrt.memo.ApplyResult(pos=pos, result=result)
 
-    def parse_items__alt0__item2__alts__alt0__no_ws(
+    def parse_items__alt0__item2__alts__alt0__item0(
         self, pos: int
     ) -> typing.Optional[
         fltk.fegen.pyrt.memo.ApplyResult[int, fltk.fegen.pyrt.terminalsrc.Span]
@@ -494,15 +507,15 @@ class Parser:
         result: bootstrap_cst.Items = bootstrap_cst.Items(
             span=fltk.fegen.pyrt.terminalsrc.Span(start=pos, end=-1)
         )
-        if ws := self.parse_items__alt0__item2__alts__alt1__ws(pos=pos):
-            pos = ws.pos
-            result.append_ws(child=ws.result)
+        if item0 := self.parse_items__alt0__item2__alts__alt1__item0(pos=pos):
+            pos = item0.pos
+            result.append_ws(child=item0.result)
         else:
             return None
         result.span = fltk.fegen.pyrt.terminalsrc.Span(start=result.span.start, end=pos)
         return fltk.fegen.pyrt.memo.ApplyResult(pos=pos, result=result)
 
-    def parse_items__alt0__item2__alts__alt1__ws(
+    def parse_items__alt0__item2__alts__alt1__item0(
         self, pos: int
     ) -> typing.Optional[
         fltk.fegen.pyrt.memo.ApplyResult[int, fltk.fegen.pyrt.terminalsrc.Span]
@@ -540,19 +553,19 @@ class Parser:
         if item0 := self.parse_item__alt0__item0(pos=pos):
             pos = item0.pos
             result.children.extend(item0.result.children)
-        if disposition := self.parse_item__alt0__disposition(pos=pos):
-            pos = disposition.pos
-            result.append_disposition(child=disposition.result)
-        if term := self.parse_item__alt0__term(pos=pos):
-            pos = term.pos
-            result.append_term(child=term.result)
+        if item1 := self.parse_item__alt0__item1(pos=pos):
+            pos = item1.pos
+            result.append_disposition(child=item1.result)
+        if item2 := self.parse_item__alt0__item2(pos=pos):
+            pos = item2.pos
+            result.append_term(child=item2.result)
         else:
             return None
-        if quantifier := self.parse_item__alt0__quantifier(pos=pos):
-            pos = quantifier.pos
-            result.append_quantifier(child=quantifier.result)
-        if ws_after__quantifier := self.consume_regex(pos=pos, regex="\\s+"):
-            pos = ws_after__quantifier.pos
+        if item3 := self.parse_item__alt0__item3(pos=pos):
+            pos = item3.pos
+            result.append_quantifier(child=item3.result)
+        if ws_after__item3 := self.consume_regex(pos=pos, regex="\\s+"):
+            pos = ws_after__item3.pos
         result.span = fltk.fegen.pyrt.terminalsrc.Span(start=result.span.start, end=pos)
         return fltk.fegen.pyrt.memo.ApplyResult(pos=pos, result=result)
 
@@ -569,9 +582,9 @@ class Parser:
         result: bootstrap_cst.Item = bootstrap_cst.Item(
             span=fltk.fegen.pyrt.terminalsrc.Span(start=pos, end=-1)
         )
-        if label := self.parse_item__alt0__item0__alts__alt0__label(pos=pos):
-            pos = label.pos
-            result.append_label(child=label.result)
+        if item0 := self.parse_item__alt0__item0__alts__alt0__item0(pos=pos):
+            pos = item0.pos
+            result.append_label(child=item0.result)
         else:
             return None
         if item1 := self.parse_item__alt0__item0__alts__alt0__item1(pos=pos):
@@ -581,7 +594,7 @@ class Parser:
         result.span = fltk.fegen.pyrt.terminalsrc.Span(start=result.span.start, end=pos)
         return fltk.fegen.pyrt.memo.ApplyResult(pos=pos, result=result)
 
-    def parse_item__alt0__item0__alts__alt0__label(
+    def parse_item__alt0__item0__alts__alt0__item0(
         self, pos: int
     ) -> typing.Optional[
         fltk.fegen.pyrt.memo.ApplyResult[int, bootstrap_cst.Identifier]
@@ -600,19 +613,19 @@ class Parser:
     ) -> typing.Optional[fltk.fegen.pyrt.memo.ApplyResult[int, bootstrap_cst.Item]]:
         return self.parse_item__alt0__item0__alts(pos=pos)
 
-    def parse_item__alt0__disposition(
+    def parse_item__alt0__item1(
         self, pos: int
     ) -> typing.Optional[
         fltk.fegen.pyrt.memo.ApplyResult[int, bootstrap_cst.Disposition]
     ]:
         return self.apply__parse_disposition(pos=pos)
 
-    def parse_item__alt0__term(
+    def parse_item__alt0__item2(
         self, pos: int
     ) -> typing.Optional[fltk.fegen.pyrt.memo.ApplyResult[int, bootstrap_cst.Term]]:
         return self.apply__parse_term(pos=pos)
 
-    def parse_item__alt0__quantifier(
+    def parse_item__alt0__item3(
         self, pos: int
     ) -> typing.Optional[
         fltk.fegen.pyrt.memo.ApplyResult[int, bootstrap_cst.Quantifier]
@@ -648,15 +661,15 @@ class Parser:
         result: bootstrap_cst.Term = bootstrap_cst.Term(
             span=fltk.fegen.pyrt.terminalsrc.Span(start=pos, end=-1)
         )
-        if identifier := self.parse_term__alt0__identifier(pos=pos):
-            pos = identifier.pos
-            result.append_identifier(child=identifier.result)
+        if item0 := self.parse_term__alt0__item0(pos=pos):
+            pos = item0.pos
+            result.append_identifier(child=item0.result)
         else:
             return None
         result.span = fltk.fegen.pyrt.terminalsrc.Span(start=result.span.start, end=pos)
         return fltk.fegen.pyrt.memo.ApplyResult(pos=pos, result=result)
 
-    def parse_term__alt0__identifier(
+    def parse_term__alt0__item0(
         self, pos: int
     ) -> typing.Optional[
         fltk.fegen.pyrt.memo.ApplyResult[int, bootstrap_cst.Identifier]
@@ -669,15 +682,15 @@ class Parser:
         result: bootstrap_cst.Term = bootstrap_cst.Term(
             span=fltk.fegen.pyrt.terminalsrc.Span(start=pos, end=-1)
         )
-        if literal := self.parse_term__alt1__literal(pos=pos):
-            pos = literal.pos
-            result.append_literal(child=literal.result)
+        if item0 := self.parse_term__alt1__item0(pos=pos):
+            pos = item0.pos
+            result.append_literal(child=item0.result)
         else:
             return None
         result.span = fltk.fegen.pyrt.terminalsrc.Span(start=result.span.start, end=pos)
         return fltk.fegen.pyrt.memo.ApplyResult(pos=pos, result=result)
 
-    def parse_term__alt1__literal(
+    def parse_term__alt1__item0(
         self, pos: int
     ) -> typing.Optional[fltk.fegen.pyrt.memo.ApplyResult[int, bootstrap_cst.Literal]]:
         return self.apply__parse_literal(pos=pos)
@@ -692,9 +705,9 @@ class Parser:
             pos = item0.pos
         else:
             return None
-        if regex := self.parse_term__alt2__regex(pos=pos):
-            pos = regex.pos
-            result.append_regex(child=regex.result)
+        if item1 := self.parse_term__alt2__item1(pos=pos):
+            pos = item1.pos
+            result.append_regex(child=item1.result)
         else:
             return None
         if item2 := self.parse_term__alt2__item2(pos=pos):
@@ -711,7 +724,7 @@ class Parser:
     ]:
         return self.consume_literal(pos=pos, literal="/")
 
-    def parse_term__alt2__regex(
+    def parse_term__alt2__item1(
         self, pos: int
     ) -> typing.Optional[
         fltk.fegen.pyrt.memo.ApplyResult[int, bootstrap_cst.RawString]
@@ -737,13 +750,13 @@ class Parser:
             return None
         if ws_after__item0 := self.consume_regex(pos=pos, regex="\\s+"):
             pos = ws_after__item0.pos
-        if alternatives := self.parse_term__alt3__alternatives(pos=pos):
-            pos = alternatives.pos
-            result.append_alternatives(child=alternatives.result)
+        if item1 := self.parse_term__alt3__item1(pos=pos):
+            pos = item1.pos
+            result.append_alternatives(child=item1.result)
         else:
             return None
-        if ws_after__alternatives := self.consume_regex(pos=pos, regex="\\s+"):
-            pos = ws_after__alternatives.pos
+        if ws_after__item1 := self.consume_regex(pos=pos, regex="\\s+"):
+            pos = ws_after__item1.pos
         if item2 := self.parse_term__alt3__item2(pos=pos):
             pos = item2.pos
         else:
@@ -758,7 +771,7 @@ class Parser:
     ]:
         return self.consume_literal(pos=pos, literal="(")
 
-    def parse_term__alt3__alternatives(
+    def parse_term__alt3__item1(
         self, pos: int
     ) -> typing.Optional[
         fltk.fegen.pyrt.memo.ApplyResult[int, bootstrap_cst.Alternatives]
@@ -805,15 +818,15 @@ class Parser:
         result: bootstrap_cst.Disposition = bootstrap_cst.Disposition(
             span=fltk.fegen.pyrt.terminalsrc.Span(start=pos, end=-1)
         )
-        if suppress := self.parse_disposition__alt0__suppress(pos=pos):
-            pos = suppress.pos
-            result.append_suppress(child=suppress.result)
+        if item0 := self.parse_disposition__alt0__item0(pos=pos):
+            pos = item0.pos
+            result.append_suppress(child=item0.result)
         else:
             return None
         result.span = fltk.fegen.pyrt.terminalsrc.Span(start=result.span.start, end=pos)
         return fltk.fegen.pyrt.memo.ApplyResult(pos=pos, result=result)
 
-    def parse_disposition__alt0__suppress(
+    def parse_disposition__alt0__item0(
         self, pos: int
     ) -> typing.Optional[
         fltk.fegen.pyrt.memo.ApplyResult[int, fltk.fegen.pyrt.terminalsrc.Span]
@@ -828,15 +841,15 @@ class Parser:
         result: bootstrap_cst.Disposition = bootstrap_cst.Disposition(
             span=fltk.fegen.pyrt.terminalsrc.Span(start=pos, end=-1)
         )
-        if include := self.parse_disposition__alt1__include(pos=pos):
-            pos = include.pos
-            result.append_include(child=include.result)
+        if item0 := self.parse_disposition__alt1__item0(pos=pos):
+            pos = item0.pos
+            result.append_include(child=item0.result)
         else:
             return None
         result.span = fltk.fegen.pyrt.terminalsrc.Span(start=result.span.start, end=pos)
         return fltk.fegen.pyrt.memo.ApplyResult(pos=pos, result=result)
 
-    def parse_disposition__alt1__include(
+    def parse_disposition__alt1__item0(
         self, pos: int
     ) -> typing.Optional[
         fltk.fegen.pyrt.memo.ApplyResult[int, fltk.fegen.pyrt.terminalsrc.Span]
@@ -851,15 +864,15 @@ class Parser:
         result: bootstrap_cst.Disposition = bootstrap_cst.Disposition(
             span=fltk.fegen.pyrt.terminalsrc.Span(start=pos, end=-1)
         )
-        if inline := self.parse_disposition__alt2__inline(pos=pos):
-            pos = inline.pos
-            result.append_inline(child=inline.result)
+        if item0 := self.parse_disposition__alt2__item0(pos=pos):
+            pos = item0.pos
+            result.append_inline(child=item0.result)
         else:
             return None
         result.span = fltk.fegen.pyrt.terminalsrc.Span(start=result.span.start, end=pos)
         return fltk.fegen.pyrt.memo.ApplyResult(pos=pos, result=result)
 
-    def parse_disposition__alt2__inline(
+    def parse_disposition__alt2__item0(
         self, pos: int
     ) -> typing.Optional[
         fltk.fegen.pyrt.memo.ApplyResult[int, fltk.fegen.pyrt.terminalsrc.Span]
@@ -899,15 +912,15 @@ class Parser:
         result: bootstrap_cst.Quantifier = bootstrap_cst.Quantifier(
             span=fltk.fegen.pyrt.terminalsrc.Span(start=pos, end=-1)
         )
-        if optional := self.parse_quantifier__alt0__optional(pos=pos):
-            pos = optional.pos
-            result.append_optional(child=optional.result)
+        if item0 := self.parse_quantifier__alt0__item0(pos=pos):
+            pos = item0.pos
+            result.append_optional(child=item0.result)
         else:
             return None
         result.span = fltk.fegen.pyrt.terminalsrc.Span(start=result.span.start, end=pos)
         return fltk.fegen.pyrt.memo.ApplyResult(pos=pos, result=result)
 
-    def parse_quantifier__alt0__optional(
+    def parse_quantifier__alt0__item0(
         self, pos: int
     ) -> typing.Optional[
         fltk.fegen.pyrt.memo.ApplyResult[int, fltk.fegen.pyrt.terminalsrc.Span]
@@ -922,15 +935,15 @@ class Parser:
         result: bootstrap_cst.Quantifier = bootstrap_cst.Quantifier(
             span=fltk.fegen.pyrt.terminalsrc.Span(start=pos, end=-1)
         )
-        if one_or_more := self.parse_quantifier__alt1__one_or_more(pos=pos):
-            pos = one_or_more.pos
-            result.append_one_or_more(child=one_or_more.result)
+        if item0 := self.parse_quantifier__alt1__item0(pos=pos):
+            pos = item0.pos
+            result.append_one_or_more(child=item0.result)
         else:
             return None
         result.span = fltk.fegen.pyrt.terminalsrc.Span(start=result.span.start, end=pos)
         return fltk.fegen.pyrt.memo.ApplyResult(pos=pos, result=result)
 
-    def parse_quantifier__alt1__one_or_more(
+    def parse_quantifier__alt1__item0(
         self, pos: int
     ) -> typing.Optional[
         fltk.fegen.pyrt.memo.ApplyResult[int, fltk.fegen.pyrt.terminalsrc.Span]
@@ -945,15 +958,15 @@ class Parser:
         result: bootstrap_cst.Quantifier = bootstrap_cst.Quantifier(
             span=fltk.fegen.pyrt.terminalsrc.Span(start=pos, end=-1)
         )
-        if zero_or_more := self.parse_quantifier__alt2__zero_or_more(pos=pos):
-            pos = zero_or_more.pos
-            result.append_zero_or_more(child=zero_or_more.result)
+        if item0 := self.parse_quantifier__alt2__item0(pos=pos):
+            pos = item0.pos
+            result.append_zero_or_more(child=item0.result)
         else:
             return None
         result.span = fltk.fegen.pyrt.terminalsrc.Span(start=result.span.start, end=pos)
         return fltk.fegen.pyrt.memo.ApplyResult(pos=pos, result=result)
 
-    def parse_quantifier__alt2__zero_or_more(
+    def parse_quantifier__alt2__item0(
         self, pos: int
     ) -> typing.Optional[
         fltk.fegen.pyrt.memo.ApplyResult[int, fltk.fegen.pyrt.terminalsrc.Span]
@@ -989,15 +1002,15 @@ class Parser:
         result: bootstrap_cst.Identifier = bootstrap_cst.Identifier(
             span=fltk.fegen.pyrt.terminalsrc.Span(start=pos, end=-1)
         )
-        if name := self.parse_identifier__alt0__name(pos=pos):
-            pos = name.pos
-            result.append_name(child=name.result)
+        if item0 := self.parse_identifier__alt0__item0(pos=pos):
+            pos = item0.pos
+            result.append_name(child=item0.result)
         else:
             return None
         result.span = fltk.fegen.pyrt.terminalsrc.Span(start=result.span.start, end=pos)
         return fltk.fegen.pyrt.memo.ApplyResult(pos=pos, result=result)
 
-    def parse_identifier__alt0__name(
+    def parse_identifier__alt0__item0(
         self, pos: int
     ) -> typing.Optional[
         fltk.fegen.pyrt.memo.ApplyResult[int, fltk.fegen.pyrt.terminalsrc.Span]
@@ -1033,15 +1046,15 @@ class Parser:
         result: bootstrap_cst.RawString = bootstrap_cst.RawString(
             span=fltk.fegen.pyrt.terminalsrc.Span(start=pos, end=-1)
         )
-        if value := self.parse_raw_string__alt0__value(pos=pos):
-            pos = value.pos
-            result.append_value(child=value.result)
+        if item0 := self.parse_raw_string__alt0__item0(pos=pos):
+            pos = item0.pos
+            result.append_value(child=item0.result)
         else:
             return None
         result.span = fltk.fegen.pyrt.terminalsrc.Span(start=result.span.start, end=pos)
         return fltk.fegen.pyrt.memo.ApplyResult(pos=pos, result=result)
 
-    def parse_raw_string__alt0__value(
+    def parse_raw_string__alt0__item0(
         self, pos: int
     ) -> typing.Optional[
         fltk.fegen.pyrt.memo.ApplyResult[int, fltk.fegen.pyrt.terminalsrc.Span]
@@ -1071,15 +1084,15 @@ class Parser:
         result: bootstrap_cst.Literal = bootstrap_cst.Literal(
             span=fltk.fegen.pyrt.terminalsrc.Span(start=pos, end=-1)
         )
-        if value := self.parse_literal__alt0__value(pos=pos):
-            pos = value.pos
-            result.append_value(child=value.result)
+        if item0 := self.parse_literal__alt0__item0(pos=pos):
+            pos = item0.pos
+            result.append_value(child=item0.result)
         else:
             return None
         result.span = fltk.fegen.pyrt.terminalsrc.Span(start=result.span.start, end=pos)
         return fltk.fegen.pyrt.memo.ApplyResult(pos=pos, result=result)
 
-    def parse_literal__alt0__value(
+    def parse_literal__alt0__item0(
         self, pos: int
     ) -> typing.Optional[
         fltk.fegen.pyrt.memo.ApplyResult[int, fltk.fegen.pyrt.terminalsrc.Span]

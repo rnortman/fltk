@@ -7,7 +7,7 @@ import fltk.fegen.pyrt.terminalsrc
 @dataclasses.dataclass
 class Grammar:
     class Label(enum.Enum):
-        rule = enum.auto()
+        RULE = enum.auto()
 
     span: fltk.fegen.pyrt.terminalsrc.Span = fltk.fegen.pyrt.terminalsrc.UnknownSpan
     children: list[tuple[typing.Optional[Label], "Rule"]] = dataclasses.field(
@@ -28,16 +28,16 @@ class Grammar:
         return self.children[0]
 
     def append_rule(self, child: "Rule") -> None:
-        self.children.append((Grammar.Label.rule, child))
+        self.children.append((Grammar.Label.RULE, child))
 
     def extend_rule(self, children: typing.Iterable["Rule"]) -> None:
-        self.children.extend((Grammar.Label.rule, child) for child in children)
+        self.children.extend((Grammar.Label.RULE, child) for child in children)
 
     def children_rule(self) -> typing.Iterator["Rule"]:
         return (
             typing.cast("Rule", child)
             for label, child in self.children
-            if label == Grammar.Label.rule
+            if label == Grammar.Label.RULE
         )
 
     def child_rule(self) -> "Rule":
@@ -56,8 +56,8 @@ class Grammar:
 @dataclasses.dataclass
 class Rule:
     class Label(enum.Enum):
-        alternatives = enum.auto()
-        name = enum.auto()
+        ALTERNATIVES = enum.auto()
+        NAME = enum.auto()
 
     span: fltk.fegen.pyrt.terminalsrc.Span = fltk.fegen.pyrt.terminalsrc.UnknownSpan
     children: list[
@@ -86,16 +86,16 @@ class Rule:
         return self.children[0]
 
     def append_alternatives(self, child: "Alternatives") -> None:
-        self.children.append((Rule.Label.alternatives, child))
+        self.children.append((Rule.Label.ALTERNATIVES, child))
 
     def extend_alternatives(self, children: typing.Iterable["Alternatives"]) -> None:
-        self.children.extend((Rule.Label.alternatives, child) for child in children)
+        self.children.extend((Rule.Label.ALTERNATIVES, child) for child in children)
 
     def children_alternatives(self) -> typing.Iterator["Alternatives"]:
         return (
             typing.cast("Alternatives", child)
             for label, child in self.children
-            if label == Rule.Label.alternatives
+            if label == Rule.Label.ALTERNATIVES
         )
 
     def child_alternatives(self) -> "Alternatives":
@@ -111,16 +111,16 @@ class Rule:
         return children[0] if children else None
 
     def append_name(self, child: "Identifier") -> None:
-        self.children.append((Rule.Label.name, child))
+        self.children.append((Rule.Label.NAME, child))
 
     def extend_name(self, children: typing.Iterable["Identifier"]) -> None:
-        self.children.extend((Rule.Label.name, child) for child in children)
+        self.children.extend((Rule.Label.NAME, child) for child in children)
 
     def children_name(self) -> typing.Iterator["Identifier"]:
         return (
             typing.cast("Identifier", child)
             for label, child in self.children
-            if label == Rule.Label.name
+            if label == Rule.Label.NAME
         )
 
     def child_name(self) -> "Identifier":
@@ -139,7 +139,7 @@ class Rule:
 @dataclasses.dataclass
 class Alternatives:
     class Label(enum.Enum):
-        items = enum.auto()
+        ITEMS = enum.auto()
 
     span: fltk.fegen.pyrt.terminalsrc.Span = fltk.fegen.pyrt.terminalsrc.UnknownSpan
     children: list[tuple[typing.Optional[Label], "Items"]] = dataclasses.field(
@@ -160,16 +160,16 @@ class Alternatives:
         return self.children[0]
 
     def append_items(self, child: "Items") -> None:
-        self.children.append((Alternatives.Label.items, child))
+        self.children.append((Alternatives.Label.ITEMS, child))
 
     def extend_items(self, children: typing.Iterable["Items"]) -> None:
-        self.children.extend((Alternatives.Label.items, child) for child in children)
+        self.children.extend((Alternatives.Label.ITEMS, child) for child in children)
 
     def children_items(self) -> typing.Iterator["Items"]:
         return (
             typing.cast("Items", child)
             for label, child in self.children
-            if label == Alternatives.Label.items
+            if label == Alternatives.Label.ITEMS
         )
 
     def child_items(self) -> "Items":
@@ -188,9 +188,10 @@ class Alternatives:
 @dataclasses.dataclass
 class Items:
     class Label(enum.Enum):
-        item = enum.auto()
-        no_ws = enum.auto()
-        ws = enum.auto()
+        ITEM = enum.auto()
+        NO_WS = enum.auto()
+        WS_ALLOWED = enum.auto()
+        WS_REQUIRED = enum.auto()
 
     span: fltk.fegen.pyrt.terminalsrc.Span = fltk.fegen.pyrt.terminalsrc.UnknownSpan
     children: list[
@@ -226,16 +227,16 @@ class Items:
         return self.children[0]
 
     def append_item(self, child: "Item") -> None:
-        self.children.append((Items.Label.item, child))
+        self.children.append((Items.Label.ITEM, child))
 
     def extend_item(self, children: typing.Iterable["Item"]) -> None:
-        self.children.extend((Items.Label.item, child) for child in children)
+        self.children.extend((Items.Label.ITEM, child) for child in children)
 
     def children_item(self) -> typing.Iterator["Item"]:
         return (
             typing.cast("Item", child)
             for label, child in self.children
-            if label == Items.Label.item
+            if label == Items.Label.ITEM
         )
 
     def child_item(self) -> "Item":
@@ -251,18 +252,18 @@ class Items:
         return children[0] if children else None
 
     def append_no_ws(self, child: "fltk.fegen.pyrt.terminalsrc.Span") -> None:
-        self.children.append((Items.Label.no_ws, child))
+        self.children.append((Items.Label.NO_WS, child))
 
     def extend_no_ws(
         self, children: typing.Iterable["fltk.fegen.pyrt.terminalsrc.Span"]
     ) -> None:
-        self.children.extend((Items.Label.no_ws, child) for child in children)
+        self.children.extend((Items.Label.NO_WS, child) for child in children)
 
     def children_no_ws(self) -> typing.Iterator["fltk.fegen.pyrt.terminalsrc.Span"]:
         return (
             typing.cast("fltk.fegen.pyrt.terminalsrc.Span", child)
             for label, child in self.children
-            if label == Items.Label.no_ws
+            if label == Items.Label.NO_WS
         )
 
     def child_no_ws(self) -> "fltk.fegen.pyrt.terminalsrc.Span":
@@ -277,41 +278,72 @@ class Items:
             raise ValueError(f"Expected at most one no_ws child but have {n}")
         return children[0] if children else None
 
-    def append_ws(self, child: "fltk.fegen.pyrt.terminalsrc.Span") -> None:
-        self.children.append((Items.Label.ws, child))
+    def append_ws_allowed(self, child: "fltk.fegen.pyrt.terminalsrc.Span") -> None:
+        self.children.append((Items.Label.WS_ALLOWED, child))
 
-    def extend_ws(
+    def extend_ws_allowed(
         self, children: typing.Iterable["fltk.fegen.pyrt.terminalsrc.Span"]
     ) -> None:
-        self.children.extend((Items.Label.ws, child) for child in children)
+        self.children.extend((Items.Label.WS_ALLOWED, child) for child in children)
 
-    def children_ws(self) -> typing.Iterator["fltk.fegen.pyrt.terminalsrc.Span"]:
+    def children_ws_allowed(
+        self,
+    ) -> typing.Iterator["fltk.fegen.pyrt.terminalsrc.Span"]:
         return (
             typing.cast("fltk.fegen.pyrt.terminalsrc.Span", child)
             for label, child in self.children
-            if label == Items.Label.ws
+            if label == Items.Label.WS_ALLOWED
         )
 
-    def child_ws(self) -> "fltk.fegen.pyrt.terminalsrc.Span":
-        children = list(self.children_ws())
+    def child_ws_allowed(self) -> "fltk.fegen.pyrt.terminalsrc.Span":
+        children = list(self.children_ws_allowed())
         if (n := len(children)) != 1:
-            raise ValueError(f"Expected one ws child but have {n}")
+            raise ValueError(f"Expected one ws_allowed child but have {n}")
         return children[0]
 
-    def maybe_ws(self) -> typing.Optional["fltk.fegen.pyrt.terminalsrc.Span"]:
-        children = list(self.children_ws())
+    def maybe_ws_allowed(self) -> typing.Optional["fltk.fegen.pyrt.terminalsrc.Span"]:
+        children = list(self.children_ws_allowed())
         if (n := len(children)) > 1:
-            raise ValueError(f"Expected at most one ws child but have {n}")
+            raise ValueError(f"Expected at most one ws_allowed child but have {n}")
+        return children[0] if children else None
+
+    def append_ws_required(self, child: "fltk.fegen.pyrt.terminalsrc.Span") -> None:
+        self.children.append((Items.Label.WS_REQUIRED, child))
+
+    def extend_ws_required(
+        self, children: typing.Iterable["fltk.fegen.pyrt.terminalsrc.Span"]
+    ) -> None:
+        self.children.extend((Items.Label.WS_REQUIRED, child) for child in children)
+
+    def children_ws_required(
+        self,
+    ) -> typing.Iterator["fltk.fegen.pyrt.terminalsrc.Span"]:
+        return (
+            typing.cast("fltk.fegen.pyrt.terminalsrc.Span", child)
+            for label, child in self.children
+            if label == Items.Label.WS_REQUIRED
+        )
+
+    def child_ws_required(self) -> "fltk.fegen.pyrt.terminalsrc.Span":
+        children = list(self.children_ws_required())
+        if (n := len(children)) != 1:
+            raise ValueError(f"Expected one ws_required child but have {n}")
+        return children[0]
+
+    def maybe_ws_required(self) -> typing.Optional["fltk.fegen.pyrt.terminalsrc.Span"]:
+        children = list(self.children_ws_required())
+        if (n := len(children)) > 1:
+            raise ValueError(f"Expected at most one ws_required child but have {n}")
         return children[0] if children else None
 
 
 @dataclasses.dataclass
 class Item:
     class Label(enum.Enum):
-        disposition = enum.auto()
-        label = enum.auto()
-        quantifier = enum.auto()
-        term = enum.auto()
+        DISPOSITION = enum.auto()
+        LABEL = enum.auto()
+        QUANTIFIER = enum.auto()
+        TERM = enum.auto()
 
     span: fltk.fegen.pyrt.terminalsrc.Span = fltk.fegen.pyrt.terminalsrc.UnknownSpan
     children: list[
@@ -348,16 +380,16 @@ class Item:
         return self.children[0]
 
     def append_disposition(self, child: "Disposition") -> None:
-        self.children.append((Item.Label.disposition, child))
+        self.children.append((Item.Label.DISPOSITION, child))
 
     def extend_disposition(self, children: typing.Iterable["Disposition"]) -> None:
-        self.children.extend((Item.Label.disposition, child) for child in children)
+        self.children.extend((Item.Label.DISPOSITION, child) for child in children)
 
     def children_disposition(self) -> typing.Iterator["Disposition"]:
         return (
             typing.cast("Disposition", child)
             for label, child in self.children
-            if label == Item.Label.disposition
+            if label == Item.Label.DISPOSITION
         )
 
     def child_disposition(self) -> "Disposition":
@@ -373,16 +405,16 @@ class Item:
         return children[0] if children else None
 
     def append_label(self, child: "Identifier") -> None:
-        self.children.append((Item.Label.label, child))
+        self.children.append((Item.Label.LABEL, child))
 
     def extend_label(self, children: typing.Iterable["Identifier"]) -> None:
-        self.children.extend((Item.Label.label, child) for child in children)
+        self.children.extend((Item.Label.LABEL, child) for child in children)
 
     def children_label(self) -> typing.Iterator["Identifier"]:
         return (
             typing.cast("Identifier", child)
             for label, child in self.children
-            if label == Item.Label.label
+            if label == Item.Label.LABEL
         )
 
     def child_label(self) -> "Identifier":
@@ -398,16 +430,16 @@ class Item:
         return children[0] if children else None
 
     def append_quantifier(self, child: "Quantifier") -> None:
-        self.children.append((Item.Label.quantifier, child))
+        self.children.append((Item.Label.QUANTIFIER, child))
 
     def extend_quantifier(self, children: typing.Iterable["Quantifier"]) -> None:
-        self.children.extend((Item.Label.quantifier, child) for child in children)
+        self.children.extend((Item.Label.QUANTIFIER, child) for child in children)
 
     def children_quantifier(self) -> typing.Iterator["Quantifier"]:
         return (
             typing.cast("Quantifier", child)
             for label, child in self.children
-            if label == Item.Label.quantifier
+            if label == Item.Label.QUANTIFIER
         )
 
     def child_quantifier(self) -> "Quantifier":
@@ -423,16 +455,16 @@ class Item:
         return children[0] if children else None
 
     def append_term(self, child: "Term") -> None:
-        self.children.append((Item.Label.term, child))
+        self.children.append((Item.Label.TERM, child))
 
     def extend_term(self, children: typing.Iterable["Term"]) -> None:
-        self.children.extend((Item.Label.term, child) for child in children)
+        self.children.extend((Item.Label.TERM, child) for child in children)
 
     def children_term(self) -> typing.Iterator["Term"]:
         return (
             typing.cast("Term", child)
             for label, child in self.children
-            if label == Item.Label.term
+            if label == Item.Label.TERM
         )
 
     def child_term(self) -> "Term":
@@ -451,10 +483,10 @@ class Item:
 @dataclasses.dataclass
 class Term:
     class Label(enum.Enum):
-        alternatives = enum.auto()
-        identifier = enum.auto()
-        literal = enum.auto()
-        regex = enum.auto()
+        ALTERNATIVES = enum.auto()
+        IDENTIFIER = enum.auto()
+        LITERAL = enum.auto()
+        REGEX = enum.auto()
 
     span: fltk.fegen.pyrt.terminalsrc.Span = fltk.fegen.pyrt.terminalsrc.UnknownSpan
     children: list[
@@ -491,16 +523,16 @@ class Term:
         return self.children[0]
 
     def append_alternatives(self, child: "Alternatives") -> None:
-        self.children.append((Term.Label.alternatives, child))
+        self.children.append((Term.Label.ALTERNATIVES, child))
 
     def extend_alternatives(self, children: typing.Iterable["Alternatives"]) -> None:
-        self.children.extend((Term.Label.alternatives, child) for child in children)
+        self.children.extend((Term.Label.ALTERNATIVES, child) for child in children)
 
     def children_alternatives(self) -> typing.Iterator["Alternatives"]:
         return (
             typing.cast("Alternatives", child)
             for label, child in self.children
-            if label == Term.Label.alternatives
+            if label == Term.Label.ALTERNATIVES
         )
 
     def child_alternatives(self) -> "Alternatives":
@@ -516,16 +548,16 @@ class Term:
         return children[0] if children else None
 
     def append_identifier(self, child: "Identifier") -> None:
-        self.children.append((Term.Label.identifier, child))
+        self.children.append((Term.Label.IDENTIFIER, child))
 
     def extend_identifier(self, children: typing.Iterable["Identifier"]) -> None:
-        self.children.extend((Term.Label.identifier, child) for child in children)
+        self.children.extend((Term.Label.IDENTIFIER, child) for child in children)
 
     def children_identifier(self) -> typing.Iterator["Identifier"]:
         return (
             typing.cast("Identifier", child)
             for label, child in self.children
-            if label == Term.Label.identifier
+            if label == Term.Label.IDENTIFIER
         )
 
     def child_identifier(self) -> "Identifier":
@@ -541,16 +573,16 @@ class Term:
         return children[0] if children else None
 
     def append_literal(self, child: "Literal") -> None:
-        self.children.append((Term.Label.literal, child))
+        self.children.append((Term.Label.LITERAL, child))
 
     def extend_literal(self, children: typing.Iterable["Literal"]) -> None:
-        self.children.extend((Term.Label.literal, child) for child in children)
+        self.children.extend((Term.Label.LITERAL, child) for child in children)
 
     def children_literal(self) -> typing.Iterator["Literal"]:
         return (
             typing.cast("Literal", child)
             for label, child in self.children
-            if label == Term.Label.literal
+            if label == Term.Label.LITERAL
         )
 
     def child_literal(self) -> "Literal":
@@ -566,16 +598,16 @@ class Term:
         return children[0] if children else None
 
     def append_regex(self, child: "RawString") -> None:
-        self.children.append((Term.Label.regex, child))
+        self.children.append((Term.Label.REGEX, child))
 
     def extend_regex(self, children: typing.Iterable["RawString"]) -> None:
-        self.children.extend((Term.Label.regex, child) for child in children)
+        self.children.extend((Term.Label.REGEX, child) for child in children)
 
     def children_regex(self) -> typing.Iterator["RawString"]:
         return (
             typing.cast("RawString", child)
             for label, child in self.children
-            if label == Term.Label.regex
+            if label == Term.Label.REGEX
         )
 
     def child_regex(self) -> "RawString":
@@ -594,9 +626,9 @@ class Term:
 @dataclasses.dataclass
 class Disposition:
     class Label(enum.Enum):
-        include = enum.auto()
-        inline = enum.auto()
-        suppress = enum.auto()
+        INCLUDE = enum.auto()
+        INLINE = enum.auto()
+        SUPPRESS = enum.auto()
 
     span: fltk.fegen.pyrt.terminalsrc.Span = fltk.fegen.pyrt.terminalsrc.UnknownSpan
     children: list[
@@ -625,18 +657,18 @@ class Disposition:
         return self.children[0]
 
     def append_include(self, child: "fltk.fegen.pyrt.terminalsrc.Span") -> None:
-        self.children.append((Disposition.Label.include, child))
+        self.children.append((Disposition.Label.INCLUDE, child))
 
     def extend_include(
         self, children: typing.Iterable["fltk.fegen.pyrt.terminalsrc.Span"]
     ) -> None:
-        self.children.extend((Disposition.Label.include, child) for child in children)
+        self.children.extend((Disposition.Label.INCLUDE, child) for child in children)
 
     def children_include(self) -> typing.Iterator["fltk.fegen.pyrt.terminalsrc.Span"]:
         return (
             typing.cast("fltk.fegen.pyrt.terminalsrc.Span", child)
             for label, child in self.children
-            if label == Disposition.Label.include
+            if label == Disposition.Label.INCLUDE
         )
 
     def child_include(self) -> "fltk.fegen.pyrt.terminalsrc.Span":
@@ -652,18 +684,18 @@ class Disposition:
         return children[0] if children else None
 
     def append_inline(self, child: "fltk.fegen.pyrt.terminalsrc.Span") -> None:
-        self.children.append((Disposition.Label.inline, child))
+        self.children.append((Disposition.Label.INLINE, child))
 
     def extend_inline(
         self, children: typing.Iterable["fltk.fegen.pyrt.terminalsrc.Span"]
     ) -> None:
-        self.children.extend((Disposition.Label.inline, child) for child in children)
+        self.children.extend((Disposition.Label.INLINE, child) for child in children)
 
     def children_inline(self) -> typing.Iterator["fltk.fegen.pyrt.terminalsrc.Span"]:
         return (
             typing.cast("fltk.fegen.pyrt.terminalsrc.Span", child)
             for label, child in self.children
-            if label == Disposition.Label.inline
+            if label == Disposition.Label.INLINE
         )
 
     def child_inline(self) -> "fltk.fegen.pyrt.terminalsrc.Span":
@@ -679,18 +711,18 @@ class Disposition:
         return children[0] if children else None
 
     def append_suppress(self, child: "fltk.fegen.pyrt.terminalsrc.Span") -> None:
-        self.children.append((Disposition.Label.suppress, child))
+        self.children.append((Disposition.Label.SUPPRESS, child))
 
     def extend_suppress(
         self, children: typing.Iterable["fltk.fegen.pyrt.terminalsrc.Span"]
     ) -> None:
-        self.children.extend((Disposition.Label.suppress, child) for child in children)
+        self.children.extend((Disposition.Label.SUPPRESS, child) for child in children)
 
     def children_suppress(self) -> typing.Iterator["fltk.fegen.pyrt.terminalsrc.Span"]:
         return (
             typing.cast("fltk.fegen.pyrt.terminalsrc.Span", child)
             for label, child in self.children
-            if label == Disposition.Label.suppress
+            if label == Disposition.Label.SUPPRESS
         )
 
     def child_suppress(self) -> "fltk.fegen.pyrt.terminalsrc.Span":
@@ -709,9 +741,9 @@ class Disposition:
 @dataclasses.dataclass
 class Quantifier:
     class Label(enum.Enum):
-        one_or_more = enum.auto()
-        optional = enum.auto()
-        zero_or_more = enum.auto()
+        ONE_OR_MORE = enum.auto()
+        OPTIONAL = enum.auto()
+        ZERO_OR_MORE = enum.auto()
 
     span: fltk.fegen.pyrt.terminalsrc.Span = fltk.fegen.pyrt.terminalsrc.UnknownSpan
     children: list[
@@ -740,13 +772,13 @@ class Quantifier:
         return self.children[0]
 
     def append_one_or_more(self, child: "fltk.fegen.pyrt.terminalsrc.Span") -> None:
-        self.children.append((Quantifier.Label.one_or_more, child))
+        self.children.append((Quantifier.Label.ONE_OR_MORE, child))
 
     def extend_one_or_more(
         self, children: typing.Iterable["fltk.fegen.pyrt.terminalsrc.Span"]
     ) -> None:
         self.children.extend(
-            (Quantifier.Label.one_or_more, child) for child in children
+            (Quantifier.Label.ONE_OR_MORE, child) for child in children
         )
 
     def children_one_or_more(
@@ -755,7 +787,7 @@ class Quantifier:
         return (
             typing.cast("fltk.fegen.pyrt.terminalsrc.Span", child)
             for label, child in self.children
-            if label == Quantifier.Label.one_or_more
+            if label == Quantifier.Label.ONE_OR_MORE
         )
 
     def child_one_or_more(self) -> "fltk.fegen.pyrt.terminalsrc.Span":
@@ -771,18 +803,18 @@ class Quantifier:
         return children[0] if children else None
 
     def append_optional(self, child: "fltk.fegen.pyrt.terminalsrc.Span") -> None:
-        self.children.append((Quantifier.Label.optional, child))
+        self.children.append((Quantifier.Label.OPTIONAL, child))
 
     def extend_optional(
         self, children: typing.Iterable["fltk.fegen.pyrt.terminalsrc.Span"]
     ) -> None:
-        self.children.extend((Quantifier.Label.optional, child) for child in children)
+        self.children.extend((Quantifier.Label.OPTIONAL, child) for child in children)
 
     def children_optional(self) -> typing.Iterator["fltk.fegen.pyrt.terminalsrc.Span"]:
         return (
             typing.cast("fltk.fegen.pyrt.terminalsrc.Span", child)
             for label, child in self.children
-            if label == Quantifier.Label.optional
+            if label == Quantifier.Label.OPTIONAL
         )
 
     def child_optional(self) -> "fltk.fegen.pyrt.terminalsrc.Span":
@@ -798,13 +830,13 @@ class Quantifier:
         return children[0] if children else None
 
     def append_zero_or_more(self, child: "fltk.fegen.pyrt.terminalsrc.Span") -> None:
-        self.children.append((Quantifier.Label.zero_or_more, child))
+        self.children.append((Quantifier.Label.ZERO_OR_MORE, child))
 
     def extend_zero_or_more(
         self, children: typing.Iterable["fltk.fegen.pyrt.terminalsrc.Span"]
     ) -> None:
         self.children.extend(
-            (Quantifier.Label.zero_or_more, child) for child in children
+            (Quantifier.Label.ZERO_OR_MORE, child) for child in children
         )
 
     def children_zero_or_more(
@@ -813,7 +845,7 @@ class Quantifier:
         return (
             typing.cast("fltk.fegen.pyrt.terminalsrc.Span", child)
             for label, child in self.children
-            if label == Quantifier.Label.zero_or_more
+            if label == Quantifier.Label.ZERO_OR_MORE
         )
 
     def child_zero_or_more(self) -> "fltk.fegen.pyrt.terminalsrc.Span":
@@ -832,7 +864,7 @@ class Quantifier:
 @dataclasses.dataclass
 class Identifier:
     class Label(enum.Enum):
-        name = enum.auto()
+        NAME = enum.auto()
 
     span: fltk.fegen.pyrt.terminalsrc.Span = fltk.fegen.pyrt.terminalsrc.UnknownSpan
     children: list[
@@ -861,18 +893,18 @@ class Identifier:
         return self.children[0]
 
     def append_name(self, child: "fltk.fegen.pyrt.terminalsrc.Span") -> None:
-        self.children.append((Identifier.Label.name, child))
+        self.children.append((Identifier.Label.NAME, child))
 
     def extend_name(
         self, children: typing.Iterable["fltk.fegen.pyrt.terminalsrc.Span"]
     ) -> None:
-        self.children.extend((Identifier.Label.name, child) for child in children)
+        self.children.extend((Identifier.Label.NAME, child) for child in children)
 
     def children_name(self) -> typing.Iterator["fltk.fegen.pyrt.terminalsrc.Span"]:
         return (
             typing.cast("fltk.fegen.pyrt.terminalsrc.Span", child)
             for label, child in self.children
-            if label == Identifier.Label.name
+            if label == Identifier.Label.NAME
         )
 
     def child_name(self) -> "fltk.fegen.pyrt.terminalsrc.Span":
@@ -891,7 +923,7 @@ class Identifier:
 @dataclasses.dataclass
 class RawString:
     class Label(enum.Enum):
-        value = enum.auto()
+        VALUE = enum.auto()
 
     span: fltk.fegen.pyrt.terminalsrc.Span = fltk.fegen.pyrt.terminalsrc.UnknownSpan
     children: list[
@@ -920,18 +952,18 @@ class RawString:
         return self.children[0]
 
     def append_value(self, child: "fltk.fegen.pyrt.terminalsrc.Span") -> None:
-        self.children.append((RawString.Label.value, child))
+        self.children.append((RawString.Label.VALUE, child))
 
     def extend_value(
         self, children: typing.Iterable["fltk.fegen.pyrt.terminalsrc.Span"]
     ) -> None:
-        self.children.extend((RawString.Label.value, child) for child in children)
+        self.children.extend((RawString.Label.VALUE, child) for child in children)
 
     def children_value(self) -> typing.Iterator["fltk.fegen.pyrt.terminalsrc.Span"]:
         return (
             typing.cast("fltk.fegen.pyrt.terminalsrc.Span", child)
             for label, child in self.children
-            if label == RawString.Label.value
+            if label == RawString.Label.VALUE
         )
 
     def child_value(self) -> "fltk.fegen.pyrt.terminalsrc.Span":
@@ -950,7 +982,7 @@ class RawString:
 @dataclasses.dataclass
 class Literal:
     class Label(enum.Enum):
-        value = enum.auto()
+        VALUE = enum.auto()
 
     span: fltk.fegen.pyrt.terminalsrc.Span = fltk.fegen.pyrt.terminalsrc.UnknownSpan
     children: list[
@@ -979,18 +1011,18 @@ class Literal:
         return self.children[0]
 
     def append_value(self, child: "fltk.fegen.pyrt.terminalsrc.Span") -> None:
-        self.children.append((Literal.Label.value, child))
+        self.children.append((Literal.Label.VALUE, child))
 
     def extend_value(
         self, children: typing.Iterable["fltk.fegen.pyrt.terminalsrc.Span"]
     ) -> None:
-        self.children.extend((Literal.Label.value, child) for child in children)
+        self.children.extend((Literal.Label.VALUE, child) for child in children)
 
     def children_value(self) -> typing.Iterator["fltk.fegen.pyrt.terminalsrc.Span"]:
         return (
             typing.cast("fltk.fegen.pyrt.terminalsrc.Span", child)
             for label, child in self.children
-            if label == Literal.Label.value
+            if label == Literal.Label.VALUE
         )
 
     def child_value(self) -> "fltk.fegen.pyrt.terminalsrc.Span":
