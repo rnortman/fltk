@@ -165,10 +165,14 @@ class CstGenerator:
                 "self",
                 f"typing.Iterator[{child_annotation_by_labels[label]}]",
             )
+            if len(model.types) > 1:
+                child_expr = f"typing.cast({child_annotation_by_labels[label]}, child)"
+            else:
+                child_expr = "child"
             children_fn.body.append(
                 pygen.stmt(
-                    f"return (typing.cast({child_annotation_by_labels[label]}, child)"
-                    f" for label, child in self.children if label == {class_name}.Label.{label.upper()})"
+                    f"return ({child_expr} for label, child in self.children"
+                    f" if label == {class_name}.Label.{label.upper()})"
                 )
             )
             klass.body.append(children_fn)
