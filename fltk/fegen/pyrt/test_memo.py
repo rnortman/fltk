@@ -1,6 +1,9 @@
 """Unit tests for memo.py"""
+
+# ruff: noqa: S101, PLR2004
+
 import logging
-from typing import Callable, Dict, Final, Optional, Sequence, Tuple, TypeVar, Union
+from typing import Callable, Final, Optional, Sequence, Tuple, TypeVar, Union
 
 from fltk.fegen.pyrt import memo
 
@@ -19,12 +22,8 @@ def memoize(
     def deco(
         func: Callable[["Parser", int], Optional[memo.ApplyResult[int, ResultType]]]
     ) -> Callable[["Parser", int], Optional[memo.ApplyResult[int, ResultType]]]:
-        def wrapper(
-            self: "Parser", pos: int
-        ) -> Optional[memo.ApplyResult[int, ResultType]]:
-            result = self.packrat.apply(
-                lambda pos: func(self, pos), rule_id, get_rule_cache(self), pos
-            )
+        def wrapper(self: "Parser", pos: int) -> Optional[memo.ApplyResult[int, ResultType]]:
+            result = self.packrat.apply(lambda pos: func(self, pos), rule_id, get_rule_cache(self), pos)
             LOG.debug("result %s at %d", result, pos)
             return result
 
@@ -44,9 +43,9 @@ class Parser:
     def __init__(self, tokens: Sequence[str]):
         self.tokens = tokens
         self.packrat: memo.Packrat[int, int] = memo.Packrat()
-        self._cache0: memo.CacheType[int, int, ExprType] = dict()
-        self._cache1: memo.CacheType[int, int, ExprType] = dict()
-        self._cache2: memo.CacheType[int, int, ExprType] = dict()
+        self._cache0: memo.CacheType[int, int, ExprType] = {}
+        self._cache1: memo.CacheType[int, int, ExprType] = {}
+        self._cache2: memo.CacheType[int, int, ExprType] = {}
 
     @memoize(0, lambda self: self._cache0)
     def rule_expr(self, pos: int) -> Optional[memo.ApplyResult[int, ExprType]]:
@@ -92,7 +91,6 @@ class Parser:
     @memoize(1, lambda self: self._cache1)
     def indirect_a(self, pos: int) -> Optional[memo.ApplyResult[int, ExprType]]:
         LOG.info("indirect_a starting %d %s", pos, self.tokens)
-        start_pos = pos
         result = self.indirect_b(pos)
         LOG.info("result %s", result)
         if result is not None:
@@ -118,7 +116,6 @@ class Parser:
     @memoize(2, lambda self: self._cache2)
     def indirect_b(self, pos: int) -> Optional[memo.ApplyResult[int, ExprType]]:
         LOG.info("indirect_b starting %d %s", pos, self.tokens)
-        start_pos = pos
         result = self.indirect_a(pos)
         if result is not None:
             return result

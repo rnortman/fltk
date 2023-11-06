@@ -1,7 +1,7 @@
 """Grammar Semantic Model (GSM) for fltk.fegen"""
 
-from abc import ABC, abstractmethod
 import dataclasses
+from abc import ABC, abstractmethod
 from enum import Enum
 from typing import Final, Mapping, Optional, Sequence, Union
 
@@ -9,8 +9,7 @@ from typing import Final, Mapping, Optional, Sequence, Union
 @dataclasses.dataclass(frozen=True, slots=True)
 class Grammar:
     rules: Sequence["Rule"]
-    vars: Sequence["Var"]
-    identifiers: Mapping[str, Union["Rule", "Var"]]
+    identifiers: Mapping[str, "Rule"]
 
 
 @dataclasses.dataclass(frozen=True, slots=True)
@@ -77,11 +76,11 @@ class Arity(Enum):
 
 class Quantifier(ABC):
     @abstractmethod
-    def min(self) -> Arity:
+    def min(self) -> Arity:  # noqa: A003
         ...
 
     @abstractmethod
-    def max(self) -> Arity:
+    def max(self) -> Arity:  # noqa: A003
         ...
 
     def is_optional(self) -> bool:
@@ -95,10 +94,10 @@ class Quantifier(ABC):
 
 
 class Required(Quantifier):
-    def min(self) -> Arity:
+    def min(self) -> Arity:  # noqa: A003
         return Arity.ONE
 
-    def max(self) -> Arity:
+    def max(self) -> Arity:  # noqa: A003
         return Arity.ONE
 
 
@@ -106,10 +105,10 @@ REQUIRED: Final = Required()
 
 
 class NotRequired(Quantifier):
-    def min(self) -> Arity:
+    def min(self) -> Arity:  # noqa: A003
         return Arity.ZERO
 
-    def max(self) -> Arity:
+    def max(self) -> Arity:  # noqa: A003
         return Arity.ONE
 
 
@@ -117,10 +116,10 @@ NOT_REQUIRED: Final = NotRequired()
 
 
 class OneOrMore(Quantifier):
-    def min(self) -> Arity:
+    def min(self) -> Arity:  # noqa: A003
         return Arity.ONE
 
-    def max(self) -> Arity:
+    def max(self) -> Arity:  # noqa: A003
         return Arity.MULTIPLE
 
 
@@ -128,10 +127,10 @@ ONE_OR_MORE: Final = OneOrMore()
 
 
 class ZeroOrMore(Quantifier):
-    def min(self) -> Arity:
+    def min(self) -> Arity:  # noqa: A003
         return Arity.ZERO
 
-    def max(self) -> Arity:
+    def max(self) -> Arity:  # noqa: A003
         return Arity.MULTIPLE
 
 

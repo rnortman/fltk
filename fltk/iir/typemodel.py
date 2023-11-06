@@ -1,8 +1,6 @@
-import dataclasses
-from dataclasses import dataclass, field
-from enum import Enum, auto
 import typing
-from typing import Final, Mapping, Optional, Sequence, Union
+from dataclasses import dataclass, field
+from typing import Final, Mapping, Optional, Union
 
 
 class ParamType:
@@ -40,9 +38,7 @@ _TypeSubclass = typing.TypeVar("_TypeSubclass", bound="Type")
 
 
 def _freeze_args(args: Mapping[str, Argument]) -> tuple[tuple[str, KeyArgument], ...]:
-    return tuple(
-        (name, arg.key if isinstance(arg, Type) else arg) for name, arg in args.items()
-    )
+    return tuple((name, arg.key if isinstance(arg, Type) else arg) for name, arg in args.items())
 
 
 def lookup_type(type_key: TypeKey) -> "Type":
@@ -68,9 +64,9 @@ class Type:
     ) -> _TypeSubclass:
         return cls(
             cname=cname,
-            params=(params if params is not None else dict()),
+            params=(params if params is not None else {}),
             instantiates=instantiates,
-            arguments=(arguments if arguments is not None else dict()),
+            arguments=(arguments if arguments is not None else {}),
         )
 
     def __post_init__(self) -> None:
@@ -88,13 +84,10 @@ class Type:
     def instantiate(self, **arguments: Argument) -> "Type":
         for name in arguments:
             if name not in self.params:
-                raise KeyError(f"Param {name} is not present in type {self}")
-        free_params = {
-            name: param for name, param in self.params.items() if name not in arguments
-        }
-        return Type(
-            cname=self.cname, params=free_params, instantiates=self, arguments=arguments
-        )
+                msg = f"Param {name} is not present in type {self}"
+                raise KeyError(msg)
+        free_params = {name: param for name, param in self.params.items() if name not in arguments}
+        return Type(cname=self.cname, params=free_params, instantiates=self, arguments=arguments)
 
     def root_type(self) -> "Type":
         if self.instantiates is None:
@@ -108,19 +101,22 @@ class Type:
             pass
         if self.instantiates:
             return self.instantiates.get_arg(name)
-        raise KeyError(f"No argument for parameter {name} provided")
+        msg = f"No argument for parameter {name} provided"
+        raise KeyError(msg)
 
     def get_arg_as_type(self, name: str) -> "Type":
         try:
             result = self.arguments[name]
             if not isinstance(result, Type):
-                raise ValueError(f"Expected Type but got {result}")
+                msg = f"Expected Type but got {result}"
+                raise ValueError(msg)
             return result
         except KeyError:
             pass
         if self.instantiates:
             return self.instantiates.get_arg_as_type(name)
-        raise KeyError(f"No argument for parameter {name} provided")
+        msg = f"No argument for parameter {name} provided"
+        raise KeyError(msg)
 
     def get_args(self) -> Mapping[str, Argument]:
         return {param: self.get_arg(param) for param in self.root_type().params}

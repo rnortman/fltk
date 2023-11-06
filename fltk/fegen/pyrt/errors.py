@@ -1,6 +1,6 @@
 from collections import defaultdict
 from dataclasses import dataclass, field
-from enum import auto, Enum
+from enum import Enum, auto
 from typing import Callable, Generic, TypeVar
 
 from fltk.fegen.pyrt import terminalsrc

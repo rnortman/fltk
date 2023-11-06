@@ -1,32 +1,27 @@
 import ast
 from typing import (
-    cast,
-    Any,
-    Callable,
-    Dict,
     Iterable,
     Iterator,
     Mapping,
     TypeVar,
-    Union,
+    cast,
 )
 
-import astor  # type: ignore
-
+from fltk import pygen
 from fltk.iir import model as iir
 from fltk.iir import typemodel
 from fltk.iir.py import reg as pyreg
-from fltk import pygen
 
 
-def compile(mod: iir.Module) -> ast.Module:
+def compile(mod: iir.Module) -> ast.Module:  # noqa: A001
     result = ast.parse("")
     for stmt in mod.block.body:
         if isinstance(stmt, iir.ClassDef):
             result.body.append(compile_class(stmt.klass))
         if isinstance(stmt, iir.Function):
             result.body.append(compile_function(stmt))
-        raise NotImplementedError(f"Module-level statement {stmt}")
+        msg = f"Module-level statement {stmt}"
+        raise NotImplementedError(msg)
     return result
 
 
@@ -41,9 +36,8 @@ def iir_type_to_py_constructor(typ: iir.Type) -> str:
         try:
             type_info = pyreg.lookup(typ.root_type())
         except KeyError:
-            print("\n".join(str(x) for x in pyreg._type_registry.keys()))
-            print(typ)
-            assert False, f"Unknown type: {typ}"
+            msg = f"Unknown type: {typ}"
+            raise AssertionError(msg) from None
     name = type_info.import_name(concrete=True)
     return name
 
@@ -59,9 +53,8 @@ def iir_type_to_py_annotation(typ: iir.Type) -> str:
         try:
             type_info = pyreg.lookup(typ.root_type())
         except KeyError:
-            print("\n".join(str(x) for x in pyreg._type_registry.keys()))
-            print(typ)
-            assert False, f"Unknown type: {typ}"
+            msg = f"Unknown type: {typ}"
+            raise AssertionError(msg) from None
     name = type_info.import_name()
     args = typ.get_args()
     if args:
@@ -76,11 +69,9 @@ def iir_type_to_py_annotation(typ: iir.Type) -> str:
 
 
 def compile_class(klass: iir.ClassType) -> ast.ClassDef:
-    assert klass.cname is not None
-    assert all(bc.cname for bc in klass.base_classes)
-    result_ast = pygen.klass(
-        name=klass.cname, bases=[cast(str, bc.cname) for bc in klass.base_classes]
-    )
+    assert klass.cname is not None  # noqa: S101
+    assert all(bc.cname for bc in klass.base_classes)  # noqa: S101
+    result_ast = pygen.klass(name=klass.cname, bases=[cast(str, bc.cname) for bc in klass.base_classes])
     if klass.doc:
         result_ast.body.append(pygen.stmt(f'"""{klass.doc}"""'))
 
@@ -90,9 +81,8 @@ def compile_class(klass: iir.ClassType) -> ast.ClassDef:
         if attr.in_class is None:
             attr.in_class = klass
         elif attr.in_class is not klass:
-            raise ValueError(
-                f"Attribute {attr} is in a different class instance than {klass}"
-            )
+            msg = f"Attribute {attr} is in a different class instance than {klass}"
+            raise ValueError(msg)
 
     ctr = klass.constructor or iir.Constructor(
         in_class=klass,
@@ -167,18 +157,17 @@ def compile_class(klass: iir.ClassType) -> ast.ClassDef:
     for method in klass.get_methods():
         result_ast.body.append(compile_function(method))
 
-    assert all(
-        isinstance(attr, (iir.Field, iir.Method))
-        for attr in klass.block.get_leaf_scope().identifiers.values()
+    assert all(  # noqa: S101
+        isinstance(attr, (iir.Field, iir.Method)) for attr in klass.block.get_leaf_scope().identifiers.values()
     )
     return result_ast
 
 
 def compile_function(function: iir.Function) -> ast.FunctionDef:
-    assert function.name is not None
+    assert function.name is not None  # noqa: S101
     params = [f"{p.name}: {iir_type_to_py_annotation(p.typ)}" for p in function.params]
     if isinstance(function, iir.Method):
-        params = ["self"] + params
+        params = ["self", *params]
     result_ast = pygen.function(
         name=function.name,
         args=", ".join(params),
@@ -192,7 +181,8 @@ def compile_function(function: iir.Function) -> ast.FunctionDef:
 
     def _ensure_in_function(stmt: iir.Statement) -> None:
         if stmt.parent_block is not None and stmt.parent_block is not function.block:
-            raise ValueError(f"Function contains statement from another block: {stmt}")
+            msg = f"Function contains statement from another block: {stmt}"
+            raise ValueError(msg)
         stmt.parent_block = function.block
 
     for stmt in function.block.body:
@@ -205,7 +195,8 @@ def compile_function(function: iir.Function) -> ast.FunctionDef:
 def compile_block(block: iir.Block) -> Iterator[ast.stmt]:
     def _ensure_in_block(stmt: iir.Statement) -> None:
         if stmt.parent_block is not None and stmt.parent_block is not block:
-            raise ValueError(f"Block contains statement from another block: {stmt}")
+            msg = f"Block contains statement from another block: {stmt}"
+            raise ValueError(msg)
         stmt.parent_block = block
 
     for stmt in block.body:
@@ -227,12 +218,9 @@ def compile_stmt(stmt: iir.Statement) -> Iterator[ast.stmt]:
             if stmt.var.typ is iir.Auto:
                 yield pygen.stmt(f"{stmt.var.name} = {compile_expr(stmt.init)}")
             else:
-                yield pygen.stmt(
-                    f"{stmt.var.name}: {iir_type_to_py_annotation(typ)} = {compile_expr(stmt.init)}"
-                )
-        else:
-            if stmt.var.typ is not iir.Auto:
-                yield pygen.stmt(f"{stmt.var.name}: {iir_type_to_py_annotation(typ)}")
+                yield pygen.stmt(f"{stmt.var.name}: {iir_type_to_py_annotation(typ)} = {compile_expr(stmt.init)}")
+        elif stmt.var.typ is not iir.Auto:
+            yield pygen.stmt(f"{stmt.var.name}: {iir_type_to_py_annotation(typ)}")
         return
     if isinstance(stmt, iir.If):
         yield from compile_if(stmt)
@@ -243,7 +231,8 @@ def compile_stmt(stmt: iir.Statement) -> Iterator[ast.stmt]:
     if isinstance(stmt, iir.ExprStatement):
         yield pygen.stmt(compile_expr(stmt.expr))
         return
-    raise NotImplementedError(f"Statement type {stmt}")
+    msg = f"Statement type {stmt}"
+    raise NotImplementedError(msg)
 
 
 def compile_assign(stmt: iir.AssignStatement) -> Iterator[ast.stmt]:
@@ -253,7 +242,7 @@ def compile_assign(stmt: iir.AssignStatement) -> Iterator[ast.stmt]:
     elif isinstance(target, iir.Store):
         target_expr = compile_expr(target.ref)
     else:
-        assert False, target
+        raise AssertionError(target)
     value_expr = compile_expr(stmt.expr)
     yield pygen.stmt(f"{target_expr} = {value_expr}")
     return
@@ -263,15 +252,14 @@ def compile_if(stmt: iir.If) -> Iterator[ast.stmt]:
     if stmt.orelse is None:
         orelse: Iterable[ast.stmt] = []
     elif isinstance(stmt.orelse, iir.If):
-        raise NotImplementedError("elif: {stmt}")
+        msg = "elif: {stmt}"
+        raise NotImplementedError(msg)
     else:
-        assert isinstance(stmt.orelse, iir.Block)
+        assert isinstance(stmt.orelse, iir.Block)  # noqa: S101
         orelse = compile_block(stmt.orelse)
 
     if isinstance(stmt.condition, iir.LetExpr):
-        condition = pygen.expr(
-            f"({stmt.condition.var.name} := {compile_expr(stmt.condition.result)})"
-        )
+        condition = pygen.expr(f"({stmt.condition.var.name} := {compile_expr(stmt.condition.result)})")
     else:
         condition = pygen.expr(compile_expr(stmt.condition))
     yield pygen.if_(condition=condition, body=compile_block(stmt.block), orelse=orelse)
@@ -279,9 +267,7 @@ def compile_if(stmt: iir.If) -> Iterator[ast.stmt]:
 
 def compile_while(stmt: iir.WhileLoop) -> Iterator[ast.stmt]:
     if isinstance(stmt.condition, iir.LetExpr):
-        condition = pygen.expr(
-            f"({stmt.condition.var.name} := {compile_expr(stmt.condition.result)})"
-        )
+        condition = pygen.expr(f"({stmt.condition.var.name} := {compile_expr(stmt.condition.result)})")
     else:
         condition = pygen.expr(compile_expr(stmt.condition))
     yield pygen.while_(condition=condition, body=compile_block(stmt.block))
@@ -289,8 +275,7 @@ def compile_while(stmt: iir.WhileLoop) -> Iterator[ast.stmt]:
 
 def _format_args(args: Iterable[iir.Expr], kwargs: Mapping[str, iir.Expr]) -> str:
     return ", ".join(
-        [compile_expr(arg) for arg in args]
-        + [f"{name}={compile_expr(val)}" for name, val in kwargs.items()]
+        [compile_expr(arg) for arg in args] + [f"{name}={compile_expr(val)}" for name, val in kwargs.items()]
     )
 
 
@@ -306,7 +291,10 @@ def compile_expr(expr: iir.Expr) -> str:
     if isinstance(expr, iir.Constant):
         return str(expr.val)
     if isinstance(expr, iir.MethodCall):
-        return f"{compile_expr(expr.bound_method.bound_to)}.{expr.bound_method.member_name}({_format_args(args=expr.args, kwargs=expr.kwargs)})"
+        return (
+            f"{compile_expr(expr.bound_method.bound_to)}.{expr.bound_method.member_name}"
+            f"({_format_args(args=expr.args, kwargs=expr.kwargs)})"
+        )
     if isinstance(expr, iir.BoundMethod):
         return f"{compile_expr(expr.bound_method.bound_to)}.{expr.bound_method.member_name}"
     if isinstance(expr, iir.Construct):
@@ -319,6 +307,9 @@ def compile_expr(expr: iir.Expr) -> str:
         return repr(expr.value)
     if isinstance(expr, iir.LiteralSequence):
         return f"[{', '.join(compile_expr(e) for e in expr.values)}]"
+    if isinstance(expr, iir.LiteralMapping):
+        args = [f"{compile_expr(key)}: {compile_expr(val)}" for key, val in expr.key_values]
+        return f"{{{', '.join(args)}}}"
     if isinstance(expr, (iir.VarByName, iir.Var)):
         return expr.name
     if isinstance(expr, iir.IsEmpty):
@@ -326,4 +317,4 @@ def compile_expr(expr: iir.Expr) -> str:
     if isinstance(expr, iir.Subscript):
         return f"({compile_expr(expr.target)}[{compile_expr(expr.index)}])"
 
-    assert False, repr(expr)
+    raise AssertionError(repr(expr))

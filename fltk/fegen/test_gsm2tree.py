@@ -1,10 +1,7 @@
 import logging
 from typing import Final
 
-from fltk.fegen import bootstrap
-from fltk.fegen import gsm
-from fltk.fegen import gsm2tree
-from fltk.iir import model as iir
+from fltk.fegen import bootstrap, gsm2tree
 from fltk.iir.py import reg as pyreg
 
 LOG: Final = logging.getLogger(__name__)

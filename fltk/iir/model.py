@@ -1,6 +1,5 @@
 from dataclasses import dataclass
 from enum import Enum
-import typing
 from typing import (
     Any,
     Final,
@@ -15,11 +14,9 @@ from typing import (
     Union,
 )
 
-from fltk import dchelpers
-from fltk.iir.typemodel import ParamType, Type as Type, TYPE as TYPE
-from fltk.iir.typemodel import Argument as TypeArgument
-from fltk.iir.typemodel import TypeKey as TypeKey
 from fltk.iir.py import reg as pyreg
+from fltk.iir.typemodel import TYPE, ParamType, Type
+from fltk.iir.typemodel import Argument as TypeArgument
 
 _T = TypeVar("_T")
 
@@ -44,9 +41,7 @@ IndexInt: Final = PrimitiveType.make(cname="IndexInt")
 pyreg.register_type(pyreg.TypeInfo(typ=IndexInt, module=pyreg.Builtins, name="int"))
 
 SignedIndexInt: Final = PrimitiveType.make(cname="SignedIndexInt")
-pyreg.register_type(
-    pyreg.TypeInfo(typ=SignedIndexInt, module=pyreg.Builtins, name="int")
-)
+pyreg.register_type(pyreg.TypeInfo(typ=SignedIndexInt, module=pyreg.Builtins, name="int"))
 
 Bool: Final = PrimitiveType.make(cname="bool")
 pyreg.register_type(pyreg.TypeInfo(typ=Bool, module=pyreg.Builtins, name="bool"))
@@ -55,14 +50,10 @@ String: Final = Type.make(cname="string")
 pyreg.register_type(pyreg.TypeInfo(typ=String, module=pyreg.Builtins, name="str"))
 
 
-Maybe: Final = Type.make(cname="Maybe", params=dict(value_type=TYPE))
-pyreg.register_type(
-    pyreg.TypeInfo(typ=Maybe, module=pyreg.Module(("typing",)), name="Optional")
-)
+Maybe: Final = Type.make(cname="Maybe", params={"value_type": TYPE})
+pyreg.register_type(pyreg.TypeInfo(typ=Maybe, module=pyreg.Module(("typing",)), name="Optional"))
 
-GenericImmutableSequence: Final = Type.make(
-    cname="ImmutableSequence", params=dict(value_type=TYPE)
-)
+GenericImmutableSequence: Final = Type.make(cname="ImmutableSequence", params={"value_type": TYPE})
 pyreg.register_type(
     pyreg.TypeInfo(
         typ=GenericImmutableSequence,
@@ -71,16 +62,10 @@ pyreg.register_type(
         concrete_name="list",
     )
 )
-GenericMutableSequence: Final = Type.make(
-    cname="MutableSequence", params=dict(value_type=TYPE)
-)
+GenericMutableSequence: Final = Type.make(cname="MutableSequence", params={"value_type": TYPE})
 
-GenericImmutableHashmap: Final = Type.make(
-    cname="ImmutableHashmap", params=dict(key_type=TYPE, value_type=TYPE)
-)
-GenericMutableHashmap: Final = Type.make(
-    cname="MutableHashmap", params=dict(key_type=TYPE, value_type=TYPE)
-)
+GenericImmutableHashmap: Final = Type.make(cname="ImmutableHashmap", params={"key_type": TYPE, "value_type": TYPE})
+GenericMutableHashmap: Final = Type.make(cname="MutableHashmap", params={"key_type": TYPE, "value_type": TYPE})
 pyreg.register_type(
     pyreg.TypeInfo(
         typ=GenericMutableHashmap,
@@ -98,15 +83,15 @@ pyreg.register_type(
 class Expr:
     @property
     def fld(self) -> "FieldLookupProxy":
-        return FieldLookupProxy(self, mutable=False)
+        return FieldLookupProxy(bind_to=self, mutable=False)
 
     @property
     def mut_fld(self) -> "FieldLookupProxy":
-        return FieldLookupProxy(self, mutable=True)
+        return FieldLookupProxy(bind_to=self, mutable=True)
 
     @property
     def method(self) -> "MethodLookupProxy":
-        return MethodLookupProxy(self)
+        return MethodLookupProxy(bind_to=self)
 
 
 @dataclass
@@ -128,12 +113,11 @@ class Scope:
 
     def define(self, name: str, entity: Nameable) -> None:
         if name in self.identifiers:
-            raise ValueError(
-                f"Attempt to redefine identifier {name}\n\nfrom\n{self.identifiers[name]}\n\nto\n{entity}"
-            )
+            msg = f"Attempt to redefine identifier {name}\n\nfrom\n{self.identifiers[name]}\n\nto\n{entity}"
+            raise ValueError(msg)
         self.identifiers[name] = entity
 
-    def lookup(self, name: str, recursive: bool = True) -> Optional[Nameable]:
+    def lookup(self, name: str, *, recursive: bool = True) -> Optional[Nameable]:
         try:
             return self.identifiers[name]
         except KeyError:
@@ -142,10 +126,11 @@ class Scope:
             return self.parent.lookup(name)
         return None
 
-    def lookup_as(self, name: str, typ: type[_T], recursive: bool = True) -> _T:
+    def lookup_as(self, name: str, typ: type[_T], *, recursive: bool = True) -> _T:
         result = self.lookup(name=name, recursive=recursive)
         if result is None or not isinstance(result, typ):
-            raise ValueError(f"Expected {typ} but got {result}")
+            msg = f"Expected {typ} but got {result}"
+            raise ValueError(msg)
         return result
 
 
@@ -171,10 +156,12 @@ class Block(Statement):
             return self.inner_scope
         if self.parent_block is not None:
             return self.parent_block.get_leaf_scope()
-        raise ValueError("No scope associated with block.")
+        msg = "No scope associated with block."
+        raise ValueError(msg)
 
     def var(
         self,
+        *,
         name: str,
         typ: Type,
         ref_type: "RefType",
@@ -196,9 +183,7 @@ class Block(Statement):
         self.body.append(result)
         return result
 
-    def if_(
-        self, condition: Expr, let: Optional["Var"] = None, orelse: bool = False
-    ) -> "If":
+    def if_(self, condition: Expr, *, let: Optional["Var"] = None, orelse: bool = False) -> "If":
         result = If(
             parent_block=self,
             condition=condition,
@@ -260,9 +245,8 @@ class Module:
     def class_def(self, klass: "ClassType") -> "ClassDef":
         result = ClassDef(parent_block=self.block, klass=klass)
         if klass.cname is None:
-            raise ValueError(
-                f"Module-level class definitions cannot be anonymous: {klass}"
-            )
+            msg = f"Module-level class definitions cannot be anonymous: {klass}"
+            raise ValueError(msg)
         self.scope.define(klass.cname, klass)
         self.block.body.append(result)
         return result
@@ -289,7 +273,7 @@ class ValRef(Expr):
 
     def load_mut(self) -> "Load":
         if hasattr(self, "mutable"):
-            assert self.mutable
+            assert self.mutable  # noqa: S101
         return Load(self, mutable=True)
 
     def store(self) -> "Store":
@@ -347,9 +331,7 @@ class Construct(Expr):
     kwargs: Mapping[str, Expr]
 
     @classmethod
-    def make(
-        cls: type["Construct"], typ: Type, *args: Expr, **kwargs: Expr
-    ) -> "Construct":
+    def make(cls: type["Construct"], typ: Type, *args: Expr, **kwargs: Expr) -> "Construct":
         return cls(typ=typ, args=args, kwargs=kwargs)
 
 
@@ -397,6 +379,11 @@ class LiteralInt(Expr):
 @dataclass(frozen=True, eq=True, slots=True)
 class LiteralSequence(Expr):
     values: Sequence[Expr]
+
+
+@dataclass(frozen=True, eq=True, slots=True)
+class LiteralMapping(Expr):
+    key_values: Sequence[tuple[Expr, Expr]]
 
 
 #
@@ -461,15 +448,15 @@ class Function:
     doc: Optional[str]
 
     def __post_init__(self) -> None:
-        assert self.block.inner_scope is not None
+        assert self.block.inner_scope is not None  # noqa: S101
         for param in self.params:
             self.block.inner_scope.define(param.name, param)
 
     def get_param(self, name: str) -> Param:
-        assert self.block.inner_scope is not None
+        assert self.block.inner_scope is not None  # noqa: S101
         result = self.block.inner_scope.lookup(name)
-        assert isinstance(result, Param)
-        assert result in self.params
+        assert isinstance(result, Param)  # noqa: S101
+        assert result in self.params  # noqa: S101
         return result
 
 
@@ -511,9 +498,9 @@ class ClassType(Type):
         block = Block(parent_block=None, body=[], inner_scope=scope)
         return cls(
             cname=cname,
-            instantiates=None,
-            arguments=(arguments if arguments is not None else dict()),
-            params=(params if params is not None else dict()),
+            instantiates=instantiates,
+            arguments=(arguments if arguments is not None else {}),
+            params=(params if params is not None else {}),
             block=block,
             base_classes=(),
             constructor=None,
@@ -524,19 +511,22 @@ class ClassType(Type):
     def get_attr(self, name: str) -> Union[Field, Method]:
         result = self.block.get_leaf_scope().lookup(name, recursive=False)
         if not isinstance(result, (Field, Method)):
-            raise ValueError(f"Class contains invalid member type {name} = {result}")
+            msg = f"Class contains invalid member type {name} = {result}"
+            raise ValueError(msg)
         return result
 
     def get_field(self, name: str) -> Field:
         result = self.block.get_leaf_scope().lookup(name, recursive=False)
         if not isinstance(result, Field):
-            raise ValueError(f"Expected field at {name} but got {result}")
+            msg = f"Expected field at {name} but got {result}"
+            raise ValueError(msg)
         return result
 
     def get_method(self, name: str) -> Method:
         result = self.block.get_leaf_scope().lookup(name, recursive=False)
         if not isinstance(result, Method):
-            raise ValueError(f"Expected method at {name} but got {result}")
+            msg = f"Expected method at {name} but got {result}"
+            raise ValueError(msg)
         return result
 
     def get_fields(self) -> Iterable[Field]:
@@ -579,7 +569,8 @@ class ClassType(Type):
         init_list: Iterable[Tuple[Field, "InitListExpr"]] = (),
     ) -> "Constructor":
         if self.constructor is not None:
-            raise AssertionError(f"Constructor already defined for class {self.cname}")
+            msg = f"Constructor already defined for class {self.cname}"
+            raise AssertionError(msg)
         self.constructor = Constructor(
             in_class=self,
             doc=doc,
@@ -628,7 +619,7 @@ class ClassDef(Statement):
 
 
 class FieldLookupProxy:
-    def __init__(self, bind_to: Expr, mutable: bool) -> None:
+    def __init__(self, *, bind_to: Expr, mutable: bool) -> None:
         self.bind_to = bind_to
         self.mutable = mutable
 
@@ -679,25 +670,24 @@ class EnumType(Type):
         cname: Optional[str] = None,
         defined_in: Module,
         doc: Optional[str] = None,
-        outer_scope: Optional[Scope] = None,
         fields: Iterable[str] = (),
     ) -> "EnumType":
         return cls(
             cname=cname,
             fields=list(fields),
             instantiates=None,
-            arguments=dict(),
-            params=dict(),
+            arguments={},
+            params={},
             defined_in=defined_in,
             doc=doc,
         )
 
-    def add_field(self, field: str, ignore_if_exists: bool = False) -> None:
+    def add_field(self, field: str, *, ignore_if_exists: bool = False) -> None:
         if field not in self.fields:
             self.fields.append(field)
         elif not ignore_if_exists:
-            raise ValueError(f"Field {field} already exists in enum {self}")
-        return
+            msg = f"Field {field} already exists in enum {self}"
+            raise ValueError(msg)
 
 
 #

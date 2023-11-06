@@ -1,3 +1,4 @@
+import ast
 from collections.abc import Sequence
 
 import bootstrap_cst as cst
@@ -10,9 +11,7 @@ class Cst2Gsm:
 
     def visit_grammar(self, grammar: cst.Grammar) -> gsm.Grammar:
         rules = [self.visit_rule(rule) for rule in grammar.children_rule()]
-        return gsm.Grammar(
-            rules=rules, vars=[], identifiers={rule.name: rule for rule in rules}
-        )
+        return gsm.Grammar(rules=rules, identifiers={rule.name: rule for rule in rules})
 
     def visit_rule(self, rule: cst.Rule) -> gsm.Rule:
         return gsm.Rule(
@@ -25,45 +24,35 @@ class Cst2Gsm:
         return gsm.Identifier(self.terminals[span.start : span.end])
 
     def visit_alternatives(self, alternatives: cst.Alternatives) -> list[gsm.Items]:
-        return list(self.visit_items(items) for items in alternatives.children_items())
+        return [self.visit_items(items) for items in alternatives.children_items()]
 
     def visit_items(self, items: cst.Items) -> gsm.Items:
         gsm_items = []
         sep_after = []
-        for (item_label, item), (ws_label, ws) in zip(
-            items.children[::2], items.children[1::2]
-        ):
-            assert item_label == cst.Items.Label.ITEM and isinstance(item, cst.Item)
+        for (item_label, item), (ws_label, _) in zip(items.children[::2], items.children[1::2]):
+            assert item_label == cst.Items.Label.ITEM and isinstance(item, cst.Item)  # noqa: S101
             gsm_items.append(self.visit_item(item))
             if ws_label == cst.Items.Label.WS:
                 sep_after.append(gsm.Separator.WS_ALLOWED)
             else:
-                assert ws_label == cst.Items.Label.NO_WS
+                assert ws_label == cst.Items.Label.NO_WS  # noqa: S101
                 sep_after.append(gsm.Separator.NO_WS)
         if (len(items.children) % 2) != 0:
             item_label, item = items.children[-1]
-            assert item_label == cst.Items.Label.ITEM and isinstance(item, cst.Item)
+            assert item_label == cst.Items.Label.ITEM and isinstance(item, cst.Item)  # noqa: S101
             gsm_items.append(self.visit_item(item))
             sep_after.append(gsm.Separator.NO_WS)
-        assert len(gsm_items) == len(sep_after)
+        assert len(gsm_items) == len(sep_after)  # noqa: S101
         return gsm.Items(items=gsm_items, sep_after=sep_after)
 
     def visit_item(self, item: cst.Item) -> gsm.Item:
         term = self.visit_term(item.child_term())
 
-        label = (
-            self.visit_identifier(cst_label).value
-            if (cst_label := item.maybe_label())
-            else None
-        )
+        label = self.visit_identifier(cst_label).value if (cst_label := item.maybe_label()) else None
         if label is None and isinstance(term, gsm.Identifier):
             label = term.value
 
-        disposition = (
-            self.visit_disposition(cst_disposition)
-            if (cst_disposition := item.maybe_disposition())
-            else None
-        )
+        disposition = self.visit_disposition(cst_disposition) if (cst_disposition := item.maybe_disposition()) else None
         if disposition is None:
             if label or isinstance(term, Sequence):
                 disposition = gsm.Disposition.INCLUDE
@@ -71,14 +60,10 @@ class Cst2Gsm:
                 disposition = gsm.Disposition.SUPPRESS
 
         quantifier = (
-            self.visit_quantifier(cst_quantifier)
-            if (cst_quantifier := item.maybe_quantifier())
-            else gsm.REQUIRED
+            self.visit_quantifier(cst_quantifier) if (cst_quantifier := item.maybe_quantifier()) else gsm.REQUIRED
         )
 
-        return gsm.Item(
-            label=label, disposition=disposition, term=term, quantifier=quantifier
-        )
+        return gsm.Item(label=label, disposition=disposition, term=term, quantifier=quantifier)
 
     def visit_term(self, term: cst.Term) -> gsm.Term:
         if alternatives := term.maybe_alternatives():
@@ -89,7 +74,8 @@ class Cst2Gsm:
             return self.visit_literal(literal)
         if regex := term.maybe_regex():
             return self.visit_regex(regex)
-        raise NotImplementedError(f"Unsupported term type: {term}")
+        msg = f"Unsupported term type: {term}"
+        raise NotImplementedError(msg)
 
     def visit_disposition(self, disposition: cst.Disposition) -> gsm.Disposition:
         label, _ = disposition.child()
@@ -99,7 +85,8 @@ class Cst2Gsm:
             return gsm.Disposition.SUPPRESS
         if label == cst.Disposition.Label.INLINE:
             return gsm.Disposition.INLINE
-        raise NotImplementedError(f"Unsupported disposition: {disposition}")
+        msg = f"Unsupported disposition: {disposition}"
+        raise NotImplementedError(msg)
 
     def visit_quantifier(self, quantifier: cst.Quantifier) -> gsm.Quantifier:
         label, _ = quantifier.child()
@@ -109,11 +96,12 @@ class Cst2Gsm:
             return gsm.NOT_REQUIRED
         if label == cst.Quantifier.Label.ZERO_OR_MORE:
             return gsm.ZERO_OR_MORE
-        raise NotImplementedError(f"Unsupported quantifier: {quantifier}")
+        msg = f"Unsupported quantifier: {quantifier}"
+        raise NotImplementedError(msg)
 
     def visit_literal(self, literal: cst.Literal) -> gsm.Literal:
         span = literal.child_value()
-        return gsm.Literal(eval(self.terminals[span.start : span.end]))
+        return gsm.Literal(ast.literal_eval(self.terminals[span.start : span.end]))
 
     def visit_regex(self, regex: cst.RawString) -> gsm.Regex:
         span = regex.child_value()

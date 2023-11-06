@@ -1,8 +1,7 @@
+import logging
 from abc import abstractmethod
 from dataclasses import dataclass
-import logging
 from typing import (
-    cast,
     Callable,
     Dict,
     Final,
@@ -12,9 +11,9 @@ from typing import (
     Optional,
     Protocol,
     Set,
-    Tuple,
     TypeVar,
     Union,
+    cast,
 )
 
 LOG: Final = logging.getLogger(__name__)
@@ -105,7 +104,7 @@ class Packrat(Generic[RuleId, PosType]):
             if isinstance(memo.result, Poison):
                 # We hit a cache poison that a previous invocation put there for us.
                 LOG.debug("apply_rule %d", rule_id)
-                assert memo.final_pos == start_pos
+                assert memo.final_pos == start_pos  # noqa: S101
                 memo.result = cast(Poison[RuleId], memo.result)
                 self._setup_recursion(rule_id, memo.result)
                 LOG.debug("apply_rule %d", rule_id)
@@ -114,11 +113,7 @@ class Packrat(Generic[RuleId, PosType]):
                 return None
             # Nominal case: Use cached result and pos
             LOG.debug("apply_rule %d result %s", rule_id, memo)
-            return (
-                ApplyResult(memo.final_pos, memo.result)
-                if memo.result is not None
-                else None
-            )
+            return ApplyResult(memo.final_pos, memo.result) if memo.result is not None else None
 
         # No cache yet; poison the cache and run the parser function
         poison: Poison[RuleId] = Poison(recursion_info=None)
@@ -130,8 +125,8 @@ class Packrat(Generic[RuleId, PosType]):
         call_result = rule_callable(start_pos)
         LOG.debug("apply_rule %d result %s", rule_id, call_result)
         popped = self.invocation_stack.pop()
-        assert popped == rule_id
-        assert memo.result is poison
+        assert popped == rule_id  # noqa: S101
+        assert memo.result is poison  # noqa: S101
 
         new_pos: PosType
         if call_result is not None:
@@ -153,7 +148,7 @@ class Packrat(Generic[RuleId, PosType]):
         # is substantially simpler.
 
         # At this point, we know that we were the head/tail of the recursive cycle
-        assert poison.recursion_info.rule_id == rule_id
+        assert poison.recursion_info.rule_id == rule_id  # noqa: S101
 
         memo.result = result
         if result is None:
@@ -161,9 +156,7 @@ class Packrat(Generic[RuleId, PosType]):
             return None
 
         LOG.debug("apply_rule %d poison %s", rule_id, poison)
-        grow_result = self._grow_seed(
-            rule_callable, start_pos, memo, poison.recursion_info
-        )
+        grow_result = self._grow_seed(rule_callable, start_pos, memo, poison.recursion_info)
         LOG.debug("apply_rule %d memo %s poison %s", rule_id, memo, poison)
         return grow_result
 
@@ -190,22 +183,17 @@ class Packrat(Generic[RuleId, PosType]):
             # Nominal case
             return memo
 
-        if (
-            memo is None
-            and rule_id is not recursion.rule_id
-            and rule_id not in recursion.involved
-        ):
+        if memo is None and rule_id is not recursion.rule_id and rule_id not in recursion.involved:
             # This case is part of the paper but I don't understand why and I'm unable to create a test case
             # that exercises this code path.  It's better to fail than to execute untested, poorly understood code.
             #
             # FWIW, the paper's algorithm would return a failure MemoEntry here (with result=None).
-            raise NotImplementedError(
-                "Untested corner case; see source code for more information."
-            )  # pragma: nocover
+            msg = "Untested corner case; see source code for more information."
+            raise NotImplementedError(msg)  # pragma: nocover
 
         # A growth cycle is active and the original recursion involves this rule; therefore we know there must be a
         # cache entry.
-        assert memo is not None
+        assert memo is not None  # noqa: S101
 
         if rule_id in recursion.eval_set:
             # This rule hasn't executed on this growth cycle yet; bypass cache
@@ -227,19 +215,17 @@ class Packrat(Generic[RuleId, PosType]):
         the recursion is detected.  It does not re-execute on each growth cycle.
         """
         LOG.debug("setup_recursion %d poison %s", rule_id, poison)
-        assert poison.recursion_info is None
-        poison.recursion_info = RecursionInfo(
-            rule_id=rule_id, involved=set(), eval_set=set()
-        )
+        assert poison.recursion_info is None  # noqa: S101
+        poison.recursion_info = RecursionInfo(rule_id=rule_id, involved=set(), eval_set=set())
         LOG.debug("setup_recursion %d poison %s", rule_id, poison)
         LOG.debug("setup_recursion stack %s", self.invocation_stack)
-        assert self.invocation_stack
+        assert self.invocation_stack  # noqa: S101
         # Walk the stack backward to create list of involved rules
         idx = len(self.invocation_stack) - 1
         while self.invocation_stack[idx] != rule_id:
             poison.recursion_info.involved.add(self.invocation_stack[idx])
             idx -= 1
-            assert idx >= 0
+            assert idx >= 0  # noqa: S101
         LOG.debug("setup_recursion %d poison %s", rule_id, poison)
 
     def _grow_seed(
@@ -261,11 +247,7 @@ class Packrat(Generic[RuleId, PosType]):
             recursion.eval_set = set(recursion.involved)
             call_result = rule_callable(start_pos)
             LOG.debug("grow_seed %s", call_result)
-            new_pos, result = (
-                (call_result.pos, call_result.result)
-                if call_result
-                else (start_pos, None)
-            )
+            new_pos, result = (call_result.pos, call_result.result) if call_result else (start_pos, None)
             if result is None or new_pos <= memo.final_pos:
                 LOG.debug("grow_seed done %s %s", new_pos, memo.final_pos)
                 break
@@ -273,6 +255,6 @@ class Packrat(Generic[RuleId, PosType]):
             memo.final_pos = new_pos
         # Recursion done; clean up the bookkeeping
         del self._recursions[start_pos]
-        assert not isinstance(memo.result, Poison)
-        assert memo.result is not None
+        assert not isinstance(memo.result, Poison)  # noqa: S101
+        assert memo.result is not None  # noqa: S101
         return ApplyResult(memo.final_pos, memo.result)

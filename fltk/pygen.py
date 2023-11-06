@@ -1,25 +1,24 @@
 import ast
-from collections.abc import Sequence
 import textwrap
+from collections.abc import Sequence
 from typing import Iterable, TypeVar
-
-import astor  # type: ignore
 
 _T = TypeVar("_T")
 
 
 def _strip_module(mod: ast.Module, expect: type[_T]) -> _T:
-    assert isinstance(mod, ast.Module), f"Not a module but a {type(mod)} {mod}"
-    assert len(mod.body) == 1
+    assert isinstance(mod, ast.Module), f"Not a module but a {type(mod)} {mod}"  # noqa: S101
+    assert len(mod.body) == 1  # noqa: S101
     result = mod.body[0]
     if not isinstance(result, expect):
-        raise ValueError(f"Expected {expect} but got {result}")
+        msg = f"Expected {expect} but got {result}"
+        raise ValueError(msg)
     return result
 
 
 def module(imports: Iterable[str | Sequence[str]] = ()):
     result = ast.parse("")
-    assert isinstance(result, ast.Module)
+    assert isinstance(result, ast.Module)  # noqa: S101
     for imp in imports:
         result.body.append(import_(imp))
     return result
@@ -42,8 +41,8 @@ def function(name: str, args: str, return_type: str) -> ast.FunctionDef:
 
 def expr(expr_py: str) -> ast.expr:
     tree = ast.parse(expr_py, mode="eval")
-    assert isinstance(tree, ast.Expression)
-    assert isinstance(tree.body, ast.expr)
+    assert isinstance(tree, ast.Expression)  # noqa: S101
+    assert isinstance(tree.body, ast.expr)  # noqa: S101
     return tree.body
 
 
@@ -80,14 +79,12 @@ def klass(name: str, bases: Iterable[str] = ()) -> ast.ClassDef:
     return result
 
 
-def if_(
-    condition: ast.expr, body: Iterable[ast.stmt], orelse: Iterable[ast.stmt]
-) -> ast.If:
+def if_(condition: ast.expr, body: Iterable[ast.stmt], orelse: Iterable[ast.stmt]) -> ast.If:
     orelse = list(orelse)
     if orelse:
         tree = ast.parse(
             textwrap.dedent(
-                f"""
+                """
                 if x:
                   pass
                 else:
@@ -98,7 +95,7 @@ def if_(
     else:
         tree = ast.parse(
             textwrap.dedent(
-                f"""
+                """
             if x:
               pass
             """
@@ -115,7 +112,7 @@ def if_(
 def while_(condition: ast.expr, body: Iterable[ast.stmt]) -> ast.While:
     tree = ast.parse(
         textwrap.dedent(
-            f"""
+            """
             while x:
               pass
             """

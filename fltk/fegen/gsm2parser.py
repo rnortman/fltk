@@ -1,14 +1,12 @@
-from dataclasses import dataclass
 import itertools
-from typing import Final, Iterable, Optional, Sequence
+from dataclasses import dataclass
+from typing import Final, Optional, Sequence
 
+from fltk.fegen import gsm, gsm2tree
 from fltk.iir import model as iir
 from fltk.iir.py import reg as pyreg
-from fltk.fegen import gsm, gsm2tree
 
-ApplyResultType: Final = iir.Type.make(
-    cname="ApplyResultType", params=dict(pos_type=iir.TYPE, result_type=iir.TYPE)
-)
+ApplyResultType: Final = iir.Type.make(cname="ApplyResultType", params={"pos_type": iir.TYPE, "result_type": iir.TYPE})
 pyreg.register_type(
     pyreg.TypeInfo(
         typ=ApplyResultType,
@@ -28,7 +26,7 @@ pyreg.register_type(
 
 MemoEntryType: Final = iir.Type.make(
     cname="MemoEntry",
-    params=dict(RuleId=iir.TYPE, PosType=iir.TYPE, ResultType=iir.TYPE),
+    params={"RuleId": iir.TYPE, "PosType": iir.TYPE, "ResultType": iir.TYPE},
 )
 pyreg.register_type(
     pyreg.TypeInfo(
@@ -40,7 +38,7 @@ pyreg.register_type(
 
 ErrorTrackerType: Final = iir.Type.make(
     cname="ErrorTracker",
-    params=dict(RuleId=iir.TYPE),
+    params={"RuleId": iir.TYPE},
 )
 pyreg.register_type(
     pyreg.TypeInfo(
@@ -63,10 +61,7 @@ class ParserGenerator:
     def __init__(self, grammar: gsm.Grammar, cstgen: gsm2tree.CstGenerator):
         self.grammar: Final = grammar
         self.cstgen = cstgen
-        if not self.grammar.vars:
-            self.pos_type: Final = iir.SignedIndexInt
-        else:
-            raise NotImplementedError("Grammar vars not implemented")
+        self.pos_type: Final = iir.SignedIndexInt
 
         self.parser_class = iir.ClassType.make(
             cname="Parser",
@@ -83,9 +78,7 @@ class ParserGenerator:
             )
         )
 
-        self.parser_class.def_field(
-            name="packrat", typ=packrat_type, init=iir.Construct.make(packrat_type)
-        )
+        self.parser_class.def_field(name="packrat", typ=packrat_type, init=iir.Construct.make(packrat_type))
 
         terminalsrc_type = iir.Type.make(cname="TerminalSource")
         pyreg.register_type(
@@ -95,27 +88,19 @@ class ParserGenerator:
                 name="TerminalSource",
             )
         )
-        terminalsrc_fld = self.parser_class.def_field(
-            name="terminalsrc", typ=terminalsrc_type, init=None
-        )
+        terminalsrc_fld = self.parser_class.def_field(name="terminalsrc", typ=terminalsrc_type, init=None)
 
-        ErrorTracker = ErrorTrackerType.instantiate(RuleId=iir.IndexInt)
+        error_tracker_type = ErrorTrackerType.instantiate(RuleId=iir.IndexInt)
         self.parser_class.def_field(
             name="error_tracker",
-            typ=ErrorTracker,
-            init=iir.Construct.make(ErrorTracker),
+            typ=error_tracker_type,
+            init=iir.Construct.make(error_tracker_type),
         )
 
         self.parser_class.def_field(
             name="rule_names",
-            typ=(
-                rule_names_type := iir.GenericImmutableSequence.instantiate(
-                    value_type=iir.String
-                )
-            ),
-            init=iir.LiteralSequence(
-                [iir.LiteralString(rule.name) for rule in self.grammar.rules]
-            ),
+            typ=iir.GenericImmutableSequence.instantiate(value_type=iir.String),
+            init=iir.LiteralSequence([iir.LiteralString(rule.name) for rule in self.grammar.rules]),
         )
 
         self.parser_class.def_constructor(
@@ -130,9 +115,7 @@ class ParserGenerator:
             init_list=[(terminalsrc_fld, iir.INIT_FROM_PARAM)],
         )
 
-        span_result_type = ApplyResultType.instantiate(
-            pos_type=self.pos_type, result_type=TerminalSpanType
-        )
+        span_result_type = ApplyResultType.instantiate(pos_type=self.pos_type, result_type=TerminalSpanType)
         consume_literal = self.parser_class.def_method(
             name="consume_literal",
             return_type=iir.Maybe.instantiate(value_type=span_result_type),
@@ -152,9 +135,7 @@ class ParserGenerator:
             ],
             mutable_self=False,
         )
-        span_var = iir.Var(
-            name="span", typ=TerminalSpanType, ref_type=iir.RefType.VALUE, mutable=False
-        )
+        span_var = iir.Var(name="span", typ=TerminalSpanType, ref_type=iir.RefType.VALUE, mutable=False)
         consume_literal.block.if_(
             condition=iir.SelfExpr().fld.terminalsrc.method.consume_literal.call(
                 pos=consume_literal.get_param("pos").load(),
@@ -164,9 +145,7 @@ class ParserGenerator:
         ).block.return_(
             iir.Success(
                 span_result_type,
-                iir.Construct.make(
-                    span_result_type, pos=span_var.fld.end, result=span_var.load()
-                ),
+                iir.Construct.make(span_result_type, pos=span_var.fld.end, result=span_var.load()),
             )
         )
         consume_literal.block.expr_stmt(
@@ -200,9 +179,7 @@ class ParserGenerator:
             ],
             mutable_self=False,
         )
-        span_var = iir.Var(
-            name="span", typ=TerminalSpanType, ref_type=iir.RefType.VALUE, mutable=False
-        )
+        span_var = iir.Var(name="span", typ=TerminalSpanType, ref_type=iir.RefType.VALUE, mutable=False)
         consume_regex.block.if_(
             condition=iir.SelfExpr().fld.terminalsrc.method.consume_regex.call(
                 pos=consume_regex.get_param("pos").load(),
@@ -212,9 +189,7 @@ class ParserGenerator:
         ).block.return_(
             iir.Success(
                 span_result_type,
-                iir.Construct.make(
-                    span_result_type, pos=span_var.fld.end, result=span_var.load()
-                ),
+                iir.Construct.make(span_result_type, pos=span_var.fld.end, result=span_var.load()),
             )
         )
 
@@ -230,10 +205,10 @@ class ParserGenerator:
         )
         consume_regex.block.return_(iir.Failure(span_result_type))
 
-        self.item_keys: dict[gsm.Item, str] = dict()
-        self.key_items: dict[str, gsm.Item] = dict()
+        self.item_keys: dict[gsm.Item, str] = {}
+        self.key_items: dict[str, gsm.Item] = {}
 
-        self.parsers: dict[tuple[str, ...], ParserGenerator.ParserFn] = dict()
+        self.parsers: dict[tuple[str, ...], ParserGenerator.ParserFn] = {}
         self.rule_id_seq = itertools.count()
         for rule in self.grammar.rules:
             self._make_parser_info(
@@ -252,9 +227,7 @@ class ParserGenerator:
             )
 
     def _memo_type(self, result_type: iir.Type) -> iir.Type:
-        return MemoEntryType.instantiate(
-            RuleId=iir.IndexInt, PosType=self.pos_type, ResultType=result_type
-        )
+        return MemoEntryType.instantiate(RuleId=iir.IndexInt, PosType=self.pos_type, ResultType=result_type)
 
     def get_item_key(self, item: gsm.Item) -> str:
         try:
@@ -321,9 +294,7 @@ class ParserGenerator:
                 TerminalSpanType,
             )
         if isinstance(term, Sequence):
-            parser_fn = self.gen_alternatives_parser(
-                path=path + ("alts",), node_type=node_type, alternatives=term
-            )
+            parser_fn = self.gen_alternatives_parser(path=(*path, "alts"), node_type=node_type, alternatives=term)
             return (
                 iir.SelfExpr()
                 .method[parser_fn.apply_name]
@@ -338,45 +309,41 @@ class ParserGenerator:
                 parser_fn.result_type,
             )
 
-        raise NotImplementedError(f"Term type {term}")
+        msg = f"Term type {term}"
+        raise NotImplementedError(msg)
 
     def _apply_rule_method_name(self, rule_name: str) -> str:
         return f"apply__{rule_name}"
 
-    def _make_parser_info(
-        self, path: tuple[str, ...], result_type: iir.Type, memoize: bool = False
-    ) -> ParserFn:
+    def _make_parser_info(self, *, path: tuple[str, ...], result_type: iir.Type, memoize: bool = False) -> ParserFn:
         base_name = f"parse_{'__'.join(path)}"
         parser_info = ParserGenerator.ParserFn(
             name=base_name,
-            apply_name=self._apply_rule_method_name(base_name)
-            if memoize
-            else base_name,
+            apply_name=self._apply_rule_method_name(base_name) if memoize else base_name,
             cache_name=f"_cache__{base_name}" if memoize else None,
             result_type=result_type,
             rule_id=next(self.rule_id_seq) if memoize else None,
         )
-        assert path not in self.parsers
+        assert path not in self.parsers  # noqa: S101
         self.parsers[path] = parser_info
         return parser_info
 
-    def _cache_parser_info(
-        self, path: tuple[str, ...], result_type: iir.Type, memoize: bool = False
-    ) -> ParserFn:
+    def _cache_parser_info(self, *, path: tuple[str, ...], result_type: iir.Type, memoize: bool = False) -> ParserFn:
         try:
             return self.parsers[path]
         except KeyError:
             pass
-        return self._make_parser_info(path, result_type, memoize)
+        return self._make_parser_info(path=path, result_type=result_type, memoize=memoize)
 
     def _gen_parser_callable(
         self,
+        *,
         path: tuple[str, ...],
         result_type: iir.Type,
         mutable_pos: bool = False,
         memoize: bool = False,
     ) -> tuple[iir.Method, ParserFn]:
-        parser_info = self._cache_parser_info(path, result_type, memoize)
+        parser_info = self._cache_parser_info(path=path, result_type=result_type, memoize=memoize)
         return_type = iir.Maybe.instantiate(
             value_type=ApplyResultType.instantiate(
                 pos_type=self.pos_type,
@@ -397,8 +364,8 @@ class ParserGenerator:
             mutable_self=False,
         )
         if memoize:
-            assert parser_info.rule_id is not None
-            assert parser_info.cache_name is not None
+            assert parser_info.rule_id is not None  # noqa: S101
+            assert parser_info.cache_name is not None  # noqa: S101
             memoizer = self.parser_class.def_method(
                 name=parser_info.apply_name,
                 return_type=return_type,
@@ -429,13 +396,11 @@ class ParserGenerator:
             self.parser_class.def_field(
                 name=parser_info.cache_name,
                 typ=cache_type,
-                init=iir.Construct.make(typ=cache_type),
+                init=iir.LiteralMapping(key_values=[]),
             )
         return rule_callable, parser_info
 
-    def gen_item_parser(
-        self, path: tuple[str, ...], node_type: iir.Type, item: gsm.Item
-    ) -> ParserFn:
+    def gen_item_parser(self, path: tuple[str, ...], node_type: iir.Type, item: gsm.Item) -> ParserFn:
         if item.quantifier.is_multiple():
             return self.gen_item_parser_multiple(path, node_type, item)
         else:
@@ -482,9 +447,7 @@ class ParserGenerator:
             path=path, node_type=node_type, term=item.term
         )
         result_type = node_type
-        return_type = ApplyResultType.instantiate(
-            pos_type=self.pos_type, result_type=result_type
-        )
+        return_type = ApplyResultType.instantiate(pos_type=self.pos_type, result_type=result_type)
 
         result, parser_info = self._gen_parser_callable(
             path=path,
@@ -515,10 +478,7 @@ class ParserGenerator:
         )
         loop.block.assign(
             target=result.get_param("pos").store(),
-            expr=loop.block.get_leaf_scope()
-            .lookup_as("one_result", iir.Var)
-            .load_mut()
-            .fld.pos.move(),
+            expr=loop.block.get_leaf_scope().lookup_as("one_result", iir.Var).load_mut().fld.pos.move(),
         )
         if term_result_type is node_type:
             loop.block.expr_stmt(
@@ -533,16 +493,11 @@ class ParserGenerator:
             method = f"append_{item.label}" if item.label else "append"
             loop.block.expr_stmt(
                 result_var.method[method].call(
-                    child=loop.block.get_leaf_scope()
-                    .lookup_as("one_result", iir.Var)
-                    .load_mut()
-                    .fld.result.move()
+                    child=loop.block.get_leaf_scope().lookup_as("one_result", iir.Var).load_mut().fld.result.move()
                 )
             )
         if item.quantifier.min() != gsm.Arity.ZERO:
-            loop.block.if_(iir.IsEmpty(result_var.fld.children)).block.return_(
-                iir.Failure(result_type)
-            )
+            loop.block.if_(iir.IsEmpty(result_var.fld.children)).block.return_(iir.Failure(result_type))
 
         result.block.assign(
             result_var.fld.span,
@@ -566,6 +521,7 @@ class ParserGenerator:
 
     def gen_alternatives_parser(
         self,
+        *,
         path: tuple[str, ...],
         node_type: iir.Type,
         alternatives: Sequence[gsm.Items],
@@ -578,26 +534,18 @@ class ParserGenerator:
             memoize=memoize,
         )
         alternatives_pos_var = alternatives_parser.get_param("pos")
-        return_type = ApplyResultType.instantiate(
-            pos_type=self.pos_type, result_type=node_type
-        )
+        return_type = ApplyResultType.instantiate(pos_type=self.pos_type, result_type=node_type)
 
         # Try each alternative in order, returning the first one that succeeds.
         for alt_idx, alternative in enumerate(alternatives):
             # Create a parser function for this alternative
             alt_name = f"alt{alt_idx}"
-            alt_path = path + (alt_name,)
-            alt_parser_info = self.gen_alternative_parser(
-                alt_path, node_type, alternative
-            )
+            alt_path = (*path, alt_name)
+            alt_parser_info = self.gen_alternative_parser(alt_path, node_type, alternative)
             # Call the alternative parser function
-            alt_result_var = iir.Var(
-                name=alt_name, typ=return_type, ref_type=iir.RefType.VALUE, mutable=True
-            )
-            alt_if = alternatives_parser.block.if_(
-                condition=iir.SelfExpr()
-                .method[alt_parser_info.apply_name]
-                .call(pos=alternatives_pos_var.load()),
+            alt_result_var = iir.Var(name=alt_name, typ=return_type, ref_type=iir.RefType.VALUE, mutable=True)
+            alternatives_parser.block.if_(
+                condition=iir.SelfExpr().method[alt_parser_info.apply_name].call(pos=alternatives_pos_var.load()),
                 let=alt_result_var,
             ).block.return_(iir.Success(return_type, alt_result_var))
 
@@ -606,12 +554,8 @@ class ParserGenerator:
 
         return parser_info
 
-    def gen_alternative_parser(
-        self, path: tuple[str, ...], node_type: iir.Type, alternative: gsm.Items
-    ) -> ParserFn:
-        alt_parser, alt_parser_info = self._gen_parser_callable(
-            path=path, result_type=node_type, mutable_pos=True
-        )
+    def gen_alternative_parser(self, path: tuple[str, ...], node_type: iir.Type, alternative: gsm.Items) -> ParserFn:
+        alt_parser, alt_parser_info = self._gen_parser_callable(path=path, result_type=node_type, mutable_pos=True)
         alt_pos_var = alt_parser.get_param("pos")
         alt_result_var = alt_parser.block.var(
             name="result",
@@ -628,32 +572,27 @@ class ParserGenerator:
             ),
         )
 
-        return_type = ApplyResultType.instantiate(
-            pos_type=self.pos_type, result_type=node_type
-        )
+        return_type = ApplyResultType.instantiate(pos_type=self.pos_type, result_type=node_type)
 
         # Process each item in the alternative in order by calling item parser functions.
         # Successful item parses are appended to alt_result_var.
         # Failed parses of non-optional items result in early Failure return.
         for item_idx, item in enumerate(alternative.items):
             if item.disposition == gsm.Disposition.INLINE:
-                raise NotImplementedError("Inline items not yet supported: {item}")
+                msg = "Inline items not yet supported: {item}"
+                raise NotImplementedError(msg)
             # Create an item parser
             item_name = f"item{item_idx}"
-            item_parser = self.gen_item_parser(path + (item_name,), node_type, item)
+            item_parser = self.gen_item_parser((*path, item_name), node_type, item)
             item_result_var = iir.Var(
                 name=item_name,
-                typ=ApplyResultType.instantiate(
-                    pos_type=self.pos_type, result_type=item_parser.result_type
-                ),
+                typ=ApplyResultType.instantiate(pos_type=self.pos_type, result_type=item_parser.result_type),
                 ref_type=iir.RefType.VALUE,
                 mutable=True,
             )
             # Call the item parser
             item_if = alt_parser.block.if_(
-                condition=iir.SelfExpr()
-                .method[item_parser.apply_name]
-                .call(pos=alt_pos_var.load()),
+                condition=iir.SelfExpr().method[item_parser.apply_name].call(pos=alt_pos_var.load()),
                 let=item_result_var,
                 orelse=item.quantifier.is_required(),
             )
@@ -662,23 +601,19 @@ class ParserGenerator:
             if item.disposition != gsm.Disposition.SUPPRESS:
                 if item_parser.result_type is node_type:
                     item_if.block.expr_stmt(
-                        alt_result_var.fld.children.method.extend.call(
-                            item_result_var.fld.result.fld.children.move()
-                        )
+                        alt_result_var.fld.children.method.extend.call(item_result_var.fld.result.fld.children.move())
                     )
                 else:
                     method_name = "append"
                     if item.label:
                         method_name += f"_{item.label}"
                     item_if.block.expr_stmt(
-                        alt_result_var.method[method_name].call(
-                            child=item_result_var.fld.result.move()
-                        )
+                        alt_result_var.method[method_name].call(child=item_result_var.fld.result.move())
                     )
 
             # Handle item failure
             if item.quantifier.is_required():
-                assert isinstance(item_if.orelse, iir.Block)
+                assert isinstance(item_if.orelse, iir.Block)  # noqa: S101
                 item_if.orelse.return_(iir.Failure(return_type))
 
             if sep := alternative.sep_after[item_idx] != gsm.Separator.NO_WS:
@@ -714,9 +649,7 @@ class ParserGenerator:
         alt_parser.block.return_(
             iir.Success(
                 return_type,
-                iir.Construct.make(
-                    return_type, pos=alt_pos_var.move(), result=alt_result_var.move()
-                ),
+                iir.Construct.make(return_type, pos=alt_pos_var.move(), result=alt_result_var.move()),
             )
         )
         return alt_parser_info

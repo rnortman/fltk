@@ -291,18 +291,14 @@ rules = [
             ),
             gsm.Items(
                 items=[
-                    gsm.Item(
-                        None, gsm.Disposition.SUPPRESS, gsm.Literal("/"), gsm.REQUIRED
-                    ),
+                    gsm.Item(None, gsm.Disposition.SUPPRESS, gsm.Literal("/"), gsm.REQUIRED),
                     gsm.Item(
                         "regex",
                         gsm.Disposition.INCLUDE,
                         gsm.Identifier("raw_string"),
                         gsm.REQUIRED,
                     ),
-                    gsm.Item(
-                        None, gsm.Disposition.SUPPRESS, gsm.Literal("/"), gsm.REQUIRED
-                    ),
+                    gsm.Item(None, gsm.Disposition.SUPPRESS, gsm.Literal("/"), gsm.REQUIRED),
                 ],
                 sep_after=[
                     gsm.Separator.NO_WS,
@@ -312,18 +308,14 @@ rules = [
             ),
             gsm.Items(
                 items=[
-                    gsm.Item(
-                        None, gsm.Disposition.SUPPRESS, gsm.Literal("("), gsm.REQUIRED
-                    ),
+                    gsm.Item(None, gsm.Disposition.SUPPRESS, gsm.Literal("("), gsm.REQUIRED),
                     gsm.Item(
                         "alternatives",
                         gsm.Disposition.INCLUDE,
                         gsm.Identifier("alternatives"),
                         gsm.REQUIRED,
                     ),
-                    gsm.Item(
-                        None, gsm.Disposition.SUPPRESS, gsm.Literal(")"), gsm.REQUIRED
-                    ),
+                    gsm.Item(None, gsm.Disposition.SUPPRESS, gsm.Literal(")"), gsm.REQUIRED),
                 ],
                 sep_after=[
                     gsm.Separator.WS_ALLOWED,
@@ -464,9 +456,7 @@ rules = [
     ),
 ]
 
-grammar = gsm.Grammar(
-    rules=rules, vars=[], identifiers=dict((rule.name, rule) for rule in rules)
-)
+grammar = gsm.Grammar(rules=rules, identifiers={rule.name: rule for rule in rules})
 
 if __name__ == "__main__":
     import sys

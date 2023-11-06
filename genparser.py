@@ -1,27 +1,24 @@
-import dataclasses
 import sys
 
 import astor  # type: ignore
 
+import fltk2gsm
+import fltk_parser
 from fltk import pygen
 from fltk.fegen import gsm, gsm2parser, gsm2tree
-from fltk.fegen.pyrt import terminalsrc, errors
+from fltk.fegen.pyrt import errors, terminalsrc
 from fltk.iir.py import compiler
 from fltk.iir.py import reg as pyreg
 
-import fltk_cst
-import fltk_parser
-import fltk2gsm
-
 
 def parse_grammar() -> gsm.Grammar:
-    with open(sys.argv[1], "r") as grammarfile:
+    with open(sys.argv[1]) as grammarfile:
         terminals = terminalsrc.TerminalSource(grammarfile.read())
     parser = fltk_parser.Parser(terminalsrc=terminals)
     result = parser.apply__parse_grammar(0)
-    assert result
+    assert result  # noqa: S101
     if not result or result.pos != len(terminals.terminals):
-        print(
+        print(  # noqa: T201
             errors.format_error_message(
                 parser.error_tracker,
                 terminals,
