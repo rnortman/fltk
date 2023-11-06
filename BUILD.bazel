@@ -1,0 +1,16 @@
+load("@rules_python//python:defs.bzl", "py_binary")
+load("@rules_python//python:pip.bzl", "compile_pip_requirements")
+load(":rules.bzl", "generate_parser")
+
+compile_pip_requirements(
+    name = "requirements",
+    requirements_in = "//:requirements.in",
+    requirements_txt = "requirements_lock_3_10.txt",
+)
+
+py_binary(
+    name="genparser",
+    srcs=["genparser.py"],
+    deps=["@pypi//astor"],
+    data=glob(["**/*.fltkg"])
+)

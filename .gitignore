@@ -1,4 +1,7 @@
 .coverage
-WORKSPACE
 __pycache__
 *~
+bazel-bin
+bazel-fltk
+bazel-out
+bazel-testlogs
