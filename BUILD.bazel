@@ -1,6 +1,5 @@
-load("@rules_python//python:defs.bzl", "py_binary")
+load("@rules_python//python:defs.bzl", "py_binary", "py_library")
 load("@rules_python//python:pip.bzl", "compile_pip_requirements")
-load(":rules.bzl", "generate_parser")
 
 compile_pip_requirements(
     name = "requirements",
@@ -9,8 +8,14 @@ compile_pip_requirements(
 )
 
 py_binary(
-    name="genparser",
-    srcs=["genparser.py"],
-    deps=["@pypi//astor"],
-    data=glob(["**/*.fltkg"])
+    name = "genparser",
+    srcs = ["genparser.py"],
+    deps = ["@pypi//astor"],
+    visibility = ["//visibility:public"],
+)
+
+py_library(
+    name = "fltk",
+    srcs = glob(["fltk/**/*.py"]),
+    visibility = ["//visibility:public"],
 )
