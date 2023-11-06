@@ -69,7 +69,7 @@ class ParserGenerator:
             defined_in=iir.Module.make(name="TODO(module)"),
         )
 
-        packrat_type = iir.Type.make(cname="Packrat")
+        packrat_type = iir.Type.make(cname="Packrat", params={"RuleId": iir.TYPE, "PosType": iir.TYPE})
         pyreg.register_type(
             pyreg.TypeInfo(
                 typ=packrat_type,
@@ -78,7 +78,10 @@ class ParserGenerator:
             )
         )
 
-        self.parser_class.def_field(name="packrat", typ=packrat_type, init=iir.Construct.make(packrat_type))
+        concrete_packrat_type = packrat_type.instantiate(RuleId=iir.IndexInt, PosType=iir.IndexInt)
+        self.parser_class.def_field(
+            name="packrat", typ=concrete_packrat_type, init=iir.Construct.make(concrete_packrat_type)
+        )
 
         terminalsrc_type = iir.Type.make(cname="TerminalSource")
         pyreg.register_type(

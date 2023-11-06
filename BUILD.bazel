@@ -17,5 +17,6 @@ py_binary(
 py_library(
     name = "fltk",
     srcs = glob(["fltk/**/*.py"]),
+    data = ["fltk/py.typed"],
     visibility = ["//visibility:public"],
 )
