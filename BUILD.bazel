@@ -10,13 +10,16 @@ compile_pip_requirements(
 py_binary(
     name = "genparser",
     srcs = ["genparser.py"],
-    deps = ["@pypi//astor"],
     visibility = ["//visibility:public"],
+    deps = [
+        ":fltk",
+        "@pypi//astor",
+    ],
 )
 
 py_library(
     name = "fltk",
-    srcs = glob(["fltk/**/*.py"]),
+    srcs = glob(["**/*.py"]),
     data = ["fltk/py.typed"],
     visibility = ["//visibility:public"],
 )
