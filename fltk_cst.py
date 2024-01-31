@@ -178,9 +178,9 @@ class Items:
         WS_REQUIRED = enum.auto()
 
     span: fltk.fegen.pyrt.terminalsrc.Span = fltk.fegen.pyrt.terminalsrc.UnknownSpan
-    children: list[
-        tuple[typing.Optional[Label], typing.Union["Item", "fltk.fegen.pyrt.terminalsrc.Span"]]
-    ] = dataclasses.field(default_factory=list)
+    children: list[tuple[typing.Optional[Label], typing.Union["Item", "fltk.fegen.pyrt.terminalsrc.Span"]]] = (
+        dataclasses.field(default_factory=list)
+    )
 
     def append(
         self, child: typing.Union["Item", "fltk.fegen.pyrt.terminalsrc.Span"], label: typing.Optional[Label] = None
@@ -314,9 +314,9 @@ class Item:
         TERM = enum.auto()
 
     span: fltk.fegen.pyrt.terminalsrc.Span = fltk.fegen.pyrt.terminalsrc.UnknownSpan
-    children: list[
-        tuple[typing.Optional[Label], typing.Union["Disposition", "Identifier", "Quantifier", "Term"]]
-    ] = dataclasses.field(default_factory=list)
+    children: list[tuple[typing.Optional[Label], typing.Union["Disposition", "Identifier", "Quantifier", "Term"]]] = (
+        dataclasses.field(default_factory=list)
+    )
 
     def append(
         self,

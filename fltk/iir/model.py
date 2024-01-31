@@ -192,13 +192,15 @@ class Block(Statement):
                 body=[],
                 inner_scope=Scope(parent=self.get_leaf_scope()),
             ),
-            orelse=Block(
-                parent_block=self,
-                body=[],
-                inner_scope=Scope(parent=self.get_leaf_scope()),
-            )
-            if orelse
-            else None,
+            orelse=(
+                Block(
+                    parent_block=self,
+                    body=[],
+                    inner_scope=Scope(parent=self.get_leaf_scope()),
+                )
+                if orelse
+                else None
+            ),
         )
         if let:
             result.block.get_leaf_scope().define(let.name, let)

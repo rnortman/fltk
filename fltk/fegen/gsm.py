@@ -76,12 +76,10 @@ class Arity(Enum):
 
 class Quantifier(ABC):
     @abstractmethod
-    def min(self) -> Arity:  # noqa: A003
-        ...
+    def min(self) -> Arity: ...
 
     @abstractmethod
-    def max(self) -> Arity:  # noqa: A003
-        ...
+    def max(self) -> Arity: ...
 
     def is_optional(self) -> bool:
         return self.min() == Arity.ZERO
@@ -94,10 +92,10 @@ class Quantifier(ABC):
 
 
 class Required(Quantifier):
-    def min(self) -> Arity:  # noqa: A003
+    def min(self) -> Arity:
         return Arity.ONE
 
-    def max(self) -> Arity:  # noqa: A003
+    def max(self) -> Arity:
         return Arity.ONE
 
 
@@ -105,10 +103,10 @@ REQUIRED: Final = Required()
 
 
 class NotRequired(Quantifier):
-    def min(self) -> Arity:  # noqa: A003
+    def min(self) -> Arity:
         return Arity.ZERO
 
-    def max(self) -> Arity:  # noqa: A003
+    def max(self) -> Arity:
         return Arity.ONE
 
 
@@ -116,10 +114,10 @@ NOT_REQUIRED: Final = NotRequired()
 
 
 class OneOrMore(Quantifier):
-    def min(self) -> Arity:  # noqa: A003
+    def min(self) -> Arity:
         return Arity.ONE
 
-    def max(self) -> Arity:  # noqa: A003
+    def max(self) -> Arity:
         return Arity.MULTIPLE
 
 
@@ -127,10 +125,10 @@ ONE_OR_MORE: Final = OneOrMore()
 
 
 class ZeroOrMore(Quantifier):
-    def min(self) -> Arity:  # noqa: A003
+    def min(self) -> Arity:
         return Arity.ZERO
 
-    def max(self) -> Arity:  # noqa: A003
+    def max(self) -> Arity:
         return Arity.MULTIPLE
 
 

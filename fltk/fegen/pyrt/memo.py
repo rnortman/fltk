@@ -21,8 +21,7 @@ LOG: Final = logging.getLogger(__name__)
 
 class ComparableProtocol(Protocol):
     @abstractmethod
-    def __le__(self: "Comparable", other: "Comparable") -> bool:
-        ...  # pragma: nocover
+    def __le__(self: "Comparable", other: "Comparable") -> bool: ...  # pragma: nocover
 
 
 Comparable = TypeVar("Comparable", bound=ComparableProtocol)
@@ -215,8 +214,10 @@ class Packrat(Generic[RuleId, PosType]):
         the recursion is detected.  It does not re-execute on each growth cycle.
         """
         LOG.debug("setup_recursion %d poison %s", rule_id, poison)
-        assert poison.recursion_info is None  # noqa: S101
-        poison.recursion_info = RecursionInfo(rule_id=rule_id, involved=set(), eval_set=set())
+        if poison.recursion_info is None:
+            poison.recursion_info = RecursionInfo(rule_id=rule_id, involved=set(), eval_set=set())
+        else:
+            assert poison.recursion_info.rule_id == rule_id  # noqa: S101
         LOG.debug("setup_recursion %d poison %s", rule_id, poison)
         LOG.debug("setup_recursion stack %s", self.invocation_stack)
         assert self.invocation_stack  # noqa: S101
