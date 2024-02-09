@@ -53,8 +53,14 @@ class TerminalSource:
                 self.line_ends.append(len(self.terminals) - 1)
         idx = bisect.bisect_left(self.line_ends, pos)
         assert idx < len(self.line_ends)  # noqa: S101
+        if idx > 0:
+            col = pos - self.line_ends[idx - 1] - 1
+            line_span = Span(self.line_ends[idx - 1] + 1, self.line_ends[idx])
+        else:
+            col = pos
+            line_span = Span(0, self.line_ends[0])
         return LineColPos(
             line=idx,
-            col=pos - self.line_ends[idx - 1] - 1,
-            line_span=Span(self.line_ends[idx - 1] + 1, self.line_ends[idx]),
+            col=col,
+            line_span=line_span,
         )
