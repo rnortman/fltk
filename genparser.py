@@ -1,6 +1,6 @@
 import sys
 
-import astor  # type: ignore
+import ast
 
 import fltk2gsm
 import fltk_parser
@@ -52,11 +52,11 @@ def gen_parser(grammar: gsm.Grammar) -> None:
     parser_mod.body.append(parser_ast)
 
     with open(parser_filename, "w") as parser_file:
-        parser_file.write(astor.to_source(parser_mod))
+        parser_file.write(ast.unparse(parser_mod))
 
     cst_mod = cstgen.gen_py_module()
     with open(cst_filename, "w") as cst_file:
-        cst_file.write(astor.to_source(cst_mod))
+        cst_file.write(ast.unparse(cst_mod))
 
 
 if __name__ == "__main__":
