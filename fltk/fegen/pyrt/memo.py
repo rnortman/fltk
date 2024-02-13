@@ -155,7 +155,9 @@ class Packrat(Generic[RuleId, PosType]):
             return None
 
         LOG.debug("apply_rule %d poison %s", rule_id, poison)
+        self.invocation_stack.append(rule_id)
         grow_result = self._grow_seed(rule_callable, start_pos, memo, poison.recursion_info)
+        assert self.invocation_stack.pop() == rule_id  # noqa: S101
         LOG.debug("apply_rule %d memo %s poison %s", rule_id, memo, poison)
         return grow_result
 
