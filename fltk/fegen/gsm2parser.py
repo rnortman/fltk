@@ -500,7 +500,7 @@ class ParserGenerator:
                 )
             )
         if item.quantifier.min() != gsm.Arity.ZERO:
-            loop.block.if_(iir.IsEmpty(result_var.fld.children)).block.return_(iir.Failure(result_type))
+            result.block.if_(iir.IsEmpty(result_var.fld.children)).block.return_(iir.Failure(result_type))
 
         result.block.assign(
             result_var.fld.span,
