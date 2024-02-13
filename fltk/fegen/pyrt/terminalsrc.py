@@ -44,9 +44,11 @@ class TerminalSource:
         return None
 
     def pos_to_line_col(self, pos: int) -> LineColPos:
-        if pos >= len(self.terminals):
+        if pos > len(self.terminals):
             msg = f"pos {pos} beyond end of terminals"
             raise ValueError(msg)
+        if pos == len(self.terminals):
+            pos -= 1
         if not self.line_ends:
             self.line_ends = [idx for idx, c in enumerate(self.terminals) if c == "\n"]
             if not self.line_ends or self.line_ends[-1] != len(self.terminals) - 1:
