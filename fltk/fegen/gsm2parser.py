@@ -619,7 +619,7 @@ class ParserGenerator:
                 assert isinstance(item_if.orelse, iir.Block)  # noqa: S101
                 item_if.orelse.return_(iir.Failure(return_type))
 
-            if sep := alternative.sep_after[item_idx] != gsm.Separator.NO_WS:
+            if (sep := alternative.sep_after[item_idx]) != gsm.Separator.NO_WS:
                 item_ws_var = iir.Var(
                     name=f"ws_after__{item_name}",
                     typ=ApplyResultType.instantiate(
@@ -634,7 +634,7 @@ class ParserGenerator:
                         pos=alt_pos_var.load(), regex=iir.LiteralString(r"\s+")
                     ),
                     let=item_ws_var,
-                    orelse=sep == gsm.Separator.WS_REQUIRED,
+                    orelse=(sep == gsm.Separator.WS_REQUIRED),
                 )
                 sep_if.block.assign(alt_pos_var.store(), item_ws_var.fld.pos.move())
                 if sep == gsm.Separator.WS_REQUIRED:

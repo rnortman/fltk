@@ -256,7 +256,7 @@ def compile_if(stmt: iir.If) -> Iterator[ast.stmt]:
         raise NotImplementedError(msg)
     else:
         assert isinstance(stmt.orelse, iir.Block)  # noqa: S101
-        orelse = compile_block(stmt.orelse)
+        orelse = list(compile_block(stmt.orelse))
 
     if isinstance(stmt.condition, iir.LetExpr):
         condition = pygen.expr(f"({stmt.condition.var.name} := {compile_expr(stmt.condition.result)})")
