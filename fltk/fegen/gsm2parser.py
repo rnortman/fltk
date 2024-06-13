@@ -1,3 +1,5 @@
+from __future__ import annotations
+
 import itertools
 from dataclasses import dataclass
 from typing import Final, Optional, Sequence
@@ -57,6 +59,7 @@ class ParserGenerator:
         cache_name: Optional[str]
         result_type: iir.Type
         rule_id: Optional[int]
+        inline_to_parent: bool
 
     def __init__(self, grammar: gsm.Grammar, cstgen: gsm2tree.CstGenerator):
         self.grammar: Final = grammar
@@ -248,16 +251,22 @@ class ParserGenerator:
         self.item_keys[item] = key
         return key
 
+    @dataclass(slots=True, frozen=True)
+    class ConsumeTermInfo:
+        expr: iir.Expr
+        result_type: iir.Type
+        inline_to_parent: bool
+
     def _gen_consume_term_expr(
         self,
         path: tuple[str, ...],
         node_type: iir.Type,
         term: gsm.Term,
-    ) -> tuple[iir.Expr, iir.Type]:
+    ) -> ConsumeTermInfo:
         if isinstance(term, gsm.Identifier):
             parser_fn = self.parsers[(term.value,)]
-            return (
-                iir.SelfExpr()
+            return ParserGenerator.ConsumeTermInfo(
+                expr=iir.SelfExpr()
                 .method[parser_fn.apply_name]
                 .call(
                     pos=iir.VarByName(
@@ -267,11 +276,12 @@ class ParserGenerator:
                         mutable=False,
                     ).load()
                 ),
-                parser_fn.result_type,
+                result_type=parser_fn.result_type,
+                inline_to_parent=False,
             )
         if isinstance(term, gsm.Literal):
-            return (
-                iir.SelfExpr().method.consume_literal.call(
+            return ParserGenerator.ConsumeTermInfo(
+                expr=iir.SelfExpr().method.consume_literal.call(
                     pos=iir.VarByName(
                         name="pos",
                         typ=self.pos_type,
@@ -280,12 +290,13 @@ class ParserGenerator:
                     ).load(),
                     literal=iir.LiteralString(term.value),
                 ),
-                TerminalSpanType,
+                result_type=TerminalSpanType,
+                inline_to_parent=False,
             )
         if isinstance(term, gsm.Regex):
             # TODO pre-compile regexes
-            return (
-                iir.SelfExpr().method.consume_regex.call(
+            return ParserGenerator.ConsumeTermInfo(
+                expr=iir.SelfExpr().method.consume_regex.call(
                     pos=iir.VarByName(
                         name="pos",
                         typ=self.pos_type,
@@ -294,12 +305,13 @@ class ParserGenerator:
                     ).load(),
                     regex=iir.LiteralString(term.value),
                 ),
-                TerminalSpanType,
+                result_type=TerminalSpanType,
+                inline_to_parent=False,
             )
         if isinstance(term, Sequence):
             parser_fn = self.gen_alternatives_parser(path=(*path, "alts"), node_type=node_type, alternatives=term)
-            return (
-                iir.SelfExpr()
+            return ParserGenerator.ConsumeTermInfo(
+                expr=iir.SelfExpr()
                 .method[parser_fn.apply_name]
                 .call(
                     pos=iir.VarByName(
@@ -309,7 +321,8 @@ class ParserGenerator:
                         mutable=False,
                     ).load()
                 ),
-                parser_fn.result_type,
+                result_type=parser_fn.result_type,
+                inline_to_parent=True,
             )
 
         msg = f"Term type {term}"
@@ -318,7 +331,9 @@ class ParserGenerator:
     def _apply_rule_method_name(self, rule_name: str) -> str:
         return f"apply__{rule_name}"
 
-    def _make_parser_info(self, *, path: tuple[str, ...], result_type: iir.Type, memoize: bool = False) -> ParserFn:
+    def _make_parser_info(
+        self, *, path: tuple[str, ...], result_type: iir.Type, memoize: bool = False, inline_to_parent: bool = False
+    ) -> ParserFn:
         base_name = f"parse_{'__'.join(path)}"
         parser_info = ParserGenerator.ParserFn(
             name=base_name,
@@ -326,17 +341,22 @@ class ParserGenerator:
             cache_name=f"_cache__{base_name}" if memoize else None,
             result_type=result_type,
             rule_id=next(self.rule_id_seq) if memoize else None,
+            inline_to_parent=inline_to_parent,
         )
         assert path not in self.parsers  # noqa: S101
         self.parsers[path] = parser_info
         return parser_info
 
-    def _cache_parser_info(self, *, path: tuple[str, ...], result_type: iir.Type, memoize: bool = False) -> ParserFn:
+    def _cache_parser_info(
+        self, *, path: tuple[str, ...], result_type: iir.Type, memoize: bool = False, inline_to_parent: bool = False
+    ) -> ParserFn:
         try:
             return self.parsers[path]
         except KeyError:
             pass
-        return self._make_parser_info(path=path, result_type=result_type, memoize=memoize)
+        return self._make_parser_info(
+            path=path, result_type=result_type, memoize=memoize, inline_to_parent=inline_to_parent
+        )
 
     def _gen_parser_callable(
         self,
@@ -345,8 +365,11 @@ class ParserGenerator:
         result_type: iir.Type,
         mutable_pos: bool = False,
         memoize: bool = False,
+        inline_to_parent: bool = False,
     ) -> tuple[iir.Method, ParserFn]:
-        parser_info = self._cache_parser_info(path=path, result_type=result_type, memoize=memoize)
+        parser_info = self._cache_parser_info(
+            path=path, result_type=result_type, memoize=memoize, inline_to_parent=inline_to_parent
+        )
         return_type = iir.Maybe.instantiate(
             value_type=ApplyResultType.instantiate(
                 pos_type=self.pos_type,
@@ -419,14 +442,13 @@ class ParserGenerator:
         def item_parser_single_or_optional(self, pos):
             return <consume_term_expr>
         """
-        consume_term_expr, term_result_type = self._gen_consume_term_expr(
-            path=path, node_type=node_type, term=item.term
-        )
+        consume_term = self._gen_consume_term_expr(path=path, node_type=node_type, term=item.term)
         result, parser_info = self._gen_parser_callable(
             path=path,
-            result_type=term_result_type,
+            result_type=consume_term.result_type,
+            inline_to_parent=consume_term.inline_to_parent,
         )
-        result.block.return_(consume_term_expr)
+        result.block.return_(consume_term.expr)
         return parser_info
 
     def gen_item_parser_multiple(
@@ -446,9 +468,7 @@ class ParserGenerator:
                     return None
             return memo.ApplyResult(pos, results)
         """
-        consume_term_expr, term_result_type = self._gen_consume_term_expr(
-            path=path, node_type=node_type, term=item.term
-        )
+        consume_term = self._gen_consume_term_expr(path=path, node_type=node_type, term=item.term)
         result_type = node_type
         return_type = ApplyResultType.instantiate(pos_type=self.pos_type, result_type=result_type)
 
@@ -456,6 +476,7 @@ class ParserGenerator:
             path=path,
             result_type=result_type,
             mutable_pos=True,
+            inline_to_parent=True,
         )
         result_var = result.block.var(
             name="result",
@@ -471,7 +492,7 @@ class ParserGenerator:
             ),
         )
         loop = result.block.while_(
-            condition=consume_term_expr,
+            condition=consume_term.expr,
             let=iir.Var(
                 name="one_result",
                 typ=iir.Auto,
@@ -483,7 +504,7 @@ class ParserGenerator:
             target=result.get_param("pos").store(),
             expr=loop.block.get_leaf_scope().lookup_as("one_result", iir.Var).load_mut().fld.pos.move(),
         )
-        if term_result_type is node_type:
+        if consume_term.inline_to_parent:
             loop.block.expr_stmt(
                 result_var.fld.children.method.extend.call(
                     loop.block.get_leaf_scope()
@@ -535,6 +556,7 @@ class ParserGenerator:
             result_type=node_type,
             mutable_pos=False,
             memoize=memoize,
+            inline_to_parent=True,
         )
         alternatives_pos_var = alternatives_parser.get_param("pos")
         return_type = ApplyResultType.instantiate(pos_type=self.pos_type, result_type=node_type)
@@ -558,7 +580,9 @@ class ParserGenerator:
         return parser_info
 
     def gen_alternative_parser(self, path: tuple[str, ...], node_type: iir.Type, alternative: gsm.Items) -> ParserFn:
-        alt_parser, alt_parser_info = self._gen_parser_callable(path=path, result_type=node_type, mutable_pos=True)
+        alt_parser, alt_parser_info = self._gen_parser_callable(
+            path=path, result_type=node_type, mutable_pos=True, inline_to_parent=True
+        )
         alt_pos_var = alt_parser.get_param("pos")
         alt_result_var = alt_parser.block.var(
             name="result",
@@ -602,7 +626,7 @@ class ParserGenerator:
             # Handle item success
             item_if.block.assign(alt_pos_var.store(), item_result_var.fld.pos.move())
             if item.disposition != gsm.Disposition.SUPPRESS:
-                if item_parser.result_type is node_type:
+                if item_parser.inline_to_parent:
                     item_if.block.expr_stmt(
                         alt_result_var.fld.children.method.extend.call(item_result_var.fld.result.fld.children.move())
                     )
