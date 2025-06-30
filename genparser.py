@@ -1,6 +1,5 @@
-import sys
-
 import ast
+import sys
 
 import fltk2gsm
 import fltk_parser

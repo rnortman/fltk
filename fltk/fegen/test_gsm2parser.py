@@ -1,6 +1,6 @@
 """Unit tests for memo.py"""
 
-# ruff: noqa: S101, PLR2004
+# ruff: noqa: S101
 
 import ast
 import logging

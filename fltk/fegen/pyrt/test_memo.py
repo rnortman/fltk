@@ -20,7 +20,7 @@ def memoize(
     Callable[["Parser", int], Optional[memo.ApplyResult[int, ResultType]]],
 ]:
     def deco(
-        func: Callable[["Parser", int], Optional[memo.ApplyResult[int, ResultType]]]
+        func: Callable[["Parser", int], Optional[memo.ApplyResult[int, ResultType]]],
     ) -> Callable[["Parser", int], Optional[memo.ApplyResult[int, ResultType]]]:
         def wrapper(self: "Parser", pos: int) -> Optional[memo.ApplyResult[int, ResultType]]:
             result = self.packrat.apply(lambda pos: func(self, pos), rule_id, get_rule_cache(self), pos)

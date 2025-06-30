@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import itertools
 from dataclasses import dataclass
-from typing import Final, Optional, Sequence
+from typing import Final, Sequence
 
 from fltk.fegen import gsm, gsm2tree
 from fltk.iir import model as iir
@@ -56,9 +56,9 @@ class ParserGenerator:
     class ParserFn:
         name: str
         apply_name: str
-        cache_name: Optional[str]
+        cache_name: str | None
         result_type: iir.Type
-        rule_id: Optional[int]
+        rule_id: int | None
         inline_to_parent: bool
 
     def __init__(self, grammar: gsm.Grammar, cstgen: gsm2tree.CstGenerator):
@@ -661,7 +661,7 @@ class ParserGenerator:
                     orelse=(sep == gsm.Separator.WS_REQUIRED),
                 )
                 sep_if.block.assign(alt_pos_var.store(), item_ws_var.fld.pos.move())
-                if sep == gsm.Separator.WS_REQUIRED:
+                if sep == gsm.Separator.WS_REQUIRED and isinstance(sep_if.orelse, iir.Block):
                     sep_if.orelse.return_(iir.Failure(return_type))
 
         # If we did not return early, then we succeeded.
