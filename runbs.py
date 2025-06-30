@@ -7,6 +7,7 @@ import bootstrap_parser
 from fltk import pygen
 from fltk.fegen import gsm, gsm2parser, gsm2tree
 from fltk.fegen.pyrt import terminalsrc
+from fltk.iir.context import create_default_context
 from fltk.iir.py import compiler
 from fltk.iir.py import reg as pyreg
 
@@ -26,11 +27,13 @@ def parse_grammar() -> gsm.Grammar:
 def gen_parser(grammar: gsm.Grammar) -> None:
     parser_filename, cst_filename, cst_module_name = sys.argv[2:]
 
-    cst_module = pyreg.Module(cst_module_name.split("."))
-    cstgen = gsm2tree.CstGenerator(grammar=grammar, py_module=cst_module)
-    pgen = gsm2parser.ParserGenerator(grammar=grammar, cstgen=cstgen)
+    context = create_default_context()
 
-    parser_ast = compiler.compile_class(pgen.parser_class)
+    cst_module = pyreg.Module(cst_module_name.split("."))
+    cstgen = gsm2tree.CstGenerator(grammar=grammar, py_module=cst_module, context=context)
+    pgen = gsm2parser.ParserGenerator(grammar=grammar, cstgen=cstgen, context=context)
+
+    parser_ast = compiler.compile_class(pgen.parser_class, context)
     imports = [
         pyreg.Module(("collections", "abc")),
         pyreg.Module(("typing",)),

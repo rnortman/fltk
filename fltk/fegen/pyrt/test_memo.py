@@ -1,7 +1,5 @@
 """Unit tests for memo.py"""
 
-# ruff: noqa: S101, PLR2004
-
 import logging
 from typing import Callable, Final, Optional, Sequence, Tuple, TypeVar, Union
 

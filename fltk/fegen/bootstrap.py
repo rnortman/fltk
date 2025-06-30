@@ -465,16 +465,20 @@ if __name__ == "__main__":
 
     from fltk import pygen
     from fltk.fegen import gsm2parser, gsm2tree
+    from fltk.iir.context import create_default_context
     from fltk.iir.py import compiler
     from fltk.iir.py import reg as pyreg
 
     parser_filename, cst_filename, cst_module_name = sys.argv[1:]
 
-    cst_module = pyreg.Module(cst_module_name.split("."))
-    cstgen = gsm2tree.CstGenerator(grammar=grammar, py_module=cst_module)
-    pgen = gsm2parser.ParserGenerator(grammar=grammar, cstgen=cstgen)
+    # Create a context for this parser generation
+    context = create_default_context()
 
-    parser_ast = compiler.compile_class(pgen.parser_class)
+    cst_module = pyreg.Module(cst_module_name.split("."))
+    cstgen = gsm2tree.CstGenerator(grammar=grammar, py_module=cst_module, context=context)
+    pgen = gsm2parser.ParserGenerator(grammar=grammar, cstgen=cstgen, context=context)
+
+    parser_ast = compiler.compile_class(pgen.parser_class, context)
     imports = [
         pyreg.Module(("collections", "abc")),
         pyreg.Module(("typing",)),

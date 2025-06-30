@@ -2,53 +2,15 @@ from __future__ import annotations
 
 import itertools
 from dataclasses import dataclass
-from typing import Final, Sequence
+from typing import TYPE_CHECKING, Final, Sequence
 
 from fltk.fegen import gsm, gsm2tree
 from fltk.iir import model as iir
+from fltk.iir.context import get_parser_types
 from fltk.iir.py import reg as pyreg
 
-ApplyResultType: Final = iir.Type.make(cname="ApplyResultType", params={"pos_type": iir.TYPE, "result_type": iir.TYPE})
-pyreg.register_type(
-    pyreg.TypeInfo(
-        typ=ApplyResultType,
-        module=pyreg.Module(("fltk", "fegen", "pyrt", "memo")),
-        name="ApplyResult",
-    )
-)
-
-TerminalSpanType: Final = iir.Type.make(cname="TerminalSpan")
-pyreg.register_type(
-    pyreg.TypeInfo(
-        typ=TerminalSpanType,
-        module=pyreg.Module(("fltk", "fegen", "pyrt", "terminalsrc")),
-        name="Span",
-    )
-)
-
-MemoEntryType: Final = iir.Type.make(
-    cname="MemoEntry",
-    params={"RuleId": iir.TYPE, "PosType": iir.TYPE, "ResultType": iir.TYPE},
-)
-pyreg.register_type(
-    pyreg.TypeInfo(
-        typ=MemoEntryType,
-        module=pyreg.Module(("fltk", "fegen", "pyrt", "memo")),
-        name="MemoEntry",
-    )
-)
-
-ErrorTrackerType: Final = iir.Type.make(
-    cname="ErrorTracker",
-    params={"RuleId": iir.TYPE},
-)
-pyreg.register_type(
-    pyreg.TypeInfo(
-        typ=ErrorTrackerType,
-        module=pyreg.Module(("fltk", "fegen", "pyrt", "errors")),
-        name="ErrorTracker",
-    )
-)
+if TYPE_CHECKING:
+    from fltk.iir.context import CompilerContext
 
 
 class ParserGenerator:
@@ -61,10 +23,18 @@ class ParserGenerator:
         rule_id: int | None
         inline_to_parent: bool
 
-    def __init__(self, grammar: gsm.Grammar, cstgen: gsm2tree.CstGenerator):
+    def __init__(
+        self,
+        grammar: gsm.Grammar,
+        cstgen: gsm2tree.CstGenerator,
+        context: CompilerContext,
+    ):
         self.grammar: Final = grammar
         self.cstgen = cstgen
+        self.context = context
         self.pos_type: Final = iir.SignedIndexInt
+
+        self.ApplyResultType, self.TerminalSpanType, self.MemoEntryType, self.ErrorTrackerType = get_parser_types()
 
         self.parser_class = iir.ClassType.make(
             cname="Parser",
@@ -73,13 +43,12 @@ class ParserGenerator:
         )
 
         packrat_type = iir.Type.make(cname="Packrat", params={"RuleId": iir.TYPE, "PosType": iir.TYPE})
-        pyreg.register_type(
-            pyreg.TypeInfo(
-                typ=packrat_type,
-                module=pyreg.Module(("fltk", "fegen", "pyrt", "memo")),
-                name="Packrat",
-            )
+        type_info = pyreg.TypeInfo(
+            typ=packrat_type,
+            module=pyreg.Module(("fltk", "fegen", "pyrt", "memo")),
+            name="Packrat",
         )
+        self.context.python_type_registry.register_type(type_info)
 
         concrete_packrat_type = packrat_type.instantiate(RuleId=iir.IndexInt, PosType=iir.IndexInt)
         self.parser_class.def_field(
@@ -87,16 +56,15 @@ class ParserGenerator:
         )
 
         terminalsrc_type = iir.Type.make(cname="TerminalSource")
-        pyreg.register_type(
-            pyreg.TypeInfo(
-                typ=terminalsrc_type,
-                module=pyreg.Module(("fltk", "fegen", "pyrt", "terminalsrc")),
-                name="TerminalSource",
-            )
+        type_info = pyreg.TypeInfo(
+            typ=terminalsrc_type,
+            module=pyreg.Module(("fltk", "fegen", "pyrt", "terminalsrc")),
+            name="TerminalSource",
         )
+        self.context.python_type_registry.register_type(type_info)
         terminalsrc_fld = self.parser_class.def_field(name="terminalsrc", typ=terminalsrc_type, init=None)
 
-        error_tracker_type = ErrorTrackerType.instantiate(RuleId=iir.IndexInt)
+        error_tracker_type = self.ErrorTrackerType.instantiate(RuleId=iir.IndexInt)
         self.parser_class.def_field(
             name="error_tracker",
             typ=error_tracker_type,
@@ -121,7 +89,7 @@ class ParserGenerator:
             init_list=[(terminalsrc_fld, iir.INIT_FROM_PARAM)],
         )
 
-        span_result_type = ApplyResultType.instantiate(pos_type=self.pos_type, result_type=TerminalSpanType)
+        span_result_type = self.ApplyResultType.instantiate(pos_type=self.pos_type, result_type=self.TerminalSpanType)
         consume_literal = self.parser_class.def_method(
             name="consume_literal",
             return_type=iir.Maybe.instantiate(value_type=span_result_type),
@@ -141,7 +109,7 @@ class ParserGenerator:
             ],
             mutable_self=False,
         )
-        span_var = iir.Var(name="span", typ=TerminalSpanType, ref_type=iir.RefType.VALUE, mutable=False)
+        span_var = iir.Var(name="span", typ=self.TerminalSpanType, ref_type=iir.RefType.VALUE, mutable=False)
         consume_literal.block.if_(
             condition=iir.SelfExpr().fld.terminalsrc.method.consume_literal.call(
                 pos=consume_literal.get_param("pos").load(),
@@ -185,7 +153,7 @@ class ParserGenerator:
             ],
             mutable_self=False,
         )
-        span_var = iir.Var(name="span", typ=TerminalSpanType, ref_type=iir.RefType.VALUE, mutable=False)
+        span_var = iir.Var(name="span", typ=self.TerminalSpanType, ref_type=iir.RefType.VALUE, mutable=False)
         consume_regex.block.if_(
             condition=iir.SelfExpr().fld.terminalsrc.method.consume_regex.call(
                 pos=consume_regex.get_param("pos").load(),
@@ -233,7 +201,7 @@ class ParserGenerator:
             )
 
     def _memo_type(self, result_type: iir.Type) -> iir.Type:
-        return MemoEntryType.instantiate(RuleId=iir.IndexInt, PosType=self.pos_type, ResultType=result_type)
+        return self.MemoEntryType.instantiate(RuleId=iir.IndexInt, PosType=self.pos_type, ResultType=result_type)
 
     def get_item_key(self, item: gsm.Item) -> str:
         try:
@@ -290,7 +258,7 @@ class ParserGenerator:
                     ).load(),
                     literal=iir.LiteralString(term.value),
                 ),
-                result_type=TerminalSpanType,
+                result_type=self.TerminalSpanType,
                 inline_to_parent=False,
             )
         if isinstance(term, gsm.Regex):
@@ -305,7 +273,7 @@ class ParserGenerator:
                     ).load(),
                     regex=iir.LiteralString(term.value),
                 ),
-                result_type=TerminalSpanType,
+                result_type=self.TerminalSpanType,
                 inline_to_parent=False,
             )
         if isinstance(term, Sequence):
@@ -371,7 +339,7 @@ class ParserGenerator:
             path=path, result_type=result_type, memoize=memoize, inline_to_parent=inline_to_parent
         )
         return_type = iir.Maybe.instantiate(
-            value_type=ApplyResultType.instantiate(
+            value_type=self.ApplyResultType.instantiate(
                 pos_type=self.pos_type,
                 result_type=result_type,
             )
@@ -470,7 +438,7 @@ class ParserGenerator:
         """
         consume_term = self._gen_consume_term_expr(path=path, node_type=node_type, term=item.term)
         result_type = node_type
-        return_type = ApplyResultType.instantiate(pos_type=self.pos_type, result_type=result_type)
+        return_type = self.ApplyResultType.instantiate(pos_type=self.pos_type, result_type=result_type)
 
         result, parser_info = self._gen_parser_callable(
             path=path,
@@ -485,7 +453,7 @@ class ParserGenerator:
             init=iir.Construct.make(
                 result_type,
                 span=iir.Construct.make(
-                    TerminalSpanType,
+                    self.TerminalSpanType,
                     start=result.get_param("pos").load(),
                     end=iir.LiteralInt(iir.SignedIndexInt, -1),
                 ),
@@ -526,7 +494,7 @@ class ParserGenerator:
         result.block.assign(
             result_var.fld.span,
             iir.Construct.make(
-                TerminalSpanType,
+                self.TerminalSpanType,
                 start=result_var.fld.span.fld.start,
                 end=result.get_param("pos").load(),
             ),
@@ -559,7 +527,7 @@ class ParserGenerator:
             inline_to_parent=True,
         )
         alternatives_pos_var = alternatives_parser.get_param("pos")
-        return_type = ApplyResultType.instantiate(pos_type=self.pos_type, result_type=node_type)
+        return_type = self.ApplyResultType.instantiate(pos_type=self.pos_type, result_type=node_type)
 
         # Try each alternative in order, returning the first one that succeeds.
         for alt_idx, alternative in enumerate(alternatives):
@@ -592,14 +560,14 @@ class ParserGenerator:
             init=iir.Construct.make(
                 node_type,
                 span=iir.Construct.make(
-                    TerminalSpanType,
+                    self.TerminalSpanType,
                     start=alt_parser.get_param("pos").load(),
                     end=iir.LiteralInt(iir.SignedIndexInt, -1),
                 ),
             ),
         )
 
-        return_type = ApplyResultType.instantiate(pos_type=self.pos_type, result_type=node_type)
+        return_type = self.ApplyResultType.instantiate(pos_type=self.pos_type, result_type=node_type)
 
         # Process each item in the alternative in order by calling item parser functions.
         # Successful item parses are appended to alt_result_var.
@@ -613,7 +581,7 @@ class ParserGenerator:
             item_parser = self.gen_item_parser((*path, item_name), node_type, item)
             item_result_var = iir.Var(
                 name=item_name,
-                typ=ApplyResultType.instantiate(pos_type=self.pos_type, result_type=item_parser.result_type),
+                typ=self.ApplyResultType.instantiate(pos_type=self.pos_type, result_type=item_parser.result_type),
                 ref_type=iir.RefType.VALUE,
                 mutable=True,
             )
@@ -646,9 +614,9 @@ class ParserGenerator:
             if (sep := alternative.sep_after[item_idx]) != gsm.Separator.NO_WS:
                 item_ws_var = iir.Var(
                     name=f"ws_after__{item_name}",
-                    typ=ApplyResultType.instantiate(
+                    typ=self.ApplyResultType.instantiate(
                         pos_type=self.pos_type,
-                        result_type=TerminalSpanType,
+                        result_type=self.TerminalSpanType,
                     ),
                     ref_type=iir.RefType.VALUE,
                     mutable=True,
@@ -668,7 +636,7 @@ class ParserGenerator:
         alt_parser.block.assign(
             alt_result_var.fld.span,
             iir.Construct.make(
-                TerminalSpanType,
+                self.TerminalSpanType,
                 start=alt_result_var.fld.span.fld.start,
                 end=alt_parser.get_param("pos").load(),
             ),

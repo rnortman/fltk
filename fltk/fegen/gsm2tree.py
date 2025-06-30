@@ -1,7 +1,9 @@
+from __future__ import annotations
+
 import ast
 from collections import defaultdict
 from dataclasses import dataclass, field
-from typing import Final, Iterable, Mapping, Sequence
+from typing import TYPE_CHECKING, Iterable, Mapping, Sequence
 
 from fltk import pygen
 from fltk.fegen import gsm
@@ -10,14 +12,8 @@ from fltk.iir import typemodel
 from fltk.iir.py import compiler as pycompiler
 from fltk.iir.py import reg as pyreg
 
-Span: Final = iir.Type.make(cname="Span")
-pyreg.register_type(
-    pyreg.TypeInfo(
-        typ=Span,
-        module=pyreg.Module(("fltk", "fegen", "pyrt", "terminalsrc")),
-        name="Span",
-    )
-)
+if TYPE_CHECKING:
+    from fltk.iir.context import CompilerContext
 
 ModelType = str | typemodel.TypeKey
 
@@ -27,18 +23,21 @@ class ItemsModel:
     labels: Mapping[str, set[ModelType]] = field(default_factory=lambda: defaultdict(set))
     types: set[ModelType] = field(default_factory=set)
 
-    def incorporate(self, other: "ItemsModel"):
+    def incorporate(self, other: ItemsModel):
         for label, models in other.labels.items():
             self.labels[label] |= models
         self.types |= other.types
 
 
 class CstGenerator:
-    def __init__(self, grammar: gsm.Grammar, py_module: pyreg.Module):
+    def __init__(self, grammar: gsm.Grammar, py_module: pyreg.Module, context: CompilerContext):
         self.grammar = grammar
         self.py_module = py_module
+        self.context = context
         self.rule_models: dict[str, ItemsModel] = {}
         self.iir_types: dict[str, iir.Type] = {}
+
+        self.Span = iir.Type.make(cname="Span")
 
         for rule in self.grammar.rules:
             self.rule_models[rule.name] = self.model_for_rule(rule, [])
@@ -53,7 +52,7 @@ class CstGenerator:
             pass
         name = self.class_name_for_rule_node(rule_name)
         typ = iir.Type.make(cname=name)
-        pyreg.register_type(pyreg.TypeInfo(typ=typ, module=self.py_module, name=name))
+        self.context.python_type_registry.register_type(pyreg.TypeInfo(typ=typ, module=self.py_module, name=name))
         self.iir_types[rule_name] = typ
         return typ
 
@@ -65,7 +64,7 @@ class CstGenerator:
     def py_annotation_for_model_types(self, *, model_types: Iterable[ModelType], in_module: bool = False) -> str:
         iir_types = [self.iir_type_for_model_type(model_type) for model_type in model_types]
         assert len(iir_types) > 0  # noqa: S101
-        py_types = sorted(pycompiler.iir_type_to_py_annotation(typ) for typ in iir_types)
+        py_types = sorted(pycompiler.iir_type_to_py_annotation(typ, self.context) for typ in iir_types)
         if in_module:
             py_types = sorted(f'"{typ.removeprefix(".".join(self.py_module.import_path) + ".")}"' for typ in py_types)
         if len(py_types) > 1:
@@ -224,7 +223,7 @@ class CstGenerator:
                 raise ValueError(msg)
             return ItemsModel(types={item.term.value})
         if isinstance(item.term, (gsm.Literal, gsm.Regex)):
-            return ItemsModel(types={Span.key})
+            return ItemsModel(types={self.Span.key})
         if isinstance(item.term, Sequence):
             return self.model_for_alternatives(item.term, inline_stack)
         msg = f"Term type {item.term}"

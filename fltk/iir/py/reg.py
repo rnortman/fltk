@@ -1,8 +1,10 @@
 # Python type and handler registries
-from dataclasses import dataclass
-from typing import Final, Optional, Sequence
+from __future__ import annotations
 
-from fltk.iir.typemodel import Type, TypeKey
+from dataclasses import dataclass
+from typing import Final, Sequence
+
+from fltk.iir.typemodel import Type
 
 
 @dataclass(frozen=True, eq=True)
@@ -18,26 +20,9 @@ class TypeInfo:
     typ: Type
     module: Module
     name: str
-    concrete_name: Optional[str] = None
+    concrete_name: str | None = None
 
     def import_name(self, *, concrete: bool = False) -> str:
         if concrete and self.concrete_name:
             return self.concrete_name
         return ".".join([*list(self.module.import_path), self.name])
-
-
-_type_registry: dict[TypeKey, TypeInfo] = {}
-
-
-def register_type(type_info: TypeInfo) -> None:
-    try:
-        existing_type = _type_registry[type_info.typ.key]
-        msg = f"Cannot register {type_info}: Type already registered as {existing_type}"
-        raise ValueError(msg)
-    except KeyError:
-        pass
-    _type_registry[type_info.typ.key] = type_info
-
-
-def lookup(typ: Type) -> TypeInfo:
-    return _type_registry[typ.key]

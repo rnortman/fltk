@@ -58,7 +58,7 @@ dependencies = [
   "ruff>=0.0.243",
 ]
 [tool.hatch.envs.lint.scripts]
-typing = "mypy --install-types --non-interactive {args:fltk}"
+typing = "mypy --install-types --non-interactive --ignore-missing-imports {args:fltk}"
 style = [
   "ruff check {args:.}",
   "black --check --diff {args:.}",
@@ -134,6 +134,7 @@ ban-relative-imports = "all"
 [tool.ruff.lint.per-file-ignores]
 # Tests can use magic values, assertions, and relative imports
 "tests/**/*" = ["PLR2004", "S101", "TID252"]
+"**/test_*.py" = ["PLR2004", "S101", "TID252"]
 
 [tool.coverage.run]
 source_pkgs = ["fltk"]

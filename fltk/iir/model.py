@@ -14,7 +14,6 @@ from typing import (
     Union,
 )
 
-from fltk.iir.py import reg as pyreg
 from fltk.iir.typemodel import TYPE, ParamType, Type
 from fltk.iir.typemodel import Argument as TypeArgument
 
@@ -24,7 +23,6 @@ _T = TypeVar("_T")
 #
 
 Void: Final = Type.make(cname="Void")
-pyreg.register_type(pyreg.TypeInfo(typ=Void, module=pyreg.Builtins, name="None"))
 
 Auto: Final = Type.make(cname="Auto")
 
@@ -35,45 +33,23 @@ class PrimitiveType(Type):
 
 
 UInt64: Final = PrimitiveType.make(cname="uint64")
-pyreg.register_type(pyreg.TypeInfo(typ=UInt64, module=pyreg.Builtins, name="int"))
 
 IndexInt: Final = PrimitiveType.make(cname="IndexInt")
-pyreg.register_type(pyreg.TypeInfo(typ=IndexInt, module=pyreg.Builtins, name="int"))
 
 SignedIndexInt: Final = PrimitiveType.make(cname="SignedIndexInt")
-pyreg.register_type(pyreg.TypeInfo(typ=SignedIndexInt, module=pyreg.Builtins, name="int"))
 
 Bool: Final = PrimitiveType.make(cname="bool")
-pyreg.register_type(pyreg.TypeInfo(typ=Bool, module=pyreg.Builtins, name="bool"))
 
 String: Final = Type.make(cname="string")
-pyreg.register_type(pyreg.TypeInfo(typ=String, module=pyreg.Builtins, name="str"))
 
 
 Maybe: Final = Type.make(cname="Maybe", params={"value_type": TYPE})
-pyreg.register_type(pyreg.TypeInfo(typ=Maybe, module=pyreg.Module(("typing",)), name="Optional"))
 
 GenericImmutableSequence: Final = Type.make(cname="ImmutableSequence", params={"value_type": TYPE})
-pyreg.register_type(
-    pyreg.TypeInfo(
-        typ=GenericImmutableSequence,
-        module=pyreg.Module(["typing"]),
-        name="Sequence",
-        concrete_name="list",
-    )
-)
 GenericMutableSequence: Final = Type.make(cname="MutableSequence", params={"value_type": TYPE})
 
 GenericImmutableHashmap: Final = Type.make(cname="ImmutableHashmap", params={"key_type": TYPE, "value_type": TYPE})
 GenericMutableHashmap: Final = Type.make(cname="MutableHashmap", params={"key_type": TYPE, "value_type": TYPE})
-pyreg.register_type(
-    pyreg.TypeInfo(
-        typ=GenericMutableHashmap,
-        module=pyreg.Module(("collections", "abc")),
-        name="MutableMapping",
-        concrete_name="dict",
-    )
-)
 
 #
 # Expression/Statement base classes
