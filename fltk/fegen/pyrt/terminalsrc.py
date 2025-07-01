@@ -30,7 +30,7 @@ class TerminalSource:
 
     def consume_literal(self, pos: int, literal: str) -> Optional[Span]:
         literal_len = len(literal)
-        if pos + literal_len >= self.terminals_len:
+        if pos + literal_len > self.terminals_len:
             return None
         for i in range(literal_len):
             if self.terminals[pos + i] != literal[i]:
