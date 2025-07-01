@@ -141,11 +141,15 @@ class TestIntegration:
         # Create two parser generators with the same grammar but different contexts
         cst_module = pyreg.Module(("test", "module"))
 
-        cstgen1 = gsm2tree.CstGenerator(grammar=bootstrap.grammar, py_module=cst_module, context=context1)
-        pgen1 = gsm2parser.ParserGenerator(grammar=bootstrap.grammar, cstgen=cstgen1, context=context1)
+        # Add trivia rules to grammar
+        enhanced_grammar1 = gsm2parser.gsm.add_trivia_rule_to_grammar(bootstrap.grammar, context1)
+        enhanced_grammar2 = gsm2parser.gsm.add_trivia_rule_to_grammar(bootstrap.grammar, context2)
 
-        cstgen2 = gsm2tree.CstGenerator(grammar=bootstrap.grammar, py_module=cst_module, context=context2)
-        pgen2 = gsm2parser.ParserGenerator(grammar=bootstrap.grammar, cstgen=cstgen2, context=context2)
+        cstgen1 = gsm2tree.CstGenerator(grammar=enhanced_grammar1, py_module=cst_module, context=context1)
+        pgen1 = gsm2parser.ParserGenerator(grammar=enhanced_grammar1, cstgen=cstgen1, context=context1)
+
+        cstgen2 = gsm2tree.CstGenerator(grammar=enhanced_grammar2, py_module=cst_module, context=context2)
+        pgen2 = gsm2parser.ParserGenerator(grammar=enhanced_grammar2, cstgen=cstgen2, context=context2)
 
         # Both should work without conflicts
         assert pgen1.parser_class is not None
@@ -177,11 +181,15 @@ class TestIntegration:
         cst_module2 = pyreg.Module(("project2", "parser"))
 
         # This should work without conflicts because each uses isolated contexts
-        cstgen1 = gsm2tree.CstGenerator(grammar=bootstrap.grammar, py_module=cst_module1, context=context1)
-        pgen1 = gsm2parser.ParserGenerator(grammar=bootstrap.grammar, cstgen=cstgen1, context=context1)
+        # Add trivia rules to grammar
+        enhanced_grammar1 = gsm2parser.gsm.add_trivia_rule_to_grammar(bootstrap.grammar, context1)
+        enhanced_grammar2 = gsm2parser.gsm.add_trivia_rule_to_grammar(bootstrap.grammar, context2)
 
-        cstgen2 = gsm2tree.CstGenerator(grammar=bootstrap.grammar, py_module=cst_module2, context=context2)
-        pgen2 = gsm2parser.ParserGenerator(grammar=bootstrap.grammar, cstgen=cstgen2, context=context2)
+        cstgen1 = gsm2tree.CstGenerator(grammar=enhanced_grammar1, py_module=cst_module1, context=context1)
+        pgen1 = gsm2parser.ParserGenerator(grammar=enhanced_grammar1, cstgen=cstgen1, context=context1)
+
+        cstgen2 = gsm2tree.CstGenerator(grammar=enhanced_grammar2, py_module=cst_module2, context=context2)
+        pgen2 = gsm2parser.ParserGenerator(grammar=enhanced_grammar2, cstgen=cstgen2, context=context2)
 
         # Both should succeed without conflicts
         assert pgen1.parser_class is not None

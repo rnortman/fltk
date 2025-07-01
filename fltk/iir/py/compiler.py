@@ -318,6 +318,8 @@ def compile_expr(expr: iir.Expr, context: "CompilerContext") -> str:
         return compile_expr(expr.expr, context)
     if isinstance(expr, (iir.LiteralString, iir.LiteralInt)):
         return repr(expr.value)
+    if isinstance(expr, iir.LiteralNull):
+        return "None"
     if isinstance(expr, iir.LiteralSequence):
         return f"[{', '.join(compile_expr(e, context) for e in expr.values)}]"
     if isinstance(expr, iir.LiteralMapping):

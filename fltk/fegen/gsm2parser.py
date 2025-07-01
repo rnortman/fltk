@@ -29,6 +29,8 @@ class ParserGenerator:
         cstgen: gsm2tree.CstGenerator,
         context: CompilerContext,
     ):
+        grammar = gsm.classify_trivia_rules(grammar)
+
         self.grammar: Final = grammar
         self.cstgen = cstgen
         self.context = context
@@ -63,6 +65,11 @@ class ParserGenerator:
         )
         self.context.python_type_registry.register_type(type_info)
         terminalsrc_fld = self.parser_class.def_field(name="terminalsrc", typ=terminalsrc_type, init=None)
+
+        if "trivia" not in self.grammar.identifiers:
+            msg = "Expected trivia rule to exist for parsing"
+            raise RuntimeError(msg)
+        self.TriviaNodeType = self.cstgen.iir_type_for_rule("trivia")
 
         error_tracker_type = self.ErrorTrackerType.instantiate(RuleId=iir.IndexInt)
         self.parser_class.def_field(
@@ -198,10 +205,22 @@ class ParserGenerator:
                 node_type=parser_fn.result_type,
                 memoize=True,
                 alternatives=rule.alternatives,
+                current_rule=rule,
             )
 
     def _memo_type(self, result_type: iir.Type) -> iir.Type:
         return self.MemoEntryType.instantiate(RuleId=iir.IndexInt, PosType=self.pos_type, ResultType=result_type)
+
+    def _get_trivia_regex_pattern(self, current_rule: gsm.Rule | None) -> str:
+        """Get the appropriate trivia regex pattern based on rule classification."""
+        if current_rule and current_rule.is_trivia_rule:
+            # Trivia rules use only basic whitespace to prevent recursion
+            return r"\s+"
+        else:
+            # Non-trivia rules use full trivia parsing (when grammar-defined trivia exists)
+            # For now, default to basic whitespace - this will be enhanced when we implement
+            # grammar-based trivia parsing in trivia rules
+            return r"\s+"
 
     def get_item_key(self, item: gsm.Item) -> str:
         try:
@@ -518,6 +537,7 @@ class ParserGenerator:
         node_type: iir.Type,
         alternatives: Sequence[gsm.Items],
         memoize: bool = False,
+        current_rule: gsm.Rule | None = None,
     ) -> ParserFn:
         alternatives_parser, parser_info = self._gen_parser_callable(
             path=path,
@@ -534,7 +554,7 @@ class ParserGenerator:
             # Create a parser function for this alternative
             alt_name = f"alt{alt_idx}"
             alt_path = (*path, alt_name)
-            alt_parser_info = self.gen_alternative_parser(alt_path, node_type, alternative)
+            alt_parser_info = self.gen_alternative_parser(alt_path, node_type, alternative, current_rule)
             # Call the alternative parser function
             alt_result_var = iir.Var(name=alt_name, typ=return_type, ref_type=iir.RefType.VALUE, mutable=True)
             alternatives_parser.block.if_(
@@ -547,7 +567,9 @@ class ParserGenerator:
 
         return parser_info
 
-    def gen_alternative_parser(self, path: tuple[str, ...], node_type: iir.Type, alternative: gsm.Items) -> ParserFn:
+    def gen_alternative_parser(
+        self, path: tuple[str, ...], node_type: iir.Type, alternative: gsm.Items, current_rule: gsm.Rule | None = None
+    ) -> ParserFn:
         alt_parser, alt_parser_info = self._gen_parser_callable(
             path=path, result_type=node_type, mutable_pos=True, inline_to_parent=True
         )
@@ -621,14 +643,56 @@ class ParserGenerator:
                     ref_type=iir.RefType.VALUE,
                     mutable=True,
                 )
-                sep_if = alt_parser.block.if_(
-                    condition=iir.SelfExpr().method.consume_regex.call(
-                        pos=alt_pos_var.load(), regex=iir.LiteralString(r"\s+")
-                    ),
-                    let=item_ws_var,
-                    orelse=(sep == gsm.Separator.WS_REQUIRED),
-                )
-                sep_if.block.assign(alt_pos_var.store(), item_ws_var.fld.pos.move())
+                # Choose trivia parsing strategy based on current rule
+                if current_rule and current_rule.is_trivia_rule:
+                    # For trivia rules, use basic regex to avoid recursion
+                    trivia_pattern = r"\s+"
+                    sep_if = alt_parser.block.if_(
+                        condition=iir.SelfExpr().method.consume_regex.call(
+                            pos=alt_pos_var.load(), regex=iir.LiteralString(trivia_pattern)
+                        ),
+                        let=item_ws_var,
+                        orelse=(sep == gsm.Separator.WS_REQUIRED),
+                    )
+                    sep_if.block.assign(alt_pos_var.store(), item_ws_var.fld.pos.move())
+
+                    # Conditionally create trivia node if capture_trivia is enabled
+                    if self.context.capture_trivia:
+                        trivia_construct = iir.Construct.make(
+                            self.TriviaNodeType,
+                            span=item_ws_var.fld.result.move(),
+                        )
+                        sep_if.block.expr_stmt(
+                            alt_result_var.method.append.call(
+                                child=trivia_construct,
+                                label=iir.LiteralNull(),
+                            )
+                        )
+                else:
+                    # For non-trivia rules, use grammar-based trivia parsing
+                    trivia_parser_info = self._cache_parser_info(
+                        path=("trivia",),
+                        result_type=self.TriviaNodeType,
+                        memoize=True,
+                    )
+                    sep_if = alt_parser.block.if_(
+                        condition=iir.SelfExpr().method[trivia_parser_info.apply_name].call(
+                            pos=alt_pos_var.load()
+                        ),
+                        let=item_ws_var,
+                        orelse=(sep == gsm.Separator.WS_REQUIRED),
+                    )
+                    sep_if.block.assign(alt_pos_var.store(), item_ws_var.fld.pos.move())
+
+                    # Conditionally add trivia node if capture_trivia is enabled
+                    if self.context.capture_trivia:
+                        sep_if.block.expr_stmt(
+                            alt_result_var.method.append.call(
+                                child=item_ws_var.fld.result.move(),
+                                label=iir.LiteralNull(),
+                            )
+                        )
+
                 if sep == gsm.Separator.WS_REQUIRED and isinstance(sep_if.orelse, iir.Block):
                     sep_if.orelse.return_(iir.Failure(return_type))
 

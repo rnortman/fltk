@@ -123,8 +123,10 @@ def test_toplevel_recursion_invocation_stack():
 
     # Generate parser
     context = create_default_context()
-    cstgen = gsm2tree.CstGenerator(grammar=grammar, py_module=pyreg.Builtins, context=context)
-    pgen = g2p.ParserGenerator(grammar=grammar, cstgen=cstgen, context=context)
+    # Add trivia rule to grammar
+    enhanced_grammar = gsm.add_trivia_rule_to_grammar(grammar, context)
+    cstgen = gsm2tree.CstGenerator(grammar=enhanced_grammar, py_module=pyreg.Builtins, context=context)
+    pgen = g2p.ParserGenerator(grammar=enhanced_grammar, cstgen=cstgen, context=context)
 
     # Compile the parser
     parser_class_ast = compiler.compile_class(pgen.parser_class, context)
@@ -302,8 +304,10 @@ def test_toplevel_recursion_error_tracker_access():
 
     # Generate and compile parser
     context = create_default_context()
-    cstgen = gsm2tree.CstGenerator(grammar=grammar, py_module=pyreg.Builtins, context=context)
-    pgen = g2p.ParserGenerator(grammar=grammar, cstgen=cstgen, context=context)
+    # Add trivia rule to grammar
+    enhanced_grammar = gsm.add_trivia_rule_to_grammar(grammar, context)
+    cstgen = gsm2tree.CstGenerator(grammar=enhanced_grammar, py_module=pyreg.Builtins, context=context)
+    pgen = g2p.ParserGenerator(grammar=enhanced_grammar, cstgen=cstgen, context=context)
 
     parser_class_ast = compiler.compile_class(pgen.parser_class, context)
     mod_ast = ast.fix_missing_locations(ast.Module(body=[parser_class_ast], type_ignores=[]))

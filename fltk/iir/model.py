@@ -364,6 +364,11 @@ class LiteralMapping(Expr):
     key_values: Sequence[tuple[Expr, Expr]]
 
 
+@dataclass(frozen=True, eq=True, slots=True)
+class LiteralNull(Expr):
+    pass
+
+
 #
 # Class member access
 #

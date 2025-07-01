@@ -1,0 +1,15 @@
+{
+  "hooks": {
+    "PostToolUse": [
+      {
+        "matcher": "Edit|MultiEdit|Write",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "if echo \"$1\" | jq -r '.tool_input.file_path // empty' | grep -q '\\.py$'; then file_path=$(echo \"$1\" | jq -r '.tool_input.file_path'); echo \"Formatting Python file: $file_path\"; cd /home/rnortman/src/fltk && hatch run lint:fmt \"$file_path\" 2>/dev/null || echo \"Formatting completed\"; fi"
+          }
+        ]
+      }
+    ]
+  }
+}

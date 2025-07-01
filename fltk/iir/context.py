@@ -44,6 +44,7 @@ class CompilerContext:
     """Compiler context holding all compiler state and services."""
 
     python_type_registry: TypeRegistry = field(default_factory=TypeRegistry)
+    capture_trivia: bool = False
 
 
 def create_default_context() -> CompilerContext:

@@ -13,20 +13,27 @@ from fltk.fegen import bootstrap, gsm, gsm2tree
 from fltk.fegen import gsm2parser as g2p
 from fltk.fegen.pyrt import memo, terminalsrc
 from fltk.iir import model as iir
-from fltk.iir.context import create_default_context
+from fltk.iir.context import CompilerContext, create_default_context
 from fltk.iir.py import compiler
 from fltk.iir.py import reg as pyreg
 
 LOG: Final = logging.getLogger(__name__)
 
 
+def create_parser_generator(grammar: gsm.Grammar, context: Optional[CompilerContext] = None) -> g2p.ParserGenerator:
+    """Helper function to create ParserGenerator with trivia rule added."""
+    if context is None:
+        context = create_default_context()
+    # Add trivia rule to grammar
+    enhanced_grammar = gsm.add_trivia_rule_to_grammar(grammar, context)
+    cstgen = gsm2tree.CstGenerator(grammar=enhanced_grammar, py_module=pyreg.Builtins, context=context)
+    return g2p.ParserGenerator(grammar=enhanced_grammar, cstgen=cstgen, context=context)
+
+
 def test_single() -> None:
     context = create_default_context()
-    pgen = g2p.ParserGenerator(
-        grammar=gsm.Grammar(rules=(), identifiers={}),
-        cstgen=gsm2tree.CstGenerator(grammar=bootstrap.grammar, py_module=pyreg.Builtins, context=context),
-        context=context,
-    )
+    empty_grammar = gsm.Grammar(rules=(), identifiers={})
+    pgen = create_parser_generator(empty_grammar, context)
     LITERAL: Final = "as'\\\"df"  # noqa: N806 Make sure escaping works well
     item = gsm.Item(
         label="testlabel",
@@ -73,11 +80,7 @@ def test_single() -> None:
 
 def test_bootstrap() -> None:
     context = create_default_context()
-    pgen = g2p.ParserGenerator(
-        grammar=bootstrap.grammar,
-        cstgen=gsm2tree.CstGenerator(grammar=bootstrap.grammar, py_module=pyreg.Builtins, context=context),
-        context=context,
-    )
+    pgen = create_parser_generator(bootstrap.grammar, context)
     LOG.info(pgen)
     LOG.info(pgen.parser_class)
     LOG.info(compiler.compile_class(pgen.parser_class, context))

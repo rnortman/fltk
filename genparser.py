@@ -37,9 +37,12 @@ def gen_parser(grammar: gsm.Grammar) -> None:
 
     context = create_default_context()
 
+    # Enhance grammar with built-in rules before creating generators
+    enhanced_grammar = gsm.add_trivia_rule_to_grammar(grammar, context)
+
     cst_module = pyreg.Module(cst_module_name.split("."))
-    cstgen = gsm2tree.CstGenerator(grammar=grammar, py_module=cst_module, context=context)
-    pgen = gsm2parser.ParserGenerator(grammar=grammar, cstgen=cstgen, context=context)
+    cstgen = gsm2tree.CstGenerator(grammar=enhanced_grammar, py_module=cst_module, context=context)
+    pgen = gsm2parser.ParserGenerator(grammar=enhanced_grammar, cstgen=cstgen, context=context)
 
     parser_ast = compiler.compile_class(pgen.parser_class, context)
     imports = [

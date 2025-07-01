@@ -87,8 +87,10 @@ def test_recursive_rule_not_spuriously_inlined():
 
     # Generate parser
     context = create_default_context()
-    cstgen = gsm2tree.CstGenerator(grammar=grammar, py_module=pyreg.Builtins, context=context)
-    pgen = g2p.ParserGenerator(grammar=grammar, cstgen=cstgen, context=context)
+    # Add trivia rule to grammar
+    enhanced_grammar = gsm.add_trivia_rule_to_grammar(grammar, context)
+    cstgen = gsm2tree.CstGenerator(grammar=enhanced_grammar, py_module=pyreg.Builtins, context=context)
+    pgen = g2p.ParserGenerator(grammar=enhanced_grammar, cstgen=cstgen, context=context)
 
     # Compile the parser
 
