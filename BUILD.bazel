@@ -1,5 +1,6 @@
 load("@rules_python//python:defs.bzl", "py_binary", "py_library")
 load("@rules_python//python:pip.bzl", "compile_pip_requirements")
+load("//:rules.bzl", "generate_parser")
 
 compile_pip_requirements(
     name = "requirements",
@@ -14,6 +15,7 @@ py_binary(
     deps = [
         ":fltk",
         "@pypi//astor",
+        "@pypi//typer",
     ],
 )
 
@@ -22,4 +24,35 @@ py_library(
     srcs = glob(["**/*.py"]),
     data = ["fltk/py.typed"],
     visibility = ["//visibility:public"],
+)
+
+# Test targets for Bazel rules
+generate_parser(
+    name = "bootstrap_both",
+    src = "fltk/fegen/bootstrap.fltkg",
+    base_name = "bootstrap_test",
+    cst_mod_path = "bootstrap_test.cst",
+)
+
+generate_parser(
+    name = "bootstrap_trivia_only",
+    src = "fltk/fegen/bootstrap.fltkg", 
+    base_name = "bootstrap_trivia",
+    cst_mod_path = "bootstrap_trivia.cst",
+    trivia_only = True,
+)
+
+generate_parser(
+    name = "bootstrap_no_trivia_only",
+    src = "fltk/fegen/bootstrap.fltkg",
+    base_name = "bootstrap_clean", 
+    cst_mod_path = "bootstrap_clean.cst",
+    no_trivia_only = True,
+)
+
+generate_parser(
+    name = "fegen_full",
+    src = "fltk/fegen/fegen.fltkg",
+    base_name = "fegen_test",
+    cst_mod_path = "fegen_test.cst",
 )

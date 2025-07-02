@@ -23,7 +23,7 @@ classifiers = [
   "Programming Language :: Python :: Implementation :: CPython",
   "Programming Language :: Python :: Implementation :: PyPy",
 ]
-dependencies = ["astor"]
+dependencies = ["astor", "typer"]
 
 [project.urls]
 Documentation = "https://github.com/rnortman/fltk#readme"
@@ -135,6 +135,8 @@ ban-relative-imports = "all"
 # Tests can use magic values, assertions, and relative imports
 "tests/**/*" = ["PLR2004", "S101", "TID252"]
 "**/test_*.py" = ["PLR2004", "S101", "TID252"]
+# CLI files can use boolean arguments as they are command-line options
+"genparser.py" = ["FBT002"]
 
 [tool.coverage.run]
 source_pkgs = ["fltk"]
