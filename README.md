@@ -93,28 +93,37 @@ invocation := method:identifier . "(" , args:expression? , ")";
 
 ## Development
 
+### Setup
+```bash
+# Install dependencies
+uv sync --group test --group lint
+```
+
 ### Testing
 ```bash
 # Run all tests
-hatch run test
+uv run pytest
 
 # Run with coverage
-hatch run cov
+uv run coverage run -m pytest && uv run coverage report
 ```
 
-### Linting
+### Linting and Formatting
 ```bash
 # Check style and types
-hatch run lint:all
+uv run ruff check . && uv run pyright
 
 # Format code
-hatch run lint:fmt
+uv run ruff format .
+
+# Fix auto-fixable issues
+uv run ruff check --fix .
 ```
 
 ### Build
 ```bash
-# Using Hatch
-hatch build
+# Using setuptools
+uv build
 
 # Using Bazel
 bazel build //...
@@ -141,7 +150,7 @@ MIT License - see [LICENSE](LICENSE) for details.
 1. Fork the repository
 2. Create a feature branch
 3. Make your changes with tests
-4. Run `hatch run lint:all` to check style
+4. Run `uv run ruff check . && uv run pyright` to check style and types
 5. Submit a pull request
 
 ## Support

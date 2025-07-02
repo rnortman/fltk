@@ -11,33 +11,36 @@ FLTK (Formal Language ToolKit) is a Python library for building parsers and comp
 ### Testing
 ```bash
 # Run all tests
-hatch run test
+uv run pytest
 
 # Run tests with coverage
-hatch run cov
+uv run coverage run -m pytest && uv run coverage report
 
 # Run tests with specific args
-hatch run test path/to/specific/test.py
+uv run pytest path/to/specific/test.py
 ```
 
 ### Linting and Formatting
 ```bash
 # Check style and types
-hatch run lint:all
+uv run ruff check . && uv run pyright
 
 # Format code
-hatch run lint:fmt
+uv run ruff format .
 
 # Check types only
-hatch run lint:typing
+uv run pyright
 
 # Check style only
-hatch run lint:style
+uv run ruff check .
+
+# Fix auto-fixable issues
+uv run ruff check --fix .
 ```
 
 ### Build System
-The project uses both Hatch (Python) and Bazel build systems:
-- Hatch: Primary Python package management and testing
+The project uses both setuptools (Python) and Bazel build systems:
+- uv: Primary Python package management and testing
 - Bazel: Alternative build system with MODULE.bazel configuration intended for adding fltk as a dependency in other projects using Bazel.
 
 ## Architecture

@@ -5,3 +5,4 @@ bazel-bin
 bazel-fltk
 bazel-out
 bazel-testlogs
+*.egg-info
