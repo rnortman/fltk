@@ -11,7 +11,7 @@ class Parser:
 
     def __init__(self, terminalsrc: fltk.fegen.pyrt.terminalsrc.TerminalSource) -> None:
         self.terminalsrc = terminalsrc
-        self.packrat: fltk.fegen.pyrt.memo.Packrat = fltk.fegen.pyrt.memo.Packrat()
+        self.packrat: fltk.fegen.pyrt.memo.Packrat[int, int] = fltk.fegen.pyrt.memo.Packrat()
         self.error_tracker: fltk.fegen.pyrt.errors.ErrorTracker[int] = fltk.fegen.pyrt.errors.ErrorTracker()
         self.rule_names: typing.Sequence[str] = [
             "grammar",
@@ -25,6 +25,10 @@ class Parser:
             "identifier",
             "raw_string",
             "literal",
+            "trivia",
+            "whitespace",
+            "line_comment",
+            "block_comment",
         ]
         self._cache__parse_grammar: collections.abc.MutableMapping[
             int, fltk.fegen.pyrt.memo.MemoEntry[int, int, fltk_cst.Grammar]
@@ -59,6 +63,18 @@ class Parser:
         self._cache__parse_literal: collections.abc.MutableMapping[
             int, fltk.fegen.pyrt.memo.MemoEntry[int, int, fltk_cst.Literal]
         ] = {}
+        self._cache__parse_trivia: collections.abc.MutableMapping[
+            int, fltk.fegen.pyrt.memo.MemoEntry[int, int, fltk_cst.Trivia]
+        ] = {}
+        self._cache__parse_whitespace: collections.abc.MutableMapping[
+            int, fltk.fegen.pyrt.memo.MemoEntry[int, int, fltk_cst.Whitespace]
+        ] = {}
+        self._cache__parse_line_comment: collections.abc.MutableMapping[
+            int, fltk.fegen.pyrt.memo.MemoEntry[int, int, fltk_cst.LineComment]
+        ] = {}
+        self._cache__parse_block_comment: collections.abc.MutableMapping[
+            int, fltk.fegen.pyrt.memo.MemoEntry[int, int, fltk_cst.BlockComment]
+        ] = {}
 
     def consume_literal(
         self, pos: int, literal: str
@@ -92,7 +108,12 @@ class Parser:
         result: fltk_cst.Grammar = fltk_cst.Grammar(span=fltk.fegen.pyrt.terminalsrc.Span(start=pos, end=-1))
         if item0 := self.parse_grammar__alt0__item0(pos=pos):
             pos = item0.pos
-            result.children.extend(item0.result.children)
+            result.append_rule(child=item0.result)
+        if ws_after__item0 := self.apply__parse_trivia(pos=pos):
+            pos = ws_after__item0.pos
+        if item1 := self.parse_grammar__alt0__item1(pos=pos):
+            pos = item1.pos
+            result.children.extend(item1.result.children)
         else:
             return None
         result.span = fltk.fegen.pyrt.terminalsrc.Span(start=result.span.start, end=pos)
@@ -100,13 +121,18 @@ class Parser:
 
     def parse_grammar__alt0__item0(
         self, pos: int
+    ) -> typing.Optional[fltk.fegen.pyrt.memo.ApplyResult[int, fltk_cst.Rule]]:
+        return self.apply__parse_rule(pos=pos)
+
+    def parse_grammar__alt0__item1(
+        self, pos: int
     ) -> typing.Optional[fltk.fegen.pyrt.memo.ApplyResult[int, fltk_cst.Grammar]]:
         result: fltk_cst.Grammar = fltk_cst.Grammar(span=fltk.fegen.pyrt.terminalsrc.Span(start=pos, end=-1))
         while one_result := self.apply__parse_rule(pos=pos):
             pos = one_result.pos
             result.append_rule(child=one_result.result)
-            if len(result.children) == 0:
-                return None
+        if len(result.children) == 0:
+            return None
         result.span = fltk.fegen.pyrt.terminalsrc.Span(start=result.span.start, end=pos)
         return fltk.fegen.pyrt.memo.ApplyResult(pos=pos, result=result)
 
@@ -125,26 +151,26 @@ class Parser:
             result.append_name(child=item0.result)
         else:
             return None
-        if ws_after__item0 := self.consume_regex(pos=pos, regex="\\s+"):
+        if ws_after__item0 := self.apply__parse_trivia(pos=pos):
             pos = ws_after__item0.pos
         if item1 := self.parse_rule__alt0__item1(pos=pos):
             pos = item1.pos
         else:
             return None
-        if ws_after__item1 := self.consume_regex(pos=pos, regex="\\s+"):
+        if ws_after__item1 := self.apply__parse_trivia(pos=pos):
             pos = ws_after__item1.pos
         if item2 := self.parse_rule__alt0__item2(pos=pos):
             pos = item2.pos
             result.append_alternatives(child=item2.result)
         else:
             return None
-        if ws_after__item2 := self.consume_regex(pos=pos, regex="\\s+"):
+        if ws_after__item2 := self.apply__parse_trivia(pos=pos):
             pos = ws_after__item2.pos
         if item3 := self.parse_rule__alt0__item3(pos=pos):
             pos = item3.pos
         else:
             return None
-        if ws_after__item3 := self.consume_regex(pos=pos, regex="\\s+"):
+        if ws_after__item3 := self.apply__parse_trivia(pos=pos):
             pos = ws_after__item3.pos
         result.span = fltk.fegen.pyrt.terminalsrc.Span(start=result.span.start, end=pos)
         return fltk.fegen.pyrt.memo.ApplyResult(pos=pos, result=result)
@@ -192,7 +218,7 @@ class Parser:
             result.append_items(child=item0.result)
         else:
             return None
-        if ws_after__item0 := self.consume_regex(pos=pos, regex="\\s+"):
+        if ws_after__item0 := self.apply__parse_trivia(pos=pos):
             pos = ws_after__item0.pos
         if item1 := self.parse_alternatives__alt0__item1(pos=pos):
             pos = item1.pos
@@ -220,7 +246,7 @@ class Parser:
             pos = item0.pos
         else:
             return None
-        if ws_after__item0 := self.consume_regex(pos=pos, regex="\\s+"):
+        if ws_after__item0 := self.apply__parse_trivia(pos=pos):
             pos = ws_after__item0.pos
         if item1 := self.parse_alternatives__alt0__item1__alts__alt0__item1(pos=pos):
             pos = item1.pos
@@ -267,17 +293,17 @@ class Parser:
             result.append_item(child=item0.result)
         else:
             return None
-        if ws_after__item0 := self.consume_regex(pos=pos, regex="\\s+"):
+        if ws_after__item0 := self.apply__parse_trivia(pos=pos):
             pos = ws_after__item0.pos
         if item1 := self.parse_items__alt0__item1(pos=pos):
             pos = item1.pos
             result.children.extend(item1.result.children)
-        if ws_after__item1 := self.consume_regex(pos=pos, regex="\\s+"):
+        if ws_after__item1 := self.apply__parse_trivia(pos=pos):
             pos = ws_after__item1.pos
         if item2 := self.parse_items__alt0__item2(pos=pos):
             pos = item2.pos
             result.children.extend(item2.result.children)
-        if ws_after__item2 := self.consume_regex(pos=pos, regex="\\s+"):
+        if ws_after__item2 := self.apply__parse_trivia(pos=pos):
             pos = ws_after__item2.pos
         result.span = fltk.fegen.pyrt.terminalsrc.Span(start=result.span.start, end=pos)
         return fltk.fegen.pyrt.memo.ApplyResult(pos=pos, result=result)
@@ -303,7 +329,7 @@ class Parser:
             result.children.extend(item0.result.children)
         else:
             return None
-        if ws_after__item0 := self.consume_regex(pos=pos, regex="\\s+"):
+        if ws_after__item0 := self.apply__parse_trivia(pos=pos):
             pos = ws_after__item0.pos
         if item1 := self.parse_items__alt0__item1__alts__alt0__item1(pos=pos):
             pos = item1.pos
@@ -486,7 +512,7 @@ class Parser:
         if item3 := self.parse_item__alt0__item3(pos=pos):
             pos = item3.pos
             result.append_quantifier(child=item3.result)
-        if ws_after__item3 := self.consume_regex(pos=pos, regex="\\s+"):
+        if ws_after__item3 := self.apply__parse_trivia(pos=pos):
             pos = ws_after__item3.pos
         result.span = fltk.fegen.pyrt.terminalsrc.Span(start=result.span.start, end=pos)
         return fltk.fegen.pyrt.memo.ApplyResult(pos=pos, result=result)
@@ -627,14 +653,14 @@ class Parser:
             pos = item0.pos
         else:
             return None
-        if ws_after__item0 := self.consume_regex(pos=pos, regex="\\s+"):
+        if ws_after__item0 := self.apply__parse_trivia(pos=pos):
             pos = ws_after__item0.pos
         if item1 := self.parse_term__alt3__item1(pos=pos):
             pos = item1.pos
             result.append_alternatives(child=item1.result)
         else:
             return None
-        if ws_after__item1 := self.consume_regex(pos=pos, regex="\\s+"):
+        if ws_after__item1 := self.apply__parse_trivia(pos=pos):
             pos = ws_after__item1.pos
         if item2 := self.parse_term__alt3__item2(pos=pos):
             pos = item2.pos
@@ -878,3 +904,232 @@ class Parser:
         self, pos: int
     ) -> typing.Optional[fltk.fegen.pyrt.memo.ApplyResult[int, fltk.fegen.pyrt.terminalsrc.Span]]:
         return self.consume_regex(pos=pos, regex='("([^"\\n\\\\]|\\\\.)+"|\'([^\'\\n\\\\]|\\\\.)+\')')
+
+    def parse_trivia(self, pos: int) -> typing.Optional[fltk.fegen.pyrt.memo.ApplyResult[int, fltk_cst.Trivia]]:
+        if alt0 := self.parse_trivia__alt0(pos=pos):
+            return alt0
+        return None
+
+    def apply__parse_trivia(self, pos: int) -> typing.Optional[fltk.fegen.pyrt.memo.ApplyResult[int, fltk_cst.Trivia]]:
+        return self.packrat.apply(
+            rule_callable=self.parse_trivia, rule_id=11, rule_cache=self._cache__parse_trivia, pos=pos
+        )
+
+    def parse_trivia__alt0(self, pos: int) -> typing.Optional[fltk.fegen.pyrt.memo.ApplyResult[int, fltk_cst.Trivia]]:
+        result: fltk_cst.Trivia = fltk_cst.Trivia(span=fltk.fegen.pyrt.terminalsrc.Span(start=pos, end=-1))
+        if item0 := self.parse_trivia__alt0__item0(pos=pos):
+            pos = item0.pos
+            result.children.extend(item0.result.children)
+        else:
+            return None
+        result.span = fltk.fegen.pyrt.terminalsrc.Span(start=result.span.start, end=pos)
+        return fltk.fegen.pyrt.memo.ApplyResult(pos=pos, result=result)
+
+    def parse_trivia__alt0__item0__alts(
+        self, pos: int
+    ) -> typing.Optional[fltk.fegen.pyrt.memo.ApplyResult[int, fltk_cst.Trivia]]:
+        if alt0 := self.parse_trivia__alt0__item0__alts__alt0(pos=pos):
+            return alt0
+        if alt1 := self.parse_trivia__alt0__item0__alts__alt1(pos=pos):
+            return alt1
+        if alt2 := self.parse_trivia__alt0__item0__alts__alt2(pos=pos):
+            return alt2
+        return None
+
+    def parse_trivia__alt0__item0__alts__alt0(
+        self, pos: int
+    ) -> typing.Optional[fltk.fegen.pyrt.memo.ApplyResult[int, fltk_cst.Trivia]]:
+        result: fltk_cst.Trivia = fltk_cst.Trivia(span=fltk.fegen.pyrt.terminalsrc.Span(start=pos, end=-1))
+        if item0 := self.parse_trivia__alt0__item0__alts__alt0__item0(pos=pos):
+            pos = item0.pos
+            result.append_whitespace(child=item0.result)
+        else:
+            return None
+        result.span = fltk.fegen.pyrt.terminalsrc.Span(start=result.span.start, end=pos)
+        return fltk.fegen.pyrt.memo.ApplyResult(pos=pos, result=result)
+
+    def parse_trivia__alt0__item0__alts__alt0__item0(
+        self, pos: int
+    ) -> typing.Optional[fltk.fegen.pyrt.memo.ApplyResult[int, fltk_cst.Whitespace]]:
+        return self.apply__parse_whitespace(pos=pos)
+
+    def parse_trivia__alt0__item0__alts__alt1(
+        self, pos: int
+    ) -> typing.Optional[fltk.fegen.pyrt.memo.ApplyResult[int, fltk_cst.Trivia]]:
+        result: fltk_cst.Trivia = fltk_cst.Trivia(span=fltk.fegen.pyrt.terminalsrc.Span(start=pos, end=-1))
+        if item0 := self.parse_trivia__alt0__item0__alts__alt1__item0(pos=pos):
+            pos = item0.pos
+            result.append_line_comment(child=item0.result)
+        else:
+            return None
+        result.span = fltk.fegen.pyrt.terminalsrc.Span(start=result.span.start, end=pos)
+        return fltk.fegen.pyrt.memo.ApplyResult(pos=pos, result=result)
+
+    def parse_trivia__alt0__item0__alts__alt1__item0(
+        self, pos: int
+    ) -> typing.Optional[fltk.fegen.pyrt.memo.ApplyResult[int, fltk_cst.LineComment]]:
+        return self.apply__parse_line_comment(pos=pos)
+
+    def parse_trivia__alt0__item0__alts__alt2(
+        self, pos: int
+    ) -> typing.Optional[fltk.fegen.pyrt.memo.ApplyResult[int, fltk_cst.Trivia]]:
+        result: fltk_cst.Trivia = fltk_cst.Trivia(span=fltk.fegen.pyrt.terminalsrc.Span(start=pos, end=-1))
+        if item0 := self.parse_trivia__alt0__item0__alts__alt2__item0(pos=pos):
+            pos = item0.pos
+            result.append_block_comment(child=item0.result)
+        else:
+            return None
+        result.span = fltk.fegen.pyrt.terminalsrc.Span(start=result.span.start, end=pos)
+        return fltk.fegen.pyrt.memo.ApplyResult(pos=pos, result=result)
+
+    def parse_trivia__alt0__item0__alts__alt2__item0(
+        self, pos: int
+    ) -> typing.Optional[fltk.fegen.pyrt.memo.ApplyResult[int, fltk_cst.BlockComment]]:
+        return self.apply__parse_block_comment(pos=pos)
+
+    def parse_trivia__alt0__item0(
+        self, pos: int
+    ) -> typing.Optional[fltk.fegen.pyrt.memo.ApplyResult[int, fltk_cst.Trivia]]:
+        result: fltk_cst.Trivia = fltk_cst.Trivia(span=fltk.fegen.pyrt.terminalsrc.Span(start=pos, end=-1))
+        while one_result := self.parse_trivia__alt0__item0__alts(pos=pos):
+            pos = one_result.pos
+            result.children.extend(one_result.result.children)
+        if len(result.children) == 0:
+            return None
+        result.span = fltk.fegen.pyrt.terminalsrc.Span(start=result.span.start, end=pos)
+        return fltk.fegen.pyrt.memo.ApplyResult(pos=pos, result=result)
+
+    def parse_whitespace(self, pos: int) -> typing.Optional[fltk.fegen.pyrt.memo.ApplyResult[int, fltk_cst.Whitespace]]:
+        if alt0 := self.parse_whitespace__alt0(pos=pos):
+            return alt0
+        return None
+
+    def apply__parse_whitespace(
+        self, pos: int
+    ) -> typing.Optional[fltk.fegen.pyrt.memo.ApplyResult[int, fltk_cst.Whitespace]]:
+        return self.packrat.apply(
+            rule_callable=self.parse_whitespace, rule_id=12, rule_cache=self._cache__parse_whitespace, pos=pos
+        )
+
+    def parse_whitespace__alt0(
+        self, pos: int
+    ) -> typing.Optional[fltk.fegen.pyrt.memo.ApplyResult[int, fltk_cst.Whitespace]]:
+        result: fltk_cst.Whitespace = fltk_cst.Whitespace(span=fltk.fegen.pyrt.terminalsrc.Span(start=pos, end=-1))
+        if item0 := self.parse_whitespace__alt0__item0(pos=pos):
+            pos = item0.pos
+            result.append_content(child=item0.result)
+        else:
+            return None
+        result.span = fltk.fegen.pyrt.terminalsrc.Span(start=result.span.start, end=pos)
+        return fltk.fegen.pyrt.memo.ApplyResult(pos=pos, result=result)
+
+    def parse_whitespace__alt0__item0(
+        self, pos: int
+    ) -> typing.Optional[fltk.fegen.pyrt.memo.ApplyResult[int, fltk.fegen.pyrt.terminalsrc.Span]]:
+        return self.consume_regex(pos=pos, regex="\\s+")
+
+    def parse_line_comment(
+        self, pos: int
+    ) -> typing.Optional[fltk.fegen.pyrt.memo.ApplyResult[int, fltk_cst.LineComment]]:
+        if alt0 := self.parse_line_comment__alt0(pos=pos):
+            return alt0
+        return None
+
+    def apply__parse_line_comment(
+        self, pos: int
+    ) -> typing.Optional[fltk.fegen.pyrt.memo.ApplyResult[int, fltk_cst.LineComment]]:
+        return self.packrat.apply(
+            rule_callable=self.parse_line_comment, rule_id=13, rule_cache=self._cache__parse_line_comment, pos=pos
+        )
+
+    def parse_line_comment__alt0(
+        self, pos: int
+    ) -> typing.Optional[fltk.fegen.pyrt.memo.ApplyResult[int, fltk_cst.LineComment]]:
+        result: fltk_cst.LineComment = fltk_cst.LineComment(span=fltk.fegen.pyrt.terminalsrc.Span(start=pos, end=-1))
+        if item0 := self.parse_line_comment__alt0__item0(pos=pos):
+            pos = item0.pos
+            result.append_prefix(child=item0.result)
+        else:
+            return None
+        if item1 := self.parse_line_comment__alt0__item1(pos=pos):
+            pos = item1.pos
+            result.append_content(child=item1.result)
+        else:
+            return None
+        if item2 := self.parse_line_comment__alt0__item2(pos=pos):
+            pos = item2.pos
+            result.append_newline(child=item2.result)
+        else:
+            return None
+        result.span = fltk.fegen.pyrt.terminalsrc.Span(start=result.span.start, end=pos)
+        return fltk.fegen.pyrt.memo.ApplyResult(pos=pos, result=result)
+
+    def parse_line_comment__alt0__item0(
+        self, pos: int
+    ) -> typing.Optional[fltk.fegen.pyrt.memo.ApplyResult[int, fltk.fegen.pyrt.terminalsrc.Span]]:
+        return self.consume_literal(pos=pos, literal="//")
+
+    def parse_line_comment__alt0__item1(
+        self, pos: int
+    ) -> typing.Optional[fltk.fegen.pyrt.memo.ApplyResult[int, fltk.fegen.pyrt.terminalsrc.Span]]:
+        return self.consume_regex(pos=pos, regex="[^\\n]*")
+
+    def parse_line_comment__alt0__item2(
+        self, pos: int
+    ) -> typing.Optional[fltk.fegen.pyrt.memo.ApplyResult[int, fltk.fegen.pyrt.terminalsrc.Span]]:
+        return self.consume_literal(pos=pos, literal="\n")
+
+    def parse_block_comment(
+        self, pos: int
+    ) -> typing.Optional[fltk.fegen.pyrt.memo.ApplyResult[int, fltk_cst.BlockComment]]:
+        if alt0 := self.parse_block_comment__alt0(pos=pos):
+            return alt0
+        return None
+
+    def apply__parse_block_comment(
+        self, pos: int
+    ) -> typing.Optional[fltk.fegen.pyrt.memo.ApplyResult[int, fltk_cst.BlockComment]]:
+        return self.packrat.apply(
+            rule_callable=self.parse_block_comment, rule_id=14, rule_cache=self._cache__parse_block_comment, pos=pos
+        )
+
+    def parse_block_comment__alt0(
+        self, pos: int
+    ) -> typing.Optional[fltk.fegen.pyrt.memo.ApplyResult[int, fltk_cst.BlockComment]]:
+        result: fltk_cst.BlockComment = fltk_cst.BlockComment(span=fltk.fegen.pyrt.terminalsrc.Span(start=pos, end=-1))
+        if item0 := self.parse_block_comment__alt0__item0(pos=pos):
+            pos = item0.pos
+            result.append_start(child=item0.result)
+        else:
+            return None
+        if ws_after__item0 := self.apply__parse_trivia(pos=pos):
+            pos = ws_after__item0.pos
+        if item1 := self.parse_block_comment__alt0__item1(pos=pos):
+            pos = item1.pos
+            result.append_content(child=item1.result)
+        else:
+            return None
+        if ws_after__item1 := self.apply__parse_trivia(pos=pos):
+            pos = ws_after__item1.pos
+        if item2 := self.parse_block_comment__alt0__item2(pos=pos):
+            pos = item2.pos
+            result.append_end(child=item2.result)
+        else:
+            return None
+        result.span = fltk.fegen.pyrt.terminalsrc.Span(start=result.span.start, end=pos)
+        return fltk.fegen.pyrt.memo.ApplyResult(pos=pos, result=result)
+
+    def parse_block_comment__alt0__item0(
+        self, pos: int
+    ) -> typing.Optional[fltk.fegen.pyrt.memo.ApplyResult[int, fltk.fegen.pyrt.terminalsrc.Span]]:
+        return self.consume_literal(pos=pos, literal="/*")
+
+    def parse_block_comment__alt0__item1(
+        self, pos: int
+    ) -> typing.Optional[fltk.fegen.pyrt.memo.ApplyResult[int, fltk.fegen.pyrt.terminalsrc.Span]]:
+        return self.consume_regex(pos=pos, regex="[^*]*(?:\\*(?!\\/)[^*]*)*")
+
+    def parse_block_comment__alt0__item2(
+        self, pos: int
+    ) -> typing.Optional[fltk.fegen.pyrt.memo.ApplyResult[int, fltk.fegen.pyrt.terminalsrc.Span]]:
+        return self.consume_literal(pos=pos, literal="*/")

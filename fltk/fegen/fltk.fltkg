@@ -1,14 +1,52 @@
+// FLTK Extended Grammar Definition Language
+// This grammar is actually broken and was never completed, but is intended to support advanced constructs like vars.
+
+// Grammar can contain rules and variable declarations
 grammar := (rules:rule | vars:var)+;
+
+// Rule definition with optional options
 rule := name:identifier , ("(" , options:rule_options , ")")? , ":=" , !alternatives , ";" ,;
+
+// Alternatives separated by '|' 
 alternatives := alternative:items , ("|" , alternative:items)* ;
+
+// Items with concatenation operators (. for no whitespace, , for whitespace allowed)
 items := items:item? , ((concat_no_ws:"." | concat:",") , items:item)* , (concat_no_ws:"." | concat:",")? ,;
+
+// Individual item with label, disposition, term, and quantifier
 item := (label:identifier . ":")? . disposition? . term . quantifier? ,;
+
+// Terms include method invocations in addition to basic terms
 term := invocation | identifier | literal | "/" . regex:raw_string . "/" | "(" , !alternatives , ")";
+
+// Disposition modifiers: % (suppress), $ (include), ! (inline)
 disposition := suppress:"%" | include:"$" | inline:"!";
+
+// Quantifiers: ? (optional), + (one or more), * (zero or more)
 quantifier := optional:"?" | one_or_more:"+" | zero_or_more:"*";
+
+// Method invocation syntax: method(expression)
 invocation := method:identifier . "(" , expression? , ")";
+
+// Expressions support addition and method calls
 expression := add:(lhs:expression , '+' , rhs:expression) | invocation | identifier;
+
+// Variable declarations for parser state
 var := "let" , identifier , ":" , "Stack" , "[" , "String" , "]" , (":=", init_value:literal)? , ";";
+
+// Basic lexical elements
 identifier := /[_a-z][_a-z0-9]*/;
 raw_string := /([^\/\n\\]|\\.)+/;
 literal := /("([^"\n\\]|\\.)+"|'([^'\n\\]|\\.)+')/;
+
+// Trivia handling for comments and whitespace
+trivia := whitespace | line_comment | block_comment;
+
+// Whitespace: spaces, tabs, newlines
+whitespace := content:/\s+/;
+
+// Line comments: // to end of line
+line_comment := prefix:"//" , content:/[^\n]*/ , newline:"\n";
+
+// Block comments: /* ... */ (nested content not containing */)
+block_comment := start:"/*" , content:/[^*]*(?:\*(?!\/)[^*]*)*/ , end:"*/";

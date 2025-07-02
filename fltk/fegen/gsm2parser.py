@@ -676,9 +676,7 @@ class ParserGenerator:
                         memoize=True,
                     )
                     sep_if = alt_parser.block.if_(
-                        condition=iir.SelfExpr().method[trivia_parser_info.apply_name].call(
-                            pos=alt_pos_var.load()
-                        ),
+                        condition=iir.SelfExpr().method[trivia_parser_info.apply_name].call(pos=alt_pos_var.load()),
                         let=item_ws_var,
                         orelse=(sep == gsm.Separator.WS_REQUIRED),
                     )
