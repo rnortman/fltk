@@ -138,8 +138,8 @@ See the grammar files in `fltk/fegen/` for real-world examples:
 
 ## Requirements
 
-- Python 3.8+
-- Dependencies: `astor`
+- Python 3.10+
+- Dependencies: `astor`, `typer`
 
 ## License
 
