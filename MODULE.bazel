@@ -2,7 +2,7 @@ module(
     name = "fltk",
 )
 
-bazel_dep(name = "rules_python", version = "0.26.0")
+bazel_dep(name = "rules_python", version = "1.5.0")
 
 python = use_extension("@rules_python//python/extensions:python.bzl", "python")
 python.toolchain(
@@ -14,6 +14,6 @@ pip = use_extension("@rules_python//python/extensions:pip.bzl", "pip")
 pip.parse(
     hub_name = "pypi",
     python_version = "3.10",
-    requirements_lock = "//:requirements_lock_3_10.txt",
+    requirements_lock = "//:requirements_lock.txt",
 )
 use_repo(pip, "pypi")

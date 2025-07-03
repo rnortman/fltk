@@ -1,11 +1,11 @@
 load("@rules_python//python:defs.bzl", "py_binary", "py_library")
-load("@rules_python//python:pip.bzl", "compile_pip_requirements")
+load("@rules_python//python/uv:lock.bzl", "lock")
 load("//:rules.bzl", "generate_parser")
 
-compile_pip_requirements(
+lock(
     name = "requirements",
-    requirements_in = "//:requirements.in",
-    requirements_txt = "requirements_lock_3_10.txt",
+    srcs = ["pyproject.toml"],
+    out = "requirements_lock.txt",
 )
 
 py_binary(
