@@ -1,4 +1,4 @@
-"""Professional CLI for FLTK parser generation.
+"""CLI for FLTK parser generation.
 
 Generates parsers from FLTK grammar files with options for trivia handling.
 """

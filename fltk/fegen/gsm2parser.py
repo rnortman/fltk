@@ -212,17 +212,6 @@ class ParserGenerator:
     def _memo_type(self, result_type: iir.Type) -> iir.Type:
         return self.MemoEntryType.instantiate(RuleId=iir.IndexInt, PosType=self.pos_type, ResultType=result_type)
 
-    def _get_trivia_regex_pattern(self, current_rule: gsm.Rule | None) -> str:
-        """Get the appropriate trivia regex pattern based on rule classification."""
-        if current_rule and current_rule.is_trivia_rule:
-            # Trivia rules use only basic whitespace to prevent recursion
-            return r"\s+"
-        else:
-            # Non-trivia rules use full trivia parsing (when grammar-defined trivia exists)
-            # For now, default to basic whitespace - this will be enhanced when we implement
-            # grammar-based trivia parsing in trivia rules
-            return r"\s+"
-
     def get_item_key(self, item: gsm.Item) -> str:
         try:
             return self.item_keys[item]
@@ -656,19 +645,7 @@ class ParserGenerator:
                         orelse=(sep == gsm.Separator.WS_REQUIRED),
                     )
                     sep_if.block.assign(alt_pos_var.store(), item_ws_var.fld.pos.move())
-
-                    # Conditionally create trivia node if capture_trivia is enabled
-                    if self.context.capture_trivia:
-                        trivia_construct = iir.Construct.make(
-                            self.TriviaNodeType,
-                            span=item_ws_var.fld.result.move(),
-                        )
-                        sep_if.block.expr_stmt(
-                            alt_result_var.method.append.call(
-                                child=trivia_construct,
-                                label=iir.LiteralNull(),
-                            )
-                        )
+                    # We don't capture trivia nodes inside trivia, even if capture_trivia is set.
                 else:
                     # For non-trivia rules, use grammar-based trivia parsing
                     trivia_parser_info = self._cache_parser_info(
