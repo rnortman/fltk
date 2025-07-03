@@ -94,6 +94,12 @@ class CstGenerator:
         for label in labels:
             label_enum.body.append(pygen.stmt(f"{label.upper()} = enum.auto()"))
         klass.body.append(label_enum)
+        if not model.types:
+            msg = (
+                f"Model class `{class_name}` "
+                "would have no members; ensure there is at least one term included in the model."
+            )
+            raise RuntimeError(msg)
         child_annotation = self.py_annotation_for_model_types(model_types=model.types, in_module=True)
         klass.body.extend(
             [

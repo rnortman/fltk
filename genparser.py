@@ -56,66 +56,7 @@ def parse_grammar_file(grammar_file: Path) -> gsm.Grammar:
     return grammar
 
 
-def generate_parser_files(
-    grammar: gsm.Grammar,
-    parser_file: Path,
-    cst_file: Path,
-    cst_module_name: str,
-    *,
-    preserve_trivia: bool,
-    context: CompilerContext | None = None,
-) -> None:
-    """Generate parser and CST files from grammar."""
-    if context is None:
-        context = create_default_context()
-
-    # Set trivia capture flag based on user preference
-    context.capture_trivia = preserve_trivia
-
-    # Conditionally enhance grammar with trivia rule
-    if preserve_trivia:
-        enhanced_grammar = gsm.add_trivia_rule_to_grammar(grammar, context)
-    else:
-        enhanced_grammar = grammar
-
-    # Generate CST and parser
-    cst_module = pyreg.Module(cst_module_name.split("."))
-    cstgen = gsm2tree.CstGenerator(grammar=enhanced_grammar, py_module=cst_module, context=context)
-    pgen = gsm2parser.ParserGenerator(grammar=enhanced_grammar, cstgen=cstgen, context=context)
-
-    # Compile parser class
-    parser_ast = compiler.compile_class(pgen.parser_class, context)
-    imports = [
-        pyreg.Module(("collections", "abc")),
-        pyreg.Module(("typing",)),
-        pyreg.Module(("fltk", "fegen", "pyrt", "errors")),
-        pyreg.Module(("fltk", "fegen", "pyrt", "memo")),
-        cst_module,
-    ]
-
-    # Generate parser module
-    parser_mod = pygen.module(module.import_path for module in imports)
-    parser_mod.body.append(parser_ast)
-
-    # Write parser file
-    try:
-        with parser_file.open("w") as f:
-            f.write(ast.unparse(parser_mod))
-    except Exception as e:
-        typer.echo(f"Error: Failed to write parser file '{parser_file}': {e}", err=True)
-        raise typer.Exit(1) from e
-
-    # Generate and write CST file
-    try:
-        cst_mod = cstgen.gen_py_module()
-        with cst_file.open("w") as f:
-            f.write(ast.unparse(cst_mod))
-    except Exception as e:
-        typer.echo(f"Error: Failed to write CST file '{cst_file}': {e}", err=True)
-        raise typer.Exit(1) from e
-
-
-def generate_parser_only(
+def generate_parser(
     grammar: gsm.Grammar,
     parser_file: Path,
     cst_module_name: str,
@@ -130,11 +71,7 @@ def generate_parser_only(
     # Set trivia capture flag based on user preference
     context.capture_trivia = preserve_trivia
 
-    # Conditionally enhance grammar with trivia rule
-    if preserve_trivia:
-        enhanced_grammar = gsm.add_trivia_rule_to_grammar(grammar, context)
-    else:
-        enhanced_grammar = grammar
+    enhanced_grammar = gsm.add_trivia_rule_to_grammar(grammar, context)
 
     # Generate parser (reusing existing CST module)
     cst_module = pyreg.Module(cst_module_name.split("."))
@@ -226,15 +163,15 @@ def generate(
         typer.echo("Generating shared CST module...")
 
     # Generate CST module using trivia-enhanced grammar (contains all possible nodes)
-    enhanced_grammar = gsm.add_trivia_rule_to_grammar(grammar, create_default_context())
+    grammar = gsm.add_trivia_rule_to_grammar(grammar, create_default_context())
     cst_module = pyreg.Module(cst_module_name.split("."))
-    cstgen = gsm2tree.CstGenerator(grammar=enhanced_grammar, py_module=cst_module, context=create_default_context())
+    cstgen = gsm2tree.CstGenerator(grammar=grammar, py_module=cst_module, context=create_default_context())
 
+    cst_mod = cstgen.gen_py_module()
     try:
-        cst_mod = cstgen.gen_py_module()
         with shared_cst.open("w") as f:
             f.write(ast.unparse(cst_mod))
-    except Exception as e:
+    except RuntimeError as e:
         typer.echo(f"Error: Failed to write shared CST file '{shared_cst}': {e}", err=True)
         raise typer.Exit(1) from e
 
@@ -249,7 +186,7 @@ def generate(
         if verbose:
             typer.echo("Generating parser without trivia preservation...")
 
-        generate_parser_only(
+        generate_parser(
             grammar=grammar,
             parser_file=no_trivia_parser,
             cst_module_name=cst_module_name,
@@ -263,7 +200,7 @@ def generate(
         if verbose:
             typer.echo("Generating parser with trivia preservation...")
 
-        generate_parser_only(
+        generate_parser(
             grammar=grammar,
             parser_file=trivia_parser,
             cst_module_name=cst_module_name,
