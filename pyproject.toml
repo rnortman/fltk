@@ -6,7 +6,7 @@ build-backend = "setuptools.build_meta"
 name = "fltk"
 dynamic = []
 description = 'Formal Language ToolKit'
-version = "0.1.0"
+version = "0.1.1"
 requires-python = ">=3.10"
 license = "MIT"
 keywords = []

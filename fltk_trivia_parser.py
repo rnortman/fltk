@@ -109,6 +109,7 @@ class Parser:
             result.append_rule(child=item0.result)
         if ws_after__item0 := self.apply__parse__trivia(pos=pos):
             pos = ws_after__item0.pos
+            result.append(child=ws_after__item0.result, label=None)
         if item1 := self.parse_grammar__alt0__item1(pos=pos):
             pos = item1.pos
             result.children.extend(item1.result.children)
@@ -147,12 +148,14 @@ class Parser:
             return None
         if ws_after__item0 := self.apply__parse__trivia(pos=pos):
             pos = ws_after__item0.pos
+            result.append(child=ws_after__item0.result, label=None)
         if item1 := self.parse_rule__alt0__item1(pos=pos):
             pos = item1.pos
         else:
             return None
         if ws_after__item1 := self.apply__parse__trivia(pos=pos):
             pos = ws_after__item1.pos
+            result.append(child=ws_after__item1.result, label=None)
         if item2 := self.parse_rule__alt0__item2(pos=pos):
             pos = item2.pos
             result.append_alternatives(child=item2.result)
@@ -160,12 +163,14 @@ class Parser:
             return None
         if ws_after__item2 := self.apply__parse__trivia(pos=pos):
             pos = ws_after__item2.pos
+            result.append(child=ws_after__item2.result, label=None)
         if item3 := self.parse_rule__alt0__item3(pos=pos):
             pos = item3.pos
         else:
             return None
         if ws_after__item3 := self.apply__parse__trivia(pos=pos):
             pos = ws_after__item3.pos
+            result.append(child=ws_after__item3.result, label=None)
         result.span = fltk.fegen.pyrt.terminalsrc.Span(start=result.span.start, end=pos)
         return fltk.fegen.pyrt.memo.ApplyResult(pos=pos, result=result)
 
@@ -206,6 +211,7 @@ class Parser:
             return None
         if ws_after__item0 := self.apply__parse__trivia(pos=pos):
             pos = ws_after__item0.pos
+            result.append(child=ws_after__item0.result, label=None)
         if item1 := self.parse_alternatives__alt0__item1(pos=pos):
             pos = item1.pos
             result.children.extend(item1.result.children)
@@ -232,6 +238,7 @@ class Parser:
             return None
         if ws_after__item0 := self.apply__parse__trivia(pos=pos):
             pos = ws_after__item0.pos
+            result.append(child=ws_after__item0.result, label=None)
         if item1 := self.parse_alternatives__alt0__item1__alts__alt0__item1(pos=pos):
             pos = item1.pos
             result.append_items(child=item1.result)
@@ -279,16 +286,19 @@ class Parser:
             return None
         if ws_after__item0 := self.apply__parse__trivia(pos=pos):
             pos = ws_after__item0.pos
+            result.append(child=ws_after__item0.result, label=None)
         if item1 := self.parse_items__alt0__item1(pos=pos):
             pos = item1.pos
             result.children.extend(item1.result.children)
         if ws_after__item1 := self.apply__parse__trivia(pos=pos):
             pos = ws_after__item1.pos
+            result.append(child=ws_after__item1.result, label=None)
         if item2 := self.parse_items__alt0__item2(pos=pos):
             pos = item2.pos
             result.children.extend(item2.result.children)
         if ws_after__item2 := self.apply__parse__trivia(pos=pos):
             pos = ws_after__item2.pos
+            result.append(child=ws_after__item2.result, label=None)
         result.span = fltk.fegen.pyrt.terminalsrc.Span(start=result.span.start, end=pos)
         return fltk.fegen.pyrt.memo.ApplyResult(pos=pos, result=result)
 
@@ -311,6 +321,7 @@ class Parser:
             return None
         if ws_after__item0 := self.apply__parse__trivia(pos=pos):
             pos = ws_after__item0.pos
+            result.append(child=ws_after__item0.result, label=None)
         if item1 := self.parse_items__alt0__item1__alts__alt0__item1(pos=pos):
             pos = item1.pos
             result.append_item(child=item1.result)
@@ -488,6 +499,7 @@ class Parser:
             result.append_quantifier(child=item3.result)
         if ws_after__item3 := self.apply__parse__trivia(pos=pos):
             pos = ws_after__item3.pos
+            result.append(child=ws_after__item3.result, label=None)
         result.span = fltk.fegen.pyrt.terminalsrc.Span(start=result.span.start, end=pos)
         return fltk.fegen.pyrt.memo.ApplyResult(pos=pos, result=result)
 
@@ -613,6 +625,7 @@ class Parser:
             return None
         if ws_after__item0 := self.apply__parse__trivia(pos=pos):
             pos = ws_after__item0.pos
+            result.append(child=ws_after__item0.result, label=None)
         if item1 := self.parse_term__alt3__item1(pos=pos):
             pos = item1.pos
             result.append_alternatives(child=item1.result)
@@ -620,6 +633,7 @@ class Parser:
             return None
         if ws_after__item1 := self.apply__parse__trivia(pos=pos):
             pos = ws_after__item1.pos
+            result.append(child=ws_after__item1.result, label=None)
         if item2 := self.parse_term__alt3__item2(pos=pos):
             pos = item2.pos
         else:
@@ -1018,6 +1032,7 @@ class Parser:
             return None
         if ws_after__item0 := self.apply__parse__trivia(pos=pos):
             pos = ws_after__item0.pos
+            result.append(child=ws_after__item0.result, label=None)
         if item1 := self.parse_block_comment__alt0__item1(pos=pos):
             pos = item1.pos
             result.append_content(child=item1.result)
@@ -1025,6 +1040,7 @@ class Parser:
             return None
         if ws_after__item1 := self.apply__parse__trivia(pos=pos):
             pos = ws_after__item1.pos
+            result.append(child=ws_after__item1.result, label=None)
         if item2 := self.parse_block_comment__alt0__item2(pos=pos):
             pos = item2.pos
             result.append_end(child=item2.result)

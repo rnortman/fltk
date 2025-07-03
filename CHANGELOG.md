@@ -2,7 +2,13 @@
 
 ## [Unreleased]
 
-## [0.1.0] - 2025-07-03
+## [0.1.1] - 2025-07-03
+
+Fix a regression caused by renaming the trivia rule to use all caps. This turns
+out to be a bit of a problem with linters on the generated parsers, so we now
+use `_trivia` instead of `_TRIVIA`.
+
+## [0.1.0] - 2025-07-02
 
 The major change in 0.1.0 is the addition of trivia support, i.e. being able to
 have comment syntax in your language. ("Trivia" is just compiler-nerd jargon for

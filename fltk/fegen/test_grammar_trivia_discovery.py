@@ -4,7 +4,7 @@ from fltk.fegen import gsm
 
 
 def test_trivia_rule_discovery():
-    """Test that rules reachable from '_TRIVIA' rule are correctly classified."""
+    """Test that rules reachable from TRIVIA_RULE_NAME rule are correctly classified."""
     # Create grammar with trivia rule
     ws_rule = gsm.Rule(
         name="ws",
@@ -44,7 +44,7 @@ def test_trivia_rule_discovery():
     )
 
     trivia_rule = gsm.Rule(
-        name="_TRIVIA",
+        name=gsm.TRIVIA_RULE_NAME,
         alternatives=[
             gsm.Items(
                 items=[
@@ -123,7 +123,7 @@ def test_trivia_rule_discovery():
     classified_rules = {rule.name: rule for rule in classified_grammar.rules}
 
     # Rules reachable from trivia should be marked as trivia rules
-    assert classified_rules["_TRIVIA"].is_trivia_rule is True
+    assert classified_rules[gsm.TRIVIA_RULE_NAME].is_trivia_rule is True
     assert classified_rules["ws"].is_trivia_rule is True
     assert classified_rules["line_comment"].is_trivia_rule is True
 
@@ -182,7 +182,7 @@ def test_trivia_separation_validation():
     )
 
     trivia_rule = gsm.Rule(
-        name="_TRIVIA",
+        name=gsm.TRIVIA_RULE_NAME,
         alternatives=[
             gsm.Items(
                 items=[

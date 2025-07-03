@@ -6,10 +6,10 @@ FLTK supports automatic handling of "trivia" - non-semantic content like whitesp
 
 ## Basic Trivia Rule
 
-Define trivia by creating a rule named `_TRIVIA` in your grammar:
+Define trivia by creating a rule named `_trivia` in your grammar:
 
 ```fltk
-_TRIVIA := whitespace | line_comment | block_comment;
+_trivia := whitespace | line_comment | block_comment;
 
 whitespace := /\s+/;
 line_comment := "//" . /[^\n]*/ . "\n";
@@ -18,7 +18,7 @@ block_comment := "/*" . /.*?\*/ . "*/";
 
 ## How Trivia Works
 
-1. **Automatic Detection**: FLTK automatically detects the `_TRIVIA` rule and classifies all rules reachable from it as trivia rules
+1. **Automatic Detection**: FLTK automatically detects the `_trivia` rule and classifies all rules reachable from it as trivia rules
 2. **Separator Behavior**: Trivia is consumed at separators (`,` and `:`) but not at concatenation (`.`)
 3. **Rule Classification**: Rules are classified as either trivia or non-trivia, preventing mixed usage
 
@@ -53,10 +53,10 @@ The one that omits trivia nodes will be slightly faster and use less memory.
 
 ## Built-in Fallback
 
-If no `_TRIVIA` rule is defined, FLTK automatically uses a default whitespace-only trivia rule equivalent to:
+If no `_trivia` rule is defined, FLTK automatically uses a default whitespace-only trivia rule equivalent to:
 
 ```fltk
-_TRIVIA := /\s+/;
+_trivia := /\s+/;
 ```
 
 ## Common Use Cases
