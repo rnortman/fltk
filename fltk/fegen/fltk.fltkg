@@ -40,7 +40,7 @@ raw_string := /([^\/\n\\]|\\.)+/;
 literal := /("([^"\n\\]|\\.)+"|'([^'\n\\]|\\.)+')/;
 
 // Trivia handling for comments and whitespace
-trivia := whitespace | line_comment | block_comment;
+_TRIVIA := whitespace | line_comment | block_comment;
 
 // Whitespace: spaces, tabs, newlines
 whitespace := content:/\s+/;

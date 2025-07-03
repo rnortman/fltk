@@ -163,11 +163,11 @@ class Var:
 
 
 def classify_trivia_rules(grammar: Grammar) -> Grammar:
-    """Classify rules as trivia/non-trivia based on reachability from 'trivia' rule.
+    """Classify rules as trivia/non-trivia based on reachability from '_TRIVIA' rule.
 
     Returns a new Grammar with updated Rule.is_trivia_rule flags.
     """
-    trivia_rule = grammar.identifiers.get("trivia")
+    trivia_rule = grammar.identifiers.get("_TRIVIA")
     if not trivia_rule:
         return grammar
 
@@ -230,11 +230,11 @@ def validate_trivia_separation(grammar: Grammar) -> None:
 def add_trivia_rule_to_grammar(grammar: Grammar, context: CompilerContext) -> Grammar:  # noqa: ARG001
     """Add built-in trivia rule to grammar if one doesn't exist."""
 
-    if "trivia" in grammar.identifiers:
+    if "_TRIVIA" in grammar.identifiers:
         return grammar
 
     trivia_rule = Rule(
-        name="trivia",
+        name="_TRIVIA",
         alternatives=[
             Items(
                 items=[
@@ -252,6 +252,6 @@ def add_trivia_rule_to_grammar(grammar: Grammar, context: CompilerContext) -> Gr
 
     new_rules = [*list(grammar.rules), trivia_rule]
     new_identifiers = dict(grammar.identifiers)
-    new_identifiers["trivia"] = trivia_rule
+    new_identifiers["_TRIVIA"] = trivia_rule
 
     return Grammar(rules=new_rules, identifiers=new_identifiers)

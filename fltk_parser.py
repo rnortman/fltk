@@ -25,7 +25,7 @@ class Parser:
             "identifier",
             "raw_string",
             "literal",
-            "trivia",
+            "_TRIVIA",
             "whitespace",
             "line_comment",
             "block_comment",

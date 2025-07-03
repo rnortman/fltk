@@ -67,10 +67,10 @@ class ParserGenerator:
         self.context.python_type_registry.register_type(type_info)
         terminalsrc_fld = self.parser_class.def_field(name="terminalsrc", typ=terminalsrc_type, init=None)
 
-        if "trivia" not in self.grammar.identifiers:
-            msg = "Expected trivia rule to exist for parsing"
+        if "_TRIVIA" not in self.grammar.identifiers:
+            msg = "Expected _TRIVIA rule to exist for parsing"
             raise RuntimeError(msg)
-        self.TriviaNodeType = self.cstgen.iir_type_for_rule("trivia")
+        self.TriviaNodeType = self.cstgen.iir_type_for_rule("_TRIVIA")
 
         error_tracker_type = self.ErrorTrackerType.instantiate(RuleId=iir.IndexInt)
         self.parser_class.def_field(
@@ -649,7 +649,7 @@ class ParserGenerator:
                 else:
                     # For non-trivia rules, use grammar-based trivia parsing
                     trivia_parser_info = self._cache_parser_info(
-                        path=("trivia",),
+                        path=("_TRIVIA",),
                         result_type=self.TriviaNodeType,
                         memoize=True,
                     )
