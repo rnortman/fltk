@@ -2,8 +2,9 @@
 
 import dataclasses
 from abc import ABC, abstractmethod
+from collections.abc import Mapping, Sequence
 from enum import Enum
-from typing import TYPE_CHECKING, Final, Mapping, Optional, Sequence, Union
+from typing import TYPE_CHECKING, Final, Optional, Union
 
 if TYPE_CHECKING:
     from fltk.iir.context import CompilerContext
@@ -38,7 +39,7 @@ class Items:
 
 @dataclasses.dataclass(frozen=True, slots=True)
 class Item:
-    label: Optional[str]
+    label: str | None
     disposition: "Disposition"
     term: "Term"
     quantifier: "Quantifier"
@@ -75,9 +76,9 @@ class Disposition(Enum):
 
 
 class Arity(Enum):
-    ZERO: Final = 0
-    ONE: Final = 1
-    MULTIPLE: Final = object()
+    ZERO = 0
+    ONE = 1
+    MULTIPLE = object()
 
 
 class Quantifier(ABC):
@@ -158,7 +159,7 @@ class Add:
 @dataclasses.dataclass(frozen=True, slots=True)
 class Var:
     name: str
-    init_value: Optional[str]
+    init_value: str | None
 
 
 def classify_trivia_rules(grammar: Grammar) -> Grammar:

@@ -1,6 +1,7 @@
 import typing
+from collections.abc import Mapping
 from dataclasses import dataclass, field
-from typing import Final, Mapping, Optional, Union
+from typing import Final, Optional, Union
 
 
 class ParamType:
@@ -26,7 +27,7 @@ KeyArgument = Union["TypeKey", int, str]
 
 @dataclass(frozen=True, eq=True)
 class TypeKey:
-    cname: Optional[str]
+    cname: str | None
     params: tuple[tuple[str, ParamType], ...]
     instantiates: Optional["TypeKey"]
     arguments: tuple[tuple[str, KeyArgument], ...]
@@ -48,19 +49,19 @@ def lookup_type(type_key: TypeKey) -> "Type":
 @dataclass(kw_only=True)
 class Type:
     key: TypeKey = field(init=False)
-    cname: Optional[str]
+    cname: str | None
     params: Mapping[str, ParamType]
     instantiates: Optional["Type"]
     arguments: Mapping[str, Argument]
 
     @classmethod
     def make(
-        cls: typing.Type[_TypeSubclass],
+        cls: type[_TypeSubclass],
         *,
-        cname: Optional[str] = None,
-        params: Optional[Mapping[str, ParamType]] = None,
+        cname: str | None = None,
+        params: Mapping[str, ParamType] | None = None,
         instantiates: Optional["Type"] = None,
-        arguments: Optional[Mapping[str, Argument]] = None,
+        arguments: Mapping[str, Argument] | None = None,
     ) -> _TypeSubclass:
         return cls(
             cname=cname,

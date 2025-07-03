@@ -1,15 +1,11 @@
+from collections.abc import Iterable, Mapping, MutableSequence, Sequence
 from dataclasses import dataclass
 from enum import Enum
 from typing import (
     Any,
     Final,
     Generic,
-    Iterable,
-    Mapping,
-    MutableSequence,
     Optional,
-    Sequence,
-    Tuple,
     TypeVar,
     Union,
 )
@@ -93,7 +89,7 @@ class Scope:
             raise ValueError(msg)
         self.identifiers[name] = entity
 
-    def lookup(self, name: str, *, recursive: bool = True) -> Optional[Nameable]:
+    def lookup(self, name: str, *, recursive: bool = True) -> Nameable | None:
         try:
             return self.identifiers[name]
         except KeyError:
@@ -112,7 +108,7 @@ class Scope:
 
 @dataclass
 class Block(Statement):
-    inner_scope: Optional[Scope]
+    inner_scope: Scope | None
     body: MutableSequence[Statement]
 
     def get_leaf_scope(self) -> Scope:
@@ -142,7 +138,7 @@ class Block(Statement):
         typ: Type,
         ref_type: "RefType",
         mutable: bool = False,
-        init: Optional[Expr] = None,
+        init: Expr | None = None,
     ) -> "Var":
         result = Var(name=name, typ=typ, ref_type=ref_type, mutable=mutable)
         self.get_leaf_scope().define(name, result)
@@ -251,7 +247,7 @@ class ValRef(Expr):
 
     def load_mut(self) -> "Load":
         if hasattr(self, "mutable"):
-            assert self.mutable  # noqa: S101
+            assert self.mutable  # noqa: S101  # type: ignore[reportAttributeAccessIssue]
         return Load(self, mutable=True)
 
     def store(self) -> "Store":
@@ -277,7 +273,7 @@ class VarByName(Var):
 @dataclass
 class VarDef(Statement):
     var: Var
-    init: Optional[Expr] = None
+    init: Expr | None = None
 
 
 @dataclass
@@ -404,7 +400,7 @@ class BoundMethod(Expr):
 @dataclass
 class Field(Var):
     in_class: "ClassType"
-    init: Optional[Expr]
+    init: Expr | None
 
 
 @dataclass
@@ -424,11 +420,11 @@ class Param(Var):
 
 @dataclass
 class Function:
-    name: Optional[str]
+    name: str | None
     params: Sequence[Param]
     return_type: Type
     block: Block
-    doc: Optional[str]
+    doc: str | None
 
     def __post_init__(self) -> None:
         assert self.block.inner_scope is not None  # noqa: S101
@@ -461,7 +457,7 @@ _ClassTypeSubclass = TypeVar("_ClassTypeSubclass", bound="ClassType")
 class ClassType(Type):
     defined_in: Module
     block: Block
-    doc: Optional[str]
+    doc: str | None
     base_classes: Sequence[Type]
     constructor: Optional["Constructor"]
 
@@ -469,13 +465,13 @@ class ClassType(Type):
     def make(  # type: ignore[override]
         cls: type[_ClassTypeSubclass],
         *,
-        cname: Optional[str] = None,
-        params: Optional[Mapping[str, ParamType]] = None,
+        cname: str | None = None,
+        params: Mapping[str, ParamType] | None = None,
         instantiates: Optional["Type"] = None,
-        arguments: Optional[Mapping[str, TypeArgument]] = None,
+        arguments: Mapping[str, TypeArgument] | None = None,
         defined_in: Module,
-        doc: Optional[str] = None,
-        outer_scope: Optional[Scope] = None,
+        doc: str | None = None,
+        outer_scope: Scope | None = None,
     ) -> _ClassTypeSubclass:
         scope = Scope(parent=outer_scope)
         block = Block(parent_block=None, body=[], inner_scope=scope)
@@ -491,9 +487,9 @@ class ClassType(Type):
             doc=doc,
         )
 
-    def get_attr(self, name: str) -> Union[Field, Method]:
+    def get_attr(self, name: str) -> Field | Method:
         result = self.block.get_leaf_scope().lookup(name, recursive=False)
-        if not isinstance(result, (Field, Method)):
+        if not isinstance(result, Field | Method):
             msg = f"Class contains invalid member type {name} = {result}"
             raise ValueError(msg)
         return result
@@ -529,7 +525,7 @@ class ClassType(Type):
         name: str,
         *,
         typ: Type,
-        init: Optional[Expr],
+        init: Expr | None,
         ref_type: RefType = RefType.VALUE,
         mutable: bool = False,
     ) -> Field:
@@ -548,8 +544,8 @@ class ClassType(Type):
         self,
         *,
         params: Iterable[Param],
-        doc: Optional[str] = None,
-        init_list: Iterable[Tuple[Field, "InitListExpr"]] = (),
+        doc: str | None = None,
+        init_list: Iterable[tuple[Field, "InitListExpr"]] = (),
     ) -> "Constructor":
         if self.constructor is not None:
             msg = f"Constructor already defined for class {self.cname}"
@@ -574,9 +570,9 @@ class ClassType(Type):
         *,
         params: Iterable[Param],
         return_type: Type,
-        doc: Optional[str] = None,
+        doc: str | None = None,
         mutable_self: bool = False,
-        using_self: Optional[SelfExpr] = None,
+        using_self: SelfExpr | None = None,
     ) -> Method:
         method = Method(
             name=name,
@@ -631,11 +627,11 @@ class InitFromParamType:
 
 INIT_FROM_PARAM: Final = InitFromParamType()
 
-InitListExpr = Union[Expr, InitFromParamType]
+InitListExpr = Expr | InitFromParamType
 
 
 class Constructor(Method):
-    def __init__(self, *, init_list: Iterable[Tuple[Field, InitListExpr]], **kws: Any):
+    def __init__(self, *, init_list: Iterable[tuple[Field, InitListExpr]], **kws: Any):
         super().__init__(name="", return_type=Void, self_expr=SelfExpr(), **kws)
         self.init_list = list(init_list)
 
@@ -643,16 +639,16 @@ class Constructor(Method):
 @dataclass(kw_only=True)
 class EnumType(Type):
     defined_in: Module
-    doc: Optional[str]
+    doc: str | None
     fields: MutableSequence[str]
 
     @classmethod
     def make(  # type: ignore[override]
         cls,
         *,
-        cname: Optional[str] = None,
+        cname: str | None = None,
         defined_in: Module,
-        doc: Optional[str] = None,
+        doc: str | None = None,
         fields: Iterable[str] = (),
     ) -> "EnumType":
         return cls(
@@ -682,7 +678,7 @@ class EnumType(Type):
 class If(Statement):
     condition: Expr
     block: Block
-    orelse: Optional[Union["If", Block]]
+    orelse: Union["If", Block] | None
 
 
 @dataclass

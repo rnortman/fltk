@@ -1,8 +1,9 @@
 # Python type and handler registries
 from __future__ import annotations
 
+from collections.abc import Sequence
 from dataclasses import dataclass
-from typing import Final, Sequence
+from typing import Final
 
 from fltk.iir.typemodel import Type
 

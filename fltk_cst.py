@@ -7,20 +7,19 @@ import fltk.fegen.pyrt.terminalsrc
 
 @dataclasses.dataclass
 class Grammar:
-
     class Label(enum.Enum):
         RULE = enum.auto()
 
     span: fltk.fegen.pyrt.terminalsrc.Span = fltk.fegen.pyrt.terminalsrc.UnknownSpan
-    children: list[tuple[typing.Optional[Label], "Rule"]] = dataclasses.field(default_factory=list)
+    children: list[tuple[Label | None, "Rule"]] = dataclasses.field(default_factory=list)
 
-    def append(self, child: "Rule", label: typing.Optional[Label] = None) -> None:
+    def append(self, child: "Rule", label: Label | None = None) -> None:
         self.children.append((label, child))
 
-    def extend(self, children: typing.Iterable["Rule"], label: typing.Optional[Label] = None) -> None:
+    def extend(self, children: typing.Iterable["Rule"], label: Label | None = None) -> None:
         self.children.extend((label, child) for child in children)
 
-    def child(self) -> tuple[typing.Optional[Label], "Rule"]:
+    def child(self) -> tuple[Label | None, "Rule"]:
         if (n := len(self.children)) != 1:
             msg = f"Expected one child but have {n}"
             raise ValueError(msg)
@@ -52,27 +51,26 @@ class Grammar:
 
 @dataclasses.dataclass
 class Rule:
-
     class Label(enum.Enum):
         ALTERNATIVES = enum.auto()
         NAME = enum.auto()
 
     span: fltk.fegen.pyrt.terminalsrc.Span = fltk.fegen.pyrt.terminalsrc.UnknownSpan
-    children: list[tuple[typing.Optional[Label], typing.Union["Alternatives", "Identifier"]]] = dataclasses.field(
+    children: list[tuple[Label | None, typing.Union["Alternatives", "Identifier"]]] = dataclasses.field(
         default_factory=list
     )
 
-    def append(self, child: typing.Union["Alternatives", "Identifier"], label: typing.Optional[Label] = None) -> None:
+    def append(self, child: typing.Union["Alternatives", "Identifier"], label: Label | None = None) -> None:
         self.children.append((label, child))
 
     def extend(
         self,
         children: typing.Iterable[typing.Union["Alternatives", "Identifier"]],
-        label: typing.Optional[Label] = None,
+        label: Label | None = None,
     ) -> None:
         self.children.extend((label, child) for child in children)
 
-    def child(self) -> tuple[typing.Optional[Label], typing.Union["Alternatives", "Identifier"]]:
+    def child(self) -> tuple[Label | None, typing.Union["Alternatives", "Identifier"]]:
         if (n := len(self.children)) != 1:
             msg = f"Expected one child but have {n}"
             raise ValueError(msg)
@@ -129,20 +127,19 @@ class Rule:
 
 @dataclasses.dataclass
 class Alternatives:
-
     class Label(enum.Enum):
         ITEMS = enum.auto()
 
     span: fltk.fegen.pyrt.terminalsrc.Span = fltk.fegen.pyrt.terminalsrc.UnknownSpan
-    children: list[tuple[typing.Optional[Label], "Items"]] = dataclasses.field(default_factory=list)
+    children: list[tuple[Label | None, "Items"]] = dataclasses.field(default_factory=list)
 
-    def append(self, child: "Items", label: typing.Optional[Label] = None) -> None:
+    def append(self, child: "Items", label: Label | None = None) -> None:
         self.children.append((label, child))
 
-    def extend(self, children: typing.Iterable["Items"], label: typing.Optional[Label] = None) -> None:
+    def extend(self, children: typing.Iterable["Items"], label: Label | None = None) -> None:
         self.children.extend((label, child) for child in children)
 
-    def child(self) -> tuple[typing.Optional[Label], "Items"]:
+    def child(self) -> tuple[Label | None, "Items"]:
         if (n := len(self.children)) != 1:
             msg = f"Expected one child but have {n}"
             raise ValueError(msg)
@@ -174,7 +171,6 @@ class Alternatives:
 
 @dataclasses.dataclass
 class Items:
-
     class Label(enum.Enum):
         ITEM = enum.auto()
         NO_WS = enum.auto()
@@ -182,23 +178,23 @@ class Items:
         WS_REQUIRED = enum.auto()
 
     span: fltk.fegen.pyrt.terminalsrc.Span = fltk.fegen.pyrt.terminalsrc.UnknownSpan
-    children: list[tuple[typing.Optional[Label], typing.Union["Item", "fltk.fegen.pyrt.terminalsrc.Span"]]] = (
-        dataclasses.field(default_factory=list)
+    children: list[tuple[Label | None, typing.Union["Item", "fltk.fegen.pyrt.terminalsrc.Span"]]] = dataclasses.field(
+        default_factory=list
     )
 
     def append(
-        self, child: typing.Union["Item", "fltk.fegen.pyrt.terminalsrc.Span"], label: typing.Optional[Label] = None
+        self, child: typing.Union["Item", "fltk.fegen.pyrt.terminalsrc.Span"], label: Label | None = None
     ) -> None:
         self.children.append((label, child))
 
     def extend(
         self,
         children: typing.Iterable[typing.Union["Item", "fltk.fegen.pyrt.terminalsrc.Span"]],
-        label: typing.Optional[Label] = None,
+        label: Label | None = None,
     ) -> None:
         self.children.extend((label, child) for child in children)
 
-    def child(self) -> tuple[typing.Optional[Label], typing.Union["Item", "fltk.fegen.pyrt.terminalsrc.Span"]]:
+    def child(self) -> tuple[Label | None, typing.Union["Item", "fltk.fegen.pyrt.terminalsrc.Span"]]:
         if (n := len(self.children)) != 1:
             msg = f"Expected one child but have {n}"
             raise ValueError(msg)
@@ -311,7 +307,6 @@ class Items:
 
 @dataclasses.dataclass
 class Item:
-
     class Label(enum.Enum):
         DISPOSITION = enum.auto()
         LABEL = enum.auto()
@@ -319,25 +314,25 @@ class Item:
         TERM = enum.auto()
 
     span: fltk.fegen.pyrt.terminalsrc.Span = fltk.fegen.pyrt.terminalsrc.UnknownSpan
-    children: list[tuple[typing.Optional[Label], typing.Union["Disposition", "Identifier", "Quantifier", "Term"]]] = (
+    children: list[tuple[Label | None, typing.Union["Disposition", "Identifier", "Quantifier", "Term"]]] = (
         dataclasses.field(default_factory=list)
     )
 
     def append(
         self,
         child: typing.Union["Disposition", "Identifier", "Quantifier", "Term"],
-        label: typing.Optional[Label] = None,
+        label: Label | None = None,
     ) -> None:
         self.children.append((label, child))
 
     def extend(
         self,
         children: typing.Iterable[typing.Union["Disposition", "Identifier", "Quantifier", "Term"]],
-        label: typing.Optional[Label] = None,
+        label: Label | None = None,
     ) -> None:
         self.children.extend((label, child) for child in children)
 
-    def child(self) -> tuple[typing.Optional[Label], typing.Union["Disposition", "Identifier", "Quantifier", "Term"]]:
+    def child(self) -> tuple[Label | None, typing.Union["Disposition", "Identifier", "Quantifier", "Term"]]:
         if (n := len(self.children)) != 1:
             msg = f"Expected one child but have {n}"
             raise ValueError(msg)
@@ -438,7 +433,6 @@ class Item:
 
 @dataclasses.dataclass
 class Term:
-
     class Label(enum.Enum):
         ALTERNATIVES = enum.auto()
         IDENTIFIER = enum.auto()
@@ -446,27 +440,27 @@ class Term:
         REGEX = enum.auto()
 
     span: fltk.fegen.pyrt.terminalsrc.Span = fltk.fegen.pyrt.terminalsrc.UnknownSpan
-    children: list[
-        tuple[typing.Optional[Label], typing.Union["Alternatives", "Identifier", "Literal", "RawString"]]
-    ] = dataclasses.field(default_factory=list)
+    children: list[tuple[Label | None, typing.Union["Alternatives", "Identifier", "Literal", "RawString"]]] = (
+        dataclasses.field(default_factory=list)
+    )
 
     def append(
         self,
         child: typing.Union["Alternatives", "Identifier", "Literal", "RawString"],
-        label: typing.Optional[Label] = None,
+        label: Label | None = None,
     ) -> None:
         self.children.append((label, child))
 
     def extend(
         self,
         children: typing.Iterable[typing.Union["Alternatives", "Identifier", "Literal", "RawString"]],
-        label: typing.Optional[Label] = None,
+        label: Label | None = None,
     ) -> None:
         self.children.extend((label, child) for child in children)
 
     def child(
         self,
-    ) -> tuple[typing.Optional[Label], typing.Union["Alternatives", "Identifier", "Literal", "RawString"]]:
+    ) -> tuple[Label | None, typing.Union["Alternatives", "Identifier", "Literal", "RawString"]]:
         if (n := len(self.children)) != 1:
             msg = f"Expected one child but have {n}"
             raise ValueError(msg)
@@ -569,26 +563,21 @@ class Term:
 
 @dataclasses.dataclass
 class Disposition:
-
     class Label(enum.Enum):
         INCLUDE = enum.auto()
         INLINE = enum.auto()
         SUPPRESS = enum.auto()
 
     span: fltk.fegen.pyrt.terminalsrc.Span = fltk.fegen.pyrt.terminalsrc.UnknownSpan
-    children: list[tuple[typing.Optional[Label], "fltk.fegen.pyrt.terminalsrc.Span"]] = dataclasses.field(
-        default_factory=list
-    )
+    children: list[tuple[Label | None, "fltk.fegen.pyrt.terminalsrc.Span"]] = dataclasses.field(default_factory=list)
 
-    def append(self, child: "fltk.fegen.pyrt.terminalsrc.Span", label: typing.Optional[Label] = None) -> None:
+    def append(self, child: "fltk.fegen.pyrt.terminalsrc.Span", label: Label | None = None) -> None:
         self.children.append((label, child))
 
-    def extend(
-        self, children: typing.Iterable["fltk.fegen.pyrt.terminalsrc.Span"], label: typing.Optional[Label] = None
-    ) -> None:
+    def extend(self, children: typing.Iterable["fltk.fegen.pyrt.terminalsrc.Span"], label: Label | None = None) -> None:
         self.children.extend((label, child) for child in children)
 
-    def child(self) -> tuple[typing.Optional[Label], "fltk.fegen.pyrt.terminalsrc.Span"]:
+    def child(self) -> tuple[Label | None, "fltk.fegen.pyrt.terminalsrc.Span"]:
         if (n := len(self.children)) != 1:
             msg = f"Expected one child but have {n}"
             raise ValueError(msg)
@@ -666,26 +655,21 @@ class Disposition:
 
 @dataclasses.dataclass
 class Quantifier:
-
     class Label(enum.Enum):
         ONE_OR_MORE = enum.auto()
         OPTIONAL = enum.auto()
         ZERO_OR_MORE = enum.auto()
 
     span: fltk.fegen.pyrt.terminalsrc.Span = fltk.fegen.pyrt.terminalsrc.UnknownSpan
-    children: list[tuple[typing.Optional[Label], "fltk.fegen.pyrt.terminalsrc.Span"]] = dataclasses.field(
-        default_factory=list
-    )
+    children: list[tuple[Label | None, "fltk.fegen.pyrt.terminalsrc.Span"]] = dataclasses.field(default_factory=list)
 
-    def append(self, child: "fltk.fegen.pyrt.terminalsrc.Span", label: typing.Optional[Label] = None) -> None:
+    def append(self, child: "fltk.fegen.pyrt.terminalsrc.Span", label: Label | None = None) -> None:
         self.children.append((label, child))
 
-    def extend(
-        self, children: typing.Iterable["fltk.fegen.pyrt.terminalsrc.Span"], label: typing.Optional[Label] = None
-    ) -> None:
+    def extend(self, children: typing.Iterable["fltk.fegen.pyrt.terminalsrc.Span"], label: Label | None = None) -> None:
         self.children.extend((label, child) for child in children)
 
-    def child(self) -> tuple[typing.Optional[Label], "fltk.fegen.pyrt.terminalsrc.Span"]:
+    def child(self) -> tuple[Label | None, "fltk.fegen.pyrt.terminalsrc.Span"]:
         if (n := len(self.children)) != 1:
             msg = f"Expected one child but have {n}"
             raise ValueError(msg)
@@ -763,24 +747,19 @@ class Quantifier:
 
 @dataclasses.dataclass
 class Identifier:
-
     class Label(enum.Enum):
         NAME = enum.auto()
 
     span: fltk.fegen.pyrt.terminalsrc.Span = fltk.fegen.pyrt.terminalsrc.UnknownSpan
-    children: list[tuple[typing.Optional[Label], "fltk.fegen.pyrt.terminalsrc.Span"]] = dataclasses.field(
-        default_factory=list
-    )
+    children: list[tuple[Label | None, "fltk.fegen.pyrt.terminalsrc.Span"]] = dataclasses.field(default_factory=list)
 
-    def append(self, child: "fltk.fegen.pyrt.terminalsrc.Span", label: typing.Optional[Label] = None) -> None:
+    def append(self, child: "fltk.fegen.pyrt.terminalsrc.Span", label: Label | None = None) -> None:
         self.children.append((label, child))
 
-    def extend(
-        self, children: typing.Iterable["fltk.fegen.pyrt.terminalsrc.Span"], label: typing.Optional[Label] = None
-    ) -> None:
+    def extend(self, children: typing.Iterable["fltk.fegen.pyrt.terminalsrc.Span"], label: Label | None = None) -> None:
         self.children.extend((label, child) for child in children)
 
-    def child(self) -> tuple[typing.Optional[Label], "fltk.fegen.pyrt.terminalsrc.Span"]:
+    def child(self) -> tuple[Label | None, "fltk.fegen.pyrt.terminalsrc.Span"]:
         if (n := len(self.children)) != 1:
             msg = f"Expected one child but have {n}"
             raise ValueError(msg)
@@ -812,24 +791,19 @@ class Identifier:
 
 @dataclasses.dataclass
 class RawString:
-
     class Label(enum.Enum):
         VALUE = enum.auto()
 
     span: fltk.fegen.pyrt.terminalsrc.Span = fltk.fegen.pyrt.terminalsrc.UnknownSpan
-    children: list[tuple[typing.Optional[Label], "fltk.fegen.pyrt.terminalsrc.Span"]] = dataclasses.field(
-        default_factory=list
-    )
+    children: list[tuple[Label | None, "fltk.fegen.pyrt.terminalsrc.Span"]] = dataclasses.field(default_factory=list)
 
-    def append(self, child: "fltk.fegen.pyrt.terminalsrc.Span", label: typing.Optional[Label] = None) -> None:
+    def append(self, child: "fltk.fegen.pyrt.terminalsrc.Span", label: Label | None = None) -> None:
         self.children.append((label, child))
 
-    def extend(
-        self, children: typing.Iterable["fltk.fegen.pyrt.terminalsrc.Span"], label: typing.Optional[Label] = None
-    ) -> None:
+    def extend(self, children: typing.Iterable["fltk.fegen.pyrt.terminalsrc.Span"], label: Label | None = None) -> None:
         self.children.extend((label, child) for child in children)
 
-    def child(self) -> tuple[typing.Optional[Label], "fltk.fegen.pyrt.terminalsrc.Span"]:
+    def child(self) -> tuple[Label | None, "fltk.fegen.pyrt.terminalsrc.Span"]:
         if (n := len(self.children)) != 1:
             msg = f"Expected one child but have {n}"
             raise ValueError(msg)
@@ -861,24 +835,19 @@ class RawString:
 
 @dataclasses.dataclass
 class Literal:
-
     class Label(enum.Enum):
         VALUE = enum.auto()
 
     span: fltk.fegen.pyrt.terminalsrc.Span = fltk.fegen.pyrt.terminalsrc.UnknownSpan
-    children: list[tuple[typing.Optional[Label], "fltk.fegen.pyrt.terminalsrc.Span"]] = dataclasses.field(
-        default_factory=list
-    )
+    children: list[tuple[Label | None, "fltk.fegen.pyrt.terminalsrc.Span"]] = dataclasses.field(default_factory=list)
 
-    def append(self, child: "fltk.fegen.pyrt.terminalsrc.Span", label: typing.Optional[Label] = None) -> None:
+    def append(self, child: "fltk.fegen.pyrt.terminalsrc.Span", label: Label | None = None) -> None:
         self.children.append((label, child))
 
-    def extend(
-        self, children: typing.Iterable["fltk.fegen.pyrt.terminalsrc.Span"], label: typing.Optional[Label] = None
-    ) -> None:
+    def extend(self, children: typing.Iterable["fltk.fegen.pyrt.terminalsrc.Span"], label: Label | None = None) -> None:
         self.children.extend((label, child) for child in children)
 
-    def child(self) -> tuple[typing.Optional[Label], "fltk.fegen.pyrt.terminalsrc.Span"]:
+    def child(self) -> tuple[Label | None, "fltk.fegen.pyrt.terminalsrc.Span"]:
         if (n := len(self.children)) != 1:
             msg = f"Expected one child but have {n}"
             raise ValueError(msg)
@@ -910,30 +879,29 @@ class Literal:
 
 @dataclasses.dataclass
 class Trivia:
-
     class Label(enum.Enum):
         BLOCK_COMMENT = enum.auto()
         LINE_COMMENT = enum.auto()
         WHITESPACE = enum.auto()
 
     span: fltk.fegen.pyrt.terminalsrc.Span = fltk.fegen.pyrt.terminalsrc.UnknownSpan
-    children: list[tuple[typing.Optional[Label], typing.Union["BlockComment", "LineComment", "Whitespace"]]] = (
-        dataclasses.field(default_factory=list)
+    children: list[tuple[Label | None, typing.Union["BlockComment", "LineComment", "Whitespace"]]] = dataclasses.field(
+        default_factory=list
     )
 
     def append(
-        self, child: typing.Union["BlockComment", "LineComment", "Whitespace"], label: typing.Optional[Label] = None
+        self, child: typing.Union["BlockComment", "LineComment", "Whitespace"], label: Label | None = None
     ) -> None:
         self.children.append((label, child))
 
     def extend(
         self,
         children: typing.Iterable[typing.Union["BlockComment", "LineComment", "Whitespace"]],
-        label: typing.Optional[Label] = None,
+        label: Label | None = None,
     ) -> None:
         self.children.extend((label, child) for child in children)
 
-    def child(self) -> tuple[typing.Optional[Label], typing.Union["BlockComment", "LineComment", "Whitespace"]]:
+    def child(self) -> tuple[Label | None, typing.Union["BlockComment", "LineComment", "Whitespace"]]:
         if (n := len(self.children)) != 1:
             msg = f"Expected one child but have {n}"
             raise ValueError(msg)
@@ -1015,24 +983,19 @@ class Trivia:
 
 @dataclasses.dataclass
 class Whitespace:
-
     class Label(enum.Enum):
         CONTENT = enum.auto()
 
     span: fltk.fegen.pyrt.terminalsrc.Span = fltk.fegen.pyrt.terminalsrc.UnknownSpan
-    children: list[tuple[typing.Optional[Label], "fltk.fegen.pyrt.terminalsrc.Span"]] = dataclasses.field(
-        default_factory=list
-    )
+    children: list[tuple[Label | None, "fltk.fegen.pyrt.terminalsrc.Span"]] = dataclasses.field(default_factory=list)
 
-    def append(self, child: "fltk.fegen.pyrt.terminalsrc.Span", label: typing.Optional[Label] = None) -> None:
+    def append(self, child: "fltk.fegen.pyrt.terminalsrc.Span", label: Label | None = None) -> None:
         self.children.append((label, child))
 
-    def extend(
-        self, children: typing.Iterable["fltk.fegen.pyrt.terminalsrc.Span"], label: typing.Optional[Label] = None
-    ) -> None:
+    def extend(self, children: typing.Iterable["fltk.fegen.pyrt.terminalsrc.Span"], label: Label | None = None) -> None:
         self.children.extend((label, child) for child in children)
 
-    def child(self) -> tuple[typing.Optional[Label], "fltk.fegen.pyrt.terminalsrc.Span"]:
+    def child(self) -> tuple[Label | None, "fltk.fegen.pyrt.terminalsrc.Span"]:
         if (n := len(self.children)) != 1:
             msg = f"Expected one child but have {n}"
             raise ValueError(msg)
@@ -1064,26 +1027,21 @@ class Whitespace:
 
 @dataclasses.dataclass
 class LineComment:
-
     class Label(enum.Enum):
         CONTENT = enum.auto()
         NEWLINE = enum.auto()
         PREFIX = enum.auto()
 
     span: fltk.fegen.pyrt.terminalsrc.Span = fltk.fegen.pyrt.terminalsrc.UnknownSpan
-    children: list[tuple[typing.Optional[Label], "fltk.fegen.pyrt.terminalsrc.Span"]] = dataclasses.field(
-        default_factory=list
-    )
+    children: list[tuple[Label | None, "fltk.fegen.pyrt.terminalsrc.Span"]] = dataclasses.field(default_factory=list)
 
-    def append(self, child: "fltk.fegen.pyrt.terminalsrc.Span", label: typing.Optional[Label] = None) -> None:
+    def append(self, child: "fltk.fegen.pyrt.terminalsrc.Span", label: Label | None = None) -> None:
         self.children.append((label, child))
 
-    def extend(
-        self, children: typing.Iterable["fltk.fegen.pyrt.terminalsrc.Span"], label: typing.Optional[Label] = None
-    ) -> None:
+    def extend(self, children: typing.Iterable["fltk.fegen.pyrt.terminalsrc.Span"], label: Label | None = None) -> None:
         self.children.extend((label, child) for child in children)
 
-    def child(self) -> tuple[typing.Optional[Label], "fltk.fegen.pyrt.terminalsrc.Span"]:
+    def child(self) -> tuple[Label | None, "fltk.fegen.pyrt.terminalsrc.Span"]:
         if (n := len(self.children)) != 1:
             msg = f"Expected one child but have {n}"
             raise ValueError(msg)
@@ -1161,26 +1119,21 @@ class LineComment:
 
 @dataclasses.dataclass
 class BlockComment:
-
     class Label(enum.Enum):
         CONTENT = enum.auto()
         END = enum.auto()
         START = enum.auto()
 
     span: fltk.fegen.pyrt.terminalsrc.Span = fltk.fegen.pyrt.terminalsrc.UnknownSpan
-    children: list[tuple[typing.Optional[Label], "fltk.fegen.pyrt.terminalsrc.Span"]] = dataclasses.field(
-        default_factory=list
-    )
+    children: list[tuple[Label | None, "fltk.fegen.pyrt.terminalsrc.Span"]] = dataclasses.field(default_factory=list)
 
-    def append(self, child: "fltk.fegen.pyrt.terminalsrc.Span", label: typing.Optional[Label] = None) -> None:
+    def append(self, child: "fltk.fegen.pyrt.terminalsrc.Span", label: Label | None = None) -> None:
         self.children.append((label, child))
 
-    def extend(
-        self, children: typing.Iterable["fltk.fegen.pyrt.terminalsrc.Span"], label: typing.Optional[Label] = None
-    ) -> None:
+    def extend(self, children: typing.Iterable["fltk.fegen.pyrt.terminalsrc.Span"], label: Label | None = None) -> None:
         self.children.extend((label, child) for child in children)
 
-    def child(self) -> tuple[typing.Optional[Label], "fltk.fegen.pyrt.terminalsrc.Span"]:
+    def child(self) -> tuple[Label | None, "fltk.fegen.pyrt.terminalsrc.Span"]:
         if (n := len(self.children)) != 1:
             msg = f"Expected one child but have {n}"
             raise ValueError(msg)

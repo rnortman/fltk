@@ -20,7 +20,7 @@ from fltk.iir.py import reg as pyreg
 LOG: Final = logging.getLogger(__name__)
 
 
-def create_parser_generator(grammar: gsm.Grammar, context: Optional[CompilerContext] = None) -> g2p.ParserGenerator:
+def create_parser_generator(grammar: gsm.Grammar, context: CompilerContext | None = None) -> g2p.ParserGenerator:
     """Helper function to create ParserGenerator with trivia rule added."""
     if context is None:
         context = create_default_context()

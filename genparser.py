@@ -5,10 +5,9 @@ Generates parsers from FLTK grammar files with options for trivia handling.
 
 import ast
 from pathlib import Path
-from typing import Optional
+from typing import Annotated
 
 import typer
-from typing_extensions import Annotated
 
 import fltk2gsm
 import fltk_parser
@@ -64,7 +63,7 @@ def generate_parser_files(
     cst_module_name: str,
     *,
     preserve_trivia: bool,
-    context: Optional[CompilerContext] = None,
+    context: CompilerContext | None = None,
 ) -> None:
     """Generate parser and CST files from grammar."""
     if context is None:
@@ -122,7 +121,7 @@ def generate_parser_only(
     cst_module_name: str,
     *,
     preserve_trivia: bool,
-    context: Optional[CompilerContext] = None,
+    context: CompilerContext | None = None,
 ) -> None:
     """Generate only a parser file using an existing CST module."""
     if context is None:
@@ -171,7 +170,7 @@ def generate(
     base_name: Annotated[str, typer.Argument(help="Base name for output files (without extension)")],
     cst_module_base: Annotated[str, typer.Argument(help="Base module name for CST classes")],
     output_dir: Annotated[
-        Optional[Path],
+        Path | None,
         typer.Option("--output-dir", "-o", help="Output directory for generated files"),
     ] = None,
     trivia_only: Annotated[

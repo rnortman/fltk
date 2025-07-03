@@ -1,9 +1,7 @@
 import ast
+from collections.abc import Iterable, Iterator, Mapping
 from typing import (
     TYPE_CHECKING,
-    Iterable,
-    Iterator,
-    Mapping,
     TypeVar,
     cast,
 )
@@ -166,7 +164,7 @@ def compile_class(klass: iir.ClassType, context: "CompilerContext") -> ast.Class
         result_ast.body.append(compile_function(method, context))
 
     assert all(  # noqa: S101
-        isinstance(attr, (iir.Field, iir.Method)) for attr in klass.block.get_leaf_scope().identifiers.values()
+        isinstance(attr, iir.Field | iir.Method) for attr in klass.block.get_leaf_scope().identifiers.values()
     )
     return result_ast
 
@@ -295,7 +293,7 @@ def compile_expr(expr: iir.Expr, context: "CompilerContext") -> str:
         return "self"
     if isinstance(expr, iir.MemberAccess):
         return f"{compile_expr(expr.bound_to, context)}.{expr.member_name}"
-    if isinstance(expr, (iir.Load, iir.Move)):
+    if isinstance(expr, iir.Load | iir.Move):
         return compile_expr(expr.ref, context)
     if isinstance(expr, iir.BinOp):
         return f"({compile_expr(expr.lhs, context)}) {expr.op} ({compile_expr(expr.rhs, context)})"
@@ -316,7 +314,7 @@ def compile_expr(expr: iir.Expr, context: "CompilerContext") -> str:
         return "None"
     if isinstance(expr, iir.Success):
         return compile_expr(expr.expr, context)
-    if isinstance(expr, (iir.LiteralString, iir.LiteralInt)):
+    if isinstance(expr, iir.LiteralString | iir.LiteralInt):
         return repr(expr.value)
     if isinstance(expr, iir.LiteralNull):
         return "None"
@@ -325,7 +323,7 @@ def compile_expr(expr: iir.Expr, context: "CompilerContext") -> str:
     if isinstance(expr, iir.LiteralMapping):
         args = [f"{compile_expr(key, context)}: {compile_expr(val, context)}" for key, val in expr.key_values]
         return f"{{{', '.join(args)}}}"
-    if isinstance(expr, (iir.VarByName, iir.Var)):
+    if isinstance(expr, iir.VarByName | iir.Var):
         return expr.name
     if isinstance(expr, iir.IsEmpty):
         return f"(len({compile_expr(expr.expr, context)}) == 0)"

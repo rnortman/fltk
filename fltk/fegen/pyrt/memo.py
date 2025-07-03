@@ -1,33 +1,27 @@
 import logging
-from abc import abstractmethod
+from collections.abc import Callable, MutableMapping
 from dataclasses import dataclass
 from typing import (
-    Callable,
-    Dict,
     Final,
     Generic,
-    List,
-    MutableMapping,
-    Optional,
     Protocol,
-    Set,
     TypeVar,
-    Union,
     cast,
 )
 
 LOG: Final = logging.getLogger(__name__)
 
 
-class ComparableProtocol(Protocol):
-    @abstractmethod
-    def __le__(self: "Comparable", other: "Comparable") -> bool: ...  # pragma: nocover
+class SupportsLessThan(Protocol):
+    """Protocol for types that support < comparison (like int)."""
+
+    def __le__(self, __other) -> bool: ...
 
 
-Comparable = TypeVar("Comparable", bound=ComparableProtocol)
+Comparable = TypeVar("Comparable", bound=SupportsLessThan)
 ResultType = TypeVar("ResultType")
 RuleId = TypeVar("RuleId")
-PosType = TypeVar("PosType", bound=ComparableProtocol)
+PosType = TypeVar("PosType", bound=SupportsLessThan)
 
 
 @dataclass
@@ -43,8 +37,8 @@ class RecursionInfo(Generic[RuleId]):
     """
 
     rule_id: RuleId
-    involved: Set[RuleId]
-    eval_set: Set[RuleId]
+    involved: set[RuleId]
+    eval_set: set[RuleId]
 
 
 @dataclass
@@ -59,12 +53,12 @@ class Poison(Generic[RuleId]):
         recursion_info: Active RecursionInfo, or None if no recursion in progress
     """
 
-    recursion_info: Optional[RecursionInfo[RuleId]]
+    recursion_info: RecursionInfo[RuleId] | None
 
 
 @dataclass
 class MemoEntry(Generic[RuleId, PosType, ResultType]):
-    result: Union[Poison[RuleId], Optional[ResultType]]
+    result: Poison[RuleId] | ResultType | None
     final_pos: PosType
 
 
@@ -77,13 +71,13 @@ class ApplyResult(Generic[PosType, ResultType]):
     result: ResultType
 
 
-RuleCallable = Callable[[PosType], Optional[ApplyResult[PosType, ResultType]]]
+RuleCallable = Callable[[PosType], ApplyResult[PosType, ResultType] | None]
 
 
 class Packrat(Generic[RuleId, PosType]):
     def __init__(self) -> None:
-        self.invocation_stack: List[RuleId] = []
-        self._recursions: Dict[PosType, RecursionInfo[RuleId]] = {}
+        self.invocation_stack: list[RuleId] = []
+        self._recursions: dict[PosType, RecursionInfo[RuleId]] = {}
 
     def apply(
         self,
@@ -91,11 +85,11 @@ class Packrat(Generic[RuleId, PosType]):
         rule_id: RuleId,
         rule_cache: CacheType[PosType, RuleId, ResultType],
         pos: PosType,
-    ) -> Optional[ApplyResult[PosType, ResultType]]:
+    ) -> ApplyResult[PosType, ResultType] | None:
         """Apply a parser rule with memoization and left-recursion support."""
         LOG.debug("apply_rule %d at %s", rule_id, pos)
         start_pos = pos
-        memo: Optional[MemoEntry[RuleId, PosType, ResultType]] = self._recall(
+        memo: MemoEntry[RuleId, PosType, ResultType] | None = self._recall(
             rule_callable, rule_id, rule_cache, start_pos
         )
         LOG.debug("apply_rule memo %s", memo)
@@ -167,7 +161,7 @@ class Packrat(Generic[RuleId, PosType]):
         rule_id: RuleId,
         rule_cache: CacheType[PosType, RuleId, ResultType],
         start_pos: PosType,
-    ) -> Optional[MemoEntry[RuleId, PosType, ResultType]]:
+    ) -> MemoEntry[RuleId, PosType, ResultType] | None:
         """Retrieve cache entries with seed-growing support.
 
         In the nominal case (no growth cycle in progress), this just returns a cache entry if one exists, or else None.

@@ -1,7 +1,8 @@
 from collections import defaultdict
+from collections.abc import Callable
 from dataclasses import dataclass, field
 from enum import Enum, auto
-from typing import Callable, Generic, TypeVar
+from typing import Generic, TypeVar
 
 from fltk.fegen.pyrt import terminalsrc
 
@@ -55,9 +56,9 @@ def format_error_message(
 ) -> str:
     error_linecol = terminals.pos_to_line_col(tracker.longest_parse_len)
     result = (
-        f"Syntax error at line {error_linecol.line+1} col {error_linecol.col+1}:\n"
-        f"{terminals.terminals[error_linecol.line_span.start:error_linecol.line_span.end]}\n"
-        f'{" "*error_linecol.col}^\n'
+        f"Syntax error at line {error_linecol.line + 1} col {error_linecol.col + 1}:\n"
+        f"{terminals.terminals[error_linecol.line_span.start : error_linecol.line_span.end]}\n"
+        f"{' ' * error_linecol.col}^\n"
         f"Expected:\n"
     )
     rule_tokens = defaultdict(set)

@@ -1,7 +1,7 @@
 import ast
 import textwrap
-from collections.abc import Sequence
-from typing import Iterable, TypeVar
+from collections.abc import Iterable, Sequence
+from typing import TypeVar
 
 _T = TypeVar("_T")
 
@@ -55,7 +55,7 @@ def dataclass(name: str, bases: Iterable[str] = ()) -> ast.ClassDef:
         textwrap.dedent(
             f"""
             @dataclasses.dataclass
-            class {name}({', '.join(bases)}):
+            class {name}({", ".join(bases)}):
                 pass
         """
         )
@@ -69,7 +69,7 @@ def klass(name: str, bases: Iterable[str] = ()) -> ast.ClassDef:
     tree = ast.parse(
         textwrap.dedent(
             f"""
-            class {name}({', '.join(bases)}):
+            class {name}({", ".join(bases)}):
                 pass
         """
         )

@@ -2,8 +2,9 @@ from __future__ import annotations
 
 import ast
 from collections import defaultdict
+from collections.abc import Iterable, MutableMapping, Sequence
 from dataclasses import dataclass, field
-from typing import TYPE_CHECKING, Iterable, Mapping, Sequence
+from typing import TYPE_CHECKING
 
 from fltk import pygen
 from fltk.fegen import gsm
@@ -20,7 +21,7 @@ ModelType = str | typemodel.TypeKey
 
 @dataclass()
 class ItemsModel:
-    labels: Mapping[str, set[ModelType]] = field(default_factory=lambda: defaultdict(set))
+    labels: MutableMapping[str, set[ModelType]] = field(default_factory=lambda: defaultdict(set))
     types: set[ModelType] = field(default_factory=set)
 
     def incorporate(self, other: ItemsModel):
@@ -222,7 +223,7 @@ class CstGenerator:
                 msg = f"Identifier {item.term.value} not in grammar"
                 raise ValueError(msg)
             return ItemsModel(types={item.term.value})
-        if isinstance(item.term, (gsm.Literal, gsm.Regex)):
+        if isinstance(item.term, gsm.Literal | gsm.Regex):
             return ItemsModel(types={self.Span.key})
         if isinstance(item.term, Sequence):
             return self.model_for_alternatives(item.term, inline_stack)

@@ -1,7 +1,7 @@
 import bisect
 import re
 from dataclasses import dataclass
-from typing import Final, Optional
+from typing import Final
 
 
 @dataclass(frozen=True, eq=True, slots=True)
@@ -28,7 +28,7 @@ class TerminalSource:
         self.terminals_len: Final = len(terminals)
         self.line_ends: list[int] = []
 
-    def consume_literal(self, pos: int, literal: str) -> Optional[Span]:
+    def consume_literal(self, pos: int, literal: str) -> Span | None:
         literal_len = len(literal)
         if pos + literal_len > self.terminals_len:
             return None
@@ -37,7 +37,7 @@ class TerminalSource:
                 return None
         return Span(pos, pos + len(literal))
 
-    def consume_regex(self, pos: int, regex: str) -> Optional[Span]:
+    def consume_regex(self, pos: int, regex: str) -> Span | None:
         if match := re.compile(regex).match(self.terminals, pos=pos):
             assert match.start() == pos  # noqa: S101
             return Span(pos, match.end())

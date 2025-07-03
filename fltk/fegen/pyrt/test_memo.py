@@ -1,7 +1,8 @@
 """Unit tests for memo.py"""
 
 import logging
-from typing import Callable, Final, Optional, Sequence, Tuple, TypeVar, Union
+from collections.abc import Callable, Sequence
+from typing import Final, TypeVar
 
 from fltk.fegen.pyrt import memo
 
@@ -14,13 +15,13 @@ def memoize(
     rule_id: int,
     get_rule_cache: Callable[["Parser"], memo.CacheType[int, int, ResultType]],
 ) -> Callable[
-    [Callable[["Parser", int], Optional[memo.ApplyResult[int, ResultType]]]],
-    Callable[["Parser", int], Optional[memo.ApplyResult[int, ResultType]]],
+    [Callable[["Parser", int], memo.ApplyResult[int, ResultType] | None]],
+    Callable[["Parser", int], memo.ApplyResult[int, ResultType] | None],
 ]:
     def deco(
-        func: Callable[["Parser", int], Optional[memo.ApplyResult[int, ResultType]]],
-    ) -> Callable[["Parser", int], Optional[memo.ApplyResult[int, ResultType]]]:
-        def wrapper(self: "Parser", pos: int) -> Optional[memo.ApplyResult[int, ResultType]]:
+        func: Callable[["Parser", int], memo.ApplyResult[int, ResultType] | None],
+    ) -> Callable[["Parser", int], memo.ApplyResult[int, ResultType] | None]:
+        def wrapper(self: "Parser", pos: int) -> memo.ApplyResult[int, ResultType] | None:
             result = self.packrat.apply(lambda pos: func(self, pos), rule_id, get_rule_cache(self), pos)
             LOG.debug("result %s at %d", result, pos)
             return result
@@ -30,7 +31,7 @@ def memoize(
     return deco
 
 
-ExprType = Union[int, str, Tuple["ExprType", str, int], Tuple["ExprType", str]]
+ExprType = int | str | tuple["ExprType", str, int] | tuple["ExprType", str]
 
 
 class Parser:
@@ -47,7 +48,7 @@ class Parser:
         self._cache3: memo.CacheType[int, int, ExprType] = {}
 
     @memoize(0, lambda self: self._cache0)
-    def rule_expr(self, pos: int) -> Optional[memo.ApplyResult[int, ExprType]]:
+    def rule_expr(self, pos: int) -> memo.ApplyResult[int, ExprType] | None:
         LOG.info("rule_expr starting %d %s", pos, self.tokens)
         start_pos = pos
         result = self.rule_expr(pos)
@@ -88,7 +89,7 @@ class Parser:
     # b := a | num
 
     @memoize(1, lambda self: self._cache1)
-    def indirect_a(self, pos: int) -> Optional[memo.ApplyResult[int, ExprType]]:
+    def indirect_a(self, pos: int) -> memo.ApplyResult[int, ExprType] | None:
         LOG.info("indirect_a starting %d %s", pos, self.tokens)
         result = self.indirect_b(pos)
         LOG.info("result %s", result)
@@ -113,7 +114,7 @@ class Parser:
         return None
 
     @memoize(2, lambda self: self._cache2)
-    def indirect_b(self, pos: int) -> Optional[memo.ApplyResult[int, ExprType]]:
+    def indirect_b(self, pos: int) -> memo.ApplyResult[int, ExprType] | None:
         LOG.info("indirect_b starting %d %s", pos, self.tokens)
         result = self.indirect_a(pos)
         if result is not None:
@@ -138,7 +139,7 @@ class Parser:
     # d := "d"
 
     @memoize(0, lambda self: self._cache0)
-    def multi_a(self, pos: int) -> Optional[memo.ApplyResult[int, ExprType]]:
+    def multi_a(self, pos: int) -> memo.ApplyResult[int, ExprType] | None:
         LOG.info("multi_a starting %d %s", pos, self.tokens)
         result = self.multi_b(pos) or self.multi_c(pos) or self.multi_d(pos)
         LOG.info("result %s", result)
@@ -169,7 +170,7 @@ class Parser:
         return None
 
     @memoize(1, lambda self: self._cache1)
-    def multi_b(self, pos: int) -> Optional[memo.ApplyResult[int, ExprType]]:
+    def multi_b(self, pos: int) -> memo.ApplyResult[int, ExprType] | None:
         LOG.info("multi_b starting %d %s", pos, self.tokens)
         result = self.multi_a(pos)
         LOG.info("result %s", result)
@@ -184,7 +185,7 @@ class Parser:
         return memo.ApplyResult(pos, (result0, "b"))
 
     @memoize(2, lambda self: self._cache2)
-    def multi_c(self, pos: int) -> Optional[memo.ApplyResult[int, ExprType]]:
+    def multi_c(self, pos: int) -> memo.ApplyResult[int, ExprType] | None:
         LOG.info("multi_c starting %d %s", pos, self.tokens)
         result = self.multi_a(pos)
         LOG.info("result %s", result)
@@ -199,7 +200,7 @@ class Parser:
         return memo.ApplyResult(pos, (result0, "c"))
 
     @memoize(3, lambda self: self._cache3)
-    def multi_d(self, pos: int) -> Optional[memo.ApplyResult[int, ExprType]]:
+    def multi_d(self, pos: int) -> memo.ApplyResult[int, ExprType] | None:
         LOG.info("multi_d starting %d %s", pos, self.tokens)
         if pos >= len(self.tokens):
             return None

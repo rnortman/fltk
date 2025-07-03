@@ -1,8 +1,9 @@
 from __future__ import annotations
 
 import itertools
+from collections.abc import Sequence
 from dataclasses import dataclass
-from typing import TYPE_CHECKING, Final, Sequence
+from typing import TYPE_CHECKING, Final
 
 from fltk.fegen import gsm, gsm2tree
 from fltk.iir import model as iir
@@ -234,9 +235,9 @@ class ParserGenerator:
                 self.key_items[key]
         except KeyError:
             pass
-        self.key_items[key] = item
-        self.item_keys[item] = key
-        return key
+        self.key_items[key] = item  # type: ignore[reportPossiblyUnboundVariable]
+        self.item_keys[item] = key  # type: ignore[reportPossiblyUnboundVariable]
+        return key  # type: ignore[reportPossiblyUnboundVariable]
 
     @dataclass(slots=True, frozen=True)
     class ConsumeTermInfo:
