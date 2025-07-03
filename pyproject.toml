@@ -6,12 +6,12 @@ build-backend = "setuptools.build_meta"
 name = "fltk"
 dynamic = []
 description = 'Formal Language ToolKit'
-version = "0.0.1"
+version = "0.1.0"
 requires-python = ">=3.10"
 license = "MIT"
 keywords = []
 authors = [
-  { name = "Randall Nortman", email = "rngithub@wonderclown.net" },
+  { name = "Randall Nortman", email = "github@randallnortman.net" },
 ]
 classifiers = [
   "Development Status :: 4 - Beta",
