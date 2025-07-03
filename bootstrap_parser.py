@@ -4,6 +4,7 @@ import typing
 import bootstrap_cst
 import fltk.fegen.pyrt.errors
 import fltk.fegen.pyrt.memo
+import fltk.fegen.pyrt.terminalsrc
 
 
 class Parser:

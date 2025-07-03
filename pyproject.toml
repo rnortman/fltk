@@ -44,7 +44,7 @@ lint = [
 
 [tool.pyright]
 pythonVersion = "3.10"
-include = ["fltk", "tests"]
+include = ["fltk", "*.py"]
 exclude = ["**/__pycache__"]
 stubPath = ""
 venvPath = ".venv"

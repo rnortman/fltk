@@ -46,6 +46,14 @@ class CstGenerator:
     def class_name_for_rule_node(self, rule_name: str) -> str:
         return "".join(part.capitalize() for part in rule_name.lower().split("_"))
 
+    def rule_has_whitespace_separators(self, rule: gsm.Rule) -> bool:
+        """Check if a rule has any whitespace separators that would allow trivia."""
+        for alternatives in rule.alternatives:
+            for separator in alternatives.sep_after:
+                if separator in (gsm.Separator.WS_REQUIRED, gsm.Separator.WS_ALLOWED):
+                    return True
+        return False
+
     def iir_type_for_rule(self, rule_name: str) -> iir.Type:
         try:
             return self.iir_types[rule_name]
@@ -271,5 +279,12 @@ class CstGenerator:
             return self.rule_models[rule.name]
         except KeyError:
             pass
-        self.rule_models[rule.name] = self.model_for_alternatives(rule.alternatives, inline_stack)
+        model = self.model_for_alternatives(rule.alternatives, inline_stack)
+
+        # Add trivia rule type if rule has whitespace separators
+        if self.rule_has_whitespace_separators(rule):
+            # Ensure the _trivia rule is processed and registered
+            model.incorporate(ItemsModel(types={"_trivia"}))
+
+        self.rule_models[rule.name] = model
         return self.rule_models[rule.name]

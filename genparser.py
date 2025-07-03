@@ -85,6 +85,7 @@ def generate_parser(
         pyreg.Module(("typing",)),
         pyreg.Module(("fltk", "fegen", "pyrt", "errors")),
         pyreg.Module(("fltk", "fegen", "pyrt", "memo")),
+        pyreg.Module(("fltk", "fegen", "pyrt", "terminalsrc")),
         cst_module,
     ]
 
