@@ -1,10 +1,10 @@
 import collections.abc
 import typing
 
-import bootstrap_cst
 import fltk.fegen.pyrt.errors
 import fltk.fegen.pyrt.memo
 import fltk.fegen.pyrt.terminalsrc
+from fltk.fegen import bootstrap_cst
 
 
 class Parser:

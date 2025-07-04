@@ -2,6 +2,12 @@
 
 ## [Unreleased]
 
+### Move python files out of repo root
+
+All python source was moved into the fltk package. This is a breaking change for
+anything directly referring to those files, though anything using the bazel
+rules will not need to change since the rules were updated as well.
+
 ## [0.1.1] - 2025-07-03
 
 Fix a regression caused by renaming the trivia rule to use all caps. This turns

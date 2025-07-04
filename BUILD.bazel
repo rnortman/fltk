@@ -10,7 +10,7 @@ lock(
 
 py_binary(
     name = "genparser",
-    srcs = ["genparser.py"],
+    srcs = ["fltk/fegen/genparser.py"],
     visibility = ["//visibility:public"],
     deps = [
         ":fltk",

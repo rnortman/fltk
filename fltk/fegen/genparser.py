@@ -9,10 +9,8 @@ from typing import Annotated
 
 import typer
 
-import fltk2gsm
-import fltk_parser
 from fltk import pygen
-from fltk.fegen import gsm, gsm2parser, gsm2tree
+from fltk.fegen import fltk2gsm, fltk_parser, gsm, gsm2parser, gsm2tree
 from fltk.fegen.pyrt import errors, terminalsrc
 from fltk.iir.context import CompilerContext, create_default_context
 from fltk.iir.py import compiler

@@ -2,10 +2,8 @@ import sys
 
 import astor  # type: ignore
 
-import bootstrap2gsm
-import bootstrap_parser
 from fltk import pygen
-from fltk.fegen import gsm, gsm2parser, gsm2tree
+from fltk.fegen import bootstrap2gsm, bootstrap_parser, gsm, gsm2parser, gsm2tree
 from fltk.fegen.pyrt import terminalsrc
 from fltk.iir.context import create_default_context
 from fltk.iir.py import compiler
