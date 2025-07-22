@@ -51,6 +51,7 @@ def parse_grammar_file(grammar_file: Path) -> gsm.Grammar:
 
     cst2gsm = fltk2gsm.Cst2Gsm(terminals.terminals)
     grammar = cst2gsm.visit_grammar(result.result)
+    grammar = gsm.classify_trivia_rules(gsm.add_trivia_rule_to_grammar(grammar, context=create_default_context()))
     return grammar
 
 
@@ -69,12 +70,12 @@ def generate_parser(
     # Set trivia capture flag based on user preference
     context.capture_trivia = preserve_trivia
 
-    enhanced_grammar = gsm.add_trivia_rule_to_grammar(grammar, context)
+    grammar = gsm.add_trivia_rule_to_grammar(grammar, context)
 
     # Generate parser (reusing existing CST module)
     cst_module = pyreg.Module(cst_module_name.split("."))
-    cstgen = gsm2tree.CstGenerator(grammar=enhanced_grammar, py_module=cst_module, context=context)
-    pgen = gsm2parser.ParserGenerator(grammar=enhanced_grammar, cstgen=cstgen, context=context)
+    cstgen = gsm2tree.CstGenerator(grammar=grammar, py_module=cst_module, context=context)
+    pgen = gsm2parser.ParserGenerator(grammar=grammar, cstgen=cstgen, context=context)
 
     # Compile parser class
     parser_ast = compiler.compile_class(pgen.parser_class, context)

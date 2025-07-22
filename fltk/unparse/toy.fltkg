@@ -1,0 +1,4 @@
+expr := term , (plus:"+" , term)*;
+term := factor , (mult:"*" , factor)*;
+factor := number | "(" , expr , ")";
+number := value:/[0-9]+/;

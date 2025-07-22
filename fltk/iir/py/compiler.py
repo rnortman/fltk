@@ -217,6 +217,9 @@ def compile_stmt(stmt: iir.Statement, context: "CompilerContext") -> Iterator[as
     if isinstance(stmt, iir.Return):
         yield ast.Return(pygen.expr(compile_expr(stmt.expr, context)))
         return
+    if isinstance(stmt, iir.Break):
+        yield ast.Break()
+        return
     if isinstance(stmt, iir.VarDef):
         typ = stmt.var.typ
 
@@ -297,6 +300,8 @@ def compile_expr(expr: iir.Expr, context: "CompilerContext") -> str:
         return compile_expr(expr.ref, context)
     if isinstance(expr, iir.BinOp):
         return f"({compile_expr(expr.lhs, context)}) {expr.op} ({compile_expr(expr.rhs, context)})"
+    if isinstance(expr, iir.UnaryOp):
+        return f"{expr.op}({compile_expr(expr.operand, context)})"
     if isinstance(expr, iir.Constant):
         return str(expr.val)
     if isinstance(expr, iir.MethodCall):
@@ -329,5 +334,11 @@ def compile_expr(expr: iir.Expr, context: "CompilerContext") -> str:
         return f"(len({compile_expr(expr.expr, context)}) == 0)"
     if isinstance(expr, iir.Subscript):
         return f"({compile_expr(expr.target, context)}[{compile_expr(expr.index, context)}])"
+
+    if isinstance(expr, iir.IsInstance):
+        return f"isinstance({compile_expr(expr.expr, context)}, {iir_type_to_py_constructor(expr.typ, context)})"
+
+    if isinstance(expr, iir.LogicalNegation):
+        return f"not ({compile_expr(expr.operand, context)})"
 
     raise AssertionError(repr(expr))

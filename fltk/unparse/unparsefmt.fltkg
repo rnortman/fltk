@@ -1,0 +1,67 @@
+// This is a grammar for unparser formatting specifications.
+// Unparsers are generated based on a source grammar and a formatting specification.
+// Formatting specifications are focused on how to handle trivia (whitespace).
+formatter := , statement*;
+
+statement := default | group | nest | join | after | before | rule_config | trivia_preserve | omit | render;
+
+default := (ws_allowed:"ws_allowed" | ws_required:"ws_required") , ":" , spacing , ";" ,;
+
+rule_config := "rule" , rule_name:identifier , "{" , (rule_statement ,)* , "}" ,;
+
+rule_statement := default | group | nest | join | after | before | omit | render;
+
+// "group" -> Entire body of rule is in a group
+// "group from [after] X" -> Group runs from X (inclusive unless "after") to end of rule
+// "group to [before] Y" -> Group runs from beginning to Y (inclusive unless "before")
+// "group from [after] X to [before] Y" -> Group runs from X to Y inclusive (unless after/before)
+group := "group" , ";" ,| "group" : from_spec? , to_spec? , ";" ,;
+nest := "nest" , ";" ,| "nest" : (indent:integer)? , from_spec? , to_spec? , ";" ,;
+join := "join" : from_spec? , to_spec? , doc_literal , ";" ,;
+
+from_spec := "from" : (after:"after" :)? . from_anchor:anchor;
+to_spec := "to" : (before:"before" :)? . to_anchor:anchor;
+
+// Items are selected either by their label or, for literals, the literal itself.
+anchor := label:identifier | literal ;
+
+// Specify handling of whitespace that comes after a specific item.
+after := "after" : anchor , "{" , position_spec_statement* , "}" , ";"? ,;
+
+// Specify handling of whitespace that comes before a specific item.
+before := "before" : anchor , "{" , position_spec_statement* , "}" , ";"? ,;
+
+// Specify that an item should be completely omitted from the unparsed output.
+omit := "omit" : anchor , ";" ,;
+
+// Specify that an item should be replaced with a specific spacing in the unparsed output.
+render := "render" : anchor , "as" : spacing , ";" ,;
+
+position_spec_statement := spacing , ";" ,;
+
+spacing := (
+    nil:"nil" // No space
+    | nbsp:"nbsp" // Non-Breaking space (always space)
+    | bsp:"bsp" // Breaking space (turns into either space or newline)
+    | soft:"soft" // Soft break (turns into either nil or newline)
+    | hard:"hard" // Always newline
+    | blank:"blank" . (, "(" , num_blanks:integer? , ")")? // Hard plus one or more blank lines
+  ) ;
+
+doc_literal := concat_literal | join_literal | compound_literal | text_literal | spacing ;
+text_literal := "text" , "(" , text:literal , ")" ;
+concat_literal := "concat" , "(" , doc_list_literal , ")" ;
+join_literal := "join" , "(" , separator:doc_literal , "," , doc_list_literal , ")" ;
+doc_list_literal := "[" , doc_literal , ("," , doc_literal)* , ","? , "]" ;
+compound_literal := (group:"group" | nest:"nest") , "(" , doc_literal , ")" ;
+
+trivia_preserve := "trivia_preserve" , ":" , trivia_node_list , ";" ,;
+
+trivia_node_list := identifier , ("," , identifier)* ;
+
+identifier := name:/[a-zA-Z_][a-zA-Z0-9_]*/;
+literal := value:/("([^"\n\\]|\\.)+"|'([^'\n\\]|\\.)+')/;
+integer := value:/[0-9]+/;
+
+_trivia := (line_comment | line_comment? :)+;
+line_comment := prefix:"//" . content:/[^\n]*/ . newline:"\n";

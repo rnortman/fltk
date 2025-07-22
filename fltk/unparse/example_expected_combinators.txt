@@ -1,0 +1,31 @@
+group([  # Yes, wrap the whole expression in a group!
+  concat([
+    text("1"),
+    line,           # soft break (not nbsp)
+    text("+"),
+    line,
+    text("2"),
+    line,
+    text("*"),
+    line,
+    text("3"),
+    line,
+    text("+"),
+    line,
+    group([         # The parenthesized expression
+      text("("),
+      nest(2, [
+        text("4"),
+        line,
+        text("+"),
+        line,
+        text("5"),
+        line,
+        text("*"),
+        line,
+        text("6"),
+      ]),
+      text(")"),
+    ]),
+  ])
+])

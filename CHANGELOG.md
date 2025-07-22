@@ -2,6 +2,53 @@
 
 ## [Unreleased]
 
+## [0.2.0]
+
+The main feature here is alpha-level support for generating unparsers and source
+code formatters from FLTK grammars. Various small bugs and enhancements are also
+included; see detailed chages in the changelog.
+
+### Utilities for dynamically generating and running parsers/unparsers
+
+There is a new `fltk.plumbing` module that makes it easy to dynamically generate
+and run parsers/unparsers, and also `unparse_cli` which lets you do this from
+the command line.
+
+### Detect repeated potentially-nil items
+
+If you have a rule like:
+
+foo := ("a"? ,)*;
+
+This can match the empty string an arbitrary number of times, which previously
+would lead to the parser hanging in an infinite loop. We fix this bug by
+detecting potentially-nil repeated items at parser generation time, making it
+easier to detect this grammar bug.
+
+### Unparser and Formatter support (alpha)
+
+A huge new feature: We can generate unparsers and formatters from FLTK grammars.
+This means that given a CST, you can generate source code that parses to that
+CST, meaning you can round-trip source and reformat it, as well as write
+refactoring tools that parse a file, modify the CST, and then write out the
+modified source without relying on fragile regex-based string matching and
+replacement.
+
+Unparsing will not always regenerate exactly the same source text, but it should
+regenerate something semantically equivalent (i.e., something that produces the
+same CST result). Formatting is based on Wadler-Lindig Pretty-Printing
+Combinators with some extensions, and is controlled by a new fltkfmt DSL.
+
+Unparsing and formatting support should be considered early alpha. It may be
+buggy and we may make breaking changes to the fltkfmt DSL or how it works.
+Unparsing is substantially more complex, it turns out, than parsing.
+
+### Allow leading whitespace/trivia
+
+Rule alternatives can now start with a separator spec to indicate leading
+trivia. In particular this is very useful for allowing the grammar as a whole to
+begin with trivia.
+
 ### Move python files out of repo root
 
 All python source was moved into the fltk package. This is a breaking change for

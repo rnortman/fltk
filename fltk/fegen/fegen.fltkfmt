@@ -1,0 +1,57 @@
+trivia_preserve: LineComment, BlockComment;
+
+ws_allowed: nil;
+ws_required: bsp;
+
+before ";" { nbsp; }
+after ";" { hard; }
+
+before "," { nbsp; }
+after "," { bsp; }
+before ":" { nbsp; }
+after ":" { bsp; }
+before "." { nbsp; }
+after "." { bsp; }
+
+rule rule
+{
+    group to ";";  // Exclude the hardline after the ";" from the group
+    nest from after ":=" to ";";
+    group from name to ":=";
+    after name { nbsp; }
+    after ":=" { bsp; }
+}
+
+rule alternatives
+{
+    group;
+    // When alternatives break, put the | before each alternative
+    before "|" { bsp; }
+    after "|" { nbsp; }
+}
+
+rule items
+{
+    group;
+    after item { nbsp; }
+}
+
+rule item
+{
+    after ":" { nil; }
+}
+
+rule term
+{
+    group;
+    after "/" { nil; }
+    before "/" { nil; }
+    after "(" { bsp; }
+    before ")" { bsp; }
+    nest from after "(" to before ")";
+}
+
+rule block_comment
+{
+    ws_allowed: nbsp;
+}

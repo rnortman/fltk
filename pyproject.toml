@@ -115,7 +115,6 @@ ban-relative-imports = "all"
 [tool.coverage.run]
 source_pkgs = ["fltk"]
 branch = true
-parallel = true
 omit = [
   "src/fltk/__about__.py",
 ]

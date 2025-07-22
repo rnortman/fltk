@@ -1,0 +1,15 @@
+ws_allowed: nbsp;
+
+// Spacing around operators
+rule expr {
+  term "+": { before: nbsp; after: nbsp; }
+}
+
+rule term {
+  term "*": { before: nbsp; after: nbsp; }
+}
+
+// Parentheses handling  
+rule factor {
+  between "(" ")": indent(2);
+}

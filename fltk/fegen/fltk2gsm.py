@@ -29,7 +29,27 @@ class Cst2Gsm:
     def visit_items(self, items: cst.Items) -> gsm.Items:
         gsm_items = []
         sep_after = []
-        for (item_label, item), (sep_label, _) in zip(items.children[::2], items.children[1::2], strict=False):
+        initial_sep = gsm.Separator.NO_WS
+
+        # Check if there's a leading separator
+        start_idx = 0
+        if items.children and items.children[0][0] in (
+            cst.Items.Label.NO_WS,
+            cst.Items.Label.WS_ALLOWED,
+            cst.Items.Label.WS_REQUIRED,
+        ):
+            sep_label, _ = items.children[0]
+            if sep_label == cst.Items.Label.WS_REQUIRED:
+                initial_sep = gsm.Separator.WS_REQUIRED
+            elif sep_label == cst.Items.Label.WS_ALLOWED:
+                initial_sep = gsm.Separator.WS_ALLOWED
+            else:
+                initial_sep = gsm.Separator.NO_WS
+            start_idx = 1
+
+        # Process items and separators
+        children = items.children[start_idx:]
+        for (item_label, item), (sep_label, _) in zip(children[::2], children[1::2], strict=False):
             assert item_label == cst.Items.Label.ITEM and isinstance(item, cst.Item)  # noqa: S101
             gsm_items.append(self.visit_item(item))
             if sep_label == cst.Items.Label.WS_REQUIRED:
@@ -39,13 +59,13 @@ class Cst2Gsm:
             else:
                 assert sep_label == cst.Items.Label.NO_WS  # noqa: S101
                 sep_after.append(gsm.Separator.NO_WS)
-        if (len(items.children) % 2) != 0:
-            item_label, item = items.children[-1]
+        if (len(children) % 2) != 0:
+            item_label, item = children[-1]
             assert item_label == cst.Items.Label.ITEM and isinstance(item, cst.Item)  # noqa: S101
             gsm_items.append(self.visit_item(item))
             sep_after.append(gsm.Separator.NO_WS)
         assert len(gsm_items) == len(sep_after)  # noqa: S101
-        return gsm.Items(items=gsm_items, sep_after=sep_after)
+        return gsm.Items(items=gsm_items, sep_after=sep_after, initial_sep=initial_sep)
 
     def visit_item(self, item: cst.Item) -> gsm.Item:
         term = self.visit_term(item.child_term())

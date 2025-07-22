@@ -314,6 +314,12 @@ class IsEmpty(Expr):
     expr: Expr
 
 
+@dataclass
+class IsInstance(Expr):
+    expr: Expr
+    typ: Type
+
+
 class SelfExpr(Expr):
     pass
 
@@ -699,6 +705,11 @@ class Return(Statement):
 
 
 @dataclass
+class Break(Statement):
+    pass
+
+
+@dataclass
 class ExprStatement(Statement):
     expr: Expr
 
@@ -716,6 +727,27 @@ class BinOp(Expr):
 
 
 @dataclass
+class UnaryOp(Expr):
+    operand: Expr
+    op: str
+
+
+@dataclass
+class LogicalNegation(Expr):
+    operand: Expr
+
+
+@dataclass
+class LogicalAnd(BinOp):
+    op: str = "and"
+
+
+@dataclass
+class LogicalOr(BinOp):
+    op: str = "or"
+
+
+@dataclass
 class GreaterThan(BinOp):
     op: str = ">"
 
@@ -723,6 +755,11 @@ class GreaterThan(BinOp):
 @dataclass
 class Subtract(BinOp):
     op: str = "-"
+
+
+@dataclass
+class Equals(BinOp):
+    op: str = "=="
 
 
 @dataclass

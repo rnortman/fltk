@@ -41,7 +41,11 @@ def test_single() -> None:
         term=gsm.Literal(LITERAL),
         quantifier=gsm.REQUIRED,
     )
-    parser_info = pgen.gen_item_parser(path=("itemfoo",), node_type=cast(iir.Type, None), item=item)
+
+    trivia_rule = pgen.grammar.identifiers[gsm.TRIVIA_RULE_NAME]
+    parser_info = pgen.gen_item_parser(
+        path=("itemfoo",), node_type=cast(iir.Type, None), item=item, current_rule=trivia_rule
+    )
     method = pgen.parser_class.block.get_leaf_scope().lookup(name=parser_info.apply_name, recursive=False)
     LOG.info("method: %s", method)
     assert isinstance(method, iir.Method)

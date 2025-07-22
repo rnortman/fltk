@@ -47,9 +47,9 @@ class CompilerContext:
     capture_trivia: bool = False
 
 
-def create_default_context() -> CompilerContext:
+def create_default_context(*, capture_trivia: bool = False) -> CompilerContext:
     """Create a default compiler context with standard type registrations."""
-    context = CompilerContext()
+    context = CompilerContext(capture_trivia=capture_trivia)
 
     # Register built-in types from model.py
     _register_builtin_types(context.python_type_registry)

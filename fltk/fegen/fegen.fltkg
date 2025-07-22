@@ -1,7 +1,9 @@
-grammar := rule? , rule+; // This construction allows leading trivia
+// FLTK grammar for FLTK grammars
+grammar := , rule+;
 rule := name:identifier , ":=" , alternatives , ";" ,;
-alternatives := items , ("|" , items)* ;
-items := item , ((no_ws:"." | ws_allowed:"," | ws_required:":") , item)* ,
+alternatives := items , ("|" , items , )* ;
+items := (no_ws:"." | ws_allowed:"," | ws_required:":")? ,
+    item , ((no_ws:"." | ws_allowed:"," | ws_required:":") , item ,)* ,
     (no_ws:"." | ws_allowed:"," | ws_required:":")? ,;
 item := (label:identifier . ":")? . disposition? . term . quantifier? ,;
 term := identifier | literal | "/" . regex:raw_string . "/" | "(" , alternatives , ")";
@@ -10,7 +12,6 @@ quantifier := optional:"?" | one_or_more:"+" | zero_or_more:"*";
 identifier := name:/[_a-z][_a-z0-9]*/;
 raw_string := value:/([^\/\n\\]|\\.)+/;
 literal := value:/("([^"\n\\]|\\.)+"|'([^'\n\\]|\\.)+')/;
-_trivia := (whitespace | line_comment | block_comment)+;
-whitespace := content:/\s+/;
-line_comment := prefix:"//" . content:/[^\n]*/ . newline:"\n";
-block_comment := start:"/*" , content:/[^*]*(?:\*(?!\/)[^*]*)*/ , end:"*/";
+_trivia := (line_comment | line_comment? : | block_comment)+;
+line_comment := prefix:"//" . content:/[^\n]*/ . "\n";
+block_comment := start:"/*" , content:/[^*]*(?:\*(?!\/)[^*]*)*/ . end:"*/";

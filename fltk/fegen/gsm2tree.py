@@ -48,10 +48,22 @@ class CstGenerator:
 
     def rule_has_whitespace_separators(self, rule: gsm.Rule) -> bool:
         """Check if a rule has any whitespace separators that would allow trivia."""
-        for alternatives in rule.alternatives:
+        return self._check_items_for_whitespace_separators(rule.alternatives)
+
+    def _check_items_for_whitespace_separators(self, alternatives_list: Sequence[gsm.Items]) -> bool:
+        """Recursively check Items for whitespace separators, including in sub-expressions."""
+        for alternatives in alternatives_list:
+            if alternatives.initial_sep in (gsm.Separator.WS_REQUIRED, gsm.Separator.WS_ALLOWED):
+                return True
+
             for separator in alternatives.sep_after:
                 if separator in (gsm.Separator.WS_REQUIRED, gsm.Separator.WS_ALLOWED):
                     return True
+
+            for item in alternatives.items:
+                if isinstance(item.term, list):  # Sub-expression is a list of Items
+                    if self._check_items_for_whitespace_separators(item.term):
+                        return True
         return False
 
     def iir_type_for_rule(self, rule_name: str) -> iir.Type:
@@ -281,10 +293,11 @@ class CstGenerator:
             pass
         model = self.model_for_alternatives(rule.alternatives, inline_stack)
 
-        # Add trivia rule type if rule has whitespace separators
         if self.rule_has_whitespace_separators(rule):
-            # Ensure the _trivia rule is processed and registered
-            model.incorporate(ItemsModel(types={"_trivia"}))
+            if rule.is_trivia_rule:
+                model.incorporate(ItemsModel(types={self.Span.key}))
+            else:
+                model.incorporate(ItemsModel(types={"_trivia"}))
 
         self.rule_models[rule.name] = model
         return self.rule_models[rule.name]

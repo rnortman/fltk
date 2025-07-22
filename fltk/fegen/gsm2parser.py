@@ -239,6 +239,7 @@ class ParserGenerator:
         path: tuple[str, ...],
         node_type: iir.Type,
         term: gsm.Term,
+        current_rule: gsm.Rule,
     ) -> ConsumeTermInfo:
         if isinstance(term, gsm.Identifier):
             parser_fn = self.parsers[(term.value,)]
@@ -286,7 +287,9 @@ class ParserGenerator:
                 inline_to_parent=False,
             )
         if isinstance(term, Sequence):
-            parser_fn = self.gen_alternatives_parser(path=(*path, "alts"), node_type=node_type, alternatives=term)
+            parser_fn = self.gen_alternatives_parser(
+                path=(*path, "alts"), node_type=node_type, alternatives=term, current_rule=current_rule
+            )
             return ParserGenerator.ConsumeTermInfo(
                 expr=iir.SelfExpr()
                 .method[parser_fn.apply_name]
@@ -403,23 +406,28 @@ class ParserGenerator:
             )
         return rule_callable, parser_info
 
-    def gen_item_parser(self, path: tuple[str, ...], node_type: iir.Type, item: gsm.Item) -> ParserFn:
+    def gen_item_parser(
+        self, path: tuple[str, ...], node_type: iir.Type, item: gsm.Item, current_rule: gsm.Rule
+    ) -> ParserFn:
         if item.quantifier.is_multiple():
-            return self.gen_item_parser_multiple(path, node_type, item)
+            return self.gen_item_parser_multiple(path, node_type, item, current_rule)
         else:
-            return self.gen_item_parser_single_or_optional(path, node_type, item)
+            return self.gen_item_parser_single_or_optional(path, node_type, item, current_rule)
 
     def gen_item_parser_single_or_optional(
         self,
         path: tuple[str, ...],
         node_type: iir.Type,
         item: gsm.Item,
+        current_rule: gsm.Rule,
     ) -> ParserFn:
         """
         def item_parser_single_or_optional(self, pos):
             return <consume_term_expr>
         """
-        consume_term = self._gen_consume_term_expr(path=path, node_type=node_type, term=item.term)
+        consume_term = self._gen_consume_term_expr(
+            path=path, node_type=node_type, term=item.term, current_rule=current_rule
+        )
         result, parser_info = self._gen_parser_callable(
             path=path,
             result_type=consume_term.result_type,
@@ -433,6 +441,7 @@ class ParserGenerator:
         path: tuple[str, ...],
         node_type: iir.Type,
         item: gsm.Item,
+        current_rule: gsm.Rule,
     ) -> ParserFn:
         """
         def item_parser_multiple(self, pos):
@@ -445,7 +454,9 @@ class ParserGenerator:
                     return None
             return memo.ApplyResult(pos, results)
         """
-        consume_term = self._gen_consume_term_expr(path=path, node_type=node_type, term=item.term)
+        consume_term = self._gen_consume_term_expr(
+            path=path, node_type=node_type, term=item.term, current_rule=current_rule
+        )
         result_type = node_type
         return_type = self.ApplyResultType.instantiate(pos_type=self.pos_type, result_type=result_type)
 
@@ -498,7 +509,10 @@ class ParserGenerator:
                 )
             )
         if item.quantifier.min() != gsm.Arity.ZERO:
-            result.block.if_(iir.IsEmpty(result_var.fld.children)).block.return_(iir.Failure(result_type))
+            # + quantifier: fail if no progress was made (position didn't advance)
+            result.block.if_(
+                iir.Equals(lhs=result.get_param("pos").load(), rhs=result_var.fld.span.fld.start)
+            ).block.return_(iir.Failure(result_type))
 
         result.block.assign(
             result_var.fld.span,
@@ -520,14 +534,93 @@ class ParserGenerator:
         )
         return parser_info
 
+    def _gen_separator_handling(
+        self,
+        *,
+        parser_block: iir.Block,
+        pos_var: iir.Var,
+        result_var: iir.Var,
+        separator: gsm.Separator,
+        var_name: str,
+        current_rule: gsm.Rule,
+        return_type: iir.Type,
+    ) -> None:
+        """Generate code to handle a separator (whitespace/trivia parsing).
+
+        Args:
+            parser_block: The block to add the separator handling code to
+            pos_var: Variable containing the current parsing position
+            result_var: Variable containing the result being built
+            separator: The separator type (NO_WS, WS_ALLOWED, WS_REQUIRED)
+            var_name: Name for the separator result variable
+            current_rule: Current rule being parsed (for trivia recursion detection)
+            return_type: Return type for early failure returns
+        """
+        if separator == gsm.Separator.NO_WS:
+            return
+
+        sep_ws_var = iir.Var(
+            name=var_name,
+            typ=self.ApplyResultType.instantiate(
+                pos_type=self.pos_type,
+                result_type=self.TerminalSpanType,
+            ),
+            ref_type=iir.RefType.VALUE,
+            mutable=True,
+        )
+
+        if current_rule.is_trivia_rule:
+            # For trivia rules, use basic regex to avoid recursion
+            trivia_pattern = r"\s+"
+            sep_if = parser_block.if_(
+                condition=iir.SelfExpr().method.consume_regex.call(
+                    pos=pos_var.load(), regex=iir.LiteralString(trivia_pattern)
+                ),
+                let=sep_ws_var,
+                orelse=(separator == gsm.Separator.WS_REQUIRED),
+            )
+            sep_if.block.assign(pos_var.store(), sep_ws_var.fld.pos.move())
+            # When trivia capture is enabled, add the parsed whitespace as a Span with no label
+            if self.context.capture_trivia:
+                sep_if.block.expr_stmt(
+                    result_var.method.append.call(
+                        child=sep_ws_var.fld.result.move(),
+                        label=iir.LiteralNull(),
+                    )
+                )
+        else:
+            # For non-trivia rules, use grammar-based trivia parsing
+            trivia_parser_info = self._cache_parser_info(
+                path=(gsm.TRIVIA_RULE_NAME,),
+                result_type=self.TriviaNodeType,
+                memoize=True,
+            )
+            sep_if = parser_block.if_(
+                condition=iir.SelfExpr().method[trivia_parser_info.apply_name].call(pos=pos_var.load()),
+                let=sep_ws_var,
+                orelse=(separator == gsm.Separator.WS_REQUIRED),
+            )
+            sep_if.block.assign(pos_var.store(), sep_ws_var.fld.pos.move())
+
+            if self.context.capture_trivia:
+                sep_if.block.expr_stmt(
+                    result_var.method.append.call(
+                        child=sep_ws_var.fld.result.move(),
+                        label=iir.LiteralNull(),
+                    )
+                )
+
+        if separator == gsm.Separator.WS_REQUIRED and isinstance(sep_if.orelse, iir.Block):
+            sep_if.orelse.return_(iir.Failure(return_type))
+
     def gen_alternatives_parser(
         self,
         *,
         path: tuple[str, ...],
         node_type: iir.Type,
         alternatives: Sequence[gsm.Items],
+        current_rule: gsm.Rule,
         memoize: bool = False,
-        current_rule: gsm.Rule | None = None,
     ) -> ParserFn:
         alternatives_parser, parser_info = self._gen_parser_callable(
             path=path,
@@ -558,7 +651,7 @@ class ParserGenerator:
         return parser_info
 
     def gen_alternative_parser(
-        self, path: tuple[str, ...], node_type: iir.Type, alternative: gsm.Items, current_rule: gsm.Rule | None = None
+        self, path: tuple[str, ...], node_type: iir.Type, alternative: gsm.Items, current_rule: gsm.Rule
     ) -> ParserFn:
         alt_parser, alt_parser_info = self._gen_parser_callable(
             path=path, result_type=node_type, mutable_pos=True, inline_to_parent=True
@@ -581,6 +674,17 @@ class ParserGenerator:
 
         return_type = self.ApplyResultType.instantiate(pos_type=self.pos_type, result_type=node_type)
 
+        # Handle initial separator if present
+        self._gen_separator_handling(
+            parser_block=alt_parser.block,
+            pos_var=alt_pos_var,
+            result_var=alt_result_var,
+            separator=alternative.initial_sep,
+            var_name="initial_ws",
+            current_rule=current_rule,
+            return_type=return_type,
+        )
+
         # Process each item in the alternative in order by calling item parser functions.
         # Successful item parses are appended to alt_result_var.
         # Failed parses of non-optional items result in early Failure return.
@@ -590,7 +694,7 @@ class ParserGenerator:
                 raise NotImplementedError(msg)
             # Create an item parser
             item_name = f"item{item_idx}"
-            item_parser = self.gen_item_parser((*path, item_name), node_type, item)
+            item_parser = self.gen_item_parser((*path, item_name), node_type, item, current_rule)
             item_result_var = iir.Var(
                 name=item_name,
                 typ=self.ApplyResultType.instantiate(pos_type=self.pos_type, result_type=item_parser.result_type),
@@ -623,54 +727,16 @@ class ParserGenerator:
                 assert isinstance(item_if.orelse, iir.Block)  # noqa: S101
                 item_if.orelse.return_(iir.Failure(return_type))
 
-            if (sep := alternative.sep_after[item_idx]) != gsm.Separator.NO_WS:
-                item_ws_var = iir.Var(
-                    name=f"ws_after__{item_name}",
-                    typ=self.ApplyResultType.instantiate(
-                        pos_type=self.pos_type,
-                        result_type=self.TerminalSpanType,
-                    ),
-                    ref_type=iir.RefType.VALUE,
-                    mutable=True,
-                )
-                # Choose trivia parsing strategy based on current rule
-                if current_rule and current_rule.is_trivia_rule:
-                    # For trivia rules, use basic regex to avoid recursion
-                    trivia_pattern = r"\s+"
-                    sep_if = alt_parser.block.if_(
-                        condition=iir.SelfExpr().method.consume_regex.call(
-                            pos=alt_pos_var.load(), regex=iir.LiteralString(trivia_pattern)
-                        ),
-                        let=item_ws_var,
-                        orelse=(sep == gsm.Separator.WS_REQUIRED),
-                    )
-                    sep_if.block.assign(alt_pos_var.store(), item_ws_var.fld.pos.move())
-                    # We don't capture trivia nodes inside trivia, even if capture_trivia is set.
-                else:
-                    # For non-trivia rules, use grammar-based trivia parsing
-                    trivia_parser_info = self._cache_parser_info(
-                        path=(gsm.TRIVIA_RULE_NAME,),
-                        result_type=self.TriviaNodeType,
-                        memoize=True,
-                    )
-                    sep_if = alt_parser.block.if_(
-                        condition=iir.SelfExpr().method[trivia_parser_info.apply_name].call(pos=alt_pos_var.load()),
-                        let=item_ws_var,
-                        orelse=(sep == gsm.Separator.WS_REQUIRED),
-                    )
-                    sep_if.block.assign(alt_pos_var.store(), item_ws_var.fld.pos.move())
-
-                    # Conditionally add trivia node if capture_trivia is enabled
-                    if self.context.capture_trivia:
-                        sep_if.block.expr_stmt(
-                            alt_result_var.method.append.call(
-                                child=item_ws_var.fld.result.move(),
-                                label=iir.LiteralNull(),
-                            )
-                        )
-
-                if sep == gsm.Separator.WS_REQUIRED and isinstance(sep_if.orelse, iir.Block):
-                    sep_if.orelse.return_(iir.Failure(return_type))
+            # Handle separator after this item
+            self._gen_separator_handling(
+                parser_block=alt_parser.block,
+                pos_var=alt_pos_var,
+                result_var=alt_result_var,
+                separator=alternative.sep_after[item_idx],
+                var_name=f"ws_after__{item_name}",
+                current_rule=current_rule,
+                return_type=return_type,
+            )
 
         # If we did not return early, then we succeeded.
         alt_parser.block.assign(

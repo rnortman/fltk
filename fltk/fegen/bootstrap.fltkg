@@ -1,7 +1,7 @@
 grammar := rule+;
 rule := name:identifier , ":=" , alternatives , ";" ,;
 alternatives := items , ("|" , items)* ;
-items := item , ((no_ws:"." | ws:",") , item)* , (no_ws:"." | ws:",")? ,;
+items := (no_ws:"." | ws:",")? , item , ((no_ws:"." | ws:",") , item)* , (no_ws:"." | ws:",")? ,;
 item := (label:identifier . ":")? . disposition? . term . quantifier? ,;
 term := identifier | literal | "/" . regex:raw_string . "/" | "(" , alternatives , ")";
 disposition := suppress:"%" | include:"$" | inline:"!";
