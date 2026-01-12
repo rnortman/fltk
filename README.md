@@ -16,72 +16,70 @@ A major secondary goal is to make the resulting syntax trees easy to work with a
 
 ## Quick Start
 
-### Basic Usage
-
-1. **Define a grammar** (`calc.fltkg`):
-```
-grammar := expression;
-expression := term , (("+" | "-") , term)*;
-term := factor , (("*" | "/") , factor)*;
-factor := number | "(" , expression , ")";
-number := /[0-9]+/;
-```
-
-2. **Generate parser**:
 ```python
-import fltk
+from fltk.plumbing import parse_grammar, generate_parser, parse_text
 
-# Generate parser from grammar
-parser_code = fltk.generate_parser("calc.fltkg")
-with open("calc_parser.py", "w") as f:
-    f.write(parser_code)
+# 1. Define your grammar
+grammar_text = """
+expr := term , ("+" , term)* ;
+term := factor , ("*" , factor)* ;
+factor := num:number | "(" , inner:expr , ")" ;
+number := value:/[0-9]+/ ;
+"""
+
+# 2. Parse the grammar and generate a parser
+grammar = parse_grammar(grammar_text)
+parser_result = generate_parser(grammar)
+
+# 3. Parse input text
+result = parse_text(parser_result, "3 + 4 * 2", "expr")
+
+if result.success:
+    print("Parsed successfully!")
+    # result.cst contains the CST
+    # result.terminals contains the source text
+else:
+    print(f"Parse error: {result.error_message}")
 ```
 
-3. **Use the parser**:
-```python
-from calc_parser import Parser
-import fltk.fegen.pyrt.terminalsrc as ts
-
-source = "3 + 4 * 2"
-parser = Parser(ts.StringTerminalSource(source))
-cst = parser.parse_grammar()
-print(cst)  # Parsed CST with full source tracking
-```
+For complete usage documentation, see [docs/usage.md](docs/usage.md).
 
 ## Grammar Syntax
 
-FLTK uses a powerful grammar notation with the following features:
+FLTK uses a powerful grammar notation. For complete documentation, see [docs/grammar-syntax.md](docs/grammar-syntax.md).
 
-### Basic Rules
+### Quick Reference
+
 ```
-rule_name := alternative1 | alternative2;
+rule_name := alternative1 | alternative2 ;
 ```
 
-### Item Separators
-- `.` - No whitespace allowed between items
-- `,` - Whitespace allowed between items  
-- `:` - Whitespace required between items
+**Separators** (whitespace control):
+- `.` - No whitespace allowed
+- `,` - Whitespace optional
+- `:` - Whitespace required
 
-### Quantifiers
+**Quantifiers**:
 - `?` - Optional (zero or one)
 - `+` - One or more
 - `*` - Zero or more
 
-### Dispositions
-- `%` - Suppress (don't include in CST)
-- `$` - Include (force include)
+**Dispositions**:
+- `%` - Suppress (exclude from CST)
+- `$` - Include (default)
 - `!` - Inline (flatten into parent)
 
-### Labels and Literals
+**Labels and Terms**:
 ```
-rule := label:identifier , "literal" , /regex_pattern/;
+rule := label:identifier , "literal" , /regex_pattern/ ;
 ```
 
-### Advanced Features
-```
-rule := method_call() | variable_ref;
-invocation := method:identifier . "(" , args:expression? , ")";
-```
+## Documentation
+
+- [Usage Guide](docs/usage.md) - How to use FLTK to parse text
+- [Grammar Syntax Reference](docs/grammar-syntax.md) - Complete reference for the `.fltkg` grammar notation
+- [CST Structure Guide](docs/cst-structure.md) - How grammars map to Concrete Syntax Trees
+- [Trivia Guide](docs/trivia-guide.md) - Handling whitespace and comments
 
 ## Architecture
 
