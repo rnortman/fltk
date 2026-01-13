@@ -50,24 +50,16 @@ def resolve_spacing_specs(doc: Doc) -> Doc:
     extracted_doc, leading, trailing = _extract_all_boundary_specs(expanded_doc)
     # Second pass: Pattern-based resolution
     if leading or trailing:
-        # If we have boundary specs at the top level, wrap in Concat to process them
+        # If we have boundary specs at the top level, flatten and process them
         all_docs = [*leading, extracted_doc, *trailing]
-        resolved_doc = _resolve_patterns(Concat(all_docs))
+        resolved_doc = _resolve_patterns(concat(all_docs))
     else:
         resolved_doc = _resolve_patterns(extracted_doc)
 
-    # import prettyprinter as pp
-    # pp.install_extras()
-    # print("BEFORE")
-    # pp.pprint(doc)
-    # print('EXPANDED')
-    # pp.pprint(expanded_doc)
-    # print("EXTRACTED")
-    # pp.pprint(extracted_doc)
-    # print("AFTER")
-    # pp.pprint(resolved_doc)
+    # Final pass: Collapse HardLine + Line/SoftLine sequences throughout the tree
+    final_doc = _collapse_hardline_sequences(resolved_doc)
 
-    return resolved_doc
+    return final_doc
 
 
 def _expand_joins(doc: Doc) -> Doc:
@@ -282,9 +274,54 @@ def _resolve_concat_patterns(docs: Sequence[Doc]) -> list[Doc]:
 
         # Step 4: If no mutator matched, pop and produce the head
         if not mutated:
-            output.append(working_set.popleft())
+            head = working_set.popleft()
+            output.append(head)
 
     return output
+
+
+def _collapse_hardline_sequences(doc: Doc) -> Doc:
+    """Recursively collapse HardLine + Line/SoftLine sequences throughout a Doc tree.
+
+    When a HardLine is followed by a soft line break, the soft break is redundant
+    because the HardLine already provides a line break. This commonly occurs when
+    preserved trivia (like a line comment) ends with a newline, and the formatter
+    adds its own separator afterward.
+    """
+    if isinstance(doc, Concat):
+        # First, recursively process children
+        processed_docs = [_collapse_hardline_sequences(d) for d in doc.docs]
+        # Then collapse HardLine + Line/SoftLine sequences
+        collapsed = _collapse_hardline_list(processed_docs)
+        return concat(collapsed)
+    elif isinstance(doc, Group):
+        return Group(_collapse_hardline_sequences(doc.content))
+    elif isinstance(doc, Nest):
+        return Nest(content=_collapse_hardline_sequences(doc.content), indent=doc.indent)
+    else:
+        # Leaf nodes pass through unchanged
+        return doc
+
+
+def _collapse_hardline_list(docs: list[Doc]) -> list[Doc]:
+    """Collapse HardLine + Line/SoftLine sequences in a list of docs."""
+    if len(docs) < 2:
+        return docs
+
+    result = []
+    i = 0
+    while i < len(docs):
+        doc = docs[i]
+        # Check if this is HardLine followed by Line/SoftLine
+        if isinstance(doc, HardLine) and i + 1 < len(docs) and isinstance(docs[i + 1], Line | SoftLine):
+            # Keep the HardLine, skip the soft break
+            result.append(doc)
+            i += 2  # Skip both HardLine and the soft break
+        else:
+            result.append(doc)
+            i += 1
+
+    return result
 
 
 def _mutate_after_sep_before(working_set: deque[Doc]) -> list[Doc] | None:
@@ -323,8 +360,17 @@ def _mutate_after_sep(working_set: deque[Doc]) -> list[Doc] | None:
             resolved_trivia = resolve_spacing_specs(sep_spec.preserved_trivia)
             return [resolved_trivia]
         elif sep_spec.spacing is not None or sep_spec.required:
-            # Use the after spacing
-            return [after_spec.spacing] if after_spec.spacing is not None else []
+            # Use after spacing, but preserve blank_lines from separator if it has more
+            result_spacing = after_spec.spacing
+            # Preserve blank_lines from separator if it's a HardLine with more blanks
+            if isinstance(sep_spec.spacing, HardLine) and sep_spec.spacing.blank_lines > 0:
+                after_has_fewer = (
+                    not isinstance(after_spec.spacing, HardLine)
+                    or after_spec.spacing.blank_lines < sep_spec.spacing.blank_lines
+                )
+                if after_has_fewer:
+                    result_spacing = sep_spec.spacing
+            return [result_spacing] if result_spacing is not None else []
         else:
             # No separator, ignore after spec
             return []
@@ -347,8 +393,17 @@ def _mutate_sep_before(working_set: deque[Doc]) -> list[Doc] | None:
             resolved_trivia = resolve_spacing_specs(sep_spec.preserved_trivia)
             return [resolved_trivia]
         elif sep_spec.spacing is not None or sep_spec.required:
-            # Use the before spacing
-            return [before_spec.spacing] if before_spec.spacing is not None else []
+            # Use before spacing, but preserve blank_lines from separator if it has more
+            result_spacing = before_spec.spacing
+            # Preserve blank_lines from separator if it's a HardLine with more blanks
+            if isinstance(sep_spec.spacing, HardLine) and sep_spec.spacing.blank_lines > 0:
+                before_has_fewer = (
+                    not isinstance(before_spec.spacing, HardLine)
+                    or before_spec.spacing.blank_lines < sep_spec.spacing.blank_lines
+                )
+                if before_has_fewer:
+                    result_spacing = sep_spec.spacing
+            return [result_spacing] if result_spacing is not None else []
         else:
             # No separator, ignore before spec
             return []

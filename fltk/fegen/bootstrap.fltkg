@@ -1,15 +1,21 @@
-grammar := rule+;
-rule := name:identifier , ":=" , alternatives , ";" ,;
-alternatives := items , ("|" , items)* ;
-items := (no_ws:"." | ws:",")? , item , ((no_ws:"." | ws:",") , item)* , (no_ws:"." | ws:",")? ,;
-item := (label:identifier . ":")? . disposition? . term . quantifier? ,;
-term := identifier | literal | "/" . regex:raw_string . "/" | "(" , alternatives , ")";
-disposition := suppress:"%" | include:"$" | inline:"!";
-quantifier := optional:"?" | one_or_more:"+" | zero_or_more:"*";
-identifier := name:/[_a-z][_a-z0-9]*/;
-raw_string := value:/([^\/\n\\]|\\.)+/;
-literal := value:/("([^"\n\\]|\\.)+"|'([^'\n\\]|\\.)+')/;
-_trivia := whitespace | line_comment | block_comment;
-whitespace := content:/\s+/;
-line_comment := prefix:"//" , content:/[^\n]*/ , newline:"\n";
-block_comment := start:"/*" , content:/[^*]*(?:\*(?!\/)[^*]*)*/ , end:"*/";
+grammar := rule+ ;
+rule := name:identifier , ":=" , alternatives , ";" , ;
+alternatives := items , ( "|" , items )* ;
+items :=
+  ( no_ws:"." | ws:"," )? ,
+  item ,
+  ( ( no_ws:"." | ws:"," ) , item )* ,
+  ( no_ws:"." | ws:"," )? ,
+  ;
+item := ( label:identifier . ":" )? . disposition? . term . quantifier? , ;
+term :=
+  identifier | literal | "/" . regex:raw_string . "/" | "(" , alternatives , ")" ;
+disposition := suppress:"%" | include:"$" | inline:"!" ;
+quantifier := optional:"?" | one_or_more:"+" | zero_or_more:"*" ;
+identifier := name:/[_a-z][_a-z0-9]*/ ;
+raw_string := value:/([^\/\n\\]|\\.)+/ ;
+literal := value:/("([^"\n\\]|\\.)+"|'([^'\n\\]|\\.)+')/ ;
+_trivia := whitespace | line_comment | block_comment ;
+whitespace := content:/\s+/ ;
+line_comment := prefix:"//" , content:/[^\n]*/ , newline:"\n" ;
+block_comment := start:"/*" , content:/[^*]*(?:\*(?!\/)[^*]*)*/ , end:"*/" ;

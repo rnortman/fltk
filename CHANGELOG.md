@@ -1,6 +1,25 @@
 # Changelog
 
+All notable changes to this project will be documented in this file.
+
+The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
+and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
+
 ## [Unreleased]
+
+### Added
+- `preserve_blanks: N` directive in format specs to preserve and normalize blank lines
+- Format specification documentation in docs/format-specs.md
+- CLI usage documentation in docs/usage.md
+
+### Fixed
+- Inline comments now stay on the same line as the code they comment
+- Extra blank lines no longer appear between alternatives with comments
+- Comments between rules now stay with the following rule, not the preceding one
+- Missing `classify_trivia_rules` call in `generate_unparser`
+
+### Changed
+- Reformatted all .fltkg grammar files using the FLTK formatter
 
 ## [0.2.0]
 

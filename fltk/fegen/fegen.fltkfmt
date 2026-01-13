@@ -1,4 +1,5 @@
 trivia_preserve: LineComment, BlockComment;
+preserve_blanks: 1;
 
 ws_allowed: nil;
 ws_required: bsp;
@@ -54,4 +55,9 @@ rule term
 rule block_comment
 {
     ws_allowed: nbsp;
+}
+
+rule _trivia
+{
+    ws_required: nbsp;
 }

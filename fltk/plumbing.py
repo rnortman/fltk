@@ -257,6 +257,7 @@ def generate_unparser(
     formatter_config = formatter_config or FormatterConfig()
 
     grammar_with_trivia = gsm.add_trivia_rule_to_grammar(grammar, context)
+    grammar_with_trivia = gsm.classify_trivia_rules(grammar_with_trivia)
 
     unparser_class, imports = gsm2unparser.generate_unparser(
         grammar_with_trivia,

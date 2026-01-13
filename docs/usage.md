@@ -446,6 +446,70 @@ output = render_doc(doc)
 print(output)  # "1 + 2 * (3 + 4)"
 ```
 
+## Formatting Files (CLI)
+
+FLTK includes a CLI tool for parsing and formatting files using a grammar and format specification:
+
+```bash
+uv run python -m fltk.unparse_cli GRAMMAR FORMAT_SPEC INPUT_FILE [OPTIONS]
+```
+
+### Formatting FLTK Grammar Files
+
+FLTK includes a formatter for `.fltkg` grammar files:
+
+```bash
+# Format a grammar file (output to stdout)
+uv run python -m fltk.unparse_cli \
+    fltk/fegen/fegen.fltkg \
+    fltk/fegen/fegen.fltkfmt \
+    mygrammar.fltkg
+
+# Format in place
+uv run python -m fltk.unparse_cli \
+    fltk/fegen/fegen.fltkg \
+    fltk/fegen/fegen.fltkfmt \
+    mygrammar.fltkg \
+    -o mygrammar.fltkg
+```
+
+### CLI Options
+
+| Option | Description |
+|--------|-------------|
+| `-o`, `--output FILE` | Write output to file (default: stdout) |
+| `-w`, `--width N` | Maximum line width (default: 80) |
+| `-i`, `--indent N` | Indent spacing (default: 2) |
+| `-r`, `--rule NAME` | Start rule name (default: first rule) |
+| `--generate-unparser FILE` | Write generated unparser source to file |
+| `--cst-module NAME` | CST module path (required with `--generate-unparser`) |
+
+### Format Specification Files
+
+Format specs (`.fltkfmt` files) control how the unparser formats output. See [Format Specification Files](format-specs.md) for complete documentation.
+
+Example (`fegen.fltkfmt`):
+
+```
+trivia_preserve: LineComment, BlockComment;
+preserve_blanks: 1;
+
+ws_allowed: nil;
+ws_required: bsp;
+
+after ";" { hard; }
+before "," { nbsp; }
+
+rule rule {
+    group to ";";
+    nest from after ":=" to ";";
+}
+```
+
+See the existing format specs in the repository for more examples:
+- `fltk/fegen/fegen.fltkfmt` - Format spec for grammar files
+- `fltk/unparse/toy.fltkfmt` - Simple example
+
 ## API Reference
 
 ### Functions

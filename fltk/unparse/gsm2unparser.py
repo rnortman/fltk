@@ -65,6 +65,8 @@ class UnparserGenerator:
             self._make_unparser_info(path=(rule_name,), result_type=self.maybe_unparse_result_type)
 
         self._gen_has_preservable_trivia_method()
+        self._gen_count_newlines_method()
+        self._gen_count_newlines_in_trivia_method()
 
         for rule in grammar.rules:
             self._generate_rule_unparser(rule)
@@ -908,6 +910,199 @@ class UnparserGenerator:
         method.block.return_(iir.FalseBool)
         return method
 
+    def _gen_count_newlines_method(self) -> iir.Method:
+        """Generate a method that counts newlines in a span's text.
+
+        This is used to:
+        1. Preserve line structure for comments that were on their own line (1+ newlines)
+        2. Preserve blank lines when configured (2+ newlines = at least 1 blank line)
+
+        Returns the count of newline characters in the span.
+        """
+        method = self.unparser_class.def_method(
+            name="_count_newlines",
+            return_type=iir.IndexInt,
+            params=[
+                iir.Param(
+                    name="span",
+                    typ=self.span_type,
+                    ref_type=iir.RefType.BORROW,
+                    mutable=False,
+                ),
+            ],
+            mutable_self=False,
+        )
+
+        # Get the span parameter
+        span_param = method.get_param("span")
+
+        # Access self.terminals
+        terminals_field = iir.SelfExpr().fld.terminals.load()
+
+        # Get start and end from span
+        span_start = span_param.load().fld.start.load()
+        span_end = span_param.load().fld.end.load()
+
+        # Initialize count to 0
+        count_var = method.block.var(
+            name="count",
+            typ=iir.IndexInt,
+            ref_type=iir.RefType.VALUE,
+            mutable=True,
+            init=iir.LiteralInt(typ=iir.IndexInt, value=0),
+        )
+
+        # Create loop index variable
+        idx_var = method.block.var(
+            name="idx",
+            typ=iir.IndexInt,
+            ref_type=iir.RefType.VALUE,
+            mutable=True,
+            init=span_start,
+        )
+
+        loop_condition = iir.BinOp(
+            lhs=idx_var.load(),
+            op="<",
+            rhs=span_end,
+        )
+
+        while_loop = method.block.while_(loop_condition)
+
+        # Get character at idx
+        char_at_idx = iir.Subscript(
+            target=terminals_field,
+            index=idx_var.load(),
+        )
+
+        # Check if it's a newline
+        is_newline = iir.BinOp(
+            lhs=char_at_idx,
+            op="==",
+            rhs=iir.LiteralString("\n"),
+        )
+
+        # If newline, increment count
+        if_newline = while_loop.block.if_(is_newline)
+        if_newline.block.assign(
+            count_var.store(),
+            iir.BinOp(
+                lhs=count_var.load(),
+                op="+",
+                rhs=iir.LiteralInt(typ=iir.IndexInt, value=1),
+            ),
+        )
+
+        # Increment idx
+        while_loop.block.assign(
+            idx_var.store(),
+            iir.BinOp(
+                lhs=idx_var.load(),
+                op="+",
+                rhs=iir.LiteralInt(typ=iir.IndexInt, value=1),
+            ),
+        )
+
+        # Return the count
+        method.block.return_(count_var.load())
+        return method
+
+    def _gen_count_newlines_in_trivia_method(self) -> iir.Method:
+        """Generate a method that counts newlines in a Trivia node's Span children.
+
+        This is used to detect blank lines in trivia when there are no preservable comments.
+        Returns the total count of newlines across all Span children.
+        """
+        trivia_type = self._get_trivia_type()
+        method = self.unparser_class.def_method(
+            name="_count_newlines_in_trivia",
+            return_type=iir.IndexInt,
+            params=[
+                iir.Param(
+                    name="trivia",
+                    typ=trivia_type,
+                    ref_type=iir.RefType.BORROW,
+                    mutable=False,
+                ),
+            ],
+            mutable_self=False,
+        )
+
+        trivia_param = method.get_param("trivia")
+
+        # Initialize count to 0
+        count_var = method.block.var(
+            name="count",
+            typ=iir.IndexInt,
+            ref_type=iir.RefType.VALUE,
+            mutable=True,
+            init=iir.LiteralInt(typ=iir.IndexInt, value=0),
+        )
+
+        # Get children count
+        children = trivia_param.load().fld.children.load()
+        children_count = self._get_len(children)
+
+        # Loop through children
+        idx_var = method.block.var(
+            name="idx",
+            typ=iir.IndexInt,
+            ref_type=iir.RefType.VALUE,
+            mutable=True,
+            init=iir.LiteralInt(typ=iir.IndexInt, value=0),
+        )
+
+        loop_condition = iir.BinOp(
+            lhs=idx_var.load(),
+            op="<",
+            rhs=children_count,
+        )
+
+        while_loop = method.block.while_(loop_condition)
+
+        # Get child at idx - it's a tuple (label, value)
+        child_tuple = iir.Subscript(
+            target=children,
+            index=idx_var.load(),
+        )
+        child_value = iir.Subscript(
+            target=child_tuple,
+            index=iir.LiteralInt(typ=iir.IndexInt, value=1),
+        )
+
+        # Check if child is a Span
+        span_type = iir.Type.make(cname="Span")
+        is_span = iir.IsInstance(expr=child_value, typ=span_type)
+
+        if_span = while_loop.block.if_(is_span)
+
+        # Count newlines in this span
+        newlines_in_span = iir.SelfExpr().method._count_newlines.call(child_value)
+
+        # Add to total count
+        if_span.block.assign(
+            count_var.store(),
+            iir.BinOp(
+                lhs=count_var.load(),
+                op="+",
+                rhs=newlines_in_span,
+            ),
+        )
+
+        # Increment idx
+        while_loop.block.assign(
+            idx_var.store(),
+            iir.BinOp(
+                lhs=idx_var.load(),
+                op="+",
+                rhs=iir.LiteralInt(typ=iir.IndexInt, value=1),
+            ),
+        )
+
+        # Return total count
+        method.block.return_(count_var.load())
+        return method
+
     def _get_trivia_child_type(self, node_name: str) -> iir.Type:
         """Get the type for a trivia child node by name."""
         # Cache trivia child types
@@ -984,7 +1179,17 @@ class UnparserGenerator:
 
             is_whitespace_span = iir.LogicalAnd(lhs=is_unlabeled, rhs=is_span_check)
 
-            if_whitespace = if_in_bounds.block.if_(is_whitespace_span, orelse=(separator == gsm.Separator.WS_REQUIRED))
+            # Always create an else block so we can handle both cases
+            if_whitespace = if_in_bounds.block.if_(is_whitespace_span, orelse=True)
+
+            # Store the span for newline check
+            span_var = if_whitespace.block.var(
+                name="whitespace_span",
+                typ=span_type,
+                ref_type=iir.RefType.VALUE,
+                mutable=False,
+                init=child_value,
+            )
 
             # Consume the whitespace span
             if_whitespace.block.assign(
@@ -996,20 +1201,104 @@ class UnparserGenerator:
                 ),
             )
 
-            # For WS_REQUIRED, check if we found whitespace and fail if not
+            # Count newlines in whitespace span
+            newline_count = iir.SelfExpr().method._count_newlines.call(span_var.load())
+
+            # Get preserve_blanks from config (generation-time constant)
+            preserve_blanks = 0
+            if self.formatter_config.trivia_config:
+                preserve_blanks = self.formatter_config.trivia_config.preserve_blanks
+
+            if preserve_blanks > 0:
+                # Check for blank lines (2+ newlines) first
+                has_blank_lines = iir.BinOp(
+                    lhs=newline_count,
+                    op=">=",
+                    rhs=iir.LiteralInt(typ=iir.IndexInt, value=2),
+                )
+                if_has_blank_lines = if_whitespace.block.if_(has_blank_lines, orelse=True)
+
+                # Emit HardLine with configured blank_lines count
+                self._add_separator_spec(
+                    if_has_blank_lines.block,
+                    accumulator_var,
+                    spacing=HardLine(blank_lines=preserve_blanks),
+                    preserved_trivia=None,
+                    required=(separator == gsm.Separator.WS_REQUIRED),
+                )
+
+                # Check for single newline (preserve line structure)
+                assert isinstance(if_has_blank_lines.orelse, iir.Block)  # noqa: S101
+                has_newline = iir.BinOp(
+                    lhs=newline_count,
+                    op=">=",
+                    rhs=iir.LiteralInt(typ=iir.IndexInt, value=1),
+                )
+                if_has_newline = if_has_blank_lines.orelse.if_(has_newline, orelse=True)
+
+                # Emit HardLine (no blank) for line structure
+                self._add_separator_spec(
+                    if_has_newline.block,
+                    accumulator_var,
+                    spacing=HARDLINE,
+                    preserved_trivia=None,
+                    required=(separator == gsm.Separator.WS_REQUIRED),
+                )
+
+                # No newlines - use configured spacing
+                assert isinstance(if_has_newline.orelse, iir.Block)  # noqa: S101
+                self._add_default_separator_spec(
+                    if_has_newline.orelse,
+                    accumulator_var,
+                    rule_name,
+                    separator,
+                )
+            else:
+                # preserve_blanks == 0: preserve line structure for comments (emit HardLine for newlines)
+                # This ensures comments that were on their own line stay on their own line
+                has_newline = iir.BinOp(
+                    lhs=newline_count,
+                    op=">=",
+                    rhs=iir.LiteralInt(typ=iir.IndexInt, value=1),
+                )
+                if_has_newline = if_whitespace.block.if_(has_newline, orelse=True)
+
+                # Emit HardLine to preserve line structure for comments
+                self._add_separator_spec(
+                    if_has_newline.block,
+                    accumulator_var,
+                    spacing=HARDLINE,
+                    preserved_trivia=None,
+                    required=(separator == gsm.Separator.WS_REQUIRED),
+                )
+
+                # No newlines - use configured spacing
+                assert isinstance(if_has_newline.orelse, iir.Block)  # noqa: S101
+                self._add_default_separator_spec(
+                    if_has_newline.orelse,
+                    accumulator_var,
+                    rule_name,
+                    separator,
+                )
+
+            # Handle the case where no whitespace span was found
+            assert isinstance(if_whitespace.orelse, iir.Block)  # noqa: S101
+            if separator == gsm.Separator.WS_REQUIRED:
+                # For WS_REQUIRED, fail if no whitespace found
+                if_whitespace.orelse.return_(iir.LiteralNull())
+            else:
+                # For WS_ALLOWED, emit default spacing
+                self._add_default_separator_spec(
+                    if_whitespace.orelse,
+                    accumulator_var,
+                    rule_name,
+                    separator,
+                )
+
+            # Also handle out of bounds case for WS_REQUIRED
             if separator == gsm.Separator.WS_REQUIRED:
                 assert isinstance(if_in_bounds.orelse, iir.Block)  # noqa: S101
                 if_in_bounds.orelse.return_(iir.LiteralNull())
-                assert isinstance(if_whitespace.orelse, iir.Block)  # noqa: S101
-                if_whitespace.orelse.return_(iir.LiteralNull())
-
-            # Always add the configured spacing
-            self._add_default_separator_spec(
-                method.block,
-                accumulator_var,
-                rule_name,
-                separator,
-            )
 
             return
 
@@ -1084,14 +1373,70 @@ class UnparserGenerator:
             required=(separator == gsm.Separator.WS_REQUIRED),
         )
 
-        # Else: no preservable content, add configured spacing
+        # Else: no preservable content, but check for blank lines
         assert isinstance(if_has_preservable.orelse, iir.Block)  # noqa: S101
-        self._add_default_separator_spec(
-            if_has_preservable.orelse,
-            accumulator_var,
-            rule_name,
-            separator,
-        )
+        no_preserve_block = if_has_preservable.orelse
+
+        # Get preserve_blanks from config (generation-time constant)
+        preserve_blanks = 0
+        if self.formatter_config.trivia_config:
+            preserve_blanks = self.formatter_config.trivia_config.preserve_blanks
+
+        # Count newlines in the trivia to check for blank lines
+        newline_count = iir.SelfExpr().method._count_newlines_in_trivia.call(trivia_var.load())
+
+        if preserve_blanks > 0:
+            # Check for blank lines (2+ newlines)
+            has_blank_lines = iir.BinOp(
+                lhs=newline_count,
+                op=">=",
+                rhs=iir.LiteralInt(typ=iir.IndexInt, value=2),
+            )
+            if_has_blank_lines = no_preserve_block.if_(has_blank_lines, orelse=True)
+
+            # Emit HardLine with configured blank_lines count
+            self._add_separator_spec(
+                if_has_blank_lines.block,
+                accumulator_var,
+                spacing=HardLine(blank_lines=preserve_blanks),
+                preserved_trivia=None,
+                required=(separator == gsm.Separator.WS_REQUIRED),
+            )
+
+            # Check for single newline (preserve line structure)
+            assert isinstance(if_has_blank_lines.orelse, iir.Block)  # noqa: S101
+            has_newline = iir.BinOp(
+                lhs=newline_count,
+                op=">=",
+                rhs=iir.LiteralInt(typ=iir.IndexInt, value=1),
+            )
+            if_has_newline = if_has_blank_lines.orelse.if_(has_newline, orelse=True)
+
+            # Emit HardLine (no blank) for line structure
+            self._add_separator_spec(
+                if_has_newline.block,
+                accumulator_var,
+                spacing=HARDLINE,
+                preserved_trivia=None,
+                required=(separator == gsm.Separator.WS_REQUIRED),
+            )
+
+            # No newlines - use configured spacing
+            assert isinstance(if_has_newline.orelse, iir.Block)  # noqa: S101
+            self._add_default_separator_spec(
+                if_has_newline.orelse,
+                accumulator_var,
+                rule_name,
+                separator,
+            )
+        else:
+            # preserve_blanks == 0: don't preserve any whitespace structure, use configured spacing
+            self._add_default_separator_spec(
+                no_preserve_block,
+                accumulator_var,
+                rule_name,
+                separator,
+            )
 
         # Always advance position past the trivia node
         if_trivia.block.assign(

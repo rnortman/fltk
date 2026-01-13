@@ -760,5 +760,370 @@ def test_trivia_rule_with_separators():
             del sys.modules[parser_result.cst_module_name]
 
 
+def test_inline_comment_stays_on_same_line():
+    """Test that inline comments stay on the same line as the code they comment.
+
+    Bug: Comments were being moved to a separate line before the code they comment.
+    Fix: Added `ws_required: nbsp` for the `_trivia` rule in format config.
+    """
+    from fltk.plumbing import parse_format_config, render_doc
+    from fltk.unparse.renderer import RendererConfig
+
+    # Use the real fegen grammar and format config for a realistic test
+    script_dir = Path(__file__).parent.parent / "fegen"
+    grammar = parse_grammar_file(script_dir / "fegen.fltkg")
+    parser_result = generate_parser(grammar, capture_trivia=True)
+    try:
+        from fltk.plumbing import parse_format_config_file, render_doc
+        from fltk.unparse.renderer import RendererConfig
+
+        fmt_config = parse_format_config_file(script_dir / "fegen.fltkfmt")
+        unparser_result = generate_unparser(
+            parser_result.grammar, parser_result.cst_module_name, formatter_config=fmt_config
+        )
+
+        # Input with inline comment - similar to the real bug case
+        test_input = 'r := a:"x" // comment\n    | b:"y" ;\n'
+        parse_result = parse_text(parser_result, test_input, "grammar")
+        assert parse_result.success, f"Failed to parse: {parse_result.error_message}"
+
+        doc = unparse_cst(unparser_result, parse_result.cst, test_input, "grammar")
+        output = render_doc(doc, RendererConfig(max_width=80))
+
+        # The comment should stay on the same line as a:"x"
+        assert ':"x" // comment' in output, f"Comment should stay inline. Got:\n{output}"
+        # The comment should NOT be on a line by itself before the code
+        lines = output.strip().split("\n")
+        for i, line in enumerate(lines):
+            if line.strip().startswith("//"):
+                # If a line starts with //, the previous line should not end with just the item
+                if i > 0:
+                    assert ':"x"' not in lines[i - 1] or "//" in lines[i - 1], (
+                        f"Comment on line {i} appears to be separated from code. Got:\n{output}"
+                    )
+
+    finally:
+        if parser_result.cst_module_name in sys.modules:
+            del sys.modules[parser_result.cst_module_name]
+
+
+def test_no_blank_lines_between_alternatives_with_comments():
+    """Test that there are no extra blank lines when alternatives have inline comments.
+
+    Bug: When an alternative had an inline comment, a blank line appeared before the
+    closing paren because HardLine (from comment's newline) + Line (from before ")")
+    produced two newlines.
+    Fix: Added post-processing to collapse HardLine + Line/SoftLine sequences.
+    """
+    # Use the real fegen grammar and format config for a realistic test
+    script_dir = Path(__file__).parent.parent / "fegen"
+    grammar = parse_grammar_file(script_dir / "fegen.fltkg")
+    parser_result = generate_parser(grammar, capture_trivia=True)
+    try:
+        from fltk.plumbing import parse_format_config_file, render_doc
+        from fltk.unparse.renderer import RendererConfig
+
+        fmt_config = parse_format_config_file(script_dir / "fegen.fltkfmt")
+        unparser_result = generate_unparser(
+            parser_result.grammar, parser_result.cst_module_name, formatter_config=fmt_config
+        )
+
+        # Input that triggers the bug: alternatives in parens with comments
+        # Needs to be long enough to force line breaking at narrow widths
+        # The last comment's newline (HardLine) + before ")" (Line) caused blank line
+        test_input = '''spacing := (
+    nil:"nil" // No space
+    | nbsp:"nbsp" // Non-Breaking space (always space)
+    | bsp:"bsp" // Breaking space (turns into either space or newline)
+  ) ;
+'''
+        parse_result = parse_text(parser_result, test_input, "grammar")
+        assert parse_result.success, f"Failed to parse: {parse_result.error_message}"
+
+        doc = unparse_cst(unparser_result, parse_result.cst, test_input, "grammar")
+        # Use width 40 which forces line breaking and triggers the bug
+        output = render_doc(doc, RendererConfig(max_width=40))
+
+        # Check for blank lines (lines that are empty or whitespace-only)
+        lines = output.split("\n")
+        for i, line in enumerate(lines):
+            assert line.strip() != "" or i == len(lines) - 1, (
+                f"Found blank line at position {i} in output:\n{output}"
+            )
+
+    finally:
+        if parser_result.cst_module_name in sys.modules:
+            del sys.modules[parser_result.cst_module_name]
+
+
+def test_comment_between_rules_stays_with_following_rule():
+    """Test that a comment on its own line between rules stays associated with the following rule.
+
+    Bug: Comments that appear on their own line between two rules were being associated
+    with the preceding rule (as trailing trivia) instead of the following rule (as leading
+    trivia). This caused the comment to appear at the end of the previous rule's line
+    after formatting.
+
+    Example input:
+        rule1 := "a" ;
+
+        // This comment describes rule2
+        rule2 := "b" ;
+
+    Expected output (comment stays before rule2):
+        rule1 := "a" ;
+        // This comment describes rule2
+        rule2 := "b" ;
+
+    Bug output (comment moved to end of rule1):
+        rule1 := "a" ; // This comment describes rule2
+        rule2 := "b" ;
+    """
+    script_dir = Path(__file__).parent.parent / "fegen"
+    grammar = parse_grammar_file(script_dir / "fegen.fltkg")
+    parser_result = generate_parser(grammar, capture_trivia=True)
+    try:
+        from fltk.plumbing import parse_format_config_file, render_doc
+        from fltk.unparse.renderer import RendererConfig
+
+        fmt_config = parse_format_config_file(script_dir / "fegen.fltkfmt")
+        unparser_result = generate_unparser(
+            parser_result.grammar, parser_result.cst_module_name, formatter_config=fmt_config
+        )
+
+        # Input with a comment on its own line between two rules
+        test_input = '''rule1 := "a" ;
+
+// This comment describes rule2
+rule2 := "b" ;
+'''
+        parse_result = parse_text(parser_result, test_input, "grammar")
+        assert parse_result.success, f"Failed to parse: {parse_result.error_message}"
+
+        doc = unparse_cst(unparser_result, parse_result.cst, test_input, "grammar")
+        output = render_doc(doc, RendererConfig(max_width=80))
+
+        # The comment should appear on its own line before rule2, not at the end of rule1
+        lines = output.strip().split("\n")
+
+        # Find the line with the comment
+        comment_line_idx = None
+        for i, line in enumerate(lines):
+            if "// This comment describes rule2" in line:
+                comment_line_idx = i
+                break
+
+        assert comment_line_idx is not None, f"Comment not found in output:\n{output}"
+
+        # The comment should be on its own line, not at the end of rule1
+        comment_line = lines[comment_line_idx]
+        assert comment_line.strip().startswith("//"), (
+            f"Comment should be at the start of its line, not trailing. Got:\n{output}"
+        )
+
+        # The comment line should NOT contain rule1's content
+        assert 'rule1' not in comment_line and '"a"' not in comment_line, (
+            f"Comment should not be on the same line as rule1. Got:\n{output}"
+        )
+
+        # The line after the comment should be rule2
+        if comment_line_idx + 1 < len(lines):
+            next_line = lines[comment_line_idx + 1]
+            assert "rule2" in next_line, (
+                f"rule2 should follow the comment. Got:\n{output}"
+            )
+
+    finally:
+        if parser_result.cst_module_name in sys.modules:
+            del sys.modules[parser_result.cst_module_name]
+
+
+# Tests for preserve_blanks feature
+# These tests verify blank line preservation and normalization
+
+
+def test_preserve_blanks_default_collapses_blanks():
+    """Test that by default (no preserve_blanks directive), blank lines are collapsed.
+
+    When preserve_blanks is not configured (default 0), multiple newlines in the source
+    should not result in blank lines in the output - they get replaced with configured spacing.
+    """
+    script_dir = Path(__file__).parent.parent / "fegen"
+    grammar = parse_grammar_file(script_dir / "fegen.fltkg")
+    parser_result = generate_parser(grammar, capture_trivia=True)
+    try:
+        from fltk.plumbing import parse_format_config, render_doc
+        from fltk.unparse.renderer import RendererConfig
+
+        # Use a format config WITHOUT preserve_blanks to test default behavior
+        fmt_config = parse_format_config("""
+trivia_preserve: LineComment, BlockComment;
+ws_allowed: nil;
+ws_required: bsp;
+after ";" { hard; }
+""")
+        unparser_result = generate_unparser(
+            parser_result.grammar, parser_result.cst_module_name, formatter_config=fmt_config
+        )
+
+        # Input with blank lines between rules
+        test_input = '''rule1 := "a" ;
+
+
+rule2 := "b" ;
+'''
+        parse_result = parse_text(parser_result, test_input, "grammar")
+        assert parse_result.success, f"Failed to parse: {parse_result.error_message}"
+
+        doc = unparse_cst(unparser_result, parse_result.cst, test_input, "grammar")
+        output = render_doc(doc, RendererConfig(max_width=80))
+
+        # Count blank lines in output
+        lines = output.strip().split("\n")
+        blank_count = sum(1 for line in lines if line.strip() == "")
+
+        # With default (preserve_blanks: 0), blank lines should be collapsed
+        # The exact behavior depends on ws_required setting, but there shouldn't be
+        # the original blank line preserved
+        assert blank_count == 0, f"Expected no blank lines with default config, got {blank_count}:\n{output}"
+
+    finally:
+        if parser_result.cst_module_name in sys.modules:
+            del sys.modules[parser_result.cst_module_name]
+
+
+def test_preserve_blanks_one_normalizes_to_single_blank():
+    """Test that preserve_blanks: 1 normalizes multiple blanks to exactly 1.
+
+    When preserve_blanks is 1, any number of blank lines (2+ newlines) in the source
+    should become exactly 1 blank line in the output.
+    """
+    script_dir = Path(__file__).parent.parent / "fegen"
+    grammar = parse_grammar_file(script_dir / "fegen.fltkg")
+    parser_result = generate_parser(grammar, capture_trivia=True)
+    try:
+        from fltk.plumbing import parse_format_config_file, render_doc
+        from fltk.unparse.renderer import RendererConfig
+
+        fmt_config = parse_format_config_file(script_dir / "fegen.fltkfmt")
+        # Set preserve_blanks to 1
+        fmt_config.trivia_config.preserve_blanks = 1
+
+        unparser_result = generate_unparser(
+            parser_result.grammar, parser_result.cst_module_name, formatter_config=fmt_config
+        )
+
+        # Input with multiple blank lines between rules
+        test_input = '''rule1 := "a" ;
+
+
+
+rule2 := "b" ;
+'''
+        parse_result = parse_text(parser_result, test_input, "grammar")
+        assert parse_result.success, f"Failed to parse: {parse_result.error_message}"
+
+        doc = unparse_cst(unparser_result, parse_result.cst, test_input, "grammar")
+        output = render_doc(doc, RendererConfig(max_width=80))
+
+        # Count blank lines in output
+        lines = output.strip().split("\n")
+        blank_count = sum(1 for line in lines if line.strip() == "")
+
+        # With preserve_blanks: 1, should have exactly 1 blank line
+        assert blank_count == 1, f"Expected exactly 1 blank line with preserve_blanks: 1, got {blank_count}:\n{output}"
+
+    finally:
+        if parser_result.cst_module_name in sys.modules:
+            del sys.modules[parser_result.cst_module_name]
+
+
+def test_preserve_blanks_no_source_blanks_no_output_blanks():
+    """Test that preserve_blanks doesn't ADD blanks where none exist in source.
+
+    When preserve_blanks is 1 but source has no blank lines (only single newlines),
+    the output should not have blank lines added.
+    """
+    script_dir = Path(__file__).parent.parent / "fegen"
+    grammar = parse_grammar_file(script_dir / "fegen.fltkg")
+    parser_result = generate_parser(grammar, capture_trivia=True)
+    try:
+        from fltk.plumbing import parse_format_config_file, render_doc
+        from fltk.unparse.renderer import RendererConfig
+
+        fmt_config = parse_format_config_file(script_dir / "fegen.fltkfmt")
+        # Set preserve_blanks to 1
+        fmt_config.trivia_config.preserve_blanks = 1
+
+        unparser_result = generate_unparser(
+            parser_result.grammar, parser_result.cst_module_name, formatter_config=fmt_config
+        )
+
+        # Input with NO blank lines - just single newlines
+        test_input = '''rule1 := "a" ;
+rule2 := "b" ;
+'''
+        parse_result = parse_text(parser_result, test_input, "grammar")
+        assert parse_result.success, f"Failed to parse: {parse_result.error_message}"
+
+        doc = unparse_cst(unparser_result, parse_result.cst, test_input, "grammar")
+        output = render_doc(doc, RendererConfig(max_width=80))
+
+        # Count blank lines in output
+        lines = output.strip().split("\n")
+        blank_count = sum(1 for line in lines if line.strip() == "")
+
+        # With no source blanks, should have no output blanks (preserve_blanks doesn't add)
+        assert blank_count == 0, f"Expected no blank lines when source has none, got {blank_count}:\n{output}"
+
+    finally:
+        if parser_result.cst_module_name in sys.modules:
+            del sys.modules[parser_result.cst_module_name]
+
+
+def test_preserve_blanks_two_normalizes_to_two_blanks():
+    """Test that preserve_blanks: 2 normalizes any blanks to exactly 2.
+
+    When preserve_blanks is 2, any number of blank lines in source should become
+    exactly 2 blank lines in output.
+    """
+    script_dir = Path(__file__).parent.parent / "fegen"
+    grammar = parse_grammar_file(script_dir / "fegen.fltkg")
+    parser_result = generate_parser(grammar, capture_trivia=True)
+    try:
+        from fltk.plumbing import parse_format_config_file, render_doc
+        from fltk.unparse.renderer import RendererConfig
+
+        fmt_config = parse_format_config_file(script_dir / "fegen.fltkfmt")
+        # Set preserve_blanks to 2
+        fmt_config.trivia_config.preserve_blanks = 2
+
+        unparser_result = generate_unparser(
+            parser_result.grammar, parser_result.cst_module_name, formatter_config=fmt_config
+        )
+
+        # Input with just 1 blank line (but we want 2 in output)
+        test_input = '''rule1 := "a" ;
+
+rule2 := "b" ;
+'''
+        parse_result = parse_text(parser_result, test_input, "grammar")
+        assert parse_result.success, f"Failed to parse: {parse_result.error_message}"
+
+        doc = unparse_cst(unparser_result, parse_result.cst, test_input, "grammar")
+        output = render_doc(doc, RendererConfig(max_width=80))
+
+        # Count blank lines in output
+        lines = output.strip().split("\n")
+        blank_count = sum(1 for line in lines if line.strip() == "")
+
+        # With preserve_blanks: 2, should have exactly 2 blank lines
+        assert blank_count == 2, f"Expected exactly 2 blank lines with preserve_blanks: 2, got {blank_count}:\n{output}"
+
+    finally:
+        if parser_result.cst_module_name in sys.modules:
+            del sys.modules[parser_result.cst_module_name]
+
+
 if __name__ == "__main__":
     pytest.main([__file__, "-v"])

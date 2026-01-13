@@ -39,6 +39,12 @@ class TriviaConfig:
     # If empty, all trivia is discarded. If None, all trivia is preserved.
     preserve_node_names: set[str] | None = field(default_factory=set)
 
+    # Blank line preservation: 0 = don't preserve (default), N > 0 = normalize blanks to N
+    # When preserve_blanks > 0, blank lines (2+ consecutive newlines) in source are
+    # preserved but normalized to exactly preserve_blanks blank lines.
+    # When preserve_blanks == 0, blank lines are collapsed (not preserved).
+    preserve_blanks: int = 0
+
 
 class ItemSelector(Enum):
     """Type of item selector for anchor points."""
@@ -128,6 +134,9 @@ class RuleConfig:
     # Key format: "{position}:{selector_type}:{selector_value}"
     # Examples: "after:label:condition", "before:literal:(", "before:rule_start:"
     anchor_configs: dict[str, AnchorConfig] = field(default_factory=dict)
+
+    # Per-rule blank line preservation: None = use global, 0 = don't preserve, N > 0 = normalize to N
+    preserve_blanks: int | None = None
 
 
 @dataclass
@@ -284,6 +293,28 @@ class FormatterConfig:
                 return op.spacing
         return None
 
+    def get_preserve_blanks(self, rule_name: str) -> int:
+        """Get the effective preserve_blanks value for a rule.
+
+        Checks rule-specific config first, then falls back to global trivia_config.
+
+        Args:
+            rule_name: Name of the grammar rule
+
+        Returns:
+            preserve_blanks value: 0 = don't preserve, N > 0 = normalize to N blanks
+        """
+        # Check for rule-specific config
+        rule_config = self.rule_configs.get(rule_name)
+        if rule_config and rule_config.preserve_blanks is not None:
+            return rule_config.preserve_blanks
+
+        # Fall back to global config
+        if self.trivia_config:
+            return self.trivia_config.preserve_blanks
+
+        return 0  # Default: don't preserve blanks
+
     def get_item_disposition(self, rule_name: str, item: gsm.Item) -> Normal | Omit | RenderAs:
         """Get the disposition for an item in the unparsed output.
 
@@ -435,6 +466,25 @@ def _process_trivia_preserve_statement(
         node_names.add(node_name)
 
     config.trivia_config = TriviaConfig(preserve_node_names=node_names)
+
+
+def _process_preserve_blanks_statement(
+    preserve_blanks: fmt_cst.PreserveBlanks, config: FormatterConfig, terminal_src: TerminalSource
+) -> None:
+    """Process a PreserveBlanks statement and update the config's trivia_config.
+
+    This handles the global-level preserve_blanks directive.
+    """
+    count_int = preserve_blanks.child_count()
+    count_span = count_int.child_value()
+    count_text = terminal_src.terminals[count_span.start : count_span.end]
+    count = int(count_text)
+
+    # Ensure trivia_config exists
+    if config.trivia_config is None:
+        config.trivia_config = TriviaConfig()
+
+    config.trivia_config.preserve_blanks = count
 
 
 def _process_after_statement(
@@ -773,6 +823,11 @@ def fmt_cst_to_config(formatter: fmt_cst.Formatter, terminal_src: TerminalSource
             _process_trivia_preserve_statement(trivia_preserve, config, terminal_src)
             continue
 
+        preserve_blanks = statement.maybe_preserve_blanks()
+        if preserve_blanks:
+            _process_preserve_blanks_statement(preserve_blanks, config, terminal_src)
+            continue
+
         omit = statement.maybe_omit()
         if omit:
             _process_omit_statement(omit, config, terminal_src)
@@ -828,6 +883,14 @@ def fmt_cst_to_config(formatter: fmt_cst.Formatter, terminal_src: TerminalSource
                 rule_render = rule_statement.maybe_render()
                 if rule_render:
                     _process_render_statement(rule_render, rule_config, terminal_src)
+                    continue
+
+                rule_preserve_blanks = rule_statement.maybe_preserve_blanks()
+                if rule_preserve_blanks:
+                    count_int = rule_preserve_blanks.child_count()
+                    count_span = count_int.child_value()
+                    count_text = terminal_src.terminals[count_span.start : count_span.end]
+                    rule_config.preserve_blanks = int(count_text)
                     continue
 
     return config
