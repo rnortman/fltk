@@ -1,20 +1,20 @@
 def _genparser_impl(ctx):
     args = ctx.actions.args()
     args.add_all([ctx.file.src, ctx.attr.base_name, ctx.attr.cst_mod_path])
-    
-    # Set output directory to current package directory
-    args.add_all(["--output-dir", ctx.bin_dir.path + "/" + ctx.label.package])
-    
+
+    # Auto-compute output file names based on base_name
+    cst_file = ctx.actions.declare_file(ctx.attr.base_name + "_cst.py")
+    outputs = [cst_file]
+
+    # Set output directory to where Bazel will place the declared files
+    args.add_all(["--output-dir", cst_file.dirname])
+
     # Control which parsers to generate
     if ctx.attr.trivia_only:
         args.add("--trivia-only")
     elif ctx.attr.no_trivia_only:
         args.add("--no-trivia-only")
     # Default generates both parsers
-
-    # Auto-compute output file names based on base_name
-    cst_file = ctx.actions.declare_file(ctx.attr.base_name + "_cst.py")
-    outputs = [cst_file]
     
     # Conditionally declare parser outputs based on configuration
     if not ctx.attr.trivia_only:

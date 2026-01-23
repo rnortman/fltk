@@ -23,6 +23,7 @@ py_library(
     name = "fltk",
     srcs = glob(["**/*.py"]),
     data = ["fltk/py.typed"],
+    imports = ["."],
     visibility = ["//visibility:public"],
 )
 

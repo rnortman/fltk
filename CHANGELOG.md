@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+- Bazel rules now work when fltk is used as a submodule (use `cst_file.dirname` for output path)
+- Add `imports = ["."]` to py_library for correct Python imports when used as submodule
+
 ### Added
 - `preserve_blanks: N` directive in format specs to preserve and normalize blank lines
 - Format specification documentation in docs/format-specs.md
