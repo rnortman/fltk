@@ -207,7 +207,6 @@ def generate(
             preserve_trivia=True,
         )
 
-    # Success message
     if verbose:
         typer.echo("✓ Parser generation completed successfully")
         typer.echo(f"Shared CST: {shared_cst}")
@@ -215,9 +214,6 @@ def generate(
             typer.echo(f"Non-trivia parser: {output_dir / f'{base_name}_parser.py'}")
         if generate_trivia:
             typer.echo(f"Trivia parser: {output_dir / f'{base_name}_trivia_parser.py'}")
-    else:
-        parser_count = sum([generate_no_trivia, generate_trivia])
-        typer.echo(f"Generated {parser_count} parser{'s' if parser_count != 1 else ''} successfully")
 
 
 if __name__ == "__main__":
