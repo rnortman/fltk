@@ -104,6 +104,18 @@ The `.fltkg` grammar format supports:
 - Black line length: 120 characters
 - Target Python version: 3.10+
 
+## Architecture Decision Records (ADRs)
+
+Significant or hard-to-reverse decisions get an ADR. Store them at `docs/adr/YYYY/MM/DD-slug/`, where the date is the decision date and `slug` is a short kebab-case name (e.g. `docs/adr/2026/05/25-rust-build-system/`). Each ADR directory holds one or more `*.md` files (typically `README.md` for the decision itself; add others for supporting notes or diagrams). An ADR records context, the decision, and consequences. Treat accepted ADRs as immutable — supersede with a new ADR rather than rewriting history.
+
+## TODO System
+
+Two pieces that stay in sync:
+- `TODO.md` at the repo root — master list. Each entry has a slug, a description, and the deferral context.
+- `TODO(slug)` comments in code — mark the spot where the work needs to happen.
+
+Slugs are the join key. Adding a TODO requires both an entry in `TODO.md` and a `TODO(slug)` comment at the relevant location. Don't use TODOs for vague aspirations — every TODO should describe a concrete thing that needs to happen, in a place where "done" is obvious.
+
 ## Working tips
 
 Always read the entire file when reading a source file.

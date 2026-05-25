@@ -1,4 +1,5 @@
 {
+  "agent": "review-chain:orchestrator",
   "hooks": {
     "PostToolUse": [
       {
