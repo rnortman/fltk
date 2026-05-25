@@ -26,6 +26,8 @@ from fltk.unparse.combinators import (
     concat,
 )
 
+_MIN_COLLAPSIBLE_LENGTH: Final = 2
+
 
 def resolve_spacing_specs(doc: Doc) -> Doc:
     """Post-process a Doc tree to resolve control nodes.
@@ -305,7 +307,7 @@ def _collapse_hardline_sequences(doc: Doc) -> Doc:
 
 def _collapse_hardline_list(docs: list[Doc]) -> list[Doc]:
     """Collapse HardLine + Line/SoftLine sequences in a list of docs."""
-    if len(docs) < 2:
+    if len(docs) < _MIN_COLLAPSIBLE_LENGTH:
         return docs
 
     result = []

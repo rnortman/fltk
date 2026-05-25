@@ -9,13 +9,17 @@ import pytest
 from fltk.plumbing import (
     generate_parser,
     generate_unparser,
+    parse_format_config,
+    parse_format_config_file,
     parse_grammar,
     parse_grammar_file,
     parse_text,
+    render_doc,
     unparse_cst,
 )
 from fltk.unparse.combinators import LINE, Concat, Line, Text, concat
 from fltk.unparse.fmt_config import FormatterConfig, TriviaConfig
+from fltk.unparse.renderer import RendererConfig
 
 
 @pytest.fixture
@@ -766,17 +770,11 @@ def test_inline_comment_stays_on_same_line():
     Bug: Comments were being moved to a separate line before the code they comment.
     Fix: Added `ws_required: nbsp` for the `_trivia` rule in format config.
     """
-    from fltk.plumbing import parse_format_config, render_doc
-    from fltk.unparse.renderer import RendererConfig
-
     # Use the real fegen grammar and format config for a realistic test
     script_dir = Path(__file__).parent.parent / "fegen"
     grammar = parse_grammar_file(script_dir / "fegen.fltkg")
     parser_result = generate_parser(grammar, capture_trivia=True)
     try:
-        from fltk.plumbing import parse_format_config_file, render_doc
-        from fltk.unparse.renderer import RendererConfig
-
         fmt_config = parse_format_config_file(script_dir / "fegen.fltkfmt")
         unparser_result = generate_unparser(
             parser_result.grammar, parser_result.cst_module_name, formatter_config=fmt_config
@@ -820,9 +818,6 @@ def test_no_blank_lines_between_alternatives_with_comments():
     grammar = parse_grammar_file(script_dir / "fegen.fltkg")
     parser_result = generate_parser(grammar, capture_trivia=True)
     try:
-        from fltk.plumbing import parse_format_config_file, render_doc
-        from fltk.unparse.renderer import RendererConfig
-
         fmt_config = parse_format_config_file(script_dir / "fegen.fltkfmt")
         unparser_result = generate_unparser(
             parser_result.grammar, parser_result.cst_module_name, formatter_config=fmt_config
@@ -831,12 +826,12 @@ def test_no_blank_lines_between_alternatives_with_comments():
         # Input that triggers the bug: alternatives in parens with comments
         # Needs to be long enough to force line breaking at narrow widths
         # The last comment's newline (HardLine) + before ")" (Line) caused blank line
-        test_input = '''spacing := (
+        test_input = """spacing := (
     nil:"nil" // No space
     | nbsp:"nbsp" // Non-Breaking space (always space)
     | bsp:"bsp" // Breaking space (turns into either space or newline)
   ) ;
-'''
+"""
         parse_result = parse_text(parser_result, test_input, "grammar")
         assert parse_result.success, f"Failed to parse: {parse_result.error_message}"
 
@@ -883,20 +878,17 @@ def test_comment_between_rules_stays_with_following_rule():
     grammar = parse_grammar_file(script_dir / "fegen.fltkg")
     parser_result = generate_parser(grammar, capture_trivia=True)
     try:
-        from fltk.plumbing import parse_format_config_file, render_doc
-        from fltk.unparse.renderer import RendererConfig
-
         fmt_config = parse_format_config_file(script_dir / "fegen.fltkfmt")
         unparser_result = generate_unparser(
             parser_result.grammar, parser_result.cst_module_name, formatter_config=fmt_config
         )
 
         # Input with a comment on its own line between two rules
-        test_input = '''rule1 := "a" ;
+        test_input = """rule1 := "a" ;
 
 // This comment describes rule2
 rule2 := "b" ;
-'''
+"""
         parse_result = parse_text(parser_result, test_input, "grammar")
         assert parse_result.success, f"Failed to parse: {parse_result.error_message}"
 
@@ -922,7 +914,7 @@ rule2 := "b" ;
         )
 
         # The comment line should NOT contain rule1's content
-        assert 'rule1' not in comment_line and '"a"' not in comment_line, (
+        assert "rule1" not in comment_line and '"a"' not in comment_line, (
             f"Comment should not be on the same line as rule1. Got:\n{output}"
         )
 
@@ -952,9 +944,6 @@ def test_preserve_blanks_default_collapses_blanks():
     grammar = parse_grammar_file(script_dir / "fegen.fltkg")
     parser_result = generate_parser(grammar, capture_trivia=True)
     try:
-        from fltk.plumbing import parse_format_config, render_doc
-        from fltk.unparse.renderer import RendererConfig
-
         # Use a format config WITHOUT preserve_blanks to test default behavior
         fmt_config = parse_format_config("""
 trivia_preserve: LineComment, BlockComment;
@@ -967,11 +956,11 @@ after ";" { hard; }
         )
 
         # Input with blank lines between rules
-        test_input = '''rule1 := "a" ;
+        test_input = """rule1 := "a" ;
 
 
 rule2 := "b" ;
-'''
+"""
         parse_result = parse_text(parser_result, test_input, "grammar")
         assert parse_result.success, f"Failed to parse: {parse_result.error_message}"
 
@@ -1002,10 +991,8 @@ def test_preserve_blanks_one_normalizes_to_single_blank():
     grammar = parse_grammar_file(script_dir / "fegen.fltkg")
     parser_result = generate_parser(grammar, capture_trivia=True)
     try:
-        from fltk.plumbing import parse_format_config_file, render_doc
-        from fltk.unparse.renderer import RendererConfig
-
         fmt_config = parse_format_config_file(script_dir / "fegen.fltkfmt")
+        assert fmt_config.trivia_config is not None
         # Set preserve_blanks to 1
         fmt_config.trivia_config.preserve_blanks = 1
 
@@ -1014,12 +1001,12 @@ def test_preserve_blanks_one_normalizes_to_single_blank():
         )
 
         # Input with multiple blank lines between rules
-        test_input = '''rule1 := "a" ;
+        test_input = """rule1 := "a" ;
 
 
 
 rule2 := "b" ;
-'''
+"""
         parse_result = parse_text(parser_result, test_input, "grammar")
         assert parse_result.success, f"Failed to parse: {parse_result.error_message}"
 
@@ -1048,10 +1035,8 @@ def test_preserve_blanks_no_source_blanks_no_output_blanks():
     grammar = parse_grammar_file(script_dir / "fegen.fltkg")
     parser_result = generate_parser(grammar, capture_trivia=True)
     try:
-        from fltk.plumbing import parse_format_config_file, render_doc
-        from fltk.unparse.renderer import RendererConfig
-
         fmt_config = parse_format_config_file(script_dir / "fegen.fltkfmt")
+        assert fmt_config.trivia_config is not None
         # Set preserve_blanks to 1
         fmt_config.trivia_config.preserve_blanks = 1
 
@@ -1060,9 +1045,9 @@ def test_preserve_blanks_no_source_blanks_no_output_blanks():
         )
 
         # Input with NO blank lines - just single newlines
-        test_input = '''rule1 := "a" ;
+        test_input = """rule1 := "a" ;
 rule2 := "b" ;
-'''
+"""
         parse_result = parse_text(parser_result, test_input, "grammar")
         assert parse_result.success, f"Failed to parse: {parse_result.error_message}"
 
@@ -1091,10 +1076,8 @@ def test_preserve_blanks_two_normalizes_to_two_blanks():
     grammar = parse_grammar_file(script_dir / "fegen.fltkg")
     parser_result = generate_parser(grammar, capture_trivia=True)
     try:
-        from fltk.plumbing import parse_format_config_file, render_doc
-        from fltk.unparse.renderer import RendererConfig
-
         fmt_config = parse_format_config_file(script_dir / "fegen.fltkfmt")
+        assert fmt_config.trivia_config is not None
         # Set preserve_blanks to 2
         fmt_config.trivia_config.preserve_blanks = 2
 
@@ -1103,10 +1086,10 @@ def test_preserve_blanks_two_normalizes_to_two_blanks():
         )
 
         # Input with just 1 blank line (but we want 2 in output)
-        test_input = '''rule1 := "a" ;
+        test_input = """rule1 := "a" ;
 
 rule2 := "b" ;
-'''
+"""
         parse_result = parse_text(parser_result, test_input, "grammar")
         assert parse_result.success, f"Failed to parse: {parse_result.error_message}"
 
