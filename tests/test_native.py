@@ -1,7 +1,7 @@
-import pytest
-
-native = pytest.importorskip("fltk._native", reason="Rust extension not built — run `maturin develop`")
+import fltk._native as native
 
 
-def test_ping():
-    assert native.Ping().pong() == "pong"
+def test_module_importable():
+    assert native.Span is not None
+    assert native.UnknownSpan is not None
+    assert native.SourceText is not None
