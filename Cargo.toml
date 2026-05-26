@@ -1,0 +1,15 @@
+[package]
+name = "fltk-native"
+version = "0.1.0"
+edition = "2021"
+
+[lib]
+name = "fltk_native"
+crate-type = ["cdylib"]
+
+[features]
+extension-module = ["pyo3/extension-module"]
+default = ["extension-module"]
+
+[dependencies]
+pyo3 = { version = "0.23", features = ["abi3-py310"] }

@@ -39,9 +39,23 @@ uv run ruff check --fix .
 ```
 
 ### Build System
-The project uses both setuptools (Python) and Bazel build systems:
-- uv: Primary Python package management and testing
-- Bazel: Alternative build system with MODULE.bazel configuration intended for adding fltk as a dependency in other projects using Bazel.
+The project uses maturin (mixed Python/Rust), uv, and Bazel:
+- maturin: Build backend for the mixed Python/Rust package. Handles Cargo build, Python packaging, and editable installs.
+- uv: Primary Python package management and testing runner.
+- Bazel: Alternative build system with MODULE.bazel configuration intended for adding fltk as a dependency in other projects using Bazel. Bazel does not currently support the Rust extension (see `TODO(bazel-rules-rust)`).
+
+**Rust toolchain required**: `rustup` and `cargo` must be installed on your machine. Install via https://rustup.rs/. Without Rust, `uv run` cannot build the package.
+
+**Build and test workflow**:
+```bash
+# Build the Rust extension (required before running tests)
+uv run --group dev maturin develop
+
+# Then run tests
+uv run pytest
+```
+
+`maturin develop` without `--release` produces a debug build (fast compile, adequate for correctness testing). Pass `--release` for performance testing.
 
 ## Development Protocols
 

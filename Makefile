@@ -1,8 +1,8 @@
-.PHONY: check lint typecheck test
+.PHONY: check lint typecheck test cargo-check cargo-test cargo-clippy
 
-# Run all checks: lint, type-check, and tests. This is the canonical
+# Run all checks: lint, type-check, tests, and Rust checks. This is the canonical
 # entry point used by CI.
-check: lint typecheck test
+check: lint typecheck test cargo-check cargo-clippy cargo-test
 
 lint:
 	uv run --group lint --group test ruff check .
@@ -12,3 +12,12 @@ typecheck:
 
 test:
 	uv run --group lint --group test pytest
+
+cargo-check:
+	cargo check
+
+cargo-test:
+	cargo test
+
+cargo-clippy:
+	cargo clippy -- -D warnings

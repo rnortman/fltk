@@ -2,6 +2,8 @@ module(
     name = "fltk",
 )
 
+# TODO(bazel-rules-rust): Add rules_rust for building the PyO3 extension via Bazel.
+
 bazel_dep(name = "rules_python", version = "1.5.0")
 
 python = use_extension("@rules_python//python/extensions:python.bzl", "python")

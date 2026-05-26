@@ -1,6 +1,6 @@
 [build-system]
-requires = ["setuptools>=61", "wheel"]
-build-backend = "setuptools.build_meta"
+requires = ["maturin>=1.7,<2"]
+build-backend = "maturin"
 
 [project]
 name = "fltk"
@@ -24,8 +24,10 @@ classifiers = [
 ]
 dependencies = ["astor", "typer"]
 
-[tool.setuptools]
-packages = ["fltk"]
+[tool.maturin]
+python-packages = ["fltk"]
+module-name = "fltk._native"
+features = ["pyo3/extension-module"]
 
 [project.urls]
 Documentation = "https://github.com/rnortman/fltk#readme"
@@ -33,6 +35,7 @@ Issues = "https://github.com/rnortman/fltk/issues"
 Source = "https://github.com/rnortman/fltk"
 
 [dependency-groups]
+dev = ["maturin>=1.7,<2"]
 test = [
   "coverage[toml]>=6.5",
   "pytest",

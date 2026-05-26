@@ -6,3 +6,7 @@ bazel-fltk
 bazel-out
 bazel-testlogs
 *.egg-info
+target/
+*.so
+*.pyd
+*.dylib
