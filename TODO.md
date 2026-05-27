@@ -15,3 +15,4 @@ Unify the `Span.with_source` construction API across backends. Currently the Pyt
 ## `pin-ci-actions`
 
 SHA-pin all GitHub Actions references in `.github/workflows/ci.yml` to immutable commit SHAs rather than mutable branch/tag refs. Currently `dtolnay/rust-toolchain@stable`, `actions/checkout@v4`, and `astral-sh/setup-uv@v6` use mutable refs. A compromised action repo could execute arbitrary code in CI and tamper with build artifacts. Use Dependabot to manage SHA-pinned action updates. Location: `.github/workflows/ci.yml:12,15,21`.
+
