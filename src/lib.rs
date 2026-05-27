@@ -1,10 +1,10 @@
 use pyo3::prelude::*;
 use pyo3::sync::GILOnceCell;
 
-mod cst_poc;
+mod cst_generated;
+mod cst_fegen;
 mod span;
 
-use cst_poc::{Identifier, Identifier_Label, Items, Items_Label};
 use span::{Span, SourceText};
 
 pub(crate) static UNKNOWN_SPAN: GILOnceCell<PyObject> = GILOnceCell::new();
@@ -27,11 +27,26 @@ fn _native(m: &Bound<'_, PyModule>) -> PyResult<()> {
         .set(m.py(), unknown_span_obj)
         .expect("UNKNOWN_SPAN already set; module initialized twice");
 
-    // CST node types
-    m.add_class::<Identifier_Label>()?;
-    m.add_class::<Identifier>()?;
-    m.add_class::<Items_Label>()?;
-    m.add_class::<Items>()?;
+    // CST node types (PoC grammar: Identifier, Items, Trivia)
+    cst_generated::register_classes(m)?;
+
+    // Fegen grammar classes in a submodule to avoid name collisions
+    // (both grammars produce Identifier, Items, Trivia)
+    let fegen_sub = PyModule::new(m.py(), "fegen_cst")?;
+    cst_fegen::register_classes(&fegen_sub)?;
+    m.add_submodule(&fegen_sub)?;
+
+    // PyO3's add_submodule does NOT register in sys.modules, so
+    // `from fltk._native.fegen_cst import X` would fail with
+    // ModuleNotFoundError. Fix by inserting manually:
+    let sys = m.py().import("sys")?;
+    sys.getattr("modules")?
+        .set_item("fltk._native.fegen_cst", &fegen_sub)
+        .map_err(|e| {
+            pyo3::exceptions::PyRuntimeError::new_err(format!(
+                "Failed to register fltk._native.fegen_cst in sys.modules: {e}"
+            ))
+        })?;
 
     Ok(())
 }

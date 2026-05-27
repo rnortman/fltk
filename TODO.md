@@ -16,3 +16,15 @@ Unify the `Span.with_source` construction API across backends. Currently the Pyt
 
 SHA-pin all GitHub Actions references in `.github/workflows/ci.yml` to immutable commit SHAs rather than mutable branch/tag refs. Currently `dtolnay/rust-toolchain@stable`, `actions/checkout@v4`, and `astral-sh/setup-uv@v6` use mutable refs. A compromised action repo could execute arbitrary code in CI and tamper with build artifacts. Use Dependabot to manage SHA-pinned action updates. Location: `.github/workflows/ci.yml:12,15,21`.
 
+## `extract-rule-name-to-class-name`
+
+Extract the underscore-to-CamelCase rule-name-to-class-name transform into a shared helper. Currently four independent copies exist: `CstGenerator.class_name_for_rule_node` (`gsm2tree.py`), `UnparserGenerator.class_name_for_rule_node` (`gsm2unparser.py`), an inline list-comp (`gsm2unparser.py`), and `_rust_variant_name` (`gsm2tree_rs.py`). A behavioral change (e.g. digit handling, consecutive underscores) must be applied in four places. Candidate location: `fltk/fegen/gsm2tree.py` or a new `fltk/fegen/naming.py`. Location: `fltk/fegen/gsm2tree_rs.py:18`.
+
+## `test-class-is-type-body`
+
+Strengthen or remove the `isinstance(cls, type)` assertion in `TestAllClassesImportable.test_class_is_type`. The assertion passes for any imported object including a misimported alias; import success is the real AC-7 check. Option: replace with `cls()` construction (already covered by AC-8a tests). Location: `tests/test_fegen_rust_cst.py:67`.
+
+## `perf-label-identity-comparison`
+
+The generated `tup.get_item(0)?.eq(&label_obj)?` pattern in label-accessor methods performs an O(children) linear scan with equality comparison per access. Identity comparison (`is`) or pre-grouped storage would be O(1). Defer until profiling confirms a bottleneck. Location: `fltk/fegen/gsm2tree_rs.py` (template in `_per_label_methods`).
+
