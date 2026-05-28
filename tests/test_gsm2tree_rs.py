@@ -184,12 +184,28 @@ class TestPreamble:
         """AC-10: Every generated .rs file includes the required use declarations."""
         assert "use pyo3::exceptions::{PyTypeError, PyValueError};" in poc_source
         assert "use pyo3::prelude::*;" in poc_source
+        assert "use pyo3::sync::GILOnceCell;" in poc_source
         assert "use pyo3::types::{PyList, PyTuple};" in poc_source
         assert "use pyo3::PyTypeInfo;" in poc_source
-        assert "use crate::UNKNOWN_SPAN;" in poc_source
 
     def test_preamble_at_start(self, poc_source: str) -> None:
         assert poc_source.startswith("use pyo3::")
+
+    def test_no_crate_unknown_span_import(self, poc_source: str) -> None:
+        """Standalone sentinel: no crate::UNKNOWN_SPAN linkage in generated source."""
+        assert "use crate::UNKNOWN_SPAN;" not in poc_source
+
+    def test_sentinel_cache_declared(self, poc_source: str) -> None:
+        """Preamble declares the module-local GILOnceCell sentinel cache."""
+        assert "static UNKNOWN_SPAN_CACHE: GILOnceCell<PyObject> = GILOnceCell::new();" in poc_source
+
+    def test_sentinel_fetches_fltk_native_at_runtime(self, poc_source: str) -> None:
+        """#[new] bodies fetch UnknownSpan from fltk._native at runtime, not from crate."""
+        assert 'py.import("fltk._native")?.getattr("UnknownSpan")?.unbind()' in poc_source
+        assert "UNKNOWN_SPAN_CACHE" in poc_source
+        # The old crate::UNKNOWN_SPAN linkage must not appear in any form
+        assert "\nuse crate::UNKNOWN_SPAN" not in poc_source
+        assert "UNKNOWN_SPAN.get(py)" not in poc_source
 
 
 # ---------------------------------------------------------------------------
@@ -335,7 +351,9 @@ class TestFegenGrammar:
     def test_preamble_in_fegen_source(self, fegen_source: str) -> None:
         """AC-10: fegen source also has the required preamble."""
         assert "use pyo3::prelude::*;" in fegen_source
-        assert "use crate::UNKNOWN_SPAN;" in fegen_source
+        assert "use pyo3::sync::GILOnceCell;" in fegen_source
+        assert "use crate::UNKNOWN_SPAN;" not in fegen_source
+        assert "static UNKNOWN_SPAN_CACHE: GILOnceCell<PyObject> = GILOnceCell::new();" in fegen_source
 
     def test_rule_name_to_class_name_mapping(self) -> None:
         """FEGEN_RULE_NAMES and FEGEN_CLASS_NAMES must agree with class_name_for_rule_node."""
@@ -386,7 +404,9 @@ class TestMinimalGrammar:
     def test_minimal_grammar_has_preamble(self, minimal_source: str) -> None:
         """AC-10: Minimal grammar source also includes required use declarations."""
         assert "use pyo3::prelude::*;" in minimal_source
-        assert "use crate::UNKNOWN_SPAN;" in minimal_source
+        assert "use pyo3::sync::GILOnceCell;" in minimal_source
+        assert "use crate::UNKNOWN_SPAN;" not in minimal_source
+        assert "static UNKNOWN_SPAN_CACHE: GILOnceCell<PyObject> = GILOnceCell::new();" in minimal_source
 
 
 # ---------------------------------------------------------------------------

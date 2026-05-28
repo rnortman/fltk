@@ -10,7 +10,7 @@ from typing import Annotated
 import typer
 
 from fltk import pygen
-from fltk.fegen import fltk2gsm, fltk_parser, gsm, gsm2parser, gsm2tree
+from fltk.fegen import fltk2gsm, fltk_parser, gsm, gsm2parser, gsm2tree, gsm2tree_rs
 from fltk.fegen.pyrt import errors, terminalsrc
 from fltk.iir.context import CompilerContext, create_default_context
 from fltk.iir.py import compiler
@@ -23,8 +23,13 @@ app = typer.Typer(
 )
 
 
-def parse_grammar_file(grammar_file: Path) -> gsm.Grammar:
-    """Parse a grammar file and return the GSM representation."""
+def _read_and_parse_grammar(grammar_file: Path) -> gsm.Grammar:
+    """Read a grammar file and return the raw GSM, with CLI-friendly error handling.
+
+    Runs the full file-read + TerminalSource + fltk_parser + Cst2Gsm pipeline and
+    exits via typer on any failure.  Does NOT apply trivia processing; callers are
+    responsible for calling add_trivia_rule_to_grammar / classify_trivia_rules if needed.
+    """
     if not grammar_file.exists():
         typer.echo(f"Error: Grammar file '{grammar_file}' not found", err=True)
         raise typer.Exit(1)
@@ -50,7 +55,12 @@ def parse_grammar_file(grammar_file: Path) -> gsm.Grammar:
         raise typer.Exit(1)
 
     cst2gsm = fltk2gsm.Cst2Gsm(terminals.terminals)
-    grammar = cst2gsm.visit_grammar(result.result)
+    return cst2gsm.visit_grammar(result.result)
+
+
+def parse_grammar_file(grammar_file: Path) -> gsm.Grammar:
+    """Parse a grammar file and return the GSM representation."""
+    grammar = _read_and_parse_grammar(grammar_file)
     grammar = gsm.classify_trivia_rules(gsm.add_trivia_rule_to_grammar(grammar, context=create_default_context()))
     return grammar
 
@@ -171,7 +181,7 @@ def generate(
     try:
         with shared_cst.open("w") as f:
             f.write(ast.unparse(cst_mod))
-    except RuntimeError as e:
+    except OSError as e:
         typer.echo(f"Error: Failed to write shared CST file '{shared_cst}': {e}", err=True)
         raise typer.Exit(1) from e
 
@@ -214,6 +224,40 @@ def generate(
             typer.echo(f"Non-trivia parser: {output_dir / f'{base_name}_parser.py'}")
         if generate_trivia:
             typer.echo(f"Trivia parser: {output_dir / f'{base_name}_trivia_parser.py'}")
+
+
+def _parse_grammar_raw(grammar_file: Path) -> gsm.Grammar:
+    """Parse a grammar file and return the raw GSM without trivia processing.
+
+    Unlike parse_grammar_file, this does NOT apply add_trivia_rule_to_grammar or
+    classify_trivia_rules.  This is the correct input for RustCstGenerator, which
+    applies trivia processing internally.
+    """
+    return _read_and_parse_grammar(grammar_file)
+
+
+@app.command(name="gen-rust-cst")
+def gen_rust_cst(
+    grammar_file: Annotated[Path, typer.Argument(help="Path to the FLTK grammar file (.fltkg)")],
+    output_file: Annotated[Path, typer.Argument(help="Path to write the .rs source")],
+) -> None:
+    """Emit Rust CST source (.rs) from a grammar file.
+
+    Generates a standalone PyO3 Rust extension source file from a grammar.
+    The user compiles and installs it with their own build tool (e.g. maturin).
+    The generated .rs file is independent of FLTK's crate at link time; it
+    depends on fltk._native only at runtime for the UnknownSpan sentinel.
+
+    Example:
+        genparser gen-rust-cst grammar.fltkg output/cst.rs
+    """
+    grammar = _parse_grammar_raw(grammar_file)
+    src = gsm2tree_rs.RustCstGenerator(grammar).generate()
+    try:
+        output_file.write_text(src)
+    except Exception as e:
+        typer.echo(f"Error: Failed to write output file '{output_file}': {e}", err=True)
+        raise typer.Exit(1) from e
 
 
 if __name__ == "__main__":

@@ -8,6 +8,7 @@ Think of it as the pipes that connect your grammar to formatted output.
 from __future__ import annotations
 
 import ast
+import importlib
 import sys
 import types
 from pathlib import Path
@@ -30,41 +31,156 @@ from fltk.unparse.unparsefmt_parser import Parser as FmtParser
 if TYPE_CHECKING:
     from typing import Any
 
+# Module-scope cache for the fegen grammar (loaded at most once per process).
+# Using a list rather than a bare variable to avoid PLW0603 (global statement).
+_fegen_grammar_cache: list[gsm.Grammar] = []
 
-def parse_grammar(grammar_text: str) -> gsm.Grammar:
+# Module-scope cache for the Rust-backed fegen parser result, keyed by module name.
+# The fegen grammar is fixed, so the generated parser class and cst_module are identical
+# on every call for the same rust_fegen_cst_module.  Caching saves the full
+# parser-codegen + exec cost on repeated parse_grammar(rust_fegen_cst_module=...) calls.
+_fegen_rust_parser_cache: dict[str, ParserResult] = {}
+
+
+def _load_fegen_grammar() -> gsm.Grammar:
+    """Return the parsed fegen grammar, loading it via the Python path at most once.
+
+    Uses the default Python CST backend (no rust_fegen_cst_module).  This never
+    recurses because the Python path in parse_grammar does not call _load_fegen_grammar.
+    """
+    if not _fegen_grammar_cache:
+        fegen_fltkg = Path(__file__).parent / "fegen" / "fegen.fltkg"
+        try:
+            with fegen_fltkg.open() as f:
+                grammar_text = f.read()
+        except FileNotFoundError as exc:
+            msg = (
+                f"FLTK internal fegen grammar is missing ({fegen_fltkg}); "
+                "this indicates a broken or mis-packaged fltk installation. "
+                "Reinstall fltk to restore the bundled grammar."
+            )
+            raise RuntimeError(msg) from exc
+        # Call parse_grammar with no rust_fegen_cst_module → pure Python path, no recursion.
+        _fegen_grammar_cache.append(parse_grammar(grammar_text))
+    return _fegen_grammar_cache[0]
+
+
+class RustBackendUnavailableError(RuntimeError):
+    """Raised when a Rust CST backend is selected but its module cannot be loaded."""
+
+    def __init__(self, module_name: str, detail: str | None = None) -> None:
+        self.module_name = module_name
+        msg = f"Rust CST backend selected (module {module_name!r}) but unavailable"
+        if detail:
+            msg += f": {detail}"
+        super().__init__(msg)
+
+
+def _load_rust_cst_classes(module_name: str) -> dict[str, object]:
+    """Import a pre-built Rust CST extension and return its public CST node classes.
+
+    Args:
+        module_name: Dotted module name of the user's installed Rust CST extension.
+            This must be a statically known, trusted value — never forward a string
+            derived from untrusted input (e.g. config files, HTTP requests, CLI args
+            from external callers) into this parameter.  ``importlib.import_module``
+            executes the module's top-level code; an attacker-controlled module name
+            is arbitrary code execution.
+
+    Returns:
+        Dict mapping class name to class object for all public type attributes.
+
+    Raises:
+        RustBackendUnavailableError: If the module cannot be imported or exposes no classes.
+    """
+    try:
+        module = importlib.import_module(module_name)
+    except ImportError as exc:
+        # ImportError covers ModuleNotFoundError (missing module) and ABI/Python-version
+        # mismatch on the .so. NOT catching Exception: genuine bugs in the user's extension
+        # init must propagate as themselves.
+        raise RustBackendUnavailableError(module_name) from exc
+    classes: dict[str, object] = {
+        name: obj
+        for name, obj in vars(module).items()
+        if not name.startswith("_") and isinstance(obj, type)
+    }
+    if not classes:
+        raise RustBackendUnavailableError(module_name, detail="module loaded but exposes no CST classes")
+    return classes
+
+
+def parse_grammar(grammar_text: str, *, rust_fegen_cst_module: str | None = None) -> gsm.Grammar:
     """Parse .fltkg text to Grammar Semantic Model.
 
     Args:
         grammar_text: The .fltkg grammar source text
+        rust_fegen_cst_module: If provided, the dotted module name of a pre-built Rust CST
+            extension for the fegen grammar.  The fegen grammar is parsed using a
+            Rust-backed fegen parser and the real Cst2Gsm is run against those Rust nodes.
+            If None (default), uses the committed Python fltk_parser and Python fltk_cst.
 
     Returns:
         The parsed grammar
 
     Raises:
         ValueError: If grammar parsing fails
+        RustBackendUnavailableError: If rust_fegen_cst_module is given but cannot be loaded.
     """
     terminals = terminalsrc.TerminalSource(grammar_text)
-    parser = fltk_parser.Parser(terminalsrc=terminals)
-    result = parser.apply__parse_grammar(0)
 
-    if not result or result.pos != len(terminals.terminals):
-        error_msg = errors.format_error_message(
-            parser.error_tracker,
-            terminals,
-            lambda rule_id: parser.rule_names[rule_id],
-        )
-        msg = f"Grammar parse failed:\n{error_msg}"
-        raise ValueError(msg)
+    if rust_fegen_cst_module is None:
+        # Default Python path: use the committed fltk_parser.
+        parser = fltk_parser.Parser(terminalsrc=terminals)
+        result = parser.apply__parse_grammar(0)
 
-    cst2gsm = fltk2gsm.Cst2Gsm(terminals.terminals)
-    return cst2gsm.visit_grammar(result.result)
+        if not result or result.pos != len(terminals.terminals):
+            error_msg = errors.format_error_message(
+                parser.error_tracker,
+                terminals,
+                lambda rule_id: parser.rule_names[rule_id],
+            )
+            msg = f"Grammar parse failed:\n{error_msg}"
+            raise ValueError(msg)
+
+        cst2gsm = fltk2gsm.Cst2Gsm(terminals.terminals)
+        return cst2gsm.visit_grammar(result.result)
+    else:
+        # Rust backend: build a fegen parser bound to the Rust fegen CST module.
+        # _load_fegen_grammar() calls parse_grammar with no rust_fegen_cst_module → no recursion.
+        # Cache the ParserResult (parser_class + cst_module) keyed by module name; the fegen
+        # grammar is fixed, so the generated parser is identical on every call.  Only
+        # TerminalSource + parse + Cst2Gsm are per-call.
+        if rust_fegen_cst_module not in _fegen_rust_parser_cache:
+            fegen_grammar = _load_fegen_grammar()
+            _fegen_rust_parser_cache[rust_fegen_cst_module] = generate_parser(
+                fegen_grammar, rust_cst_module=rust_fegen_cst_module
+            )
+        pr = _fegen_rust_parser_cache[rust_fegen_cst_module]
+        parser = pr.parser_class(terminalsrc=terminals)
+        result = parser.apply__parse_grammar(0)
+
+        if not result or result.pos != len(terminals.terminals):
+            error_msg = errors.format_error_message(
+                parser.error_tracker,
+                terminals,
+                lambda rule_id: parser.rule_names[rule_id],
+            )
+            msg = f"Grammar parse failed:\n{error_msg}"
+            raise ValueError(msg)
+
+        # Inject the same backend's CST namespace so isinstance dispatch in Cst2Gsm resolves.
+        cst2gsm = fltk2gsm.Cst2Gsm(terminals.terminals, cst=pr.cst_module)
+        return cst2gsm.visit_grammar(result.result)
 
 
-def parse_grammar_file(grammar_path: Path) -> gsm.Grammar:
+def parse_grammar_file(grammar_path: Path, *, rust_fegen_cst_module: str | None = None) -> gsm.Grammar:
     """Parse .fltkg file to Grammar Semantic Model.
 
     Args:
         grammar_path: Path to .fltkg grammar file
+        rust_fegen_cst_module: If provided, passed through to parse_grammar to select the Rust
+            fegen CST backend.  See parse_grammar for details.
 
     Returns:
         The parsed grammar
@@ -72,6 +188,7 @@ def parse_grammar_file(grammar_path: Path) -> gsm.Grammar:
     Raises:
         ValueError: If grammar parsing fails
         FileNotFoundError: If grammar file doesn't exist
+        RustBackendUnavailableError: If rust_fegen_cst_module is given but cannot be loaded.
     """
     if not grammar_path.exists():
         msg = f"Grammar file not found: {grammar_path}"
@@ -80,36 +197,55 @@ def parse_grammar_file(grammar_path: Path) -> gsm.Grammar:
     with grammar_path.open() as f:
         grammar_text = f.read()
 
-    return parse_grammar(grammar_text)
+    return parse_grammar(grammar_text, rust_fegen_cst_module=rust_fegen_cst_module)
 
 
-def generate_parser(grammar: gsm.Grammar, *, capture_trivia: bool = True) -> ParserResult:
+def generate_parser(
+    grammar: gsm.Grammar,
+    *,
+    capture_trivia: bool = True,
+    rust_cst_module: str | None = None,
+) -> ParserResult:
     """Generate parser and CST classes from grammar.
 
     Args:
         grammar: The parsed grammar
         capture_trivia: If True, generates parser that captures whitespace/comments as Trivia nodes.
                        If False, generates simpler parser that skips whitespace.
+        rust_cst_module: If provided, the dotted module name of a pre-built standalone Rust CST
+                        extension. That module is imported and its public CST node classes are used
+                        instead of generating Python dataclass CST classes at runtime.
+                        If None (default), generates Python dataclass CST classes via exec().
 
     Returns:
         ParserResult containing the generated parser class and CST module
+
+    Raises:
+        RustBackendUnavailableError: If rust_cst_module is specified but cannot be loaded or
+                                     exposes no CST classes.
     """
     context = create_default_context(capture_trivia=capture_trivia)
 
     grammar_with_trivia = gsm.classify_trivia_rules(gsm.add_trivia_rule_to_grammar(grammar, context))
 
     cstgen = gsm2tree.CstGenerator(grammar=grammar_with_trivia, py_module=pyreg.Builtins, context=context)
-    cst_module_ast = cstgen.gen_py_module()
-
-    cst_globals = {}
-    exec(compile(cst_module_ast, "<cst_module>", "exec"), cst_globals)  # noqa: S102
 
     module_name = f"fltk_grammar_{id(grammar)}"
     cst_module = types.ModuleType(module_name)
-    for name, obj in cst_globals.items():
-        if not name.startswith("_"):
-            setattr(cst_module, name, obj)
-    sys.modules[module_name] = cst_module
+
+    if rust_cst_module is None:
+        # Python backend: generate and exec CST dataclass module
+        cst_module_ast = cstgen.gen_py_module()
+        cst_globals = {}
+        exec(compile(cst_module_ast, "<cst_module>", "exec"), cst_globals)  # noqa: S102
+        public = {k: v for k, v in cst_globals.items() if not k.startswith("_")}
+    else:
+        # Rust backend: import the pre-built standalone extension and read its public classes.
+        # Hard-error on failure; never falls back to Python.
+        public = _load_rust_cst_classes(rust_cst_module)
+
+    for name, obj in public.items():
+        setattr(cst_module, name, obj)
 
     pgen = gsm2parser.ParserGenerator(grammar=grammar_with_trivia, cstgen=cstgen, context=context)
     parser_class_ast = compiler.compile_class(pgen.parser_class, context)
@@ -124,7 +260,7 @@ def generate_parser(grammar: gsm.Grammar, *, capture_trivia: bool = True) -> Par
         "fltk": fltk,
         "errors": errors,
     }
-    parser_globals.update(cst_globals)
+    parser_globals.update(public)  # use `public` for both backends
 
     exec(compile(parser_module, "<parser>", "exec"), parser_globals)  # noqa: S102
 
@@ -137,6 +273,10 @@ def generate_parser(grammar: gsm.Grammar, *, capture_trivia: bool = True) -> Par
     if parser_class is None:
         msg = "Generated parser class not found"
         raise RuntimeError(msg)
+
+    # Register in sys.modules only after successful parser generation, so a codegen
+    # failure does not leave a stale module entry under fltk_grammar_{id(grammar)}.
+    sys.modules[module_name] = cst_module
 
     return ParserResult(
         parser_class=parser_class,

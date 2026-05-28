@@ -23,5 +23,8 @@ jobs:
       - name: Install Rust toolchain
         uses: dtolnay/rust-toolchain@stable
 
+      - name: Build Rust artifacts
+        run: make build-native build-test-user-ext build-fegen-rust-cst
+
       - name: Run checks
         run: make check

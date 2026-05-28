@@ -118,13 +118,19 @@ class RustCstGenerator:
     # ------------------------------------------------------------------
 
     def _preamble(self) -> str:
+        # TODO(rust-cst-shared-rlib): if user extensions ever need to link Rust-level
+        # shared types (e.g. a typed Span), Option D (fltk-cst-common rlib + Cargo
+        # workspace) is the clean answer. Today span is opaque PyObject; no linkage needed.
         return (
             "use pyo3::exceptions::{PyTypeError, PyValueError};\n"
             "use pyo3::prelude::*;\n"
+            "use pyo3::sync::GILOnceCell;\n"
             "use pyo3::types::{PyList, PyTuple};\n"
             "use pyo3::PyTypeInfo;\n"
             "\n"
-            "use crate::UNKNOWN_SPAN;\n"
+            "/// Cached reference to `fltk._native.UnknownSpan`.\n"
+            "/// Fetched once on first node construction; avoids a Python import per call.\n"
+            "static UNKNOWN_SPAN_CACHE: GILOnceCell<PyObject> = GILOnceCell::new();\n"
         )
 
     # ------------------------------------------------------------------
@@ -229,9 +235,10 @@ class RustCstGenerator:
             "    fn new(py: Python<'_>, span: Option<PyObject>) -> PyResult<Self> {",
             "        let span_obj = match span {",
             "            Some(s) => s,",
-            "            None => UNKNOWN_SPAN",
-            "                .get(py)",
-            '                .expect("UNKNOWN_SPAN not initialized; fltk._native module not loaded")',
+            "            None => UNKNOWN_SPAN_CACHE",
+            "                .get_or_try_init(py, || -> PyResult<PyObject> {",
+            '                    Ok(py.import("fltk._native")?.getattr("UnknownSpan")?.unbind())',
+            "                })?",
             "                .clone_ref(py),",
             "        };",
             f"        Ok({class_name} {{",

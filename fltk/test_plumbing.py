@@ -1,14 +1,26 @@
 """Unit tests for the FLTK plumbing module."""
 
+import importlib
+import inspect
 import sys
+import types
+from unittest import mock
 
 import pytest
 
+import fltk.plumbing as fltk_plumbing_mod
+from fltk.fegen import fltk_cst as _fltk_cst
+from fltk.fegen import fltk_parser as _fltk_parser
+from fltk.fegen.fltk2gsm import Cst2Gsm
+from fltk.fegen.pyrt import terminalsrc as _terminalsrc
 from fltk.plumbing import (
+    RustBackendUnavailableError,
+    _load_rust_cst_classes,
     generate_parser,
     generate_unparser,
     parse_format_config,
     parse_grammar,
+    parse_grammar_file,
     parse_text,
     render_doc,
     unparse_cst,
@@ -366,6 +378,226 @@ class TestIntegration:
         # Render - should have nbsp and line
         output = render_doc(doc)
         assert output == "a b c"  # Nbsp renders as space, Line renders as space in flat mode
+
+
+class TestRustBackendUnavailableError:
+    """Test RustBackendUnavailableError construction and message."""
+
+    def test_message_without_detail(self):
+        err = RustBackendUnavailableError("mypkg.mygrammar_cst")
+        assert "mypkg.mygrammar_cst" in str(err)
+        assert "unavailable" in str(err)
+        assert err.module_name == "mypkg.mygrammar_cst"
+
+    def test_message_with_detail(self):
+        err = RustBackendUnavailableError("mypkg.mygrammar_cst", detail="module loaded but exposes no CST classes")
+        assert "mypkg.mygrammar_cst" in str(err)
+        assert "exposes no CST classes" in str(err)
+
+    def test_is_runtime_error(self):
+        err = RustBackendUnavailableError("x")
+        assert isinstance(err, RuntimeError)
+
+
+class TestLoadRustCstClasses:
+    """Test _load_rust_cst_classes helper."""
+
+    def test_missing_module_raises_unavailable_error(self):
+        """A non-existent module name raises RustBackendUnavailableError."""
+        with pytest.raises(RustBackendUnavailableError) as exc_info:
+            _load_rust_cst_classes("does_not_exist_pkg_xyz_abc.nope")
+        assert "does_not_exist_pkg_xyz_abc.nope" in str(exc_info.value)
+
+    def test_missing_module_chained_from_import_error(self):
+        """RustBackendUnavailableError chains the original ImportError."""
+        with pytest.raises(RustBackendUnavailableError) as exc_info:
+            _load_rust_cst_classes("does_not_exist_pkg_xyz_abc.nope")
+        assert isinstance(exc_info.value.__cause__, ImportError)
+
+    def test_module_with_no_classes_raises_unavailable_error(self):
+        """A module that loads but exposes no public type attributes raises error."""
+        fake_module = types.ModuleType("fake_empty_cst")
+        fake_module.some_string = "not a class"  # type: ignore[attr-defined]
+        fake_module.some_int = 42  # type: ignore[attr-defined]
+
+        with mock.patch.object(importlib, "import_module", return_value=fake_module):
+            with pytest.raises(RustBackendUnavailableError) as exc_info:
+                _load_rust_cst_classes("fake_empty_cst")
+        assert "exposes no CST classes" in str(exc_info.value)
+
+    def test_module_with_classes_returns_class_dict(self):
+        """A module with type attributes returns only those types."""
+
+        class NodeClass:
+            pass
+
+        fake_module = types.ModuleType("fake_cst")
+        fake_module.NodeClass = NodeClass  # type: ignore[attr-defined]
+        fake_module.some_string = "not a class"  # type: ignore[attr-defined]
+        fake_module._private = object()  # type: ignore[attr-defined]
+
+        with mock.patch.object(importlib, "import_module", return_value=fake_module):
+            result = _load_rust_cst_classes("fake_cst")
+
+        assert "NodeClass" in result
+        assert result["NodeClass"] is NodeClass
+        # Private names excluded
+        assert "_private" not in result
+        # Non-type attributes excluded
+        assert "some_string" not in result
+
+
+class TestGenerateParserRustBackend:
+    """Tests for generate_parser rust_cst_module parameter (Tier 1 — no real Rust artifact)."""
+
+    def test_python_backend_default_unchanged(self):
+        """No rust_cst_module argument → Python backend is used; parser and cst_module are populated as usual."""
+        grammar_text = """
+        expr := number;
+        number := value:/[0-9]+/;
+        """
+        grammar = parse_grammar(grammar_text)
+        pr = generate_parser(grammar)
+        assert pr.parser_class is not None
+        assert pr.cst_module is not None
+        assert pr.cst_module_name in sys.modules
+        assert hasattr(pr.cst_module, "Expr")
+        assert hasattr(pr.cst_module, "Number")
+
+    def test_rust_backend_missing_module_hard_errors(self):
+        """AC4: rust_cst_module missing → RustBackendUnavailableError, no sys.modules pollution."""
+        grammar = parse_grammar('test := value:"hello";')
+        module_name = f"fltk_grammar_{id(grammar)}"
+        # Ensure not already in sys.modules from a prior run
+        sys.modules.pop(module_name, None)
+
+        with pytest.raises(RustBackendUnavailableError):
+            generate_parser(grammar, rust_cst_module="does_not_exist_pkg_xyz_abc.nope")
+
+        # The per-call CST module must NOT have been registered on failure
+        assert module_name not in sys.modules
+
+    def test_rust_backend_empty_module_hard_errors(self):
+        """AC4 variant: module loads but exposes no classes → RustBackendUnavailableError."""
+        grammar = parse_grammar('test := value:"hello";')
+        module_name = f"fltk_grammar_{id(grammar)}"
+        sys.modules.pop(module_name, None)
+
+        fake_module = types.ModuleType("fake_empty_cst")
+        fake_module.not_a_class = "string"  # type: ignore[attr-defined]
+
+        with mock.patch.object(importlib, "import_module", return_value=fake_module):
+            with pytest.raises(RustBackendUnavailableError) as exc_info:
+                generate_parser(grammar, rust_cst_module="fake_empty_cst")
+
+        assert "exposes no CST classes" in str(exc_info.value)
+        assert module_name not in sys.modules
+
+    def test_rust_backend_uses_provided_classes(self):
+        """With a mocked Rust module, generate_parser populates cst_module with the module's classes."""
+
+        class FakeNode:
+            pass
+
+        fake_module = types.ModuleType("fake_cst")
+        fake_module.FakeNode = FakeNode  # type: ignore[attr-defined]
+
+        grammar = parse_grammar('fake_node := value:"hello";')
+        module_name = f"fltk_grammar_{id(grammar)}"
+        sys.modules.pop(module_name, None)
+
+        with mock.patch.object(importlib, "import_module", return_value=fake_module):
+            pr = generate_parser(grammar, rust_cst_module="fake_cst")
+
+        assert pr.parser_class is not None
+        assert pr.cst_module_name in sys.modules
+        assert hasattr(pr.cst_module, "FakeNode")
+        assert pr.cst_module.FakeNode is FakeNode  # type: ignore[attr-defined]
+
+
+class TestParseGrammarRustBackend:
+    """Tier 1 tests for parse_grammar / parse_grammar_file rust_fegen_cst_module parameter."""
+
+    def test_parse_grammar_python_default_unchanged(self):
+        """No rust_fegen_cst_module → Python path, behavior identical to before."""
+        grammar = parse_grammar('expr := value:"hello";')
+        assert grammar is not None
+        assert len(grammar.rules) >= 1
+
+    def test_parse_grammar_rust_missing_module_hard_errors(self):
+        """AC4: missing rust_fegen_cst_module → RustBackendUnavailableError, no fallback."""
+        grammar_text = 'expr := value:"hello";'
+        with pytest.raises(RustBackendUnavailableError) as exc_info:
+            parse_grammar(grammar_text, rust_fegen_cst_module="does_not_exist_pkg_xyz.nope")
+        assert "does_not_exist_pkg_xyz.nope" in str(exc_info.value)
+
+    def test_parse_grammar_rust_missing_module_no_fallback(self):
+        """AC4: on Rust backend failure, the function raises RustBackendUnavailableError."""
+        grammar_text = 'expr := value:"hello";'
+        with pytest.raises(RustBackendUnavailableError):
+            parse_grammar(grammar_text, rust_fegen_cst_module="does_not_exist_xyz.nope")
+
+    def test_parse_grammar_file_rust_missing_module_hard_errors(self, tmp_path):
+        """AC4: parse_grammar_file with missing rust_fegen_cst_module raises RustBackendUnavailableError."""
+        grammar_file = tmp_path / "test.fltkg"
+        grammar_file.write_text('expr := value:"hello";')
+        with pytest.raises(RustBackendUnavailableError) as exc_info:
+            parse_grammar_file(grammar_file, rust_fegen_cst_module="does_not_exist_pkg_xyz.nope")
+        assert "does_not_exist_pkg_xyz.nope" in str(exc_info.value)
+
+
+class TestCst2GsmDefaultNamespace:
+    """Guard the DI refactor's backward-compatibility guarantee for Cst2Gsm.
+
+    Cst2Gsm(terminals) with no cst= argument must use fltk_cst as its namespace
+    and produce the same gsm.Grammar output as the pre-DI baseline.
+    """
+
+    _GRAMMAR_SRC = """\
+expr := term , ("+" , term)* ;
+term := value:/[0-9]+/ ;
+"""
+
+    def test_default_cst_is_fltk_cst(self):
+        """Cst2Gsm() with no cst= uses fltk_cst as the namespace object."""
+        terminals = _terminalsrc.TerminalSource(self._GRAMMAR_SRC)
+        cst2gsm = Cst2Gsm(terminals.terminals)
+        assert cst2gsm.cst is _fltk_cst
+
+    def test_default_namespace_produces_correct_grammar(self):
+        """Cst2Gsm(terminals) with no cst= produces the same gsm.Grammar as the baseline parse_grammar call."""
+        # Build the CST via the Python parser.
+        terminals = _terminalsrc.TerminalSource(self._GRAMMAR_SRC)
+        parser = _fltk_parser.Parser(terminalsrc=terminals)
+        result = parser.apply__parse_grammar(0)
+        assert result is not None and result.result is not None
+
+        # Invoke Cst2Gsm with no cst= (default path).
+        cst2gsm_default = Cst2Gsm(terminals.terminals)
+        grammar_default = cst2gsm_default.visit_grammar(result.result)
+
+        # Compare to the baseline produced by parse_grammar (also Python default).
+        grammar_baseline = parse_grammar(self._GRAMMAR_SRC)
+
+        assert grammar_default is not None
+        assert len(grammar_default.rules) == len(grammar_baseline.rules)
+        for r_default, r_baseline in zip(grammar_default.rules, grammar_baseline.rules, strict=True):
+            assert r_default.name == r_baseline.name
+
+
+class TestNoRuntimeCompilation:
+    """Constraint: plumbing.py must not invoke cargo/maturin/rustc at runtime."""
+
+    def test_plumbing_imports_no_subprocess_or_build_tools(self):
+        """plumbing.py must not invoke build tools in _load_rust_cst_classes."""
+        # The constraint is that _load_rust_cst_classes ONLY uses importlib.import_module,
+        # not subprocess/cargo/maturin/rustc.
+        src = inspect.getsource(fltk_plumbing_mod._load_rust_cst_classes)
+        assert "subprocess" not in src
+        assert "cargo" not in src
+        assert "maturin" not in src
+        assert "rustc" not in src
+        assert "importlib.import_module" in src
 
 
 if __name__ == "__main__":

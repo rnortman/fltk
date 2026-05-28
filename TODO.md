@@ -28,3 +28,19 @@ Strengthen or remove the `isinstance(cls, type)` assertion in `TestAllClassesImp
 
 The generated `tup.get_item(0)?.eq(&label_obj)?` pattern in label-accessor methods performs an O(children) linear scan with equality comparison per access. Identity comparison (`is`) or pre-grouped storage would be O(1). Defer until profiling confirms a bottleneck. Location: `fltk/fegen/gsm2tree_rs.py` (template in `_per_label_methods`).
 
+## `rust-cst-shared-rlib`
+
+If user extensions ever need to link Rust-level shared types (e.g. a typed `Span`), a `fltk-cst-common` rlib combined with a Cargo workspace (Option D) is the clean answer. Today the node's `span` is an opaque `PyObject`; no Rust-level linkage between the user's crate and FLTK's crate is needed. Revisit when user extensions need to link Rust-level shared types. Location: `fltk/fegen/gsm2tree_rs.py` (`_preamble` method).
+
+## `rust-cst-abi-pinning`
+
+No version handshake exists between a user's standalone Rust CST extension and `fltk._native`. If `Span`/`UnknownSpan` shape changes between FLTK versions, a user extension built against an older FLTK could misbehave silently. If skew proves fragile, add an ABI-version check at the sentinel fetch inside the generated `UNKNOWN_SPAN_CACHE` init. Location: `fltk/fegen/gsm2tree_rs.py` (`_new_method` method).
+
+## `fegen-cst-rs-single-source`
+
+`src/cst_fegen.rs` and `tests/rust_cst_fegen/src/cst.rs` are identical files committed independently. When one is updated (e.g. by regeneration after a grammar change), the other must be separately regenerated and committed; silent divergence is possible. Fix: remove `tests/rust_cst_fegen/src/cst.rs` from the repo and generate it from `src/cst_fegen.rs` at build time (via symlink, Makefile copy step, or Rust `include!` macro), making the single source of truth explicit. Location: `tests/rust_cst_fegen/src/cst.rs`.
+
+## `rust-cst-child-span-test`
+
+No focused test verifies that Rust-backed CST child-accessor results expose `.start`/`.end` attributes (required by `fltk2gsm.Cst2Gsm.visit_identifier`, `visit_literal`, `visit_regex`). The AC8 equality test exercises this indirectly but a regression would only surface in the full parse path. Add a direct test calling `node.child_name()` (or `child_value()`) on a Rust-backed fegen node and asserting `.start`/`.end` are accessible and correct. Location: `tests/test_phase4_fegen_rust_backend.py`.
+

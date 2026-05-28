@@ -1,3 +1,6 @@
+// TODO(fegen-cst-rs-single-source): this file is identical to src/cst_fegen.rs in the repo root.
+// The two copies must be kept in sync manually; silent divergence is possible.  Fix: remove this
+// file and generate/copy it from src/cst_fegen.rs at build time (via Makefile or include! macro).
 use pyo3::exceptions::{PyTypeError, PyValueError};
 use pyo3::prelude::*;
 use pyo3::sync::GILOnceCell;

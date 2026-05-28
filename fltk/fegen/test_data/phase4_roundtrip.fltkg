@@ -1,0 +1,16 @@
+// Phase 4 roundtrip fixture grammar.
+// Chosen to exercise: labeled children, optional items, repeated items,
+// multi-variant label enums (required for AC5 / API-Contract verification).
+//
+// Grammar: a simple key=value config format.
+//   config     := entry*
+//   entry      := key:identifier , op:operator , value:literal , ";" ,
+//   operator   := assign:"=" | append:"+=" | remove:"-="
+//   identifier := name:/[_a-z][_a-z0-9]*/
+//   literal    := ( str_val:/"[^"]*"/ | int_val:/[0-9]+/ )
+
+config := entry* ;
+entry := key:identifier , op:operator , value:literal , ";" , ;
+operator := assign:"=" | append:"+=" | remove:"-=" ;
+identifier := name:/[_a-z][_a-z0-9]*/ ;
+literal := str_val:/"[^"]*"/ | int_val:/[0-9]+/ ;

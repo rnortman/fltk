@@ -1,9 +1,12 @@
 use pyo3::exceptions::{PyTypeError, PyValueError};
 use pyo3::prelude::*;
+use pyo3::sync::GILOnceCell;
 use pyo3::types::{PyList, PyTuple};
 use pyo3::PyTypeInfo;
 
-use crate::UNKNOWN_SPAN;
+/// Cached reference to `fltk._native.UnknownSpan`.
+/// Fetched once on first node construction; avoids a Python import per call.
+static UNKNOWN_SPAN_CACHE: GILOnceCell<PyObject> = GILOnceCell::new();
 
 // ───────────────────────────────────────────────────────────────────────────
 // Identifier_Label
@@ -45,9 +48,10 @@ impl Identifier {
     fn new(py: Python<'_>, span: Option<PyObject>) -> PyResult<Self> {
         let span_obj = match span {
             Some(s) => s,
-            None => UNKNOWN_SPAN
-                .get(py)
-                .expect("UNKNOWN_SPAN not initialized; fltk._native module not loaded")
+            None => UNKNOWN_SPAN_CACHE
+                .get_or_try_init(py, || -> PyResult<PyObject> {
+                    Ok(py.import("fltk._native")?.getattr("UnknownSpan")?.unbind())
+                })?
                 .clone_ref(py),
         };
         Ok(Identifier {
@@ -156,7 +160,7 @@ impl Identifier {
                 "Expected one name child but have {count}"
             )));
         }
-        Ok(found.expect("invariant: count==1 but found==None; logic error"))
+        Ok(found.expect("invariant: Identifier.child_name: count==1 but found==None; logic error"))
     }
 
     fn maybe_name(&self, py: Python<'_>) -> PyResult<Option<PyObject>> {
@@ -262,9 +266,10 @@ impl Items {
     fn new(py: Python<'_>, span: Option<PyObject>) -> PyResult<Self> {
         let span_obj = match span {
             Some(s) => s,
-            None => UNKNOWN_SPAN
-                .get(py)
-                .expect("UNKNOWN_SPAN not initialized; fltk._native module not loaded")
+            None => UNKNOWN_SPAN_CACHE
+                .get_or_try_init(py, || -> PyResult<PyObject> {
+                    Ok(py.import("fltk._native")?.getattr("UnknownSpan")?.unbind())
+                })?
                 .clone_ref(py),
         };
         Ok(Items {
@@ -373,7 +378,7 @@ impl Items {
                 "Expected one item child but have {count}"
             )));
         }
-        Ok(found.expect("invariant: count==1 but found==None; logic error"))
+        Ok(found.expect("invariant: Items.child_item: count==1 but found==None; logic error"))
     }
 
     fn maybe_item(&self, py: Python<'_>) -> PyResult<Option<PyObject>> {
@@ -461,7 +466,7 @@ impl Items {
                 "Expected one no_ws child but have {count}"
             )));
         }
-        Ok(found.expect("invariant: count==1 but found==None; logic error"))
+        Ok(found.expect("invariant: Items.child_no_ws: count==1 but found==None; logic error"))
     }
 
     fn maybe_no_ws(&self, py: Python<'_>) -> PyResult<Option<PyObject>> {
@@ -549,7 +554,7 @@ impl Items {
                 "Expected one ws_allowed child but have {count}"
             )));
         }
-        Ok(found.expect("invariant: count==1 but found==None; logic error"))
+        Ok(found.expect("invariant: Items.child_ws_allowed: count==1 but found==None; logic error"))
     }
 
     fn maybe_ws_allowed(&self, py: Python<'_>) -> PyResult<Option<PyObject>> {
@@ -637,7 +642,7 @@ impl Items {
                 "Expected one ws_required child but have {count}"
             )));
         }
-        Ok(found.expect("invariant: count==1 but found==None; logic error"))
+        Ok(found.expect("invariant: Items.child_ws_required: count==1 but found==None; logic error"))
     }
 
     fn maybe_ws_required(&self, py: Python<'_>) -> PyResult<Option<PyObject>> {
@@ -734,9 +739,10 @@ impl Trivia {
     fn new(py: Python<'_>, span: Option<PyObject>) -> PyResult<Self> {
         let span_obj = match span {
             Some(s) => s,
-            None => UNKNOWN_SPAN
-                .get(py)
-                .expect("UNKNOWN_SPAN not initialized; fltk._native module not loaded")
+            None => UNKNOWN_SPAN_CACHE
+                .get_or_try_init(py, || -> PyResult<PyObject> {
+                    Ok(py.import("fltk._native")?.getattr("UnknownSpan")?.unbind())
+                })?
                 .clone_ref(py),
         };
         Ok(Trivia {
@@ -845,7 +851,7 @@ impl Trivia {
                 "Expected one content child but have {count}"
             )));
         }
-        Ok(found.expect("invariant: count==1 but found==None; logic error"))
+        Ok(found.expect("invariant: Trivia.child_content: count==1 but found==None; logic error"))
     }
 
     fn maybe_content(&self, py: Python<'_>) -> PyResult<Option<PyObject>> {
