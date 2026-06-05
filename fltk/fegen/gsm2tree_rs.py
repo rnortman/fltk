@@ -41,9 +41,7 @@ class RustCstGenerator:
 
     def __init__(self, grammar: gsm.Grammar):
         context = create_default_context()
-        grammar_with_trivia = gsm.classify_trivia_rules(
-            gsm.add_trivia_rule_to_grammar(grammar, context)
-        )
+        grammar_with_trivia = gsm.classify_trivia_rules(gsm.add_trivia_rule_to_grammar(grammar, context))
         self._py_gen = CstGenerator(
             grammar=grammar_with_trivia,
             py_module=pyreg.Builtins,
@@ -57,10 +55,7 @@ class RustCstGenerator:
         # generated source (build-time code injection on the developer/CI host).
         for rule in self.grammar.rules:
             if not _IDENTIFIER_RE.match(rule.name):
-                msg = (
-                    f"Rule name {rule.name!r} is not a valid identifier "
-                    f"(must match {_IDENTIFIER_RE.pattern!r})"
-                )
+                msg = f"Rule name {rule.name!r} is not a valid identifier (must match {_IDENTIFIER_RE.pattern!r})"
                 raise ValueError(msg)
             for alt in rule.alternatives:
                 for item in alt.items:
@@ -314,112 +309,122 @@ class RustCstGenerator:
 
         lines: list[str] = []
 
-        lines.extend([
-            f"    fn append_{label}(&self, py: Python<'_>, child: PyObject) -> PyResult<()> {{",
-            f"        let label = {enum_name}::{rust_variant}.into_pyobject(py)?.into_any();",
-            "        let tup = PyTuple::new(py, [label, child.into_bound(py)])?;",
-            "        self.children.bind(py).append(tup)?;",
-            "        Ok(())",
-            "    }",
-            "",
-        ])
+        lines.extend(
+            [
+                f"    fn append_{label}(&self, py: Python<'_>, child: PyObject) -> PyResult<()> {{",
+                f"        let label = {enum_name}::{rust_variant}.into_pyobject(py)?.into_any();",
+                "        let tup = PyTuple::new(py, [label, child.into_bound(py)])?;",
+                "        self.children.bind(py).append(tup)?;",
+                "        Ok(())",
+                "    }",
+                "",
+            ]
+        )
 
-        lines.extend([
-            f"    fn extend_{label}(&self, py: Python<'_>, children: &Bound<'_, PyAny>) -> PyResult<()> {{",
-            f"        let label = {enum_name}::{rust_variant}.into_pyobject(py)?.into_any().unbind();",
-            "        let iter = children.try_iter()?;",
-            "        for child_result in iter {",
-            "            let child = child_result?;",
-            "            let tup = PyTuple::new(py, [label.bind(py).clone(), child])?;",
-            "            self.children.bind(py).append(tup)?;",
-            "        }",
-            "        Ok(())",
-            "    }",
-            "",
-        ])
+        lines.extend(
+            [
+                f"    fn extend_{label}(&self, py: Python<'_>, children: &Bound<'_, PyAny>) -> PyResult<()> {{",
+                f"        let label = {enum_name}::{rust_variant}.into_pyobject(py)?.into_any().unbind();",
+                "        let iter = children.try_iter()?;",
+                "        for child_result in iter {",
+                "            let child = child_result?;",
+                "            let tup = PyTuple::new(py, [label.bind(py).clone(), child])?;",
+                "            self.children.bind(py).append(tup)?;",
+                "        }",
+                "        Ok(())",
+                "    }",
+                "",
+            ]
+        )
 
         # TODO(perf-label-identity-comparison): the generated `tup.get_item(0)?.eq(&label_obj)?`
         # below performs an O(children) linear scan with equality comparison per access.
         # Identity comparison (`is`) or pre-grouped storage would be O(1). Defer until
         # profiling confirms a bottleneck; faithfully reproduces the Phase 2 template.
-        lines.extend([
-            f"    fn children_{label}(&self, py: Python<'_>) -> PyResult<Py<PyList>> {{",
-            f"        let label_obj = {enum_name}::{rust_variant}.into_pyobject(py)?;",
-            "        let result = PyList::empty(py);",
-            "        for (idx, item) in self.children.bind(py).iter().enumerate() {",
-            "            let tup = item.downcast::<PyTuple>().map_err(|e| {",
-            "                PyTypeError::new_err(format!(",
-            f'                    "{class_name}.children_{label}: children[{{idx}}] is not a tuple: {{e}}"',
-            "                ))",
-            "            })?;",
-            "            if tup.get_item(0)?.eq(&label_obj)? {",
-            "                result.append(tup.get_item(1)?)?;",
-            "            }",
-            "        }",
-            "        Ok(result.unbind())",
-            "    }",
-            "",
-        ])
+        lines.extend(
+            [
+                f"    fn children_{label}(&self, py: Python<'_>) -> PyResult<Py<PyList>> {{",
+                f"        let label_obj = {enum_name}::{rust_variant}.into_pyobject(py)?;",
+                "        let result = PyList::empty(py);",
+                "        for (idx, item) in self.children.bind(py).iter().enumerate() {",
+                "            let tup = item.downcast::<PyTuple>().map_err(|e| {",
+                "                PyTypeError::new_err(format!(",
+                f'                    "{class_name}.children_{label}: children[{{idx}}] is not a tuple: {{e}}"',
+                "                ))",
+                "            })?;",
+                "            if tup.get_item(0)?.eq(&label_obj)? {",
+                "                result.append(tup.get_item(1)?)?;",
+                "            }",
+                "        }",
+                "        Ok(result.unbind())",
+                "    }",
+                "",
+            ]
+        )
 
-        lines.extend([
-            f"    fn child_{label}(&self, py: Python<'_>) -> PyResult<PyObject> {{",
-            f"        let label_obj = {enum_name}::{rust_variant}.into_pyobject(py)?;",
-            "        let mut found: Option<PyObject> = None;",
-            "        let mut count = 0usize;",
-            "        for (idx, item) in self.children.bind(py).iter().enumerate() {",
-            "            let tup = item.downcast::<PyTuple>().map_err(|e| {",
-            "                PyTypeError::new_err(format!(",
-            f'                    "{class_name}.child_{label}: children[{{idx}}] is not a tuple: {{e}}"',
-            "                ))",
-            "            })?;",
-            "            if tup.get_item(0)?.eq(&label_obj)? {",
-            "                count += 1;",
-            "                if count == 1 {",
-            "                    found = Some(tup.get_item(1)?.unbind());",
-            "                } else {",
-            "                    break;",
-            "                }",
-            "            }",
-            "        }",
-            "        if count != 1 {",
-            "            return Err(PyValueError::new_err(format!(",
-            f'                "Expected one {label} child but have {{count}}"',
-            "            )));",
-            "        }",
-            f'        Ok(found.expect("invariant: {class_name}.child_{label}: count==1 but found==None; logic error"))',
-            "    }",
-            "",
-        ])
+        lines.extend(
+            [
+                f"    fn child_{label}(&self, py: Python<'_>) -> PyResult<PyObject> {{",
+                f"        let label_obj = {enum_name}::{rust_variant}.into_pyobject(py)?;",
+                "        let mut found: Option<PyObject> = None;",
+                "        let mut count = 0usize;",
+                "        for (idx, item) in self.children.bind(py).iter().enumerate() {",
+                "            let tup = item.downcast::<PyTuple>().map_err(|e| {",
+                "                PyTypeError::new_err(format!(",
+                f'                    "{class_name}.child_{label}: children[{{idx}}] is not a tuple: {{e}}"',
+                "                ))",
+                "            })?;",
+                "            if tup.get_item(0)?.eq(&label_obj)? {",
+                "                count += 1;",
+                "                if count == 1 {",
+                "                    found = Some(tup.get_item(1)?.unbind());",
+                "                } else {",
+                "                    break;",
+                "                }",
+                "            }",
+                "        }",
+                "        if count != 1 {",
+                "            return Err(PyValueError::new_err(format!(",
+                f'                "Expected one {label} child but have {{count}}"',
+                "            )));",
+                "        }",
+                f'        Ok(found.expect("invariant: {class_name}.child_{label}: count==1 but found==None; logic error"))',  # noqa: E501
+                "    }",
+                "",
+            ]
+        )
 
-        lines.extend([
-            f"    fn maybe_{label}(&self, py: Python<'_>) -> PyResult<Option<PyObject>> {{",
-            f"        let label_obj = {enum_name}::{rust_variant}.into_pyobject(py)?;",
-            "        let mut found: Option<PyObject> = None;",
-            "        let mut count = 0usize;",
-            "        for (idx, item) in self.children.bind(py).iter().enumerate() {",
-            "            let tup = item.downcast::<PyTuple>().map_err(|e| {",
-            "                PyTypeError::new_err(format!(",
-            f'                    "{class_name}.maybe_{label}: children[{{idx}}] is not a tuple: {{e}}"',
-            "                ))",
-            "            })?;",
-            "            if tup.get_item(0)?.eq(&label_obj)? {",
-            "                count += 1;",
-            "                if count == 1 {",
-            "                    found = Some(tup.get_item(1)?.unbind());",
-            "                } else {",
-            "                    break;",
-            "                }",
-            "            }",
-            "        }",
-            "        if count > 1 {",
-            "            return Err(PyValueError::new_err(",
-            f'                "Expected at most one {label} child but have at least 2",',
-            "            ));",
-            "        }",
-            "        Ok(found)",
-            "    }",
-            "",
-        ])
+        lines.extend(
+            [
+                f"    fn maybe_{label}(&self, py: Python<'_>) -> PyResult<Option<PyObject>> {{",
+                f"        let label_obj = {enum_name}::{rust_variant}.into_pyobject(py)?;",
+                "        let mut found: Option<PyObject> = None;",
+                "        let mut count = 0usize;",
+                "        for (idx, item) in self.children.bind(py).iter().enumerate() {",
+                "            let tup = item.downcast::<PyTuple>().map_err(|e| {",
+                "                PyTypeError::new_err(format!(",
+                f'                    "{class_name}.maybe_{label}: children[{{idx}}] is not a tuple: {{e}}"',
+                "                ))",
+                "            })?;",
+                "            if tup.get_item(0)?.eq(&label_obj)? {",
+                "                count += 1;",
+                "                if count == 1 {",
+                "                    found = Some(tup.get_item(1)?.unbind());",
+                "                } else {",
+                "                    break;",
+                "                }",
+                "            }",
+                "        }",
+                "        if count > 1 {",
+                "            return Err(PyValueError::new_err(",
+                f'                "Expected at most one {label} child but have at least 2",',
+                "            ));",
+                "        }",
+                "        Ok(found)",
+                "    }",
+                "",
+            ]
+        )
 
         return lines
 
@@ -443,7 +448,7 @@ class RustCstGenerator:
     def _hash_method(self, class_name: str) -> list[str]:
         return [
             "    fn __hash__(&self) -> PyResult<isize> {",
-            f'        Err(PyTypeError::new_err("unhashable type: \'{class_name}\'"))',
+            f"        Err(PyTypeError::new_err(\"unhashable type: '{class_name}'\"))",
             "    }",
             "",
         ]

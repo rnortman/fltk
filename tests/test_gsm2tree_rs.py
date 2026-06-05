@@ -19,6 +19,7 @@ from fltk.fegen.gsm2tree_rs import RustCstGenerator
 # PoC grammar construction
 # ---------------------------------------------------------------------------
 
+
 def _make_poc_grammar() -> gsm.Grammar:
     """Construct the same 2-rule PoC grammar used to generate src/cst_generated.rs.
 
@@ -93,6 +94,7 @@ def _make_poc_grammar() -> gsm.Grammar:
 # Minimal single-rule grammar
 # ---------------------------------------------------------------------------
 
+
 def _make_minimal_grammar() -> gsm.Grammar:
     """Single-rule grammar: numbers := digits+ (one label, no whitespace separators)."""
     numbers_rule = gsm.Rule(
@@ -121,6 +123,7 @@ def _make_minimal_grammar() -> gsm.Grammar:
 # Zero-label grammar (unlabeled INCLUDE items)
 # ---------------------------------------------------------------------------
 
+
 def _make_zero_label_grammar() -> gsm.Grammar:
     """Rule with no labeled items — label enum must be omitted."""
     unlabeled_rule = gsm.Rule(
@@ -148,6 +151,7 @@ def _make_zero_label_grammar() -> gsm.Grammar:
 # ---------------------------------------------------------------------------
 # Fixtures
 # ---------------------------------------------------------------------------
+
 
 @pytest.fixture(scope="module")
 def poc_source() -> str:
@@ -178,6 +182,7 @@ def fegen_source() -> str:
 # ---------------------------------------------------------------------------
 # AC-10: Preamble correctness
 # ---------------------------------------------------------------------------
+
 
 class TestPreamble:
     def test_required_use_declarations(self, poc_source: str) -> None:
@@ -211,6 +216,7 @@ class TestPreamble:
 # ---------------------------------------------------------------------------
 # AC-1 precondition: expected labels in generated source
 # ---------------------------------------------------------------------------
+
 
 class TestPocGrammarLabels:
     def test_identifier_label_enum_present(self, poc_source: str) -> None:
@@ -254,6 +260,7 @@ class TestPocGrammarLabels:
 # Node struct structure
 # ---------------------------------------------------------------------------
 
+
 class TestNodeStructure:
     def test_identifier_struct_present(self, poc_source: str) -> None:
         assert "pub struct Identifier {" in poc_source
@@ -282,6 +289,7 @@ class TestNodeStructure:
 # ---------------------------------------------------------------------------
 # AC-5: register_classes function
 # ---------------------------------------------------------------------------
+
 
 class TestRegisterClasses:
     def test_register_classes_function_present(self, poc_source: str) -> None:
@@ -315,15 +323,37 @@ class TestRegisterClasses:
 # ---------------------------------------------------------------------------
 
 FEGEN_RULE_NAMES = [
-    "grammar", "rule", "alternatives", "items", "item", "term",
-    "disposition", "quantifier", "identifier", "raw_string", "literal",
-    "_trivia", "line_comment", "block_comment",
+    "grammar",
+    "rule",
+    "alternatives",
+    "items",
+    "item",
+    "term",
+    "disposition",
+    "quantifier",
+    "identifier",
+    "raw_string",
+    "literal",
+    "_trivia",
+    "line_comment",
+    "block_comment",
 ]
 
 FEGEN_CLASS_NAMES = [
-    "Grammar", "Rule", "Alternatives", "Items", "Item", "Term",
-    "Disposition", "Quantifier", "Identifier", "RawString", "Literal",
-    "Trivia", "LineComment", "BlockComment",
+    "Grammar",
+    "Rule",
+    "Alternatives",
+    "Items",
+    "Item",
+    "Term",
+    "Disposition",
+    "Quantifier",
+    "Identifier",
+    "RawString",
+    "Literal",
+    "Trivia",
+    "LineComment",
+    "BlockComment",
 ]
 
 # Each rule name must map to its expected class name via class_name_for_rule_node.
@@ -365,12 +395,19 @@ class TestFegenGrammar:
         # Build a minimal CstGenerator with a dummy grammar to access the name helper.
         dummy_rule = gsm.Rule(
             name="dummy",
-            alternatives=[gsm.Items(items=[gsm.Item(
-                label="x",
-                disposition=gsm.Disposition.INCLUDE,
-                term=gsm.Regex(r"x"),
-                quantifier=gsm.REQUIRED,
-            )], sep_after=[gsm.Separator.NO_WS])],
+            alternatives=[
+                gsm.Items(
+                    items=[
+                        gsm.Item(
+                            label="x",
+                            disposition=gsm.Disposition.INCLUDE,
+                            term=gsm.Regex(r"x"),
+                            quantifier=gsm.REQUIRED,
+                        )
+                    ],
+                    sep_after=[gsm.Separator.NO_WS],
+                )
+            ],
         )
         dummy_grammar = gsm.Grammar(rules=(dummy_rule,), identifiers={"dummy": dummy_rule})
         gen = CstGenerator(grammar=dummy_grammar, py_module=pyreg.Builtins, context=create_default_context())
@@ -383,6 +420,7 @@ class TestFegenGrammar:
 # ---------------------------------------------------------------------------
 # AC-9: Minimal grammar (single-rule, no crash)
 # ---------------------------------------------------------------------------
+
 
 @pytest.fixture(scope="module")
 def minimal_source() -> str:
@@ -412,6 +450,7 @@ class TestMinimalGrammar:
 # ---------------------------------------------------------------------------
 # Determinism constraint
 # ---------------------------------------------------------------------------
+
 
 class TestDeterministicOutput:
     def test_two_calls_produce_identical_strings(self) -> None:
@@ -453,6 +492,7 @@ class TestDeterministicOutput:
 # ---------------------------------------------------------------------------
 # OQ-empty-label-enum: zero-label rules omit the label enum
 # ---------------------------------------------------------------------------
+
 
 class TestEmptyLabelEnumOmitted:
     def test_zero_label_rule_omits_label_enum(self) -> None:

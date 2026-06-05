@@ -101,9 +101,7 @@ def _load_rust_cst_classes(module_name: str) -> dict[str, object]:
         # init must propagate as themselves.
         raise RustBackendUnavailableError(module_name) from exc
     classes: dict[str, object] = {
-        name: obj
-        for name, obj in vars(module).items()
-        if not name.startswith("_") and isinstance(obj, type)
+        name: obj for name, obj in vars(module).items() if not name.startswith("_") and isinstance(obj, type)
     }
     if not classes:
         raise RustBackendUnavailableError(module_name, detail="module loaded but exposes no CST classes")

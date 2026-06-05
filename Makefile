@@ -1,12 +1,19 @@
-.PHONY: check lint typecheck test cargo-check cargo-test cargo-clippy \
-        build-native build-test-user-ext build-fegen-rust-cst gen-rust-cst
+.PHONY: check lint format-check typecheck test cargo-check cargo-test cargo-clippy \
+        build-native build-test-user-ext build-fegen-rust-cst gen-rust-cst fix
 
-# Run all checks: lint, type-check, tests, and Rust checks. This is the canonical
+# Run all checks: lint, format, type-check, tests, and Rust checks. This is the canonical
 # entry point used by CI.
-check: lint typecheck test cargo-check cargo-clippy cargo-test
+check: lint format-check typecheck test cargo-check cargo-clippy cargo-test
 
 lint:
 	uv run --group lint --group test ruff check .
+
+format-check:
+	uv run --group lint ruff format --check .
+
+fix:
+	uv run --group lint ruff check --fix .
+	uv run --group lint ruff format .
 
 typecheck:
 	uv run --group lint --group test pyright

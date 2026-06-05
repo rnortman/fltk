@@ -106,9 +106,7 @@ class TestAC8RealCst2GsmRustBackend:
 
         assert len(captured) == 1, "Cst2Gsm.__init__ not called exactly once"
         injected_cst = captured[0]
-        assert injected_cst is not fltk_cst, (
-            "Rust backend should inject the Rust CST module, not fltk_cst"
-        )
+        assert injected_cst is not fltk_cst, "Rust backend should inject the Rust CST module, not fltk_cst"
 
 
 # TODO(rust-cst-child-span-test): add a focused test that calls child_name() / child_value()

@@ -11,9 +11,7 @@ class Formatter:
         STATEMENT = enum.auto()
 
     span: fltk.fegen.pyrt.terminalsrc.Span = fltk.fegen.pyrt.terminalsrc.UnknownSpan
-    children: list[tuple[Label | None, typing.Union["Statement", "Trivia"]]] = dataclasses.field(
-        default_factory=list
-    )
+    children: list[tuple[Label | None, typing.Union["Statement", "Trivia"]]] = dataclasses.field(default_factory=list)
 
     def append(self, child: typing.Union["Statement", "Trivia"], label: Label | None = None) -> None:
         self.children.append((label, child))
@@ -423,9 +421,9 @@ class Default:
         WS_REQUIRED = enum.auto()
 
     span: fltk.fegen.pyrt.terminalsrc.Span = fltk.fegen.pyrt.terminalsrc.UnknownSpan
-    children: list[
-        tuple[Label | None, typing.Union["Spacing", "Trivia", "fltk.fegen.pyrt.terminalsrc.Span"]]
-    ] = dataclasses.field(default_factory=list)
+    children: list[tuple[Label | None, typing.Union["Spacing", "Trivia", "fltk.fegen.pyrt.terminalsrc.Span"]]] = (
+        dataclasses.field(default_factory=list)
+    )
 
     def append(
         self,
@@ -534,13 +532,11 @@ class RuleConfig:
         RULE_STATEMENT = enum.auto()
 
     span: fltk.fegen.pyrt.terminalsrc.Span = fltk.fegen.pyrt.terminalsrc.UnknownSpan
-    children: list[tuple[Label | None, typing.Union["Identifier", "RuleStatement", "Trivia"]]] = (
-        dataclasses.field(default_factory=list)
+    children: list[tuple[Label | None, typing.Union["Identifier", "RuleStatement", "Trivia"]]] = dataclasses.field(
+        default_factory=list
     )
 
-    def append(
-        self, child: typing.Union["Identifier", "RuleStatement", "Trivia"], label: Label | None = None
-    ) -> None:
+    def append(self, child: typing.Union["Identifier", "RuleStatement", "Trivia"], label: Label | None = None) -> None:
         self.children.append((label, child))
 
     def extend(
@@ -951,8 +947,8 @@ class Nest:
         TO_SPEC = enum.auto()
 
     span: fltk.fegen.pyrt.terminalsrc.Span = fltk.fegen.pyrt.terminalsrc.UnknownSpan
-    children: list[tuple[Label | None, typing.Union["FromSpec", "Integer", "ToSpec", "Trivia"]]] = (
-        dataclasses.field(default_factory=list)
+    children: list[tuple[Label | None, typing.Union["FromSpec", "Integer", "ToSpec", "Trivia"]]] = dataclasses.field(
+        default_factory=list
     )
 
     def append(
@@ -1051,8 +1047,8 @@ class Join:
         TO_SPEC = enum.auto()
 
     span: fltk.fegen.pyrt.terminalsrc.Span = fltk.fegen.pyrt.terminalsrc.UnknownSpan
-    children: list[tuple[Label | None, typing.Union["DocLiteral", "FromSpec", "ToSpec", "Trivia"]]] = (
-        dataclasses.field(default_factory=list)
+    children: list[tuple[Label | None, typing.Union["DocLiteral", "FromSpec", "ToSpec", "Trivia"]]] = dataclasses.field(
+        default_factory=list
     )
 
     def append(
@@ -1150,9 +1146,9 @@ class FromSpec:
         FROM_ANCHOR = enum.auto()
 
     span: fltk.fegen.pyrt.terminalsrc.Span = fltk.fegen.pyrt.terminalsrc.UnknownSpan
-    children: list[
-        tuple[Label | None, typing.Union["Anchor", "Trivia", "fltk.fegen.pyrt.terminalsrc.Span"]]
-    ] = dataclasses.field(default_factory=list)
+    children: list[tuple[Label | None, typing.Union["Anchor", "Trivia", "fltk.fegen.pyrt.terminalsrc.Span"]]] = (
+        dataclasses.field(default_factory=list)
+    )
 
     def append(
         self,
@@ -1234,9 +1230,9 @@ class ToSpec:
         TO_ANCHOR = enum.auto()
 
     span: fltk.fegen.pyrt.terminalsrc.Span = fltk.fegen.pyrt.terminalsrc.UnknownSpan
-    children: list[
-        tuple[Label | None, typing.Union["Anchor", "Trivia", "fltk.fegen.pyrt.terminalsrc.Span"]]
-    ] = dataclasses.field(default_factory=list)
+    children: list[tuple[Label | None, typing.Union["Anchor", "Trivia", "fltk.fegen.pyrt.terminalsrc.Span"]]] = (
+        dataclasses.field(default_factory=list)
+    )
 
     def append(
         self,
@@ -1318,9 +1314,7 @@ class Anchor:
         LITERAL = enum.auto()
 
     span: fltk.fegen.pyrt.terminalsrc.Span = fltk.fegen.pyrt.terminalsrc.UnknownSpan
-    children: list[tuple[Label | None, typing.Union["Identifier", "Literal"]]] = dataclasses.field(
-        default_factory=list
-    )
+    children: list[tuple[Label | None, typing.Union["Identifier", "Literal"]]] = dataclasses.field(default_factory=list)
 
     def append(self, child: typing.Union["Identifier", "Literal"], label: Label | None = None) -> None:
         self.children.append((label, child))
@@ -1390,8 +1384,8 @@ class After:
         POSITION_SPEC_STATEMENT = enum.auto()
 
     span: fltk.fegen.pyrt.terminalsrc.Span = fltk.fegen.pyrt.terminalsrc.UnknownSpan
-    children: list[tuple[Label | None, typing.Union["Anchor", "PositionSpecStatement", "Trivia"]]] = (
-        dataclasses.field(default_factory=list)
+    children: list[tuple[Label | None, typing.Union["Anchor", "PositionSpecStatement", "Trivia"]]] = dataclasses.field(
+        default_factory=list
     )
 
     def append(
@@ -1470,8 +1464,8 @@ class Before:
         POSITION_SPEC_STATEMENT = enum.auto()
 
     span: fltk.fegen.pyrt.terminalsrc.Span = fltk.fegen.pyrt.terminalsrc.UnknownSpan
-    children: list[tuple[Label | None, typing.Union["Anchor", "PositionSpecStatement", "Trivia"]]] = (
-        dataclasses.field(default_factory=list)
+    children: list[tuple[Label | None, typing.Union["Anchor", "PositionSpecStatement", "Trivia"]]] = dataclasses.field(
+        default_factory=list
     )
 
     def append(
@@ -1549,16 +1543,12 @@ class Omit:
         ANCHOR = enum.auto()
 
     span: fltk.fegen.pyrt.terminalsrc.Span = fltk.fegen.pyrt.terminalsrc.UnknownSpan
-    children: list[tuple[Label | None, typing.Union["Anchor", "Trivia"]]] = dataclasses.field(
-        default_factory=list
-    )
+    children: list[tuple[Label | None, typing.Union["Anchor", "Trivia"]]] = dataclasses.field(default_factory=list)
 
     def append(self, child: typing.Union["Anchor", "Trivia"], label: Label | None = None) -> None:
         self.children.append((label, child))
 
-    def extend(
-        self, children: typing.Iterable[typing.Union["Anchor", "Trivia"]], label: Label | None = None
-    ) -> None:
+    def extend(self, children: typing.Iterable[typing.Union["Anchor", "Trivia"]], label: Label | None = None) -> None:
         self.children.extend((label, child) for child in children)
 
     def child(self) -> tuple[Label | None, typing.Union["Anchor", "Trivia"]]:
@@ -1672,13 +1662,11 @@ class PositionSpecStatement:
         SPACING = enum.auto()
 
     span: fltk.fegen.pyrt.terminalsrc.Span = fltk.fegen.pyrt.terminalsrc.UnknownSpan
-    children: list[tuple[Label | None, typing.Union["PreserveBlanks", "Spacing", "Trivia"]]] = (
-        dataclasses.field(default_factory=list)
+    children: list[tuple[Label | None, typing.Union["PreserveBlanks", "Spacing", "Trivia"]]] = dataclasses.field(
+        default_factory=list
     )
 
-    def append(
-        self, child: typing.Union["PreserveBlanks", "Spacing", "Trivia"], label: Label | None = None
-    ) -> None:
+    def append(self, child: typing.Union["PreserveBlanks", "Spacing", "Trivia"], label: Label | None = None) -> None:
         self.children.append((label, child))
 
     def extend(
@@ -1761,9 +1749,9 @@ class Spacing:
         SOFT = enum.auto()
 
     span: fltk.fegen.pyrt.terminalsrc.Span = fltk.fegen.pyrt.terminalsrc.UnknownSpan
-    children: list[
-        tuple[Label | None, typing.Union["Integer", "Trivia", "fltk.fegen.pyrt.terminalsrc.Span"]]
-    ] = dataclasses.field(default_factory=list)
+    children: list[tuple[Label | None, typing.Union["Integer", "Trivia", "fltk.fegen.pyrt.terminalsrc.Span"]]] = (
+        dataclasses.field(default_factory=list)
+    )
 
     def append(
         self,
@@ -2155,16 +2143,12 @@ class TextLiteral:
         TEXT = enum.auto()
 
     span: fltk.fegen.pyrt.terminalsrc.Span = fltk.fegen.pyrt.terminalsrc.UnknownSpan
-    children: list[tuple[Label | None, typing.Union["Literal", "Trivia"]]] = dataclasses.field(
-        default_factory=list
-    )
+    children: list[tuple[Label | None, typing.Union["Literal", "Trivia"]]] = dataclasses.field(default_factory=list)
 
     def append(self, child: typing.Union["Literal", "Trivia"], label: Label | None = None) -> None:
         self.children.append((label, child))
 
-    def extend(
-        self, children: typing.Iterable[typing.Union["Literal", "Trivia"]], label: Label | None = None
-    ) -> None:
+    def extend(self, children: typing.Iterable[typing.Union["Literal", "Trivia"]], label: Label | None = None) -> None:
         self.children.extend((label, child) for child in children)
 
     def child(self) -> tuple[Label | None, typing.Union["Literal", "Trivia"]]:
@@ -2256,13 +2240,11 @@ class JoinLiteral:
         SEPARATOR = enum.auto()
 
     span: fltk.fegen.pyrt.terminalsrc.Span = fltk.fegen.pyrt.terminalsrc.UnknownSpan
-    children: list[tuple[Label | None, typing.Union["DocListLiteral", "DocLiteral", "Trivia"]]] = (
-        dataclasses.field(default_factory=list)
+    children: list[tuple[Label | None, typing.Union["DocListLiteral", "DocLiteral", "Trivia"]]] = dataclasses.field(
+        default_factory=list
     )
 
-    def append(
-        self, child: typing.Union["DocListLiteral", "DocLiteral", "Trivia"], label: Label | None = None
-    ) -> None:
+    def append(self, child: typing.Union["DocListLiteral", "DocLiteral", "Trivia"], label: Label | None = None) -> None:
         self.children.append((label, child))
 
     def extend(
@@ -2337,9 +2319,7 @@ class DocListLiteral:
         DOC_LITERAL = enum.auto()
 
     span: fltk.fegen.pyrt.terminalsrc.Span = fltk.fegen.pyrt.terminalsrc.UnknownSpan
-    children: list[tuple[Label | None, typing.Union["DocLiteral", "Trivia"]]] = dataclasses.field(
-        default_factory=list
-    )
+    children: list[tuple[Label | None, typing.Union["DocLiteral", "Trivia"]]] = dataclasses.field(default_factory=list)
 
     def append(self, child: typing.Union["DocLiteral", "Trivia"], label: Label | None = None) -> None:
         self.children.append((label, child))
@@ -2391,9 +2371,9 @@ class CompoundLiteral:
         NEST = enum.auto()
 
     span: fltk.fegen.pyrt.terminalsrc.Span = fltk.fegen.pyrt.terminalsrc.UnknownSpan
-    children: list[
-        tuple[Label | None, typing.Union["DocLiteral", "Trivia", "fltk.fegen.pyrt.terminalsrc.Span"]]
-    ] = dataclasses.field(default_factory=list)
+    children: list[tuple[Label | None, typing.Union["DocLiteral", "Trivia", "fltk.fegen.pyrt.terminalsrc.Span"]]] = (
+        dataclasses.field(default_factory=list)
+    )
 
     def append(
         self,
@@ -2557,9 +2537,7 @@ class TriviaNodeList:
         IDENTIFIER = enum.auto()
 
     span: fltk.fegen.pyrt.terminalsrc.Span = fltk.fegen.pyrt.terminalsrc.UnknownSpan
-    children: list[tuple[Label | None, typing.Union["Identifier", "Trivia"]]] = dataclasses.field(
-        default_factory=list
-    )
+    children: list[tuple[Label | None, typing.Union["Identifier", "Trivia"]]] = dataclasses.field(default_factory=list)
 
     def append(self, child: typing.Union["Identifier", "Trivia"], label: Label | None = None) -> None:
         self.children.append((label, child))
@@ -2609,16 +2587,12 @@ class PreserveBlanks:
         COUNT = enum.auto()
 
     span: fltk.fegen.pyrt.terminalsrc.Span = fltk.fegen.pyrt.terminalsrc.UnknownSpan
-    children: list[tuple[Label | None, typing.Union["Integer", "Trivia"]]] = dataclasses.field(
-        default_factory=list
-    )
+    children: list[tuple[Label | None, typing.Union["Integer", "Trivia"]]] = dataclasses.field(default_factory=list)
 
     def append(self, child: typing.Union["Integer", "Trivia"], label: Label | None = None) -> None:
         self.children.append((label, child))
 
-    def extend(
-        self, children: typing.Iterable[typing.Union["Integer", "Trivia"]], label: Label | None = None
-    ) -> None:
+    def extend(self, children: typing.Iterable[typing.Union["Integer", "Trivia"]], label: Label | None = None) -> None:
         self.children.extend((label, child) for child in children)
 
     def child(self) -> tuple[Label | None, typing.Union["Integer", "Trivia"]]:
@@ -2657,16 +2631,12 @@ class Identifier:
         NAME = enum.auto()
 
     span: fltk.fegen.pyrt.terminalsrc.Span = fltk.fegen.pyrt.terminalsrc.UnknownSpan
-    children: list[tuple[Label | None, "fltk.fegen.pyrt.terminalsrc.Span"]] = dataclasses.field(
-        default_factory=list
-    )
+    children: list[tuple[Label | None, "fltk.fegen.pyrt.terminalsrc.Span"]] = dataclasses.field(default_factory=list)
 
     def append(self, child: "fltk.fegen.pyrt.terminalsrc.Span", label: Label | None = None) -> None:
         self.children.append((label, child))
 
-    def extend(
-        self, children: typing.Iterable["fltk.fegen.pyrt.terminalsrc.Span"], label: Label | None = None
-    ) -> None:
+    def extend(self, children: typing.Iterable["fltk.fegen.pyrt.terminalsrc.Span"], label: Label | None = None) -> None:
         self.children.extend((label, child) for child in children)
 
     def child(self) -> tuple[Label | None, "fltk.fegen.pyrt.terminalsrc.Span"]:
@@ -2705,16 +2675,12 @@ class Literal:
         VALUE = enum.auto()
 
     span: fltk.fegen.pyrt.terminalsrc.Span = fltk.fegen.pyrt.terminalsrc.UnknownSpan
-    children: list[tuple[Label | None, "fltk.fegen.pyrt.terminalsrc.Span"]] = dataclasses.field(
-        default_factory=list
-    )
+    children: list[tuple[Label | None, "fltk.fegen.pyrt.terminalsrc.Span"]] = dataclasses.field(default_factory=list)
 
     def append(self, child: "fltk.fegen.pyrt.terminalsrc.Span", label: Label | None = None) -> None:
         self.children.append((label, child))
 
-    def extend(
-        self, children: typing.Iterable["fltk.fegen.pyrt.terminalsrc.Span"], label: Label | None = None
-    ) -> None:
+    def extend(self, children: typing.Iterable["fltk.fegen.pyrt.terminalsrc.Span"], label: Label | None = None) -> None:
         self.children.extend((label, child) for child in children)
 
     def child(self) -> tuple[Label | None, "fltk.fegen.pyrt.terminalsrc.Span"]:
@@ -2753,16 +2719,12 @@ class Integer:
         VALUE = enum.auto()
 
     span: fltk.fegen.pyrt.terminalsrc.Span = fltk.fegen.pyrt.terminalsrc.UnknownSpan
-    children: list[tuple[Label | None, "fltk.fegen.pyrt.terminalsrc.Span"]] = dataclasses.field(
-        default_factory=list
-    )
+    children: list[tuple[Label | None, "fltk.fegen.pyrt.terminalsrc.Span"]] = dataclasses.field(default_factory=list)
 
     def append(self, child: "fltk.fegen.pyrt.terminalsrc.Span", label: Label | None = None) -> None:
         self.children.append((label, child))
 
-    def extend(
-        self, children: typing.Iterable["fltk.fegen.pyrt.terminalsrc.Span"], label: Label | None = None
-    ) -> None:
+    def extend(self, children: typing.Iterable["fltk.fegen.pyrt.terminalsrc.Span"], label: Label | None = None) -> None:
         self.children.extend((label, child) for child in children)
 
     def child(self) -> tuple[Label | None, "fltk.fegen.pyrt.terminalsrc.Span"]:
@@ -2859,16 +2821,12 @@ class LineComment:
         PREFIX = enum.auto()
 
     span: fltk.fegen.pyrt.terminalsrc.Span = fltk.fegen.pyrt.terminalsrc.UnknownSpan
-    children: list[tuple[Label | None, "fltk.fegen.pyrt.terminalsrc.Span"]] = dataclasses.field(
-        default_factory=list
-    )
+    children: list[tuple[Label | None, "fltk.fegen.pyrt.terminalsrc.Span"]] = dataclasses.field(default_factory=list)
 
     def append(self, child: "fltk.fegen.pyrt.terminalsrc.Span", label: Label | None = None) -> None:
         self.children.append((label, child))
 
-    def extend(
-        self, children: typing.Iterable["fltk.fegen.pyrt.terminalsrc.Span"], label: Label | None = None
-    ) -> None:
+    def extend(self, children: typing.Iterable["fltk.fegen.pyrt.terminalsrc.Span"], label: Label | None = None) -> None:
         self.children.extend((label, child) for child in children)
 
     def child(self) -> tuple[Label | None, "fltk.fegen.pyrt.terminalsrc.Span"]:

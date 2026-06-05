@@ -64,6 +64,7 @@ def _span(start: int = 0, end: int = 1) -> Span:
 
 # ── AC2: module registered and exposes all rule classes ────────────────────
 
+
 class TestAC2ModuleRegistered:
     """AC2: generate_parser with Rust backend; cst_module in sys.modules, exposes classes."""
 
@@ -93,6 +94,7 @@ class TestAC2ModuleRegistered:
 
 
 # ── AC3: parse → CST → unparse roundtrip ──────────────────────────────────
+
 
 class TestAC3Roundtrip:
     """AC3: full parse → CST → unparse → render roundtrip with standalone Rust extension."""
@@ -145,6 +147,7 @@ class TestAC3Roundtrip:
 
 
 # ── AC5: API-Contract verification ────────────────────────────────────────
+
 
 class TestAC5ApiContract:
     """AC5 (PRIMARY binding): all 12 API-Contract items exercised against Rust-backed nodes.
@@ -249,7 +252,7 @@ class TestAC5ApiContract:
         evens = node.children[::2]
         assert len(evens) == 2  # children[0] and children[2]
         odds = node.children[1::2]
-        assert len(odds) == 1   # children[1]
+        assert len(odds) == 1  # children[1]
 
     def test_ac6_list_protocol_negative_index(self):
         """node.children[-1]."""
@@ -354,13 +357,18 @@ class TestAC5ApiContract:
 
 # ── AC7: Both-backend contract sweep ──────────────────────────────────────
 
+
 class TestAC7BothBackends:
     """AC7: API-Contract operations run against both Python and Rust backends."""
 
-    @pytest.mark.parametrize("pr,backend,expected_unknown", [
-        (_python_pr, "python", PyUnknownSpan),
-        (_rust_pr, "rust", UnknownSpan),
-    ], ids=["python", "rust"])
+    @pytest.mark.parametrize(
+        "pr,backend,expected_unknown",
+        [
+            (_python_pr, "python", PyUnknownSpan),
+            (_rust_pr, "rust", UnknownSpan),
+        ],
+        ids=["python", "rust"],
+    )
     def test_construction_and_span(self, pr, backend, expected_unknown):  # noqa: ARG002
         Config = pr.cst_module.Config
         node = Config()
@@ -370,30 +378,42 @@ class TestAC7BothBackends:
         node.span = s
         assert node.span == s
 
-    @pytest.mark.parametrize("pr,backend", [
-        (_python_pr, "python"),
-        (_rust_pr, "rust"),
-    ], ids=["python", "rust"])
+    @pytest.mark.parametrize(
+        "pr,backend",
+        [
+            (_python_pr, "python"),
+            (_rust_pr, "rust"),
+        ],
+        ids=["python", "rust"],
+    )
     def test_label_equality_and_hash(self, pr, backend):  # noqa: ARG002
         Operator = pr.cst_module.Operator
         assert Operator.Label.ASSIGN == Operator.Label.ASSIGN
         assert Operator.Label.ASSIGN != Operator.Label.APPEND
         assert len({Operator.Label.ASSIGN, Operator.Label.APPEND, Operator.Label.REMOVE}) == 3
 
-    @pytest.mark.parametrize("pr,backend", [
-        (_python_pr, "python"),
-        (_rust_pr, "rust"),
-    ], ids=["python", "rust"])
+    @pytest.mark.parametrize(
+        "pr,backend",
+        [
+            (_python_pr, "python"),
+            (_rust_pr, "rust"),
+        ],
+        ids=["python", "rust"],
+    )
     def test_isinstance_dispatch(self, pr, backend):  # noqa: ARG002
         Config = pr.cst_module.Config
         Entry = pr.cst_module.Entry
         assert isinstance(Config(), Config)
         assert not isinstance(Config(), Entry)
 
-    @pytest.mark.parametrize("pr,backend", [
-        (_python_pr, "python"),
-        (_rust_pr, "rust"),
-    ], ids=["python", "rust"])
+    @pytest.mark.parametrize(
+        "pr,backend",
+        [
+            (_python_pr, "python"),
+            (_rust_pr, "rust"),
+        ],
+        ids=["python", "rust"],
+    )
     def test_children_list_protocol(self, pr, backend):  # noqa: ARG002
         Entry = pr.cst_module.Entry
         Identifier = pr.cst_module.Identifier
@@ -407,10 +427,14 @@ class TestAC7BothBackends:
         # Negative index
         assert node.children[-1][0] == Entry.Label.VALUE
 
-    @pytest.mark.parametrize("pr,backend", [
-        (_python_pr, "python"),
-        (_rust_pr, "rust"),
-    ], ids=["python", "rust"])
+    @pytest.mark.parametrize(
+        "pr,backend",
+        [
+            (_python_pr, "python"),
+            (_rust_pr, "rust"),
+        ],
+        ids=["python", "rust"],
+    )
     def test_full_parse_roundtrip(self, pr, backend):
         ur = generate_unparser(_grammar, pr.cst_module_name)
         result = parse_text(pr, "key = 99;", "config")

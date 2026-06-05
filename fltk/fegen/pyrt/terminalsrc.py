@@ -13,8 +13,8 @@ class Span:
     _source: str | None = field(default=None, repr=False, compare=False, hash=False)
 
     def text(self) -> str | None:
-        """Return the source text slice ``[start, end)``, or ``None`` if no source is attached or indices are invalid.
-        """
+        """Return the source text slice ``[start, end)``, or ``None`` if no source is attached or indices are
+        invalid."""
         if self._source is None:
             return None
         start, end = self.start, self.end
