@@ -58,7 +58,8 @@ def _read_and_parse_grammar(grammar_file: Path) -> gsm.Grammar:
         raise typer.Exit(1)
 
     cst2gsm = fltk2gsm.Cst2Gsm(terminals.terminals)
-    # nominal nested-Label mismatch; see _DEFAULT_CST in fltk2gsm.py
+    # result.result is typed Any (ParseResult.cst: Any); cast to satisfy visit_grammar's annotation.
+    # TODO(parse-result-typed): make ParseResult generic so callers don't need individual casts.
     return cst2gsm.visit_grammar(cast("cstp.GrammarNode", result.result))
 
 
@@ -182,9 +183,10 @@ def generate(
     cstgen = gsm2tree.CstGenerator(grammar=grammar, py_module=cst_module, context=create_default_context())
 
     cst_mod = cstgen.gen_py_module()
+    cst_text = ast.unparse(cst_mod)  # generate before opening file so a generation error doesn't leave a partial file
     try:
-        with shared_cst.open("w") as f:
-            f.write(ast.unparse(cst_mod))
+        with shared_cst.open("w", newline="\n") as f:
+            f.write(cst_text)
     except OSError as e:
         typer.echo(f"Error: Failed to write shared CST file '{shared_cst}': {e}", err=True)
         raise typer.Exit(1) from e
@@ -192,14 +194,15 @@ def generate(
     shared_cst_protocol = output_dir / f"{base_name}_cst_protocol.py"
     if verbose:
         typer.echo("Generating CST Protocol module...")
+    # Generate before opening the file so any AST construction error doesn't leave a partial artifact.
     protocol_mod = cstgen.gen_protocol_module()
+    # Prepend file-level ruff suppressions:
+    # N802: CstModule @property methods have PascalCase names matching module attributes (intentional).
+    # F821: nested Label class self-references are forward refs safe under `from __future__ import annotations`.
+    protocol_text = "# ruff: noqa: N802, F821\n" + ast.unparse(protocol_mod)
     try:
-        with shared_cst_protocol.open("w") as f:
-            # Prepend file-level ruff suppressions:
-            # N802: CstModule @property methods have PascalCase names matching module attributes (intentional).
-            # F821: nested Label class self-references are forward refs safe under `from __future__ import annotations`.
-            f.write("# ruff: noqa: N802, F821\n")
-            f.write(ast.unparse(protocol_mod))
+        with shared_cst_protocol.open("w", newline="\n") as f:
+            f.write(protocol_text)
     except OSError as e:
         typer.echo(f"Error: Failed to write CST Protocol file '{shared_cst_protocol}': {e}", err=True)
         raise typer.Exit(1) from e

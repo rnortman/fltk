@@ -286,22 +286,36 @@ class CstGenerator:
         """Rule name → Protocol class name; must stay in sync with class_name_for_rule_node."""
         return self.class_name_for_rule_node(rule_name) + "Node"
 
-    def protocol_annotation_for_model_types(self, *, model_types: Iterable[ModelType]) -> str:
+    # TODO(cst-protocol-generator-refactor): this method mirrors py_annotation_for_model_types (gsm2tree.py:85)
+    # and _protocol_class_for_model mirrors py_class_for_model (gsm2tree.py:109).  Unify both pairs with
+    # shared skeletons parameterized by annotation resolver / Label body / method bodies / base class.
+    def protocol_annotation_for_model_types(self, *, model_types: Iterable[ModelType], class_name: str = "") -> str:
         """Return a Python annotation string for model_types.
 
         Uses <Name>Node for rule references (Protocol classes) and library-type annotations for everything else.
+
+        Quoting asymmetry is intentional: rule references are quoted strings (e.g. '"RuleNode"') because they are
+        forward references to Protocol classes defined later in the same module, while library types (e.g.
+        fltk.fegen.pyrt.terminalsrc.Span) are unquoted module paths resolved at import time.  The generated module
+        carries `from __future__ import annotations`, which makes all annotations lazy, so the explicit quoting on
+        rule refs is redundant there — but kept for clarity and consistency with how fltk_cst.py emits forward refs.
         """
         parts = []
         for model_type in model_types:
             if isinstance(model_type, str):
-                # rule reference -> Protocol node name
+                # rule reference -> Protocol node name (quoted forward ref)
                 parts.append(f'"{self.protocol_node_name(model_type)}"')
             else:
-                # library type (Span, etc.) -> use the existing iir-to-annotation path
+                # library type (Span, etc.) -> use the existing iir-to-annotation path (unquoted)
                 iir_type = typemodel.lookup_type(model_type)
                 parts.append(pycompiler.iir_type_to_py_annotation(iir_type, self.context))
-        parts = sorted(parts)
-        assert len(parts) > 0  # noqa: S101
+        # Sort for deterministic output; quoted rule names (starting with '"') sort before unquoted library
+        # paths alphabetically by ASCII order, but both categories are distinct and sort is stable within each.
+        parts = sorted(set(parts))  # deduplicate then sort for deterministic Union member order
+        if not parts:
+            rule_ctx = f" for rule {class_name!r}" if class_name else ""
+            msg = f"Rule node{rule_ctx} has no child types in its model; cannot generate annotation"
+            raise ValueError(msg)
         if len(parts) > 1:
             return f"typing.Union[{', '.join(parts)}]"
         return parts[0]
@@ -343,11 +357,16 @@ class CstGenerator:
 
         klass.body.append(pygen.stmt("span: fltk.fegen.pyrt.terminalsrc.Span"))
 
-        child_annotation = self.protocol_annotation_for_model_types(model_types=model.types)
+        child_annotation = self.protocol_annotation_for_model_types(model_types=model.types, class_name=class_name)
 
         if labels:
             klass.body.append(pygen.stmt(f"children: list[tuple[typing.Optional[Label], {child_annotation}]]"))
         else:
+            # TODO(cst-protocol-label-free): label-free nodes use tuple[None, T] rather than
+            # tuple[Label | None, T], creating an asymmetry with label-bearing nodes.  Generic
+            # consumers iterating children of arbitrary node types must case-split on this.
+            # Fix by introducing a vacuous Label class for label-free nodes or a module-level
+            # _NoLabel alias so all children share the same tuple shape.
             klass.body.append(pygen.stmt(f"children: list[tuple[None, {child_annotation}]]"))
 
         label_annotation = "typing.Optional[Label]" if labels else "None"
@@ -373,7 +392,9 @@ class CstGenerator:
         klass.body.append(child_fn)
 
         for label in labels:
-            label_type_annotation = self.protocol_annotation_for_model_types(model_types=model.labels[label])
+            label_type_annotation = self.protocol_annotation_for_model_types(
+                model_types=model.labels[label], class_name=f"{class_name}.{label}"
+            )
 
             # append_<label>
             fn = pygen.function(f"append_{label}", f"self, child: {label_type_annotation}", "None")

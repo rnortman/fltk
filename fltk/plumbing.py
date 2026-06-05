@@ -144,7 +144,8 @@ def parse_grammar(grammar_text: str, *, rust_fegen_cst_module: str | None = None
             raise ValueError(msg)
 
         cst2gsm = fltk2gsm.Cst2Gsm(terminals.terminals)
-        # nominal nested-Label mismatch; see _DEFAULT_CST in fltk2gsm.py
+        # result.result is typed Any (ParseResult.cst: Any); cast to satisfy visit_grammar's annotation.
+        # TODO(parse-result-typed): make ParseResult generic so callers don't need individual casts.
         return cst2gsm.visit_grammar(cast("cstp.GrammarNode", result.result))
     else:
         # Rust backend: build a fegen parser bound to the Rust fegen CST module.
@@ -173,6 +174,8 @@ def parse_grammar(grammar_text: str, *, rust_fegen_cst_module: str | None = None
         # Inject the Rust CST namespace; pr.cst_module is ModuleType at runtime.
         # Rust-injection boundary cast per di-boundary-escape decision (design.md).
         cst2gsm = fltk2gsm.Cst2Gsm(terminals.terminals, cst=cast("cstp.CstModule", pr.cst_module))
+        # result.result is typed Any (ParseResult.cst: Any); cast to satisfy visit_grammar's annotation.
+        # TODO(parse-result-typed): make ParseResult generic so callers don't need individual casts.
         return cst2gsm.visit_grammar(cast("cstp.GrammarNode", result.result))
 
 

@@ -46,7 +46,8 @@ def parse_grammar_file(grammar_path: Path) -> tuple[gsm.Grammar, str]:
         raise RuntimeError(msg)
 
     cst2gsm = fltk2gsm.Cst2Gsm(terminals.terminals)
-    # nominal nested-Label mismatch; see _DEFAULT_CST in fltk2gsm.py
+    # result.result is typed Any (ParseResult.cst: Any); cast to satisfy visit_grammar's annotation.
+    # TODO(parse-result-typed): make ParseResult generic so callers don't need individual casts.
     grammar = cst2gsm.visit_grammar(cast("cstp.GrammarNode", result.result))
 
     return grammar, terminals.terminals

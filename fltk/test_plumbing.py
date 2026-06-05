@@ -577,7 +577,8 @@ term := value:/[0-9]+/ ;
         assert result is not None and result.result is not None
 
         cst2gsm_default = Cst2Gsm(terminals.terminals)
-        # nominal nested-Label mismatch; see _DEFAULT_CST in fltk2gsm.py
+        # result.result is typed Any (ParseResult.cst: Any); cast to satisfy visit_grammar's annotation.
+        # TODO(parse-result-typed): make ParseResult generic so callers don't need individual casts.
         grammar_default = cst2gsm_default.visit_grammar(cast("cstp.GrammarNode", result.result))
 
         # Compare to the baseline produced by parse_grammar (also Python default).

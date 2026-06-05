@@ -183,9 +183,7 @@ class Items:
     )
 
     def append(
-        self,
-        child: typing.Union["Item", "Trivia", "fltk.fegen.pyrt.terminalsrc.Span"],
-        label: Label | None = None,
+        self, child: typing.Union["Item", "Trivia", "fltk.fegen.pyrt.terminalsrc.Span"], label: Label | None = None
     ) -> None:
         self.children.append((label, child))
 
@@ -196,9 +194,7 @@ class Items:
     ) -> None:
         self.children.extend((label, child) for child in children)
 
-    def child(
-        self,
-    ) -> tuple[Label | None, typing.Union["Item", "Trivia", "fltk.fegen.pyrt.terminalsrc.Span"]]:
+    def child(self) -> tuple[Label | None, typing.Union["Item", "Trivia", "fltk.fegen.pyrt.terminalsrc.Span"]]:
         if (n := len(self.children)) != 1:
             msg = f"Expected one child but have {n}"
             raise ValueError(msg)
@@ -336,9 +332,7 @@ class Item:
     ) -> None:
         self.children.extend((label, child) for child in children)
 
-    def child(
-        self,
-    ) -> tuple[Label | None, typing.Union["Disposition", "Identifier", "Quantifier", "Term", "Trivia"]]:
+    def child(self) -> tuple[Label | None, typing.Union["Disposition", "Identifier", "Quantifier", "Term", "Trivia"]]:
         if (n := len(self.children)) != 1:
             msg = f"Expected one child but have {n}"
             raise ValueError(msg)

@@ -13,7 +13,6 @@ import json
 import pathlib
 import shutil
 import subprocess
-import sys
 import textwrap
 from typing import Any
 
@@ -173,6 +172,13 @@ def test_cst_module_protocol_has_property_per_rule(
     expected_class_names = {cst_generator.class_name_for_rule_node(r) for r in cst_generator.rule_models}
     assert expected_class_names == prop_names
 
+    # These specific names are accessed by Cst2Gsm at runtime (fltk2gsm.py).
+    # If the grammar renames these rules, both the generator and fltk2gsm.py need updating.
+    for required_name in ("Items", "Item", "Disposition", "Quantifier"):
+        assert required_name in prop_names, (
+            f"CstModule missing required property '{required_name}' (accessed by Cst2Gsm at runtime)"
+        )
+
 
 # ---------------------------------------------------------------------------
 # T2a — Member-access fixture (verifies Protocol surface resolves on concrete module)
@@ -231,6 +237,36 @@ def _check_item_node(item: cstp.ItemNode) -> None:
     _ = item.maybe_label()
     _ = item.maybe_disposition()
     _ = item.maybe_quantifier()
+
+def _check_rule_node(rule: cstp.RuleNode) -> None:
+    _ = rule.span
+    _ = rule.children
+    _ = rule.child_name()
+    _ = rule.child_alternatives()
+
+def _check_term_node(term: cstp.TermNode) -> None:
+    _ = term.span
+    _ = term.children
+    _ = term.maybe_alternatives()
+    _ = term.maybe_literal()
+    _ = term.maybe_identifier()
+
+def _check_disposition_node(d: cstp.DispositionNode) -> None:
+    _ = d.span
+    _ = d.child()
+    _ = d.Label.INCLUDE
+
+def _check_quantifier_node(q: cstp.QuantifierNode) -> None:
+    _ = q.span
+    _ = q.child()
+
+def _check_literal_node(lit: cstp.LiteralNode) -> None:
+    _ = lit.span
+    _ = lit.child_value()
+
+def _check_raw_string_node(rs: cstp.RawStringNode) -> None:
+    _ = rs.span
+    _ = rs.child_value()
 """
 
 _WRONG_ACCESS_FIXTURE = """\
@@ -241,6 +277,43 @@ from fltk.fegen import fltk_cst_protocol as cstp
 def _bad_method(g: cstp.GrammarNode) -> None:
     _ = g.no_such_method()  # line 6: should be flagged by pyright
 """
+
+# Known-limitation fixture: pyright does NOT flag valid-but-semantically-wrong label comparisons.
+# The Protocol provides attribute-presence checking only (a non-existent label is flagged),
+# but comparing two valid label constants of different semantic meaning is not caught.
+# This is a nominal-enum limitation: == on ClassVar[object] members cannot distinguish semantic intent.
+# Documented here so future readers do not assume full label-value safety. See design.md.
+_WRONG_LABEL_VALUE_FIXTURE = """\
+# ruff: noqa
+from __future__ import annotations
+from fltk.fegen import fltk_cst_protocol as cstp
+
+def _compare_wrong_labels(items: cstp.ItemsNode) -> bool:
+    # Comparing ITEM vs NO_WS is semantically wrong but pyright does NOT flag it (nominal-enum limitation).
+    # Both are valid ClassVar[object] members; their values are opaque to pyright.
+    return items.Label.ITEM == items.Label.NO_WS  # line 7: valid attributes, wrong semantic comparison
+"""
+
+
+def test_wrong_label_value_not_flagged(
+    tmp_path: pathlib.Path,
+    pyright_available: bool,  # noqa: FBT001
+) -> None:
+    """T2a (known limitation): wrong-but-existing label comparison is NOT flagged by pyright.
+
+    The Protocol provides attribute-presence checking only. A valid-but-semantically-wrong label
+    comparison (e.g., Items.Label.ITEM == Items.Label.NO_WS) produces zero pyright errors.
+    This documents the nominal-enum limitation so consumers don't over-trust the type safety.
+    """
+    fixture = tmp_path / "wrong_label_value_fixture.py"
+    fixture.write_text(_WRONG_LABEL_VALUE_FIXTURE)
+    diags = run_pyright(fixture, pyright_available=pyright_available)
+    errors = [d for d in diags if d.get("severity") == "error"]
+    assert errors == [], (
+        "Unexpected: pyright now flags a valid-but-semantically-wrong label comparison. "
+        "If pyright gained nominal-enum checking, update the Protocol's Label members to use a typed enum "
+        "and remove this known-limitation test."
+    )
 
 
 def test_member_access_fixture_zero_errors(
@@ -332,7 +405,12 @@ _STANDIN_FIXTURE = textwrap.dedent("""\
         def child_rule(self): ...
         def maybe_rule(self): ...
 
-    # The stand-in is a plain class (not a dataclass) — satisfies Protocol structurally.
+    # The cast mirrors production usage: the nested-Label nominal mismatch (see design.md, DI boundary)
+    # means a direct structural assignment `_node: cstp.GrammarNode = _FakeGrammarNode()` is rejected
+    # by pyright for the same reason fltk_cst modules require a cast.  The cast here is intentional —
+    # it documents the known boundary, not a workaround for a real type gap.
+    # The member-access calls below (_node.span, _node.children_rule()) are the real T4 check:
+    # they verify that Protocol members resolve on a non-dataclass, non-enum plain class.
     _node: cstp.GrammarNode = typing.cast(cstp.GrammarNode, _FakeGrammarNode())
     _ = _node.span
     _ = _node.children_rule()
@@ -366,19 +444,29 @@ def test_fltk2gsm_does_not_import_protocol_at_runtime() -> None:
 
     The protocol module is TYPE_CHECKING-only; it must not appear in sys.modules
     after importing fltk2gsm under normal (non-type-checking) conditions.
+
+    Uses a subprocess to guarantee a clean sys.modules state regardless of collection order.
     """
-    protocol_key = "fltk.fegen.fltk_cst_protocol"
-    was_present = protocol_key in sys.modules
-    if was_present:
-        # If another test already imported it, we cannot test the clean-import case.
-        # Skip rather than give a false result.
-        pytest.skip("fltk_cst_protocol already in sys.modules (imported by a prior test or fixture)")
-
-    # Import fltk2gsm (it may already be in sys.modules from other tests).
-    # We only care that importing it does not drag in the protocol module.
-    import fltk.fegen.fltk2gsm  # noqa: F401, PLC0415
-
-    assert protocol_key not in sys.modules, (
-        "fltk.fegen.fltk_cst_protocol was imported at runtime by fltk2gsm, "
-        "but it must be TYPE_CHECKING-only to satisfy the no-runtime-cost constraint."
+    result = subprocess.run(
+        [  # noqa: S607
+            "uv",
+            "run",
+            "python",
+            "-c",
+            (
+                "import fltk.fegen.fltk2gsm; "
+                "import sys; "
+                "assert 'fltk.fegen.fltk_cst_protocol' not in sys.modules, "
+                "'fltk_cst_protocol was imported at runtime'"
+            ),
+        ],
+        capture_output=True,
+        text=True,
+        timeout=60,
+        check=False,
+    )
+    assert result.returncode == 0, (
+        "fltk.fegen.fltk_cst_protocol was imported at runtime by fltk2gsm — "
+        "it must be TYPE_CHECKING-only to satisfy the no-runtime-cost constraint.\n"
+        f"stderr: {result.stderr}"
     )
