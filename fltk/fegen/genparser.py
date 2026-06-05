@@ -5,7 +5,7 @@ Generates parsers from FLTK grammar files with options for trivia handling.
 
 import ast
 from pathlib import Path
-from typing import Annotated
+from typing import TYPE_CHECKING, Annotated, cast
 
 import typer
 
@@ -15,6 +15,9 @@ from fltk.fegen.pyrt import errors, terminalsrc
 from fltk.iir.context import CompilerContext, create_default_context
 from fltk.iir.py import compiler
 from fltk.iir.py import reg as pyreg
+
+if TYPE_CHECKING:
+    from fltk.fegen import fltk_cst_protocol as cstp
 
 app = typer.Typer(
     name="genparser",
@@ -55,7 +58,9 @@ def _read_and_parse_grammar(grammar_file: Path) -> gsm.Grammar:
         raise typer.Exit(1)
 
     cst2gsm = fltk2gsm.Cst2Gsm(terminals.terminals)
-    return cst2gsm.visit_grammar(result.result)
+    # Cast to Protocol type: result.result is a concrete fltk_cst.Grammar; pyright cannot match
+    # it to GrammarNode due to the nested-Label nominal limitation (same pattern as plumbing.py).
+    return cst2gsm.visit_grammar(cast("cstp.GrammarNode", result.result))
 
 
 def parse_grammar_file(grammar_file: Path) -> gsm.Grammar:

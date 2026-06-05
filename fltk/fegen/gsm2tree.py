@@ -346,13 +346,9 @@ class CstGenerator:
 
         # children: list[tuple[<Label> | None, <ChildType>]]
         if labels:
-            klass.body.append(
-                pygen.stmt(f"children: list[tuple[typing.Optional[Label], {child_annotation}]]")
-            )
+            klass.body.append(pygen.stmt(f"children: list[tuple[typing.Optional[Label], {child_annotation}]]"))
         else:
-            klass.body.append(
-                pygen.stmt(f"children: list[tuple[None, {child_annotation}]]")
-            )
+            klass.body.append(pygen.stmt(f"children: list[tuple[None, {child_annotation}]]"))
 
         label_annotation = "typing.Optional[Label]" if labels else "None"
 

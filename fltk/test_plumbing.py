@@ -4,12 +4,16 @@ import importlib
 import inspect
 import sys
 import types
+from typing import TYPE_CHECKING, cast
 from unittest import mock
 
 import pytest
 
 import fltk.plumbing as fltk_plumbing_mod
 from fltk.fegen import fltk_cst as _fltk_cst
+
+if TYPE_CHECKING:
+    from fltk.fegen import fltk_cst_protocol as cstp
 from fltk.fegen import fltk_parser as _fltk_parser
 from fltk.fegen.fltk2gsm import Cst2Gsm
 from fltk.fegen.pyrt import terminalsrc as _terminalsrc
@@ -574,7 +578,9 @@ term := value:/[0-9]+/ ;
 
         # Invoke Cst2Gsm with no cst= (default path).
         cst2gsm_default = Cst2Gsm(terminals.terminals)
-        grammar_default = cst2gsm_default.visit_grammar(result.result)
+        # Cast to Protocol type: result.result is a concrete fltk_cst.Grammar; pyright cannot match
+        # it to GrammarNode due to the nested-Label nominal limitation (same pattern as plumbing.py).
+        grammar_default = cst2gsm_default.visit_grammar(cast("cstp.GrammarNode", result.result))
 
         # Compare to the baseline produced by parse_grammar (also Python default).
         grammar_baseline = parse_grammar(self._GRAMMAR_SRC)

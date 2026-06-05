@@ -6,6 +6,16 @@
 - `fltk/fegen/fltk_cst.py`: regenerated as side effect + `make fix` (style normalization only; no type changes).
 - Deviation: design specified `ClassVar[Label]` for nested `Label` members; shipped `ClassVar[object]` instead. Pyright flags `ClassVar[Label]` as `reportUndefinedVariable` (self-referential nested class annotation); `ClassVar[object]` satisfies the design goal (attribute-presence check via `m.Items.Label.NO_WS` resolves) without pyright errors. The design explicitly states "attribute-presence only" as the guarantee for label checking (design.md:41), so the weaker type is consistent with stated intent.
 
+## Increment 3 — Pyright test harness + test suite (commit TBD)
+
+- Add `run_pyright` helper in `fltk/fegen/test_cst_protocol.py`: shells `uv run pyright --outputjson <file>`, parses `generalDiagnostics`, filters to target path; `pytest.skip` when pyright unavailable.
+- Test 1: Protocol generation unit test — assert per-node Protocol members for fegen grammar.
+- Test 2a: Member-access fixture — bind `CstModule`-typed var, access members; assert zero errors and deliberately-wrong access produces a diagnostic.
+- Test 2b: Boundary-assignability probe — bind bare `fltk_cst` module to `CstModule` without cast; record which members mismatch; assert expected nested-Label failures.
+- Test 4: Backend-agnostic swap — hand-written minimal stand-in satisfies `CstModule`; assert Protocol is not Python-dataclass-specific.
+- Test 5: Runtime unaffected — `fltk_cst_protocol` absent from `sys.modules` after importing `fltk2gsm` without `TYPE_CHECKING`.
+- Test 3 and Test 6 are gate-level (`uv run pyright` + `make check`); verified by running the commands after implementation.
+
 ## Increment 2 — fltk2gsm.py: restore visit_* annotations + DI boundary casts (commit ae53867)
 
 - `fltk/fegen/fltk2gsm.py:1-22`: added `from __future__ import annotations`, replaced `ModuleType` import with `typing.cast`, added `TYPE_CHECKING`-only import of `fltk_cst_protocol as cstp`.

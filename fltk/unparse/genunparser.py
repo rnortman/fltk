@@ -3,9 +3,13 @@
 import ast
 import sys
 from pathlib import Path
+from typing import TYPE_CHECKING, cast
 
 from fltk.fegen import fltk2gsm, fltk_parser, gsm
 from fltk.fegen.pyrt import errors, terminalsrc
+
+if TYPE_CHECKING:
+    from fltk.fegen import fltk_cst_protocol as cstp
 from fltk.iir.context import create_default_context
 from fltk.iir.py import compiler
 from fltk.unparse import fmt_config, toy_trivia_parser, unparsefmt_parser
@@ -43,7 +47,9 @@ def parse_grammar_file(grammar_path: Path) -> tuple[gsm.Grammar, str]:
 
     # Convert CST to GSM
     cst2gsm = fltk2gsm.Cst2Gsm(terminals.terminals)
-    grammar = cst2gsm.visit_grammar(result.result)
+    # Cast to Protocol type: result.result is a concrete fltk_cst.Grammar; pyright cannot match
+    # it to GrammarNode due to the nested-Label nominal limitation (same pattern as plumbing.py).
+    grammar = cst2gsm.visit_grammar(cast("cstp.GrammarNode", result.result))
 
     return grammar, terminals.terminals
 
