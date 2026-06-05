@@ -216,14 +216,14 @@ _item_label = _m.Items.Label.ITEM
 _disposition_include = _m.Disposition.Label.INCLUDE
 
 # Access methods on a typed instance
-def _check_grammar_node(g: cstp.GrammarNode) -> None:
+def _check_grammar_node(g: cstp.Grammar) -> None:
     _ = g.span
     _ = g.children
     _ = g.children_rule()
     _ = g.child_rule()
     _ = g.maybe_rule()
 
-def _check_items_node(items: cstp.ItemsNode) -> None:
+def _check_items_node(items: cstp.Items) -> None:
     _ = items.span
     _ = items.children
     _ = items.children_item()
@@ -232,39 +232,39 @@ def _check_items_node(items: cstp.ItemsNode) -> None:
     _ = items.Label.NO_WS
     _ = items.Label.ITEM
 
-def _check_item_node(item: cstp.ItemNode) -> None:
+def _check_item_node(item: cstp.Item) -> None:
     _ = item.child_term()
     _ = item.maybe_label()
     _ = item.maybe_disposition()
     _ = item.maybe_quantifier()
 
-def _check_rule_node(rule: cstp.RuleNode) -> None:
+def _check_rule_node(rule: cstp.Rule) -> None:
     _ = rule.span
     _ = rule.children
     _ = rule.child_name()
     _ = rule.child_alternatives()
 
-def _check_term_node(term: cstp.TermNode) -> None:
+def _check_term_node(term: cstp.Term) -> None:
     _ = term.span
     _ = term.children
     _ = term.maybe_alternatives()
     _ = term.maybe_literal()
     _ = term.maybe_identifier()
 
-def _check_disposition_node(d: cstp.DispositionNode) -> None:
+def _check_disposition_node(d: cstp.Disposition) -> None:
     _ = d.span
     _ = d.child()
     _ = d.Label.INCLUDE
 
-def _check_quantifier_node(q: cstp.QuantifierNode) -> None:
+def _check_quantifier_node(q: cstp.Quantifier) -> None:
     _ = q.span
     _ = q.child()
 
-def _check_literal_node(lit: cstp.LiteralNode) -> None:
+def _check_literal_node(lit: cstp.Literal) -> None:
     _ = lit.span
     _ = lit.child_value()
 
-def _check_raw_string_node(rs: cstp.RawStringNode) -> None:
+def _check_raw_string_node(rs: cstp.RawString) -> None:
     _ = rs.span
     _ = rs.child_value()
 """
@@ -274,7 +274,7 @@ _WRONG_ACCESS_FIXTURE = """\
 from __future__ import annotations
 from fltk.fegen import fltk_cst_protocol as cstp
 
-def _bad_method(g: cstp.GrammarNode) -> None:
+def _bad_method(g: cstp.Grammar) -> None:
     _ = g.no_such_method()  # line 6: should be flagged by pyright
 """
 
@@ -288,7 +288,7 @@ _WRONG_LABEL_VALUE_FIXTURE = """\
 from __future__ import annotations
 from fltk.fegen import fltk_cst_protocol as cstp
 
-def _compare_wrong_labels(items: cstp.ItemsNode) -> bool:
+def _compare_wrong_labels(items: cstp.Items) -> bool:
     # Comparing ITEM vs NO_WS is semantically wrong but pyright does NOT flag it (nominal-enum limitation).
     # Both are valid ClassVar[object] members; their values are opaque to pyright.
     return items.Label.ITEM == items.Label.NO_WS  # line 7: valid attributes, wrong semantic comparison
@@ -381,7 +381,7 @@ def test_boundary_probe_documents_label_mismatch(
 # ---------------------------------------------------------------------------
 
 # A minimal hand-written stand-in that confirms Protocol is not Python-dataclass-specific.
-# Uses a plain class cast to GrammarNode — no @dataclass, no enum.Enum, no specific base.
+# Uses a plain class cast to Grammar — no @dataclass, no enum.Enum, no specific base.
 _STANDIN_FIXTURE = textwrap.dedent("""\
     # ruff: noqa
     # Minimal stand-in confirms the Protocol imposes no dataclass-specific requirements.
@@ -391,7 +391,7 @@ _STANDIN_FIXTURE = textwrap.dedent("""\
     import fltk.fegen.pyrt.terminalsrc as _t
     from fltk.fegen import fltk_cst_protocol as cstp
 
-    class _FakeGrammarNode:
+    class _FakeGrammar:
         class Label:
             RULE: typing.ClassVar[object] = object()
         span: _t.Span = _t.UnknownSpan
@@ -406,12 +406,12 @@ _STANDIN_FIXTURE = textwrap.dedent("""\
         def maybe_rule(self): ...
 
     # The cast mirrors production usage: the nested-Label nominal mismatch (see design.md, DI boundary)
-    # means a direct structural assignment `_node: cstp.GrammarNode = _FakeGrammarNode()` is rejected
+    # means a direct structural assignment `_node: cstp.Grammar = _FakeGrammar()` is rejected
     # by pyright for the same reason fltk_cst modules require a cast.  The cast here is intentional —
     # it documents the known boundary, not a workaround for a real type gap.
     # The member-access calls below (_node.span, _node.children_rule()) are the real T4 check:
     # they verify that Protocol members resolve on a non-dataclass, non-enum plain class.
-    _node: cstp.GrammarNode = typing.cast(cstp.GrammarNode, _FakeGrammarNode())
+    _node: cstp.Grammar = typing.cast(cstp.Grammar, _FakeGrammar())
     _ = _node.span
     _ = _node.children_rule()
 """)
@@ -421,7 +421,7 @@ def test_protocol_is_not_dataclass_specific(
     tmp_path: pathlib.Path,
     pyright_available: bool,  # noqa: FBT001
 ) -> None:
-    """T4: A plain-class stand-in cast to GrammarNode resolves members without errors.
+    """T4: A plain-class stand-in cast to Grammar resolves members without errors.
 
     Confirms the Protocol imposes no dataclass-specific requirements (no @dataclass,
     no enum.Enum, no specific base class). The Protocol is structurally matchable by

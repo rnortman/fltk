@@ -8,39 +8,39 @@ from fltk.fegen import fltk_cst as _default_cst
 from fltk.fegen import gsm
 
 if TYPE_CHECKING:
-    from fltk.fegen import fltk_cst_protocol as cstp
+    from fltk.fegen import fltk_cst_protocol as cst
 
 # Module-level sentinel: cast _default_cst to the Protocol type so the __init__
 # default does not trigger B008 (no function call in default argument position).
 # The cast is needed because fltk_cst.Grammar.Label (and other nested Labels) are
 # concrete enum subclasses, not assignable to the Protocol's nested Label class
 # (pyright treats nested classes nominally, not structurally).
-_DEFAULT_CST: cstp.CstModule = cast("cstp.CstModule", _default_cst)
+_DEFAULT_CST: cst.CstModule = cast("cst.CstModule", _default_cst)
 
 
 class Cst2Gsm:
-    def __init__(self, terminals, cst: cstp.CstModule = _DEFAULT_CST):
+    def __init__(self, terminals, cst: cst.CstModule = _DEFAULT_CST):
         self.terminals = terminals
         self.cst = cst
 
-    def visit_grammar(self, grammar: cstp.GrammarNode) -> gsm.Grammar:
+    def visit_grammar(self, grammar: cst.Grammar) -> gsm.Grammar:
         rules = [self.visit_rule(rule) for rule in grammar.children_rule()]
         return gsm.Grammar(rules=rules, identifiers={rule.name: rule for rule in rules})
 
-    def visit_rule(self, rule: cstp.RuleNode) -> gsm.Rule:
+    def visit_rule(self, rule: cst.Rule) -> gsm.Rule:
         return gsm.Rule(
             name=self.visit_identifier(rule.child_name()).value,
             alternatives=self.visit_alternatives(rule.child_alternatives()),
         )
 
-    def visit_identifier(self, identifier: cstp.IdentifierNode) -> gsm.Identifier:
+    def visit_identifier(self, identifier: cst.Identifier) -> gsm.Identifier:
         span = identifier.child_name()
         return gsm.Identifier(self.terminals[span.start : span.end])
 
-    def visit_alternatives(self, alternatives: cstp.AlternativesNode) -> list[gsm.Items]:
+    def visit_alternatives(self, alternatives: cst.Alternatives) -> list[gsm.Items]:
         return [self.visit_items(items) for items in alternatives.children_items()]
 
-    def visit_items(self, items: cstp.ItemsNode) -> gsm.Items:
+    def visit_items(self, items: cst.Items) -> gsm.Items:
         gsm_items = []
         sep_after = []
         initial_sep = gsm.Separator.NO_WS
@@ -87,7 +87,7 @@ class Cst2Gsm:
         assert len(gsm_items) == len(sep_after)  # noqa: S101
         return gsm.Items(items=gsm_items, sep_after=sep_after, initial_sep=initial_sep)
 
-    def visit_item(self, item: cstp.ItemNode) -> gsm.Item:
+    def visit_item(self, item: cst.Item) -> gsm.Item:
         term = self.visit_term(item.child_term())
 
         # cst_label is a raw CST node; visit_identifier reads only span offsets off it,
@@ -109,7 +109,7 @@ class Cst2Gsm:
 
         return gsm.Item(label=label, disposition=disposition, term=term, quantifier=quantifier)
 
-    def visit_term(self, term: cstp.TermNode) -> gsm.Term:
+    def visit_term(self, term: cst.Term) -> gsm.Term:
         if alternatives := term.maybe_alternatives():
             return self.visit_alternatives(alternatives)
         if identifier := term.maybe_identifier():
@@ -121,7 +121,7 @@ class Cst2Gsm:
         msg = f"Unsupported term type: {term}"
         raise NotImplementedError(msg)
 
-    def visit_disposition(self, disposition: cstp.DispositionNode) -> gsm.Disposition:
+    def visit_disposition(self, disposition: cst.Disposition) -> gsm.Disposition:
         label, _ = disposition.child()
         if label == self.cst.Disposition.Label.INCLUDE:
             return gsm.Disposition.INCLUDE
@@ -132,7 +132,7 @@ class Cst2Gsm:
         msg = f"Unsupported disposition: {disposition}"
         raise NotImplementedError(msg)
 
-    def visit_quantifier(self, quantifier: cstp.QuantifierNode) -> gsm.Quantifier:
+    def visit_quantifier(self, quantifier: cst.Quantifier) -> gsm.Quantifier:
         label, _ = quantifier.child()
         if label == self.cst.Quantifier.Label.ONE_OR_MORE:
             return gsm.ONE_OR_MORE
@@ -143,10 +143,10 @@ class Cst2Gsm:
         msg = f"Unsupported quantifier: {quantifier}"
         raise NotImplementedError(msg)
 
-    def visit_literal(self, literal: cstp.LiteralNode) -> gsm.Literal:
+    def visit_literal(self, literal: cst.Literal) -> gsm.Literal:
         span = literal.child_value()
         return gsm.Literal(ast.literal_eval(self.terminals[span.start : span.end]))
 
-    def visit_regex(self, regex: cstp.RawStringNode) -> gsm.Regex:
+    def visit_regex(self, regex: cst.RawString) -> gsm.Regex:
         span = regex.child_value()
         return gsm.Regex(self.terminals[span.start : span.end])

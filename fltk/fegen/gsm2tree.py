@@ -283,8 +283,13 @@ class CstGenerator:
         return model
 
     def protocol_node_name(self, rule_name: str) -> str:
-        """Rule name → Protocol class name; must stay in sync with class_name_for_rule_node."""
-        return self.class_name_for_rule_node(rule_name) + "Node"
+        """Rule name → Protocol class name.
+
+        Protocol classes live in a separate *_cst_protocol.py module from concrete CST classes, so bare
+        names (e.g. 'Rule') do not collide with the concrete 'Rule' dataclass — they are always
+        module-qualified in annotations (e.g. cstp.Rule).  No suffix is needed.
+        """
+        return self.class_name_for_rule_node(rule_name)
 
     # TODO(cst-protocol-generator-refactor): this method mirrors py_annotation_for_model_types (gsm2tree.py:85)
     # and _protocol_class_for_model mirrors py_class_for_model (gsm2tree.py:109).  Unify both pairs with
@@ -292,9 +297,10 @@ class CstGenerator:
     def protocol_annotation_for_model_types(self, *, model_types: Iterable[ModelType], class_name: str = "") -> str:
         """Return a Python annotation string for model_types.
 
-        Uses <Name>Node for rule references (Protocol classes) and library-type annotations for everything else.
+        Uses the bare Protocol class name (same as the concrete class name) for rule references, and
+        library-type annotations for everything else.
 
-        Quoting asymmetry is intentional: rule references are quoted strings (e.g. '"RuleNode"') because they are
+        Quoting asymmetry is intentional: rule references are quoted strings (e.g. '"Rule"') because they are
         forward references to Protocol classes defined later in the same module, while library types (e.g.
         fltk.fegen.pyrt.terminalsrc.Span) are unquoted module paths resolved at import time.  The generated module
         carries `from __future__ import annotations`, which makes all annotations lazy, so the explicit quoting on

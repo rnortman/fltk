@@ -17,7 +17,7 @@ from fltk.iir.py import compiler
 from fltk.iir.py import reg as pyreg
 
 if TYPE_CHECKING:
-    from fltk.fegen import fltk_cst_protocol as cstp
+    from fltk.fegen import fltk_cst_protocol as cst
 
 app = typer.Typer(
     name="genparser",
@@ -60,7 +60,7 @@ def _read_and_parse_grammar(grammar_file: Path) -> gsm.Grammar:
     cst2gsm = fltk2gsm.Cst2Gsm(terminals.terminals)
     # result.result is typed Any (ParseResult.cst: Any); cast to satisfy visit_grammar's annotation.
     # TODO(parse-result-typed): make ParseResult generic so callers don't need individual casts.
-    return cst2gsm.visit_grammar(cast("cstp.GrammarNode", result.result))
+    return cst2gsm.visit_grammar(cast("cst.Grammar", result.result))
 
 
 def parse_grammar_file(grammar_file: Path) -> gsm.Grammar:
@@ -198,9 +198,10 @@ def generate(
     protocol_mod = cstgen.gen_protocol_module()
     # Prepend file-level ruff suppressions:
     # N802: CstModule @property methods have PascalCase names matching module attributes (intentional).
+    # E501: Generated code may have lines exceeding 120 chars (long Union types in extend() signatures).
     # F821 is NOT added here: nested Label references resolve via `from __future__ import annotations`
     # and ruff does not raise F821 for them; including F821 causes RUF100 (unused noqa) after `make fix`.
-    protocol_text = "# ruff: noqa: N802\n" + ast.unparse(protocol_mod)
+    protocol_text = "# ruff: noqa: N802, E501\n" + ast.unparse(protocol_mod)
     try:
         with shared_cst_protocol.open("w", newline="\n") as f:
             f.write(protocol_text)

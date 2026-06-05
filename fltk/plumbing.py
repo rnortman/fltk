@@ -31,7 +31,7 @@ from fltk.unparse.unparsefmt_parser import Parser as FmtParser
 if TYPE_CHECKING:
     from typing import Any
 
-    from fltk.fegen import fltk_cst_protocol as cstp
+    from fltk.fegen import fltk_cst_protocol as cst
 
 # Module-scope cache for the fegen grammar (loaded at most once per process).
 # Using a list rather than a bare variable to avoid PLW0603 (global statement).
@@ -146,7 +146,7 @@ def parse_grammar(grammar_text: str, *, rust_fegen_cst_module: str | None = None
         cst2gsm = fltk2gsm.Cst2Gsm(terminals.terminals)
         # result.result is typed Any (ParseResult.cst: Any); cast to satisfy visit_grammar's annotation.
         # TODO(parse-result-typed): make ParseResult generic so callers don't need individual casts.
-        return cst2gsm.visit_grammar(cast("cstp.GrammarNode", result.result))
+        return cst2gsm.visit_grammar(cast("cst.Grammar", result.result))
     else:
         # Rust backend: build a fegen parser bound to the Rust fegen CST module.
         # _load_fegen_grammar() calls parse_grammar with no rust_fegen_cst_module → no recursion.
@@ -173,10 +173,10 @@ def parse_grammar(grammar_text: str, *, rust_fegen_cst_module: str | None = None
 
         # Inject the Rust CST namespace; pr.cst_module is ModuleType at runtime.
         # Rust-injection boundary cast per di-boundary-escape decision (design.md).
-        cst2gsm = fltk2gsm.Cst2Gsm(terminals.terminals, cst=cast("cstp.CstModule", pr.cst_module))
+        cst2gsm = fltk2gsm.Cst2Gsm(terminals.terminals, cst=cast("cst.CstModule", pr.cst_module))
         # result.result is typed Any (ParseResult.cst: Any); cast to satisfy visit_grammar's annotation.
         # TODO(parse-result-typed): make ParseResult generic so callers don't need individual casts.
-        return cst2gsm.visit_grammar(cast("cstp.GrammarNode", result.result))
+        return cst2gsm.visit_grammar(cast("cst.Grammar", result.result))
 
 
 def parse_grammar_file(grammar_path: Path, *, rust_fegen_cst_module: str | None = None) -> gsm.Grammar:
