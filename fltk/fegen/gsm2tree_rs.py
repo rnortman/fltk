@@ -100,6 +100,9 @@ class RustCstGenerator:
 
         parts.append(self._preamble())
 
+        # Emit NodeKind enum before node structs so the kind getter can reference it.
+        parts.append(self._node_kind_block())
+
         for class_name, labels in self._rule_info():
             parts.append(self._label_enum_block(class_name, labels))
             parts.append(self._node_block(class_name, labels))
@@ -127,6 +130,84 @@ class RustCstGenerator:
             "/// Fetched once on first node construction; avoids a Python import per call.\n"
             "static UNKNOWN_SPAN_CACHE: GILOnceCell<PyObject> = GILOnceCell::new();\n"
         )
+
+    # ------------------------------------------------------------------
+    # NodeKind enum (one per grammar, before all node structs)
+    # ------------------------------------------------------------------
+
+    def _node_kind_variant_name(self, class_name: str) -> str:
+        """Return the CamelCase Rust variant name for a NodeKind member (same as class_name)."""
+        return class_name
+
+    def _node_kind_python_name(self, class_name: str) -> str:
+        """Return the ALL_CAPS Python-visible name for a NodeKind member."""
+        return class_name.upper()
+
+    def _node_kind_canonical_name(self, class_name: str) -> str:
+        """Return the canonical string for a NodeKind member: 'NodeKind.<UPPER>'."""
+        return f"NodeKind.{class_name.upper()}"
+
+    def _node_kind_block(self) -> str:
+        """Emit the module-level NodeKind enum + its #[pymethods] block."""
+        rule_info = self._rule_info()
+        lines: list[str] = []
+
+        lines.append(f"// {'─' * 75}")
+        lines.append("// NodeKind")
+        lines.append(f"// {'─' * 75}")
+        lines.append("")
+
+        lines.append("#[allow(non_camel_case_types)]")
+        lines.append('#[pyclass(frozen, name = "NodeKind")]')
+        lines.append("#[derive(Clone, PartialEq, Eq, Hash)]")
+        lines.append("pub enum NodeKind {")
+        for class_name, _labels in rule_info:
+            python_name = self._node_kind_python_name(class_name)
+            lines.append(f'    #[pyo3(name = "{python_name}")]')
+            lines.append(f"    {self._node_kind_variant_name(class_name)},")
+        lines.append("}")
+        lines.append("")
+
+        # pymethods block: __repr__, _fltk_canonical_name, __eq__, __hash__
+        lines.append("#[pymethods]")
+        lines.append("impl NodeKind {")
+        lines.append("    fn __repr__(&self) -> &'static str {")
+        lines.append("        match self {")
+        for class_name, _labels in rule_info:
+            variant = self._node_kind_variant_name(class_name)
+            canonical = self._node_kind_canonical_name(class_name)
+            lines.append(f'            NodeKind::{variant} => "{canonical}",')
+        lines.append("        }")
+        lines.append("    }")
+        lines.append("")
+        lines.append("    #[getter]")
+        lines.append("    fn _fltk_canonical_name(&self) -> &'static str {")
+        lines.append("        self.__repr__()")
+        lines.append("    }")
+        lines.append("")
+        lines.append("    fn __eq__(&self, py: Python<'_>, other: &Bound<'_, PyAny>) -> PyResult<PyObject> {")
+        lines.append("        if let Ok(other_kind) = other.extract::<NodeKind>() {")
+        lines.append("            return Ok((self == &other_kind).into_pyobject(py)?.to_owned().unbind().into_any());")
+        lines.append("        }")
+        lines.append('        if let Ok(cn) = other.getattr(pyo3::intern!(py, "_fltk_canonical_name")) {')
+        lines.append("            if let Ok(cn_str) = cn.extract::<&str>() {")
+        lines.append(
+            "                return Ok((self.__repr__() == cn_str).into_pyobject(py)?.to_owned().unbind().into_any());"
+        )
+        lines.append("            }")
+        lines.append("        }")
+        lines.append("        Ok(py.NotImplemented())")
+        lines.append("    }")
+        lines.append("")
+        lines.append("    fn __hash__(&self, py: Python<'_>) -> PyResult<isize> {")
+        lines.append("        pyo3::types::PyAnyMethods::hash(")
+        lines.append("            pyo3::types::PyString::new(py, self.__repr__()).as_any()")
+        lines.append("        )")
+        lines.append("    }")
+        lines.append("}")
+        lines.append("")
+
+        return "\n".join(lines)
 
     # ------------------------------------------------------------------
     # Label enum
@@ -228,6 +309,7 @@ class RustCstGenerator:
         lines.append(f"impl {class_name} {{")
 
         lines.extend(self._new_method(class_name))
+        lines.extend(self._kind_getter(class_name))
 
         if labels:
             lines.extend(self._label_classattr(class_name))
@@ -265,6 +347,17 @@ class RustCstGenerator:
             "            span: span_obj,",
             "            children: PyList::empty(py).unbind(),",
             "        })",
+            "    }",
+            "",
+        ]
+
+    def _kind_getter(self, class_name: str) -> list[str]:
+        """Emit a #[getter] fn kind(&self) -> NodeKind returning this node's NodeKind member."""
+        variant = self._node_kind_variant_name(class_name)
+        return [
+            "    #[getter]",
+            "    fn kind(&self) -> NodeKind {",
+            f"        NodeKind::{variant}",
             "    }",
             "",
         ]
@@ -497,6 +590,8 @@ class RustCstGenerator:
     def _register_classes_fn(self) -> str:
         lines: list[str] = []
         lines.append("pub fn register_classes(module: &Bound<'_, PyModule>) -> PyResult<()> {")
+        # NodeKind must be registered before node structs (whose kind getter returns it).
+        lines.append("    module.add_class::<NodeKind>()?;")
         for class_name, labels in self._rule_info():
             if labels:
                 enum_name = f"{class_name}_Label"

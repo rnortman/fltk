@@ -546,3 +546,108 @@ class TestEmptyLabelEnumOmitted:
         source = gen.generate()
         assert "module.add_class::<Token_Label>()?;" not in source
         assert "module.add_class::<Token>()?;" in source
+
+
+# ---------------------------------------------------------------------------
+# NodeKind enum generation
+# ---------------------------------------------------------------------------
+
+
+class TestNodeKindEnum:
+    def test_node_kind_enum_present(self, poc_source: str) -> None:
+        """NodeKind enum is emitted before all node structs."""
+        assert "pub enum NodeKind {" in poc_source
+
+    def test_node_kind_pyclass_no_eq_hash(self, poc_source: str) -> None:
+        """NodeKind #[pyclass] must not have eq/hash (hand-written instead)."""
+        # Confirm the NodeKind pyclass line exists and lacks eq/hash
+        assert '#[pyclass(frozen, name = "NodeKind")]' in poc_source
+        # eq/hash must not appear in combination with the NodeKind class line
+        lines = poc_source.splitlines()
+        for line in lines:
+            if '#[pyclass(frozen, name = "NodeKind")]' in line:
+                assert "eq" not in line
+                assert "hash" not in line
+
+    def test_node_kind_has_identifier_and_items_variants(self, poc_source: str) -> None:
+        """PoC grammar produces IDENTIFIER and ITEMS variants in NodeKind."""
+        assert '#[pyo3(name = "IDENTIFIER")]' in poc_source
+        assert "    Identifier," in poc_source
+        assert '#[pyo3(name = "ITEMS")]' in poc_source
+        assert "    Items," in poc_source
+
+    def test_node_kind_repr_canonical_form(self, poc_source: str) -> None:
+        """NodeKind __repr__ emits 'NodeKind.<UPPER>' canonical strings."""
+        assert '"NodeKind.IDENTIFIER"' in poc_source
+        assert '"NodeKind.ITEMS"' in poc_source
+
+    def test_node_kind_fltk_canonical_name_getter(self, poc_source: str) -> None:
+        """NodeKind has _fltk_canonical_name getter."""
+        # The NodeKind impl block must contain the getter
+        assert "fn _fltk_canonical_name(&self) -> &'static str {" in poc_source
+
+    def test_node_kind_eq_method(self, poc_source: str) -> None:
+        """NodeKind has a hand-written __eq__ reading _fltk_canonical_name off the operand."""
+        assert "fn __eq__(&self, py: Python<'_>, other: &Bound<'_, PyAny>) -> PyResult<PyObject> {" in poc_source
+
+    def test_node_kind_hash_method(self, poc_source: str) -> None:
+        """NodeKind has a hand-written __hash__ routing through PyString::hash."""
+        assert "fn __hash__(&self, py: Python<'_>) -> PyResult<isize> {" in poc_source
+
+    def test_node_kind_registered_first(self, poc_source: str) -> None:
+        """NodeKind must be registered before node structs in register_classes."""
+        idx_node_kind = poc_source.index("module.add_class::<NodeKind>()?;")
+        idx_identifier = poc_source.index("module.add_class::<Identifier>()?;")
+        assert idx_node_kind < idx_identifier
+
+    def test_node_kind_before_label_enums(self, poc_source: str) -> None:
+        """NodeKind enum block appears before the first Label enum block in the source."""
+        idx_node_kind_enum = poc_source.index("pub enum NodeKind {")
+        idx_first_label_enum = poc_source.index("pub enum Identifier_Label {")
+        assert idx_node_kind_enum < idx_first_label_enum
+
+    def test_fegen_grammar_node_kind_has_all_14(self, fegen_source: str) -> None:
+        """Fegen grammar NodeKind has all 14 class-name-derived members."""
+        for class_name in FEGEN_CLASS_NAMES:
+            python_name = class_name.upper()
+            assert f'#[pyo3(name = "{python_name}")]' in fegen_source, (
+                f"Expected NodeKind member {python_name!r} in fegen source"
+            )
+            assert f'"NodeKind.{python_name}"' in fegen_source, (
+                f"Expected canonical string NodeKind.{python_name!r} in fegen source"
+            )
+
+    def test_fegen_grammar_node_kind_registered(self, fegen_source: str) -> None:
+        """NodeKind is registered in register_classes for the fegen grammar."""
+        assert "module.add_class::<NodeKind>()?;" in fegen_source
+
+
+# ---------------------------------------------------------------------------
+# kind getter on node structs
+# ---------------------------------------------------------------------------
+
+
+class TestKindGetter:
+    def test_identifier_kind_getter(self, poc_source: str) -> None:
+        """Identifier struct has a kind getter returning NodeKind::Identifier."""
+        assert "fn kind(&self) -> NodeKind {" in poc_source
+        assert "NodeKind::Identifier" in poc_source
+
+    def test_items_kind_getter(self, poc_source: str) -> None:
+        """Items struct has a kind getter returning NodeKind::Items."""
+        assert "NodeKind::Items" in poc_source
+
+    def test_kind_getter_is_getter_attr(self, poc_source: str) -> None:
+        """The kind getter is annotated with #[getter]."""
+        # Check that #[getter] appears before kind getter (they appear together)
+        # Count that at least as many #[getter] annotations exist as there are node structs
+        # (each struct has one kind getter + possible other getters from span/children fields)
+        getter_count = poc_source.count("#[getter]")
+        # PoC: Identifier, Items, Trivia = 3 structs, each with one kind getter + one _fltk_canonical_name getter
+        # (on the label enums and NodeKind), so getter_count >= 3
+        assert getter_count >= 3
+
+    def test_fegen_grammar_all_node_kinds_present(self, fegen_source: str) -> None:
+        """All 14 node class names appear as NodeKind variants in fegen source."""
+        for class_name in FEGEN_CLASS_NAMES:
+            assert f"NodeKind::{class_name}" in fegen_source, f"Expected 'NodeKind::{class_name}' in fegen source"

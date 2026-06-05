@@ -1,6 +1,3 @@
-// TODO(fegen-cst-rs-single-source): this file is identical to src/cst_fegen.rs in the repo root.
-// The two copies must be kept in sync manually; silent divergence is possible.  Fix: remove this
-// file and generate/copy it from src/cst_fegen.rs at build time (via Makefile or include! macro).
 use pyo3::exceptions::{PyTypeError, PyValueError};
 use pyo3::prelude::*;
 use pyo3::sync::GILOnceCell;
@@ -10,6 +7,89 @@ use pyo3::PyTypeInfo;
 /// Cached reference to `fltk._native.UnknownSpan`.
 /// Fetched once on first node construction; avoids a Python import per call.
 static UNKNOWN_SPAN_CACHE: GILOnceCell<PyObject> = GILOnceCell::new();
+
+// ───────────────────────────────────────────────────────────────────────────
+// NodeKind
+// ───────────────────────────────────────────────────────────────────────────
+
+#[allow(non_camel_case_types)]
+#[pyclass(frozen, name = "NodeKind")]
+#[derive(Clone, PartialEq, Eq, Hash)]
+pub enum NodeKind {
+    #[pyo3(name = "GRAMMAR")]
+    Grammar,
+    #[pyo3(name = "RULE")]
+    Rule,
+    #[pyo3(name = "ALTERNATIVES")]
+    Alternatives,
+    #[pyo3(name = "ITEMS")]
+    Items,
+    #[pyo3(name = "ITEM")]
+    Item,
+    #[pyo3(name = "TERM")]
+    Term,
+    #[pyo3(name = "DISPOSITION")]
+    Disposition,
+    #[pyo3(name = "QUANTIFIER")]
+    Quantifier,
+    #[pyo3(name = "IDENTIFIER")]
+    Identifier,
+    #[pyo3(name = "RAWSTRING")]
+    RawString,
+    #[pyo3(name = "LITERAL")]
+    Literal,
+    #[pyo3(name = "TRIVIA")]
+    Trivia,
+    #[pyo3(name = "LINECOMMENT")]
+    LineComment,
+    #[pyo3(name = "BLOCKCOMMENT")]
+    BlockComment,
+}
+
+#[pymethods]
+impl NodeKind {
+    fn __repr__(&self) -> &'static str {
+        match self {
+            NodeKind::Grammar => "NodeKind.GRAMMAR",
+            NodeKind::Rule => "NodeKind.RULE",
+            NodeKind::Alternatives => "NodeKind.ALTERNATIVES",
+            NodeKind::Items => "NodeKind.ITEMS",
+            NodeKind::Item => "NodeKind.ITEM",
+            NodeKind::Term => "NodeKind.TERM",
+            NodeKind::Disposition => "NodeKind.DISPOSITION",
+            NodeKind::Quantifier => "NodeKind.QUANTIFIER",
+            NodeKind::Identifier => "NodeKind.IDENTIFIER",
+            NodeKind::RawString => "NodeKind.RAWSTRING",
+            NodeKind::Literal => "NodeKind.LITERAL",
+            NodeKind::Trivia => "NodeKind.TRIVIA",
+            NodeKind::LineComment => "NodeKind.LINECOMMENT",
+            NodeKind::BlockComment => "NodeKind.BLOCKCOMMENT",
+        }
+    }
+
+    #[getter]
+    fn _fltk_canonical_name(&self) -> &'static str {
+        self.__repr__()
+    }
+
+    fn __eq__(&self, py: Python<'_>, other: &Bound<'_, PyAny>) -> PyResult<PyObject> {
+        if let Ok(other_kind) = other.extract::<NodeKind>() {
+            return Ok((self == &other_kind).into_pyobject(py)?.to_owned().unbind().into_any());
+        }
+        if let Ok(cn) = other.getattr(pyo3::intern!(py, "_fltk_canonical_name")) {
+            if let Ok(cn_str) = cn.extract::<&str>() {
+                return Ok((self.__repr__() == cn_str).into_pyobject(py)?.to_owned().unbind().into_any());
+            }
+        }
+        Ok(py.NotImplemented())
+    }
+
+    fn __hash__(&self, py: Python<'_>) -> PyResult<isize> {
+        pyo3::types::PyAnyMethods::hash(
+            pyo3::types::PyString::new(py, self.__repr__()).as_any()
+        )
+    }
+}
 
 // ───────────────────────────────────────────────────────────────────────────
 // Grammar_Label
@@ -84,6 +164,11 @@ impl Grammar {
             span: span_obj,
             children: PyList::empty(py).unbind(),
         })
+    }
+
+    #[getter]
+    fn kind(&self) -> NodeKind {
+        NodeKind::Grammar
     }
 
     #[classattr]
@@ -319,6 +404,11 @@ impl Rule {
             span: span_obj,
             children: PyList::empty(py).unbind(),
         })
+    }
+
+    #[getter]
+    fn kind(&self) -> NodeKind {
+        NodeKind::Rule
     }
 
     #[classattr]
@@ -641,6 +731,11 @@ impl Alternatives {
         })
     }
 
+    #[getter]
+    fn kind(&self) -> NodeKind {
+        NodeKind::Alternatives
+    }
+
     #[classattr]
     #[allow(non_snake_case)]
     fn Label(py: Python<'_>) -> PyResult<PyObject> {
@@ -880,6 +975,11 @@ impl Items {
             span: span_obj,
             children: PyList::empty(py).unbind(),
         })
+    }
+
+    #[getter]
+    fn kind(&self) -> NodeKind {
+        NodeKind::Items
     }
 
     #[classattr]
@@ -1387,6 +1487,11 @@ impl Item {
         })
     }
 
+    #[getter]
+    fn kind(&self) -> NodeKind {
+        NodeKind::Item
+    }
+
     #[classattr]
     #[allow(non_snake_case)]
     fn Label(py: Python<'_>) -> PyResult<PyObject> {
@@ -1892,6 +1997,11 @@ impl Term {
         })
     }
 
+    #[getter]
+    fn kind(&self) -> NodeKind {
+        NodeKind::Term
+    }
+
     #[classattr]
     #[allow(non_snake_case)]
     fn Label(py: Python<'_>) -> PyResult<PyObject> {
@@ -2394,6 +2504,11 @@ impl Disposition {
         })
     }
 
+    #[getter]
+    fn kind(&self) -> NodeKind {
+        NodeKind::Disposition
+    }
+
     #[classattr]
     #[allow(non_snake_case)]
     fn Label(py: Python<'_>) -> PyResult<PyObject> {
@@ -2808,6 +2923,11 @@ impl Quantifier {
         })
     }
 
+    #[getter]
+    fn kind(&self) -> NodeKind {
+        NodeKind::Quantifier
+    }
+
     #[classattr]
     #[allow(non_snake_case)]
     fn Label(py: Python<'_>) -> PyResult<PyObject> {
@@ -3216,6 +3336,11 @@ impl Identifier {
         })
     }
 
+    #[getter]
+    fn kind(&self) -> NodeKind {
+        NodeKind::Identifier
+    }
+
     #[classattr]
     #[allow(non_snake_case)]
     fn Label(py: Python<'_>) -> PyResult<PyObject> {
@@ -3448,6 +3573,11 @@ impl RawString {
         })
     }
 
+    #[getter]
+    fn kind(&self) -> NodeKind {
+        NodeKind::RawString
+    }
+
     #[classattr]
     #[allow(non_snake_case)]
     fn Label(py: Python<'_>) -> PyResult<PyObject> {
@@ -3678,6 +3808,11 @@ impl Literal {
             span: span_obj,
             children: PyList::empty(py).unbind(),
         })
+    }
+
+    #[getter]
+    fn kind(&self) -> NodeKind {
+        NodeKind::Literal
     }
 
     #[classattr]
@@ -3913,6 +4048,11 @@ impl Trivia {
             span: span_obj,
             children: PyList::empty(py).unbind(),
         })
+    }
+
+    #[getter]
+    fn kind(&self) -> NodeKind {
+        NodeKind::Trivia
     }
 
     #[classattr]
@@ -4236,6 +4376,11 @@ impl LineComment {
             span: span_obj,
             children: PyList::empty(py).unbind(),
         })
+    }
+
+    #[getter]
+    fn kind(&self) -> NodeKind {
+        NodeKind::LineComment
     }
 
     #[classattr]
@@ -4562,6 +4707,11 @@ impl BlockComment {
             span: span_obj,
             children: PyList::empty(py).unbind(),
         })
+    }
+
+    #[getter]
+    fn kind(&self) -> NodeKind {
+        NodeKind::BlockComment
     }
 
     #[classattr]
@@ -4898,6 +5048,7 @@ impl BlockComment {
 }
 
 pub fn register_classes(module: &Bound<'_, PyModule>) -> PyResult<()> {
+    module.add_class::<NodeKind>()?;
     module.add_class::<Grammar_Label>()?;
     module.add_class::<Grammar>()?;
     module.add_class::<Rule_Label>()?;

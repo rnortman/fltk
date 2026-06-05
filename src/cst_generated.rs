@@ -9,6 +9,56 @@ use pyo3::PyTypeInfo;
 static UNKNOWN_SPAN_CACHE: GILOnceCell<PyObject> = GILOnceCell::new();
 
 // ───────────────────────────────────────────────────────────────────────────
+// NodeKind
+// ───────────────────────────────────────────────────────────────────────────
+
+#[allow(non_camel_case_types)]
+#[pyclass(frozen, name = "NodeKind")]
+#[derive(Clone, PartialEq, Eq, Hash)]
+pub enum NodeKind {
+    #[pyo3(name = "IDENTIFIER")]
+    Identifier,
+    #[pyo3(name = "ITEMS")]
+    Items,
+    #[pyo3(name = "TRIVIA")]
+    Trivia,
+}
+
+#[pymethods]
+impl NodeKind {
+    fn __repr__(&self) -> &'static str {
+        match self {
+            NodeKind::Identifier => "NodeKind.IDENTIFIER",
+            NodeKind::Items => "NodeKind.ITEMS",
+            NodeKind::Trivia => "NodeKind.TRIVIA",
+        }
+    }
+
+    #[getter]
+    fn _fltk_canonical_name(&self) -> &'static str {
+        self.__repr__()
+    }
+
+    fn __eq__(&self, py: Python<'_>, other: &Bound<'_, PyAny>) -> PyResult<PyObject> {
+        if let Ok(other_kind) = other.extract::<NodeKind>() {
+            return Ok((self == &other_kind).into_pyobject(py)?.to_owned().unbind().into_any());
+        }
+        if let Ok(cn) = other.getattr(pyo3::intern!(py, "_fltk_canonical_name")) {
+            if let Ok(cn_str) = cn.extract::<&str>() {
+                return Ok((self.__repr__() == cn_str).into_pyobject(py)?.to_owned().unbind().into_any());
+            }
+        }
+        Ok(py.NotImplemented())
+    }
+
+    fn __hash__(&self, py: Python<'_>) -> PyResult<isize> {
+        pyo3::types::PyAnyMethods::hash(
+            pyo3::types::PyString::new(py, self.__repr__()).as_any()
+        )
+    }
+}
+
+// ───────────────────────────────────────────────────────────────────────────
 // Identifier_Label
 // ───────────────────────────────────────────────────────────────────────────
 
@@ -81,6 +131,11 @@ impl Identifier {
             span: span_obj,
             children: PyList::empty(py).unbind(),
         })
+    }
+
+    #[getter]
+    fn kind(&self) -> NodeKind {
+        NodeKind::Identifier
     }
 
     #[classattr]
@@ -322,6 +377,11 @@ impl Items {
             span: span_obj,
             children: PyList::empty(py).unbind(),
         })
+    }
+
+    #[getter]
+    fn kind(&self) -> NodeKind {
+        NodeKind::Items
     }
 
     #[classattr]
@@ -820,6 +880,11 @@ impl Trivia {
         })
     }
 
+    #[getter]
+    fn kind(&self) -> NodeKind {
+        NodeKind::Trivia
+    }
+
     #[classattr]
     #[allow(non_snake_case)]
     fn Label(py: Python<'_>) -> PyResult<PyObject> {
@@ -978,6 +1043,7 @@ impl Trivia {
 }
 
 pub fn register_classes(module: &Bound<'_, PyModule>) -> PyResult<()> {
+    module.add_class::<NodeKind>()?;
     module.add_class::<Identifier_Label>()?;
     module.add_class::<Identifier>()?;
     module.add_class::<Items_Label>()?;
