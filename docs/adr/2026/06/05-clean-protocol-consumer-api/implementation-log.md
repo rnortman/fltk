@@ -1,6 +1,6 @@
 # Implementation Log: Clean Protocol-Only Consumer API
 
-## Increment 2 — Rust `Span.kind` getter returning shared Python `SpanKind.SPAN` (§2.2) (commit TBD)
+## Increment 2 — Rust `Span.kind` getter returning shared Python `SpanKind.SPAN` (§2.2) (commit 16f9582)
 
 - `src/span.rs:1-11`: Added `use pyo3::sync::GILOnceCell` and `SPAN_KIND_SPAN_CACHE: GILOnceCell<PyObject>` static with acyclicity comment.
 - `src/span.rs:251-266`: Added `#[getter] fn kind` to `#[pymethods] impl Span`; uses `SPAN_KIND_SPAN_CACHE.get_or_try_init` to import and cache `fltk.fegen.pyrt.terminalsrc.SpanKind.SPAN`. Returns `clone_ref` of cached object — same Python object as `terminalsrc.Span.kind`, so identity holds and equality is trivially satisfied.
