@@ -105,8 +105,12 @@ def test_protocol_module_has_one_class_per_rule(
     rule_names = set(cst_generator.rule_models.keys())
     class_defs = {node.name for node in protocol_module_ast.body if isinstance(node, ast.ClassDef)}
     expected_node_names = {cst_generator.protocol_node_name(r) for r in rule_names}
-    # CstModule is also generated; include it in the expected set
+    # CstModule and Span protocol are also generated; include them in the expected set
     expected_node_names.add("CstModule")
+    expected_node_names.add("Span")
+    # NodeKind and _ProtocolLabelMember are module-level classes also in the body
+    expected_node_names.add("NodeKind")
+    expected_node_names.add("_ProtocolLabelMember")
     assert expected_node_names == class_defs
 
 
@@ -170,6 +174,8 @@ def test_cst_module_protocol_has_property_per_rule(
             prop_names.add(item.name)
 
     expected_class_names = {cst_generator.class_name_for_rule_node(r) for r in cst_generator.rule_models}
+    # CstModule also includes a Span property (not a grammar rule, but a shared protocol type)
+    expected_class_names.add("Span")
     assert expected_class_names == prop_names
 
     # These specific names are accessed by Cst2Gsm at runtime (fltk2gsm.py).
@@ -439,13 +445,16 @@ def test_protocol_is_not_dataclass_specific(
 # ---------------------------------------------------------------------------
 
 
-def test_fltk2gsm_does_not_import_protocol_at_runtime() -> None:
-    """T5: Importing fltk2gsm must not trigger a runtime import of fltk_cst_protocol.
+def test_fltk2gsm_imports_protocol_not_concrete_at_runtime() -> None:
+    """T5 (updated): fltk2gsm imports the protocol module at runtime, NOT the concrete fltk_cst.
 
-    The protocol module is TYPE_CHECKING-only; it must not appear in sys.modules
-    after importing fltk2gsm under normal (non-type-checking) conditions.
+    After the clean-protocol-consumer-api work, fltk2gsm.py uses fltk_cst_protocol as its
+    sole CST import (no runtime fltk_cst, no TYPE_CHECKING shadow).  This test verifies the
+    inversion: protocol IS in sys.modules, concrete fltk_cst is NOT triggered by fltk2gsm itself
+    (though fltk_cst_protocol imports terminalsrc which is fine — we check for fltk_cst, the
+    concrete CST module, not for terminalsrc).
 
-    Uses a subprocess to guarantee a clean sys.modules state regardless of collection order.
+    Uses a subprocess to guarantee a clean sys.modules state.
     """
     result = subprocess.run(
         [  # noqa: S607
@@ -456,8 +465,10 @@ def test_fltk2gsm_does_not_import_protocol_at_runtime() -> None:
             (
                 "import fltk.fegen.fltk2gsm; "
                 "import sys; "
-                "assert 'fltk.fegen.fltk_cst_protocol' not in sys.modules, "
-                "'fltk_cst_protocol was imported at runtime'"
+                "assert 'fltk.fegen.fltk_cst_protocol' in sys.modules, "
+                "'fltk_cst_protocol was not imported at runtime by fltk2gsm'; "
+                "assert 'fltk.fegen.fltk_cst' not in sys.modules, "
+                "'fltk_cst (concrete) was imported at runtime by fltk2gsm — should only be protocol'"
             ),
         ],
         capture_output=True,
@@ -466,7 +477,6 @@ def test_fltk2gsm_does_not_import_protocol_at_runtime() -> None:
         check=False,
     )
     assert result.returncode == 0, (
-        "fltk.fegen.fltk_cst_protocol was imported at runtime by fltk2gsm — "
-        "it must be TYPE_CHECKING-only to satisfy the no-runtime-cost constraint.\n"
+        "fltk2gsm import-behavior assertion failed.\n"
         f"stderr: {result.stderr}"
     )

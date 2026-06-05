@@ -1,15 +1,10 @@
 from __future__ import annotations
 
 import ast
-import typing
 from collections.abc import Sequence
-from typing import TYPE_CHECKING
 
-from fltk.fegen import fltk_cst as cst
+from fltk.fegen import fltk_cst_protocol as cst
 from fltk.fegen import gsm
-
-if TYPE_CHECKING:
-    from fltk.fegen import fltk_cst_protocol as cst
 
 
 class Cst2Gsm:
@@ -59,23 +54,23 @@ class Cst2Gsm:
         # Process items and separators (interleaved ITEM / separator pairs)
         children = labeled_children[start_idx:]
         for (item_label, item), (sep_label, _) in zip(children[::2], children[1::2], strict=False):
-            assert item_label == cst.Items.Label.ITEM  # noqa: S101
-            item = typing.cast("cst.Item", item)
+            assert item_label == cst.Items.Label.ITEM
+            assert item.kind == cst.Item.kind
             gsm_items.append(self.visit_item(item))
             if sep_label == cst.Items.Label.WS_REQUIRED:
                 sep_after.append(gsm.Separator.WS_REQUIRED)
             elif sep_label == cst.Items.Label.WS_ALLOWED:
                 sep_after.append(gsm.Separator.WS_ALLOWED)
             else:
-                assert sep_label == cst.Items.Label.NO_WS  # noqa: S101
+                assert sep_label == cst.Items.Label.NO_WS
                 sep_after.append(gsm.Separator.NO_WS)
         if (len(children) % 2) != 0:
             item_label, item = children[-1]
-            assert item_label == cst.Items.Label.ITEM  # noqa: S101
-            item = typing.cast("cst.Item", item)
+            assert item_label == cst.Items.Label.ITEM
+            assert item.kind == cst.Item.kind
             gsm_items.append(self.visit_item(item))
             sep_after.append(gsm.Separator.NO_WS)
-        assert len(gsm_items) == len(sep_after)  # noqa: S101
+        assert len(gsm_items) == len(sep_after)
         return gsm.Items(items=gsm_items, sep_after=sep_after, initial_sep=initial_sep)
 
     def visit_item(self, item: cst.Item) -> gsm.Item:

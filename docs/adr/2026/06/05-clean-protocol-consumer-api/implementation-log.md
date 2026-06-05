@@ -6,6 +6,10 @@
 - `src/span.rs:251-266`: Added `#[getter] fn kind` to `#[pymethods] impl Span`; uses `SPAN_KIND_SPAN_CACHE.get_or_try_init` to import and cache `fltk.fegen.pyrt.terminalsrc.SpanKind.SPAN`. Returns `clone_ref` of cached object — same Python object as `terminalsrc.Span.kind`, so identity holds and equality is trivially satisfied.
 - All 463 tests pass; Rust extension builds cleanly.
 
+## Increment 3 — [DRAFT] Protocol module: runtime `NodeKind` + `kind` + `Label` values (§2.3)
+
+Emit protocol-module-local `NodeKind` with runtime values (Option A), add `kind` class attributes with `Literal`-typed runtime defaults, and add runtime value sentinels to `Label` members — all in `gsm2tree.py` `gen_protocol_module`/`_protocol_class_for_model`, regenerating `fltk_cst_protocol.py`.
+
 ## Increment 1 — `terminalsrc.SpanKind` + `Span.kind` field (§2.1) (commit 16c43da)
 
 - `fltk/fegen/pyrt/terminalsrc.py:9-29`: Added `SpanKind(enum.Enum)` with `SPAN = enum.auto()`,

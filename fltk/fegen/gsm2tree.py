@@ -84,7 +84,7 @@ class CstGenerator:
 
     def py_annotation_for_model_types(self, *, model_types: Iterable[ModelType], in_module: bool = False) -> str:
         iir_types = [self.iir_type_for_model_type(model_type) for model_type in model_types]
-        assert len(iir_types) > 0  # noqa: S101
+        assert len(iir_types) > 0
         py_types = sorted(pycompiler.iir_type_to_py_annotation(typ, self.context) for typ in iir_types)
         if in_module:
             py_types = sorted(f'"{typ.removeprefix(".".join(self.py_module.import_path) + ".")}"' for typ in py_types)
@@ -365,19 +365,19 @@ class CstGenerator:
         model = ItemsModel()
         for item in items.items:
             if item.disposition == gsm.Disposition.SUPPRESS:
-                assert not isinstance(item.term, Sequence)  # noqa: S101
+                assert not isinstance(item.term, Sequence)
                 continue
             if item.disposition == gsm.Disposition.INLINE:
-                assert isinstance(item.term, gsm.Identifier)  # noqa: S101
+                assert isinstance(item.term, gsm.Identifier)
                 inline_rule = self.grammar.identifiers[item.term.value]
-                assert isinstance(inline_rule, gsm.Rule)  # noqa: S101
+                assert isinstance(inline_rule, gsm.Rule)
                 inline_model = self.model_for_rule(inline_rule, inline_stack)
                 model.incorporate(inline_model)
             else:
                 item_model = self.model_for_item(item, inline_stack)
                 model.incorporate(item_model)
                 if item.label:
-                    assert not isinstance(item.term, Sequence)  # noqa: S101
+                    assert not isinstance(item.term, Sequence)
                     model.labels[item.label] |= item_model.types
         return model
 
@@ -431,36 +431,85 @@ class CstGenerator:
             return f"typing.Union[{', '.join(parts)}]"
         return parts[0]
 
+    @staticmethod
+    def _emit_protocol_label_member_class() -> list[ast.stmt]:
+        """Emit the module-level _ProtocolLabelMember sentinel class for protocol Label members.
+
+        Instances carry _fltk_canonical_name and a cross-backend __eq__/__hash__ matching the
+        shape in _emit_cross_backend_eq_hash.  The static type of each Label member stays object
+        (ClassVar[object]) — this sentinel is not an enum.Enum, preserving the structural-mismatch
+        contract (test_boundary_probe_documents_label_mismatch).
+        """
+        stmts = ast.parse(
+            """\
+class _ProtocolLabelMember:
+    _fltk_canonical_name: str
+    def __init__(self, canonical_name: str) -> None:
+        self._fltk_canonical_name = canonical_name
+    def __eq__(self, other: object) -> bool:
+        if other is self: return True
+        if type(other) is type(self): return self._fltk_canonical_name == other._fltk_canonical_name
+        cn = getattr(other, '_fltk_canonical_name', None)
+        if cn is not None: return self._fltk_canonical_name == cn
+        return NotImplemented
+    def __hash__(self) -> int:
+        return hash(self._fltk_canonical_name)
+    def __repr__(self) -> str:
+        return f'_ProtocolLabelMember({self._fltk_canonical_name!r})'
+"""
+        ).body
+        return stmts  # type: ignore[return-value]
+
     def gen_protocol_module(self) -> ast.Module:
         """Generate a *_cst_protocol.py module with Protocol classes describing the CST module surface."""
         module = ast.parse("")
-        assert isinstance(module, ast.Module)  # noqa: S101
+        assert isinstance(module, ast.Module)
         module.body.append(pygen.stmt("from __future__ import annotations"))
+        module.body.append(pygen.import_(("enum",)))
         module.body.append(pygen.import_(("typing",)))
         module.body.append(pygen.import_(("fltk", "fegen", "pyrt", "terminalsrc")))
 
-        # Import NodeKind from the concrete CST module so Protocol members can reference it in
-        # Literal[NodeKind.X] annotations.  Guard under TYPE_CHECKING: with from __future__ import
-        # annotations already present, all Literal[NodeKind.X] annotations are lazy strings, so no
-        # runtime import of the concrete module is needed.  This avoids coupling pure-Protocol
-        # consumers to the concrete Python CST module at import time.
-        concrete_module_path = self.py_module.import_path
-        if concrete_module_path:
-            concrete_module_dotted = ".".join(concrete_module_path)
-            # Build the TYPE_CHECKING if block as an ast.If node directly.
-            type_checking_block = ast.parse(
-                f"if typing.TYPE_CHECKING:\n    from {concrete_module_dotted} import NodeKind\n"
-            )
-            module.body.extend(type_checking_block.body)
+        # Emit a protocol-local runtime NodeKind enum (identical members + canonical strings +
+        # cross-backend bridge to the concrete module's NodeKind).  This replaces the former
+        # TYPE_CHECKING-guarded import so the protocol module owns its own runtime values and
+        # does NOT eagerly import a concrete backend at module load (Constraint: no-runtime-cost).
+        module.body.append(self._node_kind_enum())
+        module.body.extend(self._emit_node_kind_canonical_name_assignments())
+
+        # Emit the _ProtocolLabelMember sentinel class used to give Label members runtime values.
+        module.body.extend(self._emit_protocol_label_member_class())
 
         for rule in self.rule_models:
             model = self.rule_models[rule]
             class_name = self.protocol_node_name(rule)
-            module.body.append(self._protocol_class_for_model(class_name, model, rule))
+            stmts = self._protocol_class_for_model_with_assignments(class_name, model, rule)
+            module.body.extend(stmts)
 
+        module.body.append(self._protocol_span_class())
         module.body.append(self._cst_module_protocol())
 
         return module
+
+    def _protocol_class_for_model_with_assignments(
+        self, class_name: str, model: ItemsModel, rule_name: str
+    ) -> list[ast.stmt]:
+        """Generate a Protocol class plus post-class Label member sentinel assignments.
+
+        Returns a list: [ClassDef, assignment-stmts...].
+        """
+        klass = self._protocol_class_for_model(class_name, model, rule_name)
+        stmts: list[ast.stmt] = [klass]
+        # Emit post-class sentinel assignments for each Label member.
+        labels = sorted(model.labels.keys())
+        for label in labels:
+            python_name = label.upper()
+            canonical = f"{class_name}.Label.{python_name}"
+            stmts.append(
+                pygen.stmt(
+                    f'{class_name}.Label.{python_name} = _ProtocolLabelMember("{canonical}")'
+                )
+            )
+        return stmts
 
     def _protocol_class_for_model(self, class_name: str, model: ItemsModel, rule_name: str) -> ast.ClassDef:
         """Generate a Protocol class for a single CST node.
@@ -480,13 +529,16 @@ class CstGenerator:
                 # inside the nested class body.  The only guarantee we need is attribute
                 # presence (so label == self.cst.Items.Label.NO_WS typechecks); the exact
                 # type of the constant is immaterial for Protocol-level checking.
+                # Value is set post-class by _protocol_class_for_model_with_assignments.
                 label_class.body.append(pygen.stmt(f"{label.upper()}: typing.ClassVar[object]"))
             klass.body.append(label_class)
 
-        # kind discriminant: emit Literal[NodeKind.X] when concrete module is known; else object.
+        # kind discriminant: emit Literal[NodeKind.X] with runtime default value.
+        # The protocol-local NodeKind is now a real runtime enum, so the default is readable as
+        # cst.<Node>.kind on the class object, enabling native .kind narrowing (probe D4).
         if rule_name and self.py_module.import_path:
             member = self.node_kind_member_name(rule_name)
-            klass.body.append(pygen.stmt(f"kind: typing.Literal[NodeKind.{member}]"))
+            klass.body.append(pygen.stmt(f"kind: typing.Literal[NodeKind.{member}] = NodeKind.{member}"))
         else:
             klass.body.append(pygen.stmt("kind: object"))
 
@@ -558,6 +610,21 @@ class CstGenerator:
 
         return klass
 
+    def _protocol_span_class(self) -> ast.ClassDef:
+        """Generate a Protocol class for Span so consumers can write `case cst.Span.kind:`.
+
+        The Span protocol class exposes `kind` with a runtime Literal[SpanKind.SPAN] default,
+        allowing Shape 2 (`case cst.Span.kind:`) to narrow a child-union arm to Span.
+        """
+        klass = pygen.klass(name="Span", bases=["typing.Protocol"])
+        klass.body.append(
+            pygen.stmt(
+                "kind: typing.Literal[fltk.fegen.pyrt.terminalsrc.SpanKind.SPAN]"
+                " = fltk.fegen.pyrt.terminalsrc.SpanKind.SPAN"
+            )
+        )
+        return klass
+
     def _cst_module_protocol(self) -> ast.ClassDef:
         """Generate the CstModule Protocol describing the module-level surface."""
         klass = pygen.klass(name="CstModule", bases=["typing.Protocol"])
@@ -570,6 +637,12 @@ class CstGenerator:
             prop_fn.decorator_list = [pygen.expr("property")]
             prop_fn.body.append(pygen.stmt("..."))
             klass.body.append(prop_fn)
+        # Span property: the Span protocol class is generated (not per-grammar-rule), but out-of-tree
+        # consumers may want to access it via a CstModule-typed binding.  Add it here.
+        span_prop = pygen.function("Span", "self", "type[Span]")
+        span_prop.decorator_list = [pygen.expr("property")]
+        span_prop.body.append(pygen.stmt("..."))
+        klass.body.append(span_prop)
         return klass
 
     def model_for_rule(self, rule: gsm.Rule, inline_stack: list[str]) -> ItemsModel:
