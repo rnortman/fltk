@@ -5,7 +5,7 @@ import typing
 from collections.abc import Sequence
 from typing import TYPE_CHECKING
 
-from fltk.fegen import fltk_cst as _cst_const
+from fltk.fegen import fltk_cst as cst
 from fltk.fegen import gsm
 
 if TYPE_CHECKING:
@@ -43,14 +43,14 @@ class Cst2Gsm:
         # Check if there's a leading separator
         start_idx = 0
         if labeled_children and labeled_children[0][0] in (
-            _cst_const.Items.Label.NO_WS,
-            _cst_const.Items.Label.WS_ALLOWED,
-            _cst_const.Items.Label.WS_REQUIRED,
+            cst.Items.Label.NO_WS,
+            cst.Items.Label.WS_ALLOWED,
+            cst.Items.Label.WS_REQUIRED,
         ):
             sep_label, _ = labeled_children[0]
-            if sep_label == _cst_const.Items.Label.WS_REQUIRED:
+            if sep_label == cst.Items.Label.WS_REQUIRED:
                 initial_sep = gsm.Separator.WS_REQUIRED
-            elif sep_label == _cst_const.Items.Label.WS_ALLOWED:
+            elif sep_label == cst.Items.Label.WS_ALLOWED:
                 initial_sep = gsm.Separator.WS_ALLOWED
             else:
                 initial_sep = gsm.Separator.NO_WS
@@ -59,19 +59,19 @@ class Cst2Gsm:
         # Process items and separators (interleaved ITEM / separator pairs)
         children = labeled_children[start_idx:]
         for (item_label, item), (sep_label, _) in zip(children[::2], children[1::2], strict=False):
-            assert item_label == _cst_const.Items.Label.ITEM  # noqa: S101
+            assert item_label == cst.Items.Label.ITEM  # noqa: S101
             item = typing.cast("cst.Item", item)
             gsm_items.append(self.visit_item(item))
-            if sep_label == _cst_const.Items.Label.WS_REQUIRED:
+            if sep_label == cst.Items.Label.WS_REQUIRED:
                 sep_after.append(gsm.Separator.WS_REQUIRED)
-            elif sep_label == _cst_const.Items.Label.WS_ALLOWED:
+            elif sep_label == cst.Items.Label.WS_ALLOWED:
                 sep_after.append(gsm.Separator.WS_ALLOWED)
             else:
-                assert sep_label == _cst_const.Items.Label.NO_WS  # noqa: S101
+                assert sep_label == cst.Items.Label.NO_WS  # noqa: S101
                 sep_after.append(gsm.Separator.NO_WS)
         if (len(children) % 2) != 0:
             item_label, item = children[-1]
-            assert item_label == _cst_const.Items.Label.ITEM  # noqa: S101
+            assert item_label == cst.Items.Label.ITEM  # noqa: S101
             item = typing.cast("cst.Item", item)
             gsm_items.append(self.visit_item(item))
             sep_after.append(gsm.Separator.NO_WS)
@@ -114,22 +114,22 @@ class Cst2Gsm:
 
     def visit_disposition(self, disposition: cst.Disposition) -> gsm.Disposition:
         label, _ = disposition.child()
-        if label == _cst_const.Disposition.Label.INCLUDE:
+        if label == cst.Disposition.Label.INCLUDE:
             return gsm.Disposition.INCLUDE
-        if label == _cst_const.Disposition.Label.SUPPRESS:
+        if label == cst.Disposition.Label.SUPPRESS:
             return gsm.Disposition.SUPPRESS
-        if label == _cst_const.Disposition.Label.INLINE:
+        if label == cst.Disposition.Label.INLINE:
             return gsm.Disposition.INLINE
         msg = f"Unsupported disposition: {disposition}"
         raise NotImplementedError(msg)
 
     def visit_quantifier(self, quantifier: cst.Quantifier) -> gsm.Quantifier:
         label, _ = quantifier.child()
-        if label == _cst_const.Quantifier.Label.ONE_OR_MORE:
+        if label == cst.Quantifier.Label.ONE_OR_MORE:
             return gsm.ONE_OR_MORE
-        if label == _cst_const.Quantifier.Label.OPTIONAL:
+        if label == cst.Quantifier.Label.OPTIONAL:
             return gsm.NOT_REQUIRED
-        if label == _cst_const.Quantifier.Label.ZERO_OR_MORE:
+        if label == cst.Quantifier.Label.ZERO_OR_MORE:
             return gsm.ZERO_OR_MORE
         msg = f"Unsupported quantifier: {quantifier}"
         raise NotImplementedError(msg)
