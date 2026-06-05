@@ -38,6 +38,16 @@ uv run ruff check .
 uv run ruff check --fix .
 ```
 
+### Generated Code and Formatting
+
+Generated code (emitted by `fltk/fegen/*` generators) is not expected to pass ruff formatting checks straight out of the generator — this is by design. The intended workflow after regenerating code is:
+
+1. Run the generator.
+2. Run `make fix` to normalize formatting.
+3. Commit the result.
+
+`make check` (the precommit gate) enforces that committed generated code is clean. "The generator emits unformatted code" is not a bug; the regen → `make fix` → commit path is the intended flow.
+
 ### Build System
 The project uses maturin (mixed Python/Rust), uv, and Bazel:
 - maturin: Build backend for the mixed Python/Rust package. Handles Cargo build, Python packaging, and editable installs.
