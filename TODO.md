@@ -60,3 +60,15 @@ Unify `protocol_annotation_for_model_types` with `py_annotation_for_model_types`
 
 No focused test verifies that Rust-backed CST child-accessor results expose `.start`/`.end` attributes (required by `fltk2gsm.Cst2Gsm.visit_identifier`, `visit_literal`, `visit_regex`). The AC8 equality test exercises this indirectly but a regression would only surface in the full parse path. Add a direct test calling `node.child_name()` (or `child_value()`) on a Rust-backed fegen node and asserting `.start`/`.end` are accessible and correct. Location: `tests/test_phase4_fegen_rust_backend.py`.
 
+## `canonical-name-cache`
+
+`_fltk_canonical_name` is a `@property` that rebuilds the f-string on every access; since enum members are immutable singletons the string is invariant per member. The property fires on every `__hash__` call (same-backend and cross-backend) and on every cross-backend `__eq__`. Convert to a per-member cached value (e.g. assign a frozen string attribute after class creation via a post-class loop, or use a class-level dict keyed by member) so that same-backend `__hash__` and cross-backend `__eq__` do not incur per-call string allocation. Also amortize the Rust side: the `__hash__` implementation allocates a fresh `PyString` (for the salted CPython hash) on every call; cache the computed `isize` per variant via `GILOnceCell` so the allocation happens at most once per variant per process. Location: `fltk/fegen/gsm2tree.py` (`_node_kind_enum` and `py_class_for_model`) and `fltk/fegen/gsm2tree_rs.py` (`_node_kind_block` and `_label_enum_block`).
+
+## `kind-field-dataclass-eq`
+
+The `kind` dataclass field joins the generated `__eq__`/`__hash__` for every node, but it is invariant within a node type (a node of type `Item` always has `kind == NodeKind.Item`). The comparison is cheap (same singleton, `other is self` fast path), but it is pure overhead on every structural node equality. Mark `kind` with `dataclasses.field(compare=False, repr=False)` if node-equality performance becomes a concern. Location: `fltk/fegen/gsm2tree.py` (`py_class_for_model`, `kind` field emit).
+
+## `emit-cross-backend-eq-hash-helper`
+
+`gsm2tree.py` emits identical `_fltk_canonical_name` / `__eq__` / `__hash__` AST nodes in two places: `_node_kind_enum` (line ~107-128) and `py_class_for_model`'s Label emit (line ~157-181). Likewise `gsm2tree_rs.py` emits identical Rust lines in `_node_kind_block` (line ~183-206) and `_label_enum_block` (line ~256-280). Extract a shared helper in each file (`_emit_cross_backend_eq_hash` for Python, `_emit_rust_cross_backend_eq_hash` for Rust) parameterized by canonical-name string expression / type name, eliminating the four-way divergence surface. Location: `fltk/fegen/gsm2tree.py` and `fltk/fegen/gsm2tree_rs.py`.
+

@@ -149,6 +149,10 @@ class RustCstGenerator:
 
     def _node_kind_block(self) -> str:
         """Emit the module-level NodeKind enum + its #[pymethods] block."""
+        # TODO(emit-cross-backend-eq-hash-helper): extract shared helper for Rust eq/hash emit;
+        # see also _label_enum_block (gsm2tree_rs.py:~216).
+        # TODO(canonical-name-cache): __hash__ allocates a fresh PyString per call for the
+        # salted CPython hash; cache the isize per variant via GILOnceCell.
         rule_info = self._rule_info()
         lines: list[str] = []
 
@@ -157,7 +161,6 @@ class RustCstGenerator:
         lines.append(f"// {'─' * 75}")
         lines.append("")
 
-        lines.append("#[allow(non_camel_case_types)]")
         lines.append('#[pyclass(frozen, name = "NodeKind")]')
         lines.append("#[derive(Clone, PartialEq, Eq, Hash)]")
         lines.append("pub enum NodeKind {")
@@ -217,6 +220,11 @@ class RustCstGenerator:
         """Emit the label enum definition and its #[pymethods] block.
 
         For rules with no labels, emits nothing (Rust enums cannot have zero variants).
+
+        # TODO(emit-cross-backend-eq-hash-helper): extract shared helper for Rust eq/hash emit;
+        # see also _node_kind_block (gsm2tree_rs.py:~151).
+        # TODO(canonical-name-cache): __hash__ allocates a fresh PyString per call for the
+        # salted CPython hash; cache the isize per variant via GILOnceCell.
         """
         if not labels:
             return ""

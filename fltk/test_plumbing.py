@@ -580,9 +580,7 @@ term := value:/[0-9]+/ ;
         grammar_baseline = parse_grammar(self._GRAMMAR_SRC)
 
         assert grammar_default is not None
-        assert len(grammar_default.rules) == len(grammar_baseline.rules)
-        for r_default, r_baseline in zip(grammar_default.rules, grammar_baseline.rules, strict=True):
-            assert r_default.name == r_baseline.name
+        assert grammar_default == grammar_baseline
 
 
 class TestNoRuntimeCompilation:

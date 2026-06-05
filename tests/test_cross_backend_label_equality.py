@@ -99,6 +99,13 @@ class TestLabelCrossBackend:
             a = _label(a_key, "Items", member)
             b = _label(b_key, "Items", member)
             assert hash(a) == hash(b), f"hash({a_key}.Items.Label.{member}) != hash({b_key}.Items.Label.{member})"
+        # Also verify a second label class to catch per-enum-type hash bugs
+        for disp_member in ["INCLUDE", "SUPPRESS"]:
+            a_disp = _label(a_key, "Disposition", disp_member)
+            b_disp = _label(b_key, "Disposition", disp_member)
+            assert hash(a_disp) == hash(b_disp), (
+                f"hash({a_key}.Disposition.Label.{disp_member}) != hash({b_key}.Disposition.Label.{disp_member})"
+            )
 
     def test_ac5_set_collapse(self, a_key: str, b_key: str) -> None:
         """AC5: {A.X, B.X} has length 1; B.X in {A.X} is True; dict round-trip works."""
@@ -123,12 +130,14 @@ class TestLabelCrossBackend:
             f"{b_key}.ITEM incorrectly found in tuple not containing it"
         )
 
-    def test_ac7_no_raise_on_unrelated_objects(self, a_key: str, b_key: str) -> None:  # noqa: ARG002
+    def test_ac7_no_raise_on_unrelated_objects(self, a_key: str, b_key: str) -> None:
         """AC7: comparison against unrelated objects returns False/True, never raises."""
         label = _label(a_key, "Items", "NO_WS")
         unrelated: list[object] = [None, 1, "Items.Label.NO_WS", object()]
-        # Also a label from a different class
+        # Same-backend cross-class label
         unrelated.append(_label(a_key, "Disposition", "INCLUDE"))
+        # Cross-backend cross-class label (exercises canonical-name path with different class prefix)
+        unrelated.append(_label(b_key, "Disposition", "INCLUDE"))
         for other in unrelated:
             # Must not raise
             result_eq = label == other
@@ -219,13 +228,81 @@ class TestNodeKindCrossBackend:
         assert ".Label." in label_cn, f"Label canonical name should contain '.Label.': {label_cn!r}"
         assert ".Label." not in kind_cn, f"NodeKind canonical name should not contain '.Label.': {kind_cn!r}"
         assert kind_cn.startswith("NodeKind."), f"NodeKind canonical name should start with 'NodeKind.': {kind_cn!r}"
+        # Critical disjointness check: NodeKind.ITEM and Items.Label.ITEM share the same word
+        # ("ITEM"); verify the two families' canonical strings are still disjoint.
+        kind_item = _nodekind(a_key, "ITEM")
+        label_item = _label(b_key, "Items", "ITEM")
+        kind_item_cn: str = kind_item._fltk_canonical_name  # type: ignore[union-attr]
+        label_item_cn: str = label_item._fltk_canonical_name  # type: ignore[union-attr]
+        assert kind_item_cn != label_item_cn, (
+            f"NodeKind.ITEM and Items.Label.ITEM canonical strings must differ: {kind_item_cn!r} vs {label_item_cn!r}"
+        )
+        assert kind_item != label_item, "NodeKind.ITEM should not equal Items.Label.ITEM"
 
-    def test_no_raise_on_unrelated(self, a_key: str, b_key: str) -> None:  # noqa: ARG002
-        """NodeKind comparison against unrelated objects never raises."""
+    def test_no_raise_on_unrelated(self, a_key: str, b_key: str) -> None:
+        """NodeKind comparison against unrelated objects never raises; symmetric direction included."""
         kind = _nodekind(a_key, "ITEMS")
-        for other in [None, 1, "NodeKind.ITEMS", object()]:
-            result = kind == other
-            assert result is False, f"{a_key}.NodeKind.ITEMS == {other!r} should be False"
+        unrelated: list[object] = [None, 1, "NodeKind.ITEMS", object()]
+        # Also include a cross-backend label (cross-family, canonical strings disjoint by construction)
+        unrelated.append(_label(b_key, "Items", "NO_WS"))
+        for other in unrelated:
+            result_eq = kind == other
+            result_ne = kind != other
+            assert result_eq is False, f"{a_key}.NodeKind.ITEMS == {other!r} should be False"
+            assert result_ne is True, f"{a_key}.NodeKind.ITEMS != {other!r} should be True"
+            # Symmetric direction: other.__eq__(kind) or Python fallback
+            result_eq_sym = other == kind
+            result_ne_sym = other != kind
+            assert result_eq_sym is False, f"{other!r} == {a_key}.NodeKind.ITEMS should be False"
+            assert result_ne_sym is True, f"{other!r} != {a_key}.NodeKind.ITEMS should be True"
+
+
+# ---------------------------------------------------------------------------
+# Marker scope: node objects must NOT expose _fltk_canonical_name
+# ---------------------------------------------------------------------------
+
+
+class TestMarkerScope:
+    """Design §2.1: the _fltk_canonical_name marker must not appear on node objects.
+
+    If a node exposed the marker, `node == label` could accidentally return True
+    (if their canonical strings coincided), breaking the invariant that node==label is False.
+    """
+
+    def test_python_node_has_no_canonical_name_marker(self) -> None:
+        """Python Items() node does not expose _fltk_canonical_name."""
+        node = py_cst.Items()
+        assert not hasattr(node, "_fltk_canonical_name"), (
+            "Python node should not expose _fltk_canonical_name; marker is for Label/NodeKind only"
+        )
+
+    def test_rust_node_has_no_canonical_name_marker(self) -> None:
+        """Rust Items() node does not expose _fltk_canonical_name."""
+        node = fegen_rust_cst.Items()
+        assert not hasattr(node, "_fltk_canonical_name"), (
+            "Rust node should not expose _fltk_canonical_name; marker is for Label/NodeKind only"
+        )
+
+    def test_embedded_rust_node_has_no_canonical_name_marker(self) -> None:
+        """Embedded Rust Items() node does not expose _fltk_canonical_name."""
+        node = emb_cst.Items()
+        assert not hasattr(node, "_fltk_canonical_name"), (
+            "Embedded Rust node should not expose _fltk_canonical_name; marker is for Label/NodeKind only"
+        )
+
+    def test_node_neq_label_python(self) -> None:
+        """Python node != Python label (node == label must be False, not True via canonical-name path)."""
+        node = py_cst.Items()
+        label = py_cst.Items.Label.ITEM
+        assert node != label, "Items() node should not equal Items.Label.ITEM"
+        assert not (node == label), "Items() == Items.Label.ITEM should be False"
+
+    def test_node_neq_label_cross_backend(self) -> None:
+        """Python node != Rust label (cross-backend path must also stay False)."""
+        node = py_cst.Items()
+        label = fegen_rust_cst.Items.Label.ITEM
+        assert node != label, "Python Items() node should not equal Rust Items.Label.ITEM"
+        assert not (node == label), "Python Items() == Rust Items.Label.ITEM should be False"
 
 
 # ---------------------------------------------------------------------------

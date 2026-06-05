@@ -4,7 +4,9 @@ from __future__ import annotations
 import typing
 
 import fltk.fegen.pyrt.terminalsrc
-from fltk.fegen.fltk_cst import NodeKind
+
+if typing.TYPE_CHECKING:
+    from fltk.fegen.fltk_cst import NodeKind
 
 
 class Grammar(typing.Protocol):

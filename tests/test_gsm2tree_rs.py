@@ -638,14 +638,25 @@ class TestKindGetter:
         assert "NodeKind::Items" in poc_source
 
     def test_kind_getter_is_getter_attr(self, poc_source: str) -> None:
-        """The kind getter is annotated with #[getter]."""
-        # Check that #[getter] appears before kind getter (they appear together)
-        # Count that at least as many #[getter] annotations exist as there are node structs
-        # (each struct has one kind getter + possible other getters from span/children fields)
-        getter_count = poc_source.count("#[getter]")
-        # PoC: Identifier, Items, Trivia = 3 structs, each with one kind getter + one _fltk_canonical_name getter
-        # (on the label enums and NodeKind), so getter_count >= 3
-        assert getter_count >= 3
+        """The kind getter is annotated with #[getter] immediately before its fn declaration."""
+        # Verify that "#[getter]" appears as the immediately preceding non-blank, non-comment line
+        # before "fn kind(&self) -> NodeKind {" — this ensures the attribute is actually on the
+        # kind function, not just that #[getter] appears somewhere in the file.
+        lines = poc_source.splitlines()
+        kind_fn_sig = "fn kind(&self) -> NodeKind {"
+        for i, line in enumerate(lines):
+            if kind_fn_sig in line:
+                # Walk backward over blank lines to find the preceding non-blank line
+                j = i - 1
+                while j >= 0 and lines[j].strip() == "":
+                    j -= 1
+                assert j >= 0, "No non-blank line found before fn kind"
+                assert "#[getter]" in lines[j], (
+                    f"Expected '#[getter]' immediately before 'fn kind', found: {lines[j]!r}"
+                )
+                break
+        else:
+            pytest.fail("'fn kind(&self) -> NodeKind {' not found in poc_source")
 
     def test_fegen_grammar_all_node_kinds_present(self, fegen_source: str) -> None:
         """All 14 node class names appear as NodeKind variants in fegen source."""

@@ -12,7 +12,6 @@ static UNKNOWN_SPAN_CACHE: GILOnceCell<PyObject> = GILOnceCell::new();
 // NodeKind
 // ───────────────────────────────────────────────────────────────────────────
 
-#[allow(non_camel_case_types)]
 #[pyclass(frozen, name = "NodeKind")]
 #[derive(Clone, PartialEq, Eq, Hash)]
 pub enum NodeKind {
