@@ -12,7 +12,7 @@ import importlib
 import sys
 import types
 from pathlib import Path
-from typing import TYPE_CHECKING, Optional
+from typing import TYPE_CHECKING, Optional, cast
 
 import fltk
 from fltk.fegen import fltk2gsm, fltk_parser, gsm, gsm2parser, gsm2tree
@@ -30,6 +30,8 @@ from fltk.unparse.unparsefmt_parser import Parser as FmtParser
 
 if TYPE_CHECKING:
     from typing import Any
+
+    from fltk.fegen import fltk_cst_protocol as cstp
 
 # Module-scope cache for the fegen grammar (loaded at most once per process).
 # Using a list rather than a bare variable to avoid PLW0603 (global statement).
@@ -142,7 +144,10 @@ def parse_grammar(grammar_text: str, *, rust_fegen_cst_module: str | None = None
             raise ValueError(msg)
 
         cst2gsm = fltk2gsm.Cst2Gsm(terminals.terminals)
-        return cst2gsm.visit_grammar(result.result)
+        # result.result is a concrete fltk_cst.Grammar; cast to GrammarNode to satisfy the
+        # visit_grammar annotation. The nested-Label nominal mismatch applies here too
+        # (same as the default _default_cst binding in Cst2Gsm.__init__).
+        return cst2gsm.visit_grammar(cast("cstp.GrammarNode", result.result))
     else:
         # Rust backend: build a fegen parser bound to the Rust fegen CST module.
         # _load_fegen_grammar() calls parse_grammar with no rust_fegen_cst_module → no recursion.
@@ -168,8 +173,13 @@ def parse_grammar(grammar_text: str, *, rust_fegen_cst_module: str | None = None
             raise ValueError(msg)
 
         # Inject the same backend's CST namespace so isinstance dispatch in Cst2Gsm resolves.
-        cst2gsm = fltk2gsm.Cst2Gsm(terminals.terminals, cst=pr.cst_module)
-        return cst2gsm.visit_grammar(result.result)
+        # pr.cst_module is types.ModuleType at runtime; cast to CstModule so Cst2Gsm's
+        # cst parameter (statically typed as CstModule) accepts it. This is the documented
+        # Rust-injection boundary cast per the design's di-boundary-escape decision.
+        cst2gsm = fltk2gsm.Cst2Gsm(terminals.terminals, cst=cast("cstp.CstModule", pr.cst_module))
+        # result.result is a concrete Rust CST Grammar node (Any/ModuleType at static level);
+        # cast to GrammarNode — the Rust-injection boundary cast per di-boundary-escape decision.
+        return cst2gsm.visit_grammar(cast("cstp.GrammarNode", result.result))
 
 
 def parse_grammar_file(grammar_path: Path, *, rust_fegen_cst_module: str | None = None) -> gsm.Grammar:
