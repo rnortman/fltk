@@ -15,8 +15,8 @@ class SpanKind(enum.Enum):
     def __eq__(self, other: object) -> bool:
         if other is self:
             return True
-        if isinstance(other, SpanKind):
-            return self is other
+        if type(other) is type(self):
+            return self.name == other.name  # type: ignore[union-attr]
         cn = getattr(other, "_fltk_canonical_name", None)
         if cn is not None:
             return self._fltk_canonical_name == cn
@@ -144,7 +144,7 @@ class TerminalSource:
 
     def consume_regex(self, pos: int, regex: str) -> Span | None:
         if match := re.compile(regex).match(self.terminals, pos=pos):
-            assert match.start() == pos  # noqa: S101
+            assert match.start() == pos
             return Span(pos, match.end())
         return None
 
@@ -159,7 +159,7 @@ class TerminalSource:
             if not self.line_ends or self.line_ends[-1] != len(self.terminals) - 1:
                 self.line_ends.append(len(self.terminals) - 1)
         idx = bisect.bisect_left(self.line_ends, pos)
-        assert idx < len(self.line_ends)  # noqa: S101
+        assert idx < len(self.line_ends)
         if idx > 0:
             col = pos - self.line_ends[idx - 1] - 1
             line_span = Span(self.line_ends[idx - 1] + 1, self.line_ends[idx])

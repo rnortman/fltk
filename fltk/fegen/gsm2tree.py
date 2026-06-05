@@ -439,6 +439,14 @@ class CstGenerator:
         shape in _emit_cross_backend_eq_hash.  The static type of each Label member stays object
         (ClassVar[object]) — this sentinel is not an enum.Enum, preserving the structural-mismatch
         contract (test_boundary_probe_documents_label_mismatch).
+
+        TODO(protocol-label-member-private): _ProtocolLabelMember is emitted into the public
+        protocol module.  Consider emitting __all__ or moving this class to pyrt.bridge so it
+        does not appear as a public symbol in the generated output.
+
+        TODO(protocol-label-member-bridge-unify): This emits __eq__/__hash__ via ast.parse()
+        rather than calling _emit_cross_backend_eq_hash, creating two independent bridge
+        implementations.  Refactor to share the helper.
         """
         stmts = ast.parse(
             """\
@@ -504,11 +512,7 @@ class _ProtocolLabelMember:
         for label in labels:
             python_name = label.upper()
             canonical = f"{class_name}.Label.{python_name}"
-            stmts.append(
-                pygen.stmt(
-                    f'{class_name}.Label.{python_name} = _ProtocolLabelMember("{canonical}")'
-                )
-            )
+            stmts.append(pygen.stmt(f'{class_name}.Label.{python_name} = _ProtocolLabelMember("{canonical}")'))
         return stmts
 
     def _protocol_class_for_model(self, class_name: str, model: ItemsModel, rule_name: str) -> ast.ClassDef:

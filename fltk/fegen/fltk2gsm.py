@@ -53,24 +53,37 @@ class Cst2Gsm:
 
         # Process items and separators (interleaved ITEM / separator pairs)
         children = labeled_children[start_idx:]
-        for (item_label, item), (sep_label, _) in zip(children[::2], children[1::2], strict=False):
-            assert item_label == cst.Items.Label.ITEM
-            assert item.kind == cst.Item.kind
+        for i, ((item_label, item), (sep_label, _)) in enumerate(zip(children[::2], children[1::2], strict=False)):
+            assert item_label == cst.Items.Label.ITEM, (
+                f"expected ITEM label at interleaved-child index {start_idx + 2 * i}, got {item_label!r}"
+            )
+            assert item.kind == cst.Item.kind, (
+                f"expected Item node at interleaved-child index {start_idx + 2 * i}, got kind={item.kind!r}"
+            )
             gsm_items.append(self.visit_item(item))
             if sep_label == cst.Items.Label.WS_REQUIRED:
                 sep_after.append(gsm.Separator.WS_REQUIRED)
             elif sep_label == cst.Items.Label.WS_ALLOWED:
                 sep_after.append(gsm.Separator.WS_ALLOWED)
             else:
-                assert sep_label == cst.Items.Label.NO_WS
+                assert sep_label == cst.Items.Label.NO_WS, (
+                    f"expected NO_WS separator label at interleaved-child index {start_idx + 2 * i + 1},"
+                    f" got {sep_label!r}"
+                )
                 sep_after.append(gsm.Separator.NO_WS)
         if (len(children) % 2) != 0:
             item_label, item = children[-1]
-            assert item_label == cst.Items.Label.ITEM
-            assert item.kind == cst.Item.kind
+            assert item_label == cst.Items.Label.ITEM, (
+                f"expected ITEM label at trailing child index {start_idx + len(children) - 1}, got {item_label!r}"
+            )
+            assert item.kind == cst.Item.kind, (
+                f"expected Item node at trailing child index {start_idx + len(children) - 1}, got kind={item.kind!r}"
+            )
             gsm_items.append(self.visit_item(item))
             sep_after.append(gsm.Separator.NO_WS)
-        assert len(gsm_items) == len(sep_after)
+        assert len(gsm_items) == len(sep_after), (
+            f"item/sep count mismatch: {len(gsm_items)} items, {len(sep_after)} separators"
+        )
         return gsm.Items(items=gsm_items, sep_after=sep_after, initial_sep=initial_sep)
 
     def visit_item(self, item: cst.Item) -> gsm.Item:

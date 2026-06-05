@@ -261,11 +261,16 @@ impl Span {
     fn kind(&self, py: Python<'_>) -> PyResult<PyObject> {
         SPAN_KIND_SPAN_CACHE
             .get_or_try_init(py, || -> PyResult<PyObject> {
-                Ok(py
-                    .import("fltk.fegen.pyrt.terminalsrc")?
-                    .getattr("SpanKind")?
-                    .getattr("SPAN")?
-                    .unbind())
+                py.import("fltk.fegen.pyrt.terminalsrc")
+                    .and_then(|m| m.getattr("SpanKind"))
+                    .and_then(|sk| sk.getattr("SPAN"))
+                    .map(|obj| obj.unbind())
+                    .map_err(|e| {
+                        PyValueError::new_err(format!(
+                            "Span.kind: failed to load SpanKind.SPAN from \
+                            fltk.fegen.pyrt.terminalsrc: {e}"
+                        ))
+                    })
             })
             .map(|obj| obj.clone_ref(py))
     }

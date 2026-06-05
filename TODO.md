@@ -68,4 +68,12 @@ The Rust `__hash__` implementation allocates a fresh `PyString` (for the salted 
 
 The `kind` dataclass field joins the generated `__eq__`/`__hash__` for every node, but it is invariant within a node type (a node of type `Item` always has `kind == NodeKind.Item`). The comparison is cheap (same singleton, `other is self` fast path), but it is pure overhead on every structural node equality. Mark `kind` with `dataclasses.field(compare=False, repr=False)` if node-equality performance becomes a concern. Location: `fltk/fegen/gsm2tree.py` (`py_class_for_model`, `kind` field emit).
 
+## `protocol-label-member-bridge-unify`
+
+`_emit_protocol_label_member_class` in `gsm2tree.py` emits `__eq__`/`__hash__` via a raw `ast.parse()` string instead of calling the existing `_emit_cross_backend_eq_hash` helper. This creates two independent implementations of the cross-backend bridge that can drift independently. Refactor `_emit_protocol_label_member_class` to call `_emit_cross_backend_eq_hash` (or extract a pygen-based helper shared by both) so any future bridge change propagates everywhere. The divergence today (non-enum uses `_fltk_canonical_name` name comparison in the same-type fast-path; enum uses `.name`) is intentional but the coupling between the docstring note and the actual code is informal. Location: `fltk/fegen/gsm2tree.py` (`_emit_protocol_label_member_class`, `_emit_cross_backend_eq_hash`).
+
+## `protocol-label-member-private`
+
+`_ProtocolLabelMember` is emitted as a module-level class in the generated public protocol module (`fltk_cst_protocol.py`). It appears in `from fltk_cst_protocol import *` and in IDE autocompletion; downstream consumers could accidentally take a dependency on it, making it de-facto public API subject to breaking-change rules. Options: (a) emit a module-level `__all__` listing only the intended public symbols, suppressing `_ProtocolLabelMember` from wildcard imports; or (b) move the class to `fltk.fegen.pyrt.bridge` (or similar) and import it into the generated module from there, keeping the implementation out of the public-API file. Location: `fltk/fegen/gsm2tree.py` (`_emit_protocol_label_member_class`, `gen_protocol_module`).
+
 

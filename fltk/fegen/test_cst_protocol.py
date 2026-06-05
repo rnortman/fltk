@@ -476,7 +476,4 @@ def test_fltk2gsm_imports_protocol_not_concrete_at_runtime() -> None:
         timeout=60,
         check=False,
     )
-    assert result.returncode == 0, (
-        "fltk2gsm import-behavior assertion failed.\n"
-        f"stderr: {result.stderr}"
-    )
+    assert result.returncode == 0, f"fltk2gsm import-behavior assertion failed.\nstderr: {result.stderr}"

@@ -39,9 +39,19 @@ from fltk.plumbing import generate_parser, parse_grammar_file
 # Module-level availability guards
 # ---------------------------------------------------------------------------
 
-# fegen_rust_cst is optional (needs `make build-fegen-rust-cst`)
-fegen_rust_cst = pytest.importorskip(
-    "fegen_rust_cst",
+# fegen_rust_cst is optional (needs `make build-fegen-rust-cst`).
+# Import it tentatively so tests that don't need it still run; tests that use
+# fegen_rust_cst directly are gated by the `fegen_rust_cst_module` fixture below.
+try:
+    import fegen_rust_cst  # type: ignore[import-not-found]
+
+    _FEGEN_RUST_CST_AVAILABLE = True
+except ImportError:
+    fegen_rust_cst = None  # type: ignore[assignment]
+    _FEGEN_RUST_CST_AVAILABLE = False
+
+_FEGEN_RUST_CST_SKIP = pytest.mark.skipif(
+    not _FEGEN_RUST_CST_AVAILABLE,
     reason="fegen_rust_cst not built; run 'make build-fegen-rust-cst' first",
 )
 
@@ -231,7 +241,7 @@ def test_shapes_fixture_ruff_clean(tmp_path: pathlib.Path) -> None:
 
 
 def test_shapes_fixture_no_forbidden_patterns() -> None:
-    """§4 item 1 (AC 8a, 11): fixture text contains no cast, runtime_checkable, or S101 noqa."""
+    """§4 item 1 (AC 8a, 11): fixture text contains no cast, runtime_checkable, S101 noqa, or TYPE_CHECKING."""
     # Check by scanning lines that contain actual code (not docstring content)
     code_lines = [line for line in _SHAPES_FIXTURE.splitlines() if not line.strip().startswith('"""')]
     code_text = "\n".join(code_lines)
@@ -240,6 +250,8 @@ def test_shapes_fixture_no_forbidden_patterns() -> None:
     assert "runtime_checkable" not in code_text
     # No bare noqa suppression (the fixture has no CST-forced noqa)
     assert "# noqa: S101" not in code_text
+    # No TYPE_CHECKING shadow import (gating criterion forbids it)
+    assert "TYPE_CHECKING" not in code_text
 
 
 # ---------------------------------------------------------------------------
@@ -257,9 +269,7 @@ def test_fltk2gsm_single_cst_import() -> None:
     for line in lines:
         stripped = line.strip()
         if "fltk_cst" in stripped and "fltk_cst_protocol" not in stripped:
-            pytest.fail(
-                f"fltk2gsm.py contains a reference to concrete fltk_cst (not via protocol):\n  {line!r}"
-            )
+            pytest.fail(f"fltk2gsm.py contains a reference to concrete fltk_cst (not via protocol):\n  {line!r}")
 
 
 def test_fltk2gsm_no_type_checking_block() -> None:
@@ -297,11 +307,30 @@ def test_fltk2gsm_ruff_clean() -> None:
     assert violations == [], f"Unexpected ruff violations in fltk2gsm.py:\n{violations}"
 
 
+def test_protocol_module_no_new_file_level_suppressions() -> None:
+    """§4 item 2 (design §3): generated protocol module must not acquire new file-level suppressions.
+
+    The pre-existing '# ruff: noqa: N802' is permitted (suppresses non-lowercase function names,
+    not consumer-induced). No other file-level noqa or type: ignore lines may be added.
+    """
+    lines = PROTOCOL_MODULE_PATH.read_text().splitlines()
+    file_level_noqa = [line for line in lines if line.strip().startswith("# ruff: noqa")]
+    file_level_type_ignore = [line for line in lines if "# type: ignore" in line and not line.strip().startswith("#")]
+    # Exactly one file-level noqa, and it must be the pre-existing N802
+    assert len(file_level_noqa) == 1, f"Expected exactly one '# ruff: noqa' in protocol module, got: {file_level_noqa}"
+    assert "N802" in file_level_noqa[0], f"Expected '# ruff: noqa: N802', got: {file_level_noqa[0]!r}"
+    # No inline # type: ignore in the generated module (it is generated; type errors belong in the generator)
+    assert file_level_type_ignore == [], (
+        f"Protocol module must not contain inline '# type: ignore': {file_level_type_ignore}"
+    )
+
+
 # ---------------------------------------------------------------------------
 # §4 item 3 — fltk2gsm.py behavioral equivalence (AC 9)
 # ---------------------------------------------------------------------------
 
 
+@_FEGEN_RUST_CST_SKIP
 def test_fltk2gsm_behavioral_equivalence() -> None:
     """AC 9: fltk2gsm produces same GSM output as before on same input.
 
@@ -367,8 +396,7 @@ def test_protocol_import_does_not_import_concrete_backends() -> None:
         check=False,
     )
     assert result.returncode == 0, (
-        "Protocol module import pulled in a concrete backend.\n"
-        f"stderr: {result.stderr}\nstdout: {result.stdout}"
+        f"Protocol module import pulled in a concrete backend.\nstderr: {result.stderr}\nstdout: {result.stdout}"
     )
 
 
@@ -397,6 +425,7 @@ class TestCrossBackendEqualityHash:
         assert proto_kind == rust_kind, "proto NodeKind.ITEMS != embedded rust NodeKind.ITEMS"
         assert rust_kind == proto_kind, "embedded rust NodeKind.ITEMS != proto NodeKind.ITEMS (reverse)"
 
+    @_FEGEN_RUST_CST_SKIP
     def test_nodekind_proto_eq_rust_external(self) -> None:
         """proto_cst.NodeKind.ITEMS == fegen_rust_cst.NodeKind.ITEMS (and reverse)."""
         proto_kind = proto_cst.NodeKind.ITEMS
@@ -405,20 +434,36 @@ class TestCrossBackendEqualityHash:
         assert rust_kind == proto_kind, "external rust NodeKind.ITEMS != proto NodeKind.ITEMS (reverse)"
 
     def test_nodekind_nonmatching_neq(self) -> None:
-        """proto NodeKind.ITEMS != py/rust NodeKind.GRAMMAR."""
+        """proto NodeKind.ITEMS != py/rust NodeKind.GRAMMAR (both operand orders, Python + embedded Rust)."""
         proto_kind = proto_cst.NodeKind.ITEMS
         assert proto_kind != py_cst.NodeKind.GRAMMAR
         assert py_cst.NodeKind.GRAMMAR != proto_kind
+        # Rust embedded backend (always available)
+        assert proto_kind != embedded_rust_cst.NodeKind.GRAMMAR
+        assert embedded_rust_cst.NodeKind.GRAMMAR != proto_kind
+
+    @_FEGEN_RUST_CST_SKIP
+    def test_nodekind_nonmatching_neq_rust_external(self) -> None:
+        """proto NodeKind.ITEMS != fegen_rust_cst NodeKind.GRAMMAR (both operand orders)."""
+        proto_kind = proto_cst.NodeKind.ITEMS
+        assert proto_kind != fegen_rust_cst.NodeKind.GRAMMAR
+        assert fegen_rust_cst.NodeKind.GRAMMAR != proto_kind
 
     def test_nodekind_hash_consistent(self) -> None:
-        """hash(proto NodeKind.X) == hash(py NodeKind.X) == hash(rust NodeKind.X)."""
+        """hash(proto NodeKind.X) == hash(py NodeKind.X) == hash(rust emb NodeKind.X)."""
         for member in ("ITEMS", "GRAMMAR", "RULE", "ITEM"):
             proto_kind = getattr(proto_cst.NodeKind, member)
             py_kind = getattr(py_cst.NodeKind, member)
             rust_emb_kind = getattr(embedded_rust_cst.NodeKind, member)
-            rust_ext_kind = getattr(fegen_rust_cst.NodeKind, member)
             assert hash(proto_kind) == hash(py_kind), f"hash mismatch proto vs py for NodeKind.{member}"
             assert hash(proto_kind) == hash(rust_emb_kind), f"hash mismatch proto vs rust emb for NodeKind.{member}"
+
+    @_FEGEN_RUST_CST_SKIP
+    def test_nodekind_hash_consistent_rust_external(self) -> None:
+        """hash(proto NodeKind.X) == hash(fegen_rust_cst NodeKind.X)."""
+        for member in ("ITEMS", "GRAMMAR", "RULE", "ITEM"):
+            proto_kind = getattr(proto_cst.NodeKind, member)
+            rust_ext_kind = getattr(fegen_rust_cst.NodeKind, member)
             assert hash(proto_kind) == hash(rust_ext_kind), f"hash mismatch proto vs rust ext for NodeKind.{member}"
 
     # --- Label (Items.Label.ITEM) ---
@@ -437,6 +482,7 @@ class TestCrossBackendEqualityHash:
         assert proto_label == rust_label, "proto Items.Label.ITEM != rust emb Items.Label.ITEM"
         assert rust_label == proto_label, "rust emb Items.Label.ITEM != proto Items.Label.ITEM (reverse)"
 
+    @_FEGEN_RUST_CST_SKIP
     def test_label_proto_eq_rust_external_matching(self) -> None:
         """proto Items.Label.ITEM == fegen_rust_cst.Items.Label.ITEM (both orders)."""
         proto_label = proto_cst.Items.Label.ITEM
@@ -453,16 +499,22 @@ class TestCrossBackendEqualityHash:
         assert embedded_rust_cst.Items.Label.NO_WS != proto_label
 
     def test_label_hash_consistent(self) -> None:
-        """hash(proto_label) == hash(py_label) == hash(rust_label) for matching pairs."""
+        """hash(proto_label) == hash(py_label) == hash(rust_emb_label) for matching pairs."""
         for member in ("ITEM", "NO_WS", "WS_ALLOWED", "WS_REQUIRED"):
             proto_label = getattr(proto_cst.Items.Label, member)
             py_label = getattr(py_cst.Items.Label, member)
             rust_emb_label = getattr(embedded_rust_cst.Items.Label, member)
-            rust_ext_label = getattr(fegen_rust_cst.Items.Label, member)
             assert hash(proto_label) == hash(py_label), f"hash mismatch proto vs py for Items.Label.{member}"
             assert hash(proto_label) == hash(rust_emb_label), (
                 f"hash mismatch proto vs rust emb for Items.Label.{member}"
             )
+
+    @_FEGEN_RUST_CST_SKIP
+    def test_label_hash_consistent_rust_external(self) -> None:
+        """hash(proto_label) == hash(fegen_rust_cst label) for matching pairs."""
+        for member in ("ITEM", "NO_WS", "WS_ALLOWED", "WS_REQUIRED"):
+            proto_label = getattr(proto_cst.Items.Label, member)
+            rust_ext_label = getattr(fegen_rust_cst.Items.Label, member)
             assert hash(proto_label) == hash(rust_ext_label), (
                 f"hash mismatch proto vs rust ext for Items.Label.{member}"
             )
@@ -597,9 +649,7 @@ class TestCrossBackendDualShapeDispatch:
         """Shape 1 produces identical structural tag sequences from Python and Rust backends."""
         py_tags = [tag for tag, _ in self._shape1_interleaved(python_items)]
         rust_tags = [tag for tag, _ in self._shape1_interleaved(rust_items)]
-        assert py_tags == rust_tags, (
-            f"Shape 1 tag sequences differ:\n  Python: {py_tags}\n  Rust: {rust_tags}"
-        )
+        assert py_tags == rust_tags, f"Shape 1 tag sequences differ:\n  Python: {py_tags}\n  Rust: {rust_tags}"
 
     def test_span_kind_narrows_rust_backend_span_children(self, rust_items) -> None:
         """Assert that cst.Span.kind matches Span separator children in a Rust-backend Items node.
@@ -628,6 +678,28 @@ class TestCrossBackendDualShapeDispatch:
             "fltk._native.Span.kind must equal proto_cst.Span.kind (cross-backend narrowing)"
         )
 
+    def test_rust_native_span_dispatches_via_match_case(self) -> None:
+        """AC 12: Shape 2 match/case dispatch hits cst.Span.kind arm for a fltk._native.Span object.
+
+        Directly exercises the match/case value-pattern evaluation against a RustSpan instance —
+        the end-to-end AC 12 claim that 'case cst.Span.kind:' matches a Rust fltk._native.Span.
+        """
+        rust_span = RustSpan(1, 5)
+        dispatched_as: str = "unmatched"
+        match rust_span.kind:
+            case proto_cst.Item.kind:
+                dispatched_as = "item"
+            case proto_cst.Trivia.kind:
+                dispatched_as = "trivia"
+            case proto_cst.Span.kind:
+                dispatched_as = "span"
+            case _:
+                dispatched_as = "other"
+        assert dispatched_as == "span", (
+            f"fltk._native.Span did not dispatch to 'case cst.Span.kind:' arm; got {dispatched_as!r}. "
+            "AC 12 cross-backend Span dispatch is broken."
+        )
+
 
 # ---------------------------------------------------------------------------
 # §4 item 7 — Canonical-string agreement invariant
@@ -638,26 +710,31 @@ class TestCanonicalStringAgreement:
     """§4 item 7: canonical strings agree across protocol / Python-concrete / Rust-concrete."""
 
     def test_nodekind_canonical_strings_agree(self) -> None:
-        """NodeKind._fltk_canonical_name agrees across all three backends."""
+        """NodeKind._fltk_canonical_name agrees across protocol, Python, and embedded Rust."""
         for member in ("ITEMS", "GRAMMAR", "RULE", "ITEM", "TERM"):
             proto_kind = getattr(proto_cst.NodeKind, member)
             py_kind = getattr(py_cst.NodeKind, member)
             rust_emb_kind = getattr(embedded_rust_cst.NodeKind, member)
-            rust_ext_kind = getattr(fegen_rust_cst.NodeKind, member)
-
-            proto_cn = proto_kind._fltk_canonical_name
-            py_cn = py_kind._fltk_canonical_name
-            rust_emb_cn = rust_emb_kind._fltk_canonical_name
-            rust_ext_cn = rust_ext_kind._fltk_canonical_name
 
             expected = f"NodeKind.{member}"
-            assert proto_cn == expected, f"proto NodeKind.{member} canonical name: {proto_cn!r} != {expected!r}"
-            assert py_cn == expected, f"py NodeKind.{member} canonical name: {py_cn!r} != {expected!r}"
-            assert rust_emb_cn == expected, (
-                f"rust emb NodeKind.{member} canonical name: {rust_emb_cn!r} != {expected!r}"
+            assert proto_kind._fltk_canonical_name == expected, (
+                f"proto NodeKind.{member} canonical name: {proto_kind._fltk_canonical_name!r} != {expected!r}"
             )
-            assert rust_ext_cn == expected, (
-                f"rust ext NodeKind.{member} canonical name: {rust_ext_cn!r} != {expected!r}"
+            assert py_kind._fltk_canonical_name == expected, (
+                f"py NodeKind.{member} canonical name: {py_kind._fltk_canonical_name!r} != {expected!r}"
+            )
+            assert rust_emb_kind._fltk_canonical_name == expected, (
+                f"rust emb NodeKind.{member} canonical name: {rust_emb_kind._fltk_canonical_name!r} != {expected!r}"
+            )
+
+    @_FEGEN_RUST_CST_SKIP
+    def test_nodekind_canonical_strings_agree_rust_external(self) -> None:
+        """NodeKind._fltk_canonical_name agrees for fegen_rust_cst (external Rust backend)."""
+        for member in ("ITEMS", "GRAMMAR", "RULE", "ITEM", "TERM"):
+            rust_ext_kind = getattr(fegen_rust_cst.NodeKind, member)
+            expected = f"NodeKind.{member}"
+            assert rust_ext_kind._fltk_canonical_name == expected, (
+                f"rust ext NodeKind.{member} canonical name: {rust_ext_kind._fltk_canonical_name!r} != {expected!r}"
             )
 
     def test_spankind_canonical_string_agrees(self) -> None:
