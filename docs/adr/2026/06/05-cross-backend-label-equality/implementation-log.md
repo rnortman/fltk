@@ -1,8 +1,15 @@
 # Cross-Backend Label Equality — Implementation Log
 
-## Increment 2 — Rust `Label` `__eq__`/`__hash__`/`_fltk_canonical_name` in `gsm2tree_rs.py` (draft)
+## Increment 2 — Rust `Label` `__eq__`/`__hash__`/`_fltk_canonical_name` in `gsm2tree_rs.py` (commit 0d8c815)
 
-Drop `eq, hash` from `#[pyclass]` on label enums; hand-write `__eq__`, `__hash__`, `_fltk_canonical_name` getter in `#[pymethods]` on each label enum in `gsm2tree_rs.py`, then regenerate Rust CST outputs and build.
+- `fltk/fegen/gsm2tree_rs.py:152`: dropped `eq, hash` from `#[pyclass(frozen, name = ...)]` on all label enums; `#[derive(Clone, PartialEq, Eq, Hash)]` retained for Rust-internal use.
+- `fltk/fegen/gsm2tree_rs.py:175-208`: new `#[pymethods]` entries on each label enum:
+  - `_fltk_canonical_name` `#[getter]` returning `self.__repr__()` (same canonical string).
+  - `__eq__` with own-type fast path (`extract::<EnumName>()` + Rust `PartialEq`); cross-type path reads `_fltk_canonical_name` off operand via `getattr` and string-compares; marker absent → `py.NotImplemented()`.
+  - `__hash__` building `PyString::new(py, self.__repr__())` and returning its CPython hash via `PyAnyMethods::hash`, ensuring in-process hash agreement with Python.
+- `tests/test_gsm2tree_rs.py:228-252`: added 5 new generator assertions: `eq, hash` absent from `#[pyclass]`; `_fltk_canonical_name` getter present; `__eq__` present; `__hash__` with `PyString::new` present; `"_fltk_canonical_name"` string present in `__eq__` body. Updated `test_identifier_label_pyclass_name` to expect `frozen` without `eq, hash`.
+- Regenerated: `src/cst_fegen.rs`, `src/cst_generated.rs`, `tests/rust_cst_fegen/src/cst.rs`, `tests/rust_cst_fixture/src/cst.rs`. All four Rust crates compiled (`maturin develop` clean on all three extension crates).
+- 788 tests pass; pyright 0 errors; ruff clean.
 
 ## Increment 1 — Python `Label` `__eq__`/`__hash__`/`_fltk_canonical_name` in `gsm2tree.py` (commit 600bfc6)
 
