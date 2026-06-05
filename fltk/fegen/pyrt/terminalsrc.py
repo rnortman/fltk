@@ -1,7 +1,32 @@
 import bisect
+import enum
 import re
 from dataclasses import dataclass, field
-from typing import Final
+from typing import Final, Literal
+
+
+class SpanKind(enum.Enum):
+    """Discriminant enum for Span, enabling native `.kind` narrowing in protocol consumers."""
+
+    SPAN = enum.auto()
+
+    _fltk_canonical_name: str
+
+    def __eq__(self, other: object) -> bool:
+        if other is self:
+            return True
+        if isinstance(other, SpanKind):
+            return self is other
+        cn = getattr(other, "_fltk_canonical_name", None)
+        if cn is not None:
+            return self._fltk_canonical_name == cn
+        return NotImplemented
+
+    def __hash__(self) -> int:
+        return hash(self._fltk_canonical_name)
+
+
+SpanKind.SPAN._fltk_canonical_name = "SpanKind.SPAN"  # type: ignore[attr-defined]
 
 
 @dataclass(frozen=True, eq=True, slots=True)
@@ -11,6 +36,7 @@ class Span:
     start: int
     end: int
     _source: str | None = field(default=None, repr=False, compare=False, hash=False)
+    kind: Literal[SpanKind.SPAN] = field(default=SpanKind.SPAN, repr=False, compare=False, hash=False)
 
     def text(self) -> str | None:
         """Return the source text slice ``[start, end)``, or ``None`` if no source is attached or indices are
