@@ -11,6 +11,10 @@
 - Regenerated: `src/cst_fegen.rs`, `src/cst_generated.rs`, `tests/rust_cst_fegen/src/cst.rs`, `tests/rust_cst_fixture/src/cst.rs`. All four Rust crates compiled (`maturin develop` clean on all three extension crates).
 - 788 tests pass; pyright 0 errors; ruff clean.
 
+## Increment 3 — `NodeKind` enum + `kind` discriminant: Python generator, fltk_cst, fltk_cst_protocol (commit TBD)
+
+Draft scope: emit `NodeKind` enum (with cross-backend eq/hash) and `kind` instance attribute on every node in `gsm2tree.py`; regenerate `fltk_cst.py` and `fltk_cst_protocol.py`.
+
 ## Increment 1 — Python `Label` `__eq__`/`__hash__`/`_fltk_canonical_name` in `gsm2tree.py` (commit 600bfc6)
 
 - `fltk/fegen/gsm2tree.py:112-141`: in `py_class_for_model`, after emitting `enum.auto()` members, now emits on each `Label(enum.Enum)`:

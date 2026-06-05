@@ -92,6 +92,43 @@ class CstGenerator:
             return f"typing.Union[{', '.join(py_types)}]"
         return py_types[0]
 
+    def node_kind_member_name(self, rule_name: str) -> str:
+        """Return the NodeKind enum member name for a rule (uppercased class name)."""
+        return self.class_name_for_rule_node(rule_name).upper()
+
+    def _node_kind_enum(self) -> ast.ClassDef:
+        """Emit the module-level NodeKind enum with cross-backend eq/hash."""
+        node_kind = pygen.klass(name="NodeKind", bases=["enum.Enum"])
+        for rule in self.grammar.rules:
+            member = self.node_kind_member_name(rule.name)
+            node_kind.body.append(pygen.stmt(f"{member} = enum.auto()"))
+
+        # _fltk_canonical_name: instance property yielding "NodeKind.<MEMBER_NAME>"
+        canonical_name_prop = pygen.function("_fltk_canonical_name", "self", "str")
+        canonical_name_prop.decorator_list = [pygen.expr("property")]
+        canonical_name_prop.body.append(pygen.stmt('return f"NodeKind.{self.name}"'))
+        node_kind.body.append(canonical_name_prop)
+
+        # __eq__: same-type fast path, then canonical-name cross-type, then NotImplemented
+        eq_fn = pygen.function("__eq__", "self, other: object", "bool")
+        eq_fn.body.extend(
+            [
+                pygen.stmt("if other is self: return True"),
+                pygen.stmt("if type(other) is type(self): return self.name == other.name"),  # type: ignore[union-attr]
+                pygen.stmt("cn = getattr(other, '_fltk_canonical_name', None)"),
+                pygen.stmt("if cn is not None: return self._fltk_canonical_name == cn"),
+                pygen.stmt("return NotImplemented"),
+            ]
+        )
+        node_kind.body.append(eq_fn)
+
+        # __hash__: hash of canonical name
+        hash_fn = pygen.function("__hash__", "self", "int")
+        hash_fn.body.append(pygen.stmt("return hash(self._fltk_canonical_name)"))
+        node_kind.body.append(hash_fn)
+
+        return node_kind
+
     def gen_py_module(self) -> ast.Module:
         imports = [
             pyreg.Module(("dataclasses",)),
@@ -100,6 +137,9 @@ class CstGenerator:
             pyreg.Module(("fltk", "fegen", "pyrt", "terminalsrc")),
         ]
         module = pygen.module(module.import_path for module in imports)
+
+        # Emit module-level NodeKind enum before the node classes.
+        module.body.append(self._node_kind_enum())
 
         for rule, model in self.rule_models.items():
             module.body.append(self.py_class_for_model(self.class_name_for_rule_node(rule), model))
@@ -148,8 +188,11 @@ class CstGenerator:
             )
             raise RuntimeError(msg)
         child_annotation = self.py_annotation_for_model_types(model_types=model.types, in_module=True)
+        # kind: instance attribute (dataclass field with default) for NodeKind discriminant (§2.4).
+        # MUST NOT be ClassVar — pyright rejects ClassVar against the Protocol's instance-attr declaration.
         klass.body.extend(
             [
+                pygen.stmt(f"kind: typing.Literal[NodeKind.{class_name.upper()}] = NodeKind.{class_name.upper()}"),
                 pygen.stmt("span: fltk.fegen.pyrt.terminalsrc.Span = fltk.fegen.pyrt.terminalsrc.UnknownSpan"),
                 pygen.stmt(
                     f"children: list[tuple[typing.Optional[Label], {child_annotation}]]"
@@ -361,17 +404,27 @@ class CstGenerator:
         module.body.append(pygen.import_(("typing",)))
         module.body.append(pygen.import_(("fltk", "fegen", "pyrt", "terminalsrc")))
 
+        # Import NodeKind from the concrete CST module so Protocol members can reference it in
+        # Literal[NodeKind.X] annotations.  Only emitted when the concrete module has a real path.
+        concrete_module_path = self.py_module.import_path
+        if concrete_module_path:
+            concrete_module_dotted = ".".join(concrete_module_path)
+            module.body.append(pygen.stmt(f"from {concrete_module_dotted} import NodeKind"))
+
         for rule in self.rule_models:
             model = self.rule_models[rule]
             class_name = self.protocol_node_name(rule)
-            module.body.append(self._protocol_class_for_model(class_name, model))
+            module.body.append(self._protocol_class_for_model(class_name, model, rule))
 
         module.body.append(self._cst_module_protocol())
 
         return module
 
-    def _protocol_class_for_model(self, class_name: str, model: ItemsModel) -> ast.ClassDef:
-        """Generate a Protocol class for a single CST node."""
+    def _protocol_class_for_model(self, class_name: str, model: ItemsModel, rule_name: str = "") -> ast.ClassDef:
+        """Generate a Protocol class for a single CST node.
+
+        rule_name is used to emit the kind discriminant when the concrete module path is known.
+        """
         klass = pygen.klass(name=class_name, bases=["typing.Protocol"])
 
         labels = sorted(model.labels.keys())
@@ -387,6 +440,13 @@ class CstGenerator:
                 # type of the constant is immaterial for Protocol-level checking.
                 label_class.body.append(pygen.stmt(f"{label.upper()}: typing.ClassVar[object]"))
             klass.body.append(label_class)
+
+        # kind discriminant: emit Literal[NodeKind.X] when concrete module is known; else object.
+        if rule_name and self.py_module.import_path:
+            member = self.node_kind_member_name(rule_name)
+            klass.body.append(pygen.stmt(f"kind: typing.Literal[NodeKind.{member}]"))
+        else:
+            klass.body.append(pygen.stmt("kind: object"))
 
         klass.body.append(pygen.stmt("span: fltk.fegen.pyrt.terminalsrc.Span"))
 

@@ -4,12 +4,14 @@ from __future__ import annotations
 import typing
 
 import fltk.fegen.pyrt.terminalsrc
+from fltk.fegen.fltk_cst import NodeKind
 
 
 class Grammar(typing.Protocol):
     class Label:
         RULE: typing.ClassVar[object]
 
+    kind: typing.Literal[NodeKind.GRAMMAR]
     span: fltk.fegen.pyrt.terminalsrc.Span
     children: list[tuple[Label | None, Rule | Trivia]]
 
@@ -35,6 +37,7 @@ class Rule(typing.Protocol):
         ALTERNATIVES: typing.ClassVar[object]
         NAME: typing.ClassVar[object]
 
+    kind: typing.Literal[NodeKind.RULE]
     span: fltk.fegen.pyrt.terminalsrc.Span
     children: list[tuple[Label | None, Alternatives | Identifier | Trivia]]
 
@@ -71,6 +74,7 @@ class Alternatives(typing.Protocol):
     class Label:
         ITEMS: typing.ClassVar[object]
 
+    kind: typing.Literal[NodeKind.ALTERNATIVES]
     span: fltk.fegen.pyrt.terminalsrc.Span
     children: list[tuple[Label | None, Items | Trivia]]
 
@@ -98,6 +102,7 @@ class Items(typing.Protocol):
         WS_ALLOWED: typing.ClassVar[object]
         WS_REQUIRED: typing.ClassVar[object]
 
+    kind: typing.Literal[NodeKind.ITEMS]
     span: fltk.fegen.pyrt.terminalsrc.Span
     children: list[tuple[Label | None, Item | Trivia | fltk.fegen.pyrt.terminalsrc.Span]]
 
@@ -157,6 +162,7 @@ class Item(typing.Protocol):
         QUANTIFIER: typing.ClassVar[object]
         TERM: typing.ClassVar[object]
 
+    kind: typing.Literal[NodeKind.ITEM]
     span: fltk.fegen.pyrt.terminalsrc.Span
     children: list[tuple[Label | None, Disposition | Identifier | Quantifier | Term | Trivia]]
 
@@ -220,6 +226,7 @@ class Term(typing.Protocol):
         LITERAL: typing.ClassVar[object]
         REGEX: typing.ClassVar[object]
 
+    kind: typing.Literal[NodeKind.TERM]
     span: fltk.fegen.pyrt.terminalsrc.Span
     children: list[tuple[Label | None, Alternatives | Identifier | Literal | RawString | Trivia]]
 
@@ -282,6 +289,7 @@ class Disposition(typing.Protocol):
         INLINE: typing.ClassVar[object]
         SUPPRESS: typing.ClassVar[object]
 
+    kind: typing.Literal[NodeKind.DISPOSITION]
     span: fltk.fegen.pyrt.terminalsrc.Span
     children: list[tuple[Label | None, fltk.fegen.pyrt.terminalsrc.Span]]
 
@@ -330,6 +338,7 @@ class Quantifier(typing.Protocol):
         OPTIONAL: typing.ClassVar[object]
         ZERO_OR_MORE: typing.ClassVar[object]
 
+    kind: typing.Literal[NodeKind.QUANTIFIER]
     span: fltk.fegen.pyrt.terminalsrc.Span
     children: list[tuple[Label | None, fltk.fegen.pyrt.terminalsrc.Span]]
 
@@ -376,6 +385,7 @@ class Identifier(typing.Protocol):
     class Label:
         NAME: typing.ClassVar[object]
 
+    kind: typing.Literal[NodeKind.IDENTIFIER]
     span: fltk.fegen.pyrt.terminalsrc.Span
     children: list[tuple[Label | None, fltk.fegen.pyrt.terminalsrc.Span]]
 
@@ -402,6 +412,7 @@ class RawString(typing.Protocol):
     class Label:
         VALUE: typing.ClassVar[object]
 
+    kind: typing.Literal[NodeKind.RAWSTRING]
     span: fltk.fegen.pyrt.terminalsrc.Span
     children: list[tuple[Label | None, fltk.fegen.pyrt.terminalsrc.Span]]
 
@@ -428,6 +439,7 @@ class Literal(typing.Protocol):
     class Label:
         VALUE: typing.ClassVar[object]
 
+    kind: typing.Literal[NodeKind.LITERAL]
     span: fltk.fegen.pyrt.terminalsrc.Span
     children: list[tuple[Label | None, fltk.fegen.pyrt.terminalsrc.Span]]
 
@@ -455,6 +467,7 @@ class Trivia(typing.Protocol):
         BLOCK_COMMENT: typing.ClassVar[object]
         LINE_COMMENT: typing.ClassVar[object]
 
+    kind: typing.Literal[NodeKind.TRIVIA]
     span: fltk.fegen.pyrt.terminalsrc.Span
     children: list[tuple[Label | None, BlockComment | LineComment | fltk.fegen.pyrt.terminalsrc.Span]]
 
@@ -496,6 +509,7 @@ class LineComment(typing.Protocol):
         CONTENT: typing.ClassVar[object]
         PREFIX: typing.ClassVar[object]
 
+    kind: typing.Literal[NodeKind.LINECOMMENT]
     span: fltk.fegen.pyrt.terminalsrc.Span
     children: list[tuple[Label | None, fltk.fegen.pyrt.terminalsrc.Span]]
 
@@ -534,6 +548,7 @@ class BlockComment(typing.Protocol):
         END: typing.ClassVar[object]
         START: typing.ClassVar[object]
 
+    kind: typing.Literal[NodeKind.BLOCKCOMMENT]
     span: fltk.fegen.pyrt.terminalsrc.Span
     children: list[tuple[Label | None, fltk.fegen.pyrt.terminalsrc.Span]]
 

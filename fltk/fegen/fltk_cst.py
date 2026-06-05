@@ -5,6 +5,40 @@ import typing
 import fltk.fegen.pyrt.terminalsrc
 
 
+class NodeKind(enum.Enum):
+    GRAMMAR = enum.auto()
+    RULE = enum.auto()
+    ALTERNATIVES = enum.auto()
+    ITEMS = enum.auto()
+    ITEM = enum.auto()
+    TERM = enum.auto()
+    DISPOSITION = enum.auto()
+    QUANTIFIER = enum.auto()
+    IDENTIFIER = enum.auto()
+    RAWSTRING = enum.auto()
+    LITERAL = enum.auto()
+    TRIVIA = enum.auto()
+    LINECOMMENT = enum.auto()
+    BLOCKCOMMENT = enum.auto()
+
+    @property
+    def _fltk_canonical_name(self) -> str:
+        return f"NodeKind.{self.name}"
+
+    def __eq__(self, other: object) -> bool:
+        if other is self:
+            return True
+        if type(other) is type(self):
+            return self.name == other.name
+        cn = getattr(other, "_fltk_canonical_name", None)
+        if cn is not None:
+            return self._fltk_canonical_name == cn
+        return NotImplemented
+
+    def __hash__(self) -> int:
+        return hash(self._fltk_canonical_name)
+
+
 @dataclasses.dataclass
 class Grammar:
     class Label(enum.Enum):
@@ -27,6 +61,7 @@ class Grammar:
         def __hash__(self) -> int:
             return hash(self._fltk_canonical_name)
 
+    kind: typing.Literal[NodeKind.GRAMMAR] = NodeKind.GRAMMAR
     span: fltk.fegen.pyrt.terminalsrc.Span = fltk.fegen.pyrt.terminalsrc.UnknownSpan
     children: list[tuple[Label | None, typing.Union["Rule", "Trivia"]]] = dataclasses.field(default_factory=list)
 
@@ -89,6 +124,7 @@ class Rule:
         def __hash__(self) -> int:
             return hash(self._fltk_canonical_name)
 
+    kind: typing.Literal[NodeKind.RULE] = NodeKind.RULE
     span: fltk.fegen.pyrt.terminalsrc.Span = fltk.fegen.pyrt.terminalsrc.UnknownSpan
     children: list[tuple[Label | None, typing.Union["Alternatives", "Identifier", "Trivia"]]] = dataclasses.field(
         default_factory=list
@@ -181,6 +217,7 @@ class Alternatives:
         def __hash__(self) -> int:
             return hash(self._fltk_canonical_name)
 
+    kind: typing.Literal[NodeKind.ALTERNATIVES] = NodeKind.ALTERNATIVES
     span: fltk.fegen.pyrt.terminalsrc.Span = fltk.fegen.pyrt.terminalsrc.UnknownSpan
     children: list[tuple[Label | None, typing.Union["Items", "Trivia"]]] = dataclasses.field(default_factory=list)
 
@@ -245,6 +282,7 @@ class Items:
         def __hash__(self) -> int:
             return hash(self._fltk_canonical_name)
 
+    kind: typing.Literal[NodeKind.ITEMS] = NodeKind.ITEMS
     span: fltk.fegen.pyrt.terminalsrc.Span = fltk.fegen.pyrt.terminalsrc.UnknownSpan
     children: list[tuple[Label | None, typing.Union["Item", "Trivia", "fltk.fegen.pyrt.terminalsrc.Span"]]] = (
         dataclasses.field(default_factory=list)
@@ -398,6 +436,7 @@ class Item:
         def __hash__(self) -> int:
             return hash(self._fltk_canonical_name)
 
+    kind: typing.Literal[NodeKind.ITEM] = NodeKind.ITEM
     span: fltk.fegen.pyrt.terminalsrc.Span = fltk.fegen.pyrt.terminalsrc.UnknownSpan
     children: list[tuple[Label | None, typing.Union["Disposition", "Identifier", "Quantifier", "Term", "Trivia"]]] = (
         dataclasses.field(default_factory=list)
@@ -543,6 +582,7 @@ class Term:
         def __hash__(self) -> int:
             return hash(self._fltk_canonical_name)
 
+    kind: typing.Literal[NodeKind.TERM] = NodeKind.TERM
     span: fltk.fegen.pyrt.terminalsrc.Span = fltk.fegen.pyrt.terminalsrc.UnknownSpan
     children: list[
         tuple[Label | None, typing.Union["Alternatives", "Identifier", "Literal", "RawString", "Trivia"]]
@@ -689,6 +729,7 @@ class Disposition:
         def __hash__(self) -> int:
             return hash(self._fltk_canonical_name)
 
+    kind: typing.Literal[NodeKind.DISPOSITION] = NodeKind.DISPOSITION
     span: fltk.fegen.pyrt.terminalsrc.Span = fltk.fegen.pyrt.terminalsrc.UnknownSpan
     children: list[tuple[Label | None, "fltk.fegen.pyrt.terminalsrc.Span"]] = dataclasses.field(default_factory=list)
 
@@ -798,6 +839,7 @@ class Quantifier:
         def __hash__(self) -> int:
             return hash(self._fltk_canonical_name)
 
+    kind: typing.Literal[NodeKind.QUANTIFIER] = NodeKind.QUANTIFIER
     span: fltk.fegen.pyrt.terminalsrc.Span = fltk.fegen.pyrt.terminalsrc.UnknownSpan
     children: list[tuple[Label | None, "fltk.fegen.pyrt.terminalsrc.Span"]] = dataclasses.field(default_factory=list)
 
@@ -905,6 +947,7 @@ class Identifier:
         def __hash__(self) -> int:
             return hash(self._fltk_canonical_name)
 
+    kind: typing.Literal[NodeKind.IDENTIFIER] = NodeKind.IDENTIFIER
     span: fltk.fegen.pyrt.terminalsrc.Span = fltk.fegen.pyrt.terminalsrc.UnknownSpan
     children: list[tuple[Label | None, "fltk.fegen.pyrt.terminalsrc.Span"]] = dataclasses.field(default_factory=list)
 
@@ -966,6 +1009,7 @@ class RawString:
         def __hash__(self) -> int:
             return hash(self._fltk_canonical_name)
 
+    kind: typing.Literal[NodeKind.RAWSTRING] = NodeKind.RAWSTRING
     span: fltk.fegen.pyrt.terminalsrc.Span = fltk.fegen.pyrt.terminalsrc.UnknownSpan
     children: list[tuple[Label | None, "fltk.fegen.pyrt.terminalsrc.Span"]] = dataclasses.field(default_factory=list)
 
@@ -1027,6 +1071,7 @@ class Literal:
         def __hash__(self) -> int:
             return hash(self._fltk_canonical_name)
 
+    kind: typing.Literal[NodeKind.LITERAL] = NodeKind.LITERAL
     span: fltk.fegen.pyrt.terminalsrc.Span = fltk.fegen.pyrt.terminalsrc.UnknownSpan
     children: list[tuple[Label | None, "fltk.fegen.pyrt.terminalsrc.Span"]] = dataclasses.field(default_factory=list)
 
@@ -1089,6 +1134,7 @@ class Trivia:
         def __hash__(self) -> int:
             return hash(self._fltk_canonical_name)
 
+    kind: typing.Literal[NodeKind.TRIVIA] = NodeKind.TRIVIA
     span: fltk.fegen.pyrt.terminalsrc.Span = fltk.fegen.pyrt.terminalsrc.UnknownSpan
     children: list[
         tuple[Label | None, typing.Union["BlockComment", "LineComment", "fltk.fegen.pyrt.terminalsrc.Span"]]
@@ -1192,6 +1238,7 @@ class LineComment:
         def __hash__(self) -> int:
             return hash(self._fltk_canonical_name)
 
+    kind: typing.Literal[NodeKind.LINECOMMENT] = NodeKind.LINECOMMENT
     span: fltk.fegen.pyrt.terminalsrc.Span = fltk.fegen.pyrt.terminalsrc.UnknownSpan
     children: list[tuple[Label | None, "fltk.fegen.pyrt.terminalsrc.Span"]] = dataclasses.field(default_factory=list)
 
@@ -1278,6 +1325,7 @@ class BlockComment:
         def __hash__(self) -> int:
             return hash(self._fltk_canonical_name)
 
+    kind: typing.Literal[NodeKind.BLOCKCOMMENT] = NodeKind.BLOCKCOMMENT
     span: fltk.fegen.pyrt.terminalsrc.Span = fltk.fegen.pyrt.terminalsrc.UnknownSpan
     children: list[tuple[Label | None, "fltk.fegen.pyrt.terminalsrc.Span"]] = dataclasses.field(default_factory=list)
 
