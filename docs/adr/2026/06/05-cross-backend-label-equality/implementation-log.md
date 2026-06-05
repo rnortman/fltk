@@ -40,9 +40,14 @@
 - `fltk/fegen/fltk_cst_protocol.py`: regenerated — imports `NodeKind` from `fltk.fegen.fltk_cst`; each Protocol class has `kind: typing.Literal[NodeKind.<MEMBER>]`.
 - 788 tests pass; pyright 0 errors; ruff clean.
 
-## Increment 6 — Cross-backend label/NodeKind equality test module (AC1–AC8, §4)
+## Increment 6 — Cross-backend label/NodeKind equality test module (AC1-AC8, §4) (commit 35d8081)
 
-[DRAFT: new `tests/test_cross_backend_label_equality.py` covering AC1–AC8 for both Label and NodeKind across all three backend pairs; NodeKind narrowing pyright fixture]
+- `tests/test_cross_backend_label_equality.py`: new test module, 42 tests.
+- `TestLabelCrossBackend` (21 tests): parametrized over 3 backend pairs (py/ext, py/emb, emb/ext); covers AC1 (eq both directions), AC2 (ineq), AC3 (same-backend unchanged), AC4 (hash consistent), AC5 (set/dict collapse), AC6 (membership in tuple), AC7 (no raise on None/int/str/object/foreign label — both directions).
+- `TestAC8TwoRustCrates` (3 tests): explicit targeted check that the two distinct Rust cdylib crates have distinct Python types yet compare equal and hash-agree (AC8).
+- `TestNodeKindCrossBackend` (18 tests): same eq/hash/set/membership/no-raise matrix for NodeKind members; additionally asserts canonical-string family disjointness (NodeKind strings never match Label strings).
+- `_narrowing_fixture` (TYPE_CHECKING block): pyright-checked fixture confirming `node.kind == NodeKind.ITEMS` narrows correctly over `Items | Grammar` (homogeneous node union); zero pyright errors.
+- 847 tests pass; pyright 0 errors; ruff clean.
 
 ## Increment 1 — Python `Label` `__eq__`/`__hash__`/`_fltk_canonical_name` in `gsm2tree.py` (commit 600bfc6)
 
