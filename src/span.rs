@@ -1,8 +1,15 @@
 use pyo3::exceptions::PyValueError;
 use pyo3::prelude::*;
+use pyo3::sync::GILOnceCell;
 use pyo3::types::PyType;
 use std::hash::{Hash, Hasher};
 use std::sync::Arc;
+
+/// Cached reference to `fltk.fegen.pyrt.terminalsrc.SpanKind.SPAN`.
+/// Fetched once on first `Span.kind` access; avoids a Python import per call.
+/// ACYCLICITY: `terminalsrc` must never import `fltk._native` (verified at design time;
+/// see design.md §2.2). If that invariant breaks, this import becomes a cycle.
+static SPAN_KIND_SPAN_CACHE: GILOnceCell<PyObject> = GILOnceCell::new();
 
 /// Shared heap allocation holding source text.
 ///
@@ -242,5 +249,24 @@ impl Span {
     /// Return ``"Span(start=<start>, end=<end>)"`` — raw indices for debugging; source is not shown.
     fn __repr__(&self) -> String {
         format!("Span(start={}, end={})", self.start, self.end)
+    }
+
+    /// Return the shared Python ``SpanKind.SPAN`` discriminant from
+    /// ``fltk.fegen.pyrt.terminalsrc``.
+    ///
+    /// Returns the *same* Python object as the pure-Python ``terminalsrc.Span.kind`` field,
+    /// so identity holds and equality is trivially satisfied.  Uses a ``GILOnceCell`` cache
+    /// to avoid a Python attribute lookup on every call.
+    #[getter]
+    fn kind(&self, py: Python<'_>) -> PyResult<PyObject> {
+        SPAN_KIND_SPAN_CACHE
+            .get_or_try_init(py, || -> PyResult<PyObject> {
+                Ok(py
+                    .import("fltk.fegen.pyrt.terminalsrc")?
+                    .getattr("SpanKind")?
+                    .getattr("SPAN")?
+                    .unbind())
+            })
+            .map(|obj| obj.clone_ref(py))
     }
 }
