@@ -11,6 +11,14 @@
 - Regenerated: `src/cst_fegen.rs`, `src/cst_generated.rs`, `tests/rust_cst_fegen/src/cst.rs`, `tests/rust_cst_fixture/src/cst.rs`. All four Rust crates compiled (`maturin develop` clean on all three extension crates).
 - 788 tests pass; pyright 0 errors; ruff clean.
 
+## Increment 5 — `self.cst` removal from `fltk2gsm.py` (AC9, AC10) (commit aea3936)
+
+- `fltk/fegen/fltk2gsm.py`: dropped `cst=` constructor parameter and `self.cst` entirely; replaced all `self.cst.X.Label.Y` references with `_cst_const.X.Label.Y` from top-level `from fltk.fegen import fltk_cst as _cst_const`; deleted `isinstance(item, self.cst.Item)` conjuncts (lines 69, 80) and replaced with `typing.cast("cst.Item", item)`; removed `_DEFAULT_CST`/`_default_cst` sentinel scaffolding; kept `if TYPE_CHECKING: from fltk.fegen import fltk_cst_protocol as cst` for annotations.
+- `fltk/plumbing.py:174-176`: removed `cst=cast("cst.CstModule", pr.cst_module)` injection on Rust path; Rust path now calls `fltk2gsm.Cst2Gsm(terminals.terminals)` identically to Python path.
+- `tests/test_phase4_fegen_rust_backend.py`: updated `test_rust_backend_uses_real_cst2gsm` to not check `cst=` kwarg (parameter removed); replaced `TestCst2GsmInjection` with `TestAC9LabelBackendIndependence` (3 tests: cross-backend `==`, cross-backend `in`, `no self.cst` assert).
+- `fltk/test_plumbing.py`: renamed `TestCst2GsmDefaultNamespace` → `TestCst2GsmNoSelfCst`; replaced `test_default_cst_is_fltk_cst` (tested `self.cst`) with `test_no_cst_attribute` (asserts absence); removed unused `_fltk_cst` import.
+- 805 tests pass; pyright 0 errors; ruff clean.
+
 ## Increment 4 — `NodeKind` enum + `kind` discriminant: Rust generator, regenerated Rust CST outputs (commit 3ea8225)
 
 - `fltk/fegen/gsm2tree_rs.py:138-148`: added `_node_kind_variant_name`, `_node_kind_python_name`, `_node_kind_canonical_name` helpers.
@@ -31,6 +39,10 @@
 - `fltk/fegen/fltk_cst.py`: regenerated — `NodeKind` enum at top (14 members), `kind` field on all 14 node dataclasses.
 - `fltk/fegen/fltk_cst_protocol.py`: regenerated — imports `NodeKind` from `fltk.fegen.fltk_cst`; each Protocol class has `kind: typing.Literal[NodeKind.<MEMBER>]`.
 - 788 tests pass; pyright 0 errors; ruff clean.
+
+## Increment 6 — Cross-backend label/NodeKind equality test module (AC1–AC8, §4)
+
+[DRAFT: new `tests/test_cross_backend_label_equality.py` covering AC1–AC8 for both Label and NodeKind across all three backend pairs; NodeKind narrowing pyright fixture]
 
 ## Increment 1 — Python `Label` `__eq__`/`__hash__`/`_fltk_canonical_name` in `gsm2tree.py` (commit 600bfc6)
 
