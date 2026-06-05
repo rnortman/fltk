@@ -45,11 +45,7 @@ class Cst2Gsm:
         sep_after = []
         initial_sep = gsm.Separator.NO_WS
 
-        # Filter out None-labeled children (Trivia nodes captured by the trivia-capture parser).
-        # The Python fltk_parser backend produces no None-labeled Items children; the Rust backend
-        # inserts (None, Trivia(...)) entries for whitespace between items and separators.
-        # Semantically these are irrelevant for grammar processing; strip them before indexing.
-        labeled_children = [(label, val) for label, val in items.children if label is not None]
+        labeled_children = items.children
 
         # Check if there's a leading separator
         start_idx = 0

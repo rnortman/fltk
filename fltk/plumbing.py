@@ -156,7 +156,7 @@ def parse_grammar(grammar_text: str, *, rust_fegen_cst_module: str | None = None
         if rust_fegen_cst_module not in _fegen_rust_parser_cache:
             fegen_grammar = _load_fegen_grammar()
             _fegen_rust_parser_cache[rust_fegen_cst_module] = generate_parser(
-                fegen_grammar, rust_cst_module=rust_fegen_cst_module
+                fegen_grammar, capture_trivia=False, rust_cst_module=rust_fegen_cst_module
             )
         pr = _fegen_rust_parser_cache[rust_fegen_cst_module]
         parser = pr.parser_class(terminalsrc=terminals)
