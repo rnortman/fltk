@@ -11,6 +11,17 @@
 - Regenerated: `src/cst_fegen.rs`, `src/cst_generated.rs`, `tests/rust_cst_fegen/src/cst.rs`, `tests/rust_cst_fixture/src/cst.rs`. All four Rust crates compiled (`maturin develop` clean on all three extension crates).
 - 788 tests pass; pyright 0 errors; ruff clean.
 
+## Increment 4 — `NodeKind` enum + `kind` discriminant: Rust generator, regenerated Rust CST outputs (commit 3ea8225)
+
+- `fltk/fegen/gsm2tree_rs.py:138-148`: added `_node_kind_variant_name`, `_node_kind_python_name`, `_node_kind_canonical_name` helpers.
+- `fltk/fegen/gsm2tree_rs.py:150-222`: added `_node_kind_block()` emitting the module-level `NodeKind` enum with `#[pyclass(frozen)]`, `#[derive(Clone, PartialEq, Eq, Hash)]`, and `#[pymethods]` block containing `__repr__`, `_fltk_canonical_name` getter, `__eq__` (own-type fast path + canonical-name cross-type + `py.NotImplemented()`), and `__hash__` (CPython `PyString::hash`).
+- `fltk/fegen/gsm2tree_rs.py:97-112`: `generate()` now calls `_node_kind_block()` before label/node blocks.
+- `fltk/fegen/gsm2tree_rs.py:290-298`: added `_kind_getter()` emitting `#[getter] fn kind(&self) -> NodeKind` returning the node's variant.
+- `fltk/fegen/gsm2tree_rs.py:248`: `_node_block()` now calls `_kind_getter()` after `_new_method()`.
+- `fltk/fegen/gsm2tree_rs.py:558-562`: `_register_classes_fn()` registers `NodeKind` first, before label enums and node structs.
+- `tests/test_gsm2tree_rs.py`: added `TestNodeKindEnum` (11 tests) and `TestKindGetter` (4 tests) covering enum structure, canonical strings, eq/hash methods, registration order, fegen-grammar completeness, and per-node `kind` getter emission. All 60 generator tests pass.
+- Regenerated: `src/cst_fegen.rs`, `src/cst_generated.rs`, `tests/rust_cst_fegen/src/cst.rs`, `tests/rust_cst_fixture/src/cst.rs`. All four Rust extension crates compiled clean; 803 tests pass; pyright 0 errors; ruff clean.
+
 ## Increment 3 — `NodeKind` enum + `kind` discriminant: Python generator, fltk_cst, fltk_cst_protocol (commit a538305)
 
 - `fltk/fegen/gsm2tree.py`: added `node_kind_member_name()` helper and `_node_kind_enum()` which emits a module-level `NodeKind(enum.Enum)` with one member per rule (uppercased class name), plus `_fltk_canonical_name` property (`"NodeKind.<NAME>"`), cross-backend `__eq__`, and `__hash__`; `gen_py_module()` now prepends this enum before node classes.
