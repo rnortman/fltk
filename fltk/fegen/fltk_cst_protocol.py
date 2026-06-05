@@ -456,15 +456,19 @@ class Trivia(typing.Protocol):
         LINE_COMMENT: typing.ClassVar[object]
 
     span: fltk.fegen.pyrt.terminalsrc.Span
-    children: list[tuple[Label | None, BlockComment | LineComment | Trivia]]
+    children: list[tuple[Label | None, BlockComment | LineComment | fltk.fegen.pyrt.terminalsrc.Span]]
 
-    def append(self, child: BlockComment | LineComment | Trivia, label: Label | None = None) -> None: ...
-
-    def extend(
-        self, children: typing.Iterable[BlockComment | LineComment | Trivia], label: Label | None = None
+    def append(
+        self, child: BlockComment | LineComment | fltk.fegen.pyrt.terminalsrc.Span, label: Label | None = None
     ) -> None: ...
 
-    def child(self) -> tuple[Label | None, BlockComment | LineComment | Trivia]: ...
+    def extend(
+        self,
+        children: typing.Iterable[BlockComment | LineComment | fltk.fegen.pyrt.terminalsrc.Span],
+        label: Label | None = None,
+    ) -> None: ...
+
+    def child(self) -> tuple[Label | None, BlockComment | LineComment | fltk.fegen.pyrt.terminalsrc.Span]: ...
 
     def append_block_comment(self, child: BlockComment) -> None: ...
 
@@ -531,15 +535,15 @@ class BlockComment(typing.Protocol):
         START: typing.ClassVar[object]
 
     span: fltk.fegen.pyrt.terminalsrc.Span
-    children: list[tuple[Label | None, Trivia | fltk.fegen.pyrt.terminalsrc.Span]]
+    children: list[tuple[Label | None, fltk.fegen.pyrt.terminalsrc.Span]]
 
-    def append(self, child: Trivia | fltk.fegen.pyrt.terminalsrc.Span, label: Label | None = None) -> None: ...
+    def append(self, child: fltk.fegen.pyrt.terminalsrc.Span, label: Label | None = None) -> None: ...
 
     def extend(
-        self, children: typing.Iterable[Trivia | fltk.fegen.pyrt.terminalsrc.Span], label: Label | None = None
+        self, children: typing.Iterable[fltk.fegen.pyrt.terminalsrc.Span], label: Label | None = None
     ) -> None: ...
 
-    def child(self) -> tuple[Label | None, Trivia | fltk.fegen.pyrt.terminalsrc.Span]: ...
+    def child(self) -> tuple[Label | None, fltk.fegen.pyrt.terminalsrc.Span]: ...
 
     def append_content(self, child: fltk.fegen.pyrt.terminalsrc.Span) -> None: ...
 

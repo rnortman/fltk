@@ -113,6 +113,33 @@ class CstGenerator:
         labels = sorted(model.labels.keys())
         for label in labels:
             label_enum.body.append(pygen.stmt(f"{label.upper()} = enum.auto()"))
+
+        # Cross-backend equality contract (§2.2): canonical-name-keyed eq/hash.
+        # _fltk_canonical_name: instance property yielding "<ClassName>.Label.<MEMBER_NAME>".
+        canonical_name_prop = pygen.function("_fltk_canonical_name", "self", "str")
+        canonical_name_prop.decorator_list = [pygen.expr("property")]
+        canonical_name_prop.body.append(pygen.stmt(f'return f"{class_name}.Label.{{self.name}}"'))
+        label_enum.body.append(canonical_name_prop)
+
+        # __eq__: same-type fast path (identity/member-name), then canonical-name cross-type,
+        # then NotImplemented for foreign operands (so Python invokes the reflected __eq__).
+        eq_fn = pygen.function("__eq__", "self, other: object", "bool")
+        eq_fn.body.extend(
+            [
+                pygen.stmt("if other is self: return True"),
+                pygen.stmt("if type(other) is type(self): return self.name == other.name"),  # type: ignore[union-attr]
+                pygen.stmt("cn = getattr(other, '_fltk_canonical_name', None)"),
+                pygen.stmt("if cn is not None: return self._fltk_canonical_name == cn"),
+                pygen.stmt("return NotImplemented"),
+            ]
+        )
+        label_enum.body.append(eq_fn)
+
+        # __hash__: hash of canonical name so equal cross-backend members hash identically.
+        hash_fn = pygen.function("__hash__", "self", "int")
+        hash_fn.body.append(pygen.stmt("return hash(self._fltk_canonical_name)"))
+        label_enum.body.append(hash_fn)
+
         klass.body.append(label_enum)
         if not model.types:
             msg = (

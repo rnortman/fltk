@@ -10,6 +10,23 @@ class Grammar:
     class Label(enum.Enum):
         RULE = enum.auto()
 
+        @property
+        def _fltk_canonical_name(self) -> str:
+            return f"Grammar.Label.{self.name}"
+
+        def __eq__(self, other: object) -> bool:
+            if other is self:
+                return True
+            if type(other) is type(self):
+                return self.name == other.name
+            cn = getattr(other, "_fltk_canonical_name", None)
+            if cn is not None:
+                return self._fltk_canonical_name == cn
+            return NotImplemented
+
+        def __hash__(self) -> int:
+            return hash(self._fltk_canonical_name)
+
     span: fltk.fegen.pyrt.terminalsrc.Span = fltk.fegen.pyrt.terminalsrc.UnknownSpan
     children: list[tuple[Label | None, typing.Union["Rule", "Trivia"]]] = dataclasses.field(default_factory=list)
 
@@ -54,6 +71,23 @@ class Rule:
     class Label(enum.Enum):
         ALTERNATIVES = enum.auto()
         NAME = enum.auto()
+
+        @property
+        def _fltk_canonical_name(self) -> str:
+            return f"Rule.Label.{self.name}"
+
+        def __eq__(self, other: object) -> bool:
+            if other is self:
+                return True
+            if type(other) is type(self):
+                return self.name == other.name
+            cn = getattr(other, "_fltk_canonical_name", None)
+            if cn is not None:
+                return self._fltk_canonical_name == cn
+            return NotImplemented
+
+        def __hash__(self) -> int:
+            return hash(self._fltk_canonical_name)
 
     span: fltk.fegen.pyrt.terminalsrc.Span = fltk.fegen.pyrt.terminalsrc.UnknownSpan
     children: list[tuple[Label | None, typing.Union["Alternatives", "Identifier", "Trivia"]]] = dataclasses.field(
@@ -130,6 +164,23 @@ class Alternatives:
     class Label(enum.Enum):
         ITEMS = enum.auto()
 
+        @property
+        def _fltk_canonical_name(self) -> str:
+            return f"Alternatives.Label.{self.name}"
+
+        def __eq__(self, other: object) -> bool:
+            if other is self:
+                return True
+            if type(other) is type(self):
+                return self.name == other.name
+            cn = getattr(other, "_fltk_canonical_name", None)
+            if cn is not None:
+                return self._fltk_canonical_name == cn
+            return NotImplemented
+
+        def __hash__(self) -> int:
+            return hash(self._fltk_canonical_name)
+
     span: fltk.fegen.pyrt.terminalsrc.Span = fltk.fegen.pyrt.terminalsrc.UnknownSpan
     children: list[tuple[Label | None, typing.Union["Items", "Trivia"]]] = dataclasses.field(default_factory=list)
 
@@ -176,6 +227,23 @@ class Items:
         NO_WS = enum.auto()
         WS_ALLOWED = enum.auto()
         WS_REQUIRED = enum.auto()
+
+        @property
+        def _fltk_canonical_name(self) -> str:
+            return f"Items.Label.{self.name}"
+
+        def __eq__(self, other: object) -> bool:
+            if other is self:
+                return True
+            if type(other) is type(self):
+                return self.name == other.name
+            cn = getattr(other, "_fltk_canonical_name", None)
+            if cn is not None:
+                return self._fltk_canonical_name == cn
+            return NotImplemented
+
+        def __hash__(self) -> int:
+            return hash(self._fltk_canonical_name)
 
     span: fltk.fegen.pyrt.terminalsrc.Span = fltk.fegen.pyrt.terminalsrc.UnknownSpan
     children: list[tuple[Label | None, typing.Union["Item", "Trivia", "fltk.fegen.pyrt.terminalsrc.Span"]]] = (
@@ -313,6 +381,23 @@ class Item:
         QUANTIFIER = enum.auto()
         TERM = enum.auto()
 
+        @property
+        def _fltk_canonical_name(self) -> str:
+            return f"Item.Label.{self.name}"
+
+        def __eq__(self, other: object) -> bool:
+            if other is self:
+                return True
+            if type(other) is type(self):
+                return self.name == other.name
+            cn = getattr(other, "_fltk_canonical_name", None)
+            if cn is not None:
+                return self._fltk_canonical_name == cn
+            return NotImplemented
+
+        def __hash__(self) -> int:
+            return hash(self._fltk_canonical_name)
+
     span: fltk.fegen.pyrt.terminalsrc.Span = fltk.fegen.pyrt.terminalsrc.UnknownSpan
     children: list[tuple[Label | None, typing.Union["Disposition", "Identifier", "Quantifier", "Term", "Trivia"]]] = (
         dataclasses.field(default_factory=list)
@@ -440,6 +525,23 @@ class Term:
         IDENTIFIER = enum.auto()
         LITERAL = enum.auto()
         REGEX = enum.auto()
+
+        @property
+        def _fltk_canonical_name(self) -> str:
+            return f"Term.Label.{self.name}"
+
+        def __eq__(self, other: object) -> bool:
+            if other is self:
+                return True
+            if type(other) is type(self):
+                return self.name == other.name
+            cn = getattr(other, "_fltk_canonical_name", None)
+            if cn is not None:
+                return self._fltk_canonical_name == cn
+            return NotImplemented
+
+        def __hash__(self) -> int:
+            return hash(self._fltk_canonical_name)
 
     span: fltk.fegen.pyrt.terminalsrc.Span = fltk.fegen.pyrt.terminalsrc.UnknownSpan
     children: list[
@@ -570,6 +672,23 @@ class Disposition:
         INLINE = enum.auto()
         SUPPRESS = enum.auto()
 
+        @property
+        def _fltk_canonical_name(self) -> str:
+            return f"Disposition.Label.{self.name}"
+
+        def __eq__(self, other: object) -> bool:
+            if other is self:
+                return True
+            if type(other) is type(self):
+                return self.name == other.name
+            cn = getattr(other, "_fltk_canonical_name", None)
+            if cn is not None:
+                return self._fltk_canonical_name == cn
+            return NotImplemented
+
+        def __hash__(self) -> int:
+            return hash(self._fltk_canonical_name)
+
     span: fltk.fegen.pyrt.terminalsrc.Span = fltk.fegen.pyrt.terminalsrc.UnknownSpan
     children: list[tuple[Label | None, "fltk.fegen.pyrt.terminalsrc.Span"]] = dataclasses.field(default_factory=list)
 
@@ -662,6 +781,23 @@ class Quantifier:
         OPTIONAL = enum.auto()
         ZERO_OR_MORE = enum.auto()
 
+        @property
+        def _fltk_canonical_name(self) -> str:
+            return f"Quantifier.Label.{self.name}"
+
+        def __eq__(self, other: object) -> bool:
+            if other is self:
+                return True
+            if type(other) is type(self):
+                return self.name == other.name
+            cn = getattr(other, "_fltk_canonical_name", None)
+            if cn is not None:
+                return self._fltk_canonical_name == cn
+            return NotImplemented
+
+        def __hash__(self) -> int:
+            return hash(self._fltk_canonical_name)
+
     span: fltk.fegen.pyrt.terminalsrc.Span = fltk.fegen.pyrt.terminalsrc.UnknownSpan
     children: list[tuple[Label | None, "fltk.fegen.pyrt.terminalsrc.Span"]] = dataclasses.field(default_factory=list)
 
@@ -752,6 +888,23 @@ class Identifier:
     class Label(enum.Enum):
         NAME = enum.auto()
 
+        @property
+        def _fltk_canonical_name(self) -> str:
+            return f"Identifier.Label.{self.name}"
+
+        def __eq__(self, other: object) -> bool:
+            if other is self:
+                return True
+            if type(other) is type(self):
+                return self.name == other.name
+            cn = getattr(other, "_fltk_canonical_name", None)
+            if cn is not None:
+                return self._fltk_canonical_name == cn
+            return NotImplemented
+
+        def __hash__(self) -> int:
+            return hash(self._fltk_canonical_name)
+
     span: fltk.fegen.pyrt.terminalsrc.Span = fltk.fegen.pyrt.terminalsrc.UnknownSpan
     children: list[tuple[Label | None, "fltk.fegen.pyrt.terminalsrc.Span"]] = dataclasses.field(default_factory=list)
 
@@ -795,6 +948,23 @@ class Identifier:
 class RawString:
     class Label(enum.Enum):
         VALUE = enum.auto()
+
+        @property
+        def _fltk_canonical_name(self) -> str:
+            return f"RawString.Label.{self.name}"
+
+        def __eq__(self, other: object) -> bool:
+            if other is self:
+                return True
+            if type(other) is type(self):
+                return self.name == other.name
+            cn = getattr(other, "_fltk_canonical_name", None)
+            if cn is not None:
+                return self._fltk_canonical_name == cn
+            return NotImplemented
+
+        def __hash__(self) -> int:
+            return hash(self._fltk_canonical_name)
 
     span: fltk.fegen.pyrt.terminalsrc.Span = fltk.fegen.pyrt.terminalsrc.UnknownSpan
     children: list[tuple[Label | None, "fltk.fegen.pyrt.terminalsrc.Span"]] = dataclasses.field(default_factory=list)
@@ -840,6 +1010,23 @@ class Literal:
     class Label(enum.Enum):
         VALUE = enum.auto()
 
+        @property
+        def _fltk_canonical_name(self) -> str:
+            return f"Literal.Label.{self.name}"
+
+        def __eq__(self, other: object) -> bool:
+            if other is self:
+                return True
+            if type(other) is type(self):
+                return self.name == other.name
+            cn = getattr(other, "_fltk_canonical_name", None)
+            if cn is not None:
+                return self._fltk_canonical_name == cn
+            return NotImplemented
+
+        def __hash__(self) -> int:
+            return hash(self._fltk_canonical_name)
+
     span: fltk.fegen.pyrt.terminalsrc.Span = fltk.fegen.pyrt.terminalsrc.UnknownSpan
     children: list[tuple[Label | None, "fltk.fegen.pyrt.terminalsrc.Span"]] = dataclasses.field(default_factory=list)
 
@@ -884,6 +1071,23 @@ class Trivia:
     class Label(enum.Enum):
         BLOCK_COMMENT = enum.auto()
         LINE_COMMENT = enum.auto()
+
+        @property
+        def _fltk_canonical_name(self) -> str:
+            return f"Trivia.Label.{self.name}"
+
+        def __eq__(self, other: object) -> bool:
+            if other is self:
+                return True
+            if type(other) is type(self):
+                return self.name == other.name
+            cn = getattr(other, "_fltk_canonical_name", None)
+            if cn is not None:
+                return self._fltk_canonical_name == cn
+            return NotImplemented
+
+        def __hash__(self) -> int:
+            return hash(self._fltk_canonical_name)
 
     span: fltk.fegen.pyrt.terminalsrc.Span = fltk.fegen.pyrt.terminalsrc.UnknownSpan
     children: list[
@@ -971,6 +1175,23 @@ class LineComment:
         CONTENT = enum.auto()
         PREFIX = enum.auto()
 
+        @property
+        def _fltk_canonical_name(self) -> str:
+            return f"LineComment.Label.{self.name}"
+
+        def __eq__(self, other: object) -> bool:
+            if other is self:
+                return True
+            if type(other) is type(self):
+                return self.name == other.name
+            cn = getattr(other, "_fltk_canonical_name", None)
+            if cn is not None:
+                return self._fltk_canonical_name == cn
+            return NotImplemented
+
+        def __hash__(self) -> int:
+            return hash(self._fltk_canonical_name)
+
     span: fltk.fegen.pyrt.terminalsrc.Span = fltk.fegen.pyrt.terminalsrc.UnknownSpan
     children: list[tuple[Label | None, "fltk.fegen.pyrt.terminalsrc.Span"]] = dataclasses.field(default_factory=list)
 
@@ -1039,6 +1260,23 @@ class BlockComment:
         CONTENT = enum.auto()
         END = enum.auto()
         START = enum.auto()
+
+        @property
+        def _fltk_canonical_name(self) -> str:
+            return f"BlockComment.Label.{self.name}"
+
+        def __eq__(self, other: object) -> bool:
+            if other is self:
+                return True
+            if type(other) is type(self):
+                return self.name == other.name
+            cn = getattr(other, "_fltk_canonical_name", None)
+            if cn is not None:
+                return self._fltk_canonical_name == cn
+            return NotImplemented
+
+        def __hash__(self) -> int:
+            return hash(self._fltk_canonical_name)
 
     span: fltk.fegen.pyrt.terminalsrc.Span = fltk.fegen.pyrt.terminalsrc.UnknownSpan
     children: list[tuple[Label | None, "fltk.fegen.pyrt.terminalsrc.Span"]] = dataclasses.field(default_factory=list)
