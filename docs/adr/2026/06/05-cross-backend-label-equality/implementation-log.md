@@ -1,5 +1,9 @@
 # Cross-Backend Label Equality — Implementation Log
 
+## Increment 2 — Rust `Label` `__eq__`/`__hash__`/`_fltk_canonical_name` in `gsm2tree_rs.py` (draft)
+
+Drop `eq, hash` from `#[pyclass]` on label enums; hand-write `__eq__`, `__hash__`, `_fltk_canonical_name` getter in `#[pymethods]` on each label enum in `gsm2tree_rs.py`, then regenerate Rust CST outputs and build.
+
 ## Increment 1 — Python `Label` `__eq__`/`__hash__`/`_fltk_canonical_name` in `gsm2tree.py` (commit 600bfc6)
 
 - `fltk/fegen/gsm2tree.py:112-141`: in `py_class_for_model`, after emitting `enum.auto()` members, now emits on each `Label(enum.Enum)`:

@@ -13,7 +13,7 @@ static UNKNOWN_SPAN_CACHE: GILOnceCell<PyObject> = GILOnceCell::new();
 // ───────────────────────────────────────────────────────────────────────────
 
 #[allow(non_camel_case_types)]
-#[pyclass(eq, hash, frozen, name = "Config_Label")]
+#[pyclass(frozen, name = "Config_Label")]
 #[derive(Clone, PartialEq, Eq, Hash)]
 pub enum Config_Label {
     #[pyo3(name = "ENTRY")]
@@ -26,6 +26,29 @@ impl Config_Label {
         match self {
             Config_Label::Entry => "Config.Label.ENTRY",
         }
+    }
+
+    #[getter]
+    fn _fltk_canonical_name(&self) -> &'static str {
+        self.__repr__()
+    }
+
+    fn __eq__(&self, py: Python<'_>, other: &Bound<'_, PyAny>) -> PyResult<PyObject> {
+        if let Ok(other_label) = other.extract::<Config_Label>() {
+            return Ok((self == &other_label).into_pyobject(py)?.to_owned().unbind().into_any());
+        }
+        if let Ok(cn) = other.getattr(pyo3::intern!(py, "_fltk_canonical_name")) {
+            if let Ok(cn_str) = cn.extract::<&str>() {
+                return Ok((self.__repr__() == cn_str).into_pyobject(py)?.to_owned().unbind().into_any());
+            }
+        }
+        Ok(py.NotImplemented())
+    }
+
+    fn __hash__(&self, py: Python<'_>) -> PyResult<isize> {
+        pyo3::types::PyAnyMethods::hash(
+            pyo3::types::PyString::new(py, self.__repr__()).as_any()
+        )
     }
 }
 
@@ -222,7 +245,7 @@ impl Config {
 // ───────────────────────────────────────────────────────────────────────────
 
 #[allow(non_camel_case_types)]
-#[pyclass(eq, hash, frozen, name = "Entry_Label")]
+#[pyclass(frozen, name = "Entry_Label")]
 #[derive(Clone, PartialEq, Eq, Hash)]
 pub enum Entry_Label {
     #[pyo3(name = "KEY")]
@@ -241,6 +264,29 @@ impl Entry_Label {
             Entry_Label::Op => "Entry.Label.OP",
             Entry_Label::Value => "Entry.Label.VALUE",
         }
+    }
+
+    #[getter]
+    fn _fltk_canonical_name(&self) -> &'static str {
+        self.__repr__()
+    }
+
+    fn __eq__(&self, py: Python<'_>, other: &Bound<'_, PyAny>) -> PyResult<PyObject> {
+        if let Ok(other_label) = other.extract::<Entry_Label>() {
+            return Ok((self == &other_label).into_pyobject(py)?.to_owned().unbind().into_any());
+        }
+        if let Ok(cn) = other.getattr(pyo3::intern!(py, "_fltk_canonical_name")) {
+            if let Ok(cn_str) = cn.extract::<&str>() {
+                return Ok((self.__repr__() == cn_str).into_pyobject(py)?.to_owned().unbind().into_any());
+            }
+        }
+        Ok(py.NotImplemented())
+    }
+
+    fn __hash__(&self, py: Python<'_>) -> PyResult<isize> {
+        pyo3::types::PyAnyMethods::hash(
+            pyo3::types::PyString::new(py, self.__repr__()).as_any()
+        )
     }
 }
 
@@ -613,7 +659,7 @@ impl Entry {
 // ───────────────────────────────────────────────────────────────────────────
 
 #[allow(non_camel_case_types)]
-#[pyclass(eq, hash, frozen, name = "Operator_Label")]
+#[pyclass(frozen, name = "Operator_Label")]
 #[derive(Clone, PartialEq, Eq, Hash)]
 pub enum Operator_Label {
     #[pyo3(name = "APPEND")]
@@ -632,6 +678,29 @@ impl Operator_Label {
             Operator_Label::Assign => "Operator.Label.ASSIGN",
             Operator_Label::Remove => "Operator.Label.REMOVE",
         }
+    }
+
+    #[getter]
+    fn _fltk_canonical_name(&self) -> &'static str {
+        self.__repr__()
+    }
+
+    fn __eq__(&self, py: Python<'_>, other: &Bound<'_, PyAny>) -> PyResult<PyObject> {
+        if let Ok(other_label) = other.extract::<Operator_Label>() {
+            return Ok((self == &other_label).into_pyobject(py)?.to_owned().unbind().into_any());
+        }
+        if let Ok(cn) = other.getattr(pyo3::intern!(py, "_fltk_canonical_name")) {
+            if let Ok(cn_str) = cn.extract::<&str>() {
+                return Ok((self.__repr__() == cn_str).into_pyobject(py)?.to_owned().unbind().into_any());
+            }
+        }
+        Ok(py.NotImplemented())
+    }
+
+    fn __hash__(&self, py: Python<'_>) -> PyResult<isize> {
+        pyo3::types::PyAnyMethods::hash(
+            pyo3::types::PyString::new(py, self.__repr__()).as_any()
+        )
     }
 }
 
@@ -1004,7 +1073,7 @@ impl Operator {
 // ───────────────────────────────────────────────────────────────────────────
 
 #[allow(non_camel_case_types)]
-#[pyclass(eq, hash, frozen, name = "Identifier_Label")]
+#[pyclass(frozen, name = "Identifier_Label")]
 #[derive(Clone, PartialEq, Eq, Hash)]
 pub enum Identifier_Label {
     #[pyo3(name = "NAME")]
@@ -1017,6 +1086,29 @@ impl Identifier_Label {
         match self {
             Identifier_Label::Name => "Identifier.Label.NAME",
         }
+    }
+
+    #[getter]
+    fn _fltk_canonical_name(&self) -> &'static str {
+        self.__repr__()
+    }
+
+    fn __eq__(&self, py: Python<'_>, other: &Bound<'_, PyAny>) -> PyResult<PyObject> {
+        if let Ok(other_label) = other.extract::<Identifier_Label>() {
+            return Ok((self == &other_label).into_pyobject(py)?.to_owned().unbind().into_any());
+        }
+        if let Ok(cn) = other.getattr(pyo3::intern!(py, "_fltk_canonical_name")) {
+            if let Ok(cn_str) = cn.extract::<&str>() {
+                return Ok((self.__repr__() == cn_str).into_pyobject(py)?.to_owned().unbind().into_any());
+            }
+        }
+        Ok(py.NotImplemented())
+    }
+
+    fn __hash__(&self, py: Python<'_>) -> PyResult<isize> {
+        pyo3::types::PyAnyMethods::hash(
+            pyo3::types::PyString::new(py, self.__repr__()).as_any()
+        )
     }
 }
 
@@ -1213,7 +1305,7 @@ impl Identifier {
 // ───────────────────────────────────────────────────────────────────────────
 
 #[allow(non_camel_case_types)]
-#[pyclass(eq, hash, frozen, name = "Literal_Label")]
+#[pyclass(frozen, name = "Literal_Label")]
 #[derive(Clone, PartialEq, Eq, Hash)]
 pub enum Literal_Label {
     #[pyo3(name = "INT_VAL")]
@@ -1229,6 +1321,29 @@ impl Literal_Label {
             Literal_Label::IntVal => "Literal.Label.INT_VAL",
             Literal_Label::StrVal => "Literal.Label.STR_VAL",
         }
+    }
+
+    #[getter]
+    fn _fltk_canonical_name(&self) -> &'static str {
+        self.__repr__()
+    }
+
+    fn __eq__(&self, py: Python<'_>, other: &Bound<'_, PyAny>) -> PyResult<PyObject> {
+        if let Ok(other_label) = other.extract::<Literal_Label>() {
+            return Ok((self == &other_label).into_pyobject(py)?.to_owned().unbind().into_any());
+        }
+        if let Ok(cn) = other.getattr(pyo3::intern!(py, "_fltk_canonical_name")) {
+            if let Ok(cn_str) = cn.extract::<&str>() {
+                return Ok((self.__repr__() == cn_str).into_pyobject(py)?.to_owned().unbind().into_any());
+            }
+        }
+        Ok(py.NotImplemented())
+    }
+
+    fn __hash__(&self, py: Python<'_>) -> PyResult<isize> {
+        pyo3::types::PyAnyMethods::hash(
+            pyo3::types::PyString::new(py, self.__repr__()).as_any()
+        )
     }
 }
 
@@ -1513,7 +1628,7 @@ impl Literal {
 // ───────────────────────────────────────────────────────────────────────────
 
 #[allow(non_camel_case_types)]
-#[pyclass(eq, hash, frozen, name = "Trivia_Label")]
+#[pyclass(frozen, name = "Trivia_Label")]
 #[derive(Clone, PartialEq, Eq, Hash)]
 pub enum Trivia_Label {
     #[pyo3(name = "CONTENT")]
@@ -1526,6 +1641,29 @@ impl Trivia_Label {
         match self {
             Trivia_Label::Content => "Trivia.Label.CONTENT",
         }
+    }
+
+    #[getter]
+    fn _fltk_canonical_name(&self) -> &'static str {
+        self.__repr__()
+    }
+
+    fn __eq__(&self, py: Python<'_>, other: &Bound<'_, PyAny>) -> PyResult<PyObject> {
+        if let Ok(other_label) = other.extract::<Trivia_Label>() {
+            return Ok((self == &other_label).into_pyobject(py)?.to_owned().unbind().into_any());
+        }
+        if let Ok(cn) = other.getattr(pyo3::intern!(py, "_fltk_canonical_name")) {
+            if let Ok(cn_str) = cn.extract::<&str>() {
+                return Ok((self.__repr__() == cn_str).into_pyobject(py)?.to_owned().unbind().into_any());
+            }
+        }
+        Ok(py.NotImplemented())
+    }
+
+    fn __hash__(&self, py: Python<'_>) -> PyResult<isize> {
+        pyo3::types::PyAnyMethods::hash(
+            pyo3::types::PyString::new(py, self.__repr__()).as_any()
+        )
     }
 }
 

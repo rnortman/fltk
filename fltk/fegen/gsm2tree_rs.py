@@ -149,7 +149,7 @@ class RustCstGenerator:
         lines.append("")
 
         lines.append("#[allow(non_camel_case_types)]")
-        lines.append(f'#[pyclass(eq, hash, frozen, name = "{enum_name}")]')
+        lines.append(f'#[pyclass(frozen, name = "{enum_name}")]')
         lines.append("#[derive(Clone, PartialEq, Eq, Hash)]")
         lines.append(f"pub enum {enum_name} {{")
         for label in labels:
@@ -160,7 +160,7 @@ class RustCstGenerator:
         lines.append("}")
         lines.append("")
 
-        # __repr__ pymethods block
+        # pymethods block: __repr__, _fltk_canonical_name, __eq__, __hash__
         lines.append("#[pymethods]")
         lines.append(f"impl {enum_name} {{")
         lines.append("    fn __repr__(&self) -> &'static str {")
@@ -170,6 +170,31 @@ class RustCstGenerator:
             python_name = _python_label_name(label)
             lines.append(f'            {enum_name}::{rust_variant} => "{class_name}.Label.{python_name}",')
         lines.append("        }")
+        lines.append("    }")
+        lines.append("")
+        lines.append("    #[getter]")
+        lines.append("    fn _fltk_canonical_name(&self) -> &'static str {")
+        lines.append("        self.__repr__()")
+        lines.append("    }")
+        lines.append("")
+        lines.append("    fn __eq__(&self, py: Python<'_>, other: &Bound<'_, PyAny>) -> PyResult<PyObject> {")
+        lines.append(f"        if let Ok(other_label) = other.extract::<{enum_name}>() {{")
+        lines.append("            return Ok((self == &other_label).into_pyobject(py)?.to_owned().unbind().into_any());")
+        lines.append("        }")
+        lines.append('        if let Ok(cn) = other.getattr(pyo3::intern!(py, "_fltk_canonical_name")) {')
+        lines.append("            if let Ok(cn_str) = cn.extract::<&str>() {")
+        lines.append(
+            "                return Ok((self.__repr__() == cn_str).into_pyobject(py)?.to_owned().unbind().into_any());"
+        )
+        lines.append("            }")
+        lines.append("        }")
+        lines.append("        Ok(py.NotImplemented())")
+        lines.append("    }")
+        lines.append("")
+        lines.append("    fn __hash__(&self, py: Python<'_>) -> PyResult<isize> {")
+        lines.append("        pyo3::types::PyAnyMethods::hash(")
+        lines.append("            pyo3::types::PyString::new(py, self.__repr__()).as_any()")
+        lines.append("        )")
         lines.append("    }")
         lines.append("}")
         lines.append("")

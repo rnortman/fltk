@@ -225,7 +225,7 @@ class TestPocGrammarLabels:
         assert "    Name," in poc_source
 
     def test_identifier_label_pyclass_name(self, poc_source: str) -> None:
-        assert '#[pyclass(eq, hash, frozen, name = "Identifier_Label")]' in poc_source
+        assert '#[pyclass(frozen, name = "Identifier_Label")]' in poc_source
 
     def test_items_label_enum_present(self, poc_source: str) -> None:
         assert "pub enum Items_Label {" in poc_source
@@ -246,6 +246,28 @@ class TestPocGrammarLabels:
         assert '"Items.Label.NO_WS"' in poc_source
         assert '"Items.Label.WS_ALLOWED"' in poc_source
         assert '"Items.Label.WS_REQUIRED"' in poc_source
+
+    def test_label_pyclass_no_eq_hash_derive(self, poc_source: str) -> None:
+        """eq, hash must NOT appear in #[pyclass] — hand-written __eq__/__hash__ are emitted instead."""
+        assert "#[pyclass(eq, hash" not in poc_source
+
+    def test_label_fltk_canonical_name_getter(self, poc_source: str) -> None:
+        """_fltk_canonical_name getter must be emitted on label enums."""
+        assert "fn _fltk_canonical_name(&self) -> &'static str {" in poc_source
+
+    def test_label_eq_method(self, poc_source: str) -> None:
+        """__eq__ method must be emitted on label enums."""
+        assert "fn __eq__(&self, py: Python<'_>, other: &Bound<'_, PyAny>) -> PyResult<PyObject> {" in poc_source
+
+    def test_label_hash_method(self, poc_source: str) -> None:
+        """__hash__ method must be emitted on label enums."""
+        # Check for hand-written __hash__ that routes through PyString
+        assert "fn __hash__(&self, py: Python<'_>) -> PyResult<isize> {" in poc_source
+        assert "PyString::new(py, self.__repr__())" in poc_source
+
+    def test_label_eq_uses_canonical_name_marker(self, poc_source: str) -> None:
+        """__eq__ must read _fltk_canonical_name from the operand (duck-typed marker)."""
+        assert '"_fltk_canonical_name"' in poc_source
 
     def test_allow_non_camel_case_types(self, poc_source: str) -> None:
         # PoC grammar has 3 label-bearing rules: Identifier, Items, Trivia
