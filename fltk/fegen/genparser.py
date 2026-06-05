@@ -185,6 +185,22 @@ def generate(
         typer.echo(f"Error: Failed to write shared CST file '{shared_cst}': {e}", err=True)
         raise typer.Exit(1) from e
 
+    # Generate companion Protocol module
+    shared_cst_protocol = output_dir / f"{base_name}_cst_protocol.py"
+    if verbose:
+        typer.echo("Generating CST Protocol module...")
+    protocol_mod = cstgen.gen_protocol_module()
+    try:
+        with shared_cst_protocol.open("w") as f:
+            # Prepend file-level ruff suppressions:
+            # N802: CstModule @property methods have PascalCase names matching module attributes (intentional).
+            # F821: nested Label class self-references are forward refs safe under `from __future__ import annotations`.
+            f.write("# ruff: noqa: N802, F821\n")
+            f.write(ast.unparse(protocol_mod))
+    except OSError as e:
+        typer.echo(f"Error: Failed to write CST Protocol file '{shared_cst_protocol}': {e}", err=True)
+        raise typer.Exit(1) from e
+
     # Determine which parsers to generate
     generate_no_trivia = not trivia_only
     generate_trivia = not no_trivia_only

@@ -282,6 +282,148 @@ class CstGenerator:
             model.incorporate(self.model_for_items(alternative, inline_stack))
         return model
 
+    def protocol_node_name(self, rule_name: str) -> str:
+        """Return the Protocol class name for a CST node (e.g. 'grammar' -> 'GrammarNode')."""
+        return self.class_name_for_rule_node(rule_name) + "Node"
+
+    def protocol_annotation_for_model_types(self, *, model_types: Iterable[ModelType]) -> str:
+        """Like py_annotation_for_model_types but emits Protocol node names (<Name>Node) for rule refs."""
+        parts = []
+        for model_type in model_types:
+            if isinstance(model_type, str):
+                # rule reference -> Protocol node name
+                parts.append(f'"{self.protocol_node_name(model_type)}"')
+            else:
+                # library type (Span, etc.) -> use the existing iir-to-annotation path
+                iir_type = typemodel.lookup_type(model_type)
+                parts.append(pycompiler.iir_type_to_py_annotation(iir_type, self.context))
+        parts = sorted(parts)
+        assert len(parts) > 0  # noqa: S101
+        if len(parts) > 1:
+            return f"typing.Union[{', '.join(parts)}]"
+        return parts[0]
+
+    def gen_protocol_module(self) -> ast.Module:
+        """Generate a *_cst_protocol.py module with Protocol classes describing the CST module surface."""
+        module = ast.parse("")
+        assert isinstance(module, ast.Module)  # noqa: S101
+        # from __future__ import annotations (must be first; defers annotation evaluation)
+        module.body.append(pygen.stmt("from __future__ import annotations"))
+        module.body.append(pygen.import_(("typing",)))
+        module.body.append(pygen.import_(("fltk", "fegen", "pyrt", "terminalsrc")))
+
+        for rule in self.rule_models:
+            model = self.rule_models[rule]
+            class_name = self.protocol_node_name(rule)
+            module.body.append(self._protocol_class_for_model(class_name, model))
+
+        module.body.append(self._cst_module_protocol())
+
+        return module
+
+    def _protocol_class_for_model(self, class_name: str, model: ItemsModel) -> ast.ClassDef:
+        """Generate a Protocol class for a single CST node."""
+        klass = pygen.klass(name=class_name, bases=["typing.Protocol"])
+
+        labels = sorted(model.labels.keys())
+
+        # Nested Label class (if this node has labels)
+        if labels:
+            label_class = pygen.klass(name="Label")
+            for label in labels:
+                # Use ClassVar[object] rather than ClassVar[Label] to avoid the
+                # self-referential annotation that pyright flags as reportUndefinedVariable
+                # inside the nested class body.  The only guarantee we need is attribute
+                # presence (so label == self.cst.Items.Label.NO_WS typechecks); the exact
+                # type of the constant is immaterial for Protocol-level checking.
+                label_class.body.append(pygen.stmt(f"{label.upper()}: typing.ClassVar[object]"))
+            klass.body.append(label_class)
+
+        # span: fltk.fegen.pyrt.terminalsrc.Span
+        klass.body.append(pygen.stmt("span: fltk.fegen.pyrt.terminalsrc.Span"))
+
+        child_annotation = self.protocol_annotation_for_model_types(model_types=model.types)
+
+        # children: list[tuple[<Label> | None, <ChildType>]]
+        if labels:
+            klass.body.append(
+                pygen.stmt(f"children: list[tuple[typing.Optional[Label], {child_annotation}]]")
+            )
+        else:
+            klass.body.append(
+                pygen.stmt(f"children: list[tuple[None, {child_annotation}]]")
+            )
+
+        label_annotation = "typing.Optional[Label]" if labels else "None"
+
+        # append
+        append_fn = pygen.function(
+            "append", f"self, child: {child_annotation}, label: {label_annotation} = None", "None"
+        )
+        append_fn.body.append(pygen.stmt("..."))
+        klass.body.append(append_fn)
+
+        # extend
+        extend_fn = pygen.function(
+            "extend", f"self, children: typing.Iterable[{child_annotation}], label: {label_annotation} = None", "None"
+        )
+        extend_fn.body.append(pygen.stmt("..."))
+        klass.body.append(extend_fn)
+
+        # child
+        if labels:
+            child_ret = f"tuple[typing.Optional[Label], {child_annotation}]"
+        else:
+            child_ret = f"tuple[None, {child_annotation}]"
+        child_fn = pygen.function("child", "self", child_ret)
+        child_fn.body.append(pygen.stmt("..."))
+        klass.body.append(child_fn)
+
+        # Per-label methods
+        for label in labels:
+            label_type_annotation = self.protocol_annotation_for_model_types(model_types=model.labels[label])
+
+            # append_<label>
+            fn = pygen.function(f"append_{label}", f"self, child: {label_type_annotation}", "None")
+            fn.body.append(pygen.stmt("..."))
+            klass.body.append(fn)
+
+            # extend_<label>
+            fn = pygen.function(f"extend_{label}", f"self, children: typing.Iterable[{label_type_annotation}]", "None")
+            fn.body.append(pygen.stmt("..."))
+            klass.body.append(fn)
+
+            # children_<label>
+            fn = pygen.function(f"children_{label}", "self", f"typing.Iterator[{label_type_annotation}]")
+            fn.body.append(pygen.stmt("..."))
+            klass.body.append(fn)
+
+            # child_<label>
+            fn = pygen.function(f"child_{label}", "self", label_type_annotation)
+            fn.body.append(pygen.stmt("..."))
+            klass.body.append(fn)
+
+            # maybe_<label>
+            fn = pygen.function(f"maybe_{label}", "self", f"typing.Optional[{label_type_annotation}]")
+            fn.body.append(pygen.stmt("..."))
+            klass.body.append(fn)
+
+        return klass
+
+    def _cst_module_protocol(self) -> ast.ClassDef:
+        """Generate the CstModule Protocol describing the module-level surface."""
+        klass = pygen.klass(name="CstModule", bases=["typing.Protocol"])
+        for rule in self.rule_models:
+            node_name = self.protocol_node_name(rule)
+            class_name = self.class_name_for_rule_node(rule)
+            # @property returning type[<NodeName>] — covariant, satisfies concrete module's class attribute
+            prop_fn = pygen.function(class_name, "self", f"type[{node_name}]")
+            # Add @property decorator
+            prop_fn.decorator_list = [pygen.expr("property")]
+            prop_fn.body.append(pygen.stmt("..."))
+            klass.body.append(prop_fn)
+        return klass
+
     def model_for_rule(self, rule: gsm.Rule, inline_stack: list[str]) -> ItemsModel:
         if rule.name in inline_stack:
             msg = f"Recursive cycle of inlined rules: {[*inline_stack, rule.name]}"
