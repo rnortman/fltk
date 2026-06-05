@@ -272,6 +272,8 @@ def gen_rust_cst(
     Example:
         genparser gen-rust-cst grammar.fltkg output/cst.rs
     """
+    # TODO(rust-cst-pyi): also emit a .pyi stub for the generated Rust extension here,
+    # derived from the same GSM, so pyright can verify the PyO3 surface satisfies CstModule.
     grammar = _parse_grammar_raw(grammar_file)
     src = gsm2tree_rs.RustCstGenerator(grammar).generate()
     try:

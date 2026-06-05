@@ -6,15 +6,19 @@
 - `fltk/fegen/fltk_cst.py`: regenerated as side effect + `make fix` (style normalization only; no type changes).
 - Deviation: design specified `ClassVar[Label]` for nested `Label` members; shipped `ClassVar[object]` instead. Pyright flags `ClassVar[Label]` as `reportUndefinedVariable` (self-referential nested class annotation); `ClassVar[object]` satisfies the design goal (attribute-presence check via `m.Items.Label.NO_WS` resolves) without pyright errors. The design explicitly states "attribute-presence only" as the guarantee for label checking (design.md:41), so the weaker type is consistent with stated intent.
 
-## Increment 3 — Pyright test harness + test suite (commit TBD)
+## Increment 3 — Pyright test harness + test suite + visit_grammar cast fixes (commit b2c6e20)
 
-- Add `run_pyright` helper in `fltk/fegen/test_cst_protocol.py`: shells `uv run pyright --outputjson <file>`, parses `generalDiagnostics`, filters to target path; `pytest.skip` when pyright unavailable.
-- Test 1: Protocol generation unit test — assert per-node Protocol members for fegen grammar.
-- Test 2a: Member-access fixture — bind `CstModule`-typed var, access members; assert zero errors and deliberately-wrong access produces a diagnostic.
-- Test 2b: Boundary-assignability probe — bind bare `fltk_cst` module to `CstModule` without cast; record which members mismatch; assert expected nested-Label failures.
-- Test 4: Backend-agnostic swap — hand-written minimal stand-in satisfies `CstModule`; assert Protocol is not Python-dataclass-specific.
-- Test 5: Runtime unaffected — `fltk_cst_protocol` absent from `sys.modules` after importing `fltk2gsm` without `TYPE_CHECKING`.
-- Test 3 and Test 6 are gate-level (`uv run pyright` + `make check`); verified by running the commands after implementation.
+- `fltk/fegen/test_cst_protocol.py`: 8 tests; `run_pyright` helper (subprocess + JSON, `pytest.skip` when unavailable).
+  - T1: `test_protocol_module_has_one_class_per_rule`, `test_protocol_node_has_required_members`, `test_cst_module_protocol_has_property_per_rule` — assert per-node Protocol members from fegen grammar.
+  - T2a: `test_member_access_fixture_zero_errors`, `test_wrong_member_access_is_flagged` — member resolution and negative (wrong method flagged).
+  - T2b: `test_boundary_probe_documents_label_mismatch` — bare assignment produces errors, confirms cast necessity.
+  - T4: `test_protocol_is_not_dataclass_specific` — plain-class stand-in cast accepted.
+  - T5: `test_fltk2gsm_does_not_import_protocol_at_runtime` — protocol absent from sys.modules at runtime.
+- `fltk/fegen/genparser.py:9-10,62`: added TYPE_CHECKING import of cstp; cast result.result to cstp.GrammarNode at visit_grammar call site.
+- `fltk/unparse/genunparser.py:9-10,50`: same cast pattern.
+- `fltk/test_plumbing.py:11-12,581`: same cast pattern.
+- `fltk/fegen/gsm2tree.py`: ruff format (whitespace only, no logic change).
+- T3 and T6 are gate-level; `uv run pyright` (0 errors) and `make check` (782 tests pass) verified at commit.
 
 ## Increment 2 — fltk2gsm.py: restore visit_* annotations + DI boundary casts (commit ae53867)
 

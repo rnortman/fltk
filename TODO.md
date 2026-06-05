@@ -40,6 +40,10 @@ No version handshake exists between a user's standalone Rust CST extension and `
 
 `src/cst_fegen.rs` and `tests/rust_cst_fegen/src/cst.rs` are identical files committed independently. When one is updated (e.g. by regeneration after a grammar change), the other must be separately regenerated and committed; silent divergence is possible. Fix: remove `tests/rust_cst_fegen/src/cst.rs` from the repo and generate it from `src/cst_fegen.rs` at build time (via symlink, Makefile copy step, or Rust `include!` macro), making the single source of truth explicit. Location: `tests/rust_cst_fegen/src/cst.rs`.
 
+## `rust-cst-pyi`
+
+Emit a `.pyi` (or equivalent static surface) for the Rust CST extension from GSM alongside `gen-rust-cst`, and add B4 Rust-backend verification (compile + import + pyright check that the real PyO3 surface genuinely satisfies `CstModule`). Deferred per ADR `05-cst-type-annotations-regression` B3a: the shared `CstModule` Protocol covers B1/B6 for the Rust path via a boundary cast at the injection site (`plumbing.py`); the `.pyi`'s sole remaining function is verifying the cast doesn't mask a real surface gap. Location: `fltk/fegen/genparser.py` (`gen_rust_cst` command).
+
 ## `rust-cst-child-span-test`
 
 No focused test verifies that Rust-backed CST child-accessor results expose `.start`/`.end` attributes (required by `fltk2gsm.Cst2Gsm.visit_identifier`, `visit_literal`, `visit_regex`). The AC8 equality test exercises this indirectly but a regression would only surface in the full parse path. Add a direct test calling `node.child_name()` (or `child_value()`) on a Rust-backed fegen node and asserting `.start`/`.end` are accessible and correct. Location: `tests/test_phase4_fegen_rust_backend.py`.
