@@ -198,10 +198,11 @@ def generate(
     protocol_mod = cstgen.gen_protocol_module()
     # Prepend file-level ruff suppressions:
     # N802: CstModule @property methods have PascalCase names matching module attributes (intentional).
-    # E501: Generated code may have lines exceeding 120 chars (long Union types in extend() signatures).
+    # E501 is NOT added here: `make fix` reformats the generated file so no lines exceed the limit,
+    # and including E501 causes RUF100 (unused noqa) after `make fix`.
     # F821 is NOT added here: nested Label references resolve via `from __future__ import annotations`
     # and ruff does not raise F821 for them; including F821 causes RUF100 (unused noqa) after `make fix`.
-    protocol_text = "# ruff: noqa: N802, E501\n" + ast.unparse(protocol_mod)
+    protocol_text = "# ruff: noqa: N802\n" + ast.unparse(protocol_mod)
     try:
         with shared_cst_protocol.open("w", newline="\n") as f:
             f.write(protocol_text)
