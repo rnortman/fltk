@@ -171,9 +171,7 @@ def parse_grammar(grammar_text: str, *, rust_fegen_cst_module: str | None = None
             msg = f"Grammar parse failed:\n{error_msg}"
             raise ValueError(msg)
 
-        # Inject the Rust CST namespace; pr.cst_module is ModuleType at runtime.
-        # Rust-injection boundary cast per di-boundary-escape decision (design.md).
-        cst2gsm = fltk2gsm.Cst2Gsm(terminals.terminals, cst=cast("cst.CstModule", pr.cst_module))
+        cst2gsm = fltk2gsm.Cst2Gsm(terminals.terminals)
         # result.result is typed Any (ParseResult.cst: Any); cast to satisfy visit_grammar's annotation.
         # TODO(parse-result-typed): make ParseResult generic so callers don't need individual casts.
         return cst2gsm.visit_grammar(cast("cst.Grammar", result.result))

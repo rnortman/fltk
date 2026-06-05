@@ -10,7 +10,6 @@ from unittest import mock
 import pytest
 
 import fltk.plumbing as fltk_plumbing_mod
-from fltk.fegen import fltk_cst as _fltk_cst
 
 if TYPE_CHECKING:
     from fltk.fegen import fltk_cst_protocol as cst
@@ -550,26 +549,22 @@ class TestParseGrammarRustBackend:
         assert "does_not_exist_pkg_xyz.nope" in str(exc_info.value)
 
 
-class TestCst2GsmDefaultNamespace:
-    """Guard the DI refactor's backward-compatibility guarantee for Cst2Gsm.
-
-    Cst2Gsm(terminals) with no cst= argument must use fltk_cst as its namespace
-    and produce the same gsm.Grammar output as the pre-DI baseline.
-    """
+class TestCst2GsmNoSelfCst:
+    """Verify Cst2Gsm has no self.cst after AC10 removal, and produces correct output."""
 
     _GRAMMAR_SRC = """\
 expr := term , ("+" , term)* ;
 term := value:/[0-9]+/ ;
 """
 
-    def test_default_cst_is_fltk_cst(self):
-        """Cst2Gsm() with no cst= uses fltk_cst as the namespace object."""
+    def test_no_cst_attribute(self):
+        """Cst2Gsm instance has no self.cst attribute after removal."""
         terminals = _terminalsrc.TerminalSource(self._GRAMMAR_SRC)
         cst2gsm = Cst2Gsm(terminals.terminals)
-        assert cst2gsm.cst is _fltk_cst
+        assert not hasattr(cst2gsm, "cst"), "self.cst should be absent from Cst2Gsm after AC10 removal"
 
-    def test_default_namespace_produces_correct_grammar(self):
-        """Cst2Gsm(terminals) with no cst= produces the same gsm.Grammar as the baseline parse_grammar call."""
+    def test_produces_correct_grammar(self):
+        """Cst2Gsm(terminals) produces the same gsm.Grammar as the baseline parse_grammar call."""
         # Build the CST via the Python parser.
         terminals = _terminalsrc.TerminalSource(self._GRAMMAR_SRC)
         parser = _fltk_parser.Parser(terminalsrc=terminals)

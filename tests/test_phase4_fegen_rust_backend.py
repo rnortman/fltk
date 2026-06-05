@@ -33,7 +33,8 @@ fegen_rust_cst = pytest.importorskip(
 
 import fltk.fegen.fltk2gsm as fltk2gsm_mod  # noqa: E402
 from fltk._native import fegen_cst as embedded_fegen_cst  # noqa: E402
-from fltk.fegen import fltk2gsm, fltk_cst  # noqa: E402
+from fltk.fegen import fltk2gsm  # noqa: E402
+from fltk.fegen import fltk_cst as py_cst  # noqa: E402
 from fltk.fegen.pyrt import terminalsrc as tsrc  # noqa: E402
 from fltk.plumbing import parse_grammar, parse_grammar_file  # noqa: E402
 
@@ -86,17 +87,17 @@ class TestAC8RealCst2GsmRustBackend:
         assert python_result == rust_result
 
     def test_rust_backend_uses_real_cst2gsm(self):
-        """Verify the Rust path injects a cst_module into Cst2Gsm (not the default fltk_cst).
+        """Verify the Rust path calls Cst2Gsm (not a hand-written substitute).
 
-        Monkeypatches Cst2Gsm.__init__ to capture the cst argument.  Confirms
-        the cst kwarg is not fltk_cst (the Python default), proving injection occurred.
+        Monkeypatches Cst2Gsm.__init__ to confirm it is called exactly once
+        by parse_grammar with the Rust backend.
         """
         captured: list[object] = []
         original_init = fltk2gsm_mod.Cst2Gsm.__init__
 
-        def recording_init(self, terminals, cst=fltk_cst):
-            captured.append(cst)
-            return original_init(self, terminals, cst=cst)
+        def recording_init(self, terminals):
+            captured.append(terminals)
+            return original_init(self, terminals)
 
         fltk2gsm_mod.Cst2Gsm.__init__ = recording_init
         try:
@@ -105,8 +106,6 @@ class TestAC8RealCst2GsmRustBackend:
             fltk2gsm_mod.Cst2Gsm.__init__ = original_init
 
         assert len(captured) == 1, "Cst2Gsm.__init__ not called exactly once"
-        injected_cst = captured[0]
-        assert injected_cst is not fltk_cst, "Rust backend should inject the Rust CST module, not fltk_cst"
 
 
 # TODO(rust-cst-child-span-test): add a focused test that calls child_name() / child_value()
@@ -150,19 +149,29 @@ class TestAC6FegenRustCstModule:
         assert mod is not embedded_fegen_cst
 
 
-# ── Injection seam: Cst2Gsm can be used with injected fegen_rust_cst namespace ──
+# ── AC9: label-compare backend independence ────────────────────────────────
 
 
-class TestCst2GsmInjection:
-    """Verify the DI seam: Cst2Gsm accepts the fegen_rust_cst module directly as cst=."""
+class TestAC9LabelBackendIndependence:
+    """AC9: label comparisons in Cst2Gsm succeed regardless of which backend produced the label.
 
-    def test_cst2gsm_accepts_fegen_rust_cst_as_namespace(self):
-        """Cst2Gsm(terminals, cst=fegen_rust_cst) doesn't crash on construction.
+    A label held from the Rust fegen_rust_cst backend compares equal (and is
+    in-found) against the corresponding constant from the fixed Python fltk_cst module.
+    """
 
-        Full execution is tested via AC8 (parse_grammar Rust path).  This test
-        isolates the seam: DI of the Rust namespace into Cst2Gsm's constructor.
-        """
+    def test_rust_label_equals_python_constant(self):
+        """A Rust-backend label compares == to the Python fltk_cst constant."""
+        rust_label = fegen_rust_cst.Items.Label.NO_WS
+        py_label = py_cst.Items.Label.NO_WS
+        assert rust_label == py_label, f"Rust label {rust_label!r} != Python label {py_label!r}"
+
+    def test_rust_label_in_python_tuple(self):
+        """A Rust-backend label is found in a tuple of Python constants."""
+        rust_label = fegen_rust_cst.Items.Label.ITEM
+        assert rust_label in (py_cst.Items.Label.ITEM, py_cst.Items.Label.NO_WS)
+
+    def test_cst2gsm_no_cst_parameter(self):
+        """Cst2Gsm takes only terminals — no cst= parameter after self.cst removal."""
         terminals_obj = tsrc.TerminalSource(_SIMPLE_GRAMMAR)
-        # Construction only; actual visit requires Rust-backed nodes.
-        cst2gsm_instance = fltk2gsm.Cst2Gsm(terminals_obj.terminals, cst=fegen_rust_cst)
-        assert cst2gsm_instance.cst is fegen_rust_cst
+        cst2gsm_instance = fltk2gsm.Cst2Gsm(terminals_obj.terminals)
+        assert not hasattr(cst2gsm_instance, "cst"), "self.cst should be absent from Cst2Gsm"
