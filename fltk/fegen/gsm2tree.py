@@ -283,11 +283,14 @@ class CstGenerator:
         return model
 
     def protocol_node_name(self, rule_name: str) -> str:
-        """Return the Protocol class name for a CST node (e.g. 'grammar' -> 'GrammarNode')."""
+        """Rule name → Protocol class name; must stay in sync with class_name_for_rule_node."""
         return self.class_name_for_rule_node(rule_name) + "Node"
 
     def protocol_annotation_for_model_types(self, *, model_types: Iterable[ModelType]) -> str:
-        """Like py_annotation_for_model_types but emits Protocol node names (<Name>Node) for rule refs."""
+        """Return a Python annotation string for model_types.
+
+        Uses <Name>Node for rule references (Protocol classes) and library-type annotations for everything else.
+        """
         parts = []
         for model_type in model_types:
             if isinstance(model_type, str):
@@ -307,7 +310,6 @@ class CstGenerator:
         """Generate a *_cst_protocol.py module with Protocol classes describing the CST module surface."""
         module = ast.parse("")
         assert isinstance(module, ast.Module)  # noqa: S101
-        # from __future__ import annotations (must be first; defers annotation evaluation)
         module.body.append(pygen.stmt("from __future__ import annotations"))
         module.body.append(pygen.import_(("typing",)))
         module.body.append(pygen.import_(("fltk", "fegen", "pyrt", "terminalsrc")))
@@ -339,12 +341,10 @@ class CstGenerator:
                 label_class.body.append(pygen.stmt(f"{label.upper()}: typing.ClassVar[object]"))
             klass.body.append(label_class)
 
-        # span: fltk.fegen.pyrt.terminalsrc.Span
         klass.body.append(pygen.stmt("span: fltk.fegen.pyrt.terminalsrc.Span"))
 
         child_annotation = self.protocol_annotation_for_model_types(model_types=model.types)
 
-        # children: list[tuple[<Label> | None, <ChildType>]]
         if labels:
             klass.body.append(pygen.stmt(f"children: list[tuple[typing.Optional[Label], {child_annotation}]]"))
         else:
@@ -352,21 +352,18 @@ class CstGenerator:
 
         label_annotation = "typing.Optional[Label]" if labels else "None"
 
-        # append
         append_fn = pygen.function(
             "append", f"self, child: {child_annotation}, label: {label_annotation} = None", "None"
         )
         append_fn.body.append(pygen.stmt("..."))
         klass.body.append(append_fn)
 
-        # extend
         extend_fn = pygen.function(
             "extend", f"self, children: typing.Iterable[{child_annotation}], label: {label_annotation} = None", "None"
         )
         extend_fn.body.append(pygen.stmt("..."))
         klass.body.append(extend_fn)
 
-        # child
         if labels:
             child_ret = f"tuple[typing.Optional[Label], {child_annotation}]"
         else:
@@ -375,7 +372,6 @@ class CstGenerator:
         child_fn.body.append(pygen.stmt("..."))
         klass.body.append(child_fn)
 
-        # Per-label methods
         for label in labels:
             label_type_annotation = self.protocol_annotation_for_model_types(model_types=model.labels[label])
 

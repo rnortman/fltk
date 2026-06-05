@@ -45,10 +45,8 @@ def parse_grammar_file(grammar_path: Path) -> tuple[gsm.Grammar, str]:
         msg = f"Failed to parse grammar file '{grammar_path}':\n{error_msg}"
         raise RuntimeError(msg)
 
-    # Convert CST to GSM
     cst2gsm = fltk2gsm.Cst2Gsm(terminals.terminals)
-    # Cast to Protocol type: result.result is a concrete fltk_cst.Grammar; pyright cannot match
-    # it to GrammarNode due to the nested-Label nominal limitation (same pattern as plumbing.py).
+    # nominal nested-Label mismatch; see _DEFAULT_CST in fltk2gsm.py
     grammar = cst2gsm.visit_grammar(cast("cstp.GrammarNode", result.result))
 
     return grammar, terminals.terminals

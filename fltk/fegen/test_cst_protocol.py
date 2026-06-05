@@ -15,6 +15,7 @@ import shutil
 import subprocess
 import sys
 import textwrap
+from typing import Any
 
 import pytest
 
@@ -49,7 +50,7 @@ def pyright_available() -> bool:
     return result.returncode == 0
 
 
-def run_pyright(file_path: pathlib.Path, *, pyright_available: bool) -> list[dict]:  # type: ignore[type-arg]
+def run_pyright(file_path: pathlib.Path, *, pyright_available: bool) -> list[dict[str, Any]]:
     """Run pyright --outputjson on file_path, return list of diagnostics for that file.
 
     Returns empty list on success; raises pytest.skip if pyright unavailable.
@@ -182,7 +183,7 @@ def test_cst_module_protocol_has_property_per_rule(
 _MEMBER_ACCESS_FIXTURE = """\
 # ruff: noqa
 from __future__ import annotations
-from typing import cast
+from typing import Any, cast
 
 from fltk.fegen import fltk_cst_protocol as cstp
 from fltk.fegen import fltk_cst

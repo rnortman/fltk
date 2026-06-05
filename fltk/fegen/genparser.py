@@ -58,8 +58,7 @@ def _read_and_parse_grammar(grammar_file: Path) -> gsm.Grammar:
         raise typer.Exit(1)
 
     cst2gsm = fltk2gsm.Cst2Gsm(terminals.terminals)
-    # Cast to Protocol type: result.result is a concrete fltk_cst.Grammar; pyright cannot match
-    # it to GrammarNode due to the nested-Label nominal limitation (same pattern as plumbing.py).
+    # nominal nested-Label mismatch; see _DEFAULT_CST in fltk2gsm.py
     return cst2gsm.visit_grammar(cast("cstp.GrammarNode", result.result))
 
 
@@ -190,7 +189,6 @@ def generate(
         typer.echo(f"Error: Failed to write shared CST file '{shared_cst}': {e}", err=True)
         raise typer.Exit(1) from e
 
-    # Generate companion Protocol module
     shared_cst_protocol = output_dir / f"{base_name}_cst_protocol.py"
     if verbose:
         typer.echo("Generating CST Protocol module...")

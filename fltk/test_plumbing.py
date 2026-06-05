@@ -576,10 +576,8 @@ term := value:/[0-9]+/ ;
         result = parser.apply__parse_grammar(0)
         assert result is not None and result.result is not None
 
-        # Invoke Cst2Gsm with no cst= (default path).
         cst2gsm_default = Cst2Gsm(terminals.terminals)
-        # Cast to Protocol type: result.result is a concrete fltk_cst.Grammar; pyright cannot match
-        # it to GrammarNode due to the nested-Label nominal limitation (same pattern as plumbing.py).
+        # nominal nested-Label mismatch; see _DEFAULT_CST in fltk2gsm.py
         grammar_default = cst2gsm_default.visit_grammar(cast("cstp.GrammarNode", result.result))
 
         # Compare to the baseline produced by parse_grammar (also Python default).
