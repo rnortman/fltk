@@ -11,9 +11,15 @@
 - Regenerated: `src/cst_fegen.rs`, `src/cst_generated.rs`, `tests/rust_cst_fegen/src/cst.rs`, `tests/rust_cst_fixture/src/cst.rs`. All four Rust crates compiled (`maturin develop` clean on all three extension crates).
 - 788 tests pass; pyright 0 errors; ruff clean.
 
-## Increment 3 — `NodeKind` enum + `kind` discriminant: Python generator, fltk_cst, fltk_cst_protocol (commit TBD)
+## Increment 3 — `NodeKind` enum + `kind` discriminant: Python generator, fltk_cst, fltk_cst_protocol (commit a538305)
 
-Draft scope: emit `NodeKind` enum (with cross-backend eq/hash) and `kind` instance attribute on every node in `gsm2tree.py`; regenerate `fltk_cst.py` and `fltk_cst_protocol.py`.
+- `fltk/fegen/gsm2tree.py`: added `node_kind_member_name()` helper and `_node_kind_enum()` which emits a module-level `NodeKind(enum.Enum)` with one member per rule (uppercased class name), plus `_fltk_canonical_name` property (`"NodeKind.<NAME>"`), cross-backend `__eq__`, and `__hash__`; `gen_py_module()` now prepends this enum before node classes.
+- `fltk/fegen/gsm2tree.py:py_class_for_model`: added `kind: typing.Literal[NodeKind.<UPPER>] = NodeKind.<UPPER>` instance-attr dataclass field on every node class (before `span`).
+- `fltk/fegen/gsm2tree.py:gen_protocol_module`: adds `from <concrete_module> import NodeKind` when `py_module.import_path` is non-empty; passes `rule_name` to `_protocol_class_for_model`.
+- `fltk/fegen/gsm2tree.py:_protocol_class_for_model`: accepts optional `rule_name`; emits `kind: typing.Literal[NodeKind.<MEMBER>]` when module path known, else `kind: object`.
+- `fltk/fegen/fltk_cst.py`: regenerated — `NodeKind` enum at top (14 members), `kind` field on all 14 node dataclasses.
+- `fltk/fegen/fltk_cst_protocol.py`: regenerated — imports `NodeKind` from `fltk.fegen.fltk_cst`; each Protocol class has `kind: typing.Literal[NodeKind.<MEMBER>]`.
+- 788 tests pass; pyright 0 errors; ruff clean.
 
 ## Increment 1 — Python `Label` `__eq__`/`__hash__`/`_fltk_canonical_name` in `gsm2tree.py` (commit 600bfc6)
 
