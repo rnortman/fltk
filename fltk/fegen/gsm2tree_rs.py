@@ -147,12 +147,39 @@ class RustCstGenerator:
         """Return the canonical string for a NodeKind member: 'NodeKind.<UPPER>'."""
         return f"NodeKind.{class_name.upper()}"
 
+    @staticmethod
+    def _emit_rust_cross_backend_eq_hash(lines: list[str], type_name: str) -> None:
+        """Append cross-backend __eq__ and __hash__ pymethods to ``lines``.
+
+        ``type_name`` is the Rust type used for the own-type fast path (e.g. ``NodeKind`` or
+        ``Items_Label``).  The generated __hash__ allocates a PyString per call because CPython's
+        salted string hash is required for cross-backend hash agreement (AC4); amortizing this via
+        GILOnceCell is deferred.
+        # TODO(canonical-name-cache): cache the isize per variant via GILOnceCell so the PyString
+        # allocation is paid at most once per variant per process.
+        """
+        lines.append("    fn __eq__(&self, py: Python<'_>, other: &Bound<'_, PyAny>) -> PyResult<PyObject> {")
+        lines.append(f"        if let Ok(other_kind) = other.extract::<{type_name}>() {{")
+        lines.append("            return Ok((self == &other_kind).into_pyobject(py)?.to_owned().unbind().into_any());")
+        lines.append("        }")
+        lines.append('        if let Ok(cn) = other.getattr(pyo3::intern!(py, "_fltk_canonical_name")) {')
+        lines.append("            if let Ok(cn_str) = cn.extract::<&str>() {")
+        lines.append(
+            "                return Ok((self.__repr__() == cn_str).into_pyobject(py)?.to_owned().unbind().into_any());"
+        )
+        lines.append("            }")
+        lines.append("        }")
+        lines.append("        Ok(py.NotImplemented())")
+        lines.append("    }")
+        lines.append("")
+        lines.append("    fn __hash__(&self, py: Python<'_>) -> PyResult<isize> {")
+        lines.append("        pyo3::types::PyAnyMethods::hash(")
+        lines.append("            pyo3::types::PyString::new(py, self.__repr__()).as_any()")
+        lines.append("        )")
+        lines.append("    }")
+
     def _node_kind_block(self) -> str:
         """Emit the module-level NodeKind enum + its #[pymethods] block."""
-        # TODO(emit-cross-backend-eq-hash-helper): extract shared helper for Rust eq/hash emit;
-        # see also _label_enum_block (gsm2tree_rs.py:~216).
-        # TODO(canonical-name-cache): __hash__ allocates a fresh PyString per call for the
-        # salted CPython hash; cache the isize per variant via GILOnceCell.
         rule_info = self._rule_info()
         lines: list[str] = []
 
@@ -188,25 +215,7 @@ class RustCstGenerator:
         lines.append("        self.__repr__()")
         lines.append("    }")
         lines.append("")
-        lines.append("    fn __eq__(&self, py: Python<'_>, other: &Bound<'_, PyAny>) -> PyResult<PyObject> {")
-        lines.append("        if let Ok(other_kind) = other.extract::<NodeKind>() {")
-        lines.append("            return Ok((self == &other_kind).into_pyobject(py)?.to_owned().unbind().into_any());")
-        lines.append("        }")
-        lines.append('        if let Ok(cn) = other.getattr(pyo3::intern!(py, "_fltk_canonical_name")) {')
-        lines.append("            if let Ok(cn_str) = cn.extract::<&str>() {")
-        lines.append(
-            "                return Ok((self.__repr__() == cn_str).into_pyobject(py)?.to_owned().unbind().into_any());"
-        )
-        lines.append("            }")
-        lines.append("        }")
-        lines.append("        Ok(py.NotImplemented())")
-        lines.append("    }")
-        lines.append("")
-        lines.append("    fn __hash__(&self, py: Python<'_>) -> PyResult<isize> {")
-        lines.append("        pyo3::types::PyAnyMethods::hash(")
-        lines.append("            pyo3::types::PyString::new(py, self.__repr__()).as_any()")
-        lines.append("        )")
-        lines.append("    }")
+        self._emit_rust_cross_backend_eq_hash(lines, "NodeKind")
         lines.append("}")
         lines.append("")
 
@@ -220,11 +229,7 @@ class RustCstGenerator:
         """Emit the label enum definition and its #[pymethods] block.
 
         For rules with no labels, emits nothing (Rust enums cannot have zero variants).
-
-        # TODO(emit-cross-backend-eq-hash-helper): extract shared helper for Rust eq/hash emit;
-        # see also _node_kind_block (gsm2tree_rs.py:~151).
-        # TODO(canonical-name-cache): __hash__ allocates a fresh PyString per call for the
-        # salted CPython hash; cache the isize per variant via GILOnceCell.
+        Cross-backend eq/hash is emitted via _emit_rust_cross_backend_eq_hash (shared with NodeKind).
         """
         if not labels:
             return ""
@@ -266,25 +271,7 @@ class RustCstGenerator:
         lines.append("        self.__repr__()")
         lines.append("    }")
         lines.append("")
-        lines.append("    fn __eq__(&self, py: Python<'_>, other: &Bound<'_, PyAny>) -> PyResult<PyObject> {")
-        lines.append(f"        if let Ok(other_label) = other.extract::<{enum_name}>() {{")
-        lines.append("            return Ok((self == &other_label).into_pyobject(py)?.to_owned().unbind().into_any());")
-        lines.append("        }")
-        lines.append('        if let Ok(cn) = other.getattr(pyo3::intern!(py, "_fltk_canonical_name")) {')
-        lines.append("            if let Ok(cn_str) = cn.extract::<&str>() {")
-        lines.append(
-            "                return Ok((self.__repr__() == cn_str).into_pyobject(py)?.to_owned().unbind().into_any());"
-        )
-        lines.append("            }")
-        lines.append("        }")
-        lines.append("        Ok(py.NotImplemented())")
-        lines.append("    }")
-        lines.append("")
-        lines.append("    fn __hash__(&self, py: Python<'_>) -> PyResult<isize> {")
-        lines.append("        pyo3::types::PyAnyMethods::hash(")
-        lines.append("            pyo3::types::PyString::new(py, self.__repr__()).as_any()")
-        lines.append("        )")
-        lines.append("    }")
+        self._emit_rust_cross_backend_eq_hash(lines, enum_name)
         lines.append("}")
         lines.append("")
 

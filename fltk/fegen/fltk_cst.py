@@ -20,10 +20,7 @@ class NodeKind(enum.Enum):
     TRIVIA = enum.auto()
     LINECOMMENT = enum.auto()
     BLOCKCOMMENT = enum.auto()
-
-    @property
-    def _fltk_canonical_name(self) -> str:
-        return f"NodeKind.{self.name}"
+    _fltk_canonical_name: str
 
     def __eq__(self, other: object) -> bool:
         if other is self:
@@ -39,14 +36,27 @@ class NodeKind(enum.Enum):
         return hash(self._fltk_canonical_name)
 
 
+NodeKind.GRAMMAR._fltk_canonical_name = "NodeKind.GRAMMAR"
+NodeKind.RULE._fltk_canonical_name = "NodeKind.RULE"
+NodeKind.ALTERNATIVES._fltk_canonical_name = "NodeKind.ALTERNATIVES"
+NodeKind.ITEMS._fltk_canonical_name = "NodeKind.ITEMS"
+NodeKind.ITEM._fltk_canonical_name = "NodeKind.ITEM"
+NodeKind.TERM._fltk_canonical_name = "NodeKind.TERM"
+NodeKind.DISPOSITION._fltk_canonical_name = "NodeKind.DISPOSITION"
+NodeKind.QUANTIFIER._fltk_canonical_name = "NodeKind.QUANTIFIER"
+NodeKind.IDENTIFIER._fltk_canonical_name = "NodeKind.IDENTIFIER"
+NodeKind.RAWSTRING._fltk_canonical_name = "NodeKind.RAWSTRING"
+NodeKind.LITERAL._fltk_canonical_name = "NodeKind.LITERAL"
+NodeKind.TRIVIA._fltk_canonical_name = "NodeKind.TRIVIA"
+NodeKind.LINECOMMENT._fltk_canonical_name = "NodeKind.LINECOMMENT"
+NodeKind.BLOCKCOMMENT._fltk_canonical_name = "NodeKind.BLOCKCOMMENT"
+
+
 @dataclasses.dataclass
 class Grammar:
     class Label(enum.Enum):
         RULE = enum.auto()
-
-        @property
-        def _fltk_canonical_name(self) -> str:
-            return f"Grammar.Label.{self.name}"
+        _fltk_canonical_name: str
 
         def __eq__(self, other: object) -> bool:
             if other is self:
@@ -101,15 +111,15 @@ class Grammar:
         return children[0] if children else None
 
 
+Grammar.Label.RULE._fltk_canonical_name = "Grammar.Label.RULE"
+
+
 @dataclasses.dataclass
 class Rule:
     class Label(enum.Enum):
         ALTERNATIVES = enum.auto()
         NAME = enum.auto()
-
-        @property
-        def _fltk_canonical_name(self) -> str:
-            return f"Rule.Label.{self.name}"
+        _fltk_canonical_name: str
 
         def __eq__(self, other: object) -> bool:
             if other is self:
@@ -195,14 +205,15 @@ class Rule:
         return children[0] if children else None
 
 
+Rule.Label.ALTERNATIVES._fltk_canonical_name = "Rule.Label.ALTERNATIVES"
+Rule.Label.NAME._fltk_canonical_name = "Rule.Label.NAME"
+
+
 @dataclasses.dataclass
 class Alternatives:
     class Label(enum.Enum):
         ITEMS = enum.auto()
-
-        @property
-        def _fltk_canonical_name(self) -> str:
-            return f"Alternatives.Label.{self.name}"
+        _fltk_canonical_name: str
 
         def __eq__(self, other: object) -> bool:
             if other is self:
@@ -257,6 +268,9 @@ class Alternatives:
         return children[0] if children else None
 
 
+Alternatives.Label.ITEMS._fltk_canonical_name = "Alternatives.Label.ITEMS"
+
+
 @dataclasses.dataclass
 class Items:
     class Label(enum.Enum):
@@ -264,10 +278,7 @@ class Items:
         NO_WS = enum.auto()
         WS_ALLOWED = enum.auto()
         WS_REQUIRED = enum.auto()
-
-        @property
-        def _fltk_canonical_name(self) -> str:
-            return f"Items.Label.{self.name}"
+        _fltk_canonical_name: str
 
         def __eq__(self, other: object) -> bool:
             if other is self:
@@ -411,6 +422,12 @@ class Items:
         return children[0] if children else None
 
 
+Items.Label.ITEM._fltk_canonical_name = "Items.Label.ITEM"
+Items.Label.NO_WS._fltk_canonical_name = "Items.Label.NO_WS"
+Items.Label.WS_ALLOWED._fltk_canonical_name = "Items.Label.WS_ALLOWED"
+Items.Label.WS_REQUIRED._fltk_canonical_name = "Items.Label.WS_REQUIRED"
+
+
 @dataclasses.dataclass
 class Item:
     class Label(enum.Enum):
@@ -418,10 +435,7 @@ class Item:
         LABEL = enum.auto()
         QUANTIFIER = enum.auto()
         TERM = enum.auto()
-
-        @property
-        def _fltk_canonical_name(self) -> str:
-            return f"Item.Label.{self.name}"
+        _fltk_canonical_name: str
 
         def __eq__(self, other: object) -> bool:
             if other is self:
@@ -557,6 +571,12 @@ class Item:
         return children[0] if children else None
 
 
+Item.Label.DISPOSITION._fltk_canonical_name = "Item.Label.DISPOSITION"
+Item.Label.LABEL._fltk_canonical_name = "Item.Label.LABEL"
+Item.Label.QUANTIFIER._fltk_canonical_name = "Item.Label.QUANTIFIER"
+Item.Label.TERM._fltk_canonical_name = "Item.Label.TERM"
+
+
 @dataclasses.dataclass
 class Term:
     class Label(enum.Enum):
@@ -564,10 +584,7 @@ class Term:
         IDENTIFIER = enum.auto()
         LITERAL = enum.auto()
         REGEX = enum.auto()
-
-        @property
-        def _fltk_canonical_name(self) -> str:
-            return f"Term.Label.{self.name}"
+        _fltk_canonical_name: str
 
         def __eq__(self, other: object) -> bool:
             if other is self:
@@ -705,16 +722,19 @@ class Term:
         return children[0] if children else None
 
 
+Term.Label.ALTERNATIVES._fltk_canonical_name = "Term.Label.ALTERNATIVES"
+Term.Label.IDENTIFIER._fltk_canonical_name = "Term.Label.IDENTIFIER"
+Term.Label.LITERAL._fltk_canonical_name = "Term.Label.LITERAL"
+Term.Label.REGEX._fltk_canonical_name = "Term.Label.REGEX"
+
+
 @dataclasses.dataclass
 class Disposition:
     class Label(enum.Enum):
         INCLUDE = enum.auto()
         INLINE = enum.auto()
         SUPPRESS = enum.auto()
-
-        @property
-        def _fltk_canonical_name(self) -> str:
-            return f"Disposition.Label.{self.name}"
+        _fltk_canonical_name: str
 
         def __eq__(self, other: object) -> bool:
             if other is self:
@@ -815,16 +835,18 @@ class Disposition:
         return children[0] if children else None
 
 
+Disposition.Label.INCLUDE._fltk_canonical_name = "Disposition.Label.INCLUDE"
+Disposition.Label.INLINE._fltk_canonical_name = "Disposition.Label.INLINE"
+Disposition.Label.SUPPRESS._fltk_canonical_name = "Disposition.Label.SUPPRESS"
+
+
 @dataclasses.dataclass
 class Quantifier:
     class Label(enum.Enum):
         ONE_OR_MORE = enum.auto()
         OPTIONAL = enum.auto()
         ZERO_OR_MORE = enum.auto()
-
-        @property
-        def _fltk_canonical_name(self) -> str:
-            return f"Quantifier.Label.{self.name}"
+        _fltk_canonical_name: str
 
         def __eq__(self, other: object) -> bool:
             if other is self:
@@ -925,14 +947,16 @@ class Quantifier:
         return children[0] if children else None
 
 
+Quantifier.Label.ONE_OR_MORE._fltk_canonical_name = "Quantifier.Label.ONE_OR_MORE"
+Quantifier.Label.OPTIONAL._fltk_canonical_name = "Quantifier.Label.OPTIONAL"
+Quantifier.Label.ZERO_OR_MORE._fltk_canonical_name = "Quantifier.Label.ZERO_OR_MORE"
+
+
 @dataclasses.dataclass
 class Identifier:
     class Label(enum.Enum):
         NAME = enum.auto()
-
-        @property
-        def _fltk_canonical_name(self) -> str:
-            return f"Identifier.Label.{self.name}"
+        _fltk_canonical_name: str
 
         def __eq__(self, other: object) -> bool:
             if other is self:
@@ -987,14 +1011,14 @@ class Identifier:
         return children[0] if children else None
 
 
+Identifier.Label.NAME._fltk_canonical_name = "Identifier.Label.NAME"
+
+
 @dataclasses.dataclass
 class RawString:
     class Label(enum.Enum):
         VALUE = enum.auto()
-
-        @property
-        def _fltk_canonical_name(self) -> str:
-            return f"RawString.Label.{self.name}"
+        _fltk_canonical_name: str
 
         def __eq__(self, other: object) -> bool:
             if other is self:
@@ -1049,14 +1073,14 @@ class RawString:
         return children[0] if children else None
 
 
+RawString.Label.VALUE._fltk_canonical_name = "RawString.Label.VALUE"
+
+
 @dataclasses.dataclass
 class Literal:
     class Label(enum.Enum):
         VALUE = enum.auto()
-
-        @property
-        def _fltk_canonical_name(self) -> str:
-            return f"Literal.Label.{self.name}"
+        _fltk_canonical_name: str
 
         def __eq__(self, other: object) -> bool:
             if other is self:
@@ -1111,15 +1135,15 @@ class Literal:
         return children[0] if children else None
 
 
+Literal.Label.VALUE._fltk_canonical_name = "Literal.Label.VALUE"
+
+
 @dataclasses.dataclass
 class Trivia:
     class Label(enum.Enum):
         BLOCK_COMMENT = enum.auto()
         LINE_COMMENT = enum.auto()
-
-        @property
-        def _fltk_canonical_name(self) -> str:
-            return f"Trivia.Label.{self.name}"
+        _fltk_canonical_name: str
 
         def __eq__(self, other: object) -> bool:
             if other is self:
@@ -1215,15 +1239,16 @@ class Trivia:
         return children[0] if children else None
 
 
+Trivia.Label.BLOCK_COMMENT._fltk_canonical_name = "Trivia.Label.BLOCK_COMMENT"
+Trivia.Label.LINE_COMMENT._fltk_canonical_name = "Trivia.Label.LINE_COMMENT"
+
+
 @dataclasses.dataclass
 class LineComment:
     class Label(enum.Enum):
         CONTENT = enum.auto()
         PREFIX = enum.auto()
-
-        @property
-        def _fltk_canonical_name(self) -> str:
-            return f"LineComment.Label.{self.name}"
+        _fltk_canonical_name: str
 
         def __eq__(self, other: object) -> bool:
             if other is self:
@@ -1301,16 +1326,17 @@ class LineComment:
         return children[0] if children else None
 
 
+LineComment.Label.CONTENT._fltk_canonical_name = "LineComment.Label.CONTENT"
+LineComment.Label.PREFIX._fltk_canonical_name = "LineComment.Label.PREFIX"
+
+
 @dataclasses.dataclass
 class BlockComment:
     class Label(enum.Enum):
         CONTENT = enum.auto()
         END = enum.auto()
         START = enum.auto()
-
-        @property
-        def _fltk_canonical_name(self) -> str:
-            return f"BlockComment.Label.{self.name}"
+        _fltk_canonical_name: str
 
         def __eq__(self, other: object) -> bool:
             if other is self:
@@ -1409,3 +1435,8 @@ class BlockComment:
             msg = f"Expected at most one start child but have {n}"
             raise ValueError(msg)
         return children[0] if children else None
+
+
+BlockComment.Label.CONTENT._fltk_canonical_name = "BlockComment.Label.CONTENT"
+BlockComment.Label.END._fltk_canonical_name = "BlockComment.Label.END"
+BlockComment.Label.START._fltk_canonical_name = "BlockComment.Label.START"

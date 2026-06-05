@@ -96,78 +96,21 @@ class CstGenerator:
         """Return the NodeKind enum member name for a rule (uppercased class name)."""
         return self.class_name_for_rule_node(rule_name).upper()
 
-    def _node_kind_enum(self) -> ast.ClassDef:
-        """Emit the module-level NodeKind enum with cross-backend eq/hash."""
-        # TODO(emit-cross-backend-eq-hash-helper): extract shared helper for eq/hash emit;
-        # see also py_class_for_model Label emit (gsm2tree.py:~157).
-        # TODO(canonical-name-cache): _fltk_canonical_name rebuilds the f-string on every
-        # read; convert to a per-member cached value since members are immutable singletons.
-        node_kind = pygen.klass(name="NodeKind", bases=["enum.Enum"])
-        for rule in self.grammar.rules:
-            member = self.node_kind_member_name(rule.name)
-            node_kind.body.append(pygen.stmt(f"{member} = enum.auto()"))
+    @staticmethod
+    def _emit_cross_backend_eq_hash(enum_klass: ast.ClassDef) -> None:
+        """Append cross-backend __eq__ and __hash__ to an enum ClassDef.
 
-        # _fltk_canonical_name: instance property yielding "NodeKind.<MEMBER_NAME>"
-        canonical_name_prop = pygen.function("_fltk_canonical_name", "self", "str")
-        canonical_name_prop.decorator_list = [pygen.expr("property")]
-        canonical_name_prop.body.append(pygen.stmt('return f"NodeKind.{self.name}"'))
-        node_kind.body.append(canonical_name_prop)
+        Assumes each member has a plain string attribute ``_fltk_canonical_name`` (not a
+        property) set after class creation via ``_emit_canonical_name_assignments``.  That
+        attribute is an immutable per-member value, so __hash__ reads it without rebuilding
+        any string on every call.
 
-        # __eq__: same-type fast path, then canonical-name cross-type, then NotImplemented
-        eq_fn = pygen.function("__eq__", "self, other: object", "bool")
-        eq_fn.body.extend(
-            [
-                pygen.stmt("if other is self: return True"),
-                pygen.stmt("if type(other) is type(self): return self.name == other.name"),  # type: ignore[union-attr]
-                pygen.stmt("cn = getattr(other, '_fltk_canonical_name', None)"),
-                pygen.stmt("if cn is not None: return self._fltk_canonical_name == cn"),
-                pygen.stmt("return NotImplemented"),
-            ]
-        )
-        node_kind.body.append(eq_fn)
-
-        # __hash__: hash of canonical name
-        hash_fn = pygen.function("__hash__", "self", "int")
-        hash_fn.body.append(pygen.stmt("return hash(self._fltk_canonical_name)"))
-        node_kind.body.append(hash_fn)
-
-        return node_kind
-
-    def gen_py_module(self) -> ast.Module:
-        imports = [
-            pyreg.Module(("dataclasses",)),
-            pyreg.Module(("enum",)),
-            pyreg.Module(("typing",)),
-            pyreg.Module(("fltk", "fegen", "pyrt", "terminalsrc")),
-        ]
-        module = pygen.module(module.import_path for module in imports)
-
-        # Emit module-level NodeKind enum before the node classes.
-        module.body.append(self._node_kind_enum())
-
-        for rule, model in self.rule_models.items():
-            module.body.append(self.py_class_for_model(self.class_name_for_rule_node(rule), model, rule))
-
-        return module
-
-    def py_class_for_model(self, class_name: str, model: ItemsModel, rule_name: str = "") -> ast.ClassDef:
-        klass = pygen.dataclass(class_name)
-
-        label_enum = pygen.klass(name="Label", bases=["enum.Enum"])
-        labels = sorted(model.labels.keys())
-        for label in labels:
-            label_enum.body.append(pygen.stmt(f"{label.upper()} = enum.auto()"))
-
-        # Cross-backend equality contract (§2.2): canonical-name-keyed eq/hash.
-        # TODO(emit-cross-backend-eq-hash-helper): extract shared helper for eq/hash emit;
-        # see also _node_kind_enum (gsm2tree.py:~99).
-        # TODO(canonical-name-cache): _fltk_canonical_name rebuilds the f-string on every
-        # read; convert to a per-member cached value since members are immutable singletons.
-        # _fltk_canonical_name: instance property yielding "<ClassName>.Label.<MEMBER_NAME>".
-        canonical_name_prop = pygen.function("_fltk_canonical_name", "self", "str")
-        canonical_name_prop.decorator_list = [pygen.expr("property")]
-        canonical_name_prop.body.append(pygen.stmt(f'return f"{class_name}.Label.{{self.name}}"'))
-        label_enum.body.append(canonical_name_prop)
+        A bare ``_fltk_canonical_name: str`` annotation is emitted inside the class body so
+        that pyright knows the attribute exists; it carries no default and does not affect
+        runtime behaviour.  The actual value is assigned post-class by the caller.
+        """
+        # Bare annotation so pyright knows the attribute exists on instances.
+        enum_klass.body.append(pygen.stmt("_fltk_canonical_name: str"))
 
         # __eq__: same-type fast path (identity/member-name), then canonical-name cross-type,
         # then NotImplemented for foreign operands (so Python invokes the reflected __eq__).
@@ -181,12 +124,90 @@ class CstGenerator:
                 pygen.stmt("return NotImplemented"),
             ]
         )
-        label_enum.body.append(eq_fn)
+        enum_klass.body.append(eq_fn)
 
-        # __hash__: hash of canonical name so equal cross-backend members hash identically.
+        # __hash__: hash of the pre-computed canonical name (no string rebuild per call).
         hash_fn = pygen.function("__hash__", "self", "int")
         hash_fn.body.append(pygen.stmt("return hash(self._fltk_canonical_name)"))
-        label_enum.body.append(hash_fn)
+        enum_klass.body.append(hash_fn)
+
+    def _node_kind_enum(self) -> ast.ClassDef:
+        """Emit the module-level NodeKind enum with cross-backend eq/hash."""
+        node_kind = pygen.klass(name="NodeKind", bases=["enum.Enum"])
+        for rule in self.grammar.rules:
+            member = self.node_kind_member_name(rule.name)
+            node_kind.body.append(pygen.stmt(f"{member} = enum.auto()"))
+
+        self._emit_cross_backend_eq_hash(node_kind)
+
+        return node_kind
+
+    def _emit_node_kind_canonical_name_assignments(self) -> list[ast.stmt]:
+        """Emit post-class statements that assign _fltk_canonical_name on each NodeKind member.
+
+        Enum members are immutable singletons; assigning a plain string attribute after class
+        creation avoids rebuilding the f-string on every __eq__/__hash__ call (efficiency-1).
+        """
+        stmts: list[ast.stmt] = []
+        for rule in self.grammar.rules:
+            member = self.node_kind_member_name(rule.name)
+            canonical = f"NodeKind.{member}"
+            stmts.append(pygen.stmt(f'NodeKind.{member}._fltk_canonical_name = "{canonical}"'))
+        return stmts
+
+    def _emit_label_canonical_name_assignments(self, class_name: str, labels: list[str]) -> list[ast.stmt]:
+        """Emit post-class statements that assign _fltk_canonical_name on each Label member.
+
+        Same rationale as _emit_node_kind_canonical_name_assignments: per-member plain string
+        avoids per-call f-string rebuild in __eq__/__hash__ (efficiency-1).
+        """
+        stmts: list[ast.stmt] = []
+        for label in labels:
+            python_name = label.upper()
+            canonical = f"{class_name}.Label.{python_name}"
+            stmts.append(pygen.stmt(f'{class_name}.Label.{python_name}._fltk_canonical_name = "{canonical}"'))
+        return stmts
+
+    def gen_py_module(self) -> ast.Module:
+        imports = [
+            pyreg.Module(("dataclasses",)),
+            pyreg.Module(("enum",)),
+            pyreg.Module(("typing",)),
+            pyreg.Module(("fltk", "fegen", "pyrt", "terminalsrc")),
+        ]
+        module = pygen.module(module.import_path for module in imports)
+
+        # Emit module-level NodeKind enum before the node classes.
+        module.body.append(self._node_kind_enum())
+        # Assign _fltk_canonical_name as a plain string attribute on each NodeKind member
+        # after the class is fully constructed, so __hash__/__eq__ avoid per-call f-string
+        # rebuilds (efficiency-1: members are immutable singletons, value is invariant).
+        module.body.extend(self._emit_node_kind_canonical_name_assignments())
+
+        for rule, model in self.rule_models.items():
+            module.body.extend(self.py_class_for_model(self.class_name_for_rule_node(rule), model, rule))
+
+        return module
+
+    def py_class_for_model(self, class_name: str, model: ItemsModel, rule_name: str = "") -> list[ast.stmt]:
+        """Emit the dataclass for a rule node plus its post-class Label canonical-name assignments.
+
+        Returns a list of statements: the ClassDef followed by one assignment statement per Label
+        member that sets ``_fltk_canonical_name`` as a plain string attribute.  Plain attributes
+        avoid per-call f-string rebuilds in __eq__/__hash__ (efficiency-1: members are immutable
+        singletons, the canonical string is invariant).
+        """
+        klass = pygen.dataclass(class_name)
+
+        label_enum = pygen.klass(name="Label", bases=["enum.Enum"])
+        labels = sorted(model.labels.keys())
+        for label in labels:
+            label_enum.body.append(pygen.stmt(f"{label.upper()} = enum.auto()"))
+
+        # Cross-backend equality contract (§2.2): canonical-name-keyed eq/hash.
+        # _emit_cross_backend_eq_hash uses self._fltk_canonical_name, which is a plain string
+        # attribute set post-class (not a property) — see _emit_label_canonical_name_assignments.
+        self._emit_cross_backend_eq_hash(label_enum)
 
         klass.body.append(label_enum)
         if not model.types:
@@ -323,7 +344,9 @@ class CstGenerator:
             )
             klass.body.append(maybe_fn)
 
-        return klass
+        stmts: list[ast.stmt] = [klass]
+        stmts.extend(self._emit_label_canonical_name_assignments(class_name, labels))
+        return stmts
 
     def model_for_item(self, item: gsm.Item, inline_stack: list[str]) -> ItemsModel:
         if isinstance(item.term, gsm.Identifier):
