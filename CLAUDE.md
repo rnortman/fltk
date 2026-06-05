@@ -121,6 +121,17 @@ The `.fltkg` grammar format supports:
 - Type-safe child access methods based on labels
 - Suppressed elements may create gaps in spans
 
+### Generated Output is Public API
+
+FLTK is a library and framework used by external downstream applications to generate their own parsers and CST node classes — not only for FLTK self-hosting. The generated public symbol names (node class names, method names, accessor names) and type-annotation surface are **public API consumed by existing downstream consumers**.
+
+Consequences:
+
+- Renaming generated public symbols (e.g. adding a `Node` suffix to class names) is a **breaking change** for downstream code.
+- Changing the type-annotation surface in ways that force downstream callers to update every function or parameter annotation is also a breaking change.
+- The explicit goal of the Rust-backend work is a near-drop-in replacement for the Python backend: downstream consumers may need to update import statements, but must **not** be forced to edit their type annotations or call sites wholesale.
+- Do not rename generated public symbols or otherwise cause annotation churn unless the need is explicit, justified, and unavoidable — and even then it must be a deliberate, called-out decision, not an incidental side effect of an implementation choice.
+
 ## Configuration
 
 - `pyproject.toml`: uv configuration, dependencies, and tool settings
