@@ -38,13 +38,21 @@ class RuleNode(typing.Protocol):
     span: fltk.fegen.pyrt.terminalsrc.Span
     children: list[tuple[Label | None, AlternativesNode | IdentifierNode | TriviaNode]]
 
-    def append(self, child: AlternativesNode | IdentifierNode | TriviaNode, label: Label | None = None) -> None: ...
-
-    def extend(
-        self, children: typing.Iterable[AlternativesNode | IdentifierNode | TriviaNode], label: Label | None = None
+    def append(
+        self,
+        child: AlternativesNode | IdentifierNode | TriviaNode,
+        label: Label | None = None,
     ) -> None: ...
 
-    def child(self) -> tuple[Label | None, AlternativesNode | IdentifierNode | TriviaNode]: ...
+    def extend(
+        self,
+        children: typing.Iterable[AlternativesNode | IdentifierNode | TriviaNode],
+        label: Label | None = None,
+    ) -> None: ...
+
+    def child(
+        self,
+    ) -> tuple[Label | None, AlternativesNode | IdentifierNode | TriviaNode]: ...
 
     def append_alternatives(self, child: AlternativesNode) -> None: ...
 
@@ -102,7 +110,9 @@ class ItemsNode(typing.Protocol):
     children: list[tuple[Label | None, ItemNode | TriviaNode | fltk.fegen.pyrt.terminalsrc.Span]]
 
     def append(
-        self, child: ItemNode | TriviaNode | fltk.fegen.pyrt.terminalsrc.Span, label: Label | None = None
+        self,
+        child: ItemNode | TriviaNode | fltk.fegen.pyrt.terminalsrc.Span,
+        label: Label | None = None,
     ) -> None: ...
 
     def extend(
@@ -111,7 +121,9 @@ class ItemsNode(typing.Protocol):
         label: Label | None = None,
     ) -> None: ...
 
-    def child(self) -> tuple[Label | None, ItemNode | TriviaNode | fltk.fegen.pyrt.terminalsrc.Span]: ...
+    def child(
+        self,
+    ) -> tuple[Label | None, ItemNode | TriviaNode | fltk.fegen.pyrt.terminalsrc.Span]: ...
 
     def append_item(self, child: ItemNode) -> None: ...
 
@@ -162,7 +174,12 @@ class ItemNode(typing.Protocol):
         TERM: typing.ClassVar[object]
 
     span: fltk.fegen.pyrt.terminalsrc.Span
-    children: list[tuple[Label | None, DispositionNode | IdentifierNode | QuantifierNode | TermNode | TriviaNode]]
+    children: list[
+        tuple[
+            Label | None,
+            DispositionNode | IdentifierNode | QuantifierNode | TermNode | TriviaNode,
+        ]
+    ]
 
     def append(
         self,
@@ -178,7 +195,10 @@ class ItemNode(typing.Protocol):
 
     def child(
         self,
-    ) -> tuple[Label | None, DispositionNode | IdentifierNode | QuantifierNode | TermNode | TriviaNode]: ...
+    ) -> tuple[
+        Label | None,
+        DispositionNode | IdentifierNode | QuantifierNode | TermNode | TriviaNode,
+    ]: ...
 
     def append_disposition(self, child: DispositionNode) -> None: ...
 
@@ -229,7 +249,12 @@ class TermNode(typing.Protocol):
         REGEX: typing.ClassVar[object]
 
     span: fltk.fegen.pyrt.terminalsrc.Span
-    children: list[tuple[Label | None, AlternativesNode | IdentifierNode | LiteralNode | RawStringNode | TriviaNode]]
+    children: list[
+        tuple[
+            Label | None,
+            AlternativesNode | IdentifierNode | LiteralNode | RawStringNode | TriviaNode,
+        ]
+    ]
 
     def append(
         self,
@@ -245,7 +270,10 @@ class TermNode(typing.Protocol):
 
     def child(
         self,
-    ) -> tuple[Label | None, AlternativesNode | IdentifierNode | LiteralNode | RawStringNode | TriviaNode]: ...
+    ) -> tuple[
+        Label | None,
+        AlternativesNode | IdentifierNode | LiteralNode | RawStringNode | TriviaNode,
+    ]: ...
 
     def append_alternatives(self, child: AlternativesNode) -> None: ...
 
@@ -468,10 +496,17 @@ class TriviaNode(typing.Protocol):
         LINE_COMMENT: typing.ClassVar[object]
 
     span: fltk.fegen.pyrt.terminalsrc.Span
-    children: list[tuple[Label | None, BlockCommentNode | LineCommentNode | fltk.fegen.pyrt.terminalsrc.Span]]
+    children: list[
+        tuple[
+            Label | None,
+            BlockCommentNode | LineCommentNode | fltk.fegen.pyrt.terminalsrc.Span,
+        ]
+    ]
 
     def append(
-        self, child: BlockCommentNode | LineCommentNode | fltk.fegen.pyrt.terminalsrc.Span, label: Label | None = None
+        self,
+        child: BlockCommentNode | LineCommentNode | fltk.fegen.pyrt.terminalsrc.Span,
+        label: Label | None = None,
     ) -> None: ...
 
     def extend(
@@ -480,7 +515,9 @@ class TriviaNode(typing.Protocol):
         label: Label | None = None,
     ) -> None: ...
 
-    def child(self) -> tuple[Label | None, BlockCommentNode | LineCommentNode | fltk.fegen.pyrt.terminalsrc.Span]: ...
+    def child(
+        self,
+    ) -> tuple[Label | None, BlockCommentNode | LineCommentNode | fltk.fegen.pyrt.terminalsrc.Span]: ...
 
     def append_block_comment(self, child: BlockCommentNode) -> None: ...
 

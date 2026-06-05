@@ -198,8 +198,9 @@ def generate(
     protocol_mod = cstgen.gen_protocol_module()
     # Prepend file-level ruff suppressions:
     # N802: CstModule @property methods have PascalCase names matching module attributes (intentional).
-    # F821: nested Label class self-references are forward refs safe under `from __future__ import annotations`.
-    protocol_text = "# ruff: noqa: N802, F821\n" + ast.unparse(protocol_mod)
+    # F821 is NOT added here: nested Label references resolve via `from __future__ import annotations`
+    # and ruff does not raise F821 for them; including F821 causes RUF100 (unused noqa) after `make fix`.
+    protocol_text = "# ruff: noqa: N802\n" + ast.unparse(protocol_mod)
     try:
         with shared_cst_protocol.open("w", newline="\n") as f:
             f.write(protocol_text)
