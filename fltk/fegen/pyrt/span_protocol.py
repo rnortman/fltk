@@ -17,8 +17,8 @@ class SpanProtocol(Protocol):
     """
 
     def text(self) -> str | None:
-        """Return the source text slice ``[start, end)``, or ``None`` if no source is attached or indices are invalid.
-        """
+        """Return the source text slice ``[start, end)``, or ``None`` if no source is attached or indices are
+        invalid."""
         ...
 
     def text_or_raise(self) -> str:

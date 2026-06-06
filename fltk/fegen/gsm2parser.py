@@ -323,7 +323,7 @@ class ParserGenerator:
             rule_id=next(self.rule_id_seq) if memoize else None,
             inline_to_parent=inline_to_parent,
         )
-        assert path not in self.parsers  # noqa: S101
+        assert path not in self.parsers
         self.parsers[path] = parser_info
         return parser_info
 
@@ -370,8 +370,8 @@ class ParserGenerator:
             mutable_self=False,
         )
         if memoize:
-            assert parser_info.rule_id is not None  # noqa: S101
-            assert parser_info.cache_name is not None  # noqa: S101
+            assert parser_info.rule_id is not None
+            assert parser_info.cache_name is not None
             memoizer = self.parser_class.def_method(
                 name=parser_info.apply_name,
                 return_type=return_type,
@@ -724,7 +724,7 @@ class ParserGenerator:
 
             # Handle item failure
             if item.quantifier.is_required():
-                assert isinstance(item_if.orelse, iir.Block)  # noqa: S101
+                assert isinstance(item_if.orelse, iir.Block)
                 item_if.orelse.return_(iir.Failure(return_type))
 
             # Handle separator after this item

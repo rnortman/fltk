@@ -19,6 +19,7 @@ from fltk.fegen.gsm2tree_rs import RustCstGenerator
 # PoC grammar construction
 # ---------------------------------------------------------------------------
 
+
 def _make_poc_grammar() -> gsm.Grammar:
     """Construct the same 2-rule PoC grammar used to generate src/cst_generated.rs.
 
@@ -93,6 +94,7 @@ def _make_poc_grammar() -> gsm.Grammar:
 # Minimal single-rule grammar
 # ---------------------------------------------------------------------------
 
+
 def _make_minimal_grammar() -> gsm.Grammar:
     """Single-rule grammar: numbers := digits+ (one label, no whitespace separators)."""
     numbers_rule = gsm.Rule(
@@ -121,6 +123,7 @@ def _make_minimal_grammar() -> gsm.Grammar:
 # Zero-label grammar (unlabeled INCLUDE items)
 # ---------------------------------------------------------------------------
 
+
 def _make_zero_label_grammar() -> gsm.Grammar:
     """Rule with no labeled items — label enum must be omitted."""
     unlabeled_rule = gsm.Rule(
@@ -148,6 +151,7 @@ def _make_zero_label_grammar() -> gsm.Grammar:
 # ---------------------------------------------------------------------------
 # Fixtures
 # ---------------------------------------------------------------------------
+
 
 @pytest.fixture(scope="module")
 def poc_source() -> str:
@@ -178,6 +182,7 @@ def fegen_source() -> str:
 # ---------------------------------------------------------------------------
 # AC-10: Preamble correctness
 # ---------------------------------------------------------------------------
+
 
 class TestPreamble:
     def test_required_use_declarations(self, poc_source: str) -> None:
@@ -212,6 +217,7 @@ class TestPreamble:
 # AC-1 precondition: expected labels in generated source
 # ---------------------------------------------------------------------------
 
+
 class TestPocGrammarLabels:
     def test_identifier_label_enum_present(self, poc_source: str) -> None:
         assert "pub enum Identifier_Label {" in poc_source
@@ -219,7 +225,7 @@ class TestPocGrammarLabels:
         assert "    Name," in poc_source
 
     def test_identifier_label_pyclass_name(self, poc_source: str) -> None:
-        assert '#[pyclass(eq, hash, frozen, name = "Identifier_Label")]' in poc_source
+        assert '#[pyclass(frozen, name = "Identifier_Label")]' in poc_source
 
     def test_items_label_enum_present(self, poc_source: str) -> None:
         assert "pub enum Items_Label {" in poc_source
@@ -241,6 +247,28 @@ class TestPocGrammarLabels:
         assert '"Items.Label.WS_ALLOWED"' in poc_source
         assert '"Items.Label.WS_REQUIRED"' in poc_source
 
+    def test_label_pyclass_no_eq_hash_derive(self, poc_source: str) -> None:
+        """eq, hash must NOT appear in #[pyclass] — hand-written __eq__/__hash__ are emitted instead."""
+        assert "#[pyclass(eq, hash" not in poc_source
+
+    def test_label_fltk_canonical_name_getter(self, poc_source: str) -> None:
+        """_fltk_canonical_name getter must be emitted on label enums."""
+        assert "fn _fltk_canonical_name(&self) -> &'static str {" in poc_source
+
+    def test_label_eq_method(self, poc_source: str) -> None:
+        """__eq__ method must be emitted on label enums."""
+        assert "fn __eq__(&self, py: Python<'_>, other: &Bound<'_, PyAny>) -> PyResult<PyObject> {" in poc_source
+
+    def test_label_hash_method(self, poc_source: str) -> None:
+        """__hash__ method must be emitted on label enums."""
+        # Check for hand-written __hash__ that routes through PyString
+        assert "fn __hash__(&self, py: Python<'_>) -> PyResult<isize> {" in poc_source
+        assert "PyString::new(py, self.__repr__())" in poc_source
+
+    def test_label_eq_uses_canonical_name_marker(self, poc_source: str) -> None:
+        """__eq__ must read _fltk_canonical_name from the operand (duck-typed marker)."""
+        assert '"_fltk_canonical_name"' in poc_source
+
     def test_allow_non_camel_case_types(self, poc_source: str) -> None:
         # PoC grammar has 3 label-bearing rules: Identifier, Items, Trivia
         assert poc_source.count("#[allow(non_camel_case_types)]") >= 3  # one per label enum
@@ -253,6 +281,7 @@ class TestPocGrammarLabels:
 # ---------------------------------------------------------------------------
 # Node struct structure
 # ---------------------------------------------------------------------------
+
 
 class TestNodeStructure:
     def test_identifier_struct_present(self, poc_source: str) -> None:
@@ -282,6 +311,7 @@ class TestNodeStructure:
 # ---------------------------------------------------------------------------
 # AC-5: register_classes function
 # ---------------------------------------------------------------------------
+
 
 class TestRegisterClasses:
     def test_register_classes_function_present(self, poc_source: str) -> None:
@@ -315,15 +345,37 @@ class TestRegisterClasses:
 # ---------------------------------------------------------------------------
 
 FEGEN_RULE_NAMES = [
-    "grammar", "rule", "alternatives", "items", "item", "term",
-    "disposition", "quantifier", "identifier", "raw_string", "literal",
-    "_trivia", "line_comment", "block_comment",
+    "grammar",
+    "rule",
+    "alternatives",
+    "items",
+    "item",
+    "term",
+    "disposition",
+    "quantifier",
+    "identifier",
+    "raw_string",
+    "literal",
+    "_trivia",
+    "line_comment",
+    "block_comment",
 ]
 
 FEGEN_CLASS_NAMES = [
-    "Grammar", "Rule", "Alternatives", "Items", "Item", "Term",
-    "Disposition", "Quantifier", "Identifier", "RawString", "Literal",
-    "Trivia", "LineComment", "BlockComment",
+    "Grammar",
+    "Rule",
+    "Alternatives",
+    "Items",
+    "Item",
+    "Term",
+    "Disposition",
+    "Quantifier",
+    "Identifier",
+    "RawString",
+    "Literal",
+    "Trivia",
+    "LineComment",
+    "BlockComment",
 ]
 
 # Each rule name must map to its expected class name via class_name_for_rule_node.
@@ -365,12 +417,19 @@ class TestFegenGrammar:
         # Build a minimal CstGenerator with a dummy grammar to access the name helper.
         dummy_rule = gsm.Rule(
             name="dummy",
-            alternatives=[gsm.Items(items=[gsm.Item(
-                label="x",
-                disposition=gsm.Disposition.INCLUDE,
-                term=gsm.Regex(r"x"),
-                quantifier=gsm.REQUIRED,
-            )], sep_after=[gsm.Separator.NO_WS])],
+            alternatives=[
+                gsm.Items(
+                    items=[
+                        gsm.Item(
+                            label="x",
+                            disposition=gsm.Disposition.INCLUDE,
+                            term=gsm.Regex(r"x"),
+                            quantifier=gsm.REQUIRED,
+                        )
+                    ],
+                    sep_after=[gsm.Separator.NO_WS],
+                )
+            ],
         )
         dummy_grammar = gsm.Grammar(rules=(dummy_rule,), identifiers={"dummy": dummy_rule})
         gen = CstGenerator(grammar=dummy_grammar, py_module=pyreg.Builtins, context=create_default_context())
@@ -383,6 +442,7 @@ class TestFegenGrammar:
 # ---------------------------------------------------------------------------
 # AC-9: Minimal grammar (single-rule, no crash)
 # ---------------------------------------------------------------------------
+
 
 @pytest.fixture(scope="module")
 def minimal_source() -> str:
@@ -412,6 +472,7 @@ class TestMinimalGrammar:
 # ---------------------------------------------------------------------------
 # Determinism constraint
 # ---------------------------------------------------------------------------
+
 
 class TestDeterministicOutput:
     def test_two_calls_produce_identical_strings(self) -> None:
@@ -454,6 +515,7 @@ class TestDeterministicOutput:
 # OQ-empty-label-enum: zero-label rules omit the label enum
 # ---------------------------------------------------------------------------
 
+
 class TestEmptyLabelEnumOmitted:
     def test_zero_label_rule_omits_label_enum(self) -> None:
         """OQ-empty-label-enum: Rules with no labels omit the enum (Rust disallows zero-variant enums)."""
@@ -484,3 +546,119 @@ class TestEmptyLabelEnumOmitted:
         source = gen.generate()
         assert "module.add_class::<Token_Label>()?;" not in source
         assert "module.add_class::<Token>()?;" in source
+
+
+# ---------------------------------------------------------------------------
+# NodeKind enum generation
+# ---------------------------------------------------------------------------
+
+
+class TestNodeKindEnum:
+    def test_node_kind_enum_present(self, poc_source: str) -> None:
+        """NodeKind enum is emitted before all node structs."""
+        assert "pub enum NodeKind {" in poc_source
+
+    def test_node_kind_pyclass_no_eq_hash(self, poc_source: str) -> None:
+        """NodeKind #[pyclass] must not have eq/hash (hand-written instead)."""
+        # Confirm the NodeKind pyclass line exists and lacks eq/hash
+        assert '#[pyclass(frozen, name = "NodeKind")]' in poc_source
+        # eq/hash must not appear in combination with the NodeKind class line
+        lines = poc_source.splitlines()
+        for line in lines:
+            if '#[pyclass(frozen, name = "NodeKind")]' in line:
+                assert "eq" not in line
+                assert "hash" not in line
+
+    def test_node_kind_has_identifier_and_items_variants(self, poc_source: str) -> None:
+        """PoC grammar produces IDENTIFIER and ITEMS variants in NodeKind."""
+        assert '#[pyo3(name = "IDENTIFIER")]' in poc_source
+        assert "    Identifier," in poc_source
+        assert '#[pyo3(name = "ITEMS")]' in poc_source
+        assert "    Items," in poc_source
+
+    def test_node_kind_repr_canonical_form(self, poc_source: str) -> None:
+        """NodeKind __repr__ emits 'NodeKind.<UPPER>' canonical strings."""
+        assert '"NodeKind.IDENTIFIER"' in poc_source
+        assert '"NodeKind.ITEMS"' in poc_source
+
+    def test_node_kind_fltk_canonical_name_getter(self, poc_source: str) -> None:
+        """NodeKind has _fltk_canonical_name getter."""
+        # The NodeKind impl block must contain the getter
+        assert "fn _fltk_canonical_name(&self) -> &'static str {" in poc_source
+
+    def test_node_kind_eq_method(self, poc_source: str) -> None:
+        """NodeKind has a hand-written __eq__ reading _fltk_canonical_name off the operand."""
+        assert "fn __eq__(&self, py: Python<'_>, other: &Bound<'_, PyAny>) -> PyResult<PyObject> {" in poc_source
+
+    def test_node_kind_hash_method(self, poc_source: str) -> None:
+        """NodeKind has a hand-written __hash__ routing through PyString::hash."""
+        assert "fn __hash__(&self, py: Python<'_>) -> PyResult<isize> {" in poc_source
+
+    def test_node_kind_registered_first(self, poc_source: str) -> None:
+        """NodeKind must be registered before node structs in register_classes."""
+        idx_node_kind = poc_source.index("module.add_class::<NodeKind>()?;")
+        idx_identifier = poc_source.index("module.add_class::<Identifier>()?;")
+        assert idx_node_kind < idx_identifier
+
+    def test_node_kind_before_label_enums(self, poc_source: str) -> None:
+        """NodeKind enum block appears before the first Label enum block in the source."""
+        idx_node_kind_enum = poc_source.index("pub enum NodeKind {")
+        idx_first_label_enum = poc_source.index("pub enum Identifier_Label {")
+        assert idx_node_kind_enum < idx_first_label_enum
+
+    def test_fegen_grammar_node_kind_has_all_14(self, fegen_source: str) -> None:
+        """Fegen grammar NodeKind has all 14 class-name-derived members."""
+        for class_name in FEGEN_CLASS_NAMES:
+            python_name = class_name.upper()
+            assert f'#[pyo3(name = "{python_name}")]' in fegen_source, (
+                f"Expected NodeKind member {python_name!r} in fegen source"
+            )
+            assert f'"NodeKind.{python_name}"' in fegen_source, (
+                f"Expected canonical string NodeKind.{python_name!r} in fegen source"
+            )
+
+    def test_fegen_grammar_node_kind_registered(self, fegen_source: str) -> None:
+        """NodeKind is registered in register_classes for the fegen grammar."""
+        assert "module.add_class::<NodeKind>()?;" in fegen_source
+
+
+# ---------------------------------------------------------------------------
+# kind getter on node structs
+# ---------------------------------------------------------------------------
+
+
+class TestKindGetter:
+    def test_identifier_kind_getter(self, poc_source: str) -> None:
+        """Identifier struct has a kind getter returning NodeKind::Identifier."""
+        assert "fn kind(&self) -> NodeKind {" in poc_source
+        assert "NodeKind::Identifier" in poc_source
+
+    def test_items_kind_getter(self, poc_source: str) -> None:
+        """Items struct has a kind getter returning NodeKind::Items."""
+        assert "NodeKind::Items" in poc_source
+
+    def test_kind_getter_is_getter_attr(self, poc_source: str) -> None:
+        """The kind getter is annotated with #[getter] immediately before its fn declaration."""
+        # Verify that "#[getter]" appears as the immediately preceding non-blank, non-comment line
+        # before "fn kind(&self) -> NodeKind {" — this ensures the attribute is actually on the
+        # kind function, not just that #[getter] appears somewhere in the file.
+        lines = poc_source.splitlines()
+        kind_fn_sig = "fn kind(&self) -> NodeKind {"
+        for i, line in enumerate(lines):
+            if kind_fn_sig in line:
+                # Walk backward over blank lines to find the preceding non-blank line
+                j = i - 1
+                while j >= 0 and lines[j].strip() == "":
+                    j -= 1
+                assert j >= 0, "No non-blank line found before fn kind"
+                assert "#[getter]" in lines[j], (
+                    f"Expected '#[getter]' immediately before 'fn kind', found: {lines[j]!r}"
+                )
+                break
+        else:
+            pytest.fail("'fn kind(&self) -> NodeKind {' not found in poc_source")
+
+    def test_fegen_grammar_all_node_kinds_present(self, fegen_source: str) -> None:
+        """All 14 node class names appear as NodeKind variants in fegen source."""
+        for class_name in FEGEN_CLASS_NAMES:
+            assert f"NodeKind::{class_name}" in fegen_source, f"Expected 'NodeKind::{class_name}' in fegen source"

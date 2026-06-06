@@ -842,9 +842,7 @@ def test_no_blank_lines_between_alternatives_with_comments():
         # Check for blank lines (lines that are empty or whitespace-only)
         lines = output.split("\n")
         for i, line in enumerate(lines):
-            assert line.strip() != "" or i == len(lines) - 1, (
-                f"Found blank line at position {i} in output:\n{output}"
-            )
+            assert line.strip() != "" or i == len(lines) - 1, f"Found blank line at position {i} in output:\n{output}"
 
     finally:
         if parser_result.cst_module_name in sys.modules:
@@ -921,9 +919,7 @@ rule2 := "b" ;
         # The line after the comment should be rule2
         if comment_line_idx + 1 < len(lines):
             next_line = lines[comment_line_idx + 1]
-            assert "rule2" in next_line, (
-                f"rule2 should follow the comment. Got:\n{output}"
-            )
+            assert "rule2" in next_line, f"rule2 should follow the comment. Got:\n{output}"
 
     finally:
         if parser_result.cst_module_name in sys.modules:

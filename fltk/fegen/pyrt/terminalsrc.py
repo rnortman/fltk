@@ -1,7 +1,32 @@
 import bisect
+import enum
 import re
 from dataclasses import dataclass, field
-from typing import Final
+from typing import Final, Literal
+
+
+class SpanKind(enum.Enum):
+    """Discriminant enum for Span, enabling native `.kind` narrowing in protocol consumers."""
+
+    SPAN = enum.auto()
+
+    _fltk_canonical_name: str
+
+    def __eq__(self, other: object) -> bool:
+        if other is self:
+            return True
+        if type(other) is type(self):
+            return self.name == other.name  # type: ignore[union-attr]
+        cn = getattr(other, "_fltk_canonical_name", None)
+        if cn is not None:
+            return self._fltk_canonical_name == cn
+        return NotImplemented
+
+    def __hash__(self) -> int:
+        return hash(self._fltk_canonical_name)
+
+
+SpanKind.SPAN._fltk_canonical_name = "SpanKind.SPAN"  # type: ignore[attr-defined]
 
 
 @dataclass(frozen=True, eq=True, slots=True)
@@ -11,10 +36,11 @@ class Span:
     start: int
     end: int
     _source: str | None = field(default=None, repr=False, compare=False, hash=False)
+    kind: Literal[SpanKind.SPAN] = field(default=SpanKind.SPAN, repr=False, compare=False, hash=False)
 
     def text(self) -> str | None:
-        """Return the source text slice ``[start, end)``, or ``None`` if no source is attached or indices are invalid.
-        """
+        """Return the source text slice ``[start, end)``, or ``None`` if no source is attached or indices are
+        invalid."""
         if self._source is None:
             return None
         start, end = self.start, self.end
@@ -118,7 +144,7 @@ class TerminalSource:
 
     def consume_regex(self, pos: int, regex: str) -> Span | None:
         if match := re.compile(regex).match(self.terminals, pos=pos):
-            assert match.start() == pos  # noqa: S101
+            assert match.start() == pos
             return Span(pos, match.end())
         return None
 
@@ -133,7 +159,7 @@ class TerminalSource:
             if not self.line_ends or self.line_ends[-1] != len(self.terminals) - 1:
                 self.line_ends.append(len(self.terminals) - 1)
         idx = bisect.bisect_left(self.line_ends, pos)
-        assert idx < len(self.line_ends)  # noqa: S101
+        assert idx < len(self.line_ends)
         if idx > 0:
             col = pos - self.line_ends[idx - 1] - 1
             line_span = Span(self.line_ends[idx - 1] + 1, self.line_ends[idx])

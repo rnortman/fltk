@@ -44,19 +44,19 @@ class Cst2Gsm:
         # Process items and separators
         children = items.children[start_idx:]
         for (item_label, item), (ws_label, _) in zip(children[::2], children[1::2], strict=False):
-            assert item_label == cst.Items.Label.ITEM and isinstance(item, cst.Item)  # noqa: S101
+            assert item_label == cst.Items.Label.ITEM and isinstance(item, cst.Item)
             gsm_items.append(self.visit_item(item))
             if ws_label == cst.Items.Label.WS:
                 sep_after.append(gsm.Separator.WS_ALLOWED)
             else:
-                assert ws_label == cst.Items.Label.NO_WS  # noqa: S101
+                assert ws_label == cst.Items.Label.NO_WS
                 sep_after.append(gsm.Separator.NO_WS)
         if (len(children) % 2) != 0:
             item_label, item = children[-1]
-            assert item_label == cst.Items.Label.ITEM and isinstance(item, cst.Item)  # noqa: S101
+            assert item_label == cst.Items.Label.ITEM and isinstance(item, cst.Item)
             gsm_items.append(self.visit_item(item))
             sep_after.append(gsm.Separator.NO_WS)
-        assert len(gsm_items) == len(sep_after)  # noqa: S101
+        assert len(gsm_items) == len(sep_after)
         return gsm.Items(items=gsm_items, sep_after=sep_after, initial_sep=initial_sep)
 
     def visit_item(self, item: cst.Item) -> gsm.Item:

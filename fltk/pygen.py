@@ -7,8 +7,8 @@ _T = TypeVar("_T")
 
 
 def _strip_module(mod: ast.Module, expect: type[_T]) -> _T:
-    assert isinstance(mod, ast.Module), f"Not a module but a {type(mod)} {mod}"  # noqa: S101
-    assert len(mod.body) == 1  # noqa: S101
+    assert isinstance(mod, ast.Module), f"Not a module but a {type(mod)} {mod}"
+    assert len(mod.body) == 1
     result = mod.body[0]
     if not isinstance(result, expect):
         msg = f"Expected {expect} but got {result}"
@@ -18,7 +18,7 @@ def _strip_module(mod: ast.Module, expect: type[_T]) -> _T:
 
 def module(imports: Iterable[str | Sequence[str]] = ()):
     result = ast.parse("")
-    assert isinstance(result, ast.Module)  # noqa: S101
+    assert isinstance(result, ast.Module)
     for imp in imports:
         result.body.append(import_(imp))
     return result
@@ -41,8 +41,8 @@ def function(name: str, args: str, return_type: str) -> ast.FunctionDef:
 
 def expr(expr_py: str) -> ast.expr:
     tree = ast.parse(expr_py, mode="eval")
-    assert isinstance(tree, ast.Expression)  # noqa: S101
-    assert isinstance(tree.body, ast.expr)  # noqa: S101
+    assert isinstance(tree, ast.Expression)
+    assert isinstance(tree.body, ast.expr)
     return tree.body
 
 

@@ -40,7 +40,40 @@ No version handshake exists between a user's standalone Rust CST extension and `
 
 `src/cst_fegen.rs` and `tests/rust_cst_fegen/src/cst.rs` are identical files committed independently. When one is updated (e.g. by regeneration after a grammar change), the other must be separately regenerated and committed; silent divergence is possible. Fix: remove `tests/rust_cst_fegen/src/cst.rs` from the repo and generate it from `src/cst_fegen.rs` at build time (via symlink, Makefile copy step, or Rust `include!` macro), making the single source of truth explicit. Location: `tests/rust_cst_fegen/src/cst.rs`.
 
+## `rust-cst-pyi`
+
+Emit a `.pyi` (or equivalent static surface) for the Rust CST extension from GSM alongside `gen-rust-cst`, and add B4 Rust-backend verification (compile + import + pyright check that the real PyO3 surface genuinely satisfies `CstModule`). Deferred per ADR `05-cst-type-annotations-regression` B3a: the shared `CstModule` Protocol covers B1/B6 for the Rust path via a boundary cast at the injection site (`plumbing.py`); the `.pyi`'s sole remaining function is verifying the cast doesn't mask a real surface gap. Location: `fltk/fegen/genparser.py` (`gen_rust_cst` command).
+
+## `cst-protocol-label-free`
+
+Protocol classes for label-free CST nodes declare `children: list[tuple[None, T]]` while label-bearing nodes use `list[tuple[Optional[Label], T]]`. This asymmetry means generic code iterating children of arbitrary node types must case-split on whether the node has labels, which is not inferrable from the Protocol type alone. Fix: introduce a vacuous `Label` class for label-free nodes (or a `_NoLabel = None` alias) so all node `children` share the same tuple shape. Location: `fltk/fegen/gsm2tree.py` (`_protocol_class_for_model`).
+
+## `parse-result-typed`
+
+Make `ParseResult` generic (`class ParseResult(Generic[T]): cst: T | None`) so that `result.result` is typed at each call site rather than `Any`, eliminating the five scattered `cast("cstp.GrammarNode", result.result)` calls in `fltk/fegen/genparser.py`, `fltk/plumbing.py` (×2), `fltk/unparse/genunparser.py`, and `fltk/test_plumbing.py`. Currently `ParseResult.cst` is `Any` (`fltk/fltk/plumbing_types.py`), which forces per-site casts that can silently degrade if the parser's return type changes. Location: `fltk/plumbing_types.py`.
+
+## `cst-protocol-generator-refactor`
+
+Unify `protocol_annotation_for_model_types` with `py_annotation_for_model_types` (gsm2tree.py) and `_protocol_class_for_model` with `py_class_for_model` (gsm2tree.py). Both pairs share identical structure (Union building, label quintet ordering) with only the annotation resolver, Label body, method bodies, and base class differing. A shared skeleton with injected strategies would eliminate ~120 lines of parallel code; currently any new per-label accessor (e.g. `count_<l>`) or Union syntax change must be applied in both generators. Location: `fltk/fegen/gsm2tree.py`.
+
 ## `rust-cst-child-span-test`
 
 No focused test verifies that Rust-backed CST child-accessor results expose `.start`/`.end` attributes (required by `fltk2gsm.Cst2Gsm.visit_identifier`, `visit_literal`, `visit_regex`). The AC8 equality test exercises this indirectly but a regression would only surface in the full parse path. Add a direct test calling `node.child_name()` (or `child_value()`) on a Rust-backed fegen node and asserting `.start`/`.end` are accessible and correct. Location: `tests/test_phase4_fegen_rust_backend.py`.
+
+## `canonical-name-cache`
+
+The Rust `__hash__` implementation allocates a fresh `PyString` (for the salted CPython hash) on every call; the allocation is load-bearing for cross-backend hash agreement (AC4) but can be amortized. Cache the computed `isize` per variant via `GILOnceCell` so the `PyString` is built at most once per variant per process. (The Python-side canonical-name property was replaced with a plain per-member string attribute in this iteration, restoring cheap same-backend hashing there.) Location: `fltk/fegen/gsm2tree_rs.py` (`_emit_rust_cross_backend_eq_hash`).
+
+## `kind-field-dataclass-eq`
+
+The `kind` dataclass field joins the generated `__eq__`/`__hash__` for every node, but it is invariant within a node type (a node of type `Item` always has `kind == NodeKind.Item`). The comparison is cheap (same singleton, `other is self` fast path), but it is pure overhead on every structural node equality. Mark `kind` with `dataclasses.field(compare=False, repr=False)` if node-equality performance becomes a concern. Location: `fltk/fegen/gsm2tree.py` (`py_class_for_model`, `kind` field emit).
+
+## `protocol-label-member-bridge-unify`
+
+`_emit_protocol_label_member_class` in `gsm2tree.py` emits `__eq__`/`__hash__` via a raw `ast.parse()` string instead of calling the existing `_emit_cross_backend_eq_hash` helper. This creates two independent implementations of the cross-backend bridge that can drift independently. Refactor `_emit_protocol_label_member_class` to call `_emit_cross_backend_eq_hash` (or extract a pygen-based helper shared by both) so any future bridge change propagates everywhere. The divergence today (non-enum uses `_fltk_canonical_name` name comparison in the same-type fast-path; enum uses `.name`) is intentional but the coupling between the docstring note and the actual code is informal. Location: `fltk/fegen/gsm2tree.py` (`_emit_protocol_label_member_class`, `_emit_cross_backend_eq_hash`).
+
+## `protocol-label-member-private`
+
+`_ProtocolLabelMember` is emitted as a module-level class in the generated public protocol module (`fltk_cst_protocol.py`). It appears in `from fltk_cst_protocol import *` and in IDE autocompletion; downstream consumers could accidentally take a dependency on it, making it de-facto public API subject to breaking-change rules. Options: (a) emit a module-level `__all__` listing only the intended public symbols, suppressing `_ProtocolLabelMember` from wildcard imports; or (b) move the class to `fltk.fegen.pyrt.bridge` (or similar) and import it into the generated module from there, keeping the implementation out of the public-API file. Location: `fltk/fegen/gsm2tree.py` (`_emit_protocol_label_member_class`, `gen_protocol_module`).
+
 

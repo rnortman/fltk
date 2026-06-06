@@ -35,6 +35,7 @@ def simple_grammar_file(tmp_path_factory: pytest.TempPathFactory) -> pathlib.Pat
 # test_gen_rust_cst_command_emits_source  (AC6 Python half)
 # ---------------------------------------------------------------------------
 
+
 def test_gen_rust_cst_command_emits_source(simple_grammar_file: pathlib.Path, tmp_path: pathlib.Path) -> None:
     """Run gen-rust-cst on a small grammar and assert the output is correct Rust source.
 
@@ -67,6 +68,7 @@ def test_gen_rust_cst_command_emits_source(simple_grammar_file: pathlib.Path, tm
 # test_gen_rust_cst_sentinel_decoupled
 # ---------------------------------------------------------------------------
 
+
 def test_gen_rust_cst_sentinel_decoupled(simple_grammar_file: pathlib.Path, tmp_path: pathlib.Path) -> None:
     """Emitted preamble declares a module-local GILOnceCell sentinel cache and
     fetches fltk._native.UnknownSpan at runtime (not from crate::).
@@ -95,6 +97,7 @@ def test_gen_rust_cst_sentinel_decoupled(simple_grammar_file: pathlib.Path, tmp_
 # ---------------------------------------------------------------------------
 # test_gen_rust_cst_no_double_trivia
 # ---------------------------------------------------------------------------
+
 
 def test_gen_rust_cst_no_double_trivia(simple_grammar_file: pathlib.Path) -> None:
     """_parse_grammar_raw feeds RustCstGenerator a grammar with no pre-existing _trivia rule.

@@ -84,13 +84,89 @@ class CstGenerator:
 
     def py_annotation_for_model_types(self, *, model_types: Iterable[ModelType], in_module: bool = False) -> str:
         iir_types = [self.iir_type_for_model_type(model_type) for model_type in model_types]
-        assert len(iir_types) > 0  # noqa: S101
+        assert len(iir_types) > 0
         py_types = sorted(pycompiler.iir_type_to_py_annotation(typ, self.context) for typ in iir_types)
         if in_module:
             py_types = sorted(f'"{typ.removeprefix(".".join(self.py_module.import_path) + ".")}"' for typ in py_types)
         if len(py_types) > 1:
             return f"typing.Union[{', '.join(py_types)}]"
         return py_types[0]
+
+    def node_kind_member_name(self, rule_name: str) -> str:
+        """Return the NodeKind enum member name for a rule (uppercased class name)."""
+        return self.class_name_for_rule_node(rule_name).upper()
+
+    @staticmethod
+    def _emit_cross_backend_eq_hash(enum_klass: ast.ClassDef) -> None:
+        """Append cross-backend __eq__ and __hash__ to an enum ClassDef.
+
+        Assumes each member has a plain string attribute ``_fltk_canonical_name`` (not a
+        property) set after class creation via ``_emit_canonical_name_assignments``.  That
+        attribute is an immutable per-member value, so __hash__ reads it without rebuilding
+        any string on every call.
+
+        A bare ``_fltk_canonical_name: str`` annotation is emitted inside the class body so
+        that pyright knows the attribute exists; it carries no default and does not affect
+        runtime behaviour.  The actual value is assigned post-class by the caller.
+        """
+        # Bare annotation so pyright knows the attribute exists on instances.
+        enum_klass.body.append(pygen.stmt("_fltk_canonical_name: str"))
+
+        # __eq__: same-type fast path (identity/member-name), then canonical-name cross-type,
+        # then NotImplemented for foreign operands (so Python invokes the reflected __eq__).
+        eq_fn = pygen.function("__eq__", "self, other: object", "bool")
+        eq_fn.body.extend(
+            [
+                pygen.stmt("if other is self: return True"),
+                pygen.stmt("if type(other) is type(self): return self.name == other.name"),  # type: ignore[union-attr]
+                pygen.stmt("cn = getattr(other, '_fltk_canonical_name', None)"),
+                pygen.stmt("if cn is not None: return self._fltk_canonical_name == cn"),
+                pygen.stmt("return NotImplemented"),
+            ]
+        )
+        enum_klass.body.append(eq_fn)
+
+        # __hash__: hash of the pre-computed canonical name (no string rebuild per call).
+        hash_fn = pygen.function("__hash__", "self", "int")
+        hash_fn.body.append(pygen.stmt("return hash(self._fltk_canonical_name)"))
+        enum_klass.body.append(hash_fn)
+
+    def _node_kind_enum(self) -> ast.ClassDef:
+        """Emit the module-level NodeKind enum with cross-backend eq/hash."""
+        node_kind = pygen.klass(name="NodeKind", bases=["enum.Enum"])
+        for rule in self.grammar.rules:
+            member = self.node_kind_member_name(rule.name)
+            node_kind.body.append(pygen.stmt(f"{member} = enum.auto()"))
+
+        self._emit_cross_backend_eq_hash(node_kind)
+
+        return node_kind
+
+    def _emit_node_kind_canonical_name_assignments(self) -> list[ast.stmt]:
+        """Emit post-class statements that assign _fltk_canonical_name on each NodeKind member.
+
+        Enum members are immutable singletons; assigning a plain string attribute after class
+        creation avoids rebuilding the f-string on every __eq__/__hash__ call (efficiency-1).
+        """
+        stmts: list[ast.stmt] = []
+        for rule in self.grammar.rules:
+            member = self.node_kind_member_name(rule.name)
+            canonical = f"NodeKind.{member}"
+            stmts.append(pygen.stmt(f'NodeKind.{member}._fltk_canonical_name = "{canonical}"'))
+        return stmts
+
+    def _emit_label_canonical_name_assignments(self, class_name: str, labels: list[str]) -> list[ast.stmt]:
+        """Emit post-class statements that assign _fltk_canonical_name on each Label member.
+
+        Same rationale as _emit_node_kind_canonical_name_assignments: per-member plain string
+        avoids per-call f-string rebuild in __eq__/__hash__ (efficiency-1).
+        """
+        stmts: list[ast.stmt] = []
+        for label in labels:
+            python_name = label.upper()
+            canonical = f"{class_name}.Label.{python_name}"
+            stmts.append(pygen.stmt(f'{class_name}.Label.{python_name}._fltk_canonical_name = "{canonical}"'))
+        return stmts
 
     def gen_py_module(self) -> ast.Module:
         imports = [
@@ -101,18 +177,38 @@ class CstGenerator:
         ]
         module = pygen.module(module.import_path for module in imports)
 
+        # Emit module-level NodeKind enum before the node classes.
+        module.body.append(self._node_kind_enum())
+        # Assign _fltk_canonical_name as a plain string attribute on each NodeKind member
+        # after the class is fully constructed, so __hash__/__eq__ avoid per-call f-string
+        # rebuilds (efficiency-1: members are immutable singletons, value is invariant).
+        module.body.extend(self._emit_node_kind_canonical_name_assignments())
+
         for rule, model in self.rule_models.items():
-            module.body.append(self.py_class_for_model(self.class_name_for_rule_node(rule), model))
+            module.body.extend(self.py_class_for_model(self.class_name_for_rule_node(rule), model, rule))
 
         return module
 
-    def py_class_for_model(self, class_name: str, model: ItemsModel) -> ast.ClassDef:
+    def py_class_for_model(self, class_name: str, model: ItemsModel, rule_name: str = "") -> list[ast.stmt]:
+        """Emit the dataclass for a rule node plus its post-class Label canonical-name assignments.
+
+        Returns a list of statements: the ClassDef followed by one assignment statement per Label
+        member that sets ``_fltk_canonical_name`` as a plain string attribute.  Plain attributes
+        avoid per-call f-string rebuilds in __eq__/__hash__ (efficiency-1: members are immutable
+        singletons, the canonical string is invariant).
+        """
         klass = pygen.dataclass(class_name)
 
         label_enum = pygen.klass(name="Label", bases=["enum.Enum"])
         labels = sorted(model.labels.keys())
         for label in labels:
             label_enum.body.append(pygen.stmt(f"{label.upper()} = enum.auto()"))
+
+        # Cross-backend equality contract (§2.2): canonical-name-keyed eq/hash.
+        # _emit_cross_backend_eq_hash uses self._fltk_canonical_name, which is a plain string
+        # attribute set post-class (not a property) — see _emit_label_canonical_name_assignments.
+        self._emit_cross_backend_eq_hash(label_enum)
+
         klass.body.append(label_enum)
         if not model.types:
             msg = (
@@ -121,8 +217,15 @@ class CstGenerator:
             )
             raise RuntimeError(msg)
         child_annotation = self.py_annotation_for_model_types(model_types=model.types, in_module=True)
+        # kind: instance attribute (dataclass field with default) for NodeKind discriminant (§2.4).
+        # MUST NOT be ClassVar — pyright rejects ClassVar against the Protocol's instance-attr declaration.
+        # Use node_kind_member_name for the member name to stay in sync with the Protocol generator.
+        # TODO(kind-field-dataclass-eq): mark kind field compare=False, repr=False if node-eq
+        # performance becomes a concern — the field is invariant within a node type.
+        kind_member = self.node_kind_member_name(rule_name) if rule_name else class_name.upper()
         klass.body.extend(
             [
+                pygen.stmt(f"kind: typing.Literal[NodeKind.{kind_member}] = NodeKind.{kind_member}"),
                 pygen.stmt("span: fltk.fegen.pyrt.terminalsrc.Span = fltk.fegen.pyrt.terminalsrc.UnknownSpan"),
                 pygen.stmt(
                     f"children: list[tuple[typing.Optional[Label], {child_annotation}]]"
@@ -241,7 +344,9 @@ class CstGenerator:
             )
             klass.body.append(maybe_fn)
 
-        return klass
+        stmts: list[ast.stmt] = [klass]
+        stmts.extend(self._emit_label_canonical_name_assignments(class_name, labels))
+        return stmts
 
     def model_for_item(self, item: gsm.Item, inline_stack: list[str]) -> ItemsModel:
         if isinstance(item.term, gsm.Identifier):
@@ -260,19 +365,19 @@ class CstGenerator:
         model = ItemsModel()
         for item in items.items:
             if item.disposition == gsm.Disposition.SUPPRESS:
-                assert not isinstance(item.term, Sequence)  # noqa: S101
+                assert not isinstance(item.term, Sequence)
                 continue
             if item.disposition == gsm.Disposition.INLINE:
-                assert isinstance(item.term, gsm.Identifier)  # noqa: S101
+                assert isinstance(item.term, gsm.Identifier)
                 inline_rule = self.grammar.identifiers[item.term.value]
-                assert isinstance(inline_rule, gsm.Rule)  # noqa: S101
+                assert isinstance(inline_rule, gsm.Rule)
                 inline_model = self.model_for_rule(inline_rule, inline_stack)
                 model.incorporate(inline_model)
             else:
                 item_model = self.model_for_item(item, inline_stack)
                 model.incorporate(item_model)
                 if item.label:
-                    assert not isinstance(item.term, Sequence)  # noqa: S101
+                    assert not isinstance(item.term, Sequence)
                     model.labels[item.label] |= item_model.types
         return model
 
@@ -281,6 +386,268 @@ class CstGenerator:
         for alternative in alternatives:
             model.incorporate(self.model_for_items(alternative, inline_stack))
         return model
+
+    def protocol_node_name(self, rule_name: str) -> str:
+        """Rule name → Protocol class name.
+
+        Protocol classes live in a separate *_cst_protocol.py module from concrete CST classes, so bare
+        names (e.g. 'Rule') do not collide with the concrete 'Rule' dataclass — they are always
+        module-qualified in annotations (e.g. cstp.Rule).  No suffix is needed.
+        """
+        return self.class_name_for_rule_node(rule_name)
+
+    # TODO(cst-protocol-generator-refactor): this method mirrors py_annotation_for_model_types (gsm2tree.py:85)
+    # and _protocol_class_for_model mirrors py_class_for_model (gsm2tree.py:109).  Unify both pairs with
+    # shared skeletons parameterized by annotation resolver / Label body / method bodies / base class.
+    def protocol_annotation_for_model_types(self, *, model_types: Iterable[ModelType], class_name: str = "") -> str:
+        """Return a Python annotation string for model_types.
+
+        Uses the bare Protocol class name (same as the concrete class name) for rule references, and
+        library-type annotations for everything else.
+
+        Quoting asymmetry is intentional: rule references are quoted strings (e.g. '"Rule"') because they are
+        forward references to Protocol classes defined later in the same module, while library types (e.g.
+        fltk.fegen.pyrt.terminalsrc.Span) are unquoted module paths resolved at import time.  The generated module
+        carries `from __future__ import annotations`, which makes all annotations lazy, so the explicit quoting on
+        rule refs is redundant there — but kept for clarity and consistency with how fltk_cst.py emits forward refs.
+        """
+        parts = []
+        for model_type in model_types:
+            if isinstance(model_type, str):
+                # rule reference -> Protocol node name (quoted forward ref)
+                parts.append(f'"{self.protocol_node_name(model_type)}"')
+            else:
+                # library type (Span, etc.) -> use the existing iir-to-annotation path (unquoted)
+                iir_type = typemodel.lookup_type(model_type)
+                parts.append(pycompiler.iir_type_to_py_annotation(iir_type, self.context))
+        # Sort for deterministic output; quoted rule names (starting with '"') sort before unquoted library
+        # paths alphabetically by ASCII order, but both categories are distinct and sort is stable within each.
+        parts = sorted(set(parts))  # deduplicate then sort for deterministic Union member order
+        if not parts:
+            rule_ctx = f" for rule {class_name!r}" if class_name else ""
+            msg = f"Rule node{rule_ctx} has no child types in its model; cannot generate annotation"
+            raise ValueError(msg)
+        if len(parts) > 1:
+            return f"typing.Union[{', '.join(parts)}]"
+        return parts[0]
+
+    @staticmethod
+    def _emit_protocol_label_member_class() -> list[ast.stmt]:
+        """Emit the module-level _ProtocolLabelMember sentinel class for protocol Label members.
+
+        Instances carry _fltk_canonical_name and a cross-backend __eq__/__hash__ matching the
+        shape in _emit_cross_backend_eq_hash.  The static type of each Label member stays object
+        (ClassVar[object]) — this sentinel is not an enum.Enum, preserving the structural-mismatch
+        contract (test_boundary_probe_documents_label_mismatch).
+
+        TODO(protocol-label-member-private): _ProtocolLabelMember is emitted into the public
+        protocol module.  Consider emitting __all__ or moving this class to pyrt.bridge so it
+        does not appear as a public symbol in the generated output.
+
+        TODO(protocol-label-member-bridge-unify): This emits __eq__/__hash__ via ast.parse()
+        rather than calling _emit_cross_backend_eq_hash, creating two independent bridge
+        implementations.  Refactor to share the helper.
+        """
+        stmts = ast.parse(
+            """\
+class _ProtocolLabelMember:
+    _fltk_canonical_name: str
+    def __init__(self, canonical_name: str) -> None:
+        self._fltk_canonical_name = canonical_name
+    def __eq__(self, other: object) -> bool:
+        if other is self: return True
+        if type(other) is type(self): return self._fltk_canonical_name == other._fltk_canonical_name
+        cn = getattr(other, '_fltk_canonical_name', None)
+        if cn is not None: return self._fltk_canonical_name == cn
+        return NotImplemented
+    def __hash__(self) -> int:
+        return hash(self._fltk_canonical_name)
+    def __repr__(self) -> str:
+        return f'_ProtocolLabelMember({self._fltk_canonical_name!r})'
+"""
+        ).body
+        return stmts  # type: ignore[return-value]
+
+    def gen_protocol_module(self) -> ast.Module:
+        """Generate a *_cst_protocol.py module with Protocol classes describing the CST module surface."""
+        module = ast.parse("")
+        assert isinstance(module, ast.Module)
+        module.body.append(pygen.stmt("from __future__ import annotations"))
+        module.body.append(pygen.import_(("enum",)))
+        module.body.append(pygen.import_(("typing",)))
+        module.body.append(pygen.import_(("fltk", "fegen", "pyrt", "terminalsrc")))
+
+        # Emit a protocol-local runtime NodeKind enum (identical members + canonical strings +
+        # cross-backend bridge to the concrete module's NodeKind).  This replaces the former
+        # TYPE_CHECKING-guarded import so the protocol module owns its own runtime values and
+        # does NOT eagerly import a concrete backend at module load (Constraint: no-runtime-cost).
+        module.body.append(self._node_kind_enum())
+        module.body.extend(self._emit_node_kind_canonical_name_assignments())
+
+        # Emit the _ProtocolLabelMember sentinel class used to give Label members runtime values.
+        module.body.extend(self._emit_protocol_label_member_class())
+
+        for rule in self.rule_models:
+            model = self.rule_models[rule]
+            class_name = self.protocol_node_name(rule)
+            stmts = self._protocol_class_for_model_with_assignments(class_name, model, rule)
+            module.body.extend(stmts)
+
+        module.body.append(self._protocol_span_class())
+        module.body.append(self._cst_module_protocol())
+
+        return module
+
+    def _protocol_class_for_model_with_assignments(
+        self, class_name: str, model: ItemsModel, rule_name: str
+    ) -> list[ast.stmt]:
+        """Generate a Protocol class plus post-class Label member sentinel assignments.
+
+        Returns a list: [ClassDef, assignment-stmts...].
+        """
+        klass = self._protocol_class_for_model(class_name, model, rule_name)
+        stmts: list[ast.stmt] = [klass]
+        # Emit post-class sentinel assignments for each Label member.
+        labels = sorted(model.labels.keys())
+        for label in labels:
+            python_name = label.upper()
+            canonical = f"{class_name}.Label.{python_name}"
+            stmts.append(pygen.stmt(f'{class_name}.Label.{python_name} = _ProtocolLabelMember("{canonical}")'))
+        return stmts
+
+    def _protocol_class_for_model(self, class_name: str, model: ItemsModel, rule_name: str) -> ast.ClassDef:
+        """Generate a Protocol class for a single CST node.
+
+        rule_name is required to emit the correct kind discriminant.
+        """
+        klass = pygen.klass(name=class_name, bases=["typing.Protocol"])
+
+        labels = sorted(model.labels.keys())
+
+        # Nested Label class (if this node has labels)
+        if labels:
+            label_class = pygen.klass(name="Label")
+            for label in labels:
+                # Use ClassVar[object] rather than ClassVar[Label] to avoid the
+                # self-referential annotation that pyright flags as reportUndefinedVariable
+                # inside the nested class body.  The only guarantee we need is attribute
+                # presence (so label == self.cst.Items.Label.NO_WS typechecks); the exact
+                # type of the constant is immaterial for Protocol-level checking.
+                # Value is set post-class by _protocol_class_for_model_with_assignments.
+                label_class.body.append(pygen.stmt(f"{label.upper()}: typing.ClassVar[object]"))
+            klass.body.append(label_class)
+
+        # kind discriminant: emit Literal[NodeKind.X] with runtime default value.
+        # The protocol-local NodeKind is now a real runtime enum, so the default is readable as
+        # cst.<Node>.kind on the class object, enabling native .kind narrowing (probe D4).
+        if rule_name and self.py_module.import_path:
+            member = self.node_kind_member_name(rule_name)
+            klass.body.append(pygen.stmt(f"kind: typing.Literal[NodeKind.{member}] = NodeKind.{member}"))
+        else:
+            klass.body.append(pygen.stmt("kind: object"))
+
+        klass.body.append(pygen.stmt("span: fltk.fegen.pyrt.terminalsrc.Span"))
+
+        child_annotation = self.protocol_annotation_for_model_types(model_types=model.types, class_name=class_name)
+
+        if labels:
+            klass.body.append(pygen.stmt(f"children: list[tuple[typing.Optional[Label], {child_annotation}]]"))
+        else:
+            # TODO(cst-protocol-label-free): label-free nodes use tuple[None, T] rather than
+            # tuple[Label | None, T], creating an asymmetry with label-bearing nodes.  Generic
+            # consumers iterating children of arbitrary node types must case-split on this.
+            # Fix by introducing a vacuous Label class for label-free nodes or a module-level
+            # _NoLabel alias so all children share the same tuple shape.
+            klass.body.append(pygen.stmt(f"children: list[tuple[None, {child_annotation}]]"))
+
+        label_annotation = "typing.Optional[Label]" if labels else "None"
+
+        append_fn = pygen.function(
+            "append", f"self, child: {child_annotation}, label: {label_annotation} = None", "None"
+        )
+        append_fn.body.append(pygen.stmt("..."))
+        klass.body.append(append_fn)
+
+        extend_fn = pygen.function(
+            "extend", f"self, children: typing.Iterable[{child_annotation}], label: {label_annotation} = None", "None"
+        )
+        extend_fn.body.append(pygen.stmt("..."))
+        klass.body.append(extend_fn)
+
+        if labels:
+            child_ret = f"tuple[typing.Optional[Label], {child_annotation}]"
+        else:
+            child_ret = f"tuple[None, {child_annotation}]"
+        child_fn = pygen.function("child", "self", child_ret)
+        child_fn.body.append(pygen.stmt("..."))
+        klass.body.append(child_fn)
+
+        for label in labels:
+            label_type_annotation = self.protocol_annotation_for_model_types(
+                model_types=model.labels[label], class_name=f"{class_name}.{label}"
+            )
+
+            # append_<label>
+            fn = pygen.function(f"append_{label}", f"self, child: {label_type_annotation}", "None")
+            fn.body.append(pygen.stmt("..."))
+            klass.body.append(fn)
+
+            # extend_<label>
+            fn = pygen.function(f"extend_{label}", f"self, children: typing.Iterable[{label_type_annotation}]", "None")
+            fn.body.append(pygen.stmt("..."))
+            klass.body.append(fn)
+
+            # children_<label>
+            fn = pygen.function(f"children_{label}", "self", f"typing.Iterator[{label_type_annotation}]")
+            fn.body.append(pygen.stmt("..."))
+            klass.body.append(fn)
+
+            # child_<label>
+            fn = pygen.function(f"child_{label}", "self", label_type_annotation)
+            fn.body.append(pygen.stmt("..."))
+            klass.body.append(fn)
+
+            # maybe_<label>
+            fn = pygen.function(f"maybe_{label}", "self", f"typing.Optional[{label_type_annotation}]")
+            fn.body.append(pygen.stmt("..."))
+            klass.body.append(fn)
+
+        return klass
+
+    def _protocol_span_class(self) -> ast.ClassDef:
+        """Generate a Protocol class for Span so consumers can write `case cst.Span.kind:`.
+
+        The Span protocol class exposes `kind` with a runtime Literal[SpanKind.SPAN] default,
+        allowing Shape 2 (`case cst.Span.kind:`) to narrow a child-union arm to Span.
+        """
+        klass = pygen.klass(name="Span", bases=["typing.Protocol"])
+        klass.body.append(
+            pygen.stmt(
+                "kind: typing.Literal[fltk.fegen.pyrt.terminalsrc.SpanKind.SPAN]"
+                " = fltk.fegen.pyrt.terminalsrc.SpanKind.SPAN"
+            )
+        )
+        return klass
+
+    def _cst_module_protocol(self) -> ast.ClassDef:
+        """Generate the CstModule Protocol describing the module-level surface."""
+        klass = pygen.klass(name="CstModule", bases=["typing.Protocol"])
+        for rule in self.rule_models:
+            node_name = self.protocol_node_name(rule)
+            class_name = self.class_name_for_rule_node(rule)
+            # @property returning type[<NodeName>] — covariant, satisfies concrete module's class attribute
+            prop_fn = pygen.function(class_name, "self", f"type[{node_name}]")
+            # Add @property decorator
+            prop_fn.decorator_list = [pygen.expr("property")]
+            prop_fn.body.append(pygen.stmt("..."))
+            klass.body.append(prop_fn)
+        # Span property: the Span protocol class is generated (not per-grammar-rule), but out-of-tree
+        # consumers may want to access it via a CstModule-typed binding.  Add it here.
+        span_prop = pygen.function("Span", "self", "type[Span]")
+        span_prop.decorator_list = [pygen.expr("property")]
+        span_prop.body.append(pygen.stmt("..."))
+        klass.body.append(span_prop)
+        return klass
 
     def model_for_rule(self, rule: gsm.Rule, inline_stack: list[str]) -> ItemsModel:
         if rule.name in inline_stack:

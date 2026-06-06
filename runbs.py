@@ -15,8 +15,8 @@ def parse_grammar() -> gsm.Grammar:
         terminals = terminalsrc.TerminalSource(grammarfile.read())
     parser = bootstrap_parser.Parser(terminalsrc=terminals)
     result = parser.apply__parse_grammar(0)
-    assert result  # noqa: S101
-    assert result.pos == len(terminals.terminals)  # noqa: S101
+    assert result
+    assert result.pos == len(terminals.terminals)
     cst2gsm = bootstrap2gsm.Cst2Gsm(terminals.terminals)
     grammar = cst2gsm.visit_grammar(result.result)
     return grammar

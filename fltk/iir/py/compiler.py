@@ -75,8 +75,8 @@ def iir_type_to_py_annotation(typ: iir.Type, context: "CompilerContext") -> str:
 
 
 def compile_class(klass: iir.ClassType, context: "CompilerContext") -> ast.ClassDef:
-    assert klass.cname is not None  # noqa: S101
-    assert all(bc.cname for bc in klass.base_classes)  # noqa: S101
+    assert klass.cname is not None
+    assert all(bc.cname for bc in klass.base_classes)
     result_ast = pygen.klass(name=klass.cname, bases=[cast(str, bc.cname) for bc in klass.base_classes])
     if klass.doc:
         result_ast.body.append(pygen.stmt(f'"""{klass.doc}"""'))
@@ -163,14 +163,12 @@ def compile_class(klass: iir.ClassType, context: "CompilerContext") -> ast.Class
     for method in klass.get_methods():
         result_ast.body.append(compile_function(method, context))
 
-    assert all(  # noqa: S101
-        isinstance(attr, iir.Field | iir.Method) for attr in klass.block.get_leaf_scope().identifiers.values()
-    )
+    assert all(isinstance(attr, iir.Field | iir.Method) for attr in klass.block.get_leaf_scope().identifiers.values())
     return result_ast
 
 
 def compile_function(function: iir.Function, context: "CompilerContext") -> ast.FunctionDef:
-    assert function.name is not None  # noqa: S101
+    assert function.name is not None
     params = [f"{p.name}: {iir_type_to_py_annotation(p.typ, context)}" for p in function.params]
     if isinstance(function, iir.Method):
         params = ["self", *params]
@@ -266,7 +264,7 @@ def compile_if(stmt: iir.If, context: "CompilerContext") -> Iterator[ast.stmt]:
         msg = "elif: {stmt}"
         raise NotImplementedError(msg)
     else:
-        assert isinstance(stmt.orelse, iir.Block)  # noqa: S101
+        assert isinstance(stmt.orelse, iir.Block)
         orelse = list(compile_block(stmt.orelse, context))
 
     if isinstance(stmt.condition, iir.LetExpr):

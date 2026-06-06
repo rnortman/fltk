@@ -41,9 +41,7 @@ class RustCstGenerator:
 
     def __init__(self, grammar: gsm.Grammar):
         context = create_default_context()
-        grammar_with_trivia = gsm.classify_trivia_rules(
-            gsm.add_trivia_rule_to_grammar(grammar, context)
-        )
+        grammar_with_trivia = gsm.classify_trivia_rules(gsm.add_trivia_rule_to_grammar(grammar, context))
         self._py_gen = CstGenerator(
             grammar=grammar_with_trivia,
             py_module=pyreg.Builtins,
@@ -57,10 +55,7 @@ class RustCstGenerator:
         # generated source (build-time code injection on the developer/CI host).
         for rule in self.grammar.rules:
             if not _IDENTIFIER_RE.match(rule.name):
-                msg = (
-                    f"Rule name {rule.name!r} is not a valid identifier "
-                    f"(must match {_IDENTIFIER_RE.pattern!r})"
-                )
+                msg = f"Rule name {rule.name!r} is not a valid identifier (must match {_IDENTIFIER_RE.pattern!r})"
                 raise ValueError(msg)
             for alt in rule.alternatives:
                 for item in alt.items:
@@ -105,6 +100,9 @@ class RustCstGenerator:
 
         parts.append(self._preamble())
 
+        # Emit NodeKind enum before node structs so the kind getter can reference it.
+        parts.append(self._node_kind_block())
+
         for class_name, labels in self._rule_info():
             parts.append(self._label_enum_block(class_name, labels))
             parts.append(self._node_block(class_name, labels))
@@ -134,6 +132,96 @@ class RustCstGenerator:
         )
 
     # ------------------------------------------------------------------
+    # NodeKind enum (one per grammar, before all node structs)
+    # ------------------------------------------------------------------
+
+    def _node_kind_variant_name(self, class_name: str) -> str:
+        """Return the CamelCase Rust variant name for a NodeKind member (same as class_name)."""
+        return class_name
+
+    def _node_kind_python_name(self, class_name: str) -> str:
+        """Return the ALL_CAPS Python-visible name for a NodeKind member."""
+        return class_name.upper()
+
+    def _node_kind_canonical_name(self, class_name: str) -> str:
+        """Return the canonical string for a NodeKind member: 'NodeKind.<UPPER>'."""
+        return f"NodeKind.{class_name.upper()}"
+
+    @staticmethod
+    def _emit_rust_cross_backend_eq_hash(lines: list[str], type_name: str) -> None:
+        """Append cross-backend __eq__ and __hash__ pymethods to ``lines``.
+
+        ``type_name`` is the Rust type used for the own-type fast path (e.g. ``NodeKind`` or
+        ``Items_Label``).  The generated __hash__ allocates a PyString per call because CPython's
+        salted string hash is required for cross-backend hash agreement (AC4); amortizing this via
+        GILOnceCell is deferred.
+        # TODO(canonical-name-cache): cache the isize per variant via GILOnceCell so the PyString
+        # allocation is paid at most once per variant per process.
+        """
+        lines.append("    fn __eq__(&self, py: Python<'_>, other: &Bound<'_, PyAny>) -> PyResult<PyObject> {")
+        lines.append(f"        if let Ok(other_kind) = other.extract::<{type_name}>() {{")
+        lines.append("            return Ok((self == &other_kind).into_pyobject(py)?.to_owned().unbind().into_any());")
+        lines.append("        }")
+        lines.append('        if let Ok(cn) = other.getattr(pyo3::intern!(py, "_fltk_canonical_name")) {')
+        lines.append("            if let Ok(cn_str) = cn.extract::<&str>() {")
+        lines.append(
+            "                return Ok((self.__repr__() == cn_str).into_pyobject(py)?.to_owned().unbind().into_any());"
+        )
+        lines.append("            }")
+        lines.append("        }")
+        lines.append("        Ok(py.NotImplemented())")
+        lines.append("    }")
+        lines.append("")
+        lines.append("    fn __hash__(&self, py: Python<'_>) -> PyResult<isize> {")
+        lines.append("        pyo3::types::PyAnyMethods::hash(")
+        lines.append("            pyo3::types::PyString::new(py, self.__repr__()).as_any()")
+        lines.append("        )")
+        lines.append("    }")
+
+    def _node_kind_block(self) -> str:
+        """Emit the module-level NodeKind enum + its #[pymethods] block."""
+        rule_info = self._rule_info()
+        lines: list[str] = []
+
+        lines.append(f"// {'─' * 75}")
+        lines.append("// NodeKind")
+        lines.append(f"// {'─' * 75}")
+        lines.append("")
+
+        lines.append('#[pyclass(frozen, name = "NodeKind")]')
+        lines.append("#[derive(Clone, PartialEq, Eq, Hash)]")
+        lines.append("pub enum NodeKind {")
+        for class_name, _labels in rule_info:
+            python_name = self._node_kind_python_name(class_name)
+            lines.append(f'    #[pyo3(name = "{python_name}")]')
+            lines.append(f"    {self._node_kind_variant_name(class_name)},")
+        lines.append("}")
+        lines.append("")
+
+        # pymethods block: __repr__, _fltk_canonical_name, __eq__, __hash__
+        lines.append("#[pymethods]")
+        lines.append("impl NodeKind {")
+        lines.append("    fn __repr__(&self) -> &'static str {")
+        lines.append("        match self {")
+        for class_name, _labels in rule_info:
+            variant = self._node_kind_variant_name(class_name)
+            canonical = self._node_kind_canonical_name(class_name)
+            lines.append(f'            NodeKind::{variant} => "{canonical}",')
+        lines.append("        }")
+        lines.append("    }")
+        lines.append("")
+        lines.append("    #[getter]")
+        lines.append("    fn _fltk_canonical_name(&self) -> &'static str {")
+        lines.append("        self.__repr__()")
+        lines.append("    }")
+        lines.append("")
+        self._emit_rust_cross_backend_eq_hash(lines, "NodeKind")
+        lines.append("}")
+        lines.append("")
+
+        return "\n".join(lines)
+
+    # ------------------------------------------------------------------
     # Label enum
     # ------------------------------------------------------------------
 
@@ -141,6 +229,7 @@ class RustCstGenerator:
         """Emit the label enum definition and its #[pymethods] block.
 
         For rules with no labels, emits nothing (Rust enums cannot have zero variants).
+        Cross-backend eq/hash is emitted via _emit_rust_cross_backend_eq_hash (shared with NodeKind).
         """
         if not labels:
             return ""
@@ -154,7 +243,7 @@ class RustCstGenerator:
         lines.append("")
 
         lines.append("#[allow(non_camel_case_types)]")
-        lines.append(f'#[pyclass(eq, hash, frozen, name = "{enum_name}")]')
+        lines.append(f'#[pyclass(frozen, name = "{enum_name}")]')
         lines.append("#[derive(Clone, PartialEq, Eq, Hash)]")
         lines.append(f"pub enum {enum_name} {{")
         for label in labels:
@@ -165,7 +254,7 @@ class RustCstGenerator:
         lines.append("}")
         lines.append("")
 
-        # __repr__ pymethods block
+        # pymethods block: __repr__, _fltk_canonical_name, __eq__, __hash__
         lines.append("#[pymethods]")
         lines.append(f"impl {enum_name} {{")
         lines.append("    fn __repr__(&self) -> &'static str {")
@@ -176,6 +265,13 @@ class RustCstGenerator:
             lines.append(f'            {enum_name}::{rust_variant} => "{class_name}.Label.{python_name}",')
         lines.append("        }")
         lines.append("    }")
+        lines.append("")
+        lines.append("    #[getter]")
+        lines.append("    fn _fltk_canonical_name(&self) -> &'static str {")
+        lines.append("        self.__repr__()")
+        lines.append("    }")
+        lines.append("")
+        self._emit_rust_cross_backend_eq_hash(lines, enum_name)
         lines.append("}")
         lines.append("")
 
@@ -208,6 +304,7 @@ class RustCstGenerator:
         lines.append(f"impl {class_name} {{")
 
         lines.extend(self._new_method(class_name))
+        lines.extend(self._kind_getter(class_name))
 
         if labels:
             lines.extend(self._label_classattr(class_name))
@@ -245,6 +342,17 @@ class RustCstGenerator:
             "            span: span_obj,",
             "            children: PyList::empty(py).unbind(),",
             "        })",
+            "    }",
+            "",
+        ]
+
+    def _kind_getter(self, class_name: str) -> list[str]:
+        """Emit a #[getter] fn kind(&self) -> NodeKind returning this node's NodeKind member."""
+        variant = self._node_kind_variant_name(class_name)
+        return [
+            "    #[getter]",
+            "    fn kind(&self) -> NodeKind {",
+            f"        NodeKind::{variant}",
             "    }",
             "",
         ]
@@ -314,112 +422,122 @@ class RustCstGenerator:
 
         lines: list[str] = []
 
-        lines.extend([
-            f"    fn append_{label}(&self, py: Python<'_>, child: PyObject) -> PyResult<()> {{",
-            f"        let label = {enum_name}::{rust_variant}.into_pyobject(py)?.into_any();",
-            "        let tup = PyTuple::new(py, [label, child.into_bound(py)])?;",
-            "        self.children.bind(py).append(tup)?;",
-            "        Ok(())",
-            "    }",
-            "",
-        ])
+        lines.extend(
+            [
+                f"    fn append_{label}(&self, py: Python<'_>, child: PyObject) -> PyResult<()> {{",
+                f"        let label = {enum_name}::{rust_variant}.into_pyobject(py)?.into_any();",
+                "        let tup = PyTuple::new(py, [label, child.into_bound(py)])?;",
+                "        self.children.bind(py).append(tup)?;",
+                "        Ok(())",
+                "    }",
+                "",
+            ]
+        )
 
-        lines.extend([
-            f"    fn extend_{label}(&self, py: Python<'_>, children: &Bound<'_, PyAny>) -> PyResult<()> {{",
-            f"        let label = {enum_name}::{rust_variant}.into_pyobject(py)?.into_any().unbind();",
-            "        let iter = children.try_iter()?;",
-            "        for child_result in iter {",
-            "            let child = child_result?;",
-            "            let tup = PyTuple::new(py, [label.bind(py).clone(), child])?;",
-            "            self.children.bind(py).append(tup)?;",
-            "        }",
-            "        Ok(())",
-            "    }",
-            "",
-        ])
+        lines.extend(
+            [
+                f"    fn extend_{label}(&self, py: Python<'_>, children: &Bound<'_, PyAny>) -> PyResult<()> {{",
+                f"        let label = {enum_name}::{rust_variant}.into_pyobject(py)?.into_any().unbind();",
+                "        let iter = children.try_iter()?;",
+                "        for child_result in iter {",
+                "            let child = child_result?;",
+                "            let tup = PyTuple::new(py, [label.bind(py).clone(), child])?;",
+                "            self.children.bind(py).append(tup)?;",
+                "        }",
+                "        Ok(())",
+                "    }",
+                "",
+            ]
+        )
 
         # TODO(perf-label-identity-comparison): the generated `tup.get_item(0)?.eq(&label_obj)?`
         # below performs an O(children) linear scan with equality comparison per access.
         # Identity comparison (`is`) or pre-grouped storage would be O(1). Defer until
         # profiling confirms a bottleneck; faithfully reproduces the Phase 2 template.
-        lines.extend([
-            f"    fn children_{label}(&self, py: Python<'_>) -> PyResult<Py<PyList>> {{",
-            f"        let label_obj = {enum_name}::{rust_variant}.into_pyobject(py)?;",
-            "        let result = PyList::empty(py);",
-            "        for (idx, item) in self.children.bind(py).iter().enumerate() {",
-            "            let tup = item.downcast::<PyTuple>().map_err(|e| {",
-            "                PyTypeError::new_err(format!(",
-            f'                    "{class_name}.children_{label}: children[{{idx}}] is not a tuple: {{e}}"',
-            "                ))",
-            "            })?;",
-            "            if tup.get_item(0)?.eq(&label_obj)? {",
-            "                result.append(tup.get_item(1)?)?;",
-            "            }",
-            "        }",
-            "        Ok(result.unbind())",
-            "    }",
-            "",
-        ])
+        lines.extend(
+            [
+                f"    fn children_{label}(&self, py: Python<'_>) -> PyResult<Py<PyList>> {{",
+                f"        let label_obj = {enum_name}::{rust_variant}.into_pyobject(py)?;",
+                "        let result = PyList::empty(py);",
+                "        for (idx, item) in self.children.bind(py).iter().enumerate() {",
+                "            let tup = item.downcast::<PyTuple>().map_err(|e| {",
+                "                PyTypeError::new_err(format!(",
+                f'                    "{class_name}.children_{label}: children[{{idx}}] is not a tuple: {{e}}"',
+                "                ))",
+                "            })?;",
+                "            if tup.get_item(0)?.eq(&label_obj)? {",
+                "                result.append(tup.get_item(1)?)?;",
+                "            }",
+                "        }",
+                "        Ok(result.unbind())",
+                "    }",
+                "",
+            ]
+        )
 
-        lines.extend([
-            f"    fn child_{label}(&self, py: Python<'_>) -> PyResult<PyObject> {{",
-            f"        let label_obj = {enum_name}::{rust_variant}.into_pyobject(py)?;",
-            "        let mut found: Option<PyObject> = None;",
-            "        let mut count = 0usize;",
-            "        for (idx, item) in self.children.bind(py).iter().enumerate() {",
-            "            let tup = item.downcast::<PyTuple>().map_err(|e| {",
-            "                PyTypeError::new_err(format!(",
-            f'                    "{class_name}.child_{label}: children[{{idx}}] is not a tuple: {{e}}"',
-            "                ))",
-            "            })?;",
-            "            if tup.get_item(0)?.eq(&label_obj)? {",
-            "                count += 1;",
-            "                if count == 1 {",
-            "                    found = Some(tup.get_item(1)?.unbind());",
-            "                } else {",
-            "                    break;",
-            "                }",
-            "            }",
-            "        }",
-            "        if count != 1 {",
-            "            return Err(PyValueError::new_err(format!(",
-            f'                "Expected one {label} child but have {{count}}"',
-            "            )));",
-            "        }",
-            f'        Ok(found.expect("invariant: {class_name}.child_{label}: count==1 but found==None; logic error"))',
-            "    }",
-            "",
-        ])
+        lines.extend(
+            [
+                f"    fn child_{label}(&self, py: Python<'_>) -> PyResult<PyObject> {{",
+                f"        let label_obj = {enum_name}::{rust_variant}.into_pyobject(py)?;",
+                "        let mut found: Option<PyObject> = None;",
+                "        let mut count = 0usize;",
+                "        for (idx, item) in self.children.bind(py).iter().enumerate() {",
+                "            let tup = item.downcast::<PyTuple>().map_err(|e| {",
+                "                PyTypeError::new_err(format!(",
+                f'                    "{class_name}.child_{label}: children[{{idx}}] is not a tuple: {{e}}"',
+                "                ))",
+                "            })?;",
+                "            if tup.get_item(0)?.eq(&label_obj)? {",
+                "                count += 1;",
+                "                if count == 1 {",
+                "                    found = Some(tup.get_item(1)?.unbind());",
+                "                } else {",
+                "                    break;",
+                "                }",
+                "            }",
+                "        }",
+                "        if count != 1 {",
+                "            return Err(PyValueError::new_err(format!(",
+                f'                "Expected one {label} child but have {{count}}"',
+                "            )));",
+                "        }",
+                f'        Ok(found.expect("invariant: {class_name}.child_{label}: count==1 but found==None; logic error"))',  # noqa: E501
+                "    }",
+                "",
+            ]
+        )
 
-        lines.extend([
-            f"    fn maybe_{label}(&self, py: Python<'_>) -> PyResult<Option<PyObject>> {{",
-            f"        let label_obj = {enum_name}::{rust_variant}.into_pyobject(py)?;",
-            "        let mut found: Option<PyObject> = None;",
-            "        let mut count = 0usize;",
-            "        for (idx, item) in self.children.bind(py).iter().enumerate() {",
-            "            let tup = item.downcast::<PyTuple>().map_err(|e| {",
-            "                PyTypeError::new_err(format!(",
-            f'                    "{class_name}.maybe_{label}: children[{{idx}}] is not a tuple: {{e}}"',
-            "                ))",
-            "            })?;",
-            "            if tup.get_item(0)?.eq(&label_obj)? {",
-            "                count += 1;",
-            "                if count == 1 {",
-            "                    found = Some(tup.get_item(1)?.unbind());",
-            "                } else {",
-            "                    break;",
-            "                }",
-            "            }",
-            "        }",
-            "        if count > 1 {",
-            "            return Err(PyValueError::new_err(",
-            f'                "Expected at most one {label} child but have at least 2",',
-            "            ));",
-            "        }",
-            "        Ok(found)",
-            "    }",
-            "",
-        ])
+        lines.extend(
+            [
+                f"    fn maybe_{label}(&self, py: Python<'_>) -> PyResult<Option<PyObject>> {{",
+                f"        let label_obj = {enum_name}::{rust_variant}.into_pyobject(py)?;",
+                "        let mut found: Option<PyObject> = None;",
+                "        let mut count = 0usize;",
+                "        for (idx, item) in self.children.bind(py).iter().enumerate() {",
+                "            let tup = item.downcast::<PyTuple>().map_err(|e| {",
+                "                PyTypeError::new_err(format!(",
+                f'                    "{class_name}.maybe_{label}: children[{{idx}}] is not a tuple: {{e}}"',
+                "                ))",
+                "            })?;",
+                "            if tup.get_item(0)?.eq(&label_obj)? {",
+                "                count += 1;",
+                "                if count == 1 {",
+                "                    found = Some(tup.get_item(1)?.unbind());",
+                "                } else {",
+                "                    break;",
+                "                }",
+                "            }",
+                "        }",
+                "        if count > 1 {",
+                "            return Err(PyValueError::new_err(",
+                f'                "Expected at most one {label} child but have at least 2",',
+                "            ));",
+                "        }",
+                "        Ok(found)",
+                "    }",
+                "",
+            ]
+        )
 
         return lines
 
@@ -443,7 +561,7 @@ class RustCstGenerator:
     def _hash_method(self, class_name: str) -> list[str]:
         return [
             "    fn __hash__(&self) -> PyResult<isize> {",
-            f'        Err(PyTypeError::new_err("unhashable type: \'{class_name}\'"))',
+            f"        Err(PyTypeError::new_err(\"unhashable type: '{class_name}'\"))",
             "    }",
             "",
         ]
@@ -467,6 +585,8 @@ class RustCstGenerator:
     def _register_classes_fn(self) -> str:
         lines: list[str] = []
         lines.append("pub fn register_classes(module: &Bound<'_, PyModule>) -> PyResult<()> {")
+        # NodeKind must be registered before node structs (whose kind getter returns it).
+        lines.append("    module.add_class::<NodeKind>()?;")
         for class_name, labels in self._rule_info():
             if labels:
                 enum_name = f"{class_name}_Label"

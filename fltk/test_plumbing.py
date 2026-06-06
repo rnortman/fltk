@@ -4,12 +4,15 @@ import importlib
 import inspect
 import sys
 import types
+from typing import TYPE_CHECKING, cast
 from unittest import mock
 
 import pytest
 
 import fltk.plumbing as fltk_plumbing_mod
-from fltk.fegen import fltk_cst as _fltk_cst
+
+if TYPE_CHECKING:
+    from fltk.fegen import fltk_cst_protocol as cst
 from fltk.fegen import fltk_parser as _fltk_parser
 from fltk.fegen.fltk2gsm import Cst2Gsm
 from fltk.fegen.pyrt import terminalsrc as _terminalsrc
@@ -546,43 +549,38 @@ class TestParseGrammarRustBackend:
         assert "does_not_exist_pkg_xyz.nope" in str(exc_info.value)
 
 
-class TestCst2GsmDefaultNamespace:
-    """Guard the DI refactor's backward-compatibility guarantee for Cst2Gsm.
-
-    Cst2Gsm(terminals) with no cst= argument must use fltk_cst as its namespace
-    and produce the same gsm.Grammar output as the pre-DI baseline.
-    """
+class TestCst2GsmNoSelfCst:
+    """Verify Cst2Gsm has no self.cst after AC10 removal, and produces correct output."""
 
     _GRAMMAR_SRC = """\
 expr := term , ("+" , term)* ;
 term := value:/[0-9]+/ ;
 """
 
-    def test_default_cst_is_fltk_cst(self):
-        """Cst2Gsm() with no cst= uses fltk_cst as the namespace object."""
+    def test_no_cst_attribute(self):
+        """Cst2Gsm instance has no self.cst attribute after removal."""
         terminals = _terminalsrc.TerminalSource(self._GRAMMAR_SRC)
         cst2gsm = Cst2Gsm(terminals.terminals)
-        assert cst2gsm.cst is _fltk_cst
+        assert not hasattr(cst2gsm, "cst"), "self.cst should be absent from Cst2Gsm after AC10 removal"
 
-    def test_default_namespace_produces_correct_grammar(self):
-        """Cst2Gsm(terminals) with no cst= produces the same gsm.Grammar as the baseline parse_grammar call."""
+    def test_produces_correct_grammar(self):
+        """Cst2Gsm(terminals) produces the same gsm.Grammar as the baseline parse_grammar call."""
         # Build the CST via the Python parser.
         terminals = _terminalsrc.TerminalSource(self._GRAMMAR_SRC)
         parser = _fltk_parser.Parser(terminalsrc=terminals)
         result = parser.apply__parse_grammar(0)
         assert result is not None and result.result is not None
 
-        # Invoke Cst2Gsm with no cst= (default path).
         cst2gsm_default = Cst2Gsm(terminals.terminals)
-        grammar_default = cst2gsm_default.visit_grammar(result.result)
+        # result.result is typed Any (ParseResult.cst: Any); cast to satisfy visit_grammar's annotation.
+        # TODO(parse-result-typed): make ParseResult generic so callers don't need individual casts.
+        grammar_default = cst2gsm_default.visit_grammar(cast("cst.Grammar", result.result))
 
         # Compare to the baseline produced by parse_grammar (also Python default).
         grammar_baseline = parse_grammar(self._GRAMMAR_SRC)
 
         assert grammar_default is not None
-        assert len(grammar_default.rules) == len(grammar_baseline.rules)
-        for r_default, r_baseline in zip(grammar_default.rules, grammar_baseline.rules, strict=True):
-            assert r_default.name == r_baseline.name
+        assert grammar_default == grammar_baseline
 
 
 class TestNoRuntimeCompilation:

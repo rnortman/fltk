@@ -881,9 +881,7 @@ class Parser:
     ) -> fltk.fegen.pyrt.memo.ApplyResult[int, fltk.unparse.unparsefmt_cst.Render] | None:
         return self.apply__parse_render(pos=pos)
 
-    def parse_group(
-        self, pos: int
-    ) -> fltk.fegen.pyrt.memo.ApplyResult[int, fltk.unparse.unparsefmt_cst.Group] | None:
+    def parse_group(self, pos: int) -> fltk.fegen.pyrt.memo.ApplyResult[int, fltk.unparse.unparsefmt_cst.Group] | None:
         if alt0 := self.parse_group__alt0(pos=pos):
             return alt0
         if alt1 := self.parse_group__alt1(pos=pos):
@@ -987,9 +985,7 @@ class Parser:
     ) -> fltk.fegen.pyrt.memo.ApplyResult[int, fltk.fegen.pyrt.terminalsrc.Span] | None:
         return self.consume_literal(pos=pos, literal=";")
 
-    def parse_nest(
-        self, pos: int
-    ) -> fltk.fegen.pyrt.memo.ApplyResult[int, fltk.unparse.unparsefmt_cst.Nest] | None:
+    def parse_nest(self, pos: int) -> fltk.fegen.pyrt.memo.ApplyResult[int, fltk.unparse.unparsefmt_cst.Nest] | None:
         if alt0 := self.parse_nest__alt0(pos=pos):
             return alt0
         if alt1 := self.parse_nest__alt1(pos=pos):
@@ -1128,9 +1124,7 @@ class Parser:
     ) -> fltk.fegen.pyrt.memo.ApplyResult[int, fltk.fegen.pyrt.terminalsrc.Span] | None:
         return self.consume_literal(pos=pos, literal=";")
 
-    def parse_join(
-        self, pos: int
-    ) -> fltk.fegen.pyrt.memo.ApplyResult[int, fltk.unparse.unparsefmt_cst.Join] | None:
+    def parse_join(self, pos: int) -> fltk.fegen.pyrt.memo.ApplyResult[int, fltk.unparse.unparsefmt_cst.Join] | None:
         if alt0 := self.parse_join__alt0(pos=pos):
             return alt0
         return None
@@ -1436,9 +1430,7 @@ class Parser:
     ) -> fltk.fegen.pyrt.memo.ApplyResult[int, fltk.unparse.unparsefmt_cst.Literal] | None:
         return self.apply__parse_literal(pos=pos)
 
-    def parse_after(
-        self, pos: int
-    ) -> fltk.fegen.pyrt.memo.ApplyResult[int, fltk.unparse.unparsefmt_cst.After] | None:
+    def parse_after(self, pos: int) -> fltk.fegen.pyrt.memo.ApplyResult[int, fltk.unparse.unparsefmt_cst.After] | None:
         if alt0 := self.parse_after__alt0(pos=pos):
             return alt0
         return None
@@ -1640,9 +1632,7 @@ class Parser:
     ) -> fltk.fegen.pyrt.memo.ApplyResult[int, fltk.fegen.pyrt.terminalsrc.Span] | None:
         return self.consume_literal(pos=pos, literal=";")
 
-    def parse_omit(
-        self, pos: int
-    ) -> fltk.fegen.pyrt.memo.ApplyResult[int, fltk.unparse.unparsefmt_cst.Omit] | None:
+    def parse_omit(self, pos: int) -> fltk.fegen.pyrt.memo.ApplyResult[int, fltk.unparse.unparsefmt_cst.Omit] | None:
         if alt0 := self.parse_omit__alt0(pos=pos):
             return alt0
         return None

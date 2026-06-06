@@ -5,7 +5,7 @@ Generates parsers from FLTK grammar files with options for trivia handling.
 
 import ast
 from pathlib import Path
-from typing import Annotated
+from typing import TYPE_CHECKING, Annotated, cast
 
 import typer
 
@@ -15,6 +15,9 @@ from fltk.fegen.pyrt import errors, terminalsrc
 from fltk.iir.context import CompilerContext, create_default_context
 from fltk.iir.py import compiler
 from fltk.iir.py import reg as pyreg
+
+if TYPE_CHECKING:
+    from fltk.fegen import fltk_cst_protocol as cst
 
 app = typer.Typer(
     name="genparser",
@@ -55,7 +58,9 @@ def _read_and_parse_grammar(grammar_file: Path) -> gsm.Grammar:
         raise typer.Exit(1)
 
     cst2gsm = fltk2gsm.Cst2Gsm(terminals.terminals)
-    return cst2gsm.visit_grammar(result.result)
+    # result.result is typed Any (ParseResult.cst: Any); cast to satisfy visit_grammar's annotation.
+    # TODO(parse-result-typed): make ParseResult generic so callers don't need individual casts.
+    return cst2gsm.visit_grammar(cast("cst.Grammar", result.result))
 
 
 def parse_grammar_file(grammar_file: Path) -> gsm.Grammar:
@@ -178,11 +183,31 @@ def generate(
     cstgen = gsm2tree.CstGenerator(grammar=grammar, py_module=cst_module, context=create_default_context())
 
     cst_mod = cstgen.gen_py_module()
+    cst_text = ast.unparse(cst_mod)  # generate before opening file so a generation error doesn't leave a partial file
     try:
-        with shared_cst.open("w") as f:
-            f.write(ast.unparse(cst_mod))
+        with shared_cst.open("w", newline="\n") as f:
+            f.write(cst_text)
     except OSError as e:
         typer.echo(f"Error: Failed to write shared CST file '{shared_cst}': {e}", err=True)
+        raise typer.Exit(1) from e
+
+    shared_cst_protocol = output_dir / f"{base_name}_cst_protocol.py"
+    if verbose:
+        typer.echo("Generating CST Protocol module...")
+    # Generate before opening the file so any AST construction error doesn't leave a partial artifact.
+    protocol_mod = cstgen.gen_protocol_module()
+    # Prepend file-level ruff suppressions:
+    # N802: CstModule @property methods have PascalCase names matching module attributes (intentional).
+    # E501 is NOT added here: `make fix` reformats the generated file so no lines exceed the limit,
+    # and including E501 causes RUF100 (unused noqa) after `make fix`.
+    # F821 is NOT added here: nested Label references resolve via `from __future__ import annotations`
+    # and ruff does not raise F821 for them; including F821 causes RUF100 (unused noqa) after `make fix`.
+    protocol_text = "# ruff: noqa: N802\n" + ast.unparse(protocol_mod)
+    try:
+        with shared_cst_protocol.open("w", newline="\n") as f:
+            f.write(protocol_text)
+    except OSError as e:
+        typer.echo(f"Error: Failed to write CST Protocol file '{shared_cst_protocol}': {e}", err=True)
         raise typer.Exit(1) from e
 
     # Determine which parsers to generate
@@ -251,6 +276,8 @@ def gen_rust_cst(
     Example:
         genparser gen-rust-cst grammar.fltkg output/cst.rs
     """
+    # TODO(rust-cst-pyi): also emit a .pyi stub for the generated Rust extension here,
+    # derived from the same GSM, so pyright can verify the PyO3 surface satisfies CstModule.
     grammar = _parse_grammar_raw(grammar_file)
     src = gsm2tree_rs.RustCstGenerator(grammar).generate()
     try:

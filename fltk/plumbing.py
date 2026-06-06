@@ -12,7 +12,7 @@ import importlib
 import sys
 import types
 from pathlib import Path
-from typing import TYPE_CHECKING, Optional
+from typing import TYPE_CHECKING, Optional, cast
 
 import fltk
 from fltk.fegen import fltk2gsm, fltk_parser, gsm, gsm2parser, gsm2tree
@@ -30,6 +30,8 @@ from fltk.unparse.unparsefmt_parser import Parser as FmtParser
 
 if TYPE_CHECKING:
     from typing import Any
+
+    from fltk.fegen import fltk_cst_protocol as cst
 
 # Module-scope cache for the fegen grammar (loaded at most once per process).
 # Using a list rather than a bare variable to avoid PLW0603 (global statement).
@@ -101,9 +103,7 @@ def _load_rust_cst_classes(module_name: str) -> dict[str, object]:
         # init must propagate as themselves.
         raise RustBackendUnavailableError(module_name) from exc
     classes: dict[str, object] = {
-        name: obj
-        for name, obj in vars(module).items()
-        if not name.startswith("_") and isinstance(obj, type)
+        name: obj for name, obj in vars(module).items() if not name.startswith("_") and isinstance(obj, type)
     }
     if not classes:
         raise RustBackendUnavailableError(module_name, detail="module loaded but exposes no CST classes")
@@ -144,7 +144,9 @@ def parse_grammar(grammar_text: str, *, rust_fegen_cst_module: str | None = None
             raise ValueError(msg)
 
         cst2gsm = fltk2gsm.Cst2Gsm(terminals.terminals)
-        return cst2gsm.visit_grammar(result.result)
+        # result.result is typed Any (ParseResult.cst: Any); cast to satisfy visit_grammar's annotation.
+        # TODO(parse-result-typed): make ParseResult generic so callers don't need individual casts.
+        return cst2gsm.visit_grammar(cast("cst.Grammar", result.result))
     else:
         # Rust backend: build a fegen parser bound to the Rust fegen CST module.
         # _load_fegen_grammar() calls parse_grammar with no rust_fegen_cst_module → no recursion.
@@ -154,7 +156,7 @@ def parse_grammar(grammar_text: str, *, rust_fegen_cst_module: str | None = None
         if rust_fegen_cst_module not in _fegen_rust_parser_cache:
             fegen_grammar = _load_fegen_grammar()
             _fegen_rust_parser_cache[rust_fegen_cst_module] = generate_parser(
-                fegen_grammar, rust_cst_module=rust_fegen_cst_module
+                fegen_grammar, capture_trivia=False, rust_cst_module=rust_fegen_cst_module
             )
         pr = _fegen_rust_parser_cache[rust_fegen_cst_module]
         parser = pr.parser_class(terminalsrc=terminals)
@@ -169,9 +171,10 @@ def parse_grammar(grammar_text: str, *, rust_fegen_cst_module: str | None = None
             msg = f"Grammar parse failed:\n{error_msg}"
             raise ValueError(msg)
 
-        # Inject the same backend's CST namespace so isinstance dispatch in Cst2Gsm resolves.
-        cst2gsm = fltk2gsm.Cst2Gsm(terminals.terminals, cst=pr.cst_module)
-        return cst2gsm.visit_grammar(result.result)
+        cst2gsm = fltk2gsm.Cst2Gsm(terminals.terminals)
+        # result.result is typed Any (ParseResult.cst: Any); cast to satisfy visit_grammar's annotation.
+        # TODO(parse-result-typed): make ParseResult generic so callers don't need individual casts.
+        return cst2gsm.visit_grammar(cast("cst.Grammar", result.result))
 
 
 def parse_grammar_file(grammar_path: Path, *, rust_fegen_cst_module: str | None = None) -> gsm.Grammar:

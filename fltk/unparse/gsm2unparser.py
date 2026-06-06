@@ -657,7 +657,7 @@ class UnparserGenerator:
             name=base_name,
             result_type=result_type,
         )
-        assert path not in self.unparsers  # noqa: S101
+        assert path not in self.unparsers
         self.unparsers[path] = unparser_info
         return unparser_info
 
@@ -1228,7 +1228,7 @@ class UnparserGenerator:
                 )
 
                 # Check for single newline (preserve line structure)
-                assert isinstance(if_has_blank_lines.orelse, iir.Block)  # noqa: S101
+                assert isinstance(if_has_blank_lines.orelse, iir.Block)
                 has_newline = iir.BinOp(
                     lhs=newline_count,
                     op=">=",
@@ -1246,7 +1246,7 @@ class UnparserGenerator:
                 )
 
                 # No newlines - use configured spacing
-                assert isinstance(if_has_newline.orelse, iir.Block)  # noqa: S101
+                assert isinstance(if_has_newline.orelse, iir.Block)
                 self._add_default_separator_spec(
                     if_has_newline.orelse,
                     accumulator_var,
@@ -1273,7 +1273,7 @@ class UnparserGenerator:
                 )
 
                 # No newlines - use configured spacing
-                assert isinstance(if_has_newline.orelse, iir.Block)  # noqa: S101
+                assert isinstance(if_has_newline.orelse, iir.Block)
                 self._add_default_separator_spec(
                     if_has_newline.orelse,
                     accumulator_var,
@@ -1282,7 +1282,7 @@ class UnparserGenerator:
                 )
 
             # Handle the case where no whitespace span was found
-            assert isinstance(if_whitespace.orelse, iir.Block)  # noqa: S101
+            assert isinstance(if_whitespace.orelse, iir.Block)
             if separator == gsm.Separator.WS_REQUIRED:
                 # For WS_REQUIRED, fail if no whitespace found
                 if_whitespace.orelse.return_(iir.LiteralNull())
@@ -1297,7 +1297,7 @@ class UnparserGenerator:
 
             # Also handle out of bounds case for WS_REQUIRED
             if separator == gsm.Separator.WS_REQUIRED:
-                assert isinstance(if_in_bounds.orelse, iir.Block)  # noqa: S101
+                assert isinstance(if_in_bounds.orelse, iir.Block)
                 if_in_bounds.orelse.return_(iir.LiteralNull())
 
             return
@@ -1374,7 +1374,7 @@ class UnparserGenerator:
         )
 
         # Else: no preservable content, but check for blank lines
-        assert isinstance(if_has_preservable.orelse, iir.Block)  # noqa: S101
+        assert isinstance(if_has_preservable.orelse, iir.Block)
         no_preserve_block = if_has_preservable.orelse
 
         # Get preserve_blanks from config (generation-time constant)
@@ -1404,7 +1404,7 @@ class UnparserGenerator:
             )
 
             # Check for single newline (preserve line structure)
-            assert isinstance(if_has_blank_lines.orelse, iir.Block)  # noqa: S101
+            assert isinstance(if_has_blank_lines.orelse, iir.Block)
             has_newline = iir.BinOp(
                 lhs=newline_count,
                 op=">=",
@@ -1422,7 +1422,7 @@ class UnparserGenerator:
             )
 
             # No newlines - use configured spacing
-            assert isinstance(if_has_newline.orelse, iir.Block)  # noqa: S101
+            assert isinstance(if_has_newline.orelse, iir.Block)
             self._add_default_separator_spec(
                 if_has_newline.orelse,
                 accumulator_var,
@@ -1449,7 +1449,7 @@ class UnparserGenerator:
         )
 
         # Else: child is not trivia, add default spacing
-        assert isinstance(if_trivia.orelse, iir.Block)  # noqa: S101
+        assert isinstance(if_trivia.orelse, iir.Block)
         self._add_default_separator_spec(
             if_trivia.orelse,
             accumulator_var,
@@ -1458,7 +1458,7 @@ class UnparserGenerator:
         )
 
         # Also handle out of bounds case - add default spacing
-        assert isinstance(if_in_bounds.orelse, iir.Block)  # noqa: S101
+        assert isinstance(if_in_bounds.orelse, iir.Block)
         self._add_default_separator_spec(
             if_in_bounds.orelse,
             accumulator_var,
@@ -1671,7 +1671,7 @@ class UnparserGenerator:
                     new_accumulator = accumulator_var.load().method.add_non_trivia.call(spacing_value)
                     method.block.assign(accumulator_var.store(), new_accumulator)
                 elif not isinstance(item_disposition, Omit):
-                    assert isinstance(item_disposition, Normal)  # noqa: S101
+                    assert isinstance(item_disposition, Normal)
                     result_accumulator = self._extract_result_accumulator(unparse_result_var)
                     method.block.assign(accumulator_var.store(), result_accumulator)
                     self._gen_after_item_spacing(method.block, accumulator_var, grammar_item, rule_name)
@@ -1687,7 +1687,7 @@ class UnparserGenerator:
                     new_accumulator = accumulator_var.load().method.add_non_trivia.call(spacing_value)
                     if_not_none.block.assign(accumulator_var.store(), new_accumulator)
                 elif not isinstance(item_disposition, Omit):
-                    assert isinstance(item_disposition, Normal)  # noqa: S101
+                    assert isinstance(item_disposition, Normal)
                     result_accumulator = self._extract_result_accumulator(unparse_result_var)
                     if_not_none.block.assign(accumulator_var.store(), result_accumulator)
 

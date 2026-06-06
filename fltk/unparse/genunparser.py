@@ -3,9 +3,13 @@
 import ast
 import sys
 from pathlib import Path
+from typing import TYPE_CHECKING, cast
 
 from fltk.fegen import fltk2gsm, fltk_parser, gsm
 from fltk.fegen.pyrt import errors, terminalsrc
+
+if TYPE_CHECKING:
+    from fltk.fegen import fltk_cst_protocol as cst
 from fltk.iir.context import create_default_context
 from fltk.iir.py import compiler
 from fltk.unparse import fmt_config, toy_trivia_parser, unparsefmt_parser
@@ -41,9 +45,10 @@ def parse_grammar_file(grammar_path: Path) -> tuple[gsm.Grammar, str]:
         msg = f"Failed to parse grammar file '{grammar_path}':\n{error_msg}"
         raise RuntimeError(msg)
 
-    # Convert CST to GSM
     cst2gsm = fltk2gsm.Cst2Gsm(terminals.terminals)
-    grammar = cst2gsm.visit_grammar(result.result)
+    # result.result is typed Any (ParseResult.cst: Any); cast to satisfy visit_grammar's annotation.
+    # TODO(parse-result-typed): make ParseResult generic so callers don't need individual casts.
+    grammar = cst2gsm.visit_grammar(cast("cst.Grammar", result.result))
 
     return grammar, terminals.terminals
 

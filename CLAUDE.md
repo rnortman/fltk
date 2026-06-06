@@ -6,6 +6,20 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 FLTK (Formal Language ToolKit) is a Python library for building parsers and compilers. It uses a custom grammar format (.fltkg files) to generate parsers that produce Concrete Syntax Trees (CST).
 
+## CRITICAL: Generated Output is Public API for Out-of-Tree Consumers
+
+FLTK's PRIMARY purpose is to be used by OTHER, OUT-OF-TREE applications. External downstream apps use FLTK to generate their own parsers and CST node classes, then write application code against those generated artifacts. The generated CST node classes, parsers, label enums, accessor methods, and their type-annotation and equality/comparison surfaces are **public API consumed by real downstream consumers who live outside this repo**.
+
+**When evaluating whether a change is "needed" or "breaking": the absence of an in-tree consumer is NOT evidence the change is safe.** The real consumers live outside this repository and are not visible here.
+
+Concrete consequences:
+
+- Renaming generated public symbols (e.g. adding a `Node` suffix to class names) is a **breaking change** for downstream code.
+- Changing the type-annotation surface in ways that force downstream callers to update every function or parameter annotation is also a breaking change.
+- The explicit goal of the Rust-backend work is a near-drop-in replacement for the Python backend: downstream consumers may need to update import statements, but must **not** be forced to edit their type annotations or call sites wholesale.
+- Backward compatibility and cross-backend (Python/Rust) behavioral equivalence must be evaluated from the perspective of out-of-tree consumers, not just FLTK's self-hosting tests.
+- Do not rename generated public symbols or otherwise cause annotation churn unless the need is explicit, justified, and unavoidable — and even then it must be a deliberate, called-out decision, not an incidental side effect of an implementation choice.
+
 ## Development Commands
 
 ### Testing
@@ -37,6 +51,16 @@ uv run ruff check .
 # Fix auto-fixable issues
 uv run ruff check --fix .
 ```
+
+### Generated Code and Formatting
+
+Generated code (emitted by `fltk/fegen/*` generators) is not expected to pass ruff formatting checks straight out of the generator — this is by design. The intended workflow after regenerating code is:
+
+1. Run the generator.
+2. Run `make fix` to normalize formatting.
+3. Commit the result.
+
+`make check` (the precommit gate) enforces that committed generated code is clean. "The generator emits unformatted code" is not a bug; the regen → `make fix` → commit path is the intended flow.
 
 ### Build System
 The project uses maturin (mixed Python/Rust), uv, and Bazel:

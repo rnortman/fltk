@@ -1,6 +1,3 @@
-// TODO(fegen-cst-rs-single-source): this file is identical to src/cst_fegen.rs in the repo root.
-// The two copies must be kept in sync manually; silent divergence is possible.  Fix: remove this
-// file and generate/copy it from src/cst_fegen.rs at build time (via Makefile or include! macro).
 use pyo3::exceptions::{PyTypeError, PyValueError};
 use pyo3::prelude::*;
 use pyo3::sync::GILOnceCell;
@@ -12,11 +9,93 @@ use pyo3::PyTypeInfo;
 static UNKNOWN_SPAN_CACHE: GILOnceCell<PyObject> = GILOnceCell::new();
 
 // ───────────────────────────────────────────────────────────────────────────
+// NodeKind
+// ───────────────────────────────────────────────────────────────────────────
+
+#[pyclass(frozen, name = "NodeKind")]
+#[derive(Clone, PartialEq, Eq, Hash)]
+pub enum NodeKind {
+    #[pyo3(name = "GRAMMAR")]
+    Grammar,
+    #[pyo3(name = "RULE")]
+    Rule,
+    #[pyo3(name = "ALTERNATIVES")]
+    Alternatives,
+    #[pyo3(name = "ITEMS")]
+    Items,
+    #[pyo3(name = "ITEM")]
+    Item,
+    #[pyo3(name = "TERM")]
+    Term,
+    #[pyo3(name = "DISPOSITION")]
+    Disposition,
+    #[pyo3(name = "QUANTIFIER")]
+    Quantifier,
+    #[pyo3(name = "IDENTIFIER")]
+    Identifier,
+    #[pyo3(name = "RAWSTRING")]
+    RawString,
+    #[pyo3(name = "LITERAL")]
+    Literal,
+    #[pyo3(name = "TRIVIA")]
+    Trivia,
+    #[pyo3(name = "LINECOMMENT")]
+    LineComment,
+    #[pyo3(name = "BLOCKCOMMENT")]
+    BlockComment,
+}
+
+#[pymethods]
+impl NodeKind {
+    fn __repr__(&self) -> &'static str {
+        match self {
+            NodeKind::Grammar => "NodeKind.GRAMMAR",
+            NodeKind::Rule => "NodeKind.RULE",
+            NodeKind::Alternatives => "NodeKind.ALTERNATIVES",
+            NodeKind::Items => "NodeKind.ITEMS",
+            NodeKind::Item => "NodeKind.ITEM",
+            NodeKind::Term => "NodeKind.TERM",
+            NodeKind::Disposition => "NodeKind.DISPOSITION",
+            NodeKind::Quantifier => "NodeKind.QUANTIFIER",
+            NodeKind::Identifier => "NodeKind.IDENTIFIER",
+            NodeKind::RawString => "NodeKind.RAWSTRING",
+            NodeKind::Literal => "NodeKind.LITERAL",
+            NodeKind::Trivia => "NodeKind.TRIVIA",
+            NodeKind::LineComment => "NodeKind.LINECOMMENT",
+            NodeKind::BlockComment => "NodeKind.BLOCKCOMMENT",
+        }
+    }
+
+    #[getter]
+    fn _fltk_canonical_name(&self) -> &'static str {
+        self.__repr__()
+    }
+
+    fn __eq__(&self, py: Python<'_>, other: &Bound<'_, PyAny>) -> PyResult<PyObject> {
+        if let Ok(other_kind) = other.extract::<NodeKind>() {
+            return Ok((self == &other_kind).into_pyobject(py)?.to_owned().unbind().into_any());
+        }
+        if let Ok(cn) = other.getattr(pyo3::intern!(py, "_fltk_canonical_name")) {
+            if let Ok(cn_str) = cn.extract::<&str>() {
+                return Ok((self.__repr__() == cn_str).into_pyobject(py)?.to_owned().unbind().into_any());
+            }
+        }
+        Ok(py.NotImplemented())
+    }
+
+    fn __hash__(&self, py: Python<'_>) -> PyResult<isize> {
+        pyo3::types::PyAnyMethods::hash(
+            pyo3::types::PyString::new(py, self.__repr__()).as_any()
+        )
+    }
+}
+
+// ───────────────────────────────────────────────────────────────────────────
 // Grammar_Label
 // ───────────────────────────────────────────────────────────────────────────
 
 #[allow(non_camel_case_types)]
-#[pyclass(eq, hash, frozen, name = "Grammar_Label")]
+#[pyclass(frozen, name = "Grammar_Label")]
 #[derive(Clone, PartialEq, Eq, Hash)]
 pub enum Grammar_Label {
     #[pyo3(name = "RULE")]
@@ -29,6 +108,29 @@ impl Grammar_Label {
         match self {
             Grammar_Label::Rule => "Grammar.Label.RULE",
         }
+    }
+
+    #[getter]
+    fn _fltk_canonical_name(&self) -> &'static str {
+        self.__repr__()
+    }
+
+    fn __eq__(&self, py: Python<'_>, other: &Bound<'_, PyAny>) -> PyResult<PyObject> {
+        if let Ok(other_label) = other.extract::<Grammar_Label>() {
+            return Ok((self == &other_label).into_pyobject(py)?.to_owned().unbind().into_any());
+        }
+        if let Ok(cn) = other.getattr(pyo3::intern!(py, "_fltk_canonical_name")) {
+            if let Ok(cn_str) = cn.extract::<&str>() {
+                return Ok((self.__repr__() == cn_str).into_pyobject(py)?.to_owned().unbind().into_any());
+            }
+        }
+        Ok(py.NotImplemented())
+    }
+
+    fn __hash__(&self, py: Python<'_>) -> PyResult<isize> {
+        pyo3::types::PyAnyMethods::hash(
+            pyo3::types::PyString::new(py, self.__repr__()).as_any()
+        )
     }
 }
 
@@ -61,6 +163,11 @@ impl Grammar {
             span: span_obj,
             children: PyList::empty(py).unbind(),
         })
+    }
+
+    #[getter]
+    fn kind(&self) -> NodeKind {
+        NodeKind::Grammar
     }
 
     #[classattr]
@@ -225,7 +332,7 @@ impl Grammar {
 // ───────────────────────────────────────────────────────────────────────────
 
 #[allow(non_camel_case_types)]
-#[pyclass(eq, hash, frozen, name = "Rule_Label")]
+#[pyclass(frozen, name = "Rule_Label")]
 #[derive(Clone, PartialEq, Eq, Hash)]
 pub enum Rule_Label {
     #[pyo3(name = "ALTERNATIVES")]
@@ -241,6 +348,29 @@ impl Rule_Label {
             Rule_Label::Alternatives => "Rule.Label.ALTERNATIVES",
             Rule_Label::Name => "Rule.Label.NAME",
         }
+    }
+
+    #[getter]
+    fn _fltk_canonical_name(&self) -> &'static str {
+        self.__repr__()
+    }
+
+    fn __eq__(&self, py: Python<'_>, other: &Bound<'_, PyAny>) -> PyResult<PyObject> {
+        if let Ok(other_label) = other.extract::<Rule_Label>() {
+            return Ok((self == &other_label).into_pyobject(py)?.to_owned().unbind().into_any());
+        }
+        if let Ok(cn) = other.getattr(pyo3::intern!(py, "_fltk_canonical_name")) {
+            if let Ok(cn_str) = cn.extract::<&str>() {
+                return Ok((self.__repr__() == cn_str).into_pyobject(py)?.to_owned().unbind().into_any());
+            }
+        }
+        Ok(py.NotImplemented())
+    }
+
+    fn __hash__(&self, py: Python<'_>) -> PyResult<isize> {
+        pyo3::types::PyAnyMethods::hash(
+            pyo3::types::PyString::new(py, self.__repr__()).as_any()
+        )
     }
 }
 
@@ -273,6 +403,11 @@ impl Rule {
             span: span_obj,
             children: PyList::empty(py).unbind(),
         })
+    }
+
+    #[getter]
+    fn kind(&self) -> NodeKind {
+        NodeKind::Rule
     }
 
     #[classattr]
@@ -525,7 +660,7 @@ impl Rule {
 // ───────────────────────────────────────────────────────────────────────────
 
 #[allow(non_camel_case_types)]
-#[pyclass(eq, hash, frozen, name = "Alternatives_Label")]
+#[pyclass(frozen, name = "Alternatives_Label")]
 #[derive(Clone, PartialEq, Eq, Hash)]
 pub enum Alternatives_Label {
     #[pyo3(name = "ITEMS")]
@@ -538,6 +673,29 @@ impl Alternatives_Label {
         match self {
             Alternatives_Label::Items => "Alternatives.Label.ITEMS",
         }
+    }
+
+    #[getter]
+    fn _fltk_canonical_name(&self) -> &'static str {
+        self.__repr__()
+    }
+
+    fn __eq__(&self, py: Python<'_>, other: &Bound<'_, PyAny>) -> PyResult<PyObject> {
+        if let Ok(other_label) = other.extract::<Alternatives_Label>() {
+            return Ok((self == &other_label).into_pyobject(py)?.to_owned().unbind().into_any());
+        }
+        if let Ok(cn) = other.getattr(pyo3::intern!(py, "_fltk_canonical_name")) {
+            if let Ok(cn_str) = cn.extract::<&str>() {
+                return Ok((self.__repr__() == cn_str).into_pyobject(py)?.to_owned().unbind().into_any());
+            }
+        }
+        Ok(py.NotImplemented())
+    }
+
+    fn __hash__(&self, py: Python<'_>) -> PyResult<isize> {
+        pyo3::types::PyAnyMethods::hash(
+            pyo3::types::PyString::new(py, self.__repr__()).as_any()
+        )
     }
 }
 
@@ -570,6 +728,11 @@ impl Alternatives {
             span: span_obj,
             children: PyList::empty(py).unbind(),
         })
+    }
+
+    #[getter]
+    fn kind(&self) -> NodeKind {
+        NodeKind::Alternatives
     }
 
     #[classattr]
@@ -734,7 +897,7 @@ impl Alternatives {
 // ───────────────────────────────────────────────────────────────────────────
 
 #[allow(non_camel_case_types)]
-#[pyclass(eq, hash, frozen, name = "Items_Label")]
+#[pyclass(frozen, name = "Items_Label")]
 #[derive(Clone, PartialEq, Eq, Hash)]
 pub enum Items_Label {
     #[pyo3(name = "ITEM")]
@@ -756,6 +919,29 @@ impl Items_Label {
             Items_Label::WsAllowed => "Items.Label.WS_ALLOWED",
             Items_Label::WsRequired => "Items.Label.WS_REQUIRED",
         }
+    }
+
+    #[getter]
+    fn _fltk_canonical_name(&self) -> &'static str {
+        self.__repr__()
+    }
+
+    fn __eq__(&self, py: Python<'_>, other: &Bound<'_, PyAny>) -> PyResult<PyObject> {
+        if let Ok(other_label) = other.extract::<Items_Label>() {
+            return Ok((self == &other_label).into_pyobject(py)?.to_owned().unbind().into_any());
+        }
+        if let Ok(cn) = other.getattr(pyo3::intern!(py, "_fltk_canonical_name")) {
+            if let Ok(cn_str) = cn.extract::<&str>() {
+                return Ok((self.__repr__() == cn_str).into_pyobject(py)?.to_owned().unbind().into_any());
+            }
+        }
+        Ok(py.NotImplemented())
+    }
+
+    fn __hash__(&self, py: Python<'_>) -> PyResult<isize> {
+        pyo3::types::PyAnyMethods::hash(
+            pyo3::types::PyString::new(py, self.__repr__()).as_any()
+        )
     }
 }
 
@@ -788,6 +974,11 @@ impl Items {
             span: span_obj,
             children: PyList::empty(py).unbind(),
         })
+    }
+
+    #[getter]
+    fn kind(&self) -> NodeKind {
+        NodeKind::Items
     }
 
     #[classattr]
@@ -1216,7 +1407,7 @@ impl Items {
 // ───────────────────────────────────────────────────────────────────────────
 
 #[allow(non_camel_case_types)]
-#[pyclass(eq, hash, frozen, name = "Item_Label")]
+#[pyclass(frozen, name = "Item_Label")]
 #[derive(Clone, PartialEq, Eq, Hash)]
 pub enum Item_Label {
     #[pyo3(name = "DISPOSITION")]
@@ -1238,6 +1429,29 @@ impl Item_Label {
             Item_Label::Quantifier => "Item.Label.QUANTIFIER",
             Item_Label::Term => "Item.Label.TERM",
         }
+    }
+
+    #[getter]
+    fn _fltk_canonical_name(&self) -> &'static str {
+        self.__repr__()
+    }
+
+    fn __eq__(&self, py: Python<'_>, other: &Bound<'_, PyAny>) -> PyResult<PyObject> {
+        if let Ok(other_label) = other.extract::<Item_Label>() {
+            return Ok((self == &other_label).into_pyobject(py)?.to_owned().unbind().into_any());
+        }
+        if let Ok(cn) = other.getattr(pyo3::intern!(py, "_fltk_canonical_name")) {
+            if let Ok(cn_str) = cn.extract::<&str>() {
+                return Ok((self.__repr__() == cn_str).into_pyobject(py)?.to_owned().unbind().into_any());
+            }
+        }
+        Ok(py.NotImplemented())
+    }
+
+    fn __hash__(&self, py: Python<'_>) -> PyResult<isize> {
+        pyo3::types::PyAnyMethods::hash(
+            pyo3::types::PyString::new(py, self.__repr__()).as_any()
+        )
     }
 }
 
@@ -1270,6 +1484,11 @@ impl Item {
             span: span_obj,
             children: PyList::empty(py).unbind(),
         })
+    }
+
+    #[getter]
+    fn kind(&self) -> NodeKind {
+        NodeKind::Item
     }
 
     #[classattr]
@@ -1698,7 +1917,7 @@ impl Item {
 // ───────────────────────────────────────────────────────────────────────────
 
 #[allow(non_camel_case_types)]
-#[pyclass(eq, hash, frozen, name = "Term_Label")]
+#[pyclass(frozen, name = "Term_Label")]
 #[derive(Clone, PartialEq, Eq, Hash)]
 pub enum Term_Label {
     #[pyo3(name = "ALTERNATIVES")]
@@ -1720,6 +1939,29 @@ impl Term_Label {
             Term_Label::Literal => "Term.Label.LITERAL",
             Term_Label::Regex => "Term.Label.REGEX",
         }
+    }
+
+    #[getter]
+    fn _fltk_canonical_name(&self) -> &'static str {
+        self.__repr__()
+    }
+
+    fn __eq__(&self, py: Python<'_>, other: &Bound<'_, PyAny>) -> PyResult<PyObject> {
+        if let Ok(other_label) = other.extract::<Term_Label>() {
+            return Ok((self == &other_label).into_pyobject(py)?.to_owned().unbind().into_any());
+        }
+        if let Ok(cn) = other.getattr(pyo3::intern!(py, "_fltk_canonical_name")) {
+            if let Ok(cn_str) = cn.extract::<&str>() {
+                return Ok((self.__repr__() == cn_str).into_pyobject(py)?.to_owned().unbind().into_any());
+            }
+        }
+        Ok(py.NotImplemented())
+    }
+
+    fn __hash__(&self, py: Python<'_>) -> PyResult<isize> {
+        pyo3::types::PyAnyMethods::hash(
+            pyo3::types::PyString::new(py, self.__repr__()).as_any()
+        )
     }
 }
 
@@ -1752,6 +1994,11 @@ impl Term {
             span: span_obj,
             children: PyList::empty(py).unbind(),
         })
+    }
+
+    #[getter]
+    fn kind(&self) -> NodeKind {
+        NodeKind::Term
     }
 
     #[classattr]
@@ -2180,7 +2427,7 @@ impl Term {
 // ───────────────────────────────────────────────────────────────────────────
 
 #[allow(non_camel_case_types)]
-#[pyclass(eq, hash, frozen, name = "Disposition_Label")]
+#[pyclass(frozen, name = "Disposition_Label")]
 #[derive(Clone, PartialEq, Eq, Hash)]
 pub enum Disposition_Label {
     #[pyo3(name = "INCLUDE")]
@@ -2199,6 +2446,29 @@ impl Disposition_Label {
             Disposition_Label::Inline => "Disposition.Label.INLINE",
             Disposition_Label::Suppress => "Disposition.Label.SUPPRESS",
         }
+    }
+
+    #[getter]
+    fn _fltk_canonical_name(&self) -> &'static str {
+        self.__repr__()
+    }
+
+    fn __eq__(&self, py: Python<'_>, other: &Bound<'_, PyAny>) -> PyResult<PyObject> {
+        if let Ok(other_label) = other.extract::<Disposition_Label>() {
+            return Ok((self == &other_label).into_pyobject(py)?.to_owned().unbind().into_any());
+        }
+        if let Ok(cn) = other.getattr(pyo3::intern!(py, "_fltk_canonical_name")) {
+            if let Ok(cn_str) = cn.extract::<&str>() {
+                return Ok((self.__repr__() == cn_str).into_pyobject(py)?.to_owned().unbind().into_any());
+            }
+        }
+        Ok(py.NotImplemented())
+    }
+
+    fn __hash__(&self, py: Python<'_>) -> PyResult<isize> {
+        pyo3::types::PyAnyMethods::hash(
+            pyo3::types::PyString::new(py, self.__repr__()).as_any()
+        )
     }
 }
 
@@ -2231,6 +2501,11 @@ impl Disposition {
             span: span_obj,
             children: PyList::empty(py).unbind(),
         })
+    }
+
+    #[getter]
+    fn kind(&self) -> NodeKind {
+        NodeKind::Disposition
     }
 
     #[classattr]
@@ -2571,7 +2846,7 @@ impl Disposition {
 // ───────────────────────────────────────────────────────────────────────────
 
 #[allow(non_camel_case_types)]
-#[pyclass(eq, hash, frozen, name = "Quantifier_Label")]
+#[pyclass(frozen, name = "Quantifier_Label")]
 #[derive(Clone, PartialEq, Eq, Hash)]
 pub enum Quantifier_Label {
     #[pyo3(name = "ONE_OR_MORE")]
@@ -2590,6 +2865,29 @@ impl Quantifier_Label {
             Quantifier_Label::Optional => "Quantifier.Label.OPTIONAL",
             Quantifier_Label::ZeroOrMore => "Quantifier.Label.ZERO_OR_MORE",
         }
+    }
+
+    #[getter]
+    fn _fltk_canonical_name(&self) -> &'static str {
+        self.__repr__()
+    }
+
+    fn __eq__(&self, py: Python<'_>, other: &Bound<'_, PyAny>) -> PyResult<PyObject> {
+        if let Ok(other_label) = other.extract::<Quantifier_Label>() {
+            return Ok((self == &other_label).into_pyobject(py)?.to_owned().unbind().into_any());
+        }
+        if let Ok(cn) = other.getattr(pyo3::intern!(py, "_fltk_canonical_name")) {
+            if let Ok(cn_str) = cn.extract::<&str>() {
+                return Ok((self.__repr__() == cn_str).into_pyobject(py)?.to_owned().unbind().into_any());
+            }
+        }
+        Ok(py.NotImplemented())
+    }
+
+    fn __hash__(&self, py: Python<'_>) -> PyResult<isize> {
+        pyo3::types::PyAnyMethods::hash(
+            pyo3::types::PyString::new(py, self.__repr__()).as_any()
+        )
     }
 }
 
@@ -2622,6 +2920,11 @@ impl Quantifier {
             span: span_obj,
             children: PyList::empty(py).unbind(),
         })
+    }
+
+    #[getter]
+    fn kind(&self) -> NodeKind {
+        NodeKind::Quantifier
     }
 
     #[classattr]
@@ -2962,7 +3265,7 @@ impl Quantifier {
 // ───────────────────────────────────────────────────────────────────────────
 
 #[allow(non_camel_case_types)]
-#[pyclass(eq, hash, frozen, name = "Identifier_Label")]
+#[pyclass(frozen, name = "Identifier_Label")]
 #[derive(Clone, PartialEq, Eq, Hash)]
 pub enum Identifier_Label {
     #[pyo3(name = "NAME")]
@@ -2975,6 +3278,29 @@ impl Identifier_Label {
         match self {
             Identifier_Label::Name => "Identifier.Label.NAME",
         }
+    }
+
+    #[getter]
+    fn _fltk_canonical_name(&self) -> &'static str {
+        self.__repr__()
+    }
+
+    fn __eq__(&self, py: Python<'_>, other: &Bound<'_, PyAny>) -> PyResult<PyObject> {
+        if let Ok(other_label) = other.extract::<Identifier_Label>() {
+            return Ok((self == &other_label).into_pyobject(py)?.to_owned().unbind().into_any());
+        }
+        if let Ok(cn) = other.getattr(pyo3::intern!(py, "_fltk_canonical_name")) {
+            if let Ok(cn_str) = cn.extract::<&str>() {
+                return Ok((self.__repr__() == cn_str).into_pyobject(py)?.to_owned().unbind().into_any());
+            }
+        }
+        Ok(py.NotImplemented())
+    }
+
+    fn __hash__(&self, py: Python<'_>) -> PyResult<isize> {
+        pyo3::types::PyAnyMethods::hash(
+            pyo3::types::PyString::new(py, self.__repr__()).as_any()
+        )
     }
 }
 
@@ -3007,6 +3333,11 @@ impl Identifier {
             span: span_obj,
             children: PyList::empty(py).unbind(),
         })
+    }
+
+    #[getter]
+    fn kind(&self) -> NodeKind {
+        NodeKind::Identifier
     }
 
     #[classattr]
@@ -3171,7 +3502,7 @@ impl Identifier {
 // ───────────────────────────────────────────────────────────────────────────
 
 #[allow(non_camel_case_types)]
-#[pyclass(eq, hash, frozen, name = "RawString_Label")]
+#[pyclass(frozen, name = "RawString_Label")]
 #[derive(Clone, PartialEq, Eq, Hash)]
 pub enum RawString_Label {
     #[pyo3(name = "VALUE")]
@@ -3184,6 +3515,29 @@ impl RawString_Label {
         match self {
             RawString_Label::Value => "RawString.Label.VALUE",
         }
+    }
+
+    #[getter]
+    fn _fltk_canonical_name(&self) -> &'static str {
+        self.__repr__()
+    }
+
+    fn __eq__(&self, py: Python<'_>, other: &Bound<'_, PyAny>) -> PyResult<PyObject> {
+        if let Ok(other_label) = other.extract::<RawString_Label>() {
+            return Ok((self == &other_label).into_pyobject(py)?.to_owned().unbind().into_any());
+        }
+        if let Ok(cn) = other.getattr(pyo3::intern!(py, "_fltk_canonical_name")) {
+            if let Ok(cn_str) = cn.extract::<&str>() {
+                return Ok((self.__repr__() == cn_str).into_pyobject(py)?.to_owned().unbind().into_any());
+            }
+        }
+        Ok(py.NotImplemented())
+    }
+
+    fn __hash__(&self, py: Python<'_>) -> PyResult<isize> {
+        pyo3::types::PyAnyMethods::hash(
+            pyo3::types::PyString::new(py, self.__repr__()).as_any()
+        )
     }
 }
 
@@ -3216,6 +3570,11 @@ impl RawString {
             span: span_obj,
             children: PyList::empty(py).unbind(),
         })
+    }
+
+    #[getter]
+    fn kind(&self) -> NodeKind {
+        NodeKind::RawString
     }
 
     #[classattr]
@@ -3380,7 +3739,7 @@ impl RawString {
 // ───────────────────────────────────────────────────────────────────────────
 
 #[allow(non_camel_case_types)]
-#[pyclass(eq, hash, frozen, name = "Literal_Label")]
+#[pyclass(frozen, name = "Literal_Label")]
 #[derive(Clone, PartialEq, Eq, Hash)]
 pub enum Literal_Label {
     #[pyo3(name = "VALUE")]
@@ -3393,6 +3752,29 @@ impl Literal_Label {
         match self {
             Literal_Label::Value => "Literal.Label.VALUE",
         }
+    }
+
+    #[getter]
+    fn _fltk_canonical_name(&self) -> &'static str {
+        self.__repr__()
+    }
+
+    fn __eq__(&self, py: Python<'_>, other: &Bound<'_, PyAny>) -> PyResult<PyObject> {
+        if let Ok(other_label) = other.extract::<Literal_Label>() {
+            return Ok((self == &other_label).into_pyobject(py)?.to_owned().unbind().into_any());
+        }
+        if let Ok(cn) = other.getattr(pyo3::intern!(py, "_fltk_canonical_name")) {
+            if let Ok(cn_str) = cn.extract::<&str>() {
+                return Ok((self.__repr__() == cn_str).into_pyobject(py)?.to_owned().unbind().into_any());
+            }
+        }
+        Ok(py.NotImplemented())
+    }
+
+    fn __hash__(&self, py: Python<'_>) -> PyResult<isize> {
+        pyo3::types::PyAnyMethods::hash(
+            pyo3::types::PyString::new(py, self.__repr__()).as_any()
+        )
     }
 }
 
@@ -3425,6 +3807,11 @@ impl Literal {
             span: span_obj,
             children: PyList::empty(py).unbind(),
         })
+    }
+
+    #[getter]
+    fn kind(&self) -> NodeKind {
+        NodeKind::Literal
     }
 
     #[classattr]
@@ -3589,7 +3976,7 @@ impl Literal {
 // ───────────────────────────────────────────────────────────────────────────
 
 #[allow(non_camel_case_types)]
-#[pyclass(eq, hash, frozen, name = "Trivia_Label")]
+#[pyclass(frozen, name = "Trivia_Label")]
 #[derive(Clone, PartialEq, Eq, Hash)]
 pub enum Trivia_Label {
     #[pyo3(name = "BLOCK_COMMENT")]
@@ -3605,6 +3992,29 @@ impl Trivia_Label {
             Trivia_Label::BlockComment => "Trivia.Label.BLOCK_COMMENT",
             Trivia_Label::LineComment => "Trivia.Label.LINE_COMMENT",
         }
+    }
+
+    #[getter]
+    fn _fltk_canonical_name(&self) -> &'static str {
+        self.__repr__()
+    }
+
+    fn __eq__(&self, py: Python<'_>, other: &Bound<'_, PyAny>) -> PyResult<PyObject> {
+        if let Ok(other_label) = other.extract::<Trivia_Label>() {
+            return Ok((self == &other_label).into_pyobject(py)?.to_owned().unbind().into_any());
+        }
+        if let Ok(cn) = other.getattr(pyo3::intern!(py, "_fltk_canonical_name")) {
+            if let Ok(cn_str) = cn.extract::<&str>() {
+                return Ok((self.__repr__() == cn_str).into_pyobject(py)?.to_owned().unbind().into_any());
+            }
+        }
+        Ok(py.NotImplemented())
+    }
+
+    fn __hash__(&self, py: Python<'_>) -> PyResult<isize> {
+        pyo3::types::PyAnyMethods::hash(
+            pyo3::types::PyString::new(py, self.__repr__()).as_any()
+        )
     }
 }
 
@@ -3637,6 +4047,11 @@ impl Trivia {
             span: span_obj,
             children: PyList::empty(py).unbind(),
         })
+    }
+
+    #[getter]
+    fn kind(&self) -> NodeKind {
+        NodeKind::Trivia
     }
 
     #[classattr]
@@ -3889,7 +4304,7 @@ impl Trivia {
 // ───────────────────────────────────────────────────────────────────────────
 
 #[allow(non_camel_case_types)]
-#[pyclass(eq, hash, frozen, name = "LineComment_Label")]
+#[pyclass(frozen, name = "LineComment_Label")]
 #[derive(Clone, PartialEq, Eq, Hash)]
 pub enum LineComment_Label {
     #[pyo3(name = "CONTENT")]
@@ -3905,6 +4320,29 @@ impl LineComment_Label {
             LineComment_Label::Content => "LineComment.Label.CONTENT",
             LineComment_Label::Prefix => "LineComment.Label.PREFIX",
         }
+    }
+
+    #[getter]
+    fn _fltk_canonical_name(&self) -> &'static str {
+        self.__repr__()
+    }
+
+    fn __eq__(&self, py: Python<'_>, other: &Bound<'_, PyAny>) -> PyResult<PyObject> {
+        if let Ok(other_label) = other.extract::<LineComment_Label>() {
+            return Ok((self == &other_label).into_pyobject(py)?.to_owned().unbind().into_any());
+        }
+        if let Ok(cn) = other.getattr(pyo3::intern!(py, "_fltk_canonical_name")) {
+            if let Ok(cn_str) = cn.extract::<&str>() {
+                return Ok((self.__repr__() == cn_str).into_pyobject(py)?.to_owned().unbind().into_any());
+            }
+        }
+        Ok(py.NotImplemented())
+    }
+
+    fn __hash__(&self, py: Python<'_>) -> PyResult<isize> {
+        pyo3::types::PyAnyMethods::hash(
+            pyo3::types::PyString::new(py, self.__repr__()).as_any()
+        )
     }
 }
 
@@ -3937,6 +4375,11 @@ impl LineComment {
             span: span_obj,
             children: PyList::empty(py).unbind(),
         })
+    }
+
+    #[getter]
+    fn kind(&self) -> NodeKind {
+        NodeKind::LineComment
     }
 
     #[classattr]
@@ -4189,7 +4632,7 @@ impl LineComment {
 // ───────────────────────────────────────────────────────────────────────────
 
 #[allow(non_camel_case_types)]
-#[pyclass(eq, hash, frozen, name = "BlockComment_Label")]
+#[pyclass(frozen, name = "BlockComment_Label")]
 #[derive(Clone, PartialEq, Eq, Hash)]
 pub enum BlockComment_Label {
     #[pyo3(name = "CONTENT")]
@@ -4208,6 +4651,29 @@ impl BlockComment_Label {
             BlockComment_Label::End => "BlockComment.Label.END",
             BlockComment_Label::Start => "BlockComment.Label.START",
         }
+    }
+
+    #[getter]
+    fn _fltk_canonical_name(&self) -> &'static str {
+        self.__repr__()
+    }
+
+    fn __eq__(&self, py: Python<'_>, other: &Bound<'_, PyAny>) -> PyResult<PyObject> {
+        if let Ok(other_label) = other.extract::<BlockComment_Label>() {
+            return Ok((self == &other_label).into_pyobject(py)?.to_owned().unbind().into_any());
+        }
+        if let Ok(cn) = other.getattr(pyo3::intern!(py, "_fltk_canonical_name")) {
+            if let Ok(cn_str) = cn.extract::<&str>() {
+                return Ok((self.__repr__() == cn_str).into_pyobject(py)?.to_owned().unbind().into_any());
+            }
+        }
+        Ok(py.NotImplemented())
+    }
+
+    fn __hash__(&self, py: Python<'_>) -> PyResult<isize> {
+        pyo3::types::PyAnyMethods::hash(
+            pyo3::types::PyString::new(py, self.__repr__()).as_any()
+        )
     }
 }
 
@@ -4240,6 +4706,11 @@ impl BlockComment {
             span: span_obj,
             children: PyList::empty(py).unbind(),
         })
+    }
+
+    #[getter]
+    fn kind(&self) -> NodeKind {
+        NodeKind::BlockComment
     }
 
     #[classattr]
@@ -4576,6 +5047,7 @@ impl BlockComment {
 }
 
 pub fn register_classes(module: &Bound<'_, PyModule>) -> PyResult<()> {
+    module.add_class::<NodeKind>()?;
     module.add_class::<Grammar_Label>()?;
     module.add_class::<Grammar>()?;
     module.add_class::<Rule_Label>()?;

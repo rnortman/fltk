@@ -247,7 +247,7 @@ class ValRef(Expr):
 
     def load_mut(self) -> "Load":
         if hasattr(self, "mutable"):
-            assert self.mutable  # noqa: S101  # type: ignore[reportAttributeAccessIssue]
+            assert self.mutable  # type: ignore[reportAttributeAccessIssue]
         return Load(self, mutable=True)
 
     def store(self) -> "Store":
@@ -433,15 +433,15 @@ class Function:
     doc: str | None
 
     def __post_init__(self) -> None:
-        assert self.block.inner_scope is not None  # noqa: S101
+        assert self.block.inner_scope is not None
         for param in self.params:
             self.block.inner_scope.define(param.name, param)
 
     def get_param(self, name: str) -> Param:
-        assert self.block.inner_scope is not None  # noqa: S101
+        assert self.block.inner_scope is not None
         result = self.block.inner_scope.lookup(name)
-        assert isinstance(result, Param)  # noqa: S101
-        assert result in self.params  # noqa: S101
+        assert isinstance(result, Param)
+        assert result in self.params
         return result
 
 
