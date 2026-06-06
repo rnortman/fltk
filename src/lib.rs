@@ -13,8 +13,6 @@ use span::{Span, SourceText};
 // `fltk._native.UnknownSpan` at runtime.  The static is retained here so that any
 // external code that might hold a reference to the crate-internal value still works;
 // it is not dead in the sense of the module being broken, but no generated code reads it.
-// TODO(rust-cst-shared-rlib): if generated extensions ever need Rust-level shared types,
-// a shared rlib would make this static directly linkable again.
 pub(crate) static UNKNOWN_SPAN: GILOnceCell<PyObject> = GILOnceCell::new();
 
 #[pymodule]

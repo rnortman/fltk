@@ -14,7 +14,7 @@ at it by module name. FLTK never invokes `cargo`, `maturin`, or `rustc` at runti
 
 **Runtime dependency:** your extension imports `fltk._native` lazily (on first node construction)
 for the `UnknownSpan` sentinel. FLTK must be installed in the same environment. Rebuild your
-extension if you upgrade FLTK and `Span`/`UnknownSpan` changed (`TODO(rust-cst-abi-pinning)`).
+extension if you upgrade FLTK and `Span`/`UnknownSpan` changed.
 
 ---
 
@@ -133,7 +133,6 @@ immediately — no silent fallback to the Python backend.
   `AttributeError` or `KeyError`, not at load time.
 - **No ABI pinning.** A user extension built against one FLTK version may misbehave if
   `Span`/`UnknownSpan` changed in a newer FLTK version. Rebuild on upgrade.
-  See `TODO(rust-cst-abi-pinning)`.
 - **`fltk._native` must be importable at parse time.** If FLTK is not installed, the first node
   construction (lazy sentinel fetch) raises `ImportError`.
 

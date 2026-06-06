@@ -59,7 +59,6 @@ def _read_and_parse_grammar(grammar_file: Path) -> gsm.Grammar:
 
     cst2gsm = fltk2gsm.Cst2Gsm(terminals.terminals)
     # result.result is typed Any (ParseResult.cst: Any); cast to satisfy visit_grammar's annotation.
-    # TODO(parse-result-typed): make ParseResult generic so callers don't need individual casts.
     return cst2gsm.visit_grammar(cast("cst.Grammar", result.result))
 
 

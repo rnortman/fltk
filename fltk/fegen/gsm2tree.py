@@ -220,8 +220,6 @@ class CstGenerator:
         # kind: instance attribute (dataclass field with default) for NodeKind discriminant (§2.4).
         # MUST NOT be ClassVar — pyright rejects ClassVar against the Protocol's instance-attr declaration.
         # Use node_kind_member_name for the member name to stay in sync with the Protocol generator.
-        # TODO(kind-field-dataclass-eq): mark kind field compare=False, repr=False if node-eq
-        # performance becomes a concern — the field is invariant within a node type.
         kind_member = self.node_kind_member_name(rule_name) if rule_name else class_name.upper()
         klass.body.extend(
             [
@@ -443,10 +441,6 @@ class CstGenerator:
         TODO(protocol-label-member-private): _ProtocolLabelMember is emitted into the public
         protocol module.  Consider emitting __all__ or moving this class to pyrt.bridge so it
         does not appear as a public symbol in the generated output.
-
-        TODO(protocol-label-member-bridge-unify): This emits __eq__/__hash__ via ast.parse()
-        rather than calling _emit_cross_backend_eq_hash, creating two independent bridge
-        implementations.  Refactor to share the helper.
         """
         stmts = ast.parse(
             """\

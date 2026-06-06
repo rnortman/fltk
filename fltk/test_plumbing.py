@@ -573,7 +573,6 @@ term := value:/[0-9]+/ ;
 
         cst2gsm_default = Cst2Gsm(terminals.terminals)
         # result.result is typed Any (ParseResult.cst: Any); cast to satisfy visit_grammar's annotation.
-        # TODO(parse-result-typed): make ParseResult generic so callers don't need individual casts.
         grammar_default = cst2gsm_default.visit_grammar(cast("cst.Grammar", result.result))
 
         # Compare to the baseline produced by parse_grammar (also Python default).

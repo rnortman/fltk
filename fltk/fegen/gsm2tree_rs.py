@@ -116,9 +116,6 @@ class RustCstGenerator:
     # ------------------------------------------------------------------
 
     def _preamble(self) -> str:
-        # TODO(rust-cst-shared-rlib): if user extensions ever need to link Rust-level
-        # shared types (e.g. a typed Span), Option D (fltk-cst-common rlib + Cargo
-        # workspace) is the clean answer. Today span is opaque PyObject; no linkage needed.
         return (
             "use pyo3::exceptions::{PyTypeError, PyValueError};\n"
             "use pyo3::prelude::*;\n"
@@ -155,8 +152,6 @@ class RustCstGenerator:
         ``Items_Label``).  The generated __hash__ allocates a PyString per call because CPython's
         salted string hash is required for cross-backend hash agreement (AC4); amortizing this via
         GILOnceCell is deferred.
-        # TODO(canonical-name-cache): cache the isize per variant via GILOnceCell so the PyString
-        # allocation is paid at most once per variant per process.
         """
         lines.append("    fn __eq__(&self, py: Python<'_>, other: &Bound<'_, PyAny>) -> PyResult<PyObject> {")
         lines.append(f"        if let Ok(other_kind) = other.extract::<{type_name}>() {{")
@@ -450,10 +445,6 @@ class RustCstGenerator:
             ]
         )
 
-        # TODO(perf-label-identity-comparison): the generated `tup.get_item(0)?.eq(&label_obj)?`
-        # below performs an O(children) linear scan with equality comparison per access.
-        # Identity comparison (`is`) or pre-grouped storage would be O(1). Defer until
-        # profiling confirms a bottleneck; faithfully reproduces the Phase 2 template.
         lines.extend(
             [
                 f"    fn children_{label}(&self, py: Python<'_>) -> PyResult<Py<PyList>> {{",
