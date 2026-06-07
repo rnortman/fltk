@@ -1,3 +1,7 @@
+# This is a standalone crate intentionally excluded from the root workspace.
+# It builds as a separate maturin extension (see Makefile build-fegen-rust-cst).
+[workspace]
+
 [package]
 name = "fegen-rust-cst"
 version = "0.1.0"
@@ -13,3 +17,4 @@ default = ["extension-module"]
 
 [dependencies]
 pyo3 = { version = "0.23", features = ["abi3-py310"] }
+fltk-cst-core = { path = "../../crates/fltk-cst-core", default-features = false }

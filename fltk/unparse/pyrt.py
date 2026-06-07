@@ -31,5 +31,27 @@ class UnparseResult:
 
 
 def extract_span_text(span: Span, terminals: str) -> str:
-    """Extract the text content from a span using the terminals string."""
+    """Extract the text content from a span using the terminals string.
+
+    Handles both Python-backend terminalsrc.Span (uses .start/.end slice) and
+    Rust-backend fltk._native.Span (uses .text() which carries its own source).
+    """
+    text = span.text() if hasattr(span, "text") else None
+    if text is not None:
+        return text
+    # Fallback: sourceless Python-backend span — slice from terminals directly.
+    # Guard: only fall back for spans without source. A source-bearing span
+    # whose text() returns None indicates invalid byte offsets, not a missing
+    # source; use the terminals slice only for genuinely sourceless spans.
+    if hasattr(span, "has_source") and span.has_source():
+        msg = f"span.text() returned None for source-bearing span {span!r}; codepoint offsets may be out of range"
+        raise ValueError(msg)
     return terminals[span.start : span.end]
+
+
+def count_span_newlines(span: Span, terminals: str) -> int:
+    """Count newline characters in a span's text.
+
+    Uses extract_span_text to handle both Python and Rust backends.
+    """
+    return extract_span_text(span, terminals).count("\n")

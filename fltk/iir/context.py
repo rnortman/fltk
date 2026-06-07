@@ -69,8 +69,9 @@ def get_parser_types():
         cname="ErrorTracker",
         params={"RuleId": iir.TYPE},
     )
+    source_text_type = iir.Type.make(cname="SourceText")
 
-    return apply_result_type, terminal_span_type, memo_entry_type, error_tracker_type
+    return apply_result_type, terminal_span_type, memo_entry_type, error_tracker_type, source_text_type
 
 
 def _register_builtin_types(registry: TypeRegistry) -> None:
@@ -113,8 +114,20 @@ def _register_builtin_types(registry: TypeRegistry) -> None:
     builtin_types.append(
         pyreg.TypeInfo(
             typ=terminal_span_type,
-            module=pyreg.Module(("fltk", "fegen", "pyrt", "terminalsrc")),
+            # Use the backend selector so generated code imports the active Span type.
+            # When fltk._native is available, fltk.fegen.pyrt.span.Span is fltk._native.Span;
+            # otherwise it falls back to fltk.fegen.pyrt.terminalsrc.Span.
+            module=pyreg.Module(("fltk", "fegen", "pyrt", "span")),
             name="Span",
+        )
+    )
+
+    source_text_type = iir.Type.make(cname="SourceText")
+    builtin_types.append(
+        pyreg.TypeInfo(
+            typ=source_text_type,
+            module=pyreg.Module(("fltk", "fegen", "pyrt", "span")),
+            name="SourceText",
         )
     )
 

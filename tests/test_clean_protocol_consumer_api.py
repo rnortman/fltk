@@ -877,3 +877,59 @@ def test_protocol_label_remains_plain_class_not_enum() -> None:
     assert type(label_class) is not type(concrete_label_class), (
         "Protocol and concrete Label classes have the same metaclass — structural mismatch may have been lost"
     )
+
+
+# ---------------------------------------------------------------------------
+# §4 item 8 (rust-cst-native-span design) — Protocol span annotation widening
+# is additive: Python-backend-only consumer still type-checks unedited
+# ---------------------------------------------------------------------------
+
+# A fixture representing a Python-backend-only consumer that:
+#  1. Annotates a helper function's parameter as terminalsrc.Span (the old, non-widened type).
+#  2. Calls that function with a concrete terminalsrc.Span value.
+#  3. Assigns a terminalsrc.Span to a concrete Python-backend CST node's .span field.
+# After the widening (protocol span: terminalsrc.Span | fltk._native.Span), this code must
+# still be pyright-clean — the consumer need not edit their own annotations.
+_PYTHON_BACKEND_CONSUMER_FIXTURE = '''\
+"""Python-backend-only consumer fixture for §4 item 8 (rust-cst-native-span).
+
+Uses terminalsrc.Span in explicit annotations; must remain pyright-clean after
+protocol span annotation widening to terminalsrc.Span | fltk._native.Span.
+"""
+from __future__ import annotations
+
+from fltk.fegen import fltk_cst
+from fltk.fegen.pyrt.terminalsrc import Span
+
+
+def extract_span_text(span: Span) -> str:
+    """Consumer function whose parameter is annotated as terminalsrc.Span."""
+    text = span.text()
+    return text if text is not None else ""
+
+
+def process_node(node: fltk_cst.Identifier) -> str:
+    # Create a Python-backend span and assign it (setter accepts terminalsrc.Span | fltk._native.Span)
+    s = Span(0, 3)
+    node.span = s
+    # Read back and pass to the terminalsrc.Span-annotated helper.
+    # node.span returns the stored terminalsrc.Span (Python backend); type is terminalsrc.Span.
+    return extract_span_text(node.span)
+'''
+
+
+def test_python_backend_consumer_pyright_clean(
+    tmp_path: pathlib.Path,
+    pyright_available: bool,  # noqa: FBT001
+) -> None:
+    """§4 item 8 (rust-cst-native-span): Python-backend consumer with terminalsrc.Span
+    annotations type-checks unedited after protocol span widening (additive union).
+    """
+    fixture = tmp_path / "python_backend_consumer.py"
+    fixture.write_text(_PYTHON_BACKEND_CONSUMER_FIXTURE)
+    errors = _run_pyright(fixture, pyright_available=pyright_available)
+    assert errors == [], (
+        "Python-backend-only consumer fixture has pyright errors after span annotation widening "
+        "(widening must be additive — existing terminalsrc.Span code must not require edits):\n"
+        f"{errors}"
+    )

@@ -37,7 +37,13 @@ class ParserGenerator:
         self.context = context
         self.pos_type: Final = iir.SignedIndexInt
 
-        self.ApplyResultType, self.TerminalSpanType, self.MemoEntryType, self.ErrorTrackerType = get_parser_types()
+        (
+            self.ApplyResultType,
+            self.TerminalSpanType,
+            self.MemoEntryType,
+            self.ErrorTrackerType,
+            self.SourceTextType,
+        ) = get_parser_types()
 
         self.parser_class = iir.ClassType.make(
             cname="Parser",
@@ -67,6 +73,17 @@ class ParserGenerator:
         self.context.python_type_registry.register_type(type_info)
         terminalsrc_fld = self.parser_class.def_field(name="terminalsrc", typ=terminalsrc_type, init=None)
 
+        # SourceText wraps the input text for portable source-bearing span construction.
+        # The type is also used by _make_span_expr to emit Span.with_source(...) calls.
+        self.context.python_type_registry.register_type(
+            pyreg.TypeInfo(
+                typ=self.SourceTextType,
+                module=pyreg.Module(("fltk", "fegen", "pyrt", "span")),
+                name="SourceText",
+            )
+        )
+        source_text_fld = self.parser_class.def_field(name="_source_text", typ=self.SourceTextType, init=None)
+
         if gsm.TRIVIA_RULE_NAME not in self.grammar.identifiers:
             msg = f"Expected {gsm.TRIVIA_RULE_NAME} rule to exist for parsing"
             raise RuntimeError(msg)
@@ -85,6 +102,20 @@ class ParserGenerator:
             init=iir.LiteralSequence([iir.LiteralString(rule.name) for rule in self.grammar.rules]),
         )
 
+        # _source_text init expression: SourceText(text=terminalsrc.terminals)
+        # References the constructor `terminalsrc` param via VarByName.
+        _source_text_init = iir.Construct.make(
+            self.SourceTextType,
+            text=iir.FieldAccess(
+                member_name="terminals",
+                bound_to=iir.VarByName(
+                    name="terminalsrc",
+                    typ=terminalsrc_type,
+                    ref_type=iir.RefType.VALUE,
+                    mutable=False,
+                ),
+            ),
+        )
         self.parser_class.def_constructor(
             params=[
                 iir.Param(
@@ -94,7 +125,10 @@ class ParserGenerator:
                     mutable=False,
                 )
             ],
-            init_list=[(terminalsrc_fld, iir.INIT_FROM_PARAM)],
+            init_list=[
+                (terminalsrc_fld, iir.INIT_FROM_PARAM),
+                (source_text_fld, _source_text_init),
+            ],
         )
 
         span_result_type = self.ApplyResultType.instantiate(pos_type=self.pos_type, result_type=self.TerminalSpanType)
@@ -127,7 +161,11 @@ class ParserGenerator:
         ).block.return_(
             iir.Success(
                 span_result_type,
-                iir.Construct.make(span_result_type, pos=span_var.fld.end, result=span_var.load()),
+                iir.Construct.make(
+                    span_result_type,
+                    pos=span_var.fld.end,
+                    result=self._make_span_expr(span_var.fld.start, span_var.fld.end),
+                ),
             )
         )
         consume_literal.block.expr_stmt(
@@ -171,7 +209,11 @@ class ParserGenerator:
         ).block.return_(
             iir.Success(
                 span_result_type,
-                iir.Construct.make(span_result_type, pos=span_var.fld.end, result=span_var.load()),
+                iir.Construct.make(
+                    span_result_type,
+                    pos=span_var.fld.end,
+                    result=self._make_span_expr(span_var.fld.start, span_var.fld.end),
+                ),
             )
         )
 
@@ -208,6 +250,30 @@ class ParserGenerator:
                 alternatives=rule.alternatives,
                 current_rule=rule,
             )
+
+    def _make_span_expr(self, start_expr: iir.Expr, end_expr: iir.Expr) -> iir.Expr:
+        """Return an IIR expression for a portable source-bearing Span.
+
+        Emits ``<span_module>.Span.with_source(start, end, self._source_text)``,
+        where ``<span_module>`` is derived from the type registry entry for
+        ``self.TerminalSpanType`` — so a future module rename only requires
+        updating the registry, not this call site.
+        On the Python backend this returns a terminalsrc.Span with source; on the Rust
+        backend it returns a fltk._native.Span with source.  Both paths accept the
+        resulting object as a node's span value.
+        """
+        span_class_name = self.context.python_type_registry.lookup(self.TerminalSpanType).import_name()
+        span_class_ref = iir.VarByName(
+            name=span_class_name,
+            typ=self.TerminalSpanType,
+            ref_type=iir.RefType.VALUE,
+            mutable=False,
+        )
+        return iir.MethodAccess("with_source", span_class_ref).call(
+            start_expr,
+            end_expr,
+            iir.SelfExpr().fld._source_text.load(),
+        )
 
     def _memo_type(self, result_type: iir.Type) -> iir.Type:
         return self.MemoEntryType.instantiate(RuleId=iir.IndexInt, PosType=self.pos_type, ResultType=result_type)
@@ -466,16 +532,23 @@ class ParserGenerator:
             mutable_pos=True,
             inline_to_parent=True,
         )
+        # Save initial pos before the loop mutates it, so we can build the final span
+        # without reading result.span.start (which is unavailable on the Rust backend).
+        span_start_var = result.block.var(
+            name="_span_start",
+            typ=self.pos_type,
+            ref_type=iir.RefType.VALUE,
+            init=result.get_param("pos").load(),
+        )
         result_var = result.block.var(
             name="result",
             typ=result_type,
             ref_type=iir.RefType.VALUE,
             init=iir.Construct.make(
                 result_type,
-                span=iir.Construct.make(
-                    self.TerminalSpanType,
-                    start=result.get_param("pos").load(),
-                    end=iir.LiteralInt(iir.SignedIndexInt, -1),
+                span=self._make_span_expr(
+                    result.get_param("pos").load(),
+                    iir.LiteralInt(iir.SignedIndexInt, -1),
                 ),
             ),
         )
@@ -494,11 +567,8 @@ class ParserGenerator:
         )
         if consume_term.inline_to_parent:
             loop.block.expr_stmt(
-                result_var.fld.children.method.extend.call(
-                    loop.block.get_leaf_scope()
-                    .lookup_as("one_result", iir.Var)
-                    .load_mut()
-                    .fld.result.fld.children.move()
+                result_var.method["extend_children"].call(
+                    other=loop.block.get_leaf_scope().lookup_as("one_result", iir.Var).load_mut().fld.result.move()
                 )
             )
         else:
@@ -510,16 +580,15 @@ class ParserGenerator:
             )
         if item.quantifier.min() != gsm.Arity.ZERO:
             # + quantifier: fail if no progress was made (position didn't advance)
-            result.block.if_(
-                iir.Equals(lhs=result.get_param("pos").load(), rhs=result_var.fld.span.fld.start)
-            ).block.return_(iir.Failure(result_type))
+            result.block.if_(iir.Equals(lhs=result.get_param("pos").load(), rhs=span_start_var.load())).block.return_(
+                iir.Failure(result_type)
+            )
 
         result.block.assign(
             result_var.fld.span,
-            iir.Construct.make(
-                self.TerminalSpanType,
-                start=result_var.fld.span.fld.start,
-                end=result.get_param("pos").load(),
+            self._make_span_expr(
+                span_start_var.load(),
+                result.get_param("pos").load(),
             ),
         )
         result.block.return_(
@@ -657,6 +726,14 @@ class ParserGenerator:
             path=path, result_type=node_type, mutable_pos=True, inline_to_parent=True
         )
         alt_pos_var = alt_parser.get_param("pos")
+        # Save initial pos before it may be mutated, so we can build the final span
+        # without reading result.span.start (unavailable on the Rust backend).
+        alt_span_start_var = alt_parser.block.var(
+            name="_span_start",
+            typ=self.pos_type,
+            ref_type=iir.RefType.VALUE,
+            init=alt_parser.get_param("pos").load(),
+        )
         alt_result_var = alt_parser.block.var(
             name="result",
             typ=node_type,
@@ -664,10 +741,9 @@ class ParserGenerator:
             mutable=True,
             init=iir.Construct.make(
                 node_type,
-                span=iir.Construct.make(
-                    self.TerminalSpanType,
-                    start=alt_parser.get_param("pos").load(),
-                    end=iir.LiteralInt(iir.SignedIndexInt, -1),
+                span=self._make_span_expr(
+                    alt_parser.get_param("pos").load(),
+                    iir.LiteralInt(iir.SignedIndexInt, -1),
                 ),
             ),
         )
@@ -712,7 +788,7 @@ class ParserGenerator:
             if item.disposition != gsm.Disposition.SUPPRESS:
                 if item_parser.inline_to_parent:
                     item_if.block.expr_stmt(
-                        alt_result_var.fld.children.method.extend.call(item_result_var.fld.result.fld.children.move())
+                        alt_result_var.method["extend_children"].call(other=item_result_var.fld.result.move())
                     )
                 else:
                     method_name = "append"
@@ -741,10 +817,9 @@ class ParserGenerator:
         # If we did not return early, then we succeeded.
         alt_parser.block.assign(
             alt_result_var.fld.span,
-            iir.Construct.make(
-                self.TerminalSpanType,
-                start=alt_result_var.fld.span.fld.start,
-                end=alt_parser.get_param("pos").load(),
+            self._make_span_expr(
+                alt_span_start_var.load(),
+                alt_parser.get_param("pos").load(),
             ),
         )
         alt_parser.block.return_(

@@ -1,11 +1,11 @@
 use pyo3::prelude::*;
 use pyo3::sync::GILOnceCell;
 
-mod cst_generated;
 mod cst_fegen;
+mod cst_generated;
 mod span;
 
-use span::{Span, SourceText};
+use span::{SourceText, Span};
 
 // UNKNOWN_SPAN is set at module init (below) and exposed as `fltk._native.UnknownSpan`.
 // Generated node code no longer reads crate::UNKNOWN_SPAN directly; each generated
@@ -19,15 +19,7 @@ pub(crate) static UNKNOWN_SPAN: GILOnceCell<PyObject> = GILOnceCell::new();
 fn _native(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_class::<Span>()?;
     m.add_class::<SourceText>()?;
-    let unknown_span_obj = Py::new(
-        m.py(),
-        Span {
-            start: -1,
-            end: -1,
-            source: None,
-        },
-    )?
-    .into_any();
+    let unknown_span_obj = Py::new(m.py(), Span::unknown())?.into_any();
     m.add("UnknownSpan", unknown_span_obj.clone_ref(m.py()))?;
     UNKNOWN_SPAN
         .set(m.py(), unknown_span_obj)

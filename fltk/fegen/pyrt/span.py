@@ -1,17 +1,13 @@
 """Backend selector: re-exports Span from Rust backend if available, else pure-Python.
 
 Note: ``Span.with_source`` is intentionally excluded from ``SpanProtocol`` because
-its signature differs between backends (Python takes ``str``; Rust takes ``SourceText``).
-Code calling ``with_source`` must either know which backend is active or branch on
-``SourceText is not None``.
-TODO(backend-with-source-signature): Unify construction API in a future phase.
+its signature is backend-concrete (Python accepts ``str | SourceText``; Rust accepts
+only ``SourceText``).  The portable form is always ``Span.with_source(s, e, SourceText(text))``.
 """
 
 import warnings
 
-from fltk.fegen.pyrt.terminalsrc import Span, UnknownSpan
-
-SourceText: type | None = None  # not available in pure-Python backend
+from fltk.fegen.pyrt.terminalsrc import SourceText, Span, UnknownSpan
 
 try:
     from fltk._native import SourceText, Span, UnknownSpan  # type: ignore[assignment]

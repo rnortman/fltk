@@ -4,7 +4,7 @@ import pytest
 
 _native_module = pytest.importorskip("fltk._native", reason="Rust extension not available")
 
-from fltk._native import Identifier, Items, Span, UnknownSpan  # noqa: E402
+from fltk._native import Identifier, Items, SourceText, Span, UnknownSpan  # noqa: E402
 
 
 def _span(start: int = 0, end: int = 1) -> Span:
@@ -44,29 +44,34 @@ class TestLabelSemantics:
 
 
 class TestChildrenListSemantics:
-    def test_children_same_object(self):
-        """AC-6: node.children returns the same list object on every access."""
+    def test_children_rebuilt_each_call(self):
+        """Native children: node.children is rebuilt from the Vec on each call.
+        The returned list need not be the same object on every access (§2.3 design)."""
         node = Identifier()
         a = node.children
         b = node.children
-        assert a is b
+        # Both are empty lists with the same content; identity not guaranteed
+        assert a == b
+        assert isinstance(a, list)
 
-    def test_children_mutation_visibility(self):
-        """AC-7: Direct mutation of the returned list is visible via node.children."""
+    def test_children_getter_reflects_appended(self):
+        """node.children reflects children appended via append/append_name."""
         node = Identifier()
-        node.children.append(("x", "y"))
-        assert len(node.children) == 1
-        assert node.children[0] == ("x", "y")
+        s = _span(0, 1)
+        node.append_name(s)
+        children = node.children
+        assert len(children) == 1
+        assert children[0][1] == s
 
-    def test_cross_node_children_extend(self):
-        """AC-8: a.children.extend(b.children) mutates a's backing list."""
+    def test_cross_node_children_extend_via_method(self):
+        """Use node.extend_name(b.children_name()) to extend a node with label-filtered children."""
         a = Identifier()
         b = Identifier()
         s1 = _span(0, 1)
         s2 = _span(1, 2)
         a.append_name(s1)
         b.append_name(s2)
-        a.children.extend(b.children)
+        a.extend_name(b.children_name())
         assert len(a.children) == 2
 
 
@@ -224,6 +229,25 @@ class TestSpanField:
         node = Identifier(span=s)
         assert node.span == s
         assert node.span is not UnknownSpan
+
+    def test_span_setter_rejects_non_span(self):
+        """§4 item 3: Setting node.span to a non-Span Python object raises TypeError."""
+        node = Identifier()
+        with pytest.raises(TypeError):
+            node.span = object()  # type: ignore[assignment]
+        with pytest.raises(TypeError):
+            node.span = "not a span"  # type: ignore[assignment]
+        with pytest.raises(TypeError):
+            node.span = 42  # type: ignore[assignment]
+
+    def test_span_getter_returns_native_span(self):
+        """§4 item 3: node.span returns a fltk._native.Span (not terminalsrc.Span)."""
+        node = Identifier()
+        s = _span(3, 7)
+        node.span = s
+        result = node.span
+        assert isinstance(result, Span)
+        assert result == s
 
 
 class TestEquality:
@@ -416,6 +440,58 @@ class TestRepr:
         r = repr(Items.Label.ITEM)
         assert "Items" in r
         assert "ITEM" in r
+
+
+class TestSpanSourcePreservation:
+    """Regression tests for rust-cst-span-getter-source-loss fix.
+
+    Span getter and child span to_pyobject must preserve source from the native stored Span.
+    """
+
+    def _source_span(self, start: int, end: int, text: str) -> Span:
+        """Create a source-bearing Span."""
+        return Span.with_source(start, end, SourceText(text))
+
+    def test_node_span_getter_preserves_source(self):
+        """node.span getter returns a source-bearing Span when source was stored."""
+        src = SourceText("hello world")
+        s = Span.with_source(0, 5, src)
+        node = Identifier(span=s)
+        result = node.span
+        assert result.has_source() is True
+        assert result.text() == "hello"
+
+    def test_node_span_getter_sourceless_stays_sourceless(self):
+        """node.span getter returns sourceless Span when no source was stored."""
+        s = Span(0, 5)
+        node = Identifier(span=s)
+        result = node.span
+        assert result.has_source() is False
+
+    def test_child_span_accessor_preserves_source(self):
+        """Child span returned via label accessor retains source text from native storage."""
+        src = SourceText("hello world")
+        s = Span.with_source(6, 11, src)
+        node = Identifier()
+        node.append_name(s)
+        result = node.child_name()
+        assert result is not None
+        assert isinstance(result, Span)
+        assert result.has_source() is True
+        assert result.text() == "world"
+
+    def test_child_span_in_children_getter_preserves_source(self):
+        """Child span accessed through node.children list retains source text."""
+        src = SourceText("abcde")
+        s = Span.with_source(1, 4, src)
+        node = Identifier()
+        node.append_name(s)
+        children = node.children
+        assert len(children) == 1
+        _, child_span = children[0]
+        assert isinstance(child_span, Span)
+        assert child_span.has_source() is True
+        assert child_span.text() == "bcd"
 
 
 class TestNoneLabelFiltering:

@@ -26,33 +26,43 @@ from fltk._native.fegen_cst import (
     Trivia,
 )
 
+
+def _span() -> Span:
+    """Create a simple sourceless Span for use as a terminal child value."""
+    return Span(0, 1)
+
+
 # ---------------------------------------------------------------------------
-# Catalogue: (class, label_for_Label_access, label_for_roundtrip)
+# Catalogue: (class, label_for_Label_access, label_for_roundtrip, child_factory)
 # label_for_Label_access: any label name (UPPERCASE) to test ClassName.Label.VARIANT
 # label_for_roundtrip: method suffix (lowercase) for append_{l} / child_{l} round-trip
+# child_factory: callable returning a valid child for append_{label_for_roundtrip}
 # ---------------------------------------------------------------------------
 
 # fmt: off
 CLASS_LABEL_INFO = [
-    (Grammar,      "RULE",          "rule"),
-    (Rule,         "NAME",          "name"),
-    (Alternatives, "ITEMS",         "items"),
-    (Items,        "ITEM",          "item"),
-    (Item,         "LABEL",         "label"),
-    (Term,         "IDENTIFIER",    "identifier"),
-    (Disposition,  "INCLUDE",       "include"),
-    (Quantifier,   "OPTIONAL",      "optional"),
-    (Identifier,   "NAME",          "name"),
-    (RawString,    "VALUE",         "value"),
-    (Literal,      "VALUE",         "value"),
-    (Trivia,       "LINE_COMMENT",  "line_comment"),
-    (LineComment,  "PREFIX",        "prefix"),
-    (BlockComment, "START",         "start"),
+    # (class, label_for_Label_access, label_for_roundtrip, child_factory)
+    # child_factory produces a valid child value for append_{label_for_roundtrip}.
+    # Terminal children (regex/literal) → Span; rule-ref children → the referenced class.
+    (Grammar,      "RULE",          "rule",         Rule),
+    (Rule,         "NAME",          "name",         Identifier),   # name:identifier rule ref
+    (Alternatives, "ITEMS",         "items",        Items),
+    (Items,        "ITEM",          "item",         Item),
+    (Item,         "LABEL",         "label",        Identifier),   # label:identifier rule ref
+    (Term,         "IDENTIFIER",    "identifier",   Identifier),
+    (Disposition,  "INCLUDE",       "include",      _span),        # literal terminal
+    (Quantifier,   "OPTIONAL",      "optional",     _span),        # literal terminal
+    (Identifier,   "NAME",          "name",         _span),        # regex terminal
+    (RawString,    "VALUE",         "value",        _span),        # regex terminal
+    (Literal,      "VALUE",         "value",        _span),        # literal terminal
+    (Trivia,       "LINE_COMMENT",  "line_comment", LineComment),
+    (LineComment,  "PREFIX",        "prefix",       _span),        # literal terminal
+    (BlockComment, "START",         "start",        _span),        # literal terminal
 ]
 # fmt: on
 
-ALL_CLASSES = [cls for cls, _, _ in CLASS_LABEL_INFO]
-ALL_CLASS_IDS = [cls.__name__ for cls, _, _ in CLASS_LABEL_INFO]
+ALL_CLASSES = [cls for cls, _, _, _ in CLASS_LABEL_INFO]
+ALL_CLASS_IDS = [cls.__name__ for cls, _, _, _ in CLASS_LABEL_INFO]
 
 
 # ---------------------------------------------------------------------------
@@ -114,7 +124,7 @@ class TestChildrenIsList:
 class TestLabelAccess:
     @pytest.mark.parametrize(
         "cls, variant_name",
-        [(cls, label) for cls, label, _ in CLASS_LABEL_INFO],
+        [(cls, label) for cls, label, _, _ in CLASS_LABEL_INFO],
         ids=ALL_CLASS_IDS,
     )
     def test_label_variant_accessible(self, cls: type, variant_name: str) -> None:
@@ -131,35 +141,37 @@ class TestLabelAccess:
 
 class TestAppendChildRoundtrip:
     @pytest.mark.parametrize(
-        "cls, method_suffix",
-        [(cls, suffix) for cls, _, suffix in CLASS_LABEL_INFO],
+        "cls, method_suffix, child_factory",
+        [(cls, suffix, factory) for cls, _, suffix, factory in CLASS_LABEL_INFO],
         ids=ALL_CLASS_IDS,
     )
-    def test_append_and_child_roundtrip(self, cls: type, method_suffix: str) -> None:
-        """AC-8: append_{label} then child_{label} returns the same object."""
+    def test_append_and_child_roundtrip(self, cls: type, method_suffix: str, child_factory) -> None:
+        """AC-8: append_{label} then child_{label} returns a value-equal child."""
         parent = cls()
-        child = cls()  # use same type as child; any PyObject is fine
+        child = child_factory()
         getattr(parent, f"append_{method_suffix}")(child)
         retrieved = getattr(parent, f"child_{method_suffix}")()
-        assert retrieved is child
+        # Use value equality (==), not identity (is): native storage clones on extraction.
+        assert retrieved == child
 
     @pytest.mark.parametrize(
-        "cls, method_suffix",
-        [(cls, suffix) for cls, _, suffix in CLASS_LABEL_INFO],
+        "cls, method_suffix, child_factory",
+        [(cls, suffix, factory) for cls, _, suffix, factory in CLASS_LABEL_INFO],
         ids=ALL_CLASS_IDS,
     )
-    def test_children_label_returns_list(self, cls: type, method_suffix: str) -> None:
-        """AC-8: children_{label} returns a list containing appended children."""
+    def test_children_label_returns_list(self, cls: type, method_suffix: str, child_factory) -> None:
+        """AC-8: children_{label} returns a list containing value-equal appended children."""
         parent = cls()
-        child1 = cls()
-        child2 = cls()
+        child1 = child_factory()
+        child2 = child_factory()
         getattr(parent, f"append_{method_suffix}")(child1)
         getattr(parent, f"append_{method_suffix}")(child2)
         result = getattr(parent, f"children_{method_suffix}")()
         assert isinstance(result, list)
         assert len(result) == 2
-        assert result[0] is child1
-        assert result[1] is child2
+        # Value equality (==) rather than identity (is): native storage clones on extraction.
+        assert result[0] == child1
+        assert result[1] == child2
 
 
 # ---------------------------------------------------------------------------
@@ -169,25 +181,26 @@ class TestAppendChildRoundtrip:
 
 class TestExtendAndMaybe:
     @pytest.mark.parametrize(
-        "cls, method_suffix",
-        [(cls, suffix) for cls, _, suffix in CLASS_LABEL_INFO],
+        "cls, method_suffix, child_factory",
+        [(cls, suffix, factory) for cls, _, suffix, factory in CLASS_LABEL_INFO],
         ids=ALL_CLASS_IDS,
     )
-    def test_extend_label_appends_children(self, cls: type, method_suffix: str) -> None:
+    def test_extend_label_appends_children(self, cls: type, method_suffix: str, child_factory) -> None:
         """extend_{label} appends multiple children with the correct label."""
         parent = cls()
-        child1 = cls()
-        child2 = cls()
+        child1 = child_factory()
+        child2 = child_factory()
         getattr(parent, f"extend_{method_suffix}")([child1, child2])
         result = getattr(parent, f"children_{method_suffix}")()
         assert isinstance(result, list)
         assert len(result) == 2
-        assert result[0] is child1
-        assert result[1] is child2
+        # Value equality (==) rather than identity (is): native storage clones on extraction.
+        assert result[0] == child1
+        assert result[1] == child2
 
     @pytest.mark.parametrize(
         "cls, method_suffix",
-        [(cls, suffix) for cls, _, suffix in CLASS_LABEL_INFO],
+        [(cls, suffix) for cls, _, suffix, _ in CLASS_LABEL_INFO],
         ids=ALL_CLASS_IDS,
     )
     def test_maybe_label_returns_none_when_empty(self, cls: type, method_suffix: str) -> None:
@@ -197,28 +210,29 @@ class TestExtendAndMaybe:
         assert result is None
 
     @pytest.mark.parametrize(
-        "cls, method_suffix",
-        [(cls, suffix) for cls, _, suffix in CLASS_LABEL_INFO],
+        "cls, method_suffix, child_factory",
+        [(cls, suffix, factory) for cls, _, suffix, factory in CLASS_LABEL_INFO],
         ids=ALL_CLASS_IDS,
     )
-    def test_maybe_label_returns_child_when_one_match(self, cls: type, method_suffix: str) -> None:
-        """maybe_{label} returns the child when exactly one matching child exists."""
+    def test_maybe_label_returns_child_when_one_match(self, cls: type, method_suffix: str, child_factory) -> None:
+        """maybe_{label} returns a value-equal child when exactly one matching child exists."""
         parent = cls()
-        child = cls()
+        child = child_factory()
         getattr(parent, f"append_{method_suffix}")(child)
         result = getattr(parent, f"maybe_{method_suffix}")()
-        assert result is child
+        # Value equality (==) rather than identity (is): native storage clones on extraction.
+        assert result == child
 
     @pytest.mark.parametrize(
-        "cls, method_suffix",
-        [(cls, suffix) for cls, _, suffix in CLASS_LABEL_INFO],
+        "cls, method_suffix, child_factory",
+        [(cls, suffix, factory) for cls, _, suffix, factory in CLASS_LABEL_INFO],
         ids=ALL_CLASS_IDS,
     )
-    def test_maybe_label_raises_when_two_matches(self, cls: type, method_suffix: str) -> None:
+    def test_maybe_label_raises_when_two_matches(self, cls: type, method_suffix: str, child_factory) -> None:
         """maybe_{label} raises ValueError when two or more matching children exist."""
         parent = cls()
-        child1 = cls()
-        child2 = cls()
+        child1 = child_factory()
+        child2 = child_factory()
         getattr(parent, f"append_{method_suffix}")(child1)
         getattr(parent, f"append_{method_suffix}")(child2)
         with pytest.raises(ValueError, match="Expected at most one"):

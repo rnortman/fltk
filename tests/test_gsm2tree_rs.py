@@ -187,30 +187,24 @@ def fegen_source() -> str:
 class TestPreamble:
     def test_required_use_declarations(self, poc_source: str) -> None:
         """AC-10: Every generated .rs file includes the required use declarations."""
+        assert "use fltk_cst_core::Span;" in poc_source
         assert "use pyo3::exceptions::{PyTypeError, PyValueError};" in poc_source
         assert "use pyo3::prelude::*;" in poc_source
         assert "use pyo3::sync::GILOnceCell;" in poc_source
-        assert "use pyo3::types::{PyList, PyTuple};" in poc_source
+        assert "use pyo3::types::{PyList, PyTuple, PyType};" in poc_source
         assert "use pyo3::PyTypeInfo;" in poc_source
 
     def test_preamble_at_start(self, poc_source: str) -> None:
-        assert poc_source.startswith("use pyo3::")
+        assert poc_source.startswith("use fltk_cst_core::Span;\n")
 
     def test_no_crate_unknown_span_import(self, poc_source: str) -> None:
         """Standalone sentinel: no crate::UNKNOWN_SPAN linkage in generated source."""
         assert "use crate::UNKNOWN_SPAN;" not in poc_source
 
-    def test_sentinel_cache_declared(self, poc_source: str) -> None:
-        """Preamble declares the module-local GILOnceCell sentinel cache."""
-        assert "static UNKNOWN_SPAN_CACHE: GILOnceCell<PyObject> = GILOnceCell::new();" in poc_source
-
-    def test_sentinel_fetches_fltk_native_at_runtime(self, poc_source: str) -> None:
-        """#[new] bodies fetch UnknownSpan from fltk._native at runtime, not from crate."""
-        assert 'py.import("fltk._native")?.getattr("UnknownSpan")?.unbind()' in poc_source
-        assert "UNKNOWN_SPAN_CACHE" in poc_source
-        # The old crate::UNKNOWN_SPAN linkage must not appear in any form
-        assert "\nuse crate::UNKNOWN_SPAN" not in poc_source
-        assert "UNKNOWN_SPAN.get(py)" not in poc_source
+    def test_no_unknown_span_cache(self, poc_source: str) -> None:
+        """Native span: no UNKNOWN_SPAN_CACHE for span sentinel (replaced by Span::unknown())."""
+        assert "UNKNOWN_SPAN_CACHE" not in poc_source
+        assert 'py.import("fltk._native")?.getattr("UnknownSpan")' not in poc_source
 
 
 # ---------------------------------------------------------------------------
@@ -294,18 +288,62 @@ class TestNodeStructure:
         """Trivia class is emitted (trivia rule is auto-inserted by RustCstGenerator, not in the raw grammar)."""
         assert "pub struct Trivia {" in poc_source
 
-    def test_span_field(self, poc_source: str) -> None:
-        assert "#[pyo3(get, set)]" in poc_source
-        assert "span: PyObject," in poc_source
+    def test_span_field_native(self, poc_source: str) -> None:
+        """§2.2: span field is native Span, not PyObject."""
+        assert "span: Span," in poc_source
+        assert "span: PyObject," not in poc_source
 
-    def test_children_field(self, poc_source: str) -> None:
-        assert "#[pyo3(get)]" in poc_source
-        assert "children: Py<PyList>," in poc_source
+    def test_span_getter_emitted(self, poc_source: str) -> None:
+        """§2.2: explicit span getter returning fltk._native.Span (cross-cdylib via PyObject)."""
+        assert "fn span(&self, py: Python<'_>) -> PyResult<PyObject> {" in poc_source
+
+    def test_span_setter_emitted(self, poc_source: str) -> None:
+        """§2.2: explicit span setter (cross-cdylib compatible via extract_span helper)."""
+        assert "fn set_span(&mut self, py: Python<'_>, value: &Bound<'_, PyAny>) -> PyResult<()> {" in poc_source
+
+    def test_children_field_native_vec(self, poc_source: str) -> None:
+        """§2.3: children field is a native Vec, not Py<PyList>."""
+        # IdentifierChild is the per-node child enum for Identifier
+        assert "children: Vec<(Option<Identifier_Label>, IdentifierChild)>," in poc_source
+        assert "children: Py<PyList>," not in poc_source
+        assert "#[pyo3(get)]\n    children:" not in poc_source
+
+    def test_children_getter_emitted(self, poc_source: str) -> None:
+        """§2.3: explicit children getter rebuilds PyList from Vec."""
+        assert "fn children(&self, py: Python<'_>) -> PyResult<Py<PyList>> {" in poc_source
+
+    def test_child_enum_emitted(self, poc_source: str) -> None:
+        """§2.3: per-node child enum is emitted for each node class."""
+        assert "pub enum IdentifierChild {" in poc_source
+        assert "pub enum ItemsChild {" in poc_source
+        # Identifier only has Span children (regex terminal)
+        assert "IdentifierChild {\n    Span(Span)," in poc_source
+        # Items has Span (literals) and Identifier (rule ref) children
+        assert "Span(Span)," in poc_source
+        assert "Identifier(Box<Identifier>)," in poc_source
 
     def test_label_classattr_present(self, poc_source: str) -> None:
         assert "#[classattr]" in poc_source
         assert "#[allow(non_snake_case)]" in poc_source
         assert "fn Label(py: Python<'_>) -> PyResult<PyObject> {" in poc_source
+
+    def test_extend_children_emitted(self, poc_source: str) -> None:
+        """§2.3/§2.5: extend_children method is emitted for each node class."""
+        assert "fn extend_children(" in poc_source
+        assert "fn extend_children(&mut self, other: PyRef<'_, Identifier>) -> PyResult<()> {" in poc_source
+
+    def test_get_span_type_helper_emitted(self, poc_source: str) -> None:
+        """quality-1: single get_span_type() helper replaces per-method inline init block."""
+        assert "fn get_span_type(py: Python<'_>) -> PyResult<Bound<'_, PyType>> {" in poc_source
+        # Per-method inline init blocks must be absent; only the preamble helpers may contain the import.
+        # Count occurrences: only 1 (in extract_span) + 1 (in get_span_type) should exist.
+        import_count = poc_source.count('py.import("fltk._native")')
+        assert import_count <= 2, (
+            f'Expected at most 2 occurrences of py.import("fltk._native") '
+            f"(extract_span + get_span_type), got {import_count}"
+        )
+        # No per-method let span_type = FLTK_NATIVE_SPAN_TYPE.get_or_try_init block.
+        assert "let span_type = FLTK_NATIVE_SPAN_TYPE.get_or_try_init" not in poc_source
 
 
 # ---------------------------------------------------------------------------
@@ -402,10 +440,12 @@ class TestFegenGrammar:
 
     def test_preamble_in_fegen_source(self, fegen_source: str) -> None:
         """AC-10: fegen source also has the required preamble."""
+        assert "use fltk_cst_core::Span;" in fegen_source
         assert "use pyo3::prelude::*;" in fegen_source
         assert "use pyo3::sync::GILOnceCell;" in fegen_source
         assert "use crate::UNKNOWN_SPAN;" not in fegen_source
-        assert "static UNKNOWN_SPAN_CACHE: GILOnceCell<PyObject> = GILOnceCell::new();" in fegen_source
+        assert "UNKNOWN_SPAN_CACHE" not in fegen_source
+        assert "FLTK_NATIVE_SPAN_TYPE" in fegen_source
 
     def test_rule_name_to_class_name_mapping(self) -> None:
         """FEGEN_RULE_NAMES and FEGEN_CLASS_NAMES must agree with class_name_for_rule_node."""
@@ -463,10 +503,12 @@ class TestMinimalGrammar:
 
     def test_minimal_grammar_has_preamble(self, minimal_source: str) -> None:
         """AC-10: Minimal grammar source also includes required use declarations."""
+        assert "use fltk_cst_core::Span;" in minimal_source
         assert "use pyo3::prelude::*;" in minimal_source
         assert "use pyo3::sync::GILOnceCell;" in minimal_source
         assert "use crate::UNKNOWN_SPAN;" not in minimal_source
-        assert "static UNKNOWN_SPAN_CACHE: GILOnceCell<PyObject> = GILOnceCell::new();" in minimal_source
+        assert "UNKNOWN_SPAN_CACHE" not in minimal_source
+        assert "FLTK_NATIVE_SPAN_TYPE" in minimal_source
 
 
 # ---------------------------------------------------------------------------
@@ -662,3 +704,55 @@ class TestKindGetter:
         """All 14 node class names appear as NodeKind variants in fegen source."""
         for class_name in FEGEN_CLASS_NAMES:
             assert f"NodeKind::{class_name}" in fegen_source, f"Expected 'NodeKind::{class_name}' in fegen source"
+
+
+# ---------------------------------------------------------------------------
+# §4 item 2: No-PyObject audit (generator source level)
+# ---------------------------------------------------------------------------
+
+
+class TestNoPyObjectAudit:
+    def test_no_pyobject_span_field(self, poc_source: str) -> None:
+        """§4 item 2: No generated node struct has span: PyObject."""
+        assert "span: PyObject," not in poc_source
+
+    def test_no_py_pylist_children(self, poc_source: str) -> None:
+        """§4 item 2 (§2.3): children field is now a native Vec, not Py<PyList>."""
+        assert "children: Py<PyList>," not in poc_source
+        # Native Vec storage for children
+        assert "Vec<(Option<" in poc_source
+
+    def test_no_unknown_span_cache_in_fegen(self, fegen_source: str) -> None:
+        """§4 item 2: UNKNOWN_SPAN_CACHE not emitted for fegen grammar either."""
+        assert "UNKNOWN_SPAN_CACHE" not in fegen_source
+
+    def test_span_uses_native_sentinel(self, poc_source: str) -> None:
+        """§2.2: new method uses Span::unknown() sentinel, not Python import."""
+        assert "Span::unknown" in poc_source
+        assert "UnknownSpan" not in poc_source
+
+
+# ---------------------------------------------------------------------------
+# §4 item 4: Native equality — generator source level
+# ---------------------------------------------------------------------------
+
+
+class TestNativeEqualityGenerated:
+    def test_eq_uses_native_structural_equality(self, poc_source: str) -> None:
+        """§2.4: __eq__ uses native Rust PartialEq (self == &*other_node), not Python .eq()."""
+        assert "self == &*other_node" in poc_source
+        assert "// Native structural equality: no Python .eq() on stored state" in poc_source
+
+    def test_eq_no_python_span_eq(self, poc_source: str) -> None:
+        """§2.4: Python .eq() on span must not appear in __eq__."""
+        assert "self.span.bind(py).eq(" not in poc_source
+
+    def test_eq_no_python_children_eq(self, poc_source: str) -> None:
+        """§2.4: Python .eq() on children must not appear in __eq__."""
+        assert "self.children.bind(py).eq(" not in poc_source
+
+    def test_repr_uses_native_span_repr(self, poc_source: str) -> None:
+        """§2.4: __repr__ uses native span start()/end() accessors, not Python .repr() on a bound obj."""
+        assert "self.span.start()" in poc_source
+        assert "self.span.end()" in poc_source
+        assert "self.span.bind(py).repr()" not in poc_source

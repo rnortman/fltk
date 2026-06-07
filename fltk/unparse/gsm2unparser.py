@@ -82,13 +82,9 @@ class UnparserGenerator:
         self.context.python_type_registry.register_type(type_info)
         self.doc_type = doc_type
 
+        # Span is already registered by create_default_context() via _register_builtin_types();
+        # look it up rather than re-registering (re-registration would conflict).
         self.span_type = iir.Type.make(cname="Span")
-        span_type_info = pyreg.TypeInfo(
-            typ=self.span_type,
-            module=pyreg.Module(("fltk", "fegen", "pyrt", "terminalsrc")),
-            name="Span",
-        )
-        self.context.python_type_registry.register_type(span_type_info)
 
         self.unparse_result_type = iir.Type.make(cname="UnparseResult")
         unparse_result_type_info = pyreg.TypeInfo(
@@ -918,6 +914,7 @@ class UnparserGenerator:
         2. Preserve blank lines when configured (2+ newlines = at least 1 blank line)
 
         Returns the count of newline characters in the span.
+        Delegates to fltk.unparse.pyrt.count_span_newlines to handle both Python and Rust spans.
         """
         method = self.unparser_class.def_method(
             name="_count_newlines",
@@ -933,78 +930,20 @@ class UnparserGenerator:
             mutable_self=False,
         )
 
-        # Get the span parameter
         span_param = method.get_param("span")
-
-        # Access self.terminals
         terminals_field = iir.SelfExpr().fld.terminals.load()
 
-        # Get start and end from span
-        span_start = span_param.load().fld.start.load()
-        span_end = span_param.load().fld.end.load()
-
-        # Initialize count to 0
-        count_var = method.block.var(
-            name="count",
-            typ=iir.IndexInt,
-            ref_type=iir.RefType.VALUE,
-            mutable=True,
-            init=iir.LiteralInt(typ=iir.IndexInt, value=0),
+        pyrt_module = iir.VarByName(
+            name="fltk.unparse.pyrt",
+            typ=iir.Type.make(cname="module"),
+            ref_type=iir.RefType.BORROW,
+            mutable=False,
         )
-
-        # Create loop index variable
-        idx_var = method.block.var(
-            name="idx",
-            typ=iir.IndexInt,
-            ref_type=iir.RefType.VALUE,
-            mutable=True,
-            init=span_start,
+        newline_count = pyrt_module.method.count_span_newlines.call(
+            span_param.load(),
+            terminals_field,
         )
-
-        loop_condition = iir.BinOp(
-            lhs=idx_var.load(),
-            op="<",
-            rhs=span_end,
-        )
-
-        while_loop = method.block.while_(loop_condition)
-
-        # Get character at idx
-        char_at_idx = iir.Subscript(
-            target=terminals_field,
-            index=idx_var.load(),
-        )
-
-        # Check if it's a newline
-        is_newline = iir.BinOp(
-            lhs=char_at_idx,
-            op="==",
-            rhs=iir.LiteralString("\n"),
-        )
-
-        # If newline, increment count
-        if_newline = while_loop.block.if_(is_newline)
-        if_newline.block.assign(
-            count_var.store(),
-            iir.BinOp(
-                lhs=count_var.load(),
-                op="+",
-                rhs=iir.LiteralInt(typ=iir.IndexInt, value=1),
-            ),
-        )
-
-        # Increment idx
-        while_loop.block.assign(
-            idx_var.store(),
-            iir.BinOp(
-                lhs=idx_var.load(),
-                op="+",
-                rhs=iir.LiteralInt(typ=iir.IndexInt, value=1),
-            ),
-        )
-
-        # Return the count
-        method.block.return_(count_var.load())
+        method.block.return_(newline_count)
         return method
 
     def _gen_count_newlines_in_trivia_method(self) -> iir.Method:

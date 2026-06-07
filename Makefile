@@ -1,5 +1,5 @@
 .PHONY: check lint format-check typecheck test cargo-check cargo-test cargo-clippy \
-        build-native build-test-user-ext build-fegen-rust-cst gen-rust-cst fix
+        build-native build-test-user-ext build-fegen-rust-cst gen-rust-cst fix gencode
 
 # Run all checks: lint, format, type-check, tests, and Rust checks. This is the canonical
 # entry point used by CI.
@@ -53,3 +53,51 @@ build-fegen-rust-cst:
 # Usage: make gen-rust-cst GRAMMAR=path/to/grammar.fltkg RS_OUT=path/to/output.rs
 gen-rust-cst:
 	uv run python -m fltk.fegen.genparser gen-rust-cst $(GRAMMAR) $(RS_OUT)
+
+# Regenerate ALL generated code from their source grammars, then normalize formatting.
+# Covers:
+#   - Python CST/parser/protocol for fltk, fegen/bootstrap, toy, and unparsefmt grammars
+#   - Rust CST source for cst_generated.rs (PoC grammar), cst_fegen.rs, and fixture crates
+# After running, `git diff --stat` reveals any drift between committed generated files and
+# what the generators actually produce (cheat-detection: committed hand-patches show as diffs).
+# TODO(gencode-poc-fltkg): src/cst_generated.rs is generated from a hand-built PoC grammar
+# (_make_poc_grammar in tests/test_gsm2tree_rs.py) — no .fltkg file exists for it.
+gencode:
+	# Python: fegen grammar → fltk_cst.py, fltk_cst_protocol.py, fltk_parser.py, fltk_trivia_parser.py
+	# (fltk.fltkg is intentionally broken; fltk_cst.py is generated from fegen.fltkg)
+	uv run python -m fltk.fegen.genparser generate \
+		fltk/fegen/fegen.fltkg fltk fltk.fegen.fltk_cst \
+		--output-dir fltk/fegen
+	# Python: bootstrap grammar → bootstrap_cst.py, bootstrap_cst_protocol.py, bootstrap_parser.py, bootstrap_trivia_parser.py
+	uv run python -m fltk.fegen.genparser generate \
+		fltk/fegen/bootstrap.fltkg bootstrap fltk.fegen.bootstrap_cst \
+		--output-dir fltk/fegen
+	# Python: toy grammar (toy_cst.py, toy_cst_protocol.py, toy_parser.py, toy_trivia_parser.py)
+	uv run python -m fltk.fegen.genparser generate \
+		fltk/unparse/toy.fltkg toy fltk.unparse.toy_cst \
+		--output-dir fltk/unparse
+	# Python: unparsefmt grammar (unparsefmt_cst.py, unparsefmt_cst_protocol.py, unparsefmt_parser.py, unparsefmt_trivia_parser.py)
+	uv run python -m fltk.fegen.genparser generate \
+		fltk/unparse/unparsefmt.fltkg unparsefmt fltk.unparse.unparsefmt_cst \
+		--output-dir fltk/unparse
+	# Rust: src/cst_generated.rs (PoC grammar — no .fltkg; import helper from tests)
+	uv run python -c "\
+import sys; sys.path.insert(0, 'tests'); \
+from test_gsm2tree_rs import _make_poc_grammar; \
+from fltk.fegen.gsm2tree_rs import RustCstGenerator; \
+open('src/cst_generated.rs', 'w').write(RustCstGenerator(_make_poc_grammar()).generate())"
+	# Rust: src/cst_fegen.rs (fegen.fltkg)
+	$(MAKE) gen-rust-cst GRAMMAR=fltk/fegen/fegen.fltkg RS_OUT=src/cst_fegen.rs
+	# Rust: tests/rust_cst_fixture/src/cst.rs (phase4_roundtrip.fltkg)
+	$(MAKE) gen-rust-cst GRAMMAR=fltk/fegen/test_data/phase4_roundtrip.fltkg RS_OUT=tests/rust_cst_fixture/src/cst.rs
+	# Rust: tests/rust_cst_fegen/src/cst.rs (fegen.fltkg — TODO(fegen-cst-rs-single-source): duplicate of cst_fegen.rs)
+	$(MAKE) gen-rust-cst GRAMMAR=fltk/fegen/fegen.fltkg RS_OUT=tests/rust_cst_fegen/src/cst.rs
+	# Normalize formatting. Order matters:
+	# 1. ruff check --fix: upgrades typing.Union[X,Y] → X|Y and similar, so ruff format can then
+	#    wrap the resulting X|Y chains correctly.  Exit code ignored — residuals handled by step 2.
+	# 2. ruff format: applies canonical line-length formatting.
+	# 3. ruff check --fix again: cleans up any issues exposed after formatting.
+	# make check (the gate) is the definitive clean check; intermediate exits are informational.
+	uv run --group lint ruff check --fix . || true
+	uv run --group lint ruff format .
+	uv run --group lint ruff check --fix . || true

@@ -2,7 +2,7 @@
 
 import pytest
 
-from fltk.fegen.pyrt.terminalsrc import Span, UnknownSpan
+from fltk.fegen.pyrt.terminalsrc import SourceText, Span, UnknownSpan
 
 
 def test_construction_positional():
@@ -60,6 +60,12 @@ def test_unknown_span_start():
 
 def test_with_source_text():
     s = Span.with_source(6, 11, "hello world")
+    assert s.text() == "world"
+
+
+def test_with_source_text_object():
+    st = SourceText("hello world")
+    s = Span.with_source(6, 11, st)
     assert s.text() == "world"
 
 

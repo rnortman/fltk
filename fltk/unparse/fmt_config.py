@@ -26,6 +26,19 @@ from fltk.unparse.combinators import (
 )
 
 
+def _span_text(span: object, terminal_src: TerminalSource) -> str:
+    """Return the text for a span, handling both Python and Rust backends.
+
+    Python-backend terminalsrc.Span: uses .start/.end to slice terminals.
+    Rust-backend fltk._native.Span: uses .text() which carries its own source.
+    """
+    if hasattr(span, "text"):
+        text = span.text()  # type: ignore[union-attr]
+        if text is not None:
+            return text
+    return terminal_src.terminals[span.start : span.end]  # type: ignore[union-attr]
+
+
 @dataclass
 class TriviaConfig:
     """Configuration for selective trivia preservation in unparsing.
@@ -357,7 +370,7 @@ def _spacing_cst_to_doc(spacing: fmt_cst.Spacing, terminal_src: TerminalSource) 
         num_blanks = spacing.maybe_num_blanks()
         if num_blanks:
             num_blanks_span = num_blanks.child_value()
-            num_blanks_text = terminal_src.terminals[num_blanks_span.start : num_blanks_span.end]
+            num_blanks_text = _span_text(num_blanks_span, terminal_src)
             return HardLine(blank_lines=int(num_blanks_text))
         else:
             return HARDLINE_BLANK
@@ -442,13 +455,13 @@ def _process_default_statement(
 def _extract_identifier_text(identifier: fmt_cst.Identifier, terminal_src: TerminalSource) -> str:
     """Extract the text content of an identifier from its span."""
     name_span = identifier.child_name()
-    return terminal_src.terminals[name_span.start : name_span.end]
+    return _span_text(name_span, terminal_src)
 
 
 def _extract_literal_text(literal: fmt_cst.Literal, terminal_src: TerminalSource) -> str:
     """Extract the text content of a literal from its span, properly unquoting."""
     value_span = literal.child_value()
-    quoted_text = terminal_src.terminals[value_span.start : value_span.end]
+    quoted_text = _span_text(value_span, terminal_src)
 
     return literal_eval(quoted_text)
 
@@ -477,7 +490,7 @@ def _process_preserve_blanks_statement(
     """
     count_int = preserve_blanks.child_count()
     count_span = count_int.child_value()
-    count_text = terminal_src.terminals[count_span.start : count_span.end]
+    count_text = _span_text(count_span, terminal_src)
     count = int(count_text)
 
     # Ensure trivia_config exists
@@ -679,7 +692,7 @@ def _process_nest_statement(
     indent = nest.maybe_indent()
     if indent:
         indent_span = indent.child_value()
-        indent_text = terminal_src.terminals[indent_span.start : indent_span.end]
+        indent_text = _span_text(indent_span, terminal_src)
         indent_value = int(indent_text)
 
     _process_range_operation(
@@ -889,7 +902,7 @@ def fmt_cst_to_config(formatter: fmt_cst.Formatter, terminal_src: TerminalSource
                 if rule_preserve_blanks:
                     count_int = rule_preserve_blanks.child_count()
                     count_span = count_int.child_value()
-                    count_text = terminal_src.terminals[count_span.start : count_span.end]
+                    count_text = _span_text(count_span, terminal_src)
                     rule_config.preserve_blanks = int(count_text)
                     continue
 

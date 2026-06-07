@@ -5,6 +5,22 @@ from dataclasses import dataclass, field
 from typing import Final, Literal
 
 
+@dataclass(frozen=True, slots=True)
+class SourceText:
+    """Immutable wrapper over a source string.
+
+    Mirrors the Python-visible surface of the Rust ``SourceText`` class needed
+    for portable span construction.  The only contractually portable operation
+    is construction: ``SourceText(text)``.  The ``_text`` field is intentionally
+    private; cross-backend code must not rely on reading it back.
+    """
+
+    _text: str
+
+    def __init__(self, text: str) -> None:
+        object.__setattr__(self, "_text", text)
+
+
 class SpanKind(enum.Enum):
     """Discriminant enum for Span, enabling native `.kind` narrowing in protocol consumers."""
 
@@ -112,9 +128,25 @@ class Span:
         return Span(s, e, source)
 
     @classmethod
-    def with_source(cls, start: int, end: int, source: str) -> "Span":
-        """Construct a source-bearing span.  ``source`` is a plain Python ``str``; no copy is made."""
-        return cls(start=start, end=end, _source=source)
+    def with_source(cls, start: int, end: int, source: "str | SourceText") -> "Span":
+        """Construct a source-bearing span.
+
+        ``source`` may be a plain Python ``str`` (Python-backend convenience,
+        preserved for backward compatibility) or a ``SourceText`` instance
+        (portable form that works on both backends).  No copy of the string is
+        made in either case.
+
+        Raises ``TypeError`` for any other type, matching the Rust backend's
+        eager rejection behavior.
+        """
+        if isinstance(source, SourceText):
+            raw: str = source._text
+        elif isinstance(source, str):
+            raw = source
+        else:
+            msg = f"with_source: source must be str or SourceText, got {type(source)!r}"
+            raise TypeError(msg)
+        return cls(start=start, end=end, _source=raw)
 
 
 UnknownSpan: Final = Span(-1, -1)

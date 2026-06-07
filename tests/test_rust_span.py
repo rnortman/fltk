@@ -58,15 +58,14 @@ class TestRepr:
 
 
 class TestFrozen:
-    def test_no_start_attribute(self):
+    def test_start_attribute_readable(self):
+        # .start and .end are readable getters for drop-in parity with terminalsrc.Span.
         s = Span(1, 5)
-        with pytest.raises(AttributeError):
-            _ = s.start  # type: ignore[attr-defined]
+        assert s.start == 1
 
-    def test_no_end_attribute(self):
+    def test_end_attribute_readable(self):
         s = Span(1, 5)
-        with pytest.raises(AttributeError):
-            _ = s.end  # type: ignore[attr-defined]
+        assert s.end == 5
 
     def test_assignment_raises(self):
         s = Span(1, 5)
@@ -122,14 +121,18 @@ class TestSourceBearingSpan:
         src = SourceText("hello")
         assert Span.with_source(2, 2, src).text() == ""
 
-    def test_unicode_byte_indices(self):
-        # "é" is 2 bytes in UTF-8: 0xC3 0xA9
-        # "héllo": h=0, é=1..3, l=3, l=4, o=5
+    def test_unicode_codepoint_indices(self):
+        # Span start/end are codepoint (Unicode character) indices, matching Python semantics.
+        # "héllo": h=0, é=1, l=2, l=3, o=4  (5 codepoints; 'é' is 2 UTF-8 bytes)
         src = SourceText("héllo")
-        assert Span.with_source(0, 3, src).text() == "hé"
-        assert Span.with_source(1, 3, src).text() == "é"
-        # byte 2 is mid-codepoint for é: not a char boundary
-        assert Span.with_source(1, 2, src).text() is None
+        # Codepoint slice [0:2] = "hé" (2 codepoints)
+        assert Span.with_source(0, 2, src).text() == "hé"
+        # Codepoint slice [1:2] = "é" (1 codepoint, 2 UTF-8 bytes)
+        assert Span.with_source(1, 2, src).text() == "é"
+        # Codepoint slice [0:5] = full string
+        assert Span.with_source(0, 5, src).text() == "héllo"
+        # Out-of-bounds codepoint index returns None
+        assert Span.with_source(0, 6, src).text() is None
 
 
 class TestLen:

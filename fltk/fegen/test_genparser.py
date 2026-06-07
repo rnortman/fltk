@@ -61,7 +61,7 @@ def test_gen_rust_cst_command_emits_source(simple_grammar_file: pathlib.Path, tm
     assert "use crate::UNKNOWN_SPAN;" not in src
 
     # Sanity: it's valid-ish Rust (starts with use declarations).
-    assert src.startswith("use pyo3::")
+    assert src.startswith("use fltk_cst_core::Span;\n")
 
 
 # ---------------------------------------------------------------------------
@@ -70,10 +70,10 @@ def test_gen_rust_cst_command_emits_source(simple_grammar_file: pathlib.Path, tm
 
 
 def test_gen_rust_cst_sentinel_decoupled(simple_grammar_file: pathlib.Path, tmp_path: pathlib.Path) -> None:
-    """Emitted preamble declares a module-local GILOnceCell sentinel cache and
-    fetches fltk._native.UnknownSpan at runtime (not from crate::).
+    """Emitted preamble uses native Span::unknown() sentinel — no GILOnceCell cache, no
+    fltk._native.UnknownSpan runtime import, no crate:: linkage.
 
-    Design §Test Plan Tier 1 / §Resolved design questions artifact-build-mechanism.
+    Design §2.2 (native span sentinel) / §Test Plan item 2.
     """
     output_rs = tmp_path / "sentinel_test_cst.rs"
     runner = CliRunner()
@@ -83,11 +83,10 @@ def test_gen_rust_cst_sentinel_decoupled(simple_grammar_file: pathlib.Path, tmp_
 
     src = output_rs.read_text()
 
-    # Module-local sentinel cache declaration must be present.
-    assert "static UNKNOWN_SPAN_CACHE: GILOnceCell<PyObject> = GILOnceCell::new();" in src
-
-    # The #[new] body must fetch UnknownSpan from fltk._native at runtime.
-    assert 'py.import("fltk._native")?.getattr("UnknownSpan")?.unbind()' in src
+    # Native sentinel: Span::unknown() — no Python import for span default.
+    assert "Span::unknown" in src
+    assert "UNKNOWN_SPAN_CACHE" not in src
+    assert 'py.import("fltk._native")?.getattr("UnknownSpan")' not in src
 
     # The old crate-internal linkage patterns must be absent.
     assert "use crate::UNKNOWN_SPAN;" not in src
@@ -117,3 +116,46 @@ def test_gen_rust_cst_no_double_trivia(simple_grammar_file: pathlib.Path) -> Non
 
     # Sanity: the grammar parsed the expected rule.
     assert "word" in grammar.identifiers
+
+
+# ---------------------------------------------------------------------------
+# test_gsm2parser_extend_children_emission  (§2.3/§2.5 parser-generator change)
+# ---------------------------------------------------------------------------
+
+# Grammar with a repeating term that becomes inline_to_parent.
+# The repeated labeled `item:word+` produces a sub-rule result merged via extend_children.
+_INLINE_GRAMMAR_SRC = """\
+items := item:word+ ;
+word := value:/[a-z]+/ ;
+"""
+
+
+def test_gsm2parser_extend_children_call_site(tmp_path: pathlib.Path) -> None:
+    """gsm2parser emits extend_children calls, not .children.extend(), for inline-to-parent sites.
+
+    Design §2.3 parser-generator note / §2.5 partial: generated parsers must route
+    child mutations through the node's own extend_children method so the native Vec
+    is updated (not a throwaway rebuilt PyList from the getter).
+    """
+    grammar_file = tmp_path / "inline.fltkg"
+    grammar_file.write_text(_INLINE_GRAMMAR_SRC)
+
+    runner = CliRunner()
+    result = runner.invoke(
+        app,
+        ["generate", str(grammar_file), "inline", "inline_cst", "--output-dir", str(tmp_path), "--no-trivia-only"],
+    )
+
+    assert result.exit_code == 0, f"generate failed:\n{result.output}\n{result.exception}"
+    parser_py = tmp_path / "inline_parser.py"
+    assert parser_py.exists(), "Expected inline_parser.py was not created"
+    src = parser_py.read_text()
+
+    # The generated parser must use extend_children, not getter-mutation.
+    assert "extend_children" in src, (
+        "Parser generator must emit extend_children calls for inline-to-parent child extension"
+    )
+    # Must NOT have the old getter-mutation pattern (which mutated a throwaway PyList).
+    assert ".children.extend(" not in src, (
+        "Parser generator must not emit .children.extend() (getter-mutation is a no-op on Rust backend)"
+    )

@@ -21,9 +21,28 @@ class Cst2Gsm:
             alternatives=self.visit_alternatives(rule.child_alternatives()),
         )
 
+    def _span_text(self, span) -> str:
+        """Return the text for a span, using source-bearing text() if available, else terminals slice.
+
+        The terminals fallback is for sourceless Python-backend spans only (bootstrap compatibility).
+        After fltk_parser.py is regenerated with source-bearing spans, text() always succeeds and
+        the fallback is unreachable.
+        """
+        text = span.text()
+        if text is not None:
+            return text
+        # Guard: only fall back for genuinely sourceless spans. A source-bearing span
+        # whose text() returns None indicates out-of-range codepoint offsets, not a missing
+        # source; raising here surfaces the bug rather than silently returning wrong text.
+        if hasattr(span, "has_source") and span.has_source():
+            msg = f"span.text() returned None for source-bearing span {span!r}; codepoint offsets may be out of range"
+            raise ValueError(msg)
+        # Fallback: sourceless Python-backend span — read from self.terminals directly.
+        return self.terminals[span.start : span.end]
+
     def visit_identifier(self, identifier: cst.Identifier) -> gsm.Identifier:
         span = identifier.child_name()
-        return gsm.Identifier(self.terminals[span.start : span.end])
+        return gsm.Identifier(self._span_text(span))
 
     def visit_alternatives(self, alternatives: cst.Alternatives) -> list[gsm.Items]:
         return [self.visit_items(items) for items in alternatives.children_items()]
@@ -144,8 +163,8 @@ class Cst2Gsm:
 
     def visit_literal(self, literal: cst.Literal) -> gsm.Literal:
         span = literal.child_value()
-        return gsm.Literal(ast.literal_eval(self.terminals[span.start : span.end]))
+        return gsm.Literal(ast.literal_eval(self._span_text(span)))
 
     def visit_regex(self, regex: cst.RawString) -> gsm.Regex:
         span = regex.child_value()
-        return gsm.Regex(self.terminals[span.start : span.end])
+        return gsm.Regex(self._span_text(span))

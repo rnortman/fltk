@@ -1,0 +1,3 @@
+# Request
+
+The Rust backend currently holds a python Span via PyObject instead of a Rust Span. This was a massive mistake that originated in a proof of concept which punted on this problem and then we just copied that punt into the real code. We must correct that mistake. Here is the primary requirement: No Rust CST node may hold a reference to any Python object. Rust CST must be usable on its own in pure Rust. The fact that there are Python bindings or wrappers around the Rust CST should not make the Rust CST itself rely on Python classes. Yes this will require that some of the in-tree callers be updated. Out-of-tree callers will need to be updated *when they choose to use the Rust CST backend* but can continue to use the Python backend until they are updated.

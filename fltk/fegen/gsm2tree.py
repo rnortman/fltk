@@ -174,6 +174,10 @@ class CstGenerator:
             pyreg.Module(("enum",)),
             pyreg.Module(("typing",)),
             pyreg.Module(("fltk", "fegen", "pyrt", "terminalsrc")),
+            # Import backend-selector span module so pyright resolves fltk.fegen.pyrt.span.Span
+            # in child/terminal span type annotations (TerminalSpanType is registered in context.py
+            # with this module path; selector re-exports terminalsrc.Span or fltk._native.Span).
+            pyreg.Module(("fltk", "fegen", "pyrt", "span")),
         ]
         module = pygen.module(module.import_path for module in imports)
 
@@ -251,6 +255,14 @@ class CstGenerator:
         )
         extend_fn.body.append(pygen.stmt("self.children.extend((label, child) for child in children)"))
         klass.body.append(extend_fn)
+
+        extend_children_fn = pygen.function(
+            "extend_children",
+            f"self, other: '{class_name}'",
+            "None",
+        )
+        extend_children_fn.body.append(pygen.stmt("self.children.extend(other.children)"))
+        klass.body.append(extend_children_fn)
 
         child_fn = pygen.function("child", "self", f"tuple[typing.Optional[Label], {child_annotation}]")
         child_fn.body.extend(
@@ -470,6 +482,22 @@ class _ProtocolLabelMember:
         module.body.append(pygen.import_(("enum",)))
         module.body.append(pygen.import_(("typing",)))
         module.body.append(pygen.import_(("fltk", "fegen", "pyrt", "terminalsrc")))
+        # Both imports under TYPE_CHECKING so neither pulls in a concrete backend at protocol
+        # module load time (no-runtime-cost constraint; test_protocol_import_does_not_import_concrete_backends).
+        # fltk.fegen.pyrt.span is the backend-selector (may activate fltk._native at import time).
+        # fltk._native is the Rust extension.
+        # With `from __future__ import annotations` all annotations are lazy strings — these imports
+        # are needed only by pyright, not at runtime.
+        module.body.append(
+            pygen.if_(
+                pygen.expr("typing.TYPE_CHECKING"),
+                [
+                    pygen.stmt("import fltk.fegen.pyrt.span"),
+                    pygen.stmt("import fltk._native"),
+                ],
+                [],
+            )
+        )
 
         # Emit a protocol-local runtime NodeKind enum (identical members + canonical strings +
         # cross-backend bridge to the concrete module's NodeKind).  This replaces the former
@@ -540,7 +568,7 @@ class _ProtocolLabelMember:
         else:
             klass.body.append(pygen.stmt("kind: object"))
 
-        klass.body.append(pygen.stmt("span: fltk.fegen.pyrt.terminalsrc.Span"))
+        klass.body.append(pygen.stmt("span: fltk.fegen.pyrt.terminalsrc.Span | fltk._native.Span"))
 
         child_annotation = self.protocol_annotation_for_model_types(model_types=model.types, class_name=class_name)
 
@@ -567,6 +595,10 @@ class _ProtocolLabelMember:
         )
         extend_fn.body.append(pygen.stmt("..."))
         klass.body.append(extend_fn)
+
+        extend_children_fn = pygen.function("extend_children", f"self, other: '{class_name}'", "None")
+        extend_children_fn.body.append(pygen.stmt("..."))
+        klass.body.append(extend_children_fn)
 
         if labels:
             child_ret = f"tuple[typing.Optional[Label], {child_annotation}]"
