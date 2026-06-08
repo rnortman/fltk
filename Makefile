@@ -2,8 +2,23 @@
         build-native build-test-user-ext build-fegen-rust-cst gen-rust-cst fix gencode
 
 # Run all checks: lint, format, type-check, tests, and Rust checks. This is the canonical
-# entry point used by CI.
-check: lint format-check typecheck test cargo-check cargo-clippy cargo-test
+# entry point used by CI. On success prints one line; on failure prints the failing step name
+# and its full output, then exits non-zero. Individual sub-targets are unchanged and still
+# stream output when invoked directly.
+check:
+	@steps="lint format-check typecheck test cargo-check cargo-clippy cargo-test"; \
+	failed=0; \
+	for step in $$steps; do \
+	    tmpfile=$$(mktemp); \
+	    if ! $(MAKE) $$step >"$$tmpfile" 2>&1; then \
+	        echo "FAILED: $$step"; \
+	        cat "$$tmpfile"; \
+	        rm -f "$$tmpfile"; \
+	        exit 1; \
+	    fi; \
+	    rm -f "$$tmpfile"; \
+	done; \
+	echo "check: all steps passed (lint format-check typecheck test cargo-check cargo-clippy cargo-test)"
 
 lint:
 	uv run --group lint --group test ruff check .
