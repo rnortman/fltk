@@ -21,10 +21,10 @@ check:
 	echo "check: all steps passed (lint format-check typecheck test cargo-check cargo-clippy cargo-test)"
 
 lint:
-	uv run --group lint --group test ruff check .
+	uv run --group lint --group test ruff check -q .
 
 format-check:
-	uv run --group lint ruff format --check .
+	uv run --group lint ruff format --check -q .
 
 fix:
 	uv run --group lint ruff check --fix .
@@ -34,16 +34,16 @@ typecheck:
 	uv run --group lint --group test pyright
 
 test:
-	uv run --group lint --group test pytest
+	uv run --group lint --group test pytest -q
 
 cargo-check:
-	cargo check
+	cargo check -q
 
 cargo-test:
-	cargo test
+	cargo test -q
 
 cargo-clippy:
-	cargo clippy -- -D warnings
+	cargo clippy -q -- -D warnings
 
 # ── FLTK-internal Rust artifact targets ──────────────────────────────────────
 # These build FLTK's own test/dogfooding Rust artifacts.
