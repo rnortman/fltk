@@ -16,11 +16,6 @@ SHA-pin all GitHub Actions references in `.github/workflows/ci.yml` to immutable
 
 Emit a `.pyi` (or equivalent static surface) for the Rust CST extension from GSM alongside `gen-rust-cst`, and add B4 Rust-backend verification (compile + import + pyright check that the real PyO3 surface genuinely satisfies `CstModule`). Deferred per ADR `05-cst-type-annotations-regression` B3a: the shared `CstModule` Protocol covers B1/B6 for the Rust path via a boundary cast at the injection site (`plumbing.py`); the `.pyi`'s sole remaining function is verifying the cast doesn't mask a real surface gap. Location: `fltk/fegen/genparser.py` (`gen_rust_cst` command).
 
-## `rust-cst-child-span-test`
-
-No focused test verifies that Rust-backed CST child-accessor results expose `.start`/`.end` attributes (required by `fltk2gsm.Cst2Gsm.visit_identifier`, `visit_literal`, `visit_regex`). The AC8 equality test exercises this indirectly but a regression would only surface in the full parse path. Add a direct test calling `node.child_name()` (or `child_value()`) on a Rust-backed fegen node and asserting `.start`/`.end` are accessible and correct. Location: `tests/test_phase4_fegen_rust_backend.py`.
-
-
 ## `rust-cst-child-node-identity`
 
 Native child ownership (`Box<ChildNode>` in the native Vec) means a child returned twice through a Python getter/accessor wraps a fresh `Py<ConcreteNode>` per call; the same child read twice is not the same Python object (identity differs). Tests in `tests/test_phase4_rust_fixture.py` that formerly used `is` for child identity were relaxed to `==` (value equality). If a consumer requires stable Python child-object identity, add a per-node boundary cache (e.g. `Py` cache indexed by position) at the generated accessor layer. Deferred: no in-tree consumer currently requires identity stability. Location: `fltk/fegen/gsm2tree_rs.py` (accessor methods in `_per_label_methods`); see also `tests/test_phase4_rust_fixture.py:242,276,291,350,371`.
@@ -32,6 +27,10 @@ Native child ownership (`Box<ChildNode>` in the native Vec) means a child return
 ## `preamble-helpers-into-cst-core`
 
 The cross-cdylib span helper block emitted by `_preamble()` in `gsm2tree_rs.py` — `FLTK_NATIVE_SPAN_TYPE` static, `extract_span`, `get_span_type`, `FLTK_NATIVE_SOURCE_TEXT_TYPE` static, `get_source_text_type` — is emitted byte-for-byte identically into every generated file (`src/cst_fegen.rs`, `src/cst_generated.rs`, `tests/rust_cst_fixture/src/cst.rs`). Move these as `pub` functions/statics into `fltk-cst-core`, so all generated cdylibs call a single definition at link time and any bug fix propagates without regeneration. Location: `fltk/fegen/gsm2tree_rs.py` (`_preamble()`, lines 131-209); `crates/fltk-cst-core/src/lib.rs`.
+
+## `child-span-params-dedup`
+
+The three node/accessor triples in `_CHILD_SPAN_PARAMS` (`tests/test_phase4_fegen_rust_backend.py:115`) duplicate the three `_span`-factory rows of `CLASS_LABEL_INFO` (`tests/test_fegen_rust_cst.py:55-57`). A label rename in the generated CST would require updating both; unify via a shared conftest fixture. Location: `tests/test_phase4_fegen_rust_backend.py:115`.
 
 ## `span-source-as-py-crosscdylib`
 

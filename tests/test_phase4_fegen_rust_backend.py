@@ -32,6 +32,7 @@ fegen_rust_cst = pytest.importorskip(
 )
 
 import fltk.fegen.fltk2gsm as fltk2gsm_mod  # noqa: E402
+from fltk._native import SourceText, Span  # noqa: E402
 from fltk._native import fegen_cst as embedded_fegen_cst  # noqa: E402
 from fltk.fegen import fltk2gsm  # noqa: E402
 from fltk.fegen import fltk_cst as py_cst  # noqa: E402
@@ -108,9 +109,67 @@ class TestAC8RealCst2GsmRustBackend:
         assert len(captured) == 1, "Cst2Gsm.__init__ not called exactly once"
 
 
-# TODO(rust-cst-child-span-test): add a focused test that calls child_name() / child_value()
-# on a Rust-backed fegen node and asserts .start/.end are accessible and correct.
-# The AC8 equality test exercises this indirectly but a focused test aids root-cause diagnosis.
+# ── Child accessor contract: span roundtrip and type pins ─────────────────
+
+
+# TODO(child-span-params-dedup): These three triples duplicate the _span-factory rows of
+# CLASS_LABEL_INFO in tests/test_fegen_rust_cst.py:55-57. A label rename in the generated
+# CST requires updating both lists; they could be unified via a shared conftest fixture.
+_CHILD_SPAN_PARAMS = pytest.mark.parametrize(
+    "node_class,append_method,child_method",
+    [
+        (fegen_rust_cst.Identifier, "append_name", "child_name"),
+        (fegen_rust_cst.Literal, "append_value", "child_value"),
+        (fegen_rust_cst.RawString, "append_value", "child_value"),
+    ],
+    ids=["Identifier.child_name", "Literal.child_value", "RawString.child_value"],
+)
+
+
+class TestChildSpanAccessorContract:
+    """Focused regression tests for Rust-backed fegen node child span accessors.
+
+    Pins the contracts required by fltk2gsm._span_text (used by visit_identifier,
+    visit_literal, visit_regex) on objects returned by child_name()/child_value().
+    The AC8 equality tests cover this indirectly; these tests give a localized failure
+    signal if an accessor's return type or source-preservation regresses.
+    """
+
+    @_CHILD_SPAN_PARAMS
+    def test_sourceless_span_start_end(self, node_class, append_method, child_method):
+        """Sourceless roundtrip: return type is fltk._native.Span; .start/.end are accessible."""
+        span = Span(3, 9)
+        node = node_class()
+        getattr(node, append_method)(span)
+        result = getattr(node, child_method)()
+        assert isinstance(result, Span)
+        assert result.start == 3
+        assert result.end == 9
+        assert result.text() is None
+        assert result.has_source() is False
+
+    @_CHILD_SPAN_PARAMS
+    def test_source_bearing_span_text(self, node_class, append_method, child_method):
+        """Source-bearing roundtrip: source survives native storage; .text() returns correct slice."""
+        src = SourceText("hello world!")
+        span = Span.with_source(3, 9, src)
+        node = node_class()
+        getattr(node, append_method)(span)
+        result = getattr(node, child_method)()
+        assert isinstance(result, Span)
+        assert result.start == 3
+        assert result.end == 9
+        assert result.has_source() is True
+        assert result.text() == "lo wor"
+
+    @_CHILD_SPAN_PARAMS
+    def test_append_rejects_terminalsrc_span(self, node_class, append_method, child_method):  # noqa: ARG002
+        """append_<label> rejects terminalsrc.Span; only fltk._native.Span is accepted."""
+        bad = tsrc.Span(3, 9)
+        node = node_class()
+        with pytest.raises(TypeError, match="unsupported child type"):
+            getattr(node, append_method)(bad)
+
 
 # ── AC6 (partial): fegen_rust_cst is importable and has expected classes ──
 
