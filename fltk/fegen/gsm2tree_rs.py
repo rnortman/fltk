@@ -8,23 +8,18 @@ from __future__ import annotations
 
 import re
 
-from fltk.fegen import gsm
+from fltk.fegen import gsm, naming
 from fltk.fegen.gsm2tree import CstGenerator
 from fltk.iir.context import create_default_context
 from fltk.iir.py import reg as pyreg
 
 # Valid identifier pattern (matches fegen.fltkg:16 grammar rule for identifiers)
 _IDENTIFIER_RE = re.compile(r"^[_a-z][_a-z0-9]*$")
-# TODO(extract-rule-name-to-class-name): _rust_variant_name duplicates the
-# underscore-to-CamelCase transform in CstGenerator.class_name_for_rule_node
-# (gsm2tree.py:46), UnparserGenerator.class_name_for_rule_node
-# (gsm2unparser.py:638), and an inline list-comp (gsm2unparser.py:1888).
-# Extract to a shared helper in fltk/fegen/gsm2tree.py or fltk/fegen/naming.py.
 
 
 def _rust_variant_name(label: str) -> str:
     """Label -> CamelCase Rust enum variant. 'no_ws' -> 'NoWs'."""
-    return "".join(part.capitalize() for part in label.split("_"))
+    return naming.snake_to_upper_camel(label)
 
 
 def _python_label_name(label: str) -> str:

@@ -12,10 +12,6 @@ Add `rules_rust` to `MODULE.bazel` so that the PyO3 native extension (`fltk._nat
 
 SHA-pin all GitHub Actions references in `.github/workflows/ci.yml` to immutable commit SHAs rather than mutable branch/tag refs. Currently `dtolnay/rust-toolchain@stable`, `actions/checkout@v4`, and `astral-sh/setup-uv@v6` use mutable refs. A compromised action repo could execute arbitrary code in CI and tamper with build artifacts. Use Dependabot to manage SHA-pinned action updates. Location: `.github/workflows/ci.yml:12,15,21`.
 
-## `extract-rule-name-to-class-name`
-
-Extract the underscore-to-CamelCase rule-name-to-class-name transform into a shared helper. Currently four independent copies exist: `CstGenerator.class_name_for_rule_node` (`gsm2tree.py`), `UnparserGenerator.class_name_for_rule_node` (`gsm2unparser.py`), an inline list-comp (`gsm2unparser.py`), and `_rust_variant_name` (`gsm2tree_rs.py`). A behavioral change (e.g. digit handling, consecutive underscores) must be applied in four places. Candidate location: `fltk/fegen/gsm2tree.py` or a new `fltk/fegen/naming.py`. Location: `fltk/fegen/gsm2tree_rs.py:18`.
-
 ## `fegen-cst-rs-single-source`
 
 `src/cst_fegen.rs` and `tests/rust_cst_fegen/src/cst.rs` are identical files committed independently. When one is updated (e.g. by regeneration after a grammar change), the other must be separately regenerated and committed; silent divergence is possible. Fix: remove `tests/rust_cst_fegen/src/cst.rs` from the repo and generate it from `src/cst_fegen.rs` at build time (via symlink, Makefile copy step, or Rust `include!` macro), making the single source of truth explicit. Location: `tests/rust_cst_fegen/src/cst.rs`.

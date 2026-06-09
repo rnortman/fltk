@@ -7,7 +7,7 @@ from collections.abc import Sequence
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Final
 
-from fltk.fegen import gsm
+from fltk.fegen import gsm, naming
 from fltk.iir import model as iir
 from fltk.iir.py import reg as pyreg
 from fltk.unparse.combinators import (
@@ -632,7 +632,7 @@ class UnparserGenerator:
         )
 
     def class_name_for_rule_node(self, rule_name: str) -> str:
-        return "".join(part.capitalize() for part in rule_name.lower().split("_"))
+        return naming.snake_to_upper_camel(rule_name)
 
     def get_node_type_for_rule(self, rule_name: str) -> iir.Type:
         return self.cst_node_types[rule_name]
@@ -1824,7 +1824,7 @@ def generate_unparser(
     ]
 
     rule_names = [rule.name for rule in grammar.rules if isinstance(rule, gsm.Rule)]
-    class_names = ["".join(part.capitalize() for part in rule_name.lower().split("_")) for rule_name in rule_names]
+    class_names = [naming.snake_to_upper_camel(rule_name) for rule_name in rule_names]
     cst_import = ast.ImportFrom(
         module=cst_module, names=[ast.alias(name=class_name, asname=None) for class_name in class_names], level=0
     )

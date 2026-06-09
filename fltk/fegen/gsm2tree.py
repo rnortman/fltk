@@ -7,7 +7,7 @@ from dataclasses import dataclass, field
 from typing import TYPE_CHECKING
 
 from fltk import pygen
-from fltk.fegen import gsm
+from fltk.fegen import gsm, naming
 from fltk.iir import model as iir
 from fltk.iir import typemodel
 from fltk.iir.py import compiler as pycompiler
@@ -44,7 +44,7 @@ class CstGenerator:
             self.rule_models[rule.name] = self.model_for_rule(rule, [])
 
     def class_name_for_rule_node(self, rule_name: str) -> str:
-        return "".join(part.capitalize() for part in rule_name.lower().split("_"))
+        return naming.snake_to_upper_camel(rule_name)
 
     def rule_has_whitespace_separators(self, rule: gsm.Rule) -> bool:
         """Check if a rule has any whitespace separators that would allow trivia."""
