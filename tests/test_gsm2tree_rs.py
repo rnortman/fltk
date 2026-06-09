@@ -14,6 +14,8 @@ import pytest
 
 from fltk.fegen import gsm
 from fltk.fegen.gsm2tree_rs import RustCstGenerator
+from tests.gsm2tree_helpers import make_generator as _make_generator
+from tests.gsm2tree_helpers import make_zero_label_grammar as _make_zero_label_grammar
 
 # ---------------------------------------------------------------------------
 # PoC grammar construction
@@ -116,35 +118,6 @@ def _make_minimal_grammar() -> gsm.Grammar:
     return gsm.Grammar(
         rules=(numbers_rule,),
         identifiers={"numbers": numbers_rule},
-    )
-
-
-# ---------------------------------------------------------------------------
-# Zero-label grammar (unlabeled INCLUDE items)
-# ---------------------------------------------------------------------------
-
-
-def _make_zero_label_grammar() -> gsm.Grammar:
-    """Rule with no labeled items — label enum must be omitted."""
-    unlabeled_rule = gsm.Rule(
-        name="token",
-        alternatives=[
-            gsm.Items(
-                items=[
-                    gsm.Item(
-                        label=None,
-                        disposition=gsm.Disposition.INCLUDE,
-                        term=gsm.Regex(r"[a-z]+"),
-                        quantifier=gsm.REQUIRED,
-                    ),
-                ],
-                sep_after=[gsm.Separator.NO_WS],
-            ),
-        ],
-    )
-    return gsm.Grammar(
-        rules=(unlabeled_rule,),
-        identifiers={"token": unlabeled_rule},
     )
 
 
@@ -449,30 +422,10 @@ class TestFegenGrammar:
 
     def test_rule_name_to_class_name_mapping(self) -> None:
         """FEGEN_RULE_NAMES and FEGEN_CLASS_NAMES must agree with class_name_for_rule_node."""
-        from fltk.fegen import gsm  # noqa: PLC0415
-        from fltk.fegen.gsm2tree import CstGenerator  # noqa: PLC0415
-        from fltk.iir.context import create_default_context  # noqa: PLC0415
-        from fltk.iir.py import reg as pyreg  # noqa: PLC0415
+        # Use the shared labeled grammar and _make_generator to access the name helper.
+        from tests.gsm2tree_helpers import make_labeled_grammar  # noqa: PLC0415
 
-        # Build a minimal CstGenerator with a dummy grammar to access the name helper.
-        dummy_rule = gsm.Rule(
-            name="dummy",
-            alternatives=[
-                gsm.Items(
-                    items=[
-                        gsm.Item(
-                            label="x",
-                            disposition=gsm.Disposition.INCLUDE,
-                            term=gsm.Regex(r"x"),
-                            quantifier=gsm.REQUIRED,
-                        )
-                    ],
-                    sep_after=[gsm.Separator.NO_WS],
-                )
-            ],
-        )
-        dummy_grammar = gsm.Grammar(rules=(dummy_rule,), identifiers={"dummy": dummy_rule})
-        gen = CstGenerator(grammar=dummy_grammar, py_module=pyreg.Builtins, context=create_default_context())
+        gen = _make_generator(make_labeled_grammar())
         for rule_name, expected_class in FEGEN_RULE_TO_CLASS:
             assert gen.class_name_for_rule_node(rule_name) == expected_class, (
                 f"class_name_for_rule_node({rule_name!r}) should be {expected_class!r}"
@@ -563,31 +516,31 @@ class TestEmptyLabelEnumOmitted:
         """OQ-empty-label-enum: Rules with no labels omit the enum (Rust disallows zero-variant enums)."""
         gen = RustCstGenerator(_make_zero_label_grammar())
         source = gen.generate()
-        assert "Token_Label" not in source
+        assert "Foo_Label" not in source
 
     def test_zero_label_rule_still_emits_struct(self) -> None:
         gen = RustCstGenerator(_make_zero_label_grammar())
         source = gen.generate()
-        assert "pub struct Token {" in source
+        assert "pub struct Foo {" in source
 
     def test_zero_label_rule_omits_label_classattr(self) -> None:
-        """#[classattr] Label is not emitted in the Token impl block (no label enum exists)."""
+        """#[classattr] Label is not emitted in the Foo impl block (no label enum exists)."""
         gen = RustCstGenerator(_make_zero_label_grammar())
         source = gen.generate()
-        # Extract the impl Token { ... } block and verify Label classattr is absent from it.
+        # Extract the impl Foo { ... } block and verify Label classattr is absent from it.
         # (The _trivia rule added by the generator does have labels, so the file as a whole
-        #  may contain 'fn Label' — but not inside the Token impl block.)
+        #  may contain 'fn Label' — but not inside the Foo impl block.)
         # Use regex to match the impl block up to the first `\n}` at column 0 (not indented).
-        m = re.search(r"impl Token \{(.+?)\n\}", source, re.DOTALL)
-        assert m is not None, "impl Token { ... } block not found in generated source"
-        token_impl = m.group(0)
-        assert "fn Label(" not in token_impl
+        m = re.search(r"impl Foo \{(.+?)\n\}", source, re.DOTALL)
+        assert m is not None, "impl Foo { ... } block not found in generated source"
+        foo_impl = m.group(0)
+        assert "fn Label(" not in foo_impl
 
     def test_zero_label_rule_register_classes_no_enum(self) -> None:
         gen = RustCstGenerator(_make_zero_label_grammar())
         source = gen.generate()
-        assert "module.add_class::<Token_Label>()?;" not in source
-        assert "module.add_class::<Token>()?;" in source
+        assert "module.add_class::<Foo_Label>()?;" not in source
+        assert "module.add_class::<Foo>()?;" in source
 
 
 # ---------------------------------------------------------------------------

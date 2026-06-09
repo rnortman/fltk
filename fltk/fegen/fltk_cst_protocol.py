@@ -9,6 +9,25 @@ import fltk.fegen.pyrt.terminalsrc
 if typing.TYPE_CHECKING:
     import fltk._native
     import fltk.fegen.pyrt.span
+__all__ = [
+    "Alternatives",
+    "BlockComment",
+    "CstModule",
+    "Disposition",
+    "Grammar",
+    "Identifier",
+    "Item",
+    "Items",
+    "LineComment",
+    "Literal",
+    "NodeKind",
+    "Quantifier",
+    "RawString",
+    "Rule",
+    "Span",
+    "Term",
+    "Trivia",
+]
 
 
 class NodeKind(enum.Enum):

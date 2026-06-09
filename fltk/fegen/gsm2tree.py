@@ -2,9 +2,9 @@ from __future__ import annotations
 
 import ast
 from collections import defaultdict
-from collections.abc import Iterable, MutableMapping, Sequence
+from collections.abc import Callable, Iterable, MutableMapping, Sequence
 from dataclasses import dataclass, field
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Literal
 
 from fltk import pygen
 from fltk.fegen import gsm, naming
@@ -203,17 +203,18 @@ class CstGenerator:
         """
         klass = pygen.dataclass(class_name)
 
-        label_enum = pygen.klass(name="Label", bases=["enum.Enum"])
         labels = sorted(model.labels.keys())
-        for label in labels:
-            label_enum.body.append(pygen.stmt(f"{label.upper()} = enum.auto()"))
+        if labels:
+            label_enum = pygen.klass(name="Label", bases=["enum.Enum"])
+            for label in labels:
+                label_enum.body.append(pygen.stmt(f"{label.upper()} = enum.auto()"))
 
-        # Cross-backend equality contract (§2.2): canonical-name-keyed eq/hash.
-        # _emit_cross_backend_eq_hash uses self._fltk_canonical_name, which is a plain string
-        # attribute set post-class (not a property) — see _emit_label_canonical_name_assignments.
-        self._emit_cross_backend_eq_hash(label_enum)
+            # Cross-backend equality contract (§2.2): canonical-name-keyed eq/hash.
+            # _emit_cross_backend_eq_hash uses self._fltk_canonical_name, which is a plain string
+            # attribute set post-class (not a property) — see _emit_label_canonical_name_assignments.
+            self._emit_cross_backend_eq_hash(label_enum)
 
-        klass.body.append(label_enum)
+            klass.body.append(label_enum)
         if not model.types:
             msg = (
                 f"Model class `{class_name}` "
@@ -221,6 +222,9 @@ class CstGenerator:
             )
             raise RuntimeError(msg)
         child_annotation = self.py_annotation_for_model_types(model_types=model.types, in_module=True)
+        # Mirror the Protocol generator's label_annotation pattern: when the node has labels, use
+        # Optional[Label]; when label-free, use None (matching Protocol/Rust reference exactly).
+        label_annotation = "typing.Optional[Label]" if labels else "None"
         # kind: instance attribute (dataclass field with default) for NodeKind discriminant (§2.4).
         # MUST NOT be ClassVar — pyright rejects ClassVar against the Protocol's instance-attr declaration.
         # Use node_kind_member_name for the member name to stay in sync with the Protocol generator.
@@ -230,7 +234,7 @@ class CstGenerator:
                 pygen.stmt(f"kind: typing.Literal[NodeKind.{kind_member}] = NodeKind.{kind_member}"),
                 pygen.stmt("span: fltk.fegen.pyrt.terminalsrc.Span = fltk.fegen.pyrt.terminalsrc.UnknownSpan"),
                 pygen.stmt(
-                    f"children: list[tuple[typing.Optional[Label], {child_annotation}]]"
+                    f"children: list[tuple[{label_annotation}, {child_annotation}]]"
                     " = dataclasses.field(default_factory=list)"
                 ),
             ]
@@ -242,7 +246,7 @@ class CstGenerator:
         }
         append_fn = pygen.function(
             "append",
-            f"self, child: {child_annotation}, label: typing.Optional[Label] = None",
+            f"self, child: {child_annotation}, label: {label_annotation} = None",
             "None",
         )
         append_fn.body.append(pygen.stmt("self.children.append((label, child))"))
@@ -250,7 +254,7 @@ class CstGenerator:
 
         extend_fn = pygen.function(
             "extend",
-            f"self, children: typing.Iterable[{child_annotation}], label: typing.Optional[Label] = None",
+            f"self, children: typing.Iterable[{child_annotation}], label: {label_annotation} = None",
             "None",
         )
         extend_fn.body.append(pygen.stmt("self.children.extend((label, child) for child in children)"))
@@ -264,7 +268,7 @@ class CstGenerator:
         extend_children_fn.body.append(pygen.stmt("self.children.extend(other.children)"))
         klass.body.append(extend_children_fn)
 
-        child_fn = pygen.function("child", "self", f"tuple[typing.Optional[Label], {child_annotation}]")
+        child_fn = pygen.function("child", "self", f"tuple[{label_annotation}, {child_annotation}]")
         child_fn.body.extend(
             [
                 pygen.if_(
@@ -280,45 +284,25 @@ class CstGenerator:
         )
         klass.body.append(child_fn)
 
-        for label in labels:
-            append_fn = pygen.function(
-                f"append_{label}",
-                f"self, child: {child_annotation_by_labels[label]}",
-                "None",
-            )
-            append_fn.body.append(pygen.stmt(f"self.children.append(({class_name}.Label.{label.upper()}, child))"))
-            klass.body.append(append_fn)
+        multi_type = len(model.types) > 1
 
-            extend_fn = pygen.function(
-                f"extend_{label}",
-                f"self, children: typing.Iterable[{child_annotation_by_labels[label]}]",
-                "None",
-            )
-            extend_fn.body.append(
-                pygen.stmt(f"self.children.extend(({class_name}.Label.{label.upper()}, child) for child in children)")
-            )
-            klass.body.append(extend_fn)
-
-            children_fn = pygen.function(
-                f"children_{label}",
-                "self",
-                f"typing.Iterator[{child_annotation_by_labels[label]}]",
-            )
-            if len(model.types) > 1:
-                child_expr = f"typing.cast({child_annotation_by_labels[label]}, child)"
-            else:
-                child_expr = "child"
-            children_fn.body.append(
-                pygen.stmt(
-                    f"return ({child_expr} for label, child in self.children"
-                    f" if label == {class_name}.Label.{label.upper()})"
-                )
-            )
-            klass.body.append(children_fn)
-
-            child_fn = pygen.function(f"child_{label}", "self", f"{child_annotation_by_labels[label]}")
-            child_fn.body.extend(
-                [
+        def concrete_body_for(method: str, label: str) -> list[ast.stmt]:
+            lann = child_annotation_by_labels[label]
+            upper = label.upper()
+            if method == "append":
+                return [pygen.stmt(f"self.children.append(({class_name}.Label.{upper}, child))")]
+            if method == "extend":
+                return [pygen.stmt(f"self.children.extend(({class_name}.Label.{upper}, child) for child in children)")]
+            if method == "children":
+                child_expr = f"typing.cast({lann}, child)" if multi_type else "child"
+                return [
+                    pygen.stmt(
+                        f"return ({child_expr} for label, child in self.children"
+                        f" if label == {class_name}.Label.{upper})"
+                    )
+                ]
+            if method == "child":
+                return [
                     pygen.stmt(f"children = list(self.children_{label}())"),
                     pygen.if_(
                         pygen.expr("(n := len(children)) != 1"),
@@ -330,16 +314,8 @@ class CstGenerator:
                     ),
                     pygen.stmt("return children[0]"),
                 ]
-            )
-            klass.body.append(child_fn)
-
-            maybe_fn = pygen.function(
-                f"maybe_{label}",
-                "self",
-                f"typing.Optional[{child_annotation_by_labels[label]}]",
-            )
-            maybe_fn.body.extend(
-                [
+            if method == "maybe":
+                return [
                     pygen.stmt(f"children = list(self.children_{label}())"),
                     pygen.if_(
                         pygen.expr("(n := len(children)) > 1"),
@@ -351,8 +327,16 @@ class CstGenerator:
                     ),
                     pygen.stmt("return children[0] if children else None"),
                 ]
+            msg = f"Unknown method: {method!r}"
+            raise ValueError(msg)
+
+        klass.body.extend(
+            self._emit_label_quintet(
+                labels=labels,
+                annotation_for=lambda label: child_annotation_by_labels[label],
+                body_for=concrete_body_for,
             )
-            klass.body.append(maybe_fn)
+        )
 
         stmts: list[ast.stmt] = [klass]
         stmts.extend(self._emit_label_canonical_name_assignments(class_name, labels))
@@ -406,9 +390,6 @@ class CstGenerator:
         """
         return self.class_name_for_rule_node(rule_name)
 
-    # TODO(cst-protocol-generator-refactor): this method mirrors py_annotation_for_model_types (gsm2tree.py:85)
-    # and _protocol_class_for_model mirrors py_class_for_model (gsm2tree.py:109).  Unify both pairs with
-    # shared skeletons parameterized by annotation resolver / Label body / method bodies / base class.
     def protocol_annotation_for_model_types(self, *, model_types: Iterable[ModelType], class_name: str = "") -> str:
         """Return a Python annotation string for model_types.
 
@@ -449,10 +430,6 @@ class CstGenerator:
         shape in _emit_cross_backend_eq_hash.  The static type of each Label member stays object
         (ClassVar[object]) — this sentinel is not an enum.Enum, preserving the structural-mismatch
         contract (test_boundary_probe_documents_label_mismatch).
-
-        TODO(protocol-label-member-private): _ProtocolLabelMember is emitted into the public
-        protocol module.  Consider emitting __all__ or moving this class to pyrt.bridge so it
-        does not appear as a public symbol in the generated output.
         """
         stmts = ast.parse(
             """\
@@ -518,6 +495,42 @@ class _ProtocolLabelMember:
         module.body.append(self._protocol_span_class())
         module.body.append(self._cst_module_protocol())
 
+        # Emit __all__ to prevent _ProtocolLabelMember from leaking as a public symbol
+        # via wildcard imports / IDE autocomplete.  Build the list from the same sources
+        # used to emit the actual classes so it cannot drift from the generated output.
+        # Sorted for deterministic output across regenerations.
+        public_names = sorted(
+            {self.protocol_node_name(rule) for rule in self.rule_models} | {"NodeKind", "Span", "CstModule"}
+        )
+        # Insert after the last import / TYPE_CHECKING block so __all__ appears near the top of
+        # the module.  Derive the position structurally rather than hardcoding a count so it
+        # stays correct if the preamble ever changes.
+        last_import_idx = max(
+            (
+                i
+                for i, stmt in enumerate(module.body)
+                if isinstance(stmt, ast.ImportFrom | ast.Import)
+                or (
+                    isinstance(stmt, ast.If)
+                    and isinstance(stmt.test, ast.Attribute)
+                    and isinstance(stmt.test.value, ast.Name)
+                    and stmt.test.value.id == "typing"
+                    and stmt.test.attr == "TYPE_CHECKING"
+                )
+            ),
+            default=-1,
+        )
+        all_stmt = ast.Assign(
+            targets=[ast.Name(id="__all__", ctx=ast.Store())],
+            value=ast.List(
+                elts=[ast.Constant(value=name) for name in public_names],
+                ctx=ast.Load(),
+            ),
+            lineno=0,
+            col_offset=0,
+        )
+        module.body.insert(last_import_idx + 1, all_stmt)
+
         return module
 
     def _protocol_class_for_model_with_assignments(
@@ -536,6 +549,55 @@ class _ProtocolLabelMember:
             canonical = f"{class_name}.Label.{python_name}"
             stmts.append(pygen.stmt(f'{class_name}.Label.{python_name} = _ProtocolLabelMember("{canonical}")'))
         return stmts
+
+    def _emit_label_quintet(
+        self,
+        *,
+        labels: list[str],
+        annotation_for: Callable[[str], str],
+        body_for: Callable[[Literal["append", "extend", "children", "child", "maybe"], str], list[ast.stmt]],
+    ) -> list[ast.FunctionDef]:
+        """Emit the per-label quintet of accessor methods shared by both generators.
+
+        Returns a flat list of FunctionDefs (append_<l>, extend_<l>, children_<l>, child_<l>,
+        maybe_<l>) for each label, in order.  Callers append into their own class body.
+
+        Parameters
+        ----------
+        labels:
+            Sorted list of label names (empty → returns []).
+        annotation_for:
+            Maps label name → child type annotation string for that label.
+        body_for:
+            Maps (method_name, label) → list of body statements.
+            method_name is one of "append", "extend", "children", "child", "maybe".
+            Protocol callers return [pygen.stmt("...")] for every call.
+        """
+        fns: list[ast.FunctionDef] = []
+        for label in labels:
+            lann = annotation_for(label)
+
+            fn = pygen.function(f"append_{label}", f"self, child: {lann}", "None")
+            fn.body = body_for("append", label)
+            fns.append(fn)
+
+            fn = pygen.function(f"extend_{label}", f"self, children: typing.Iterable[{lann}]", "None")
+            fn.body = body_for("extend", label)
+            fns.append(fn)
+
+            fn = pygen.function(f"children_{label}", "self", f"typing.Iterator[{lann}]")
+            fn.body = body_for("children", label)
+            fns.append(fn)
+
+            fn = pygen.function(f"child_{label}", "self", lann)
+            fn.body = body_for("child", label)
+            fns.append(fn)
+
+            fn = pygen.function(f"maybe_{label}", "self", f"typing.Optional[{lann}]")
+            fn.body = body_for("maybe", label)
+            fns.append(fn)
+
+        return fns
 
     def _protocol_class_for_model(self, class_name: str, model: ItemsModel, rule_name: str) -> ast.ClassDef:
         """Generate a Protocol class for a single CST node.
@@ -575,11 +637,6 @@ class _ProtocolLabelMember:
         if labels:
             klass.body.append(pygen.stmt(f"children: list[tuple[typing.Optional[Label], {child_annotation}]]"))
         else:
-            # TODO(cst-protocol-label-free): label-free nodes use tuple[None, T] rather than
-            # tuple[Label | None, T], creating an asymmetry with label-bearing nodes.  Generic
-            # consumers iterating children of arbitrary node types must case-split on this.
-            # Fix by introducing a vacuous Label class for label-free nodes or a module-level
-            # _NoLabel alias so all children share the same tuple shape.
             klass.body.append(pygen.stmt(f"children: list[tuple[None, {child_annotation}]]"))
 
         label_annotation = "typing.Optional[Label]" if labels else "None"
@@ -608,35 +665,18 @@ class _ProtocolLabelMember:
         child_fn.body.append(pygen.stmt("..."))
         klass.body.append(child_fn)
 
-        for label in labels:
-            label_type_annotation = self.protocol_annotation_for_model_types(
+        def protocol_annotation_for(label: str) -> str:
+            return self.protocol_annotation_for_model_types(
                 model_types=model.labels[label], class_name=f"{class_name}.{label}"
             )
 
-            # append_<label>
-            fn = pygen.function(f"append_{label}", f"self, child: {label_type_annotation}", "None")
-            fn.body.append(pygen.stmt("..."))
-            klass.body.append(fn)
-
-            # extend_<label>
-            fn = pygen.function(f"extend_{label}", f"self, children: typing.Iterable[{label_type_annotation}]", "None")
-            fn.body.append(pygen.stmt("..."))
-            klass.body.append(fn)
-
-            # children_<label>
-            fn = pygen.function(f"children_{label}", "self", f"typing.Iterator[{label_type_annotation}]")
-            fn.body.append(pygen.stmt("..."))
-            klass.body.append(fn)
-
-            # child_<label>
-            fn = pygen.function(f"child_{label}", "self", label_type_annotation)
-            fn.body.append(pygen.stmt("..."))
-            klass.body.append(fn)
-
-            # maybe_<label>
-            fn = pygen.function(f"maybe_{label}", "self", f"typing.Optional[{label_type_annotation}]")
-            fn.body.append(pygen.stmt("..."))
-            klass.body.append(fn)
+        klass.body.extend(
+            self._emit_label_quintet(
+                labels=labels,
+                annotation_for=protocol_annotation_for,
+                body_for=lambda _method, _label: [pygen.stmt("...")],
+            )
+        )
 
         return klass
 

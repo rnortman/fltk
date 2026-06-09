@@ -9,6 +9,7 @@ import fltk.fegen.pyrt.terminalsrc
 if typing.TYPE_CHECKING:
     import fltk._native
     import fltk.fegen.pyrt.span
+__all__ = ["CstModule", "Expr", "Factor", "NodeKind", "Number", "Span", "Term", "Trivia"]
 
 
 class NodeKind(enum.Enum):
