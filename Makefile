@@ -105,8 +105,6 @@ open('src/cst_generated.rs', 'w').write(RustCstGenerator(_make_poc_grammar()).ge
 	$(MAKE) gen-rust-cst GRAMMAR=fltk/fegen/fegen.fltkg RS_OUT=src/cst_fegen.rs
 	# Rust: tests/rust_cst_fixture/src/cst.rs (phase4_roundtrip.fltkg)
 	$(MAKE) gen-rust-cst GRAMMAR=fltk/fegen/test_data/phase4_roundtrip.fltkg RS_OUT=tests/rust_cst_fixture/src/cst.rs
-	# Rust: tests/rust_cst_fegen/src/cst.rs (fegen.fltkg — TODO(fegen-cst-rs-single-source): duplicate of cst_fegen.rs)
-	$(MAKE) gen-rust-cst GRAMMAR=fltk/fegen/fegen.fltkg RS_OUT=tests/rust_cst_fegen/src/cst.rs
 	# Normalize formatting. Order matters:
 	# 1. ruff check --fix: upgrades typing.Union[X,Y] → X|Y and similar, so ruff format can then
 	#    wrap the resulting X|Y chains correctly.  Exit code ignored — residuals handled by step 2.

@@ -129,6 +129,10 @@ class RustCstGenerator:
     # ------------------------------------------------------------------
 
     def _preamble(self) -> str:
+        # TODO(preamble-helpers-into-cst-core): the span helper block below (FLTK_NATIVE_SPAN_TYPE,
+        # extract_span, get_span_type, FLTK_NATIVE_SOURCE_TEXT_TYPE, get_source_text_type) is emitted
+        # into every generated file. Move them as pub items into fltk-cst-core so all cdylibs share
+        # one definition at link time and any fix propagates without regeneration.
         return (
             "use fltk_cst_core::Span;\n"
             "use pyo3::exceptions::{PyTypeError, PyValueError};\n"
