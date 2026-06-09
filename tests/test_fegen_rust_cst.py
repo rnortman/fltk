@@ -66,22 +66,6 @@ ALL_CLASS_IDS = [cls.__name__ for cls, _, _, _ in CLASS_LABEL_INFO]
 
 
 # ---------------------------------------------------------------------------
-# AC-7: All 14 classes importable
-# ---------------------------------------------------------------------------
-
-
-class TestAllClassesImportable:
-    @pytest.mark.parametrize("cls", ALL_CLASSES, ids=ALL_CLASS_IDS)
-    def test_class_is_type(self, cls: type) -> None:
-        """AC-7: Each class is a real Python type (importable and callable)."""
-        # TODO(test-class-is-type-body): `isinstance(cls, type)` passes for any
-        # imported class including a misimported alias. Import success is the real
-        # AC-7 check; a construction test (cls()) would be stronger. The AC-8a
-        # tests already cover construction for all 14 classes.
-        assert isinstance(cls, type)
-
-
-# ---------------------------------------------------------------------------
 # AC-8a: Construction with default UnknownSpan
 # ---------------------------------------------------------------------------
 

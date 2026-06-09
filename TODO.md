@@ -16,10 +16,6 @@ SHA-pin all GitHub Actions references in `.github/workflows/ci.yml` to immutable
 
 Extract the underscore-to-CamelCase rule-name-to-class-name transform into a shared helper. Currently four independent copies exist: `CstGenerator.class_name_for_rule_node` (`gsm2tree.py`), `UnparserGenerator.class_name_for_rule_node` (`gsm2unparser.py`), an inline list-comp (`gsm2unparser.py`), and `_rust_variant_name` (`gsm2tree_rs.py`). A behavioral change (e.g. digit handling, consecutive underscores) must be applied in four places. Candidate location: `fltk/fegen/gsm2tree.py` or a new `fltk/fegen/naming.py`. Location: `fltk/fegen/gsm2tree_rs.py:18`.
 
-## `test-class-is-type-body`
-
-Strengthen or remove the `isinstance(cls, type)` assertion in `TestAllClassesImportable.test_class_is_type`. The assertion passes for any imported object including a misimported alias; import success is the real AC-7 check. Option: replace with `cls()` construction (already covered by AC-8a tests). Location: `tests/test_fegen_rust_cst.py:67`.
-
 ## `fegen-cst-rs-single-source`
 
 `src/cst_fegen.rs` and `tests/rust_cst_fegen/src/cst.rs` are identical files committed independently. When one is updated (e.g. by regeneration after a grammar change), the other must be separately regenerated and committed; silent divergence is possible. Fix: remove `tests/rust_cst_fegen/src/cst.rs` from the repo and generate it from `src/cst_fegen.rs` at build time (via symlink, Makefile copy step, or Rust `include!` macro), making the single source of truth explicit. Location: `tests/rust_cst_fegen/src/cst.rs`.
