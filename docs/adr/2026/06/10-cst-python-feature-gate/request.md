@@ -14,7 +14,7 @@ FLTK's ultimate goal is to support all three of:
 
 User direction, verbatim: "I expect *generation* to stay in Python; python generates rust." The generator toolchain (`fltk/fegen/*`) remains Python; only the generated artifacts and runtime crates gain a Python-free mode.
 
-Sequencing decision: the feature gate comes **before** the Rust parser backend, because (a) it defines and stabilizes the native API contract the parser backend will code against, (b) it surfaces API gaps cheaply via the spike below, (c) it gives CI a pure-Rust build target that prevents pyo3 entanglement creep during the longer parser effort, and (d) it lets the future parser backend iterate under plain `cargo test`.
+Sequencing decision: the feature gate comes **before** the Rust parser backend, because (a) it defines and stabilizes the native API contract the parser backend will code against, (b) it surfaces API gaps cheaply via the spike below, (c) it gives CI a pure-Rust build target that prevents pyo3 entanglement creep during the longer parser effort, and (d) it lets the future parser backend iterate under plain `cargo test`. Rust parser generation is out of scope here; this prepares the CST backend for later pure-Rust applications.
 
 ## Background
 
@@ -40,8 +40,8 @@ In a Python-free build none of the pyo3 surface is needed, and — important —
 - **Generated output is public API for out-of-tree consumers** (see CLAUDE.md). No renames, no annotation churn, no Python-visible behavior change.
 - **No parser work.** No Rust parser generation, no parsing in the spike. Resist scope creep toward phase 2.
 - **No `unsafe` reachable in the python-off configuration.** Enforced structurally (gating out `cross_cdylib.rs`), not by convention.
-- `TODO(crosscdylib-abi-sentinel)` is python-side only and unaffected; leave it alone.
 - Generator implementation stays Python.
+- Rust-only applications pay no Python-associated costs.
 
 ## Verification expectations
 

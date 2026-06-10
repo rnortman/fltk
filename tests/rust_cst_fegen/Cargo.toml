@@ -12,8 +12,9 @@ name = "fegen_rust_cst"
 crate-type = ["cdylib"]
 
 [features]
-extension-module = ["pyo3/extension-module"]
 default = ["extension-module"]
+extension-module = ["python", "pyo3/extension-module"]
+python = ["fltk-cst-core/python"]
 
 [dependencies]
 pyo3 = { version = "0.23", features = ["abi3-py310"] }

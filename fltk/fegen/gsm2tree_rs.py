@@ -243,10 +243,16 @@ class RustCstGenerator:
 
     def _preamble(self) -> str:
         return (
-            "use fltk_cst_core::{extract_span, get_span_type, span_to_pyobject, Span};\n"
+            "use fltk_cst_core::Span;\n"
+            '#[cfg(feature = "python")]\n'
+            "use fltk_cst_core::{extract_span, get_span_type, span_to_pyobject};\n"
+            '#[cfg(feature = "python")]\n'
             "use pyo3::exceptions::{PyTypeError, PyValueError};\n"
+            '#[cfg(feature = "python")]\n'
             "use pyo3::prelude::*;\n"
+            '#[cfg(feature = "python")]\n'
             "use pyo3::types::{PyList, PyTuple, PyType};\n"
+            '#[cfg(feature = "python")]\n'
             "use pyo3::PyTypeInfo;\n"
             "\n"
         )
@@ -310,17 +316,35 @@ class RustCstGenerator:
         lines.append(f"// {'─' * 75}")
         lines.append("")
 
+        # Emit two enum definitions: one with pyclass/pyo3 attrs for python-on,
+        # one plain for python-off.  cfg_attr on enum variant helper attributes
+        # (pyo3(name=...)) fails with pyo3 0.23 when the outer pyclass is also
+        # behind cfg_attr — the attribute validator fires before proc-macro
+        # expansion so pyo3 is not yet registered as a helper attr.
+        # Dual-cfg blocks are the correct pyo3-idiomatic workaround.
+        # Variant names are extracted once and reused in both blocks to prevent drift.
+        variant_names = [
+            (self._node_kind_variant_name(cn), self._node_kind_python_name(rn)) for cn, _l, rn in rule_info
+        ]
+        lines.append('#[cfg(feature = "python")]')
         lines.append('#[pyclass(frozen, name = "NodeKind")]')
         lines.append("#[derive(Clone, PartialEq, Eq, Hash)]")
         lines.append("pub enum NodeKind {")
-        for class_name, _labels, rule_name in rule_info:
-            python_name = self._node_kind_python_name(rule_name)
+        for variant, python_name in variant_names:
             lines.append(f'    #[pyo3(name = "{python_name}")]')
-            lines.append(f"    {self._node_kind_variant_name(class_name)},")
+            lines.append(f"    {variant},")
+        lines.append("}")
+        lines.append("")
+        lines.append('#[cfg(not(feature = "python"))]')
+        lines.append("#[derive(Clone, PartialEq, Eq, Hash)]")
+        lines.append("pub enum NodeKind {")
+        for variant, _python_name in variant_names:
+            lines.append(f"    {variant},")
         lines.append("}")
         lines.append("")
 
         # pymethods block: __repr__, _fltk_canonical_name, __eq__, __hash__
+        lines.append('#[cfg(feature = "python")]')
         lines.append("#[pymethods]")
         lines.append("impl NodeKind {")
         lines.append("    fn __repr__(&self) -> &'static str {")
@@ -364,19 +388,30 @@ class RustCstGenerator:
         lines.append(f"// {'─' * 75}")
         lines.append("")
 
+        # Dual-cfg blocks (same rationale as NodeKind above).
+        # Variant names extracted once and reused in both blocks to prevent drift.
+        label_variants = [(_rust_variant_name(lbl), _python_label_name(lbl)) for lbl in labels]
         lines.append("#[allow(non_camel_case_types)]")
+        lines.append('#[cfg(feature = "python")]')
         lines.append(f'#[pyclass(frozen, name = "{enum_name}")]')
         lines.append("#[derive(Clone, PartialEq, Eq, Hash)]")
         lines.append(f"pub enum {enum_name} {{")
-        for label in labels:
-            rust_variant = _rust_variant_name(label)
-            python_name = _python_label_name(label)
+        for rust_variant, python_name in label_variants:
             lines.append(f'    #[pyo3(name = "{python_name}")]')
+            lines.append(f"    {rust_variant},")
+        lines.append("}")
+        lines.append("")
+        lines.append("#[allow(non_camel_case_types)]")
+        lines.append('#[cfg(not(feature = "python"))]')
+        lines.append("#[derive(Clone, PartialEq, Eq, Hash)]")
+        lines.append(f"pub enum {enum_name} {{")
+        for rust_variant, _python_name in label_variants:
             lines.append(f"    {rust_variant},")
         lines.append("}")
         lines.append("")
 
         # pymethods block: __repr__, _fltk_canonical_name, __eq__, __hash__
+        lines.append('#[cfg(feature = "python")]')
         lines.append("#[pymethods]")
         lines.append(f"impl {enum_name} {{")
         lines.append("    fn __repr__(&self) -> &'static str {")
@@ -437,6 +472,8 @@ class RustCstGenerator:
         lines.append("}")
         lines.append("")
 
+        # to_pyobject/extract_from_pyobject: python-only, gate the entire impl block
+        lines.append('#[cfg(feature = "python")]')
         # to_pyobject: translate a native child variant back to a Python object
         # py is needed when any variant exists; _span_type parameter dropped (no longer used by Span arm).
         py_param = "py" if (child_classes or has_span) else "_py"
@@ -445,8 +482,6 @@ class RustCstGenerator:
         lines.append("        match self {")
         if has_span:
             lines.append("            Self::Span(s) => {")
-            lines.append("                // span_to_pyobject: O(1) Arc clone, no string copy; preserves")
-            lines.append("                // Arc-sharing so multiple reads of the same span merge without error.")
             lines.append("                span_to_pyobject(py, s)")
             lines.append("            }")
         for child_cls in child_classes:
@@ -504,7 +539,7 @@ class RustCstGenerator:
         lines.append(f"// {'─' * 75}")
         lines.append("")
 
-        lines.append("#[pyclass]")
+        lines.append('#[cfg_attr(feature = "python", pyclass)]')
         lines.append(f"pub struct {class_name} {{")
         lines.append("    span: Span,")
         lines.append(f"    children: Vec<({label_type}, {enum_name})>,")
@@ -561,6 +596,7 @@ class RustCstGenerator:
         lines.append("")
 
         # pymethods block
+        lines.append('#[cfg(feature = "python")]')
         lines.append("#[pymethods]")
         lines.append(f"impl {class_name} {{")
 
@@ -610,9 +646,6 @@ class RustCstGenerator:
         return [
             "    #[getter]",
             "    fn span(&self, py: Python<'_>) -> PyResult<PyObject> {",
-            "        // Return a fltk._native.Span so consumers always get the canonical type",
-            "        // regardless of which cdylib the node is defined in.",
-            "        // Preserve source via span_to_pyobject: O(1) Arc clone, no string copy.",
             "        span_to_pyobject(py, &self.span)",
             "    }",
             "",
@@ -673,7 +706,7 @@ class RustCstGenerator:
             "        let span_type = get_span_type(py)?;",
             f"        let native_child = {enum_name}::extract_from_pyobject(py, child, &span_type)?;",
             "        let native_label = match label {",
-            *self._label_from_pyobject_match(class_name, labels),
+            *self._label_from_pyobject_match(class_name, labels, method_name="append"),
             "        };",
             "        self.children.push((native_label, native_child));",
             "        Ok(())",
@@ -681,7 +714,7 @@ class RustCstGenerator:
             "",
         ]
 
-    def _label_from_pyobject_match(self, class_name: str, labels: list[str]) -> list[str]:
+    def _label_from_pyobject_match(self, class_name: str, labels: list[str], method_name: str) -> list[str]:
         """Emit the match arms for converting an Option<PyObject> label to native label type."""
         if not labels:
             return [
@@ -689,7 +722,7 @@ class RustCstGenerator:
                 "            Some(lbl) => {",
                 "                let lbl_type = lbl.bind(py).get_type().name()?;",
                 "                return Err(PyTypeError::new_err(format!(",
-                f'                    "{class_name}.append: no labels defined for this node; got {{}} label",',
+                f'                    "{class_name}.{method_name}: no labels defined for this node; got {{}} label",',
                 "                    lbl_type",
                 "                )));",
                 "            }",
@@ -702,7 +735,7 @@ class RustCstGenerator:
             "                    Some(native_lbl)",
             "                } else {",
             "                    return Err(PyTypeError::new_err(format!(",
-            f'                        "{class_name}.append: label argument is not a {enum_name}; got {{}}",',
+            f'                        "{class_name}.{method_name}: label argument is not a {enum_name}; got {{}}",',
             "                        lbl.bind(py).get_type().name()?",
             "                    )));",
             "                }",
@@ -721,7 +754,7 @@ class RustCstGenerator:
             "    ) -> PyResult<()> {",
             "        let span_type = get_span_type(py)?;",
             "        let native_label = match label {",
-            *self._label_from_pyobject_match(class_name, labels),
+            *self._label_from_pyobject_match(class_name, labels, method_name="extend"),
             "        };",
             "        let iter = children.try_iter()?;",
             "        for child_result in iter {",
@@ -915,6 +948,7 @@ class RustCstGenerator:
 
     def _register_classes_fn(self) -> str:
         lines: list[str] = []
+        lines.append('#[cfg(feature = "python")]')
         lines.append("pub fn register_classes(module: &Bound<'_, PyModule>) -> PyResult<()> {")
         # NodeKind must be registered before node structs (whose kind getter returns it).
         lines.append("    module.add_class::<NodeKind>()?;")

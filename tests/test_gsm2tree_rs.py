@@ -172,17 +172,26 @@ def fegen_source(fegen_generator: RustCstGenerator) -> str:
 class TestPreamble:
     def test_required_use_declarations(self, poc_source: str) -> None:
         """AC-10: Every generated .rs file includes the required use declarations."""
-        assert "use fltk_cst_core::{extract_span, get_span_type, span_to_pyobject, Span};" in poc_source
-        assert "use pyo3::exceptions::{PyTypeError, PyValueError};" in poc_source
-        assert "use pyo3::prelude::*;" in poc_source
+        # Unconditional: only Span (native, mode-independent)
+        assert "use fltk_cst_core::Span;" in poc_source
+        # Python-only imports are cfg-gated
+        assert (
+            '#[cfg(feature = "python")]\nuse fltk_cst_core::{extract_span, get_span_type, span_to_pyobject};'
+            in poc_source
+        )
+        assert '#[cfg(feature = "python")]\nuse pyo3::exceptions::{PyTypeError, PyValueError};' in poc_source
+        assert '#[cfg(feature = "python")]\nuse pyo3::prelude::*;' in poc_source
+        assert '#[cfg(feature = "python")]\nuse pyo3::types::{PyList, PyTuple, PyType};' in poc_source
+        assert '#[cfg(feature = "python")]\nuse pyo3::PyTypeInfo;' in poc_source
+        # These must NOT appear as unconditional imports
         assert "use pyo3::sync::GILOnceCell;" not in poc_source
-        assert "use pyo3::types::{PyList, PyTuple, PyType};" in poc_source
-        assert "use pyo3::PyTypeInfo;" in poc_source
         # get_source_text_type is no longer imported (span_to_pyobject handles the full path)
         assert "get_source_text_type" not in poc_source
+        # Old form: unconditional pyo3 import is gone
+        assert "use fltk_cst_core::{extract_span, get_span_type, span_to_pyobject, Span};" not in poc_source
 
     def test_preamble_at_start(self, poc_source: str) -> None:
-        assert poc_source.startswith("use fltk_cst_core::{extract_span, get_span_type, span_to_pyobject, Span};\n")
+        assert poc_source.startswith("use fltk_cst_core::Span;\n")
 
     def test_helpers_not_emitted(self, poc_source: str) -> None:
         """Helpers now live in fltk-cst-core; none of the five items are emitted in generated source."""
@@ -217,12 +226,17 @@ class TestPreamble:
 
 class TestPocGrammarLabels:
     def test_identifier_label_enum_present(self, poc_source: str) -> None:
+        # Two enum definitions: one gated python-on with pyclass/pyo3 attrs, one python-off plain.
         assert "pub enum Identifier_Label {" in poc_source
+        # Python-on block has pyo3(name) directly on variants
         assert '#[pyo3(name = "NAME")]' in poc_source
         assert "    Name," in poc_source
 
     def test_identifier_label_pyclass_name(self, poc_source: str) -> None:
+        # Dual-cfg: python-on block uses direct #[pyclass]; python-off block has no pyclass.
         assert '#[pyclass(frozen, name = "Identifier_Label")]' in poc_source
+        # The python-on enum block is wrapped in #[cfg(feature = "python")]
+        assert '#[cfg(feature = "python")]\n#[pyclass(frozen, name = "Identifier_Label")]' in poc_source
 
     def test_items_label_enum_present(self, poc_source: str) -> None:
         assert "pub enum Items_Label {" in poc_source
@@ -350,8 +364,11 @@ class TestNodeStructure:
 
 class TestRegisterClasses:
     def test_register_classes_function_present(self, poc_source: str) -> None:
-        """AC-5: pub fn register_classes is present."""
-        assert "pub fn register_classes(module: &Bound<'_, PyModule>) -> PyResult<()> {" in poc_source
+        """AC-5: pub fn register_classes is present and gated with #[cfg(feature = "python")]."""
+        assert (
+            '#[cfg(feature = "python")]\npub fn register_classes(module: &Bound<\'_, PyModule>) -> PyResult<()> {'
+            in poc_source
+        )
 
     def test_register_classes_adds_identifier_label(self, poc_source: str) -> None:
         assert "module.add_class::<Identifier_Label>()?;" in poc_source
@@ -373,6 +390,89 @@ class TestRegisterClasses:
 
     def test_register_classes_returns_ok(self, poc_source: str) -> None:
         assert "    Ok(())\n}" in poc_source
+
+
+# ---------------------------------------------------------------------------
+# cfg feature gate coverage (§2.3 of design)
+# ---------------------------------------------------------------------------
+
+
+class TestCfgFeatureGate:
+    """Verify cfg-gate placement per design §2.3.
+
+    Enums (NodeKind, label enums) use dual-cfg blocks rather than cfg_attr on variant helper
+    attributes.  pyo3 0.23 validates helper attributes before proc-macro expansion, so
+    #[cfg_attr(feature = "python", pyo3(name = "..."))] on enum variants fails when pyclass
+    is itself inside cfg_attr.  Dual-cfg blocks (one python-on with full pyo3 attrs, one
+    python-off plain) are the correct pyo3-idiomatic approach.  Structs still use cfg_attr.
+    """
+
+    def test_pymethods_blocks_gated(self, poc_source: str) -> None:
+        """Every #[pymethods] is immediately preceded by #[cfg(feature = "python")]."""
+        lines = poc_source.splitlines()
+        for i, line in enumerate(lines):
+            if line.strip() == "#[pymethods]":
+                # Walk backward over blank lines to find the preceding non-blank line
+                j = i - 1
+                while j >= 0 and lines[j].strip() == "":
+                    j -= 1
+                assert j >= 0, f"No line before #[pymethods] at line {i}"
+                assert lines[j].strip() == '#[cfg(feature = "python")]', (
+                    f"Expected '#[cfg(feature = \"python\")]' before #[pymethods] at line {i + 1}, found: {lines[j]!r}"
+                )
+
+    def test_node_struct_pyclass_gated(self, poc_source: str) -> None:
+        """Node structs use #[cfg_attr(feature = \"python\", pyclass)] not raw #[pyclass]."""
+        assert '#[cfg_attr(feature = "python", pyclass)]' in poc_source
+        # No raw bare #[pyclass] without attributes (only #[pyclass(...)]) forms present
+        lines = poc_source.splitlines()
+        for line in lines:
+            assert line.strip() != "#[pyclass]", f"Found raw #[pyclass] line: {line!r}"
+
+    def test_child_enum_pyo3_impl_gated(self, poc_source: str) -> None:
+        """The to_pyobject/extract_from_pyobject impl block on child enums is gated."""
+        # The gated impl block starts with '#[cfg(feature = "python")]' then 'impl <Enum>Child {'
+        assert '#[cfg(feature = "python")]\nimpl IdentifierChild {' in poc_source
+        assert '#[cfg(feature = "python")]\nimpl ItemsChild {' in poc_source
+        assert '#[cfg(feature = "python")]\nimpl TriviaChild {' in poc_source
+
+    def test_unconditional_child_enum_partialeq(self, poc_source: str) -> None:
+        """Child enum PartialEq impl is unconditional (no cfg gate)."""
+        # PartialEq impl must not be directly preceded by a cfg line
+        lines = poc_source.splitlines()
+        for child_type in ("IdentifierChild", "TriviaChild"):
+            for i, line in enumerate(lines):
+                if f"impl PartialEq for {child_type}" in line:
+                    j = i - 1
+                    while j >= 0 and lines[j].strip() == "":
+                        j -= 1
+                    assert j >= 0
+                    assert "#[cfg" not in lines[j], (
+                        f"PartialEq impl for {child_type} should be unconditional, but preceded by: {lines[j]!r}"
+                    )
+
+    def test_enum_python_on_block_gated(self, poc_source: str) -> None:
+        """Enum definitions with pyclass/pyo3 attrs are inside #[cfg(feature = \"python\")] blocks."""
+        assert '#[cfg(feature = "python")]\n#[pyclass(frozen, name = "NodeKind")]' in poc_source
+        assert '#[cfg(feature = "python")]\n#[pyclass(frozen, name = "Identifier_Label")]' in poc_source
+
+    def test_enum_python_off_block_present(self, poc_source: str) -> None:
+        """Enum definitions without pyo3 attrs present for python-off mode."""
+        assert (
+            '#[cfg(not(feature = "python"))]\n#[derive(Clone, PartialEq, Eq, Hash)]\npub enum NodeKind {' in poc_source
+        )
+        assert (
+            '#[cfg(not(feature = "python"))]\n#[derive(Clone, PartialEq, Eq, Hash)]\npub enum Identifier_Label {'
+            in poc_source
+        )
+        assert (
+            '#[cfg(not(feature = "python"))]\n#[derive(Clone, PartialEq, Eq, Hash)]\npub enum Items_Label {'
+            in poc_source
+        )
+        assert (
+            '#[cfg(not(feature = "python"))]\n#[derive(Clone, PartialEq, Eq, Hash)]\npub enum Trivia_Label {'
+            in poc_source
+        )
 
 
 # ---------------------------------------------------------------------------
@@ -426,7 +526,10 @@ class TestFegenGrammar:
             )
 
     def test_register_classes_present(self, fegen_source: str) -> None:
-        assert "pub fn register_classes(module: &Bound<'_, PyModule>) -> PyResult<()> {" in fegen_source
+        assert (
+            '#[cfg(feature = "python")]\npub fn register_classes(module: &Bound<\'_, PyModule>) -> PyResult<()> {'
+            in fegen_source
+        )
 
     def test_all_14_classes_registered(self, fegen_source: str) -> None:
         """AC-7: all 14 classes have add_class calls in register_classes."""
@@ -436,9 +539,13 @@ class TestFegenGrammar:
             )
 
     def test_preamble_in_fegen_source(self, fegen_source: str) -> None:
-        """AC-10: fegen source also has the required preamble."""
-        assert "use fltk_cst_core::{extract_span, get_span_type, span_to_pyobject, Span};" in fegen_source
-        assert "use pyo3::prelude::*;" in fegen_source
+        """AC-10: fegen source also has the required preamble (cfg-gated)."""
+        assert "use fltk_cst_core::Span;" in fegen_source
+        assert (
+            '#[cfg(feature = "python")]\nuse fltk_cst_core::{extract_span, get_span_type, span_to_pyobject};'
+            in fegen_source
+        )
+        assert '#[cfg(feature = "python")]\nuse pyo3::prelude::*;' in fegen_source
         assert "use pyo3::sync::GILOnceCell;" not in fegen_source
         assert "use crate::UNKNOWN_SPAN;" not in fegen_source
         assert "UNKNOWN_SPAN_CACHE" not in fegen_source
@@ -476,13 +583,18 @@ class TestMinimalGrammar:
 
     def test_minimal_grammar_produces_numbers_label(self, minimal_source: str) -> None:
         assert "pub enum Numbers_Label {" in minimal_source
+        # Dual-cfg: python-on block has direct pyo3(name)
         assert '#[pyo3(name = "DIGITS")]' in minimal_source
         assert "    Digits," in minimal_source
 
     def test_minimal_grammar_has_preamble(self, minimal_source: str) -> None:
-        """AC-10: Minimal grammar source also includes required use declarations."""
-        assert "use fltk_cst_core::{extract_span, get_span_type, span_to_pyobject, Span};" in minimal_source
-        assert "use pyo3::prelude::*;" in minimal_source
+        """AC-10: Minimal grammar source also includes required use declarations (cfg-gated)."""
+        assert "use fltk_cst_core::Span;" in minimal_source
+        assert (
+            '#[cfg(feature = "python")]\nuse fltk_cst_core::{extract_span, get_span_type, span_to_pyobject};'
+            in minimal_source
+        )
+        assert '#[cfg(feature = "python")]\nuse pyo3::prelude::*;' in minimal_source
         assert "use pyo3::sync::GILOnceCell;" not in minimal_source
         assert "use crate::UNKNOWN_SPAN;" not in minimal_source
         assert "UNKNOWN_SPAN_CACHE" not in minimal_source
@@ -594,10 +706,11 @@ class TestNodeKindEnum:
         assert "pub enum NodeKind {" in poc_source
 
     def test_node_kind_pyclass_no_eq_hash(self, poc_source: str) -> None:
-        """NodeKind #[pyclass] must not have eq/hash (hand-written instead)."""
-        # Confirm the NodeKind pyclass line exists and lacks eq/hash
+        """NodeKind #[pyclass] must not have eq/hash (hand-written instead); dual-cfg form used."""
+        # Dual-cfg: python-on block has direct #[pyclass]; must not have eq/hash
         assert '#[pyclass(frozen, name = "NodeKind")]' in poc_source
-        # eq/hash must not appear in combination with the NodeKind class line
+        assert '#[cfg(feature = "python")]\n#[pyclass(frozen, name = "NodeKind")]' in poc_source
+        # eq/hash must not appear in the pyclass line
         lines = poc_source.splitlines()
         for line in lines:
             if '#[pyclass(frozen, name = "NodeKind")]' in line:
@@ -605,7 +718,7 @@ class TestNodeKindEnum:
                 assert "hash" not in line
 
     def test_node_kind_has_identifier_and_items_variants(self, poc_source: str) -> None:
-        """PoC grammar produces IDENTIFIER and ITEMS variants in NodeKind."""
+        """PoC grammar produces IDENTIFIER and ITEMS variants in NodeKind (direct pyo3 name in python-on block)."""
         assert '#[pyo3(name = "IDENTIFIER")]' in poc_source
         assert "    Identifier," in poc_source
         assert '#[pyo3(name = "ITEMS")]' in poc_source
@@ -642,7 +755,7 @@ class TestNodeKindEnum:
         assert idx_node_kind_enum < idx_first_label_enum
 
     def test_fegen_grammar_node_kind_has_all_14(self, fegen_source: str) -> None:
-        """Fegen grammar NodeKind has all 14 class-name-derived members."""
+        """Fegen grammar NodeKind has all 14 class-name-derived members (dual-cfg form)."""
         for class_name in FEGEN_CLASS_NAMES:
             python_name = class_name.upper()
             assert f'#[pyo3(name = "{python_name}")]' in fegen_source, (

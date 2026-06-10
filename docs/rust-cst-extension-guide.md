@@ -27,7 +27,8 @@ uv run python -m fltk.fegen.genparser gen-rust-cst my_grammar.fltkg cst.rs
 This writes `cst.rs` — a Rust source file containing one struct per grammar rule, their label
 enums, and a `register_classes` function that registers all types with a PyO3 module.
 
-The generated file has no link-time dependency on FLTK's crate. It depends on PyO3 only.
+The generated file depends on `fltk-cst-core` (for `Span`/`SourceText` and cross-cdylib helpers)
+and on PyO3. You must declare both as Cargo dependencies (see Step 2).
 
 ---
 
@@ -49,10 +50,16 @@ name = "my_grammar_cst"
 crate-type = ["cdylib"]
 
 [features]
-extension-module = ["pyo3/extension-module"]
 default = ["extension-module"]
+extension-module = ["python", "pyo3/extension-module"]
+python = ["fltk-cst-core/python"]
 
 [dependencies]
+# If using a published release:
+fltk-cst-core = { version = "0.1", default-features = false, features = ["python"] }
+# Or if referencing a local checkout or git revision (no crates.io release yet):
+# fltk-cst-core = { path = "../fltk/crates/fltk-cst-core", default-features = false, features = ["python"] }
+# fltk-cst-core = { git = "https://github.com/your-org/fltk", default-features = false, features = ["python"] }
 pyo3 = { version = "0.23", features = ["abi3-py310"] }
 ```
 
@@ -123,6 +130,25 @@ immediately — no silent fallback to the Python backend.
 - Your extension calls `register_classes` in its `#[pymodule]` init, so by the time Python
   imports the module, it is already populated. FLTK reads classes off the imported module — it
   never calls `register_classes` from Python.
+
+---
+
+## Migrating an existing consumer crate
+
+If you built a consumer crate against an older version of FLTK that did not declare `fltk-cst-core`
+as a dependency, you need to make two changes before or alongside upgrading:
+
+1. **Add the `fltk-cst-core` dependency** to your `Cargo.toml` (see template in Step 2 above).
+   Without it, unresolved `fltk_cst_core` imports in your committed `cst.rs` will fail to compile.
+
+2. **Add the `python` feature block** (`default`, `extension-module`, `python` as shown above).
+   Without it, `cargo build` emits `unexpected_cfgs` warnings and then fails because `register_classes`
+   is conditionally compiled out (`#[cfg(feature = "python")]`) but referenced from your
+   `#[pymodule]` init.
+
+Both changes are required regardless of whether you regenerate `cst.rs`. Apply them first, then
+rebuild. If you then regenerate (`make gencode` equivalent), the new cfg-gated output is compatible
+with the same `Cargo.toml`.
 
 ---
 

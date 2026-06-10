@@ -1,7 +1,13 @@
-use fltk_cst_core::{extract_span, get_span_type, span_to_pyobject, Span};
+use fltk_cst_core::Span;
+#[cfg(feature = "python")]
+use fltk_cst_core::{extract_span, get_span_type, span_to_pyobject};
+#[cfg(feature = "python")]
 use pyo3::exceptions::{PyTypeError, PyValueError};
+#[cfg(feature = "python")]
 use pyo3::prelude::*;
+#[cfg(feature = "python")]
 use pyo3::types::{PyList, PyTuple, PyType};
+#[cfg(feature = "python")]
 use pyo3::PyTypeInfo;
 
 
@@ -9,6 +15,7 @@ use pyo3::PyTypeInfo;
 // NodeKind
 // ───────────────────────────────────────────────────────────────────────────
 
+#[cfg(feature = "python")]
 #[pyclass(frozen, name = "NodeKind")]
 #[derive(Clone, PartialEq, Eq, Hash)]
 pub enum NodeKind {
@@ -26,6 +33,18 @@ pub enum NodeKind {
     Trivia,
 }
 
+#[cfg(not(feature = "python"))]
+#[derive(Clone, PartialEq, Eq, Hash)]
+pub enum NodeKind {
+    Config,
+    Entry,
+    Operator,
+    Identifier,
+    Literal,
+    Trivia,
+}
+
+#[cfg(feature = "python")]
 #[pymethods]
 impl NodeKind {
     fn __repr__(&self) -> &'static str {
@@ -68,6 +87,7 @@ impl NodeKind {
 // ───────────────────────────────────────────────────────────────────────────
 
 #[allow(non_camel_case_types)]
+#[cfg(feature = "python")]
 #[pyclass(frozen, name = "Config_Label")]
 #[derive(Clone, PartialEq, Eq, Hash)]
 pub enum Config_Label {
@@ -75,6 +95,14 @@ pub enum Config_Label {
     Entry,
 }
 
+#[allow(non_camel_case_types)]
+#[cfg(not(feature = "python"))]
+#[derive(Clone, PartialEq, Eq, Hash)]
+pub enum Config_Label {
+    Entry,
+}
+
+#[cfg(feature = "python")]
 #[pymethods]
 impl Config_Label {
     fn __repr__(&self) -> &'static str {
@@ -121,6 +149,7 @@ impl PartialEq for ConfigChild {
     }
 }
 
+#[cfg(feature = "python")]
 impl ConfigChild {
     fn to_pyobject(&self, py: Python<'_>) -> PyResult<PyObject> {
         match self {
@@ -148,7 +177,7 @@ impl ConfigChild {
 // Config
 // ───────────────────────────────────────────────────────────────────────────
 
-#[pyclass]
+#[cfg_attr(feature = "python", pyclass)]
 pub struct Config {
     span: Span,
     children: Vec<(Option<Config_Label>, ConfigChild)>,
@@ -195,6 +224,7 @@ impl Config {
     }
 }
 
+#[cfg(feature = "python")]
 #[pymethods]
 impl Config {
     #[new]
@@ -212,9 +242,6 @@ impl Config {
 
     #[getter]
     fn span(&self, py: Python<'_>) -> PyResult<PyObject> {
-        // Return a fltk._native.Span so consumers always get the canonical type
-        // regardless of which cdylib the node is defined in.
-        // Preserve source via span_to_pyobject: O(1) Arc clone, no string copy.
         span_to_pyobject(py, &self.span)
     }
 
@@ -286,7 +313,7 @@ impl Config {
                     Some(native_lbl)
                 } else {
                     return Err(PyTypeError::new_err(format!(
-                        "Config.append: label argument is not a Config_Label; got {}",
+                        "Config.extend: label argument is not a Config_Label; got {}",
                         lbl.bind(py).get_type().name()?
                     )));
                 }
@@ -419,6 +446,7 @@ impl Config {
 // ───────────────────────────────────────────────────────────────────────────
 
 #[allow(non_camel_case_types)]
+#[cfg(feature = "python")]
 #[pyclass(frozen, name = "Entry_Label")]
 #[derive(Clone, PartialEq, Eq, Hash)]
 pub enum Entry_Label {
@@ -430,6 +458,16 @@ pub enum Entry_Label {
     Value,
 }
 
+#[allow(non_camel_case_types)]
+#[cfg(not(feature = "python"))]
+#[derive(Clone, PartialEq, Eq, Hash)]
+pub enum Entry_Label {
+    Key,
+    Op,
+    Value,
+}
+
+#[cfg(feature = "python")]
 #[pymethods]
 impl Entry_Label {
     fn __repr__(&self) -> &'static str {
@@ -485,6 +523,7 @@ impl PartialEq for EntryChild {
     }
 }
 
+#[cfg(feature = "python")]
 impl EntryChild {
     fn to_pyobject(&self, py: Python<'_>) -> PyResult<PyObject> {
         match self {
@@ -527,7 +566,7 @@ impl EntryChild {
 // Entry
 // ───────────────────────────────────────────────────────────────────────────
 
-#[pyclass]
+#[cfg_attr(feature = "python", pyclass)]
 pub struct Entry {
     span: Span,
     children: Vec<(Option<Entry_Label>, EntryChild)>,
@@ -574,6 +613,7 @@ impl Entry {
     }
 }
 
+#[cfg(feature = "python")]
 #[pymethods]
 impl Entry {
     #[new]
@@ -591,9 +631,6 @@ impl Entry {
 
     #[getter]
     fn span(&self, py: Python<'_>) -> PyResult<PyObject> {
-        // Return a fltk._native.Span so consumers always get the canonical type
-        // regardless of which cdylib the node is defined in.
-        // Preserve source via span_to_pyobject: O(1) Arc clone, no string copy.
         span_to_pyobject(py, &self.span)
     }
 
@@ -665,7 +702,7 @@ impl Entry {
                     Some(native_lbl)
                 } else {
                     return Err(PyTypeError::new_err(format!(
-                        "Entry.append: label argument is not a Entry_Label; got {}",
+                        "Entry.extend: label argument is not a Entry_Label; got {}",
                         lbl.bind(py).get_type().name()?
                     )));
                 }
@@ -930,6 +967,7 @@ impl Entry {
 // ───────────────────────────────────────────────────────────────────────────
 
 #[allow(non_camel_case_types)]
+#[cfg(feature = "python")]
 #[pyclass(frozen, name = "Operator_Label")]
 #[derive(Clone, PartialEq, Eq, Hash)]
 pub enum Operator_Label {
@@ -941,6 +979,16 @@ pub enum Operator_Label {
     Remove,
 }
 
+#[allow(non_camel_case_types)]
+#[cfg(not(feature = "python"))]
+#[derive(Clone, PartialEq, Eq, Hash)]
+pub enum Operator_Label {
+    Append,
+    Assign,
+    Remove,
+}
+
+#[cfg(feature = "python")]
 #[pymethods]
 impl Operator_Label {
     fn __repr__(&self) -> &'static str {
@@ -989,12 +1037,11 @@ impl PartialEq for OperatorChild {
     }
 }
 
+#[cfg(feature = "python")]
 impl OperatorChild {
     fn to_pyobject(&self, py: Python<'_>) -> PyResult<PyObject> {
         match self {
             Self::Span(s) => {
-                // span_to_pyobject: O(1) Arc clone, no string copy; preserves
-                // Arc-sharing so multiple reads of the same span merge without error.
                 span_to_pyobject(py, s)
             }
         }
@@ -1020,7 +1067,7 @@ impl OperatorChild {
 // Operator
 // ───────────────────────────────────────────────────────────────────────────
 
-#[pyclass]
+#[cfg_attr(feature = "python", pyclass)]
 pub struct Operator {
     span: Span,
     children: Vec<(Option<Operator_Label>, OperatorChild)>,
@@ -1067,6 +1114,7 @@ impl Operator {
     }
 }
 
+#[cfg(feature = "python")]
 #[pymethods]
 impl Operator {
     #[new]
@@ -1084,9 +1132,6 @@ impl Operator {
 
     #[getter]
     fn span(&self, py: Python<'_>) -> PyResult<PyObject> {
-        // Return a fltk._native.Span so consumers always get the canonical type
-        // regardless of which cdylib the node is defined in.
-        // Preserve source via span_to_pyobject: O(1) Arc clone, no string copy.
         span_to_pyobject(py, &self.span)
     }
 
@@ -1158,7 +1203,7 @@ impl Operator {
                     Some(native_lbl)
                 } else {
                     return Err(PyTypeError::new_err(format!(
-                        "Operator.append: label argument is not a Operator_Label; got {}",
+                        "Operator.extend: label argument is not a Operator_Label; got {}",
                         lbl.bind(py).get_type().name()?
                     )));
                 }
@@ -1423,6 +1468,7 @@ impl Operator {
 // ───────────────────────────────────────────────────────────────────────────
 
 #[allow(non_camel_case_types)]
+#[cfg(feature = "python")]
 #[pyclass(frozen, name = "Identifier_Label")]
 #[derive(Clone, PartialEq, Eq, Hash)]
 pub enum Identifier_Label {
@@ -1430,6 +1476,14 @@ pub enum Identifier_Label {
     Name,
 }
 
+#[allow(non_camel_case_types)]
+#[cfg(not(feature = "python"))]
+#[derive(Clone, PartialEq, Eq, Hash)]
+pub enum Identifier_Label {
+    Name,
+}
+
+#[cfg(feature = "python")]
 #[pymethods]
 impl Identifier_Label {
     fn __repr__(&self) -> &'static str {
@@ -1476,12 +1530,11 @@ impl PartialEq for IdentifierChild {
     }
 }
 
+#[cfg(feature = "python")]
 impl IdentifierChild {
     fn to_pyobject(&self, py: Python<'_>) -> PyResult<PyObject> {
         match self {
             Self::Span(s) => {
-                // span_to_pyobject: O(1) Arc clone, no string copy; preserves
-                // Arc-sharing so multiple reads of the same span merge without error.
                 span_to_pyobject(py, s)
             }
         }
@@ -1507,7 +1560,7 @@ impl IdentifierChild {
 // Identifier
 // ───────────────────────────────────────────────────────────────────────────
 
-#[pyclass]
+#[cfg_attr(feature = "python", pyclass)]
 pub struct Identifier {
     span: Span,
     children: Vec<(Option<Identifier_Label>, IdentifierChild)>,
@@ -1554,6 +1607,7 @@ impl Identifier {
     }
 }
 
+#[cfg(feature = "python")]
 #[pymethods]
 impl Identifier {
     #[new]
@@ -1571,9 +1625,6 @@ impl Identifier {
 
     #[getter]
     fn span(&self, py: Python<'_>) -> PyResult<PyObject> {
-        // Return a fltk._native.Span so consumers always get the canonical type
-        // regardless of which cdylib the node is defined in.
-        // Preserve source via span_to_pyobject: O(1) Arc clone, no string copy.
         span_to_pyobject(py, &self.span)
     }
 
@@ -1645,7 +1696,7 @@ impl Identifier {
                     Some(native_lbl)
                 } else {
                     return Err(PyTypeError::new_err(format!(
-                        "Identifier.append: label argument is not a Identifier_Label; got {}",
+                        "Identifier.extend: label argument is not a Identifier_Label; got {}",
                         lbl.bind(py).get_type().name()?
                     )));
                 }
@@ -1778,6 +1829,7 @@ impl Identifier {
 // ───────────────────────────────────────────────────────────────────────────
 
 #[allow(non_camel_case_types)]
+#[cfg(feature = "python")]
 #[pyclass(frozen, name = "Literal_Label")]
 #[derive(Clone, PartialEq, Eq, Hash)]
 pub enum Literal_Label {
@@ -1787,6 +1839,15 @@ pub enum Literal_Label {
     StrVal,
 }
 
+#[allow(non_camel_case_types)]
+#[cfg(not(feature = "python"))]
+#[derive(Clone, PartialEq, Eq, Hash)]
+pub enum Literal_Label {
+    IntVal,
+    StrVal,
+}
+
+#[cfg(feature = "python")]
 #[pymethods]
 impl Literal_Label {
     fn __repr__(&self) -> &'static str {
@@ -1834,12 +1895,11 @@ impl PartialEq for LiteralChild {
     }
 }
 
+#[cfg(feature = "python")]
 impl LiteralChild {
     fn to_pyobject(&self, py: Python<'_>) -> PyResult<PyObject> {
         match self {
             Self::Span(s) => {
-                // span_to_pyobject: O(1) Arc clone, no string copy; preserves
-                // Arc-sharing so multiple reads of the same span merge without error.
                 span_to_pyobject(py, s)
             }
         }
@@ -1865,7 +1925,7 @@ impl LiteralChild {
 // Literal
 // ───────────────────────────────────────────────────────────────────────────
 
-#[pyclass]
+#[cfg_attr(feature = "python", pyclass)]
 pub struct Literal {
     span: Span,
     children: Vec<(Option<Literal_Label>, LiteralChild)>,
@@ -1912,6 +1972,7 @@ impl Literal {
     }
 }
 
+#[cfg(feature = "python")]
 #[pymethods]
 impl Literal {
     #[new]
@@ -1929,9 +1990,6 @@ impl Literal {
 
     #[getter]
     fn span(&self, py: Python<'_>) -> PyResult<PyObject> {
-        // Return a fltk._native.Span so consumers always get the canonical type
-        // regardless of which cdylib the node is defined in.
-        // Preserve source via span_to_pyobject: O(1) Arc clone, no string copy.
         span_to_pyobject(py, &self.span)
     }
 
@@ -2003,7 +2061,7 @@ impl Literal {
                     Some(native_lbl)
                 } else {
                     return Err(PyTypeError::new_err(format!(
-                        "Literal.append: label argument is not a Literal_Label; got {}",
+                        "Literal.extend: label argument is not a Literal_Label; got {}",
                         lbl.bind(py).get_type().name()?
                     )));
                 }
@@ -2202,6 +2260,7 @@ impl Literal {
 // ───────────────────────────────────────────────────────────────────────────
 
 #[allow(non_camel_case_types)]
+#[cfg(feature = "python")]
 #[pyclass(frozen, name = "Trivia_Label")]
 #[derive(Clone, PartialEq, Eq, Hash)]
 pub enum Trivia_Label {
@@ -2209,6 +2268,14 @@ pub enum Trivia_Label {
     Content,
 }
 
+#[allow(non_camel_case_types)]
+#[cfg(not(feature = "python"))]
+#[derive(Clone, PartialEq, Eq, Hash)]
+pub enum Trivia_Label {
+    Content,
+}
+
+#[cfg(feature = "python")]
 #[pymethods]
 impl Trivia_Label {
     fn __repr__(&self) -> &'static str {
@@ -2255,12 +2322,11 @@ impl PartialEq for TriviaChild {
     }
 }
 
+#[cfg(feature = "python")]
 impl TriviaChild {
     fn to_pyobject(&self, py: Python<'_>) -> PyResult<PyObject> {
         match self {
             Self::Span(s) => {
-                // span_to_pyobject: O(1) Arc clone, no string copy; preserves
-                // Arc-sharing so multiple reads of the same span merge without error.
                 span_to_pyobject(py, s)
             }
         }
@@ -2286,7 +2352,7 @@ impl TriviaChild {
 // Trivia
 // ───────────────────────────────────────────────────────────────────────────
 
-#[pyclass]
+#[cfg_attr(feature = "python", pyclass)]
 pub struct Trivia {
     span: Span,
     children: Vec<(Option<Trivia_Label>, TriviaChild)>,
@@ -2333,6 +2399,7 @@ impl Trivia {
     }
 }
 
+#[cfg(feature = "python")]
 #[pymethods]
 impl Trivia {
     #[new]
@@ -2350,9 +2417,6 @@ impl Trivia {
 
     #[getter]
     fn span(&self, py: Python<'_>) -> PyResult<PyObject> {
-        // Return a fltk._native.Span so consumers always get the canonical type
-        // regardless of which cdylib the node is defined in.
-        // Preserve source via span_to_pyobject: O(1) Arc clone, no string copy.
         span_to_pyobject(py, &self.span)
     }
 
@@ -2424,7 +2488,7 @@ impl Trivia {
                     Some(native_lbl)
                 } else {
                     return Err(PyTypeError::new_err(format!(
-                        "Trivia.append: label argument is not a Trivia_Label; got {}",
+                        "Trivia.extend: label argument is not a Trivia_Label; got {}",
                         lbl.bind(py).get_type().name()?
                     )));
                 }
@@ -2552,6 +2616,7 @@ impl Trivia {
 
 }
 
+#[cfg(feature = "python")]
 pub fn register_classes(module: &Bound<'_, PyModule>) -> PyResult<()> {
     module.add_class::<NodeKind>()?;
     module.add_class::<Config_Label>()?;

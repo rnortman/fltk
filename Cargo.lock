@@ -22,6 +22,14 @@ dependencies = [
 ]
 
 [[package]]
+name = "fltk-cst-spike"
+version = "0.1.0"
+dependencies = [
+ "fltk-cst-core",
+ "pyo3",
+]
+
+[[package]]
 name = "fltk-native"
 version = "0.1.0"
 dependencies = [

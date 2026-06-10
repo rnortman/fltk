@@ -1,0 +1,19 @@
+[package]
+name = "fltk-cst-spike"
+version = "0.1.0"
+edition = "2021"
+publish = false
+
+[lib]
+name = "fltk_cst_spike"
+crate-type = ["rlib"]
+
+# python feature OFF by default — this crate's purpose is to exercise the python-off lane.
+# Enable `--features python` to compile-check the same generated output in python-on mode.
+[features]
+default = []
+python = ["dep:pyo3", "fltk-cst-core/python"]
+
+[dependencies]
+fltk-cst-core = { path = "../fltk-cst-core", default-features = false }
+pyo3 = { version = "0.23", features = ["abi3-py310"], optional = true }

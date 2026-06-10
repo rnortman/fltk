@@ -1,15 +1,40 @@
+#[cfg(feature = "python")]
 use crate::cross_cdylib::{extract_source_text, FLTK_CST_CORE_ABI};
+#[cfg(feature = "python")]
 use pyo3::exceptions::PyValueError;
+#[cfg(feature = "python")]
 use pyo3::prelude::*;
+#[cfg(feature = "python")]
 use pyo3::sync::GILOnceCell;
+#[cfg(feature = "python")]
 use pyo3::types::PyType;
+use std::fmt;
 use std::hash::{Hash, Hasher};
 use std::sync::Arc;
+
+/// Error type for native Span operations that can fail (e.g., merge/intersect across sources).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[non_exhaustive]
+pub enum SpanError {
+    /// The two spans carry different (non-identical) source references.
+    SourceMismatch,
+}
+
+impl fmt::Display for SpanError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            SpanError::SourceMismatch => write!(f, "cannot merge spans from different sources"),
+        }
+    }
+}
+
+impl std::error::Error for SpanError {}
 
 /// Cached reference to `fltk.fegen.pyrt.terminalsrc.SpanKind.SPAN`.
 /// Fetched once on first `Span.kind` access; avoids a Python import per call.
 /// ACYCLICITY: `terminalsrc` must never import `fltk._native` (verified at design time;
 /// see design.md §2.2). If that invariant breaks, this import becomes a cycle.
+#[cfg(feature = "python")]
 static SPAN_KIND_SPAN_CACHE: GILOnceCell<PyObject> = GILOnceCell::new();
 
 /// Shared heap allocation holding source text.
@@ -27,7 +52,7 @@ pub struct SourceInner {
 /// Constructing a ``SourceText`` from Python copies the string once (Python str → UTF-8).
 /// All ``Span`` objects created from the same ``SourceText`` share the underlying allocation
 /// via ``Arc``; cloning a span is a reference-count increment, not a string copy.
-#[pyclass(frozen)]
+#[cfg_attr(feature = "python", pyclass(frozen))]
 pub struct SourceText {
     pub inner: Arc<SourceInner>,
 }
@@ -46,6 +71,7 @@ impl SourceText {
     }
 }
 
+#[cfg(feature = "python")]
 #[pymethods]
 impl SourceText {
     /// Construct a ``SourceText`` from a Python ``str``.
@@ -90,7 +116,7 @@ impl SourceText {
 /// at the same position.
 ///
 /// **Frozen:** assignment to any attribute raises ``AttributeError`` from Python.
-#[pyclass(frozen, eq, hash)]
+#[cfg_attr(feature = "python", pyclass(frozen, eq, hash))]
 #[derive(Clone)]
 pub struct Span {
     pub(crate) start: i64,
@@ -162,6 +188,7 @@ impl Span {
     /// pass the result to ``Span::_with_source_unchecked`` via ``span_to_pyobject``
     /// (``cross_cdylib.rs``), which accepts the locally-registered ``SourceText`` via the
     /// ABI-marker check in ``extract_source_text``.
+    #[cfg(feature = "python")]
     pub fn source_as_py(&self, py: Python<'_>) -> PyResult<Option<Py<SourceText>>> {
         match &self.source {
             Some(arc) => Ok(Some(Py::new(
@@ -191,16 +218,119 @@ impl Span {
     }
 
     /// Returns the shared source for two spans, or an error if they carry different sources.
-    fn coerce_source(&self, other: &Span) -> PyResult<Option<Arc<SourceInner>>> {
+    fn coerce_source(&self, other: &Span) -> Result<Option<Arc<SourceInner>>, SpanError> {
         match (&self.source, &other.source) {
-            (Some(a), Some(b)) if !Arc::ptr_eq(a, b) => Err(PyValueError::new_err(
-                "cannot merge spans from different sources",
-            )),
+            (Some(a), Some(b)) if !Arc::ptr_eq(a, b) => Err(SpanError::SourceMismatch),
             _ => Ok(self.source.clone().or_else(|| other.source.clone())),
         }
     }
+
+    /// Return the source text slice ``[start, end)``, or ``None`` if:
+    /// - no source is attached,
+    /// - either index is negative,
+    /// - ``start > end``,
+    /// - ``end`` exceeds the number of Unicode codepoints in the source, or
+    /// - ``start`` is greater than the number of codepoints.
+    ///
+    /// ``start`` and ``end`` are codepoint (Unicode character) indices, matching Python's
+    /// string indexing semantics (same as ``source[start:end]`` in Python).
+    pub fn text(&self) -> Option<String> {
+        let inner = self.source.as_ref()?;
+        if self.start < 0 || self.end < 0 {
+            return None;
+        }
+        let start = self.start as usize;
+        let end = self.end as usize;
+        if start > end {
+            return None;
+        }
+        let src = &inner.text;
+        // Single forward pass: scan char_indices once to collect both byte offsets.
+        // We need the byte offset of codepoint `start` (byte_start) and of codepoint
+        // `end` (byte_end, where end == char_count means byte_end = src.len()).
+        // The previous two-restart implementation rescanned from byte 0 for each index
+        // and did a third O(src.len()) scan for the end-of-source case.
+        let mut byte_start: Option<usize> = None;
+        let mut byte_end: Option<usize> = None;
+        let mut char_count = 0usize;
+        for (byte_idx, _) in src.char_indices() {
+            if char_count == start {
+                byte_start = Some(byte_idx);
+            }
+            if char_count == end {
+                byte_end = Some(byte_idx);
+                break;
+            }
+            char_count += 1;
+        }
+        // Handle end == char_count (valid: slice to end of string).
+        if byte_end.is_none() && char_count == end {
+            byte_end = Some(src.len());
+        }
+        // Handle start == 0 on an empty source string (char_count stays 0, byte_start not set).
+        if byte_start.is_none() && start == 0 && end == 0 {
+            return Some(String::new());
+        }
+        match (byte_start, byte_end) {
+            (Some(bs), Some(be)) => Some(src[bs..be].to_owned()),
+            _ => None,
+        }
+    }
+
+    /// Return ``True`` if a source string is attached to this span.
+    pub fn has_source(&self) -> bool {
+        self.source.is_some()
+    }
+
+    /// Return the span length in codepoints (``end - start``).
+    ///
+    /// Returns 0 for sentinel/unknown spans with negative indices.
+    pub fn len(&self) -> i64 {
+        if self.start < 0 || self.end < 0 {
+            return 0;
+        }
+        (self.end - self.start).max(0)
+    }
+
+    /// Return ``True`` if the span covers no bytes (``start >= end``), including sentinel spans.
+    pub fn is_empty(&self) -> bool {
+        self.start >= self.end
+    }
+
+    /// Return the smallest span that covers both ``self`` and ``other``.
+    ///
+    /// Returns ``Err(SpanError::SourceMismatch)`` if both spans carry different (non-identical)
+    /// source references.
+    pub fn merge(&self, other: &Span) -> Result<Span, SpanError> {
+        let source = self.coerce_source(other)?;
+        Ok(Span {
+            start: self.start.min(other.start),
+            end: self.end.max(other.end),
+            source,
+        })
+    }
+
+    /// Return the overlapping region of ``self`` and ``other``, or the ``UnknownSpan`` sentinel
+    /// (``Span(-1, -1)``) if they are disjoint.
+    ///
+    /// Returns ``Err(SpanError::SourceMismatch)`` if both spans carry different (non-identical)
+    /// source references.
+    pub fn intersect(&self, other: &Span) -> Result<Span, SpanError> {
+        let source = self.coerce_source(other)?;
+        let s = self.start.max(other.start);
+        let e = self.end.min(other.end);
+        if s >= e {
+            return Ok(Span::unknown());
+        }
+        Ok(Span {
+            start: s,
+            end: e,
+            source,
+        })
+    }
 }
 
+#[cfg(feature = "python")]
 #[pymethods]
 impl Span {
     /// Construct a sourceless span ``[start, end)``.
@@ -244,45 +374,12 @@ impl Span {
         Ok(Span::new_with_source(start, end, &extract_source_text(source)?))
     }
 
-    /// Return the source text slice ``[start, end)``, or ``None`` if:
-    /// - no source is attached,
-    /// - either index is negative,
-    /// - ``start > end``,
-    /// - ``end`` exceeds the number of Unicode codepoints in the source, or
-    /// - ``start`` is greater than the number of codepoints.
+    /// Return the source text slice ``[start, end)``, or ``None`` — delegates to ``Span::text``.
     ///
-    /// ``start`` and ``end`` are codepoint (Unicode character) indices, matching Python's
-    /// string indexing semantics (same as ``source[start:end]`` in Python).
-    fn text(&self) -> Option<String> {
-        let inner = self.source.as_ref()?;
-        if self.start < 0 || self.end < 0 {
-            return None;
-        }
-        let start = self.start as usize;
-        let end = self.end as usize;
-        if start > end {
-            return None;
-        }
-        let src = &inner.text;
-        // Translate codepoint indices to byte offsets.
-        let byte_start = src.char_indices().nth(start).map(|(b, _)| b);
-        let byte_end = if end == 0 {
-            Some(0)
-        } else {
-            src.char_indices().nth(end).map(|(b, _)| b).or_else(|| {
-                // end == char_count is valid: byte_end = src.len()
-                if src.chars().count() == end {
-                    Some(src.len())
-                } else {
-                    None
-                }
-            })
-        };
-        match (byte_start, byte_end) {
-            (Some(bs), Some(be)) => Some(src[bs..be].to_owned()),
-            (None, Some(0)) if start == 0 => Some(String::new()),
-            _ => None,
-        }
+    /// Python-visible wrapper preserving the original name via the native implementation.
+    #[pyo3(name = "text")]
+    fn py_text(&self) -> Option<String> {
+        self.text()
     }
 
     /// Return the source text slice ``[start, end)``, raising ``ValueError`` if
@@ -308,80 +405,63 @@ impl Span {
                 self.start, self.end
             )));
         }
+        // Validate end <= char_count before delegating, to emit a specific OOB message.
         let inner = self.source.as_ref()
             .expect("invariant: source is Some — is_none() guard above returned Err already");
-        let start = self.start as usize;
         let end = self.end as usize;
-        let src = &inner.text;
-        // Translate codepoint indices to byte offsets.
-        let byte_start = src.char_indices().nth(start).map(|(b, _)| b);
-        let char_count = src.chars().count();
+        let char_count = inner.text.chars().count();
         if end > char_count {
             return Err(PyValueError::new_err(format!(
                 "Span({}, {}) is out of bounds for source with {} codepoints",
                 self.start, self.end, char_count
             )));
         }
-        let byte_start = byte_start.ok_or_else(|| {
+        // Pre-conditions confirmed; delegate to native text() which handles byte-offset translation.
+        self.text().ok_or_else(|| {
             PyValueError::new_err(format!(
                 "Span({}, {}) start index out of bounds for source with {} codepoints",
                 self.start, self.end, char_count
             ))
-        })?;
-        let byte_end = src.char_indices().nth(end).map(|(b, _)| b).unwrap_or(src.len());
-        Ok(src[byte_start..byte_end].to_owned())
+        })
     }
 
     /// Return ``True`` if a source string is attached to this span.
-    fn has_source(&self) -> bool {
-        self.source.is_some()
+    #[pyo3(name = "has_source")]
+    fn py_has_source(&self) -> bool {
+        self.has_source()
     }
 
     /// Return the span length in codepoints (``end - start``).
     ///
     /// Returns 0 for sentinel/unknown spans with negative indices.
-    fn len(&self) -> i64 {
-        if self.start < 0 || self.end < 0 {
-            return 0;
-        }
-        (self.end - self.start).max(0)
+    #[pyo3(name = "len")]
+    fn py_len(&self) -> i64 {
+        self.len()
     }
 
     /// Return ``True`` if the span covers no bytes (``start >= end``), including sentinel spans.
-    fn is_empty(&self) -> bool {
-        self.start >= self.end
+    #[pyo3(name = "is_empty")]
+    fn py_is_empty(&self) -> bool {
+        self.is_empty()
     }
 
     /// Return the smallest span that covers both ``self`` and ``other``.
     ///
     /// Raises ``ValueError`` if both spans carry different (non-identical) source references.
-    #[pyo3(signature = (other,))]
-    fn merge(&self, other: &Span) -> PyResult<Span> {
-        let source = self.coerce_source(other)?;
-        Ok(Span {
-            start: self.start.min(other.start),
-            end: self.end.max(other.end),
-            source,
-        })
+    #[pyo3(name = "merge", signature = (other,))]
+    fn py_merge(&self, other: &Span) -> PyResult<Span> {
+        self.merge(other)
+            .map_err(|e| PyValueError::new_err(e.to_string()))
     }
 
     /// Return the overlapping region of ``self`` and ``other``, or the ``UnknownSpan`` sentinel
     /// (``Span(-1, -1)``) if they are disjoint.
     ///
     /// Raises ``ValueError`` if both spans carry different (non-identical) source references.
-    #[pyo3(signature = (other,))]
-    fn intersect(&self, other: &Span) -> PyResult<Span> {
-        let source = self.coerce_source(other)?;
-        let s = self.start.max(other.start);
-        let e = self.end.min(other.end);
-        if s >= e {
-            return Ok(Span::unknown());
-        }
-        Ok(Span {
-            start: s,
-            end: e,
-            source,
-        })
+    #[pyo3(name = "intersect", signature = (other,))]
+    fn py_intersect(&self, other: &Span) -> PyResult<Span> {
+        self.intersect(other)
+            .map_err(|e| PyValueError::new_err(e.to_string()))
     }
 
     /// Return the start codepoint index as a Python integer.

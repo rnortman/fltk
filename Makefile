@@ -1,4 +1,5 @@
 .PHONY: check lint format-check typecheck test cargo-check cargo-test cargo-clippy \
+        cargo-test-no-python cargo-clippy-no-python check-no-pyo3 \
         build-native build-test-user-ext build-fegen-rust-cst gen-rust-cst fix gencode
 
 # Run all checks: lint, format, type-check, tests, and Rust checks. This is the canonical
@@ -6,7 +7,7 @@
 # and its full output, then exits non-zero. Individual sub-targets are unchanged and still
 # stream output when invoked directly.
 check:
-	@steps="lint format-check typecheck test cargo-check cargo-clippy cargo-test"; \
+	@steps="lint format-check typecheck test cargo-check cargo-clippy cargo-test cargo-test-no-python cargo-clippy-no-python check-no-pyo3"; \
 	failed=0; \
 	for step in $$steps; do \
 	    tmpfile=$$(mktemp); \
@@ -18,7 +19,7 @@ check:
 	    fi; \
 	    rm -f "$$tmpfile"; \
 	done; \
-	echo "check: all steps passed (lint format-check typecheck test cargo-check cargo-clippy cargo-test)"
+	echo "check: all steps passed (lint format-check typecheck test cargo-check cargo-clippy cargo-test cargo-test-no-python cargo-clippy-no-python check-no-pyo3)"
 
 lint:
 	uv run --group lint --group test ruff check -q .
@@ -44,6 +45,30 @@ cargo-test:
 
 cargo-clippy:
 	cargo clippy -q -- -D warnings
+
+# python-off lane: feature isolation requires -p selection (workspace unification would
+# re-enable pyo3 via fltk-native's dependency).
+cargo-test-no-python:
+	cargo test -q -p fltk-cst-core --no-default-features
+	cargo test -q -p fltk-cst-spike
+
+cargo-clippy-no-python:
+	cargo clippy -q -p fltk-cst-core --no-default-features -- -D warnings
+	cargo clippy -q -p fltk-cst-spike -- -D warnings
+	cargo clippy -q -p fltk-cst-spike --features python -- -D warnings
+
+# Mechanical check: verify pyo3 is absent from the python-off dependency graphs.
+# Uses a positive control (fltk-cst-core present) before the negative assertion
+# to prevent false passes when cargo tree fails silently.
+check-no-pyo3:
+	@set -e; \
+	out="$$(cargo tree -p fltk-cst-spike --edges normal,build)"; \
+	echo "$$out" | grep -q fltk-cst-core || { echo "FAIL: check-no-pyo3 broken: cargo tree output lacks fltk-cst-core"; exit 1; }; \
+	! echo "$$out" | grep -q pyo3 || { echo "FAIL: pyo3 present in fltk-cst-spike python-off dependency graph"; exit 1; }; \
+	core="$$(cargo tree -p fltk-cst-core --no-default-features --edges normal,build)"; \
+	echo "$$core" | grep -q fltk-cst-core || { echo "FAIL: check-no-pyo3 broken: cargo tree output lacks fltk-cst-core"; exit 1; }; \
+	! echo "$$core" | grep -q pyo3 || { echo "FAIL: pyo3 present in fltk-cst-core --no-default-features graph"; exit 1; }; \
+	echo "check-no-pyo3: pyo3 absent from python-off graphs"
 
 # ── FLTK-internal Rust artifact targets ──────────────────────────────────────
 # These build FLTK's own test/dogfooding Rust artifacts.
@@ -103,6 +128,8 @@ gencode:
 		--pyi-output fltk/_native/fegen_cst.pyi
 	# Rust: tests/rust_cst_fixture/src/cst.rs (phase4_roundtrip.fltkg)
 	$(MAKE) gen-rust-cst GRAMMAR=fltk/fegen/test_data/phase4_roundtrip.fltkg RS_OUT=tests/rust_cst_fixture/src/cst.rs
+	# Rust: crates/fltk-cst-spike/src/cst.rs — same grammar as cst_generated.rs; cp makes identity explicit
+	cp src/cst_generated.rs crates/fltk-cst-spike/src/cst.rs
 	# Normalize formatting. Order matters:
 	# 1. ruff check --fix: upgrades typing.Union[X,Y] → X|Y and similar, so ruff format can then
 	#    wrap the resulting X|Y chains correctly.  Exit code ignored — residuals handled by step 2.

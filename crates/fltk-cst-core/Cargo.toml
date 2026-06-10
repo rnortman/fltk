@@ -7,9 +7,13 @@ edition = "2021"
 name = "fltk_cst_core"
 crate-type = ["rlib"]
 
-# pyo3 WITHOUT extension-module: allows #[pyclass]/#[pymethods] for Python bindings
-# but does NOT activate libpython linkage. This is intentional — downstream cdylib crates
-# that depend on fltk-cst-core must NOT activate extension-module here, or they get a
-# double-init pyo3 symbol conflict. Downstream crates depend with default-features = false.
+# `python` feature (default-on): activates pyo3 linkage, #[pyclass]/#[pymethods], and
+# cross-cdylib helpers. Downstream cdylib crates depend with `default-features = false`
+# and re-enable via a forwarding feature (see docs/rust-cst-extension-guide.md).
+# Pure-Rust consumers omit pyo3 entirely by NOT enabling this feature.
 [dependencies]
-pyo3 = { version = "0.23", features = ["abi3-py310"] }
+pyo3 = { version = "0.23", features = ["abi3-py310"], optional = true }
+
+[features]
+default = ["python"]
+python = ["dep:pyo3"]
