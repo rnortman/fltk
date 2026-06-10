@@ -10,8 +10,8 @@
 # by cst_generated::register_classes (src/lib.rs:29) are intentionally omitted.
 # They have no committed protocol module (required by the OQ-0(a) .pyi emitter) and
 # no static in-repo references, so omission costs nothing statically.
-# See TODO(gencode-poc-fltkg): the PoC grammar has no .fltkg source file; the classes
-# must be hand-maintained here once that TODO is resolved.
+# The PoC grammar source is at fltk/fegen/test_data/poc_grammar.fltkg; classes would need
+# to be hand-maintained here if a protocol module were added for the PoC grammar.
 from __future__ import annotations
 
 import typing

@@ -1,0 +1,2 @@
+identifier := name:$/[_a-z][_a-z0-9]*/ ;
+items := no_ws:$"." . ws_allowed:$"," , ws_required:$":" : item:$identifier ;

@@ -75,8 +75,6 @@ gen-rust-cst:
 #   - Rust CST source for cst_generated.rs (PoC grammar), cst_fegen.rs, and fixture crates
 # After running, `git diff --stat` reveals any drift between committed generated files and
 # what the generators actually produce (cheat-detection: committed hand-patches show as diffs).
-# TODO(gencode-poc-fltkg): src/cst_generated.rs is generated from a hand-built PoC grammar
-# (_make_poc_grammar in tests/test_gsm2tree_rs.py) — no .fltkg file exists for it.
 gencode:
 	# Python: fegen grammar → fltk_cst.py, fltk_cst_protocol.py, fltk_parser.py, fltk_trivia_parser.py
 	# (fltk.fltkg is intentionally broken; fltk_cst.py is generated from fegen.fltkg)
@@ -95,12 +93,9 @@ gencode:
 	uv run python -m fltk.fegen.genparser generate \
 		fltk/unparse/unparsefmt.fltkg unparsefmt fltk.unparse.unparsefmt_cst \
 		--output-dir fltk/unparse
-	# Rust: src/cst_generated.rs (PoC grammar — no .fltkg; import helper from tests)
-	uv run python -c "\
-import sys; sys.path.insert(0, 'tests'); \
-from test_gsm2tree_rs import _make_poc_grammar; \
-from fltk.fegen.gsm2tree_rs import RustCstGenerator; \
-open('src/cst_generated.rs', 'w').write(RustCstGenerator(_make_poc_grammar()).generate())"
+	# Rust: src/cst_generated.rs (PoC grammar — fltk/fegen/test_data/poc_grammar.fltkg)
+	uv run python -m fltk.fegen.genparser gen-rust-cst \
+		fltk/fegen/test_data/poc_grammar.fltkg src/cst_generated.rs
 	# Rust: src/cst_fegen.rs (fegen.fltkg) + fltk/_native/fegen_cst.pyi stub
 	uv run python -m fltk.fegen.genparser gen-rust-cst \
 		fltk/fegen/fegen.fltkg src/cst_fegen.rs \

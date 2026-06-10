@@ -1163,6 +1163,49 @@ def _write_per_class_conformance_fixture(
     return fixture
 
 
+# ---------------------------------------------------------------------------
+# Drift guard: poc_grammar.fltkg must describe the same GSM as _make_poc_grammar()
+# ---------------------------------------------------------------------------
+
+
+class TestPocGrammarFltkg:
+    """Assert the declarative .fltkg source for the PoC grammar equals _make_poc_grammar().
+
+    Prevents the hand-built Python fixture and the .fltkg file from silently diverging.
+    Both are sources of truth for src/cst_generated.rs; this test ties them together.
+    """
+
+    @pytest.fixture(scope="class")
+    def fltkg_grammar(self) -> gsm.Grammar:
+        """Parse fltk/fegen/test_data/poc_grammar.fltkg via the same raw pipeline used by gen-rust-cst."""
+        from fltk.fegen.genparser import _parse_grammar_raw  # noqa: PLC0415
+
+        fltkg_path = pathlib.Path(__file__).parent.parent / "fltk" / "fegen" / "test_data" / "poc_grammar.fltkg"
+        return _parse_grammar_raw(fltkg_path)
+
+    def test_rule_names_match(self, fltkg_grammar: gsm.Grammar) -> None:
+        """The .fltkg grammar has the same rule names in the same order as _make_poc_grammar()."""
+        expected = _make_poc_grammar()
+        assert [r.name for r in fltkg_grammar.rules] == [r.name for r in expected.rules]
+
+    @pytest.mark.parametrize("rule_name", ["identifier", "items"])
+    def test_rule_items(self, fltkg_grammar: gsm.Grammar, rule_name: str) -> None:
+        """Each rule: alternatives, items, and all item fields (incl. initial_sep) match _make_poc_grammar()."""
+        expected = _make_poc_grammar()
+        fltkg_rule = fltkg_grammar.identifiers[rule_name]
+        expected_rule = expected.identifiers[rule_name]
+        assert len(fltkg_rule.alternatives) == len(expected_rule.alternatives)
+        for fltkg_alt, expected_alt in zip(fltkg_rule.alternatives, expected_rule.alternatives, strict=True):
+            assert fltkg_alt.initial_sep == expected_alt.initial_sep
+            assert fltkg_alt.sep_after == expected_alt.sep_after
+            assert len(fltkg_alt.items) == len(expected_alt.items)
+            for fltkg_item, expected_item in zip(fltkg_alt.items, expected_alt.items, strict=True):
+                assert fltkg_item.label == expected_item.label
+                assert fltkg_item.disposition == expected_item.disposition
+                assert fltkg_item.term == expected_item.term
+                assert fltkg_item.quantifier == expected_item.quantifier
+
+
 class TestGeneratePyiConformance:
     """Stub-vs-protocol conformance: the emitted .pyi satisfies CstModule without a cast."""
 
