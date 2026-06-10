@@ -5,6 +5,7 @@ import pytest
 _native_module = pytest.importorskip("fltk._native", reason="Rust extension not available")
 
 from fltk._native import SourceText, Span, UnknownSpan  # noqa: E402
+from fltk._native.fegen_cst import Grammar  # noqa: E402
 
 
 class TestConstruction:
@@ -232,3 +233,129 @@ class TestSourceTextOpaque:
         # SourceText should not expose text content directly
         with pytest.raises(AttributeError):
             _ = src.text  # type: ignore[attr-defined]
+
+
+class TestAbiMarkerClassattr:
+    """§4 item 3: SourceText._fltk_cst_core_abi classattr and Span._with_source_unchecked."""
+
+    def test_source_text_abi_classattr_exists(self):
+        """SourceText exposes _fltk_cst_core_abi as a class attribute, accessible via type(instance).
+
+        extract_source_text reads obj.get_type().getattr("_fltk_cst_core_abi") — the type-of-instance
+        path — so both the class-direct and type(instance) access paths must agree.
+        """
+        assert hasattr(SourceText, "_fltk_cst_core_abi")
+        src = SourceText("hello")
+        assert hasattr(type(src), "_fltk_cst_core_abi")
+        assert type(src)._fltk_cst_core_abi == SourceText._fltk_cst_core_abi  # type: ignore[attr-defined]
+
+    def test_source_text_abi_classattr_is_string(self):
+        """SourceText._fltk_cst_core_abi is a non-empty string."""
+        marker = SourceText._fltk_cst_core_abi  # type: ignore[attr-defined]
+        assert isinstance(marker, str)
+        assert len(marker) > 0
+
+    def test_source_text_abi_classattr_contains_fltk_cst_core(self):
+        """SourceText._fltk_cst_core_abi starts with 'fltk-cst-core/'."""
+        marker = SourceText._fltk_cst_core_abi  # type: ignore[attr-defined]
+        assert marker.startswith("fltk-cst-core/")
+
+    def test_span_to_pyobject_fast_path_arc_sharing(self):
+        """span_to_pyobject fast path (same cdylib): fegen_cst nodes share Arc with their source.
+
+        Exercises the Span::type_object(py).is(&span_type) branch of span_to_pyobject in
+        cross_cdylib.rs: when the executing cdylib IS fltk._native, Py::new is used directly
+        and the returned Span shares the original Arc. Two .span reads from the same node
+        must merge without ValueError.
+        """
+        src = SourceText("hello world")
+        node = Grammar(span=Span.with_source(0, 11, src))
+        s1 = node.span
+        s2 = node.span
+        assert s1.has_source()
+        merged = s1.merge(s2)
+        assert merged.text() == "hello world"
+
+    def test_with_source_unchecked_canonical_source_text(self):
+        """Span._with_source_unchecked with a canonical (same-cdylib) SourceText works correctly."""
+        src = SourceText("hello world")
+        s = Span._with_source_unchecked(0, 5, src)  # type: ignore[attr-defined]
+        assert s.text() == "hello"
+        assert s.start == 0
+        assert s.end == 5
+
+    def test_with_source_unchecked_canonical_spans_merge(self):
+        """Two spans built from the same SourceText via _with_source_unchecked merge successfully."""
+        src = SourceText("hello world")
+        s1 = Span._with_source_unchecked(0, 5, src)  # type: ignore[attr-defined]
+        s2 = Span._with_source_unchecked(6, 11, src)  # type: ignore[attr-defined]
+        merged = s1.merge(s2)
+        assert merged.text() == "hello world"
+
+    def test_with_source_unchecked_str_raises_type_error(self):
+        """Span._with_source_unchecked with a plain str raises TypeError naming the type."""
+        with pytest.raises(TypeError, match="fltk._native.SourceText"):
+            Span._with_source_unchecked(0, 5, "hello world")  # type: ignore[attr-defined]
+
+    def test_with_source_unchecked_no_marker_attr_raises_type_error(self):
+        """An object with no _fltk_cst_core_abi attribute raises TypeError naming the type."""
+
+        class NoMarker:
+            pass
+
+        with pytest.raises(TypeError, match="fltk._native.SourceText"):
+            Span._with_source_unchecked(0, 5, NoMarker())  # type: ignore[attr-defined]
+
+    def test_with_source_unchecked_non_str_marker_raises_type_error(self):
+        """An object whose _fltk_cst_core_abi is a non-str raises TypeError naming the attribute type."""
+
+        class IntMarker:
+            _fltk_cst_core_abi = 42
+
+        with pytest.raises(TypeError, match="_fltk_cst_core_abi"):
+            Span._with_source_unchecked(0, 5, IntMarker())  # type: ignore[attr-defined]
+
+    def test_with_source_unchecked_bogus_abi_marker_raises_type_error(self):
+        """An object with _fltk_cst_core_abi = 'bogus/0.0.0' raises TypeError mentioning ABI mismatch."""
+
+        class FakeSource:
+            _fltk_cst_core_abi = "bogus/0.0.0"
+
+        with pytest.raises(TypeError, match="ABI mismatch"):
+            Span._with_source_unchecked(0, 5, FakeSource())  # type: ignore[attr-defined]
+
+    def test_with_source_keeps_exact_behavior(self):
+        """Public with_source still rejects foreign-cdylib SourceText (pinned behavior).
+
+        Requires make build-test-user-ext; skipped if the fixture is not available.
+        A CI lane where this test is always skipped is a gap, not a pass.
+        """
+        phase4 = pytest.importorskip(
+            "phase4_roundtrip_cst",
+            reason="phase4_roundtrip_cst not built; run 'make build-test-user-ext' first",
+        )
+        foreign_st = phase4.SourceText("hello world")  # type: ignore[attr-defined]
+        with pytest.raises(TypeError, match="SourceText"):
+            Span.with_source(0, 5, foreign_st)
+
+    def test_with_source_unchecked_foreign_cdylib_works(self):
+        """Span._with_source_unchecked accepts a foreign-cdylib SourceText (the cross-cdylib case)."""
+        phase4 = pytest.importorskip(
+            "phase4_roundtrip_cst",
+            reason="phase4_roundtrip_cst not built; run 'make build-test-user-ext' first",
+        )
+        foreign_st = phase4.SourceText("hello world")  # type: ignore[attr-defined]
+        s = Span._with_source_unchecked(0, 5, foreign_st)  # type: ignore[attr-defined]
+        assert s.text() == "hello"
+
+    def test_with_source_unchecked_foreign_spans_merge(self):
+        """Two spans built from the same foreign SourceText via _with_source_unchecked merge successfully."""
+        phase4 = pytest.importorskip(
+            "phase4_roundtrip_cst",
+            reason="phase4_roundtrip_cst not built; run 'make build-test-user-ext' first",
+        )
+        foreign_st = phase4.SourceText("hello world")  # type: ignore[attr-defined]
+        s1 = Span._with_source_unchecked(0, 5, foreign_st)  # type: ignore[attr-defined]
+        s2 = Span._with_source_unchecked(6, 11, foreign_st)  # type: ignore[attr-defined]
+        merged = s1.merge(s2)
+        assert merged.text() == "hello world"

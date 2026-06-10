@@ -8,7 +8,7 @@ from __future__ import annotations
 
 import pytest
 
-from fltk._native import Span, UnknownSpan
+from fltk._native import SourceText, Span, UnknownSpan
 from fltk._native.fegen_cst import (
     Alternatives,
     BlockComment,
@@ -161,6 +161,64 @@ class TestAppendChildRoundtrip:
 # ---------------------------------------------------------------------------
 # AC-8e: extend_{label} and maybe_{label} for fegen classes
 # ---------------------------------------------------------------------------
+
+
+class TestArcSharingNodeSpan:
+    """§4 item 1: span accessor preserves Arc-sharing; multiple reads merge without ValueError.
+
+    These tests verify the fix for the O(N) copy bug: span accessors must return a
+    fltk._native.Span that shares the same source Arc as the node, so that two spans
+    from the same node can be merged without "cannot merge spans from different sources".
+    """
+
+    def test_node_span_read_twice_merges(self):
+        """Reading node.span twice yields spans that merge successfully (same source Arc)."""
+        src = SourceText("hello world")
+        node = Grammar(span=Span.with_source(0, 11, src))
+        s1 = node.span
+        s2 = node.span
+        merged = s1.merge(s2)
+        assert merged.text() == "hello world"
+
+    def test_node_span_has_source(self):
+        """node.span is source-bearing when node was constructed with a source-bearing span."""
+        src = SourceText("hello world")
+        node = Grammar(span=Span.with_source(0, 5, src))
+        assert node.span.has_source()
+        assert node.span.text() == "hello"
+
+    def test_span_child_read_twice_merges(self):
+        """A Span child read back through children/child_<label> twice merges without ValueError."""
+        src = SourceText("hello world!")
+        span1 = Span.with_source(0, 5, src)
+        node = Identifier()
+        node.append_name(span1)
+        s1 = node.child_name()
+        s2 = node.child_name()
+        merged = s1.merge(s2)
+        assert merged.text() == "hello"
+
+    def test_span_child_merges_with_node_span(self):
+        """A Span child from children_<label> merges with the node's .span."""
+        src = SourceText("hello world!")
+        node = Identifier(span=Span.with_source(0, 5, src))
+        span_child = Span.with_source(0, 5, src)
+        node.append_name(span_child)
+        child_span = node.child_name()
+        node_span = node.span
+        merged = child_span.merge(node_span)
+        assert merged.text() == "hello"
+
+    def test_span_from_children_getter_merges(self):
+        """Span retrieved via generic children list merges with another span from same source."""
+        src = SourceText("hello world!")
+        node = Identifier(span=Span.with_source(0, 12, src))
+        node.append_name(Span.with_source(0, 5, src))
+        # children returns list of (label, value) tuples
+        _, child_span = node.children[0]
+        node_span = node.span
+        merged = child_span.merge(node_span)
+        assert merged.text() == "hello world!"
 
 
 class TestExtendAndMaybe:

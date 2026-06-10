@@ -1,3 +1,4 @@
+use crate::cross_cdylib::{extract_source_text, FLTK_CST_CORE_ABI};
 use pyo3::exceptions::PyValueError;
 use pyo3::prelude::*;
 use pyo3::sync::GILOnceCell;
@@ -53,6 +54,24 @@ impl SourceText {
     #[new]
     fn new(text: &str) -> Self {
         SourceText::from_str(text)
+    }
+
+    /// ABI marker: ``"fltk-cst-core/<version>"`` baked into the rlib at compile time.
+    ///
+    /// Every cdylib linking the same ``fltk-cst-core`` rlib with the same Cargo.toml
+    /// version exposes this identical string on its locally-registered ``SourceText`` type.
+    /// ``extract_source_text`` (``cross_cdylib.rs``) reads this classattr to gate
+    /// ``downcast_unchecked`` across the cdylib boundary without relying on type-object
+    /// identity (which is not available in the canonical→consumer direction; see design §2.1).
+    ///
+    /// The marker is a plain string (debuggable, mismatch message trivially constructible).
+    /// It is deliberately *not* a PyCapsule: anything readable from Python is replayable,
+    /// so a capsule adds API surface without removing the pure-Python-reachable UB path.
+    /// Strengthening the derivation (pyo3 version, layout hash) is owned by the
+    /// ``crosscdylib-abi-sentinel`` TODO; this attribute is the seed mechanism.
+    #[classattr]
+    fn _fltk_cst_core_abi() -> &'static str {
+        FLTK_CST_CORE_ABI
     }
 }
 
@@ -139,15 +158,10 @@ impl Span {
     /// ``None`` if sourceless.  Clones only the reference count (O(1)).
     ///
     /// Returns a ``SourceText`` registered with the *current* cdylib's type system.
-    /// This is usable when caller and callee share the same cdylib (i.e., generated code
-    /// inside ``fltk._native`` itself).  For cross-cdylib use (out-of-tree consumer crate
-    /// passing the result to ``fltk._native.Span.with_source``), the caller must use an
-    /// ``extract_source_text`` helper analogous to ``extract_span`` to bridge the type
-    /// registration boundary.
-    ///
-    /// TODO(span-source-as-py-crosscdylib): wire cross-cdylib ``extract_source_text`` in the
-    /// fltk-cst-core cross_cdylib module so generated code can use this method instead of
-    /// ``source_full_text_str`` + full-string reconstruction (efficiency-deep-1).
+    /// For cross-cdylib use (out-of-tree consumer crate building a ``fltk._native.Span``),
+    /// pass the result to ``Span::_with_source_unchecked`` via ``span_to_pyobject``
+    /// (``cross_cdylib.rs``), which accepts the locally-registered ``SourceText`` via the
+    /// ABI-marker check in ``extract_source_text``.
     pub fn source_as_py(&self, py: Python<'_>) -> PyResult<Option<Py<SourceText>>> {
         match &self.source {
             Some(arc) => Ok(Some(Py::new(
@@ -163,8 +177,10 @@ impl Span {
     /// Return the full source text (the entire input string, not just the span slice), or ``None``
     /// if the span has no source attached.
     ///
-    /// Used by generated accessor code to construct a canonical ``fltk._native.SourceText`` for
-    /// cross-cdylib span construction: ``fltk._native.Span.with_source(start, end, SourceText(full))``.
+    /// Retained for compatibility with previously-generated consumer ``cst.rs`` files that still
+    /// call ``source_full_text_str()`` + ``get_source_text_type(py)?.call1(full_text)``.
+    /// New generated code uses ``span_to_pyobject`` (``cross_cdylib.rs``) instead, which
+    /// preserves Arc-sharing in O(1).
     pub fn source_full_text_str(&self) -> Option<String> {
         self.source.as_ref().map(|arc| arc.text.clone())
     }
@@ -204,6 +220,28 @@ impl Span {
     #[pyo3(signature = (start, end, source))]
     fn with_source(_cls: &Bound<'_, PyType>, start: i64, end: i64, source: &SourceText) -> Self {
         Span::new_with_source(start, end, source)
+    }
+
+    /// Private cross-cdylib constructor (generated-code use only): like ``with_source``,
+    /// but accepts a ``SourceText`` registered by another fltk-cst-core-linking cdylib.
+    ///
+    /// "unchecked" = bypasses pyo3's registry-based type check; an ABI-marker check in
+    /// ``extract_source_text`` still gates the cast (see ``cross_cdylib.rs``).
+    ///
+    /// Passing a forged-marker object (a Python class with ``_fltk_cst_core_abi`` set to the
+    /// expected string but a mismatched memory layout) is **Undefined Behavior**. This is
+    /// out-of-contract: this method is private by convention (leading underscore) and is
+    /// intended to be called only by ``span_to_pyobject`` (``cross_cdylib.rs``) passing
+    /// the result of ``source_as_py``, which always produces a genuine ``SourceText``.
+    #[classmethod]
+    #[pyo3(signature = (start, end, source))]
+    fn _with_source_unchecked(
+        _cls: &Bound<'_, PyType>,
+        start: i64,
+        end: i64,
+        source: &Bound<'_, PyAny>,
+    ) -> PyResult<Span> {
+        Ok(Span::new_with_source(start, end, &extract_source_text(source)?))
     }
 
     /// Return the source text slice ``[start, end)``, or ``None`` if:

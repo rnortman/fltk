@@ -1,4 +1,4 @@
-use fltk_cst_core::{extract_span, get_source_text_type, get_span_type, Span};
+use fltk_cst_core::{extract_span, get_span_type, span_to_pyobject, Span};
 use pyo3::exceptions::{PyTypeError, PyValueError};
 use pyo3::prelude::*;
 use pyo3::types::{PyList, PyTuple, PyType};
@@ -149,7 +149,7 @@ impl PartialEq for GrammarChild {
 }
 
 impl GrammarChild {
-    fn to_pyobject(&self, py: Python<'_>, _span_type: &Bound<'_, PyType>) -> PyResult<PyObject> {
+    fn to_pyobject(&self, py: Python<'_>) -> PyResult<PyObject> {
         match self {
             Self::Rule(n) => Py::new(py, (**n).clone()).map(|p| p.into_any()),
             Self::Trivia(n) => Py::new(py, (**n).clone()).map(|p| p.into_any()),
@@ -246,20 +246,8 @@ impl Grammar {
     fn span(&self, py: Python<'_>) -> PyResult<PyObject> {
         // Return a fltk._native.Span so consumers always get the canonical type
         // regardless of which cdylib the node is defined in.
-        // Preserve source: if the stored span carries source, construct a canonical
-        // fltk._native.SourceText from the full text string (cross-cdylib safe).
-        let span_cls = get_span_type(py)?;
-        if let Some(full_text) = self.span.source_full_text_str() {
-            let st_type = get_source_text_type(py)?;
-            let py_src = st_type.call1((full_text.as_str(),))?;
-            span_cls
-                .call_method1("with_source", (self.span.start(), self.span.end(), py_src))
-                .map(|b| b.unbind())
-        } else {
-            span_cls
-                .call1((self.span.start(), self.span.end()))
-                .map(|b| b.unbind())
-        }
+        // Preserve source via span_to_pyobject: O(1) Arc clone, no string copy.
+        span_to_pyobject(py, &self.span)
     }
 
     #[setter]
@@ -281,14 +269,13 @@ impl Grammar {
 
     #[getter]
     fn children(&self, py: Python<'_>) -> PyResult<Py<PyList>> {
-        let span_type = get_span_type(py)?;
         let result = PyList::empty(py);
         for (label, child) in &self.children {
             let label_obj: PyObject = match label {
                 None => py.None(),
                 Some(lbl) => lbl.clone().into_pyobject(py)?.into_any().unbind(),
             };
-            let child_obj = child.to_pyobject(py, &span_type)?;
+            let child_obj = child.to_pyobject(py)?;
             let tup = PyTuple::new(py, [label_obj, child_obj])?;
             result.append(tup)?;
         }
@@ -360,13 +347,12 @@ impl Grammar {
                 "Expected one child but have {n}"
             )));
         }
-        let span_type = get_span_type(py)?;
         let (label, child) = &self.children[0];
         let label_obj: PyObject = match label {
             None => py.None(),
             Some(lbl) => lbl.clone().into_pyobject(py)?.into_any().unbind(),
         };
-        let child_obj = child.to_pyobject(py, &span_type)?;
+        let child_obj = child.to_pyobject(py)?;
         Ok(PyTuple::new(py, [label_obj, child_obj])?.into_any().unbind())
     }
 
@@ -389,25 +375,23 @@ impl Grammar {
     }
 
     fn children_rule(&self, py: Python<'_>) -> PyResult<Py<PyList>> {
-        let span_type = get_span_type(py)?;
         let result = PyList::empty(py);
         for (label, child) in &self.children {
             if *label == Some(Grammar_Label::Rule) {
-                result.append(child.to_pyobject(py, &span_type)?)?;
+                result.append(child.to_pyobject(py)?)?;
             }
         }
         Ok(result.unbind())
     }
 
     fn child_rule(&self, py: Python<'_>) -> PyResult<PyObject> {
-        let span_type = get_span_type(py)?;
         let mut found: Option<PyObject> = None;
         let mut count = 0usize;
         for (label, child) in &self.children {
             if *label == Some(Grammar_Label::Rule) {
                 count += 1;
                 if count == 1 {
-                    found = Some(child.to_pyobject(py, &span_type)?);
+                    found = Some(child.to_pyobject(py)?);
                 }
             }
         }
@@ -420,14 +404,13 @@ impl Grammar {
     }
 
     fn maybe_rule(&self, py: Python<'_>) -> PyResult<Option<PyObject>> {
-        let span_type = get_span_type(py)?;
         let mut found: Option<PyObject> = None;
         let mut count = 0usize;
         for (label, child) in &self.children {
             if *label == Some(Grammar_Label::Rule) {
                 count += 1;
                 if count == 1 {
-                    found = Some(child.to_pyobject(py, &span_type)?);
+                    found = Some(child.to_pyobject(py)?);
                 }
             }
         }
@@ -530,7 +513,7 @@ impl PartialEq for RuleChild {
 }
 
 impl RuleChild {
-    fn to_pyobject(&self, py: Python<'_>, _span_type: &Bound<'_, PyType>) -> PyResult<PyObject> {
+    fn to_pyobject(&self, py: Python<'_>) -> PyResult<PyObject> {
         match self {
             Self::Alternatives(n) => Py::new(py, (**n).clone()).map(|p| p.into_any()),
             Self::Identifier(n) => Py::new(py, (**n).clone()).map(|p| p.into_any()),
@@ -632,20 +615,8 @@ impl Rule {
     fn span(&self, py: Python<'_>) -> PyResult<PyObject> {
         // Return a fltk._native.Span so consumers always get the canonical type
         // regardless of which cdylib the node is defined in.
-        // Preserve source: if the stored span carries source, construct a canonical
-        // fltk._native.SourceText from the full text string (cross-cdylib safe).
-        let span_cls = get_span_type(py)?;
-        if let Some(full_text) = self.span.source_full_text_str() {
-            let st_type = get_source_text_type(py)?;
-            let py_src = st_type.call1((full_text.as_str(),))?;
-            span_cls
-                .call_method1("with_source", (self.span.start(), self.span.end(), py_src))
-                .map(|b| b.unbind())
-        } else {
-            span_cls
-                .call1((self.span.start(), self.span.end()))
-                .map(|b| b.unbind())
-        }
+        // Preserve source via span_to_pyobject: O(1) Arc clone, no string copy.
+        span_to_pyobject(py, &self.span)
     }
 
     #[setter]
@@ -667,14 +638,13 @@ impl Rule {
 
     #[getter]
     fn children(&self, py: Python<'_>) -> PyResult<Py<PyList>> {
-        let span_type = get_span_type(py)?;
         let result = PyList::empty(py);
         for (label, child) in &self.children {
             let label_obj: PyObject = match label {
                 None => py.None(),
                 Some(lbl) => lbl.clone().into_pyobject(py)?.into_any().unbind(),
             };
-            let child_obj = child.to_pyobject(py, &span_type)?;
+            let child_obj = child.to_pyobject(py)?;
             let tup = PyTuple::new(py, [label_obj, child_obj])?;
             result.append(tup)?;
         }
@@ -746,13 +716,12 @@ impl Rule {
                 "Expected one child but have {n}"
             )));
         }
-        let span_type = get_span_type(py)?;
         let (label, child) = &self.children[0];
         let label_obj: PyObject = match label {
             None => py.None(),
             Some(lbl) => lbl.clone().into_pyobject(py)?.into_any().unbind(),
         };
-        let child_obj = child.to_pyobject(py, &span_type)?;
+        let child_obj = child.to_pyobject(py)?;
         Ok(PyTuple::new(py, [label_obj, child_obj])?.into_any().unbind())
     }
 
@@ -775,25 +744,23 @@ impl Rule {
     }
 
     fn children_alternatives(&self, py: Python<'_>) -> PyResult<Py<PyList>> {
-        let span_type = get_span_type(py)?;
         let result = PyList::empty(py);
         for (label, child) in &self.children {
             if *label == Some(Rule_Label::Alternatives) {
-                result.append(child.to_pyobject(py, &span_type)?)?;
+                result.append(child.to_pyobject(py)?)?;
             }
         }
         Ok(result.unbind())
     }
 
     fn child_alternatives(&self, py: Python<'_>) -> PyResult<PyObject> {
-        let span_type = get_span_type(py)?;
         let mut found: Option<PyObject> = None;
         let mut count = 0usize;
         for (label, child) in &self.children {
             if *label == Some(Rule_Label::Alternatives) {
                 count += 1;
                 if count == 1 {
-                    found = Some(child.to_pyobject(py, &span_type)?);
+                    found = Some(child.to_pyobject(py)?);
                 }
             }
         }
@@ -806,14 +773,13 @@ impl Rule {
     }
 
     fn maybe_alternatives(&self, py: Python<'_>) -> PyResult<Option<PyObject>> {
-        let span_type = get_span_type(py)?;
         let mut found: Option<PyObject> = None;
         let mut count = 0usize;
         for (label, child) in &self.children {
             if *label == Some(Rule_Label::Alternatives) {
                 count += 1;
                 if count == 1 {
-                    found = Some(child.to_pyobject(py, &span_type)?);
+                    found = Some(child.to_pyobject(py)?);
                 }
             }
         }
@@ -844,25 +810,23 @@ impl Rule {
     }
 
     fn children_name(&self, py: Python<'_>) -> PyResult<Py<PyList>> {
-        let span_type = get_span_type(py)?;
         let result = PyList::empty(py);
         for (label, child) in &self.children {
             if *label == Some(Rule_Label::Name) {
-                result.append(child.to_pyobject(py, &span_type)?)?;
+                result.append(child.to_pyobject(py)?)?;
             }
         }
         Ok(result.unbind())
     }
 
     fn child_name(&self, py: Python<'_>) -> PyResult<PyObject> {
-        let span_type = get_span_type(py)?;
         let mut found: Option<PyObject> = None;
         let mut count = 0usize;
         for (label, child) in &self.children {
             if *label == Some(Rule_Label::Name) {
                 count += 1;
                 if count == 1 {
-                    found = Some(child.to_pyobject(py, &span_type)?);
+                    found = Some(child.to_pyobject(py)?);
                 }
             }
         }
@@ -875,14 +839,13 @@ impl Rule {
     }
 
     fn maybe_name(&self, py: Python<'_>) -> PyResult<Option<PyObject>> {
-        let span_type = get_span_type(py)?;
         let mut found: Option<PyObject> = None;
         let mut count = 0usize;
         for (label, child) in &self.children {
             if *label == Some(Rule_Label::Name) {
                 count += 1;
                 if count == 1 {
-                    found = Some(child.to_pyobject(py, &span_type)?);
+                    found = Some(child.to_pyobject(py)?);
                 }
             }
         }
@@ -980,7 +943,7 @@ impl PartialEq for AlternativesChild {
 }
 
 impl AlternativesChild {
-    fn to_pyobject(&self, py: Python<'_>, _span_type: &Bound<'_, PyType>) -> PyResult<PyObject> {
+    fn to_pyobject(&self, py: Python<'_>) -> PyResult<PyObject> {
         match self {
             Self::Items(n) => Py::new(py, (**n).clone()).map(|p| p.into_any()),
             Self::Trivia(n) => Py::new(py, (**n).clone()).map(|p| p.into_any()),
@@ -1077,20 +1040,8 @@ impl Alternatives {
     fn span(&self, py: Python<'_>) -> PyResult<PyObject> {
         // Return a fltk._native.Span so consumers always get the canonical type
         // regardless of which cdylib the node is defined in.
-        // Preserve source: if the stored span carries source, construct a canonical
-        // fltk._native.SourceText from the full text string (cross-cdylib safe).
-        let span_cls = get_span_type(py)?;
-        if let Some(full_text) = self.span.source_full_text_str() {
-            let st_type = get_source_text_type(py)?;
-            let py_src = st_type.call1((full_text.as_str(),))?;
-            span_cls
-                .call_method1("with_source", (self.span.start(), self.span.end(), py_src))
-                .map(|b| b.unbind())
-        } else {
-            span_cls
-                .call1((self.span.start(), self.span.end()))
-                .map(|b| b.unbind())
-        }
+        // Preserve source via span_to_pyobject: O(1) Arc clone, no string copy.
+        span_to_pyobject(py, &self.span)
     }
 
     #[setter]
@@ -1112,14 +1063,13 @@ impl Alternatives {
 
     #[getter]
     fn children(&self, py: Python<'_>) -> PyResult<Py<PyList>> {
-        let span_type = get_span_type(py)?;
         let result = PyList::empty(py);
         for (label, child) in &self.children {
             let label_obj: PyObject = match label {
                 None => py.None(),
                 Some(lbl) => lbl.clone().into_pyobject(py)?.into_any().unbind(),
             };
-            let child_obj = child.to_pyobject(py, &span_type)?;
+            let child_obj = child.to_pyobject(py)?;
             let tup = PyTuple::new(py, [label_obj, child_obj])?;
             result.append(tup)?;
         }
@@ -1191,13 +1141,12 @@ impl Alternatives {
                 "Expected one child but have {n}"
             )));
         }
-        let span_type = get_span_type(py)?;
         let (label, child) = &self.children[0];
         let label_obj: PyObject = match label {
             None => py.None(),
             Some(lbl) => lbl.clone().into_pyobject(py)?.into_any().unbind(),
         };
-        let child_obj = child.to_pyobject(py, &span_type)?;
+        let child_obj = child.to_pyobject(py)?;
         Ok(PyTuple::new(py, [label_obj, child_obj])?.into_any().unbind())
     }
 
@@ -1220,25 +1169,23 @@ impl Alternatives {
     }
 
     fn children_items(&self, py: Python<'_>) -> PyResult<Py<PyList>> {
-        let span_type = get_span_type(py)?;
         let result = PyList::empty(py);
         for (label, child) in &self.children {
             if *label == Some(Alternatives_Label::Items) {
-                result.append(child.to_pyobject(py, &span_type)?)?;
+                result.append(child.to_pyobject(py)?)?;
             }
         }
         Ok(result.unbind())
     }
 
     fn child_items(&self, py: Python<'_>) -> PyResult<PyObject> {
-        let span_type = get_span_type(py)?;
         let mut found: Option<PyObject> = None;
         let mut count = 0usize;
         for (label, child) in &self.children {
             if *label == Some(Alternatives_Label::Items) {
                 count += 1;
                 if count == 1 {
-                    found = Some(child.to_pyobject(py, &span_type)?);
+                    found = Some(child.to_pyobject(py)?);
                 }
             }
         }
@@ -1251,14 +1198,13 @@ impl Alternatives {
     }
 
     fn maybe_items(&self, py: Python<'_>) -> PyResult<Option<PyObject>> {
-        let span_type = get_span_type(py)?;
         let mut found: Option<PyObject> = None;
         let mut count = 0usize;
         for (label, child) in &self.children {
             if *label == Some(Alternatives_Label::Items) {
                 count += 1;
                 if count == 1 {
-                    found = Some(child.to_pyobject(py, &span_type)?);
+                    found = Some(child.to_pyobject(py)?);
                 }
             }
         }
@@ -1367,19 +1313,12 @@ impl PartialEq for ItemsChild {
 }
 
 impl ItemsChild {
-    fn to_pyobject(&self, py: Python<'_>, span_type: &Bound<'_, PyType>) -> PyResult<PyObject> {
+    fn to_pyobject(&self, py: Python<'_>) -> PyResult<PyObject> {
         match self {
             Self::Span(s) => {
-                // Preserve source: if span carries source, construct a canonical
-                // fltk._native.SourceText from the full text string and use it
-                // to build a source-bearing Python Span (cross-cdylib safe).
-                if let Some(full_text) = s.source_full_text_str() {
-                    let st_type = get_source_text_type(py)?;
-                    let py_src = st_type.call1((full_text.as_str(),))?;
-                    span_type.call_method1("with_source", (s.start(), s.end(), py_src)).map(|b| b.unbind())
-                } else {
-                    span_type.call1((s.start(), s.end())).map(|b| b.unbind())
-                }
+                // span_to_pyobject: O(1) Arc clone, no string copy; preserves
+                // Arc-sharing so multiple reads of the same span merge without error.
+                span_to_pyobject(py, s)
             }
             Self::Item(n) => Py::new(py, (**n).clone()).map(|p| p.into_any()),
             Self::Trivia(n) => Py::new(py, (**n).clone()).map(|p| p.into_any()),
@@ -1480,20 +1419,8 @@ impl Items {
     fn span(&self, py: Python<'_>) -> PyResult<PyObject> {
         // Return a fltk._native.Span so consumers always get the canonical type
         // regardless of which cdylib the node is defined in.
-        // Preserve source: if the stored span carries source, construct a canonical
-        // fltk._native.SourceText from the full text string (cross-cdylib safe).
-        let span_cls = get_span_type(py)?;
-        if let Some(full_text) = self.span.source_full_text_str() {
-            let st_type = get_source_text_type(py)?;
-            let py_src = st_type.call1((full_text.as_str(),))?;
-            span_cls
-                .call_method1("with_source", (self.span.start(), self.span.end(), py_src))
-                .map(|b| b.unbind())
-        } else {
-            span_cls
-                .call1((self.span.start(), self.span.end()))
-                .map(|b| b.unbind())
-        }
+        // Preserve source via span_to_pyobject: O(1) Arc clone, no string copy.
+        span_to_pyobject(py, &self.span)
     }
 
     #[setter]
@@ -1515,14 +1442,13 @@ impl Items {
 
     #[getter]
     fn children(&self, py: Python<'_>) -> PyResult<Py<PyList>> {
-        let span_type = get_span_type(py)?;
         let result = PyList::empty(py);
         for (label, child) in &self.children {
             let label_obj: PyObject = match label {
                 None => py.None(),
                 Some(lbl) => lbl.clone().into_pyobject(py)?.into_any().unbind(),
             };
-            let child_obj = child.to_pyobject(py, &span_type)?;
+            let child_obj = child.to_pyobject(py)?;
             let tup = PyTuple::new(py, [label_obj, child_obj])?;
             result.append(tup)?;
         }
@@ -1594,13 +1520,12 @@ impl Items {
                 "Expected one child but have {n}"
             )));
         }
-        let span_type = get_span_type(py)?;
         let (label, child) = &self.children[0];
         let label_obj: PyObject = match label {
             None => py.None(),
             Some(lbl) => lbl.clone().into_pyobject(py)?.into_any().unbind(),
         };
-        let child_obj = child.to_pyobject(py, &span_type)?;
+        let child_obj = child.to_pyobject(py)?;
         Ok(PyTuple::new(py, [label_obj, child_obj])?.into_any().unbind())
     }
 
@@ -1623,25 +1548,23 @@ impl Items {
     }
 
     fn children_item(&self, py: Python<'_>) -> PyResult<Py<PyList>> {
-        let span_type = get_span_type(py)?;
         let result = PyList::empty(py);
         for (label, child) in &self.children {
             if *label == Some(Items_Label::Item) {
-                result.append(child.to_pyobject(py, &span_type)?)?;
+                result.append(child.to_pyobject(py)?)?;
             }
         }
         Ok(result.unbind())
     }
 
     fn child_item(&self, py: Python<'_>) -> PyResult<PyObject> {
-        let span_type = get_span_type(py)?;
         let mut found: Option<PyObject> = None;
         let mut count = 0usize;
         for (label, child) in &self.children {
             if *label == Some(Items_Label::Item) {
                 count += 1;
                 if count == 1 {
-                    found = Some(child.to_pyobject(py, &span_type)?);
+                    found = Some(child.to_pyobject(py)?);
                 }
             }
         }
@@ -1654,14 +1577,13 @@ impl Items {
     }
 
     fn maybe_item(&self, py: Python<'_>) -> PyResult<Option<PyObject>> {
-        let span_type = get_span_type(py)?;
         let mut found: Option<PyObject> = None;
         let mut count = 0usize;
         for (label, child) in &self.children {
             if *label == Some(Items_Label::Item) {
                 count += 1;
                 if count == 1 {
-                    found = Some(child.to_pyobject(py, &span_type)?);
+                    found = Some(child.to_pyobject(py)?);
                 }
             }
         }
@@ -1692,25 +1614,23 @@ impl Items {
     }
 
     fn children_no_ws(&self, py: Python<'_>) -> PyResult<Py<PyList>> {
-        let span_type = get_span_type(py)?;
         let result = PyList::empty(py);
         for (label, child) in &self.children {
             if *label == Some(Items_Label::NoWs) {
-                result.append(child.to_pyobject(py, &span_type)?)?;
+                result.append(child.to_pyobject(py)?)?;
             }
         }
         Ok(result.unbind())
     }
 
     fn child_no_ws(&self, py: Python<'_>) -> PyResult<PyObject> {
-        let span_type = get_span_type(py)?;
         let mut found: Option<PyObject> = None;
         let mut count = 0usize;
         for (label, child) in &self.children {
             if *label == Some(Items_Label::NoWs) {
                 count += 1;
                 if count == 1 {
-                    found = Some(child.to_pyobject(py, &span_type)?);
+                    found = Some(child.to_pyobject(py)?);
                 }
             }
         }
@@ -1723,14 +1643,13 @@ impl Items {
     }
 
     fn maybe_no_ws(&self, py: Python<'_>) -> PyResult<Option<PyObject>> {
-        let span_type = get_span_type(py)?;
         let mut found: Option<PyObject> = None;
         let mut count = 0usize;
         for (label, child) in &self.children {
             if *label == Some(Items_Label::NoWs) {
                 count += 1;
                 if count == 1 {
-                    found = Some(child.to_pyobject(py, &span_type)?);
+                    found = Some(child.to_pyobject(py)?);
                 }
             }
         }
@@ -1761,25 +1680,23 @@ impl Items {
     }
 
     fn children_ws_allowed(&self, py: Python<'_>) -> PyResult<Py<PyList>> {
-        let span_type = get_span_type(py)?;
         let result = PyList::empty(py);
         for (label, child) in &self.children {
             if *label == Some(Items_Label::WsAllowed) {
-                result.append(child.to_pyobject(py, &span_type)?)?;
+                result.append(child.to_pyobject(py)?)?;
             }
         }
         Ok(result.unbind())
     }
 
     fn child_ws_allowed(&self, py: Python<'_>) -> PyResult<PyObject> {
-        let span_type = get_span_type(py)?;
         let mut found: Option<PyObject> = None;
         let mut count = 0usize;
         for (label, child) in &self.children {
             if *label == Some(Items_Label::WsAllowed) {
                 count += 1;
                 if count == 1 {
-                    found = Some(child.to_pyobject(py, &span_type)?);
+                    found = Some(child.to_pyobject(py)?);
                 }
             }
         }
@@ -1792,14 +1709,13 @@ impl Items {
     }
 
     fn maybe_ws_allowed(&self, py: Python<'_>) -> PyResult<Option<PyObject>> {
-        let span_type = get_span_type(py)?;
         let mut found: Option<PyObject> = None;
         let mut count = 0usize;
         for (label, child) in &self.children {
             if *label == Some(Items_Label::WsAllowed) {
                 count += 1;
                 if count == 1 {
-                    found = Some(child.to_pyobject(py, &span_type)?);
+                    found = Some(child.to_pyobject(py)?);
                 }
             }
         }
@@ -1830,25 +1746,23 @@ impl Items {
     }
 
     fn children_ws_required(&self, py: Python<'_>) -> PyResult<Py<PyList>> {
-        let span_type = get_span_type(py)?;
         let result = PyList::empty(py);
         for (label, child) in &self.children {
             if *label == Some(Items_Label::WsRequired) {
-                result.append(child.to_pyobject(py, &span_type)?)?;
+                result.append(child.to_pyobject(py)?)?;
             }
         }
         Ok(result.unbind())
     }
 
     fn child_ws_required(&self, py: Python<'_>) -> PyResult<PyObject> {
-        let span_type = get_span_type(py)?;
         let mut found: Option<PyObject> = None;
         let mut count = 0usize;
         for (label, child) in &self.children {
             if *label == Some(Items_Label::WsRequired) {
                 count += 1;
                 if count == 1 {
-                    found = Some(child.to_pyobject(py, &span_type)?);
+                    found = Some(child.to_pyobject(py)?);
                 }
             }
         }
@@ -1861,14 +1775,13 @@ impl Items {
     }
 
     fn maybe_ws_required(&self, py: Python<'_>) -> PyResult<Option<PyObject>> {
-        let span_type = get_span_type(py)?;
         let mut found: Option<PyObject> = None;
         let mut count = 0usize;
         for (label, child) in &self.children {
             if *label == Some(Items_Label::WsRequired) {
                 count += 1;
                 if count == 1 {
-                    found = Some(child.to_pyobject(py, &span_type)?);
+                    found = Some(child.to_pyobject(py)?);
                 }
             }
         }
@@ -1981,7 +1894,7 @@ impl PartialEq for ItemChild {
 }
 
 impl ItemChild {
-    fn to_pyobject(&self, py: Python<'_>, _span_type: &Bound<'_, PyType>) -> PyResult<PyObject> {
+    fn to_pyobject(&self, py: Python<'_>) -> PyResult<PyObject> {
         match self {
             Self::Disposition(n) => Py::new(py, (**n).clone()).map(|p| p.into_any()),
             Self::Identifier(n) => Py::new(py, (**n).clone()).map(|p| p.into_any()),
@@ -2093,20 +2006,8 @@ impl Item {
     fn span(&self, py: Python<'_>) -> PyResult<PyObject> {
         // Return a fltk._native.Span so consumers always get the canonical type
         // regardless of which cdylib the node is defined in.
-        // Preserve source: if the stored span carries source, construct a canonical
-        // fltk._native.SourceText from the full text string (cross-cdylib safe).
-        let span_cls = get_span_type(py)?;
-        if let Some(full_text) = self.span.source_full_text_str() {
-            let st_type = get_source_text_type(py)?;
-            let py_src = st_type.call1((full_text.as_str(),))?;
-            span_cls
-                .call_method1("with_source", (self.span.start(), self.span.end(), py_src))
-                .map(|b| b.unbind())
-        } else {
-            span_cls
-                .call1((self.span.start(), self.span.end()))
-                .map(|b| b.unbind())
-        }
+        // Preserve source via span_to_pyobject: O(1) Arc clone, no string copy.
+        span_to_pyobject(py, &self.span)
     }
 
     #[setter]
@@ -2128,14 +2029,13 @@ impl Item {
 
     #[getter]
     fn children(&self, py: Python<'_>) -> PyResult<Py<PyList>> {
-        let span_type = get_span_type(py)?;
         let result = PyList::empty(py);
         for (label, child) in &self.children {
             let label_obj: PyObject = match label {
                 None => py.None(),
                 Some(lbl) => lbl.clone().into_pyobject(py)?.into_any().unbind(),
             };
-            let child_obj = child.to_pyobject(py, &span_type)?;
+            let child_obj = child.to_pyobject(py)?;
             let tup = PyTuple::new(py, [label_obj, child_obj])?;
             result.append(tup)?;
         }
@@ -2207,13 +2107,12 @@ impl Item {
                 "Expected one child but have {n}"
             )));
         }
-        let span_type = get_span_type(py)?;
         let (label, child) = &self.children[0];
         let label_obj: PyObject = match label {
             None => py.None(),
             Some(lbl) => lbl.clone().into_pyobject(py)?.into_any().unbind(),
         };
-        let child_obj = child.to_pyobject(py, &span_type)?;
+        let child_obj = child.to_pyobject(py)?;
         Ok(PyTuple::new(py, [label_obj, child_obj])?.into_any().unbind())
     }
 
@@ -2236,25 +2135,23 @@ impl Item {
     }
 
     fn children_disposition(&self, py: Python<'_>) -> PyResult<Py<PyList>> {
-        let span_type = get_span_type(py)?;
         let result = PyList::empty(py);
         for (label, child) in &self.children {
             if *label == Some(Item_Label::Disposition) {
-                result.append(child.to_pyobject(py, &span_type)?)?;
+                result.append(child.to_pyobject(py)?)?;
             }
         }
         Ok(result.unbind())
     }
 
     fn child_disposition(&self, py: Python<'_>) -> PyResult<PyObject> {
-        let span_type = get_span_type(py)?;
         let mut found: Option<PyObject> = None;
         let mut count = 0usize;
         for (label, child) in &self.children {
             if *label == Some(Item_Label::Disposition) {
                 count += 1;
                 if count == 1 {
-                    found = Some(child.to_pyobject(py, &span_type)?);
+                    found = Some(child.to_pyobject(py)?);
                 }
             }
         }
@@ -2267,14 +2164,13 @@ impl Item {
     }
 
     fn maybe_disposition(&self, py: Python<'_>) -> PyResult<Option<PyObject>> {
-        let span_type = get_span_type(py)?;
         let mut found: Option<PyObject> = None;
         let mut count = 0usize;
         for (label, child) in &self.children {
             if *label == Some(Item_Label::Disposition) {
                 count += 1;
                 if count == 1 {
-                    found = Some(child.to_pyobject(py, &span_type)?);
+                    found = Some(child.to_pyobject(py)?);
                 }
             }
         }
@@ -2305,25 +2201,23 @@ impl Item {
     }
 
     fn children_label(&self, py: Python<'_>) -> PyResult<Py<PyList>> {
-        let span_type = get_span_type(py)?;
         let result = PyList::empty(py);
         for (label, child) in &self.children {
             if *label == Some(Item_Label::Label) {
-                result.append(child.to_pyobject(py, &span_type)?)?;
+                result.append(child.to_pyobject(py)?)?;
             }
         }
         Ok(result.unbind())
     }
 
     fn child_label(&self, py: Python<'_>) -> PyResult<PyObject> {
-        let span_type = get_span_type(py)?;
         let mut found: Option<PyObject> = None;
         let mut count = 0usize;
         for (label, child) in &self.children {
             if *label == Some(Item_Label::Label) {
                 count += 1;
                 if count == 1 {
-                    found = Some(child.to_pyobject(py, &span_type)?);
+                    found = Some(child.to_pyobject(py)?);
                 }
             }
         }
@@ -2336,14 +2230,13 @@ impl Item {
     }
 
     fn maybe_label(&self, py: Python<'_>) -> PyResult<Option<PyObject>> {
-        let span_type = get_span_type(py)?;
         let mut found: Option<PyObject> = None;
         let mut count = 0usize;
         for (label, child) in &self.children {
             if *label == Some(Item_Label::Label) {
                 count += 1;
                 if count == 1 {
-                    found = Some(child.to_pyobject(py, &span_type)?);
+                    found = Some(child.to_pyobject(py)?);
                 }
             }
         }
@@ -2374,25 +2267,23 @@ impl Item {
     }
 
     fn children_quantifier(&self, py: Python<'_>) -> PyResult<Py<PyList>> {
-        let span_type = get_span_type(py)?;
         let result = PyList::empty(py);
         for (label, child) in &self.children {
             if *label == Some(Item_Label::Quantifier) {
-                result.append(child.to_pyobject(py, &span_type)?)?;
+                result.append(child.to_pyobject(py)?)?;
             }
         }
         Ok(result.unbind())
     }
 
     fn child_quantifier(&self, py: Python<'_>) -> PyResult<PyObject> {
-        let span_type = get_span_type(py)?;
         let mut found: Option<PyObject> = None;
         let mut count = 0usize;
         for (label, child) in &self.children {
             if *label == Some(Item_Label::Quantifier) {
                 count += 1;
                 if count == 1 {
-                    found = Some(child.to_pyobject(py, &span_type)?);
+                    found = Some(child.to_pyobject(py)?);
                 }
             }
         }
@@ -2405,14 +2296,13 @@ impl Item {
     }
 
     fn maybe_quantifier(&self, py: Python<'_>) -> PyResult<Option<PyObject>> {
-        let span_type = get_span_type(py)?;
         let mut found: Option<PyObject> = None;
         let mut count = 0usize;
         for (label, child) in &self.children {
             if *label == Some(Item_Label::Quantifier) {
                 count += 1;
                 if count == 1 {
-                    found = Some(child.to_pyobject(py, &span_type)?);
+                    found = Some(child.to_pyobject(py)?);
                 }
             }
         }
@@ -2443,25 +2333,23 @@ impl Item {
     }
 
     fn children_term(&self, py: Python<'_>) -> PyResult<Py<PyList>> {
-        let span_type = get_span_type(py)?;
         let result = PyList::empty(py);
         for (label, child) in &self.children {
             if *label == Some(Item_Label::Term) {
-                result.append(child.to_pyobject(py, &span_type)?)?;
+                result.append(child.to_pyobject(py)?)?;
             }
         }
         Ok(result.unbind())
     }
 
     fn child_term(&self, py: Python<'_>) -> PyResult<PyObject> {
-        let span_type = get_span_type(py)?;
         let mut found: Option<PyObject> = None;
         let mut count = 0usize;
         for (label, child) in &self.children {
             if *label == Some(Item_Label::Term) {
                 count += 1;
                 if count == 1 {
-                    found = Some(child.to_pyobject(py, &span_type)?);
+                    found = Some(child.to_pyobject(py)?);
                 }
             }
         }
@@ -2474,14 +2362,13 @@ impl Item {
     }
 
     fn maybe_term(&self, py: Python<'_>) -> PyResult<Option<PyObject>> {
-        let span_type = get_span_type(py)?;
         let mut found: Option<PyObject> = None;
         let mut count = 0usize;
         for (label, child) in &self.children {
             if *label == Some(Item_Label::Term) {
                 count += 1;
                 if count == 1 {
-                    found = Some(child.to_pyobject(py, &span_type)?);
+                    found = Some(child.to_pyobject(py)?);
                 }
             }
         }
@@ -2594,7 +2481,7 @@ impl PartialEq for TermChild {
 }
 
 impl TermChild {
-    fn to_pyobject(&self, py: Python<'_>, _span_type: &Bound<'_, PyType>) -> PyResult<PyObject> {
+    fn to_pyobject(&self, py: Python<'_>) -> PyResult<PyObject> {
         match self {
             Self::Alternatives(n) => Py::new(py, (**n).clone()).map(|p| p.into_any()),
             Self::Identifier(n) => Py::new(py, (**n).clone()).map(|p| p.into_any()),
@@ -2706,20 +2593,8 @@ impl Term {
     fn span(&self, py: Python<'_>) -> PyResult<PyObject> {
         // Return a fltk._native.Span so consumers always get the canonical type
         // regardless of which cdylib the node is defined in.
-        // Preserve source: if the stored span carries source, construct a canonical
-        // fltk._native.SourceText from the full text string (cross-cdylib safe).
-        let span_cls = get_span_type(py)?;
-        if let Some(full_text) = self.span.source_full_text_str() {
-            let st_type = get_source_text_type(py)?;
-            let py_src = st_type.call1((full_text.as_str(),))?;
-            span_cls
-                .call_method1("with_source", (self.span.start(), self.span.end(), py_src))
-                .map(|b| b.unbind())
-        } else {
-            span_cls
-                .call1((self.span.start(), self.span.end()))
-                .map(|b| b.unbind())
-        }
+        // Preserve source via span_to_pyobject: O(1) Arc clone, no string copy.
+        span_to_pyobject(py, &self.span)
     }
 
     #[setter]
@@ -2741,14 +2616,13 @@ impl Term {
 
     #[getter]
     fn children(&self, py: Python<'_>) -> PyResult<Py<PyList>> {
-        let span_type = get_span_type(py)?;
         let result = PyList::empty(py);
         for (label, child) in &self.children {
             let label_obj: PyObject = match label {
                 None => py.None(),
                 Some(lbl) => lbl.clone().into_pyobject(py)?.into_any().unbind(),
             };
-            let child_obj = child.to_pyobject(py, &span_type)?;
+            let child_obj = child.to_pyobject(py)?;
             let tup = PyTuple::new(py, [label_obj, child_obj])?;
             result.append(tup)?;
         }
@@ -2820,13 +2694,12 @@ impl Term {
                 "Expected one child but have {n}"
             )));
         }
-        let span_type = get_span_type(py)?;
         let (label, child) = &self.children[0];
         let label_obj: PyObject = match label {
             None => py.None(),
             Some(lbl) => lbl.clone().into_pyobject(py)?.into_any().unbind(),
         };
-        let child_obj = child.to_pyobject(py, &span_type)?;
+        let child_obj = child.to_pyobject(py)?;
         Ok(PyTuple::new(py, [label_obj, child_obj])?.into_any().unbind())
     }
 
@@ -2849,25 +2722,23 @@ impl Term {
     }
 
     fn children_alternatives(&self, py: Python<'_>) -> PyResult<Py<PyList>> {
-        let span_type = get_span_type(py)?;
         let result = PyList::empty(py);
         for (label, child) in &self.children {
             if *label == Some(Term_Label::Alternatives) {
-                result.append(child.to_pyobject(py, &span_type)?)?;
+                result.append(child.to_pyobject(py)?)?;
             }
         }
         Ok(result.unbind())
     }
 
     fn child_alternatives(&self, py: Python<'_>) -> PyResult<PyObject> {
-        let span_type = get_span_type(py)?;
         let mut found: Option<PyObject> = None;
         let mut count = 0usize;
         for (label, child) in &self.children {
             if *label == Some(Term_Label::Alternatives) {
                 count += 1;
                 if count == 1 {
-                    found = Some(child.to_pyobject(py, &span_type)?);
+                    found = Some(child.to_pyobject(py)?);
                 }
             }
         }
@@ -2880,14 +2751,13 @@ impl Term {
     }
 
     fn maybe_alternatives(&self, py: Python<'_>) -> PyResult<Option<PyObject>> {
-        let span_type = get_span_type(py)?;
         let mut found: Option<PyObject> = None;
         let mut count = 0usize;
         for (label, child) in &self.children {
             if *label == Some(Term_Label::Alternatives) {
                 count += 1;
                 if count == 1 {
-                    found = Some(child.to_pyobject(py, &span_type)?);
+                    found = Some(child.to_pyobject(py)?);
                 }
             }
         }
@@ -2918,25 +2788,23 @@ impl Term {
     }
 
     fn children_identifier(&self, py: Python<'_>) -> PyResult<Py<PyList>> {
-        let span_type = get_span_type(py)?;
         let result = PyList::empty(py);
         for (label, child) in &self.children {
             if *label == Some(Term_Label::Identifier) {
-                result.append(child.to_pyobject(py, &span_type)?)?;
+                result.append(child.to_pyobject(py)?)?;
             }
         }
         Ok(result.unbind())
     }
 
     fn child_identifier(&self, py: Python<'_>) -> PyResult<PyObject> {
-        let span_type = get_span_type(py)?;
         let mut found: Option<PyObject> = None;
         let mut count = 0usize;
         for (label, child) in &self.children {
             if *label == Some(Term_Label::Identifier) {
                 count += 1;
                 if count == 1 {
-                    found = Some(child.to_pyobject(py, &span_type)?);
+                    found = Some(child.to_pyobject(py)?);
                 }
             }
         }
@@ -2949,14 +2817,13 @@ impl Term {
     }
 
     fn maybe_identifier(&self, py: Python<'_>) -> PyResult<Option<PyObject>> {
-        let span_type = get_span_type(py)?;
         let mut found: Option<PyObject> = None;
         let mut count = 0usize;
         for (label, child) in &self.children {
             if *label == Some(Term_Label::Identifier) {
                 count += 1;
                 if count == 1 {
-                    found = Some(child.to_pyobject(py, &span_type)?);
+                    found = Some(child.to_pyobject(py)?);
                 }
             }
         }
@@ -2987,25 +2854,23 @@ impl Term {
     }
 
     fn children_literal(&self, py: Python<'_>) -> PyResult<Py<PyList>> {
-        let span_type = get_span_type(py)?;
         let result = PyList::empty(py);
         for (label, child) in &self.children {
             if *label == Some(Term_Label::Literal) {
-                result.append(child.to_pyobject(py, &span_type)?)?;
+                result.append(child.to_pyobject(py)?)?;
             }
         }
         Ok(result.unbind())
     }
 
     fn child_literal(&self, py: Python<'_>) -> PyResult<PyObject> {
-        let span_type = get_span_type(py)?;
         let mut found: Option<PyObject> = None;
         let mut count = 0usize;
         for (label, child) in &self.children {
             if *label == Some(Term_Label::Literal) {
                 count += 1;
                 if count == 1 {
-                    found = Some(child.to_pyobject(py, &span_type)?);
+                    found = Some(child.to_pyobject(py)?);
                 }
             }
         }
@@ -3018,14 +2883,13 @@ impl Term {
     }
 
     fn maybe_literal(&self, py: Python<'_>) -> PyResult<Option<PyObject>> {
-        let span_type = get_span_type(py)?;
         let mut found: Option<PyObject> = None;
         let mut count = 0usize;
         for (label, child) in &self.children {
             if *label == Some(Term_Label::Literal) {
                 count += 1;
                 if count == 1 {
-                    found = Some(child.to_pyobject(py, &span_type)?);
+                    found = Some(child.to_pyobject(py)?);
                 }
             }
         }
@@ -3056,25 +2920,23 @@ impl Term {
     }
 
     fn children_regex(&self, py: Python<'_>) -> PyResult<Py<PyList>> {
-        let span_type = get_span_type(py)?;
         let result = PyList::empty(py);
         for (label, child) in &self.children {
             if *label == Some(Term_Label::Regex) {
-                result.append(child.to_pyobject(py, &span_type)?)?;
+                result.append(child.to_pyobject(py)?)?;
             }
         }
         Ok(result.unbind())
     }
 
     fn child_regex(&self, py: Python<'_>) -> PyResult<PyObject> {
-        let span_type = get_span_type(py)?;
         let mut found: Option<PyObject> = None;
         let mut count = 0usize;
         for (label, child) in &self.children {
             if *label == Some(Term_Label::Regex) {
                 count += 1;
                 if count == 1 {
-                    found = Some(child.to_pyobject(py, &span_type)?);
+                    found = Some(child.to_pyobject(py)?);
                 }
             }
         }
@@ -3087,14 +2949,13 @@ impl Term {
     }
 
     fn maybe_regex(&self, py: Python<'_>) -> PyResult<Option<PyObject>> {
-        let span_type = get_span_type(py)?;
         let mut found: Option<PyObject> = None;
         let mut count = 0usize;
         for (label, child) in &self.children {
             if *label == Some(Term_Label::Regex) {
                 count += 1;
                 if count == 1 {
-                    found = Some(child.to_pyobject(py, &span_type)?);
+                    found = Some(child.to_pyobject(py)?);
                 }
             }
         }
@@ -3195,19 +3056,12 @@ impl PartialEq for DispositionChild {
 }
 
 impl DispositionChild {
-    fn to_pyobject(&self, py: Python<'_>, span_type: &Bound<'_, PyType>) -> PyResult<PyObject> {
+    fn to_pyobject(&self, py: Python<'_>) -> PyResult<PyObject> {
         match self {
             Self::Span(s) => {
-                // Preserve source: if span carries source, construct a canonical
-                // fltk._native.SourceText from the full text string and use it
-                // to build a source-bearing Python Span (cross-cdylib safe).
-                if let Some(full_text) = s.source_full_text_str() {
-                    let st_type = get_source_text_type(py)?;
-                    let py_src = st_type.call1((full_text.as_str(),))?;
-                    span_type.call_method1("with_source", (s.start(), s.end(), py_src)).map(|b| b.unbind())
-                } else {
-                    span_type.call1((s.start(), s.end())).map(|b| b.unbind())
-                }
+                // span_to_pyobject: O(1) Arc clone, no string copy; preserves
+                // Arc-sharing so multiple reads of the same span merge without error.
+                span_to_pyobject(py, s)
             }
         }
     }
@@ -3298,20 +3152,8 @@ impl Disposition {
     fn span(&self, py: Python<'_>) -> PyResult<PyObject> {
         // Return a fltk._native.Span so consumers always get the canonical type
         // regardless of which cdylib the node is defined in.
-        // Preserve source: if the stored span carries source, construct a canonical
-        // fltk._native.SourceText from the full text string (cross-cdylib safe).
-        let span_cls = get_span_type(py)?;
-        if let Some(full_text) = self.span.source_full_text_str() {
-            let st_type = get_source_text_type(py)?;
-            let py_src = st_type.call1((full_text.as_str(),))?;
-            span_cls
-                .call_method1("with_source", (self.span.start(), self.span.end(), py_src))
-                .map(|b| b.unbind())
-        } else {
-            span_cls
-                .call1((self.span.start(), self.span.end()))
-                .map(|b| b.unbind())
-        }
+        // Preserve source via span_to_pyobject: O(1) Arc clone, no string copy.
+        span_to_pyobject(py, &self.span)
     }
 
     #[setter]
@@ -3333,14 +3175,13 @@ impl Disposition {
 
     #[getter]
     fn children(&self, py: Python<'_>) -> PyResult<Py<PyList>> {
-        let span_type = get_span_type(py)?;
         let result = PyList::empty(py);
         for (label, child) in &self.children {
             let label_obj: PyObject = match label {
                 None => py.None(),
                 Some(lbl) => lbl.clone().into_pyobject(py)?.into_any().unbind(),
             };
-            let child_obj = child.to_pyobject(py, &span_type)?;
+            let child_obj = child.to_pyobject(py)?;
             let tup = PyTuple::new(py, [label_obj, child_obj])?;
             result.append(tup)?;
         }
@@ -3412,13 +3253,12 @@ impl Disposition {
                 "Expected one child but have {n}"
             )));
         }
-        let span_type = get_span_type(py)?;
         let (label, child) = &self.children[0];
         let label_obj: PyObject = match label {
             None => py.None(),
             Some(lbl) => lbl.clone().into_pyobject(py)?.into_any().unbind(),
         };
-        let child_obj = child.to_pyobject(py, &span_type)?;
+        let child_obj = child.to_pyobject(py)?;
         Ok(PyTuple::new(py, [label_obj, child_obj])?.into_any().unbind())
     }
 
@@ -3441,25 +3281,23 @@ impl Disposition {
     }
 
     fn children_include(&self, py: Python<'_>) -> PyResult<Py<PyList>> {
-        let span_type = get_span_type(py)?;
         let result = PyList::empty(py);
         for (label, child) in &self.children {
             if *label == Some(Disposition_Label::Include) {
-                result.append(child.to_pyobject(py, &span_type)?)?;
+                result.append(child.to_pyobject(py)?)?;
             }
         }
         Ok(result.unbind())
     }
 
     fn child_include(&self, py: Python<'_>) -> PyResult<PyObject> {
-        let span_type = get_span_type(py)?;
         let mut found: Option<PyObject> = None;
         let mut count = 0usize;
         for (label, child) in &self.children {
             if *label == Some(Disposition_Label::Include) {
                 count += 1;
                 if count == 1 {
-                    found = Some(child.to_pyobject(py, &span_type)?);
+                    found = Some(child.to_pyobject(py)?);
                 }
             }
         }
@@ -3472,14 +3310,13 @@ impl Disposition {
     }
 
     fn maybe_include(&self, py: Python<'_>) -> PyResult<Option<PyObject>> {
-        let span_type = get_span_type(py)?;
         let mut found: Option<PyObject> = None;
         let mut count = 0usize;
         for (label, child) in &self.children {
             if *label == Some(Disposition_Label::Include) {
                 count += 1;
                 if count == 1 {
-                    found = Some(child.to_pyobject(py, &span_type)?);
+                    found = Some(child.to_pyobject(py)?);
                 }
             }
         }
@@ -3510,25 +3347,23 @@ impl Disposition {
     }
 
     fn children_inline(&self, py: Python<'_>) -> PyResult<Py<PyList>> {
-        let span_type = get_span_type(py)?;
         let result = PyList::empty(py);
         for (label, child) in &self.children {
             if *label == Some(Disposition_Label::Inline) {
-                result.append(child.to_pyobject(py, &span_type)?)?;
+                result.append(child.to_pyobject(py)?)?;
             }
         }
         Ok(result.unbind())
     }
 
     fn child_inline(&self, py: Python<'_>) -> PyResult<PyObject> {
-        let span_type = get_span_type(py)?;
         let mut found: Option<PyObject> = None;
         let mut count = 0usize;
         for (label, child) in &self.children {
             if *label == Some(Disposition_Label::Inline) {
                 count += 1;
                 if count == 1 {
-                    found = Some(child.to_pyobject(py, &span_type)?);
+                    found = Some(child.to_pyobject(py)?);
                 }
             }
         }
@@ -3541,14 +3376,13 @@ impl Disposition {
     }
 
     fn maybe_inline(&self, py: Python<'_>) -> PyResult<Option<PyObject>> {
-        let span_type = get_span_type(py)?;
         let mut found: Option<PyObject> = None;
         let mut count = 0usize;
         for (label, child) in &self.children {
             if *label == Some(Disposition_Label::Inline) {
                 count += 1;
                 if count == 1 {
-                    found = Some(child.to_pyobject(py, &span_type)?);
+                    found = Some(child.to_pyobject(py)?);
                 }
             }
         }
@@ -3579,25 +3413,23 @@ impl Disposition {
     }
 
     fn children_suppress(&self, py: Python<'_>) -> PyResult<Py<PyList>> {
-        let span_type = get_span_type(py)?;
         let result = PyList::empty(py);
         for (label, child) in &self.children {
             if *label == Some(Disposition_Label::Suppress) {
-                result.append(child.to_pyobject(py, &span_type)?)?;
+                result.append(child.to_pyobject(py)?)?;
             }
         }
         Ok(result.unbind())
     }
 
     fn child_suppress(&self, py: Python<'_>) -> PyResult<PyObject> {
-        let span_type = get_span_type(py)?;
         let mut found: Option<PyObject> = None;
         let mut count = 0usize;
         for (label, child) in &self.children {
             if *label == Some(Disposition_Label::Suppress) {
                 count += 1;
                 if count == 1 {
-                    found = Some(child.to_pyobject(py, &span_type)?);
+                    found = Some(child.to_pyobject(py)?);
                 }
             }
         }
@@ -3610,14 +3442,13 @@ impl Disposition {
     }
 
     fn maybe_suppress(&self, py: Python<'_>) -> PyResult<Option<PyObject>> {
-        let span_type = get_span_type(py)?;
         let mut found: Option<PyObject> = None;
         let mut count = 0usize;
         for (label, child) in &self.children {
             if *label == Some(Disposition_Label::Suppress) {
                 count += 1;
                 if count == 1 {
-                    found = Some(child.to_pyobject(py, &span_type)?);
+                    found = Some(child.to_pyobject(py)?);
                 }
             }
         }
@@ -3718,19 +3549,12 @@ impl PartialEq for QuantifierChild {
 }
 
 impl QuantifierChild {
-    fn to_pyobject(&self, py: Python<'_>, span_type: &Bound<'_, PyType>) -> PyResult<PyObject> {
+    fn to_pyobject(&self, py: Python<'_>) -> PyResult<PyObject> {
         match self {
             Self::Span(s) => {
-                // Preserve source: if span carries source, construct a canonical
-                // fltk._native.SourceText from the full text string and use it
-                // to build a source-bearing Python Span (cross-cdylib safe).
-                if let Some(full_text) = s.source_full_text_str() {
-                    let st_type = get_source_text_type(py)?;
-                    let py_src = st_type.call1((full_text.as_str(),))?;
-                    span_type.call_method1("with_source", (s.start(), s.end(), py_src)).map(|b| b.unbind())
-                } else {
-                    span_type.call1((s.start(), s.end())).map(|b| b.unbind())
-                }
+                // span_to_pyobject: O(1) Arc clone, no string copy; preserves
+                // Arc-sharing so multiple reads of the same span merge without error.
+                span_to_pyobject(py, s)
             }
         }
     }
@@ -3821,20 +3645,8 @@ impl Quantifier {
     fn span(&self, py: Python<'_>) -> PyResult<PyObject> {
         // Return a fltk._native.Span so consumers always get the canonical type
         // regardless of which cdylib the node is defined in.
-        // Preserve source: if the stored span carries source, construct a canonical
-        // fltk._native.SourceText from the full text string (cross-cdylib safe).
-        let span_cls = get_span_type(py)?;
-        if let Some(full_text) = self.span.source_full_text_str() {
-            let st_type = get_source_text_type(py)?;
-            let py_src = st_type.call1((full_text.as_str(),))?;
-            span_cls
-                .call_method1("with_source", (self.span.start(), self.span.end(), py_src))
-                .map(|b| b.unbind())
-        } else {
-            span_cls
-                .call1((self.span.start(), self.span.end()))
-                .map(|b| b.unbind())
-        }
+        // Preserve source via span_to_pyobject: O(1) Arc clone, no string copy.
+        span_to_pyobject(py, &self.span)
     }
 
     #[setter]
@@ -3856,14 +3668,13 @@ impl Quantifier {
 
     #[getter]
     fn children(&self, py: Python<'_>) -> PyResult<Py<PyList>> {
-        let span_type = get_span_type(py)?;
         let result = PyList::empty(py);
         for (label, child) in &self.children {
             let label_obj: PyObject = match label {
                 None => py.None(),
                 Some(lbl) => lbl.clone().into_pyobject(py)?.into_any().unbind(),
             };
-            let child_obj = child.to_pyobject(py, &span_type)?;
+            let child_obj = child.to_pyobject(py)?;
             let tup = PyTuple::new(py, [label_obj, child_obj])?;
             result.append(tup)?;
         }
@@ -3935,13 +3746,12 @@ impl Quantifier {
                 "Expected one child but have {n}"
             )));
         }
-        let span_type = get_span_type(py)?;
         let (label, child) = &self.children[0];
         let label_obj: PyObject = match label {
             None => py.None(),
             Some(lbl) => lbl.clone().into_pyobject(py)?.into_any().unbind(),
         };
-        let child_obj = child.to_pyobject(py, &span_type)?;
+        let child_obj = child.to_pyobject(py)?;
         Ok(PyTuple::new(py, [label_obj, child_obj])?.into_any().unbind())
     }
 
@@ -3964,25 +3774,23 @@ impl Quantifier {
     }
 
     fn children_one_or_more(&self, py: Python<'_>) -> PyResult<Py<PyList>> {
-        let span_type = get_span_type(py)?;
         let result = PyList::empty(py);
         for (label, child) in &self.children {
             if *label == Some(Quantifier_Label::OneOrMore) {
-                result.append(child.to_pyobject(py, &span_type)?)?;
+                result.append(child.to_pyobject(py)?)?;
             }
         }
         Ok(result.unbind())
     }
 
     fn child_one_or_more(&self, py: Python<'_>) -> PyResult<PyObject> {
-        let span_type = get_span_type(py)?;
         let mut found: Option<PyObject> = None;
         let mut count = 0usize;
         for (label, child) in &self.children {
             if *label == Some(Quantifier_Label::OneOrMore) {
                 count += 1;
                 if count == 1 {
-                    found = Some(child.to_pyobject(py, &span_type)?);
+                    found = Some(child.to_pyobject(py)?);
                 }
             }
         }
@@ -3995,14 +3803,13 @@ impl Quantifier {
     }
 
     fn maybe_one_or_more(&self, py: Python<'_>) -> PyResult<Option<PyObject>> {
-        let span_type = get_span_type(py)?;
         let mut found: Option<PyObject> = None;
         let mut count = 0usize;
         for (label, child) in &self.children {
             if *label == Some(Quantifier_Label::OneOrMore) {
                 count += 1;
                 if count == 1 {
-                    found = Some(child.to_pyobject(py, &span_type)?);
+                    found = Some(child.to_pyobject(py)?);
                 }
             }
         }
@@ -4033,25 +3840,23 @@ impl Quantifier {
     }
 
     fn children_optional(&self, py: Python<'_>) -> PyResult<Py<PyList>> {
-        let span_type = get_span_type(py)?;
         let result = PyList::empty(py);
         for (label, child) in &self.children {
             if *label == Some(Quantifier_Label::Optional) {
-                result.append(child.to_pyobject(py, &span_type)?)?;
+                result.append(child.to_pyobject(py)?)?;
             }
         }
         Ok(result.unbind())
     }
 
     fn child_optional(&self, py: Python<'_>) -> PyResult<PyObject> {
-        let span_type = get_span_type(py)?;
         let mut found: Option<PyObject> = None;
         let mut count = 0usize;
         for (label, child) in &self.children {
             if *label == Some(Quantifier_Label::Optional) {
                 count += 1;
                 if count == 1 {
-                    found = Some(child.to_pyobject(py, &span_type)?);
+                    found = Some(child.to_pyobject(py)?);
                 }
             }
         }
@@ -4064,14 +3869,13 @@ impl Quantifier {
     }
 
     fn maybe_optional(&self, py: Python<'_>) -> PyResult<Option<PyObject>> {
-        let span_type = get_span_type(py)?;
         let mut found: Option<PyObject> = None;
         let mut count = 0usize;
         for (label, child) in &self.children {
             if *label == Some(Quantifier_Label::Optional) {
                 count += 1;
                 if count == 1 {
-                    found = Some(child.to_pyobject(py, &span_type)?);
+                    found = Some(child.to_pyobject(py)?);
                 }
             }
         }
@@ -4102,25 +3906,23 @@ impl Quantifier {
     }
 
     fn children_zero_or_more(&self, py: Python<'_>) -> PyResult<Py<PyList>> {
-        let span_type = get_span_type(py)?;
         let result = PyList::empty(py);
         for (label, child) in &self.children {
             if *label == Some(Quantifier_Label::ZeroOrMore) {
-                result.append(child.to_pyobject(py, &span_type)?)?;
+                result.append(child.to_pyobject(py)?)?;
             }
         }
         Ok(result.unbind())
     }
 
     fn child_zero_or_more(&self, py: Python<'_>) -> PyResult<PyObject> {
-        let span_type = get_span_type(py)?;
         let mut found: Option<PyObject> = None;
         let mut count = 0usize;
         for (label, child) in &self.children {
             if *label == Some(Quantifier_Label::ZeroOrMore) {
                 count += 1;
                 if count == 1 {
-                    found = Some(child.to_pyobject(py, &span_type)?);
+                    found = Some(child.to_pyobject(py)?);
                 }
             }
         }
@@ -4133,14 +3935,13 @@ impl Quantifier {
     }
 
     fn maybe_zero_or_more(&self, py: Python<'_>) -> PyResult<Option<PyObject>> {
-        let span_type = get_span_type(py)?;
         let mut found: Option<PyObject> = None;
         let mut count = 0usize;
         for (label, child) in &self.children {
             if *label == Some(Quantifier_Label::ZeroOrMore) {
                 count += 1;
                 if count == 1 {
-                    found = Some(child.to_pyobject(py, &span_type)?);
+                    found = Some(child.to_pyobject(py)?);
                 }
             }
         }
@@ -4235,19 +4036,12 @@ impl PartialEq for IdentifierChild {
 }
 
 impl IdentifierChild {
-    fn to_pyobject(&self, py: Python<'_>, span_type: &Bound<'_, PyType>) -> PyResult<PyObject> {
+    fn to_pyobject(&self, py: Python<'_>) -> PyResult<PyObject> {
         match self {
             Self::Span(s) => {
-                // Preserve source: if span carries source, construct a canonical
-                // fltk._native.SourceText from the full text string and use it
-                // to build a source-bearing Python Span (cross-cdylib safe).
-                if let Some(full_text) = s.source_full_text_str() {
-                    let st_type = get_source_text_type(py)?;
-                    let py_src = st_type.call1((full_text.as_str(),))?;
-                    span_type.call_method1("with_source", (s.start(), s.end(), py_src)).map(|b| b.unbind())
-                } else {
-                    span_type.call1((s.start(), s.end())).map(|b| b.unbind())
-                }
+                // span_to_pyobject: O(1) Arc clone, no string copy; preserves
+                // Arc-sharing so multiple reads of the same span merge without error.
+                span_to_pyobject(py, s)
             }
         }
     }
@@ -4338,20 +4132,8 @@ impl Identifier {
     fn span(&self, py: Python<'_>) -> PyResult<PyObject> {
         // Return a fltk._native.Span so consumers always get the canonical type
         // regardless of which cdylib the node is defined in.
-        // Preserve source: if the stored span carries source, construct a canonical
-        // fltk._native.SourceText from the full text string (cross-cdylib safe).
-        let span_cls = get_span_type(py)?;
-        if let Some(full_text) = self.span.source_full_text_str() {
-            let st_type = get_source_text_type(py)?;
-            let py_src = st_type.call1((full_text.as_str(),))?;
-            span_cls
-                .call_method1("with_source", (self.span.start(), self.span.end(), py_src))
-                .map(|b| b.unbind())
-        } else {
-            span_cls
-                .call1((self.span.start(), self.span.end()))
-                .map(|b| b.unbind())
-        }
+        // Preserve source via span_to_pyobject: O(1) Arc clone, no string copy.
+        span_to_pyobject(py, &self.span)
     }
 
     #[setter]
@@ -4373,14 +4155,13 @@ impl Identifier {
 
     #[getter]
     fn children(&self, py: Python<'_>) -> PyResult<Py<PyList>> {
-        let span_type = get_span_type(py)?;
         let result = PyList::empty(py);
         for (label, child) in &self.children {
             let label_obj: PyObject = match label {
                 None => py.None(),
                 Some(lbl) => lbl.clone().into_pyobject(py)?.into_any().unbind(),
             };
-            let child_obj = child.to_pyobject(py, &span_type)?;
+            let child_obj = child.to_pyobject(py)?;
             let tup = PyTuple::new(py, [label_obj, child_obj])?;
             result.append(tup)?;
         }
@@ -4452,13 +4233,12 @@ impl Identifier {
                 "Expected one child but have {n}"
             )));
         }
-        let span_type = get_span_type(py)?;
         let (label, child) = &self.children[0];
         let label_obj: PyObject = match label {
             None => py.None(),
             Some(lbl) => lbl.clone().into_pyobject(py)?.into_any().unbind(),
         };
-        let child_obj = child.to_pyobject(py, &span_type)?;
+        let child_obj = child.to_pyobject(py)?;
         Ok(PyTuple::new(py, [label_obj, child_obj])?.into_any().unbind())
     }
 
@@ -4481,25 +4261,23 @@ impl Identifier {
     }
 
     fn children_name(&self, py: Python<'_>) -> PyResult<Py<PyList>> {
-        let span_type = get_span_type(py)?;
         let result = PyList::empty(py);
         for (label, child) in &self.children {
             if *label == Some(Identifier_Label::Name) {
-                result.append(child.to_pyobject(py, &span_type)?)?;
+                result.append(child.to_pyobject(py)?)?;
             }
         }
         Ok(result.unbind())
     }
 
     fn child_name(&self, py: Python<'_>) -> PyResult<PyObject> {
-        let span_type = get_span_type(py)?;
         let mut found: Option<PyObject> = None;
         let mut count = 0usize;
         for (label, child) in &self.children {
             if *label == Some(Identifier_Label::Name) {
                 count += 1;
                 if count == 1 {
-                    found = Some(child.to_pyobject(py, &span_type)?);
+                    found = Some(child.to_pyobject(py)?);
                 }
             }
         }
@@ -4512,14 +4290,13 @@ impl Identifier {
     }
 
     fn maybe_name(&self, py: Python<'_>) -> PyResult<Option<PyObject>> {
-        let span_type = get_span_type(py)?;
         let mut found: Option<PyObject> = None;
         let mut count = 0usize;
         for (label, child) in &self.children {
             if *label == Some(Identifier_Label::Name) {
                 count += 1;
                 if count == 1 {
-                    found = Some(child.to_pyobject(py, &span_type)?);
+                    found = Some(child.to_pyobject(py)?);
                 }
             }
         }
@@ -4614,19 +4391,12 @@ impl PartialEq for RawStringChild {
 }
 
 impl RawStringChild {
-    fn to_pyobject(&self, py: Python<'_>, span_type: &Bound<'_, PyType>) -> PyResult<PyObject> {
+    fn to_pyobject(&self, py: Python<'_>) -> PyResult<PyObject> {
         match self {
             Self::Span(s) => {
-                // Preserve source: if span carries source, construct a canonical
-                // fltk._native.SourceText from the full text string and use it
-                // to build a source-bearing Python Span (cross-cdylib safe).
-                if let Some(full_text) = s.source_full_text_str() {
-                    let st_type = get_source_text_type(py)?;
-                    let py_src = st_type.call1((full_text.as_str(),))?;
-                    span_type.call_method1("with_source", (s.start(), s.end(), py_src)).map(|b| b.unbind())
-                } else {
-                    span_type.call1((s.start(), s.end())).map(|b| b.unbind())
-                }
+                // span_to_pyobject: O(1) Arc clone, no string copy; preserves
+                // Arc-sharing so multiple reads of the same span merge without error.
+                span_to_pyobject(py, s)
             }
         }
     }
@@ -4717,20 +4487,8 @@ impl RawString {
     fn span(&self, py: Python<'_>) -> PyResult<PyObject> {
         // Return a fltk._native.Span so consumers always get the canonical type
         // regardless of which cdylib the node is defined in.
-        // Preserve source: if the stored span carries source, construct a canonical
-        // fltk._native.SourceText from the full text string (cross-cdylib safe).
-        let span_cls = get_span_type(py)?;
-        if let Some(full_text) = self.span.source_full_text_str() {
-            let st_type = get_source_text_type(py)?;
-            let py_src = st_type.call1((full_text.as_str(),))?;
-            span_cls
-                .call_method1("with_source", (self.span.start(), self.span.end(), py_src))
-                .map(|b| b.unbind())
-        } else {
-            span_cls
-                .call1((self.span.start(), self.span.end()))
-                .map(|b| b.unbind())
-        }
+        // Preserve source via span_to_pyobject: O(1) Arc clone, no string copy.
+        span_to_pyobject(py, &self.span)
     }
 
     #[setter]
@@ -4752,14 +4510,13 @@ impl RawString {
 
     #[getter]
     fn children(&self, py: Python<'_>) -> PyResult<Py<PyList>> {
-        let span_type = get_span_type(py)?;
         let result = PyList::empty(py);
         for (label, child) in &self.children {
             let label_obj: PyObject = match label {
                 None => py.None(),
                 Some(lbl) => lbl.clone().into_pyobject(py)?.into_any().unbind(),
             };
-            let child_obj = child.to_pyobject(py, &span_type)?;
+            let child_obj = child.to_pyobject(py)?;
             let tup = PyTuple::new(py, [label_obj, child_obj])?;
             result.append(tup)?;
         }
@@ -4831,13 +4588,12 @@ impl RawString {
                 "Expected one child but have {n}"
             )));
         }
-        let span_type = get_span_type(py)?;
         let (label, child) = &self.children[0];
         let label_obj: PyObject = match label {
             None => py.None(),
             Some(lbl) => lbl.clone().into_pyobject(py)?.into_any().unbind(),
         };
-        let child_obj = child.to_pyobject(py, &span_type)?;
+        let child_obj = child.to_pyobject(py)?;
         Ok(PyTuple::new(py, [label_obj, child_obj])?.into_any().unbind())
     }
 
@@ -4860,25 +4616,23 @@ impl RawString {
     }
 
     fn children_value(&self, py: Python<'_>) -> PyResult<Py<PyList>> {
-        let span_type = get_span_type(py)?;
         let result = PyList::empty(py);
         for (label, child) in &self.children {
             if *label == Some(RawString_Label::Value) {
-                result.append(child.to_pyobject(py, &span_type)?)?;
+                result.append(child.to_pyobject(py)?)?;
             }
         }
         Ok(result.unbind())
     }
 
     fn child_value(&self, py: Python<'_>) -> PyResult<PyObject> {
-        let span_type = get_span_type(py)?;
         let mut found: Option<PyObject> = None;
         let mut count = 0usize;
         for (label, child) in &self.children {
             if *label == Some(RawString_Label::Value) {
                 count += 1;
                 if count == 1 {
-                    found = Some(child.to_pyobject(py, &span_type)?);
+                    found = Some(child.to_pyobject(py)?);
                 }
             }
         }
@@ -4891,14 +4645,13 @@ impl RawString {
     }
 
     fn maybe_value(&self, py: Python<'_>) -> PyResult<Option<PyObject>> {
-        let span_type = get_span_type(py)?;
         let mut found: Option<PyObject> = None;
         let mut count = 0usize;
         for (label, child) in &self.children {
             if *label == Some(RawString_Label::Value) {
                 count += 1;
                 if count == 1 {
-                    found = Some(child.to_pyobject(py, &span_type)?);
+                    found = Some(child.to_pyobject(py)?);
                 }
             }
         }
@@ -4993,19 +4746,12 @@ impl PartialEq for LiteralChild {
 }
 
 impl LiteralChild {
-    fn to_pyobject(&self, py: Python<'_>, span_type: &Bound<'_, PyType>) -> PyResult<PyObject> {
+    fn to_pyobject(&self, py: Python<'_>) -> PyResult<PyObject> {
         match self {
             Self::Span(s) => {
-                // Preserve source: if span carries source, construct a canonical
-                // fltk._native.SourceText from the full text string and use it
-                // to build a source-bearing Python Span (cross-cdylib safe).
-                if let Some(full_text) = s.source_full_text_str() {
-                    let st_type = get_source_text_type(py)?;
-                    let py_src = st_type.call1((full_text.as_str(),))?;
-                    span_type.call_method1("with_source", (s.start(), s.end(), py_src)).map(|b| b.unbind())
-                } else {
-                    span_type.call1((s.start(), s.end())).map(|b| b.unbind())
-                }
+                // span_to_pyobject: O(1) Arc clone, no string copy; preserves
+                // Arc-sharing so multiple reads of the same span merge without error.
+                span_to_pyobject(py, s)
             }
         }
     }
@@ -5096,20 +4842,8 @@ impl Literal {
     fn span(&self, py: Python<'_>) -> PyResult<PyObject> {
         // Return a fltk._native.Span so consumers always get the canonical type
         // regardless of which cdylib the node is defined in.
-        // Preserve source: if the stored span carries source, construct a canonical
-        // fltk._native.SourceText from the full text string (cross-cdylib safe).
-        let span_cls = get_span_type(py)?;
-        if let Some(full_text) = self.span.source_full_text_str() {
-            let st_type = get_source_text_type(py)?;
-            let py_src = st_type.call1((full_text.as_str(),))?;
-            span_cls
-                .call_method1("with_source", (self.span.start(), self.span.end(), py_src))
-                .map(|b| b.unbind())
-        } else {
-            span_cls
-                .call1((self.span.start(), self.span.end()))
-                .map(|b| b.unbind())
-        }
+        // Preserve source via span_to_pyobject: O(1) Arc clone, no string copy.
+        span_to_pyobject(py, &self.span)
     }
 
     #[setter]
@@ -5131,14 +4865,13 @@ impl Literal {
 
     #[getter]
     fn children(&self, py: Python<'_>) -> PyResult<Py<PyList>> {
-        let span_type = get_span_type(py)?;
         let result = PyList::empty(py);
         for (label, child) in &self.children {
             let label_obj: PyObject = match label {
                 None => py.None(),
                 Some(lbl) => lbl.clone().into_pyobject(py)?.into_any().unbind(),
             };
-            let child_obj = child.to_pyobject(py, &span_type)?;
+            let child_obj = child.to_pyobject(py)?;
             let tup = PyTuple::new(py, [label_obj, child_obj])?;
             result.append(tup)?;
         }
@@ -5210,13 +4943,12 @@ impl Literal {
                 "Expected one child but have {n}"
             )));
         }
-        let span_type = get_span_type(py)?;
         let (label, child) = &self.children[0];
         let label_obj: PyObject = match label {
             None => py.None(),
             Some(lbl) => lbl.clone().into_pyobject(py)?.into_any().unbind(),
         };
-        let child_obj = child.to_pyobject(py, &span_type)?;
+        let child_obj = child.to_pyobject(py)?;
         Ok(PyTuple::new(py, [label_obj, child_obj])?.into_any().unbind())
     }
 
@@ -5239,25 +4971,23 @@ impl Literal {
     }
 
     fn children_value(&self, py: Python<'_>) -> PyResult<Py<PyList>> {
-        let span_type = get_span_type(py)?;
         let result = PyList::empty(py);
         for (label, child) in &self.children {
             if *label == Some(Literal_Label::Value) {
-                result.append(child.to_pyobject(py, &span_type)?)?;
+                result.append(child.to_pyobject(py)?)?;
             }
         }
         Ok(result.unbind())
     }
 
     fn child_value(&self, py: Python<'_>) -> PyResult<PyObject> {
-        let span_type = get_span_type(py)?;
         let mut found: Option<PyObject> = None;
         let mut count = 0usize;
         for (label, child) in &self.children {
             if *label == Some(Literal_Label::Value) {
                 count += 1;
                 if count == 1 {
-                    found = Some(child.to_pyobject(py, &span_type)?);
+                    found = Some(child.to_pyobject(py)?);
                 }
             }
         }
@@ -5270,14 +5000,13 @@ impl Literal {
     }
 
     fn maybe_value(&self, py: Python<'_>) -> PyResult<Option<PyObject>> {
-        let span_type = get_span_type(py)?;
         let mut found: Option<PyObject> = None;
         let mut count = 0usize;
         for (label, child) in &self.children {
             if *label == Some(Literal_Label::Value) {
                 count += 1;
                 if count == 1 {
-                    found = Some(child.to_pyobject(py, &span_type)?);
+                    found = Some(child.to_pyobject(py)?);
                 }
             }
         }
@@ -5380,19 +5109,12 @@ impl PartialEq for TriviaChild {
 }
 
 impl TriviaChild {
-    fn to_pyobject(&self, py: Python<'_>, span_type: &Bound<'_, PyType>) -> PyResult<PyObject> {
+    fn to_pyobject(&self, py: Python<'_>) -> PyResult<PyObject> {
         match self {
             Self::Span(s) => {
-                // Preserve source: if span carries source, construct a canonical
-                // fltk._native.SourceText from the full text string and use it
-                // to build a source-bearing Python Span (cross-cdylib safe).
-                if let Some(full_text) = s.source_full_text_str() {
-                    let st_type = get_source_text_type(py)?;
-                    let py_src = st_type.call1((full_text.as_str(),))?;
-                    span_type.call_method1("with_source", (s.start(), s.end(), py_src)).map(|b| b.unbind())
-                } else {
-                    span_type.call1((s.start(), s.end())).map(|b| b.unbind())
-                }
+                // span_to_pyobject: O(1) Arc clone, no string copy; preserves
+                // Arc-sharing so multiple reads of the same span merge without error.
+                span_to_pyobject(py, s)
             }
             Self::BlockComment(n) => Py::new(py, (**n).clone()).map(|p| p.into_any()),
             Self::LineComment(n) => Py::new(py, (**n).clone()).map(|p| p.into_any()),
@@ -5493,20 +5215,8 @@ impl Trivia {
     fn span(&self, py: Python<'_>) -> PyResult<PyObject> {
         // Return a fltk._native.Span so consumers always get the canonical type
         // regardless of which cdylib the node is defined in.
-        // Preserve source: if the stored span carries source, construct a canonical
-        // fltk._native.SourceText from the full text string (cross-cdylib safe).
-        let span_cls = get_span_type(py)?;
-        if let Some(full_text) = self.span.source_full_text_str() {
-            let st_type = get_source_text_type(py)?;
-            let py_src = st_type.call1((full_text.as_str(),))?;
-            span_cls
-                .call_method1("with_source", (self.span.start(), self.span.end(), py_src))
-                .map(|b| b.unbind())
-        } else {
-            span_cls
-                .call1((self.span.start(), self.span.end()))
-                .map(|b| b.unbind())
-        }
+        // Preserve source via span_to_pyobject: O(1) Arc clone, no string copy.
+        span_to_pyobject(py, &self.span)
     }
 
     #[setter]
@@ -5528,14 +5238,13 @@ impl Trivia {
 
     #[getter]
     fn children(&self, py: Python<'_>) -> PyResult<Py<PyList>> {
-        let span_type = get_span_type(py)?;
         let result = PyList::empty(py);
         for (label, child) in &self.children {
             let label_obj: PyObject = match label {
                 None => py.None(),
                 Some(lbl) => lbl.clone().into_pyobject(py)?.into_any().unbind(),
             };
-            let child_obj = child.to_pyobject(py, &span_type)?;
+            let child_obj = child.to_pyobject(py)?;
             let tup = PyTuple::new(py, [label_obj, child_obj])?;
             result.append(tup)?;
         }
@@ -5607,13 +5316,12 @@ impl Trivia {
                 "Expected one child but have {n}"
             )));
         }
-        let span_type = get_span_type(py)?;
         let (label, child) = &self.children[0];
         let label_obj: PyObject = match label {
             None => py.None(),
             Some(lbl) => lbl.clone().into_pyobject(py)?.into_any().unbind(),
         };
-        let child_obj = child.to_pyobject(py, &span_type)?;
+        let child_obj = child.to_pyobject(py)?;
         Ok(PyTuple::new(py, [label_obj, child_obj])?.into_any().unbind())
     }
 
@@ -5636,25 +5344,23 @@ impl Trivia {
     }
 
     fn children_block_comment(&self, py: Python<'_>) -> PyResult<Py<PyList>> {
-        let span_type = get_span_type(py)?;
         let result = PyList::empty(py);
         for (label, child) in &self.children {
             if *label == Some(Trivia_Label::BlockComment) {
-                result.append(child.to_pyobject(py, &span_type)?)?;
+                result.append(child.to_pyobject(py)?)?;
             }
         }
         Ok(result.unbind())
     }
 
     fn child_block_comment(&self, py: Python<'_>) -> PyResult<PyObject> {
-        let span_type = get_span_type(py)?;
         let mut found: Option<PyObject> = None;
         let mut count = 0usize;
         for (label, child) in &self.children {
             if *label == Some(Trivia_Label::BlockComment) {
                 count += 1;
                 if count == 1 {
-                    found = Some(child.to_pyobject(py, &span_type)?);
+                    found = Some(child.to_pyobject(py)?);
                 }
             }
         }
@@ -5667,14 +5373,13 @@ impl Trivia {
     }
 
     fn maybe_block_comment(&self, py: Python<'_>) -> PyResult<Option<PyObject>> {
-        let span_type = get_span_type(py)?;
         let mut found: Option<PyObject> = None;
         let mut count = 0usize;
         for (label, child) in &self.children {
             if *label == Some(Trivia_Label::BlockComment) {
                 count += 1;
                 if count == 1 {
-                    found = Some(child.to_pyobject(py, &span_type)?);
+                    found = Some(child.to_pyobject(py)?);
                 }
             }
         }
@@ -5705,25 +5410,23 @@ impl Trivia {
     }
 
     fn children_line_comment(&self, py: Python<'_>) -> PyResult<Py<PyList>> {
-        let span_type = get_span_type(py)?;
         let result = PyList::empty(py);
         for (label, child) in &self.children {
             if *label == Some(Trivia_Label::LineComment) {
-                result.append(child.to_pyobject(py, &span_type)?)?;
+                result.append(child.to_pyobject(py)?)?;
             }
         }
         Ok(result.unbind())
     }
 
     fn child_line_comment(&self, py: Python<'_>) -> PyResult<PyObject> {
-        let span_type = get_span_type(py)?;
         let mut found: Option<PyObject> = None;
         let mut count = 0usize;
         for (label, child) in &self.children {
             if *label == Some(Trivia_Label::LineComment) {
                 count += 1;
                 if count == 1 {
-                    found = Some(child.to_pyobject(py, &span_type)?);
+                    found = Some(child.to_pyobject(py)?);
                 }
             }
         }
@@ -5736,14 +5439,13 @@ impl Trivia {
     }
 
     fn maybe_line_comment(&self, py: Python<'_>) -> PyResult<Option<PyObject>> {
-        let span_type = get_span_type(py)?;
         let mut found: Option<PyObject> = None;
         let mut count = 0usize;
         for (label, child) in &self.children {
             if *label == Some(Trivia_Label::LineComment) {
                 count += 1;
                 if count == 1 {
-                    found = Some(child.to_pyobject(py, &span_type)?);
+                    found = Some(child.to_pyobject(py)?);
                 }
             }
         }
@@ -5841,19 +5543,12 @@ impl PartialEq for LineCommentChild {
 }
 
 impl LineCommentChild {
-    fn to_pyobject(&self, py: Python<'_>, span_type: &Bound<'_, PyType>) -> PyResult<PyObject> {
+    fn to_pyobject(&self, py: Python<'_>) -> PyResult<PyObject> {
         match self {
             Self::Span(s) => {
-                // Preserve source: if span carries source, construct a canonical
-                // fltk._native.SourceText from the full text string and use it
-                // to build a source-bearing Python Span (cross-cdylib safe).
-                if let Some(full_text) = s.source_full_text_str() {
-                    let st_type = get_source_text_type(py)?;
-                    let py_src = st_type.call1((full_text.as_str(),))?;
-                    span_type.call_method1("with_source", (s.start(), s.end(), py_src)).map(|b| b.unbind())
-                } else {
-                    span_type.call1((s.start(), s.end())).map(|b| b.unbind())
-                }
+                // span_to_pyobject: O(1) Arc clone, no string copy; preserves
+                // Arc-sharing so multiple reads of the same span merge without error.
+                span_to_pyobject(py, s)
             }
         }
     }
@@ -5944,20 +5639,8 @@ impl LineComment {
     fn span(&self, py: Python<'_>) -> PyResult<PyObject> {
         // Return a fltk._native.Span so consumers always get the canonical type
         // regardless of which cdylib the node is defined in.
-        // Preserve source: if the stored span carries source, construct a canonical
-        // fltk._native.SourceText from the full text string (cross-cdylib safe).
-        let span_cls = get_span_type(py)?;
-        if let Some(full_text) = self.span.source_full_text_str() {
-            let st_type = get_source_text_type(py)?;
-            let py_src = st_type.call1((full_text.as_str(),))?;
-            span_cls
-                .call_method1("with_source", (self.span.start(), self.span.end(), py_src))
-                .map(|b| b.unbind())
-        } else {
-            span_cls
-                .call1((self.span.start(), self.span.end()))
-                .map(|b| b.unbind())
-        }
+        // Preserve source via span_to_pyobject: O(1) Arc clone, no string copy.
+        span_to_pyobject(py, &self.span)
     }
 
     #[setter]
@@ -5979,14 +5662,13 @@ impl LineComment {
 
     #[getter]
     fn children(&self, py: Python<'_>) -> PyResult<Py<PyList>> {
-        let span_type = get_span_type(py)?;
         let result = PyList::empty(py);
         for (label, child) in &self.children {
             let label_obj: PyObject = match label {
                 None => py.None(),
                 Some(lbl) => lbl.clone().into_pyobject(py)?.into_any().unbind(),
             };
-            let child_obj = child.to_pyobject(py, &span_type)?;
+            let child_obj = child.to_pyobject(py)?;
             let tup = PyTuple::new(py, [label_obj, child_obj])?;
             result.append(tup)?;
         }
@@ -6058,13 +5740,12 @@ impl LineComment {
                 "Expected one child but have {n}"
             )));
         }
-        let span_type = get_span_type(py)?;
         let (label, child) = &self.children[0];
         let label_obj: PyObject = match label {
             None => py.None(),
             Some(lbl) => lbl.clone().into_pyobject(py)?.into_any().unbind(),
         };
-        let child_obj = child.to_pyobject(py, &span_type)?;
+        let child_obj = child.to_pyobject(py)?;
         Ok(PyTuple::new(py, [label_obj, child_obj])?.into_any().unbind())
     }
 
@@ -6087,25 +5768,23 @@ impl LineComment {
     }
 
     fn children_content(&self, py: Python<'_>) -> PyResult<Py<PyList>> {
-        let span_type = get_span_type(py)?;
         let result = PyList::empty(py);
         for (label, child) in &self.children {
             if *label == Some(LineComment_Label::Content) {
-                result.append(child.to_pyobject(py, &span_type)?)?;
+                result.append(child.to_pyobject(py)?)?;
             }
         }
         Ok(result.unbind())
     }
 
     fn child_content(&self, py: Python<'_>) -> PyResult<PyObject> {
-        let span_type = get_span_type(py)?;
         let mut found: Option<PyObject> = None;
         let mut count = 0usize;
         for (label, child) in &self.children {
             if *label == Some(LineComment_Label::Content) {
                 count += 1;
                 if count == 1 {
-                    found = Some(child.to_pyobject(py, &span_type)?);
+                    found = Some(child.to_pyobject(py)?);
                 }
             }
         }
@@ -6118,14 +5797,13 @@ impl LineComment {
     }
 
     fn maybe_content(&self, py: Python<'_>) -> PyResult<Option<PyObject>> {
-        let span_type = get_span_type(py)?;
         let mut found: Option<PyObject> = None;
         let mut count = 0usize;
         for (label, child) in &self.children {
             if *label == Some(LineComment_Label::Content) {
                 count += 1;
                 if count == 1 {
-                    found = Some(child.to_pyobject(py, &span_type)?);
+                    found = Some(child.to_pyobject(py)?);
                 }
             }
         }
@@ -6156,25 +5834,23 @@ impl LineComment {
     }
 
     fn children_prefix(&self, py: Python<'_>) -> PyResult<Py<PyList>> {
-        let span_type = get_span_type(py)?;
         let result = PyList::empty(py);
         for (label, child) in &self.children {
             if *label == Some(LineComment_Label::Prefix) {
-                result.append(child.to_pyobject(py, &span_type)?)?;
+                result.append(child.to_pyobject(py)?)?;
             }
         }
         Ok(result.unbind())
     }
 
     fn child_prefix(&self, py: Python<'_>) -> PyResult<PyObject> {
-        let span_type = get_span_type(py)?;
         let mut found: Option<PyObject> = None;
         let mut count = 0usize;
         for (label, child) in &self.children {
             if *label == Some(LineComment_Label::Prefix) {
                 count += 1;
                 if count == 1 {
-                    found = Some(child.to_pyobject(py, &span_type)?);
+                    found = Some(child.to_pyobject(py)?);
                 }
             }
         }
@@ -6187,14 +5863,13 @@ impl LineComment {
     }
 
     fn maybe_prefix(&self, py: Python<'_>) -> PyResult<Option<PyObject>> {
-        let span_type = get_span_type(py)?;
         let mut found: Option<PyObject> = None;
         let mut count = 0usize;
         for (label, child) in &self.children {
             if *label == Some(LineComment_Label::Prefix) {
                 count += 1;
                 if count == 1 {
-                    found = Some(child.to_pyobject(py, &span_type)?);
+                    found = Some(child.to_pyobject(py)?);
                 }
             }
         }
@@ -6295,19 +5970,12 @@ impl PartialEq for BlockCommentChild {
 }
 
 impl BlockCommentChild {
-    fn to_pyobject(&self, py: Python<'_>, span_type: &Bound<'_, PyType>) -> PyResult<PyObject> {
+    fn to_pyobject(&self, py: Python<'_>) -> PyResult<PyObject> {
         match self {
             Self::Span(s) => {
-                // Preserve source: if span carries source, construct a canonical
-                // fltk._native.SourceText from the full text string and use it
-                // to build a source-bearing Python Span (cross-cdylib safe).
-                if let Some(full_text) = s.source_full_text_str() {
-                    let st_type = get_source_text_type(py)?;
-                    let py_src = st_type.call1((full_text.as_str(),))?;
-                    span_type.call_method1("with_source", (s.start(), s.end(), py_src)).map(|b| b.unbind())
-                } else {
-                    span_type.call1((s.start(), s.end())).map(|b| b.unbind())
-                }
+                // span_to_pyobject: O(1) Arc clone, no string copy; preserves
+                // Arc-sharing so multiple reads of the same span merge without error.
+                span_to_pyobject(py, s)
             }
         }
     }
@@ -6398,20 +6066,8 @@ impl BlockComment {
     fn span(&self, py: Python<'_>) -> PyResult<PyObject> {
         // Return a fltk._native.Span so consumers always get the canonical type
         // regardless of which cdylib the node is defined in.
-        // Preserve source: if the stored span carries source, construct a canonical
-        // fltk._native.SourceText from the full text string (cross-cdylib safe).
-        let span_cls = get_span_type(py)?;
-        if let Some(full_text) = self.span.source_full_text_str() {
-            let st_type = get_source_text_type(py)?;
-            let py_src = st_type.call1((full_text.as_str(),))?;
-            span_cls
-                .call_method1("with_source", (self.span.start(), self.span.end(), py_src))
-                .map(|b| b.unbind())
-        } else {
-            span_cls
-                .call1((self.span.start(), self.span.end()))
-                .map(|b| b.unbind())
-        }
+        // Preserve source via span_to_pyobject: O(1) Arc clone, no string copy.
+        span_to_pyobject(py, &self.span)
     }
 
     #[setter]
@@ -6433,14 +6089,13 @@ impl BlockComment {
 
     #[getter]
     fn children(&self, py: Python<'_>) -> PyResult<Py<PyList>> {
-        let span_type = get_span_type(py)?;
         let result = PyList::empty(py);
         for (label, child) in &self.children {
             let label_obj: PyObject = match label {
                 None => py.None(),
                 Some(lbl) => lbl.clone().into_pyobject(py)?.into_any().unbind(),
             };
-            let child_obj = child.to_pyobject(py, &span_type)?;
+            let child_obj = child.to_pyobject(py)?;
             let tup = PyTuple::new(py, [label_obj, child_obj])?;
             result.append(tup)?;
         }
@@ -6512,13 +6167,12 @@ impl BlockComment {
                 "Expected one child but have {n}"
             )));
         }
-        let span_type = get_span_type(py)?;
         let (label, child) = &self.children[0];
         let label_obj: PyObject = match label {
             None => py.None(),
             Some(lbl) => lbl.clone().into_pyobject(py)?.into_any().unbind(),
         };
-        let child_obj = child.to_pyobject(py, &span_type)?;
+        let child_obj = child.to_pyobject(py)?;
         Ok(PyTuple::new(py, [label_obj, child_obj])?.into_any().unbind())
     }
 
@@ -6541,25 +6195,23 @@ impl BlockComment {
     }
 
     fn children_content(&self, py: Python<'_>) -> PyResult<Py<PyList>> {
-        let span_type = get_span_type(py)?;
         let result = PyList::empty(py);
         for (label, child) in &self.children {
             if *label == Some(BlockComment_Label::Content) {
-                result.append(child.to_pyobject(py, &span_type)?)?;
+                result.append(child.to_pyobject(py)?)?;
             }
         }
         Ok(result.unbind())
     }
 
     fn child_content(&self, py: Python<'_>) -> PyResult<PyObject> {
-        let span_type = get_span_type(py)?;
         let mut found: Option<PyObject> = None;
         let mut count = 0usize;
         for (label, child) in &self.children {
             if *label == Some(BlockComment_Label::Content) {
                 count += 1;
                 if count == 1 {
-                    found = Some(child.to_pyobject(py, &span_type)?);
+                    found = Some(child.to_pyobject(py)?);
                 }
             }
         }
@@ -6572,14 +6224,13 @@ impl BlockComment {
     }
 
     fn maybe_content(&self, py: Python<'_>) -> PyResult<Option<PyObject>> {
-        let span_type = get_span_type(py)?;
         let mut found: Option<PyObject> = None;
         let mut count = 0usize;
         for (label, child) in &self.children {
             if *label == Some(BlockComment_Label::Content) {
                 count += 1;
                 if count == 1 {
-                    found = Some(child.to_pyobject(py, &span_type)?);
+                    found = Some(child.to_pyobject(py)?);
                 }
             }
         }
@@ -6610,25 +6261,23 @@ impl BlockComment {
     }
 
     fn children_end(&self, py: Python<'_>) -> PyResult<Py<PyList>> {
-        let span_type = get_span_type(py)?;
         let result = PyList::empty(py);
         for (label, child) in &self.children {
             if *label == Some(BlockComment_Label::End) {
-                result.append(child.to_pyobject(py, &span_type)?)?;
+                result.append(child.to_pyobject(py)?)?;
             }
         }
         Ok(result.unbind())
     }
 
     fn child_end(&self, py: Python<'_>) -> PyResult<PyObject> {
-        let span_type = get_span_type(py)?;
         let mut found: Option<PyObject> = None;
         let mut count = 0usize;
         for (label, child) in &self.children {
             if *label == Some(BlockComment_Label::End) {
                 count += 1;
                 if count == 1 {
-                    found = Some(child.to_pyobject(py, &span_type)?);
+                    found = Some(child.to_pyobject(py)?);
                 }
             }
         }
@@ -6641,14 +6290,13 @@ impl BlockComment {
     }
 
     fn maybe_end(&self, py: Python<'_>) -> PyResult<Option<PyObject>> {
-        let span_type = get_span_type(py)?;
         let mut found: Option<PyObject> = None;
         let mut count = 0usize;
         for (label, child) in &self.children {
             if *label == Some(BlockComment_Label::End) {
                 count += 1;
                 if count == 1 {
-                    found = Some(child.to_pyobject(py, &span_type)?);
+                    found = Some(child.to_pyobject(py)?);
                 }
             }
         }
@@ -6679,25 +6327,23 @@ impl BlockComment {
     }
 
     fn children_start(&self, py: Python<'_>) -> PyResult<Py<PyList>> {
-        let span_type = get_span_type(py)?;
         let result = PyList::empty(py);
         for (label, child) in &self.children {
             if *label == Some(BlockComment_Label::Start) {
-                result.append(child.to_pyobject(py, &span_type)?)?;
+                result.append(child.to_pyobject(py)?)?;
             }
         }
         Ok(result.unbind())
     }
 
     fn child_start(&self, py: Python<'_>) -> PyResult<PyObject> {
-        let span_type = get_span_type(py)?;
         let mut found: Option<PyObject> = None;
         let mut count = 0usize;
         for (label, child) in &self.children {
             if *label == Some(BlockComment_Label::Start) {
                 count += 1;
                 if count == 1 {
-                    found = Some(child.to_pyobject(py, &span_type)?);
+                    found = Some(child.to_pyobject(py)?);
                 }
             }
         }
@@ -6710,14 +6356,13 @@ impl BlockComment {
     }
 
     fn maybe_start(&self, py: Python<'_>) -> PyResult<Option<PyObject>> {
-        let span_type = get_span_type(py)?;
         let mut found: Option<PyObject> = None;
         let mut count = 0usize;
         for (label, child) in &self.children {
             if *label == Some(BlockComment_Label::Start) {
                 count += 1;
                 if count == 1 {
-                    found = Some(child.to_pyobject(py, &span_type)?);
+                    found = Some(child.to_pyobject(py)?);
                 }
             }
         }

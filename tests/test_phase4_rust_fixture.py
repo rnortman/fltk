@@ -518,6 +518,46 @@ class TestAC7BothBackends:
         # The span text must be a non-empty substring of the input
         assert len(text) > 0
 
+    def test_cross_cdylib_span_merge_after_accessor(self):
+        """§4 item 2: spans read from a cross-cdylib node via .span merge without ValueError.
+
+        This is the primary observable for the Arc-sharing fix: before the fix,
+        two .span reads from the same node each create a fresh Arc, so merge raises
+        ValueError("cannot merge spans from different sources"). After the fix,
+        the shared Arc is preserved across the cross-cdylib boundary.
+        """
+        result = parse_text(_rust_pr, "key = 99;", "config")
+        assert result.success, result.error_message
+        cst_root = result.cst
+        s1 = cst_root.span
+        s2 = cst_root.span
+        # Must not raise ValueError — both reads share the same Arc after the fix.
+        merged = s1.merge(s2)
+        assert merged == s1
+
+    def test_cross_cdylib_child_span_merge(self):
+        """§4 item 2: spans from child accessors on a cross-cdylib node merge without ValueError.
+
+        Uses Identifier.child_name() which returns a fltk._native.Span (terminal/regex child),
+        and verifies two reads of the same span merge without ValueError.
+        """
+        result = parse_text(_rust_pr, "key = 99;", "config")
+        assert result.success, result.error_message
+        cst_root = result.cst
+        Entry = _rust_pr.cst_module.Entry
+        Identifier = _rust_pr.cst_module.Identifier
+        entry = cst_root.children[0][1]
+        assert isinstance(entry, Entry)
+        key_ident = entry.child_key()
+        assert isinstance(key_ident, Identifier)
+        # child_name() returns a Span (regex terminal child).
+        name_span_1 = key_ident.child_name()
+        name_span_2 = key_ident.child_name()
+        assert isinstance(name_span_1, Span)
+        # Both reads share the same Arc; merge must succeed.
+        merged = name_span_1.merge(name_span_2)
+        assert merged == name_span_1
+
     def test_rust_backend_node_span_text_non_ascii(self):
         """Correctness-1 regression guard: codepoint semantics for non-ASCII source.
 
@@ -539,3 +579,16 @@ class TestAC7BothBackends:
         assert "héllo" in text, (
             f"Non-ASCII content missing from span text {text!r} — possible codepoint/byte offset mismatch"
         )
+
+    def test_cross_cdylib_sourceless_span_accessor(self):
+        """span_to_pyobject sourceless slow-path arm: a node with a sourceless span returns
+        has_source() == False through the cross-cdylib accessor.
+
+        This pins the None arm of span_to_pyobject's match on the slow (cross-cdylib) path.
+        """
+        Entry = _rust_pr.cst_module.Entry
+        node = Entry(span=Span(3, 7))
+        s = node.span
+        assert isinstance(s, Span)
+        assert not s.has_source()
+        assert s == Span(3, 7)

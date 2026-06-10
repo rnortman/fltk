@@ -243,7 +243,7 @@ class RustCstGenerator:
 
     def _preamble(self) -> str:
         return (
-            "use fltk_cst_core::{extract_span, get_source_text_type, get_span_type, Span};\n"
+            "use fltk_cst_core::{extract_span, get_span_type, span_to_pyobject, Span};\n"
             "use pyo3::exceptions::{PyTypeError, PyValueError};\n"
             "use pyo3::prelude::*;\n"
             "use pyo3::types::{PyList, PyTuple, PyType};\n"
@@ -438,33 +438,16 @@ class RustCstGenerator:
         lines.append("")
 
         # to_pyobject: translate a native child variant back to a Python object
-        # Use _py/_span_type if unused (when only one variant type is present)
-        # Note: py is always needed when has_span because get_source_text_type(py) is called in the
-        # source-bearing branch.
+        # py is needed when any variant exists; _span_type parameter dropped (no longer used by Span arm).
         py_param = "py" if (child_classes or has_span) else "_py"
-        span_type_param = "span_type" if has_span else "_span_type"
         lines.append(f"impl {enum_name} {{")
-        lines.append(
-            f"    fn to_pyobject(&self, {py_param}: Python<'_>, "
-            f"{span_type_param}: &Bound<'_, PyType>) -> PyResult<PyObject> {{"
-        )
+        lines.append(f"    fn to_pyobject(&self, {py_param}: Python<'_>) -> PyResult<PyObject> {{")
         lines.append("        match self {")
         if has_span:
             lines.append("            Self::Span(s) => {")
-            lines.append("                // Preserve source: if span carries source, construct a canonical")
-            lines.append("                // fltk._native.SourceText from the full text string and use it")
-            lines.append("                // to build a source-bearing Python Span (cross-cdylib safe).")
-            lines.append("                if let Some(full_text) = s.source_full_text_str() {")
-            lines.append("                    let st_type = get_source_text_type(py)?;")
-            lines.append("                    let py_src = st_type.call1((full_text.as_str(),))?;")
-            rust_with_source = (
-                '                    span_type.call_method1("with_source",'
-                " (s.start(), s.end(), py_src)).map(|b| b.unbind())"
-            )
-            lines.append(rust_with_source)
-            lines.append("                } else {")
-            lines.append("                    span_type.call1((s.start(), s.end())).map(|b| b.unbind())")
-            lines.append("                }")
+            lines.append("                // span_to_pyobject: O(1) Arc clone, no string copy; preserves")
+            lines.append("                // Arc-sharing so multiple reads of the same span merge without error.")
+            lines.append("                span_to_pyobject(py, s)")
             lines.append("            }")
         for child_cls in child_classes:
             lines.append(f"            Self::{child_cls}(n) => Py::new(py, (**n).clone()).map(|p| p.into_any()),")
@@ -629,20 +612,8 @@ class RustCstGenerator:
             "    fn span(&self, py: Python<'_>) -> PyResult<PyObject> {",
             "        // Return a fltk._native.Span so consumers always get the canonical type",
             "        // regardless of which cdylib the node is defined in.",
-            "        // Preserve source: if the stored span carries source, construct a canonical",
-            "        // fltk._native.SourceText from the full text string (cross-cdylib safe).",
-            "        let span_cls = get_span_type(py)?;",
-            "        if let Some(full_text) = self.span.source_full_text_str() {",
-            "            let st_type = get_source_text_type(py)?;",
-            "            let py_src = st_type.call1((full_text.as_str(),))?;",
-            "            span_cls",
-            '                .call_method1("with_source", (self.span.start(), self.span.end(), py_src))',
-            "                .map(|b| b.unbind())",
-            "        } else {",
-            "            span_cls",
-            "                .call1((self.span.start(), self.span.end()))",
-            "                .map(|b| b.unbind())",
-            "        }",
+            "        // Preserve source via span_to_pyobject: O(1) Arc clone, no string copy.",
+            "        span_to_pyobject(py, &self.span)",
             "    }",
             "",
             "    #[setter]",
@@ -680,14 +651,13 @@ class RustCstGenerator:
         return [
             "    #[getter]",
             "    fn children(&self, py: Python<'_>) -> PyResult<Py<PyList>> {",
-            "        let span_type = get_span_type(py)?;",
             "        let result = PyList::empty(py);",
             "        for (label, child) in &self.children {",
             "            let label_obj: PyObject = match label {",
             "                None => py.None(),",
             "                Some(lbl) => lbl.clone().into_pyobject(py)?.into_any().unbind(),",
             "            };",
-            "            let child_obj = child.to_pyobject(py, &span_type)?;",
+            "            let child_obj = child.to_pyobject(py)?;",
             "            let tup = PyTuple::new(py, [label_obj, child_obj])?;",
             "            result.append(tup)?;",
             "        }",
@@ -790,13 +760,12 @@ class RustCstGenerator:
             '                "Expected one child but have {n}"',
             "            )));",
             "        }",
-            "        let span_type = get_span_type(py)?;",
             "        let (label, child) = &self.children[0];",
             "        let label_obj: PyObject = match label {",
             "            None => py.None(),",
             "            Some(lbl) => lbl.clone().into_pyobject(py)?.into_any().unbind(),",
             "        };",
-            "        let child_obj = child.to_pyobject(py, &span_type)?;",
+            "        let child_obj = child.to_pyobject(py)?;",
             "        Ok(PyTuple::new(py, [label_obj, child_obj])?.into_any().unbind())",
             "    }",
             "",
@@ -842,11 +811,10 @@ class RustCstGenerator:
         lines.extend(
             [
                 f"    fn children_{label}(&self, py: Python<'_>) -> PyResult<Py<PyList>> {{",
-                "        let span_type = get_span_type(py)?;",
                 "        let result = PyList::empty(py);",
                 "        for (label, child) in &self.children {",
                 f"            if *label == Some({label_enum_name}::{rust_variant}) {{",
-                "                result.append(child.to_pyobject(py, &span_type)?)?;",
+                "                result.append(child.to_pyobject(py)?)?;",
                 "            }",
                 "        }",
                 "        Ok(result.unbind())",
@@ -859,14 +827,13 @@ class RustCstGenerator:
         lines.extend(
             [
                 f"    fn child_{label}(&self, py: Python<'_>) -> PyResult<PyObject> {{",
-                "        let span_type = get_span_type(py)?;",
                 "        let mut found: Option<PyObject> = None;",
                 "        let mut count = 0usize;",
                 "        for (label, child) in &self.children {",
                 f"            if *label == Some({label_enum_name}::{rust_variant}) {{",
                 "                count += 1;",
                 "                if count == 1 {",
-                "                    found = Some(child.to_pyobject(py, &span_type)?);",
+                "                    found = Some(child.to_pyobject(py)?);",
                 "                }",
                 "            }",
                 "        }",
@@ -885,14 +852,13 @@ class RustCstGenerator:
         lines.extend(
             [
                 f"    fn maybe_{label}(&self, py: Python<'_>) -> PyResult<Option<PyObject>> {{",
-                "        let span_type = get_span_type(py)?;",
                 "        let mut found: Option<PyObject> = None;",
                 "        let mut count = 0usize;",
                 "        for (label, child) in &self.children {",
                 f"            if *label == Some({label_enum_name}::{rust_variant}) {{",
                 "                count += 1;",
                 "                if count == 1 {",
-                "                    found = Some(child.to_pyobject(py, &span_type)?);",
+                "                    found = Some(child.to_pyobject(py)?);",
                 "                }",
                 "            }",
                 "        }",

@@ -25,6 +25,8 @@ class SourceText:
     All Span objects created from the same SourceText share the underlying allocation.
     """
 
+    _fltk_cst_core_abi: typing.ClassVar[str]
+
     def __init__(self, text: str) -> None: ...
 
 class Span:
@@ -37,6 +39,15 @@ class Span:
     def __init__(self, start: int, end: int) -> None: ...
     @classmethod
     def with_source(cls, start: int, end: int, source: SourceText) -> Span: ...
+    @classmethod
+    def _with_source_unchecked(cls, start: int, end: int, source: object) -> Span:
+        """Internal cross-cdylib constructor (generated-code use only).
+
+        Like with_source, but accepts a SourceText registered by another
+        fltk-cst-core-linking cdylib. The ABI marker check in extract_source_text
+        gates the cast. Passing a forged-marker object is UB. Do not call directly.
+        """
+        ...
     def text(self) -> str | None: ...
     def text_or_raise(self) -> str: ...
     def has_source(self) -> bool: ...
