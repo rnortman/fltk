@@ -372,6 +372,46 @@ class TestAC5ApiContract:
         assert tup[1] == ident
 
 
+# ── Error-path tests for extract_span (cross_cdylib.rs) ────────────────────
+
+
+class TestExtractSpanErrorPaths:
+    """Verify extract_span raises TypeError with a useful message for wrong-typed arguments.
+
+    Exercises the error branch of extract_span (cross_cdylib.rs) — both the fast-path
+    rejection (obj.extract::<Span>() fails) and the isinstance check both fail, so
+    PyTypeError is returned with the type name of the rejected object.
+    """
+
+    def test_set_span_integer_raises_typeerror(self):
+        """Passing an integer as a span raises TypeError."""
+        Entry = _rust_pr.cst_module.Entry
+        node = Entry()
+        with pytest.raises(TypeError):
+            node.span = 42
+
+    def test_set_span_string_raises_typeerror(self):
+        """Passing a string as a span raises TypeError."""
+        Entry = _rust_pr.cst_module.Entry
+        node = Entry()
+        with pytest.raises(TypeError):
+            node.span = "not a span"
+
+    def test_set_span_none_raises_typeerror(self):
+        """Passing None as a span raises TypeError."""
+        Entry = _rust_pr.cst_module.Entry
+        node = Entry()
+        with pytest.raises(TypeError):
+            node.span = None
+
+    def test_set_span_wrong_type_message_mentions_span(self):
+        """The TypeError message from a wrong-typed span mentions fltk._native.Span."""
+        Entry = _rust_pr.cst_module.Entry
+        node = Entry()
+        with pytest.raises(TypeError, match="fltk._native.Span"):
+            node.span = 99
+
+
 # ── AC7: Both-backend contract sweep ──────────────────────────────────────
 
 

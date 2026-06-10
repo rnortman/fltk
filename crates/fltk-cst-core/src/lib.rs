@@ -1,5 +1,7 @@
+mod cross_cdylib;
 mod span;
 
+pub use cross_cdylib::{extract_span, get_source_text_type, get_span_type};
 pub use span::{SourceText, Span};
 
 #[cfg(test)]

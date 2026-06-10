@@ -171,15 +171,31 @@ def fegen_source(fegen_generator: RustCstGenerator) -> str:
 class TestPreamble:
     def test_required_use_declarations(self, poc_source: str) -> None:
         """AC-10: Every generated .rs file includes the required use declarations."""
-        assert "use fltk_cst_core::Span;" in poc_source
+        assert "use fltk_cst_core::{extract_span, get_source_text_type, get_span_type, Span};" in poc_source
         assert "use pyo3::exceptions::{PyTypeError, PyValueError};" in poc_source
         assert "use pyo3::prelude::*;" in poc_source
-        assert "use pyo3::sync::GILOnceCell;" in poc_source
+        assert "use pyo3::sync::GILOnceCell;" not in poc_source
         assert "use pyo3::types::{PyList, PyTuple, PyType};" in poc_source
         assert "use pyo3::PyTypeInfo;" in poc_source
 
     def test_preamble_at_start(self, poc_source: str) -> None:
-        assert poc_source.startswith("use fltk_cst_core::Span;\n")
+        assert poc_source.startswith("use fltk_cst_core::{extract_span, get_source_text_type, get_span_type, Span};\n")
+
+    def test_helpers_not_emitted(self, poc_source: str) -> None:
+        """Helpers now live in fltk-cst-core; none of the five items are emitted in generated source."""
+        assert "fn extract_span" not in poc_source
+        assert "fn get_span_type" not in poc_source
+        assert "fn get_source_text_type" not in poc_source
+        assert "FLTK_NATIVE_SPAN_TYPE" not in poc_source
+        assert "FLTK_NATIVE_SOURCE_TEXT_TYPE" not in poc_source
+        # py.import("fltk._native") must not appear in generated code for preamble-helper purposes
+        # (helpers moved to cst-core). Note: this assertion is scoped to the absence of the
+        # preamble helpers only — if a future generator feature legitimately emits
+        # py.import("fltk._native") for a different purpose, update this check accordingly.
+        import_count = poc_source.count('py.import("fltk._native")')
+        assert import_count == 0, (
+            f'Expected 0 occurrences of py.import("fltk._native") in generated source, got {import_count}'
+        )
 
     def test_no_crate_unknown_span_import(self, poc_source: str) -> None:
         """Standalone sentinel: no crate::UNKNOWN_SPAN linkage in generated source."""
@@ -316,16 +332,10 @@ class TestNodeStructure:
         assert "fn extend_children(" in poc_source
         assert "fn extend_children(&mut self, other: PyRef<'_, Identifier>) -> PyResult<()> {" in poc_source
 
-    def test_get_span_type_helper_emitted(self, poc_source: str) -> None:
-        """quality-1: single get_span_type() helper replaces per-method inline init block."""
-        assert "fn get_span_type(py: Python<'_>) -> PyResult<Bound<'_, PyType>> {" in poc_source
-        # Per-method inline init blocks must be absent; only the preamble helpers may contain the import.
-        # Count occurrences: only 1 (in extract_span) + 1 (in get_span_type) should exist.
-        import_count = poc_source.count('py.import("fltk._native")')
-        assert import_count <= 2, (
-            f'Expected at most 2 occurrences of py.import("fltk._native") '
-            f"(extract_span + get_span_type), got {import_count}"
-        )
+    def test_get_span_type_helper_not_emitted(self, poc_source: str) -> None:
+        """quality-1: helpers now in fltk-cst-core; no local helper or per-method init block."""
+        # No local helper definitions (they're in fltk-cst-core).
+        assert "fn get_span_type(py: Python<'_>) -> PyResult<Bound<'_, PyType>> {" not in poc_source
         # No per-method let span_type = FLTK_NATIVE_SPAN_TYPE.get_or_try_init block.
         assert "let span_type = FLTK_NATIVE_SPAN_TYPE.get_or_try_init" not in poc_source
 
@@ -424,12 +434,12 @@ class TestFegenGrammar:
 
     def test_preamble_in_fegen_source(self, fegen_source: str) -> None:
         """AC-10: fegen source also has the required preamble."""
-        assert "use fltk_cst_core::Span;" in fegen_source
+        assert "use fltk_cst_core::{extract_span, get_source_text_type, get_span_type, Span};" in fegen_source
         assert "use pyo3::prelude::*;" in fegen_source
-        assert "use pyo3::sync::GILOnceCell;" in fegen_source
+        assert "use pyo3::sync::GILOnceCell;" not in fegen_source
         assert "use crate::UNKNOWN_SPAN;" not in fegen_source
         assert "UNKNOWN_SPAN_CACHE" not in fegen_source
-        assert "FLTK_NATIVE_SPAN_TYPE" in fegen_source
+        assert "FLTK_NATIVE_SPAN_TYPE" not in fegen_source
 
     def test_rule_name_to_class_name_mapping(self) -> None:
         """FEGEN_RULE_NAMES and FEGEN_CLASS_NAMES must agree with class_name_for_rule_node."""
@@ -467,12 +477,12 @@ class TestMinimalGrammar:
 
     def test_minimal_grammar_has_preamble(self, minimal_source: str) -> None:
         """AC-10: Minimal grammar source also includes required use declarations."""
-        assert "use fltk_cst_core::Span;" in minimal_source
+        assert "use fltk_cst_core::{extract_span, get_source_text_type, get_span_type, Span};" in minimal_source
         assert "use pyo3::prelude::*;" in minimal_source
-        assert "use pyo3::sync::GILOnceCell;" in minimal_source
+        assert "use pyo3::sync::GILOnceCell;" not in minimal_source
         assert "use crate::UNKNOWN_SPAN;" not in minimal_source
         assert "UNKNOWN_SPAN_CACHE" not in minimal_source
-        assert "FLTK_NATIVE_SPAN_TYPE" in minimal_source
+        assert "FLTK_NATIVE_SPAN_TYPE" not in minimal_source
 
 
 # ---------------------------------------------------------------------------

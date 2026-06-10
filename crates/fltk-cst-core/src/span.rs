@@ -146,7 +146,7 @@ impl Span {
     /// registration boundary.
     ///
     /// TODO(span-source-as-py-crosscdylib): wire cross-cdylib ``extract_source_text`` in the
-    /// generator preamble so generated code can use this method instead of
+    /// fltk-cst-core cross_cdylib module so generated code can use this method instead of
     /// ``source_full_text_str`` + full-string reconstruction (efficiency-deep-1).
     pub fn source_as_py(&self, py: Python<'_>) -> PyResult<Option<Py<SourceText>>> {
         match &self.source {

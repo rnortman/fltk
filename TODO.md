@@ -12,13 +12,13 @@ Add `rules_rust` to `MODULE.bazel` so that the PyO3 native extension (`fltk._nat
 
 Native child ownership (`Box<ChildNode>` in the native Vec) means a child returned twice through a Python getter/accessor wraps a fresh `Py<ConcreteNode>` per call; the same child read twice is not the same Python object (identity differs). Tests in `tests/test_phase4_rust_fixture.py` that formerly used `is` for child identity were relaxed to `==` (value equality). If a consumer requires stable Python child-object identity, add a per-node boundary cache (e.g. `Py` cache indexed by position) at the generated accessor layer. Deferred: no in-tree consumer currently requires identity stability. Location: `fltk/fegen/gsm2tree_rs.py` (accessor methods in `_per_label_methods`); see also `tests/test_phase4_rust_fixture.py:242,276,291,350,371`.
 
-## `preamble-helpers-into-cst-core`
-
-The cross-cdylib span helper block emitted by `_preamble()` in `gsm2tree_rs.py` — `FLTK_NATIVE_SPAN_TYPE` static, `extract_span`, `get_span_type`, `FLTK_NATIVE_SOURCE_TEXT_TYPE` static, `get_source_text_type` — is emitted byte-for-byte identically into every generated file (`src/cst_fegen.rs`, `src/cst_generated.rs`, `tests/rust_cst_fixture/src/cst.rs`). Move these as `pub` functions/statics into `fltk-cst-core`, so all generated cdylibs call a single definition at link time and any bug fix propagates without regeneration. Location: `fltk/fegen/gsm2tree_rs.py` (`_preamble()`, lines 131-209); `crates/fltk-cst-core/src/lib.rs`.
-
 ## `span-source-as-py-crosscdylib`
 
 `Span::source_as_py` (crates/fltk-cst-core/src/span.rs) clones only the Arc (O(1)) and is the correct API for source-preservation in span-returning accessors, but cannot be used in generated code for out-of-tree consumer crates because the locally-registered `SourceText` type object differs from `fltk._native.SourceText`. Currently, generated accessors call `source_full_text_str()` + `get_source_text_type(py)?.call1(full_text)` which copies the full source string twice per accessor call (O(source length) per node read). Fix: add an `extract_source_text` helper to the generated preamble (analogous to `extract_span`, using the shared-rlib invariant and `downcast_unchecked`) so generated code can use `source_as_py` cross-cdylib without a string copy. Location: `fltk/fegen/gsm2tree_rs.py` (preamble and span-getter/to_pyobject emission); `crates/fltk-cst-core/src/span.rs:source_as_py`.
+
+## `crosscdylib-abi-sentinel`
+
+`extract_span` in `crates/fltk-cst-core/src/cross_cdylib.rs` uses `downcast_unchecked` after an `isinstance` check that can pass under version skew (consumer pins revision A, installed `fltk._native` wheel built from revision B with different `Span` layout) — turning a packaging error into in-process memory corruption rather than a clean error. Fix: export an ABI sentinel (e.g. `__fltk_cst_core_abi__` string derived from `env!("CARGO_PKG_VERSION")` or a layout hash) from `fltk._native`, and verify it once inside `get_span_type`'s `GILOnceCell` init, failing with `PyRuntimeError` on mismatch instead of proceeding to UB. Location: `crates/fltk-cst-core/src/cross_cdylib.rs` (`get_span_type`, `extract_span`).
 
 ## `pyright-batch-tests`
 

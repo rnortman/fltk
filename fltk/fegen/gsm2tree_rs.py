@@ -242,86 +242,12 @@ class RustCstGenerator:
     # ------------------------------------------------------------------
 
     def _preamble(self) -> str:
-        # TODO(preamble-helpers-into-cst-core): the span helper block below (FLTK_NATIVE_SPAN_TYPE,
-        # extract_span, get_span_type, FLTK_NATIVE_SOURCE_TEXT_TYPE, get_source_text_type) is emitted
-        # into every generated file. Move them as pub items into fltk-cst-core so all cdylibs share
-        # one definition at link time and any fix propagates without regeneration.
         return (
-            "use fltk_cst_core::Span;\n"
+            "use fltk_cst_core::{extract_span, get_source_text_type, get_span_type, Span};\n"
             "use pyo3::exceptions::{PyTypeError, PyValueError};\n"
             "use pyo3::prelude::*;\n"
-            "use pyo3::sync::GILOnceCell;\n"
             "use pyo3::types::{PyList, PyTuple, PyType};\n"
             "use pyo3::PyTypeInfo;\n"
-            "\n"
-            "/// Cached reference to the `fltk._native.Span` Python type object.\n"
-            "/// Used by the span setter to validate cross-cdylib span arguments\n"
-            "/// (pyo3 `extract::<Span>()` only matches the locally-registered class;\n"
-            "/// runtime isinstance against the canonical class is required for cross-module compatibility).\n"
-            "static FLTK_NATIVE_SPAN_TYPE: GILOnceCell<Py<PyType>> = GILOnceCell::new();\n"
-            "\n"
-            "/// Extract a native `Span` from a Python object, accepting any span registered\n"
-            "/// either in this cdylib or in `fltk._native` (cross-cdylib compatibility).\n"
-            "fn extract_span(py: Python<'_>, obj: &Bound<'_, PyAny>) -> PyResult<Span> {\n"
-            "    // Fast path: locally-registered Span type (succeeds when caller uses the same cdylib's Span).\n"
-            "    if let Ok(span_ref) = obj.extract::<Span>() {\n"
-            "        return Ok(span_ref);\n"
-            "    }\n"
-            "    // Slow path: check against fltk._native.Span (cross-cdylib: fltk._native Span\n"
-            "    // registered there, not here).  isinstance succeeds; downcast_unchecked is safe\n"
-            "    // because both cdylibs link the same fltk-cst-core rlib Span type.\n"
-            "    let native_span_type = get_span_type(py)?;\n"
-            "    if obj.is_instance(&native_span_type)? {\n"
-            "        // SAFETY: obj is a pyo3 PyCell<Span> instance (confirmed by isinstance above).\n"
-            "        // Both this cdylib and fltk._native MUST link the same fltk-cst-core rlib, so the\n"
-            "        // Span type layout is identical. The downcast_unchecked reinterprets the Python\n"
-            "        // object's underlying Span value, which is safe given identical type layout.\n"
-            "        // INVARIANT VIOLATION: if two different fltk-cst-core rlib versions are linked\n"
-            "        // (e.g. version skew between the installed fltk._native wheel and a consumer's\n"
-            "        // pinned revision), is_instance may still pass while the Span layout differs,\n"
-            "        // causing memory corruption (out-of-bounds Arc pointer deref, type confusion)\n"
-            "        // — not merely a wrong result. The deployment constraint is a single shared rlib.\n"
-            "        let span = unsafe { obj.downcast_unchecked::<Span>() };\n"
-            "        return Ok(span.borrow().clone());\n"
-            "    }\n"
-            "    Err(PyTypeError::new_err(format!(\n"
-            '        "expected fltk._native.Span, got {}",\n'
-            "        obj.get_type().name()?\n"
-            "    )))\n"
-            "}\n"
-            "\n"
-            "/// Return the `fltk._native.Span` Python type object, loading it once on first call.\n"
-            "fn get_span_type(py: Python<'_>) -> PyResult<Bound<'_, PyType>> {\n"
-            "    FLTK_NATIVE_SPAN_TYPE\n"
-            "        .get_or_try_init(py, || {\n"
-            '            py.import("fltk._native")\n'
-            '                .and_then(|m| m.getattr("Span"))\n'
-            "                .and_then(|s| s.downcast_into::<PyType>().map_err(|e| e.into()))\n"
-            "                .map(|t: Bound<'_, PyType>| t.unbind())\n"
-            "        })\n"
-            "        .map(|t| t.bind(py).clone())\n"
-            "}\n"
-            "\n"
-            "/// Cached reference to the `fltk._native.SourceText` Python type object.\n"
-            "/// Used when constructing source-bearing spans for cross-cdylib compatibility:\n"
-            "/// the locally-registered SourceText cannot be passed to `fltk._native.Span.with_source`,\n"
-            "/// so we construct a canonical `fltk._native.SourceText` from the full text string.\n"
-            "static FLTK_NATIVE_SOURCE_TEXT_TYPE: GILOnceCell<Py<PyType>> = GILOnceCell::new();\n"
-            "\n"
-            "/// Return the `fltk._native.SourceText` Python type object, loading it once on first call.\n"
-            "fn get_source_text_type(py: Python<'_>) -> PyResult<Bound<'_, PyType>> {\n"
-            "    FLTK_NATIVE_SOURCE_TEXT_TYPE\n"
-            "        .get_or_try_init(py, || {\n"
-            '            py.import("fltk._native")\n'
-            '                .and_then(|m| m.getattr("SourceText"))\n'
-            "                .and_then(|s| s.downcast_into::<PyType>().map_err(|e| e.into()))\n"
-            "                .map(|t: Bound<'_, PyType>| t.unbind())\n"
-            "                .map_err(|e| pyo3::exceptions::PyRuntimeError::new_err(format!(\n"
-            '                    "span source preservation requires fltk._native (SourceText): {e}"\n'
-            "                )))\n"
-            "        })\n"
-            "        .map(|t| t.bind(py).clone())\n"
-            "}\n"
             "\n"
         )
 
