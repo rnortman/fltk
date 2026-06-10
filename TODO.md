@@ -20,10 +20,6 @@ Native child ownership (`Box<ChildNode>` in the native Vec) means a child return
 
 The cross-cdylib span helper block emitted by `_preamble()` in `gsm2tree_rs.py` — `FLTK_NATIVE_SPAN_TYPE` static, `extract_span`, `get_span_type`, `FLTK_NATIVE_SOURCE_TEXT_TYPE` static, `get_source_text_type` — is emitted byte-for-byte identically into every generated file (`src/cst_fegen.rs`, `src/cst_generated.rs`, `tests/rust_cst_fixture/src/cst.rs`). Move these as `pub` functions/statics into `fltk-cst-core`, so all generated cdylibs call a single definition at link time and any bug fix propagates without regeneration. Location: `fltk/fegen/gsm2tree_rs.py` (`_preamble()`, lines 131-209); `crates/fltk-cst-core/src/lib.rs`.
 
-## `child-span-params-dedup`
-
-The three node/accessor triples in `_CHILD_SPAN_PARAMS` (`tests/test_phase4_fegen_rust_backend.py:115`) duplicate the three `_span`-factory rows of `CLASS_LABEL_INFO` (`tests/test_fegen_rust_cst.py:55-57`). A label rename in the generated CST would require updating both; unify via a shared conftest fixture. Location: `tests/test_phase4_fegen_rust_backend.py:115`.
-
 ## `span-source-as-py-crosscdylib`
 
 `Span::source_as_py` (crates/fltk-cst-core/src/span.rs) clones only the Arc (O(1)) and is the correct API for source-preservation in span-returning accessors, but cannot be used in generated code for out-of-tree consumer crates because the locally-registered `SourceText` type object differs from `fltk._native.SourceText`. Currently, generated accessors call `source_full_text_str()` + `get_source_text_type(py)?.call1(full_text)` which copies the full source string twice per accessor call (O(source length) per node read). Fix: add an `extract_source_text` helper to the generated preamble (analogous to `extract_span`, using the shared-rlib invariant and `downcast_unchecked`) so generated code can use `source_as_py` cross-cdylib without a string copy. Location: `fltk/fegen/gsm2tree_rs.py` (preamble and span-getter/to_pyobject emission); `crates/fltk-cst-core/src/span.rs:source_as_py`.
@@ -31,10 +27,6 @@ The three node/accessor triples in `_CHILD_SPAN_PARAMS` (`tests/test_phase4_fege
 ## `dependabot-branch-pin-gap`
 
 `dtolnay/rust-toolchain` is pinned to a commit SHA on the `stable` branch, not a semver tag. Dependabot's `github-actions` ecosystem only proposes SHA bumps for semver-tagged actions; branch-referenced actions are silently skipped. As a result, the `dtolnay/rust-toolchain` SHA will not receive automated refresh proposals and will silently rot. Periodic manual refresh required: `git ls-remote https://github.com/dtolnay/rust-toolchain refs/heads/stable` and update the SHA in `.github/workflows/ci.yml` (or use `pinact`). Location: `.github/workflows/ci.yml` (the `dtolnay/rust-toolchain` step).
-
-## `pyi-label-quintet-reuse`
-
-`generate_pyi` hand-rolls the per-label `append_/extend_/children_/child_/maybe_` quintet as a string-building loop, duplicating the method-name and parameter-shape logic that `CstGenerator._emit_label_quintet` owns. If a sixth accessor is added or a method renamed, `generate_pyi` must be updated independently. Reuse requires bridging the string-vs-AST boundary (e.g. extract method-name/signature helpers). Location: `fltk/fegen/gsm2tree_rs.py` (per-label loop in `generate_pyi`); `fltk/fegen/gsm2tree.py:560-607` (`_emit_label_quintet`).
 
 ## `pyright-batch-tests`
 

@@ -180,9 +180,6 @@ class RustCstGenerator:
             lines.append(f"    def child(self) -> {child_ret}: ...")
 
             # Per-label accessor quintet
-            # TODO(pyi-label-quintet-reuse): consolidate with CstGenerator._emit_label_quintet
-            # to avoid diverging if a method is added/renamed.  The string-vs-AST boundary
-            # requires extracting shared method-name/signature helpers first.
             for label in labels:
                 lann = self._pyi_annotation_for_model_types(model.labels[label], class_name=f"{class_name}.{label}")
                 lines.append(f"    def append_{label}(self, child: {lann}) -> None: ...")

@@ -112,9 +112,6 @@ class TestAC8RealCst2GsmRustBackend:
 # ── Child accessor contract: span roundtrip and type pins ─────────────────
 
 
-# TODO(child-span-params-dedup): These three triples duplicate the _span-factory rows of
-# CLASS_LABEL_INFO in tests/test_fegen_rust_cst.py:55-57. A label rename in the generated
-# CST requires updating both lists; they could be unified via a shared conftest fixture.
 _CHILD_SPAN_PARAMS = pytest.mark.parametrize(
     "node_class,append_method,child_method",
     [
