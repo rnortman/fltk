@@ -101,8 +101,11 @@ import sys; sys.path.insert(0, 'tests'); \
 from test_gsm2tree_rs import _make_poc_grammar; \
 from fltk.fegen.gsm2tree_rs import RustCstGenerator; \
 open('src/cst_generated.rs', 'w').write(RustCstGenerator(_make_poc_grammar()).generate())"
-	# Rust: src/cst_fegen.rs (fegen.fltkg)
-	$(MAKE) gen-rust-cst GRAMMAR=fltk/fegen/fegen.fltkg RS_OUT=src/cst_fegen.rs
+	# Rust: src/cst_fegen.rs (fegen.fltkg) + fltk/_native/fegen_cst.pyi stub
+	uv run python -m fltk.fegen.genparser gen-rust-cst \
+		fltk/fegen/fegen.fltkg src/cst_fegen.rs \
+		--protocol-module fltk.fegen.fltk_cst_protocol \
+		--pyi-output fltk/_native/fegen_cst.pyi
 	# Rust: tests/rust_cst_fixture/src/cst.rs (phase4_roundtrip.fltkg)
 	$(MAKE) gen-rust-cst GRAMMAR=fltk/fegen/test_data/phase4_roundtrip.fltkg RS_OUT=tests/rust_cst_fixture/src/cst.rs
 	# Normalize formatting. Order matters:

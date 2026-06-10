@@ -1846,6 +1846,3 @@ class CstModule(typing.Protocol):
 
     @property
     def LineComment(self) -> type[LineComment]: ...
-
-    @property
-    def Span(self) -> type[Span]: ...

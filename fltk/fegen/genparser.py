@@ -265,26 +265,83 @@ def _parse_grammar_raw(grammar_file: Path) -> gsm.Grammar:
 def gen_rust_cst(
     grammar_file: Annotated[Path, typer.Argument(help="Path to the FLTK grammar file (.fltkg)")],
     output_file: Annotated[Path, typer.Argument(help="Path to write the .rs source")],
+    protocol_module: Annotated[
+        str | None,
+        typer.Option(
+            "--protocol-module",
+            help=(
+                "Import path of the committed protocol module for this grammar "
+                "(e.g. 'fltk.fegen.fltk_cst_protocol'). When provided, also emits a .pyi stub "
+                "so pyright can verify the PyO3 surface satisfies CstModule. "
+                "When omitted, no .pyi is emitted (backward compatible)."
+            ),
+        ),
+    ] = None,
+    pyi_output: Annotated[
+        Path | None,
+        typer.Option(
+            "--pyi-output",
+            help=(
+                "Path to write the .pyi stub. Defaults to output_file with .pyi suffix "
+                "(co-located with the .rs). Override when the .rs stem differs from the "
+                "compiled module's import name — pyright resolves stubs by import name, "
+                "not .rs file name. Example: 'src/cst_fegen.rs' backs 'fegen_cst', "
+                "so --pyi-output fltk/_native/fegen_cst.pyi is required."
+            ),
+        ),
+    ] = None,
 ) -> None:
-    """Emit Rust CST source (.rs) from a grammar file.
+    """Emit Rust CST source (.rs) from a grammar file, and optionally a .pyi stub.
 
     Generates a standalone PyO3 Rust extension source file from a grammar.
     The user compiles and installs it with their own build tool (e.g. maturin).
     The generated .rs file is independent of FLTK's crate at link time; it
     depends on fltk._native only at runtime for the UnknownSpan sentinel.
 
-    Example:
+    When --protocol-module is given, also emits a .pyi stub derived from the same
+    GSM so pyright can verify the compiled extension satisfies CstModule without a
+    cast. The stub path defaults to output_file.with_suffix('.pyi'); use --pyi-output
+    to override (needed when the .rs stem differs from the compiled module's import name).
+
+    Examples:
         genparser gen-rust-cst grammar.fltkg output/cst.rs
+        genparser gen-rust-cst grammar.fltkg src/cst_fegen.rs \\
+            --protocol-module fltk.fegen.fltk_cst_protocol \\
+            --pyi-output fltk/_native/fegen_cst.pyi
     """
-    # TODO(rust-cst-pyi): also emit a .pyi stub for the generated Rust extension here,
-    # derived from the same GSM, so pyright can verify the PyO3 surface satisfies CstModule.
+    if pyi_output is not None and protocol_module is None:
+        typer.echo("Error: --pyi-output requires --protocol-module", err=True)
+        raise typer.Exit(1)
+
     grammar = _parse_grammar_raw(grammar_file)
-    src = gsm2tree_rs.RustCstGenerator(grammar).generate()
+    try:
+        gen = gsm2tree_rs.RustCstGenerator(grammar)
+    except ValueError as e:
+        typer.echo(f"Error: {e}", err=True)
+        raise typer.Exit(1) from e
+
+    # Generate .pyi text before opening any file so a generation error doesn't leave partial files.
+    pyi_text: str | None = None
+    try:
+        if protocol_module is not None:
+            pyi_text = gen.generate_pyi(protocol_module)
+        src = gen.generate()
+    except (ValueError, RuntimeError) as e:
+        typer.echo(f"Error: {e}", err=True)
+        raise typer.Exit(1) from e
     try:
         output_file.write_text(src)
     except Exception as e:
         typer.echo(f"Error: Failed to write output file '{output_file}': {e}", err=True)
         raise typer.Exit(1) from e
+
+    if pyi_text is not None:
+        stub_path = pyi_output if pyi_output is not None else output_file.with_suffix(".pyi")
+        try:
+            stub_path.write_text(pyi_text)
+        except Exception as e:
+            typer.echo(f"Error: Failed to write .pyi stub '{stub_path}': {e}", err=True)
+            raise typer.Exit(1) from e
 
 
 if __name__ == "__main__":

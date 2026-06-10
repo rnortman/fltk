@@ -7,8 +7,12 @@ and test_fegen_rust_cst.py (fegen grammar).
 
 from __future__ import annotations
 
+import json
 import pathlib
 import re
+import shutil
+import subprocess
+from typing import Any
 
 import pytest
 
@@ -134,8 +138,11 @@ def poc_source() -> str:
 
 
 @pytest.fixture(scope="module")
-def fegen_source() -> str:
-    """Generated Rust source for the fegen.fltkg 14-rule grammar."""
+def fegen_generator() -> RustCstGenerator:
+    """Module-scoped RustCstGenerator for the fegen.fltkg 14-rule grammar.
+
+    Shared by fegen_source and fegen_pyi to avoid duplicating the parse pipeline.
+    """
     from fltk.fegen import fltk2gsm, fltk_parser  # noqa: PLC0415
     from fltk.fegen.pyrt import terminalsrc  # noqa: PLC0415
 
@@ -147,9 +154,13 @@ def fegen_source() -> str:
     assert result is not None, "fegen.fltkg failed to parse"
     cst2gsm = fltk2gsm.Cst2Gsm(terminals.terminals)
     grammar = cst2gsm.visit_grammar(result.result)
+    return RustCstGenerator(grammar)
 
-    gen = RustCstGenerator(grammar)
-    return gen.generate()
+
+@pytest.fixture(scope="module")
+def fegen_source(fegen_generator: RustCstGenerator) -> str:
+    """Generated Rust source for the fegen.fltkg 14-rule grammar."""
+    return fegen_generator.generate()
 
 
 # ---------------------------------------------------------------------------
@@ -482,6 +493,20 @@ class TestDeterministicOutput:
         s2 = RustCstGenerator(grammar).generate()
         assert s1 == s2
 
+    def test_pyi_two_calls_produce_identical_strings(self) -> None:
+        """generate_pyi is deterministic across two calls on the same instance."""
+        gen = RustCstGenerator(_make_poc_grammar())
+        s1 = gen.generate_pyi(_PROTO_MODULE)
+        s2 = gen.generate_pyi(_PROTO_MODULE)
+        assert s1 == s2
+
+    def test_pyi_two_generator_instances_produce_identical_strings(self) -> None:
+        """generate_pyi is deterministic across two separate generator instances."""
+        grammar = _make_poc_grammar()
+        s1 = RustCstGenerator(grammar).generate_pyi(_PROTO_MODULE)
+        s2 = RustCstGenerator(grammar).generate_pyi(_PROTO_MODULE)
+        assert s1 == s2
+
     def test_fegen_grammar_deterministic(self, fegen_source: str) -> None:
         """Fegen grammar (14 rules, many multi-label rules) produces identical output on two calls.
 
@@ -709,3 +734,469 @@ class TestNativeEqualityGenerated:
         assert "self.span.start()" in poc_source
         assert "self.span.end()" in poc_source
         assert "self.span.bind(py).repr()" not in poc_source
+
+
+# ---------------------------------------------------------------------------
+# generate_pyi: .pyi stub emission (§2.1 of design)
+# ---------------------------------------------------------------------------
+
+_PROTO_MODULE = "fltk.fegen.fltk_cst_protocol"
+
+
+@pytest.fixture(scope="module")
+def poc_pyi() -> str:
+    """Generated .pyi stub for the PoC 2-rule grammar."""
+    gen = RustCstGenerator(_make_poc_grammar())
+    return gen.generate_pyi(_PROTO_MODULE)
+
+
+@pytest.fixture(scope="module")
+def minimal_pyi() -> str:
+    """Generated .pyi stub for the minimal single-rule grammar (one label)."""
+    gen = RustCstGenerator(_make_minimal_grammar())
+    return gen.generate_pyi(_PROTO_MODULE)
+
+
+@pytest.fixture(scope="module")
+def zero_label_pyi() -> str:
+    """Generated .pyi stub for the zero-label grammar."""
+    from tests.gsm2tree_helpers import make_zero_label_grammar  # noqa: PLC0415
+
+    gen = RustCstGenerator(make_zero_label_grammar())
+    return gen.generate_pyi(_PROTO_MODULE)
+
+
+@pytest.fixture(scope="module")
+def fegen_pyi(fegen_generator: RustCstGenerator) -> str:
+    """Generated .pyi stub for the fegen grammar (14 rules).
+
+    Derived from the shared fegen_generator fixture (no duplicate parse pipeline).
+    """
+    return fegen_generator.generate_pyi(_PROTO_MODULE)
+
+
+class TestGeneratePyiHeader:
+    def test_future_annotations(self, poc_pyi: str) -> None:
+        assert "from __future__ import annotations" in poc_pyi
+
+    def test_imports_typing(self, poc_pyi: str) -> None:
+        assert "import typing" in poc_pyi
+
+    def test_imports_terminalsrc(self, poc_pyi: str) -> None:
+        assert "import fltk.fegen.pyrt.terminalsrc" in poc_pyi
+
+    def test_imports_span_module(self, poc_pyi: str) -> None:
+        assert "import fltk.fegen.pyrt.span" in poc_pyi
+
+    def test_imports_fltk_native(self, poc_pyi: str) -> None:
+        assert "import fltk._native" in poc_pyi
+
+    def test_imports_protocol_module_as_proto(self, poc_pyi: str) -> None:
+        assert f"import {_PROTO_MODULE} as _proto" in poc_pyi
+
+    def test_ruff_noqa_header(self, poc_pyi: str) -> None:
+        assert poc_pyi.startswith("# ruff: noqa: N802")
+
+    def test_node_kind_alias(self, poc_pyi: str) -> None:
+        assert "NodeKind = _proto.NodeKind" in poc_pyi
+
+    def test_no_module_level_span(self, poc_pyi: str) -> None:
+        """No module-level Span: neither backend's generated module exports one (§2.1a)."""
+        lines = poc_pyi.splitlines()
+        for line in lines:
+            stripped = line.strip()
+            # No top-level 'Span = ...' or 'Span: ...' at module level (class Span inside is fine)
+            if re.match(r"^Span\s*[:=]", stripped):
+                pytest.fail(f"Found module-level Span binding: {line!r}")
+
+
+class TestGeneratePyiClasses:
+    def test_one_class_per_rule(self, poc_pyi: str) -> None:
+        """Every rule in the PoC grammar produces exactly one class in the stub."""
+        # PoC grammar has identifier + items; trivia is auto-added
+        for class_name in ("Identifier", "Items", "Trivia"):
+            assert f"class {class_name}:" in poc_pyi
+
+    def test_labelled_rule_has_label_alias(self, poc_pyi: str) -> None:
+        """Labelled rules have 'Label = _proto.<Class>.Label' (type alias, not ClassVar).
+
+        ClassVar annotation causes pyright reportRedeclaration when checking structural
+        compatibility with the protocol's nested Label class (§3 — self-check must pass).
+        """
+        assert "Label = _proto.Identifier.Label" in poc_pyi
+        assert "Label = _proto.Items.Label" in poc_pyi
+
+    def test_zero_label_rule_has_no_label(self, zero_label_pyi: str) -> None:
+        """Label-free rules omit the Label alias (mirroring .rs conditional emission).
+
+        The zero-label grammar has a Foo rule with no labels; _trivia is auto-added and
+        does have labels, so we check specifically that Foo's class body lacks Label.
+        """
+        # Extract the Foo class body: lines between 'class Foo:' and the next 'class ' or EOF.
+        lines = zero_label_pyi.splitlines()
+        in_foo = False
+        foo_lines: list[str] = []
+        for line in lines:
+            if line.startswith("class Foo:"):
+                in_foo = True
+                continue
+            if in_foo:
+                if line.startswith("class "):
+                    break
+                foo_lines.append(line)
+        assert foo_lines, "Foo class not found in zero_label_pyi"
+        foo_body = "\n".join(foo_lines)
+        assert "Label" not in foo_body, f"Foo (label-free) should not have Label member; Foo body:\n{foo_body}"
+
+    def test_kind_discriminant_uses_proto_nodekind(self, poc_pyi: str) -> None:
+        """kind: Literal[_proto.NodeKind.<MEMBER>] — references protocol module's NodeKind."""
+        assert "kind: typing.Literal[_proto.NodeKind.IDENTIFIER]" in poc_pyi
+        assert "kind: typing.Literal[_proto.NodeKind.ITEMS]" in poc_pyi
+
+    def test_span_annotation_exact_protocol_union(self, poc_pyi: str) -> None:
+        """span annotation is the exact protocol union (invariant attribute)."""
+        assert "span: fltk.fegen.pyrt.terminalsrc.Span | fltk._native.Span" in poc_pyi
+
+    def test_children_annotation_labelled(self, poc_pyi: str) -> None:
+        """Labelled node children: list[tuple[Optional[_proto.<Class>.Label], <child_ann>]]."""
+        # Identifier has one label; children annotation must use proto Label
+        assert "list[tuple[typing.Optional[_proto.Identifier.Label]" in poc_pyi
+
+    def test_children_annotation_label_free(self, zero_label_pyi: str) -> None:
+        """Label-free node children: list[tuple[None, <child_ann>]]."""
+        assert "list[tuple[None," in zero_label_pyi
+
+    def test_no_stub_local_class_names_in_annotations(self, poc_pyi: str) -> None:
+        """No quoted rule-ref annotations ('"ClassName"') — all replaced with _proto.ClassName."""
+        import re  # noqa: PLC0415
+
+        assert not re.search(r'"[A-Z][A-Za-z0-9_]*"', poc_pyi), (
+            "Found quoted class name in .pyi; should be _proto-qualified"
+        )
+        # This check catches the quoted-string form produced under `from __future__ import
+        # annotations`; a hypothetical bare (unquoted) uppercase name in an annotation context
+        # would not be caught here but would be flagged by the pyright conformance tests.
+        # The pyright conformance tests are the authoritative guard; this is a fast pre-pyright lint only.
+
+    def test_extend_children_present(self, poc_pyi: str) -> None:
+        """extend_children uses _proto.ClassName (not stub-local) to avoid contravariance errors."""
+        assert "def extend_children(self, other: _proto.Identifier) -> None: ..." in poc_pyi
+        assert "def extend_children(self, other: _proto.Items) -> None: ..." in poc_pyi
+
+    def test_generic_append_present(self, poc_pyi: str) -> None:
+        assert "def append(self," in poc_pyi
+
+    def test_generic_extend_present(self, poc_pyi: str) -> None:
+        assert "def extend(self," in poc_pyi
+
+    def test_generic_child_present(self, poc_pyi: str) -> None:
+        assert "def child(self)" in poc_pyi
+
+
+class TestGeneratePyiPerLabelAccessors:
+    def test_append_label_method_present(self, poc_pyi: str) -> None:
+        assert "def append_name(self, child:" in poc_pyi
+
+    def test_extend_label_method_present(self, poc_pyi: str) -> None:
+        assert "def extend_name(self, children:" in poc_pyi
+
+    def test_children_label_typed_iterator(self, poc_pyi: str) -> None:
+        """children_<label> must be Iterator[T], NOT list[T] (§3 of design)."""
+        assert "def children_name(self) -> typing.Iterator[" in poc_pyi
+        # Must not be list
+        assert "def children_name(self) -> list[" not in poc_pyi
+
+    def test_child_label_method_present(self, poc_pyi: str) -> None:
+        assert "def child_name(self)" in poc_pyi
+
+    def test_maybe_label_method_present(self, poc_pyi: str) -> None:
+        assert "def maybe_name(self)" in poc_pyi
+
+    def test_multi_label_rule_all_five_per_label(self, poc_pyi: str) -> None:
+        """Items rule (4 labels) has all 5 accessors per label."""
+        for label in ("no_ws", "ws_allowed", "ws_required", "item"):
+            for prefix in ("append_", "extend_", "children_", "child_", "maybe_"):
+                method = f"def {prefix}{label}("
+                assert method in poc_pyi, f"Missing {method!r} in poc_pyi"
+
+
+class TestGeneratePyiModuleLevelClassAttrs:
+    def test_no_redundant_module_level_attrs(self, poc_pyi: str) -> None:
+        """No 'ClassName: type[ClassName]' module-level attrs (would cause reportRedeclaration).
+
+        The class definition itself serves as the module-level binding; separate variable
+        annotations of the same name trigger pyright reportRedeclaration in stub self-check.
+        CstModule conformance works from the class definitions alone.
+        """
+        import re  # noqa: PLC0415
+
+        for line in poc_pyi.splitlines():
+            # Top-level (unindented) '<ClassName>: type[<ClassName>]' should NOT be present.
+            if re.match(r"^[A-Z]\w+: type\[\w+\]", line):
+                pytest.fail(f"Redundant module-level class attr found: {line!r}")
+
+    def test_fegen_grammar_class_definitions_all_present(self, fegen_pyi: str) -> None:
+        """Fegen grammar: all 14 expected classes are defined in the stub."""
+        for class_name in FEGEN_CLASS_NAMES:
+            assert f"class {class_name}:" in fegen_pyi, f"Missing class definition for '{class_name}'"
+
+
+class TestGeneratePyiClassLabelSetMatchesRs:
+    """Class/label set of the .pyi must equal that of the .rs (drift guard)."""
+
+    def _extract_rs_classes(self, rs_source: str) -> set[str]:
+        import re  # noqa: PLC0415
+
+        return set(re.findall(r"pub struct (\w+) \{", rs_source))
+
+    def _extract_pyi_classes(self, pyi_source: str) -> set[str]:
+        import re  # noqa: PLC0415
+
+        return set(re.findall(r"^class (\w+):", pyi_source, re.MULTILINE))
+
+    def test_poc_class_set_matches(self, poc_source: str, poc_pyi: str) -> None:
+        """PoC grammar: class names in .pyi equal class names in .rs."""
+        rs_classes = self._extract_rs_classes(poc_source)
+        pyi_classes = self._extract_pyi_classes(poc_pyi)
+        assert rs_classes == pyi_classes
+
+    def test_fegen_class_set_matches(self, fegen_source: str, fegen_pyi: str) -> None:
+        """Fegen grammar: class names in .pyi equal class names in .rs."""
+        rs_classes = self._extract_rs_classes(fegen_source)
+        pyi_classes = self._extract_pyi_classes(fegen_pyi)
+        assert rs_classes == pyi_classes
+
+
+# ---------------------------------------------------------------------------
+# Pyright harness for .pyi self-check and conformance tests
+# ---------------------------------------------------------------------------
+
+
+@pytest.fixture(scope="session")
+def pyright_available() -> bool:
+    """Return True when uv + pyright are runnable in this environment."""
+    if shutil.which("uv") is None:
+        return False
+    result = subprocess.run(
+        ["uv", "run", "pyright", "--version"],  # noqa: S607
+        capture_output=True,
+        text=True,
+        timeout=30,
+        check=False,
+    )
+    return result.returncode == 0
+
+
+def _run_pyright_in_tmpdir(
+    file_path: pathlib.Path,
+    *,
+    pyright_available: bool,
+    cwd: pathlib.Path | None = None,
+) -> list[dict[str, Any]]:
+    """Run pyright --outputjson on file_path, return list of error diagnostics.
+
+    Raises pytest.skip if pyright unavailable.
+    cwd: directory to run pyright from (defaults to file_path.parent).
+    """
+    if not pyright_available:
+        pytest.skip("pyright not available in this environment")
+    run_cwd = cwd if cwd is not None else file_path.parent
+    result = subprocess.run(  # noqa: S603
+        ["uv", "run", "pyright", "--outputjson", str(file_path)],  # noqa: S607
+        capture_output=True,
+        text=True,
+        timeout=60,
+        check=False,
+        cwd=str(run_cwd),
+    )
+    try:
+        data = json.loads(result.stdout)
+    except json.JSONDecodeError:
+        pytest.fail(f"pyright produced non-JSON output: {result.stdout[:500]}")
+    return [d for d in data.get("generalDiagnostics", []) if d.get("severity") == "error"]
+
+
+def _run_pyright_over_dir(
+    tmpdir: pathlib.Path,
+    *,
+    pyright_available: bool,
+) -> dict[str, list[dict[str, Any]]]:
+    """Run pyright --outputjson over a directory; return errors partitioned by file path.
+
+    Returns a dict mapping each file's absolute path string to its list of error diagnostics.
+    Raises pytest.skip if pyright unavailable.
+    """
+    if not pyright_available:
+        pytest.skip("pyright not available in this environment")
+    result = subprocess.run(  # noqa: S603
+        ["uv", "run", "pyright", "--outputjson", str(tmpdir)],  # noqa: S607
+        capture_output=True,
+        text=True,
+        timeout=120,
+        check=False,
+        cwd=str(tmpdir),
+    )
+    try:
+        data = json.loads(result.stdout)
+    except json.JSONDecodeError:
+        pytest.fail(f"pyright produced non-JSON output: {result.stdout[:500]}")
+    partitioned: dict[str, list[dict[str, Any]]] = {}
+    for diag in data.get("generalDiagnostics", []):
+        if diag.get("severity") != "error":
+            continue
+        file_key = diag.get("file", "")
+        partitioned.setdefault(file_key, []).append(diag)
+    return partitioned
+
+
+_REPO_ROOT = pathlib.Path(__file__).parent.parent
+
+
+def _write_pyi_tmpdir(tmp_path: pathlib.Path, pyi_text: str, mod_name: str = "fegen_cst") -> pathlib.Path:
+    """Write the stub to tmp_path/<mod_name>.pyi plus an empty <mod_name>.py and pyrightconfig.json.
+
+    The pyrightconfig.json points to the repo venv so fltk imports resolve.
+    Returns the path to the .pyi file.
+    """
+    pyi_path = tmp_path / f"{mod_name}.pyi"
+    pyi_path.write_text(pyi_text)
+    (tmp_path / f"{mod_name}.py").write_text("")
+    (tmp_path / "pyrightconfig.json").write_text(
+        json.dumps({"pythonVersion": "3.10", "venvPath": str(_REPO_ROOT), "venv": ".venv"})
+    )
+    return pyi_path
+
+
+# ---------------------------------------------------------------------------
+# .pyi pyright self-check (§4 item 3 — zero errors on the stub in isolation)
+# ---------------------------------------------------------------------------
+
+
+@pytest.fixture(scope="module")
+def fegen_pyright_diagnostics(
+    fegen_pyi: str,
+    pyright_available: bool,  # noqa: FBT001
+    tmp_path_factory: pytest.TempPathFactory,
+) -> dict[str, list[dict[str, Any]]]:
+    """Run pyright once over a shared tmpdir holding all fegen .pyi check fixtures.
+
+    Writes: fegen_cst.pyi (stub), fegen_cst.py (empty), pyrightconfig.json,
+    conformance_fixture.py (whole-module), per_class_fixture.py (per-class).
+    Runs a single `uv run pyright --outputjson <dir>` invocation and returns
+    diagnostics partitioned by absolute file path.
+
+    Batching the three fegen pyright tests (self-check, whole-module, per-class)
+    into one subprocess avoids 3x cold pyright startup cost.
+    """
+    tmpdir = tmp_path_factory.mktemp("fegen_pyright")
+    _write_pyi_tmpdir(tmpdir, fegen_pyi)
+    _write_module_conformance_fixture(tmpdir)
+    _write_per_class_conformance_fixture(tmpdir, FEGEN_CLASS_NAMES)
+    return _run_pyright_over_dir(tmpdir, pyright_available=pyright_available)
+
+
+class TestGeneratePyiSelfCheck:
+    """Pyright self-check: the emitted .pyi produces zero errors in isolation."""
+
+    def test_fegen_pyi_self_check_zero_errors(
+        self,
+        fegen_pyright_diagnostics: dict[str, list[dict[str, Any]]],
+    ) -> None:
+        """The fegen grammar .pyi stub produces zero pyright errors when checked in isolation.
+
+        This verifies internal well-typedness (all referenced names resolve, no illegal type
+        forms) but does NOT compare against the protocol — that is the conformance tests' job.
+        Uses the shared fegen_pyright_diagnostics fixture (one pyright run for all fegen tests).
+        """
+        # Filter diagnostics to those originating from the fegen_cst.pyi file.
+        pyi_errors = [d for path, errs in fegen_pyright_diagnostics.items() if "fegen_cst.pyi" in path for d in errs]
+        assert pyi_errors == [], f"Unexpected pyright errors in fegen .pyi self-check:\n{pyi_errors}"
+
+    def test_poc_pyi_self_check_zero_errors(
+        self,
+        tmp_path: pathlib.Path,
+        poc_pyi: str,
+        pyright_available: bool,  # noqa: FBT001
+    ) -> None:
+        """The PoC grammar .pyi stub produces zero pyright errors when checked in isolation."""
+        pyi_path = _write_pyi_tmpdir(tmp_path, poc_pyi, mod_name="poc_cst")
+        errors = _run_pyright_in_tmpdir(pyi_path, pyright_available=pyright_available)
+        assert errors == [], f"Unexpected pyright errors in PoC .pyi self-check:\n{errors}"
+
+
+# ---------------------------------------------------------------------------
+# Stub-vs-protocol conformance tests (§2.2, §4 item 4)
+# ---------------------------------------------------------------------------
+
+
+def _write_module_conformance_fixture(tmp_path: pathlib.Path, mod_name: str = "fegen_cst") -> pathlib.Path:
+    """Write a fixture that imports mod_name and assigns it to cstp.CstModule without a cast."""
+    fixture = tmp_path / "conformance_fixture.py"
+    fixture.write_text(
+        f"# ruff: noqa\n"
+        f"from __future__ import annotations\n"
+        f"import fltk.fegen.fltk_cst_protocol as cstp\n"
+        f"import {mod_name}\n"
+        f"\n"
+        f"_m: cstp.CstModule = {mod_name}\n"
+    )
+    return fixture
+
+
+def _write_per_class_conformance_fixture(
+    tmp_path: pathlib.Path, class_names: list[str], mod_name: str = "fegen_cst"
+) -> pathlib.Path:
+    """Write per-class no-cast fixtures: def f(x: mod.Foo) -> None: _x: cstp.Foo = x."""
+    lines = [
+        "# ruff: noqa",
+        "from __future__ import annotations",
+        "import fltk.fegen.fltk_cst_protocol as cstp",
+        f"import {mod_name}",
+        "",
+    ]
+    for name in class_names:
+        lines.append(f"def _check_{name.lower()}(x: {mod_name}.{name}) -> None:")
+        lines.append(f"    _x: cstp.{name} = x")
+        lines.append("")
+    fixture = tmp_path / "per_class_fixture.py"
+    fixture.write_text("\n".join(lines))
+    return fixture
+
+
+class TestGeneratePyiConformance:
+    """Stub-vs-protocol conformance: the emitted .pyi satisfies CstModule without a cast."""
+
+    def test_fegen_whole_module_no_cast_zero_errors(
+        self,
+        fegen_pyright_diagnostics: dict[str, list[dict[str, Any]]],
+    ) -> None:
+        """Whole-module no-cast: assign fegen_cst module to cstp.CstModule → zero pyright errors.
+
+        This is the primary load-bearing test: verifies the .pyi's structural conformance to
+        the CstModule protocol without any cast. Post-§2.1a (Span property removal), zero errors
+        is the expected and achievable outcome (design §2.2, §4 item 4).
+        Uses the shared fegen_pyright_diagnostics fixture (one pyright run for all fegen tests).
+        """
+        errors = [d for path, errs in fegen_pyright_diagnostics.items() if "conformance_fixture" in path for d in errs]
+        assert errors == [], (
+            f"Expected zero pyright errors for fegen_cst -> CstModule (no cast).\n"
+            f"Errors indicate a stub annotation diverges from the protocol (design §1 blockers).\n"
+            f"Errors: {errors}"
+        )
+
+    def test_fegen_per_class_no_cast_zero_errors(
+        self,
+        fegen_pyright_diagnostics: dict[str, list[dict[str, Any]]],
+    ) -> None:
+        """Per-class no-cast: each stub class is assignable to its protocol counterpart.
+
+        Each function 'def f(x: fegen_cst.Grammar) -> None: _x: cstp.Grammar = x' must
+        produce zero pyright errors — verifying that individual node-class structural
+        compatibility holds, not just the module-level assignment.
+        Uses the shared fegen_pyright_diagnostics fixture (one pyright run for all fegen tests).
+        """
+        errors = [d for path, errs in fegen_pyright_diagnostics.items() if "per_class_fixture" in path for d in errs]
+        assert errors == [], (
+            f"Per-class conformance failed: at least one stub class does not satisfy its "
+            f"protocol counterpart without a cast.\nErrors: {errors}"
+        )

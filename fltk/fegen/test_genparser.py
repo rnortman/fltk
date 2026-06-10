@@ -159,3 +159,110 @@ def test_gsm2parser_extend_children_call_site(tmp_path: pathlib.Path) -> None:
     assert ".children.extend(" not in src, (
         "Parser generator must not emit .children.extend() (getter-mutation is a no-op on Rust backend)"
     )
+
+
+# ---------------------------------------------------------------------------
+# gen-rust-cst --protocol-module / --pyi-output CLI tests
+# ---------------------------------------------------------------------------
+
+
+def test_gen_rust_cst_no_protocol_module_no_pyi(simple_grammar_file: pathlib.Path, tmp_path: pathlib.Path) -> None:
+    """Without --protocol-module no .pyi is emitted (backward compatible)."""
+    output_rs = tmp_path / "simple_cst.rs"
+    runner = CliRunner()
+    result = runner.invoke(app, ["gen-rust-cst", str(simple_grammar_file), str(output_rs)])
+
+    assert result.exit_code == 0, f"gen-rust-cst failed:\n{result.output}"
+    # No .pyi by default
+    pyi = output_rs.with_suffix(".pyi")
+    assert not pyi.exists(), "No .pyi should be emitted without --protocol-module"
+
+
+def test_gen_rust_cst_protocol_module_emits_pyi(simple_grammar_file: pathlib.Path, tmp_path: pathlib.Path) -> None:
+    """With --protocol-module the .pyi is written next to the .rs.
+
+    Note: this test uses a simple single-rule grammar (word := /[a-z]+/) with
+    fltk_cst_protocol as the protocol module — a mismatched pair (fltk_cst_protocol
+    is the fegen grammar's protocol). The test verifies CLI file-emission plumbing
+    only, not type-level correctness. The pyright conformance tests in
+    TestGeneratePyiConformance use the matched fegen grammar + fltk_cst_protocol pair.
+    """
+    import ast  # noqa: PLC0415
+
+    output_rs = tmp_path / "simple_cst.rs"
+    runner = CliRunner()
+    result = runner.invoke(
+        app,
+        [
+            "gen-rust-cst",
+            str(simple_grammar_file),
+            str(output_rs),
+            "--protocol-module",
+            "fltk.fegen.fltk_cst_protocol",
+        ],
+    )
+
+    assert result.exit_code == 0, f"gen-rust-cst failed:\n{result.output}"
+    assert output_rs.exists(), ".rs file must still be written"
+    pyi = tmp_path / "simple_cst.pyi"
+    assert pyi.exists(), ".pyi should be emitted when --protocol-module is given"
+    pyi_text = pyi.read_text()
+    assert "import fltk.fegen.fltk_cst_protocol as _proto" in pyi_text
+    assert "class Word:" in pyi_text
+    # Verify the emitted stub is at least syntactically valid Python
+    ast.parse(pyi_text)  # raises SyntaxError if the stub text is malformed
+
+
+def test_gen_rust_cst_pyi_output_override(simple_grammar_file: pathlib.Path, tmp_path: pathlib.Path) -> None:
+    """--pyi-output overrides the default .pyi path."""
+    output_rs = tmp_path / "cst_fegen.rs"
+    pyi_override = tmp_path / "fegen_cst.pyi"
+    runner = CliRunner()
+    result = runner.invoke(
+        app,
+        [
+            "gen-rust-cst",
+            str(simple_grammar_file),
+            str(output_rs),
+            "--protocol-module",
+            "fltk.fegen.fltk_cst_protocol",
+            "--pyi-output",
+            str(pyi_override),
+        ],
+    )
+
+    assert result.exit_code == 0, f"gen-rust-cst failed:\n{result.output}"
+    assert output_rs.exists(), ".rs file must still be written"
+    # Default path (cst_fegen.pyi) must NOT exist; custom path must exist.
+    assert not (tmp_path / "cst_fegen.pyi").exists(), "Default .pyi path must not exist when --pyi-output given"
+    assert pyi_override.exists(), "--pyi-output path must be written"
+    assert "class Word:" in pyi_override.read_text()
+
+
+def test_gen_rust_cst_rs_unchanged_with_protocol_module(
+    simple_grammar_file: pathlib.Path, tmp_path: pathlib.Path
+) -> None:
+    """Adding --protocol-module does not change the .rs output (additive, non-goal per design)."""
+    output_rs_no_pyi = tmp_path / "no_pyi" / "cst.rs"
+    output_rs_with_pyi = tmp_path / "with_pyi" / "cst.rs"
+    output_rs_no_pyi.parent.mkdir()
+    output_rs_with_pyi.parent.mkdir()
+
+    runner = CliRunner()
+    result1 = runner.invoke(app, ["gen-rust-cst", str(simple_grammar_file), str(output_rs_no_pyi)])
+    assert result1.exit_code == 0, f"gen-rust-cst (no --protocol-module) failed:\n{result1.output}"
+    result2 = runner.invoke(
+        app,
+        [
+            "gen-rust-cst",
+            str(simple_grammar_file),
+            str(output_rs_with_pyi),
+            "--protocol-module",
+            "fltk.fegen.fltk_cst_protocol",
+        ],
+    )
+    assert result2.exit_code == 0, f"gen-rust-cst (with --protocol-module) failed:\n{result2.output}"
+
+    assert output_rs_no_pyi.read_text() == output_rs_with_pyi.read_text(), (
+        "--protocol-module must not change .rs output"
+    )

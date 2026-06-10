@@ -273,6 +273,3 @@ class CstModule(typing.Protocol):
 
     @property
     def Trivia(self) -> type[Trivia]: ...
-
-    @property
-    def Span(self) -> type[Span]: ...

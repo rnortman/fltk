@@ -7,9 +7,10 @@ same Python-visible API as gsm2tree.py but as compiled Rust extension classes.
 from __future__ import annotations
 
 import re
+from collections.abc import Iterable
 
 from fltk.fegen import gsm, naming
-from fltk.fegen.gsm2tree import CstGenerator
+from fltk.fegen.gsm2tree import CstGenerator, ModelType
 from fltk.iir.context import create_default_context
 from fltk.iir.py import reg as pyreg
 
@@ -105,6 +106,121 @@ class RustCstGenerator:
                 # TypeKey — must be the Span key
                 has_span = True
         return sorted(child_class_names), has_span
+
+    def generate_pyi(self, protocol_module: str) -> str:
+        """Return a complete .pyi stub for the generated Rust extension as a string.
+
+        protocol_module: import path of the committed protocol module for this grammar,
+        e.g. 'fltk.fegen.fltk_cst_protocol'. All type identities in annotations reference
+        it under the alias '_proto', so the stub cannot satisfy pyright with stub-local
+        nominal types (§1 of the design).
+
+        Callers write this string to <compiled_module_name>.pyi alongside the .rs file,
+        or to a custom path via --pyi-output when the .rs stem differs from the import name.
+        """
+        lines: list[str] = []
+
+        # Header: ruff noqa for PascalCase module-level names (same as protocol generator).
+        lines.append("# ruff: noqa: N802")
+        # Safety note: this directory must never gain an __init__.py or it will shadow the
+        # compiled extension and break all runtime imports. See design §2.3.
+        lines.append("from __future__ import annotations")
+        lines.append("import typing")
+        lines.append("import fltk.fegen.pyrt.terminalsrc")
+        lines.append("import fltk.fegen.pyrt.span")
+        lines.append("import fltk._native")
+        lines.append(f"import {protocol_module} as _proto")
+        lines.append("")
+        # NodeKind: runtime is the PyO3 enum; type identity is the protocol's NodeKind.
+        # This deliberate divergence (OQ-0(a)) keeps consumer kind-comparisons type-checked.
+        lines.append("NodeKind = _proto.NodeKind")
+        lines.append("")
+
+        rule_info = self._rule_info()
+
+        # Per-rule class stubs
+        for class_name, labels, rule_name in rule_info:
+            model = self._py_gen.rule_models[rule_name]
+            lines.append(f"class {class_name}:")
+
+            # Nested Label class alias (only when rule has labels, mirroring .rs conditional emission).
+            # Use 'Label = _proto.ClassName.Label' (type alias assignment) rather than a ClassVar
+            # annotation: the protocol's Label is a nested class, not a ClassVar, and pyright rejects
+            # 'ClassVar[type[...]]' when checking structural compatibility with the protocol's nested class.
+            if labels:
+                lines.append(f"    Label = _proto.{class_name}.Label")
+
+            # kind discriminant: reference protocol's NodeKind so Literal matches
+            node_kind_member = self._node_kind_python_name(rule_name)
+            lines.append(f"    kind: typing.Literal[_proto.NodeKind.{node_kind_member}]")
+
+            # span: exact protocol union (invariant attribute; narrower would fail conformance)
+            lines.append("    span: fltk.fegen.pyrt.terminalsrc.Span | fltk._native.Span")
+
+            # children: proto-qualified element types
+            child_ann = self._pyi_annotation_for_model_types(model.types, class_name=class_name)
+            if labels:
+                lines.append(f"    children: list[tuple[typing.Optional[_proto.{class_name}.Label], {child_ann}]]")
+            else:
+                lines.append(f"    children: list[tuple[None, {child_ann}]]")
+
+            # Generic methods: append, extend, child, extend_children
+            label_ann = f"typing.Optional[_proto.{class_name}.Label]" if labels else "None"
+            lines.append(f"    def append(self, child: {child_ann}, label: {label_ann} = ...) -> None: ...")
+            lines.append(
+                f"    def extend(self, children: typing.Iterable[{child_ann}], label: {label_ann} = ...) -> None: ..."
+            )
+            # extend_children takes _proto.ClassName (not the stub-local class) to avoid
+            # contravariance mismatches when pyright checks structural compatibility.
+            lines.append(f"    def extend_children(self, other: _proto.{class_name}) -> None: ...")
+            if labels:
+                child_ret = f"tuple[typing.Optional[_proto.{class_name}.Label], {child_ann}]"
+            else:
+                child_ret = f"tuple[None, {child_ann}]"
+            lines.append(f"    def child(self) -> {child_ret}: ...")
+
+            # Per-label accessor quintet
+            # TODO(pyi-label-quintet-reuse): consolidate with CstGenerator._emit_label_quintet
+            # to avoid diverging if a method is added/renamed.  The string-vs-AST boundary
+            # requires extracting shared method-name/signature helpers first.
+            for label in labels:
+                lann = self._pyi_annotation_for_model_types(model.labels[label], class_name=f"{class_name}.{label}")
+                lines.append(f"    def append_{label}(self, child: {lann}) -> None: ...")
+                lines.append(f"    def extend_{label}(self, children: typing.Iterable[{lann}]) -> None: ...")
+                # children_<label>: typed Iterator[T] (§3 of design: Rust returns list but
+                # Iterator is the protocol's declared return type; stub uses narrower declaration
+                # so conformance fixtures pass. Callers only ever iterate.)
+                lines.append(f"    def children_{label}(self) -> typing.Iterator[{lann}]: ...")  # stub/runtime diverge
+                lines.append(f"    def child_{label}(self) -> {lann}: ...")
+                lines.append(f"    def maybe_{label}(self) -> typing.Optional[{lann}]: ...")
+
+            lines.append("")
+
+        # No module-level '<Class>: type[<Class>]' attrs: the class definition itself serves as
+        # the module-level binding, and emitting a separate variable annotation of the same name
+        # would cause pyright 'reportRedeclaration' errors in the stub self-check. CstModule
+        # conformance works without them because the class definitions provide 'type[Grammar]' etc.
+        # directly as module attributes.
+
+        return "\n".join(lines)
+
+    def _pyi_annotation_for_model_types(self, model_types: Iterable[ModelType], *, class_name: str = "") -> str:
+        """Return a proto-qualified annotation string for use in the .pyi stub.
+
+        Transforms the output of protocol_annotation_for_model_types: quoted rule references
+        like '"Grammar"' become '_proto.Grammar', while unquoted library paths (e.g.
+        'fltk.fegen.pyrt.terminalsrc.Span') are kept as-is.
+        """
+        # Get the raw annotation string from the protocol machinery.
+        raw = self._py_gen.protocol_annotation_for_model_types(model_types=model_types, class_name=class_name)
+
+        # Transform quoted rule refs to _proto-qualified names.
+        # Raw form: '"ClassName"' (single-type) or 'typing.Union["A", "B", ...]'
+        # We replace each '"ClassName"' occurrence with '_proto.ClassName'.
+        def _replace_quoted(m: re.Match[str]) -> str:
+            return f"_proto.{m.group(1)}"
+
+        return re.sub(r'"([A-Z][A-Za-z0-9_]*)"', _replace_quoted, raw)
 
     def generate(self) -> str:
         """Return a complete, compilable .rs file as a string."""
@@ -220,9 +336,13 @@ class RustCstGenerator:
         """Return the CamelCase Rust variant name for a NodeKind member (same as class_name)."""
         return class_name
 
-    def _node_kind_python_name(self, class_name: str) -> str:
-        """Return the ALL_CAPS Python-visible name for a NodeKind member."""
-        return class_name.upper()
+    def _node_kind_python_name(self, rule_name: str) -> str:
+        """Return the ALL_CAPS Python-visible name for a NodeKind member.
+
+        Delegates to CstGenerator.node_kind_member_name so CstGenerator is the single
+        source of truth for this naming convention across .rs, .pyi, and protocol.
+        """
+        return self._py_gen.node_kind_member_name(rule_name)
 
     def _node_kind_canonical_name(self, class_name: str) -> str:
         """Return the canonical string for a NodeKind member: 'NodeKind.<UPPER>'."""
@@ -270,8 +390,8 @@ class RustCstGenerator:
         lines.append('#[pyclass(frozen, name = "NodeKind")]')
         lines.append("#[derive(Clone, PartialEq, Eq, Hash)]")
         lines.append("pub enum NodeKind {")
-        for class_name, _labels, _rule_name in rule_info:
-            python_name = self._node_kind_python_name(class_name)
+        for class_name, _labels, rule_name in rule_info:
+            python_name = self._node_kind_python_name(rule_name)
             lines.append(f'    #[pyo3(name = "{python_name}")]')
             lines.append(f"    {self._node_kind_variant_name(class_name)},")
         lines.append("}")

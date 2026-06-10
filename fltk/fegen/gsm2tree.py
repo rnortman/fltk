@@ -174,12 +174,30 @@ class CstGenerator:
             pyreg.Module(("enum",)),
             pyreg.Module(("typing",)),
             pyreg.Module(("fltk", "fegen", "pyrt", "terminalsrc")),
-            # Import backend-selector span module so pyright resolves fltk.fegen.pyrt.span.Span
-            # in child/terminal span type annotations (TerminalSpanType is registered in context.py
-            # with this module path; selector re-exports terminalsrc.Span or fltk._native.Span).
-            pyreg.Module(("fltk", "fegen", "pyrt", "span")),
         ]
         module = pygen.module(module.import_path for module in imports)
+        # from __future__ import annotations makes all annotations lazy strings so that
+        # fltk._native (guarded under TYPE_CHECKING below) is NOT needed at runtime.
+        # Without this, 'span: terminalsrc.Span | fltk._native.Span' would evaluate
+        # eagerly and fail with ImportError on any pure-Python install.
+        module.body.insert(0, pygen.stmt("from __future__ import annotations"))
+        # Both imports under TYPE_CHECKING: annotations are lazy (from __future__ above),
+        # so these are only needed by pyright for type resolution, not at runtime.
+        # This mirrors the protocol generator (gen_protocol_module) exactly, keeping
+        # concrete CST modules importable in pure-Python environments.
+        module.body.append(
+            pygen.if_(
+                pygen.expr("typing.TYPE_CHECKING"),
+                [
+                    # Backend-selector span module: pyright resolves fltk.fegen.pyrt.span.Span
+                    # in child/terminal span type annotations.
+                    pygen.stmt("import fltk.fegen.pyrt.span"),
+                    # Rust extension: resolves fltk._native.Span in the span annotation union.
+                    pygen.stmt("import fltk._native"),
+                ],
+                [],
+            )
+        )
 
         # Emit module-level NodeKind enum before the node classes.
         module.body.append(self._node_kind_enum())
@@ -232,7 +250,10 @@ class CstGenerator:
         klass.body.extend(
             [
                 pygen.stmt(f"kind: typing.Literal[NodeKind.{kind_member}] = NodeKind.{kind_member}"),
-                pygen.stmt("span: fltk.fegen.pyrt.terminalsrc.Span = fltk.fegen.pyrt.terminalsrc.UnknownSpan"),
+                pygen.stmt(
+                    "span: fltk.fegen.pyrt.terminalsrc.Span | fltk._native.Span"
+                    " = fltk.fegen.pyrt.terminalsrc.UnknownSpan"
+                ),
                 pygen.stmt(
                     f"children: list[tuple[{label_annotation}, {child_annotation}]]"
                     " = dataclasses.field(default_factory=list)"
@@ -707,12 +728,10 @@ class _ProtocolLabelMember:
             prop_fn.decorator_list = [pygen.expr("property")]
             prop_fn.body.append(pygen.stmt("..."))
             klass.body.append(prop_fn)
-        # Span property: the Span protocol class is generated (not per-grammar-rule), but out-of-tree
-        # consumers may want to access it via a CstModule-typed binding.  Add it here.
-        span_prop = pygen.function("Span", "self", "type[Span]")
-        span_prop.decorator_list = [pygen.expr("property")]
-        span_prop.body.append(pygen.stmt("..."))
-        klass.body.append(span_prop)
+        # Note: no Span property. Span is a common-lib type (fltk.fegen.pyrt.terminalsrc.Span /
+        # fltk._native.Span); neither backend's generated CST module exports a module-level Span.
+        # Promising it here would certify an attribute that raises AttributeError at runtime on
+        # every backend. Consumers obtain Span from fltk.fegen.pyrt.span or fltk._native directly.
         return klass
 
     def model_for_rule(self, rule: gsm.Rule, inline_stack: list[str]) -> ItemsModel:

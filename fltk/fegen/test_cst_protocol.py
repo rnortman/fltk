@@ -174,8 +174,7 @@ def test_cst_module_protocol_has_property_per_rule(
             prop_names.add(item.name)
 
     expected_class_names = {cst_generator.class_name_for_rule_node(r) for r in cst_generator.rule_models}
-    # CstModule also includes a Span property (not a grammar rule, but a shared protocol type)
-    expected_class_names.add("Span")
+    # No Span property: Span is a common-lib type, not a generated-module attribute (§2.1a).
     assert expected_class_names == prop_names
 
     # These specific names are accessed by Cst2Gsm at runtime (fltk2gsm.py).
