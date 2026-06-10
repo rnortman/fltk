@@ -21,13 +21,9 @@ jobs:
           python-version: "3.10"
           enable-cache: true
 
-      # TODO(dependabot-branch-pin-gap): dtolnay/rust-toolchain tracks the `stable`
-      # branch, not a semver tag. Dependabot does not propose SHA bumps for
-      # branch-pinned actions, so this pin will silently rot. Periodically
-      # refresh manually: git ls-remote https://github.com/dtolnay/rust-toolchain refs/heads/stable
-      # and update the SHA here (or use `pinact`).
+      # Pinned to the v1 tag SHA; Dependabot refreshes this weekly.
       - name: Install Rust toolchain
-        uses: dtolnay/rust-toolchain@29eef336d9b2848a0b548edc03f92a220660cdb8  # stable
+        uses: dtolnay/rust-toolchain@e97e2d8cc328f1b50210efc529dca0028893a2d9  # v1
         with:
           toolchain: stable
 
