@@ -9,7 +9,6 @@ T3 and T6 are gate-level and run via `make check` / `uv run pyright`.
 from __future__ import annotations
 
 import ast
-import json
 import pathlib
 import shutil
 import subprocess
@@ -21,6 +20,7 @@ import pytest
 from fltk.fegen import gsm, gsm2tree
 from fltk.fegen.genparser import _parse_grammar_raw, create_default_context
 from fltk.iir.py import reg as pyreg
+from tests.pyright_test_utils import _diags_for_file, _run_pyright_over_dir, write_pyright_config
 
 # ---------------------------------------------------------------------------
 # Paths
@@ -47,31 +47,6 @@ def pyright_available() -> bool:
         check=False,
     )
     return result.returncode == 0
-
-
-def run_pyright(file_path: pathlib.Path, *, pyright_available: bool) -> list[dict[str, Any]]:
-    """Run pyright --outputjson on file_path, return list of diagnostics for that file.
-
-    Returns empty list on success; raises pytest.skip if pyright unavailable.
-    Each entry is a dict with keys: file, severity, message, rule, range.
-    """
-    if not pyright_available:
-        pytest.skip("pyright not available in this environment")
-    result = subprocess.run(  # noqa: S603
-        ["uv", "run", "pyright", "--outputjson", str(file_path)],  # noqa: S607
-        capture_output=True,
-        text=True,
-        timeout=60,
-        check=False,
-    )
-    try:
-        data = json.loads(result.stdout)
-    except json.JSONDecodeError:
-        pytest.fail(f"pyright produced non-JSON output: {result.stdout[:500]}")
-    diagnostics = data.get("generalDiagnostics", [])
-    # Filter to the target file (pyright may report diagnostics for dependencies)
-    file_str = str(file_path.resolve())
-    return [d for d in diagnostics if d.get("file", "").endswith(file_path.name) or file_str in d.get("file", "")]
 
 
 # ---------------------------------------------------------------------------
@@ -183,6 +158,56 @@ def test_cst_module_protocol_has_property_per_rule(
         assert required_name in prop_names, (
             f"CstModule missing required property '{required_name}' (accessed by Cst2Gsm at runtime)"
         )
+
+
+# ---------------------------------------------------------------------------
+# Batched pyright fixtures (module-scoped)
+# ---------------------------------------------------------------------------
+#
+# All pyright-invoking tests share two module-scoped batch runs:
+#   - cst_protocol_pyright_diagnostics: positive + known-limitation tests (6 fixture files)
+#   - cst_protocol_negative_pyright_diagnostics: negative tests (2 fixture files)
+# Each test filters the partitioned results by its own fixture file name.
+
+
+@pytest.fixture(scope="module")
+def cst_protocol_pyright_diagnostics(
+    pyright_available: bool,  # noqa: FBT001
+    tmp_path_factory: pytest.TempPathFactory,
+) -> dict[str, list[dict[str, Any]]]:
+    """Run pyright once over all positive CST-protocol fixture files.
+
+    Writes all positive fixture files into a shared tmpdir and runs a single
+    `uv run pyright --outputjson <dir>` invocation.  Returns diagnostics
+    partitioned by absolute file path.  Negative-test fixtures (which deliberately
+    contain errors) are batched separately to keep error attribution unambiguous.
+    """
+    tmpdir = tmp_path_factory.mktemp("cst_protocol_pyright")
+    write_pyright_config(tmpdir)
+    (tmpdir / "wrong_label_value_fixture.py").write_text(_WRONG_LABEL_VALUE_FIXTURE)
+    (tmpdir / "member_access_fixture.py").write_text(_MEMBER_ACCESS_FIXTURE)
+    (tmpdir / "standin_fixture.py").write_text(_STANDIN_FIXTURE)
+    (tmpdir / "python_backend_consumer.py").write_text(_PYTHON_BACKEND_CONSUMER_FIXTURE)
+    (tmpdir / "rust_backend_consumer.py").write_text(_RUST_BACKEND_CONSUMER_FIXTURE)
+    (tmpdir / "python_backend_uncasted_callsite.py").write_text(_PYTHON_BACKEND_UNCASTED_CALLSITE_FIXTURE)
+    return _run_pyright_over_dir(tmpdir, pyright_available=pyright_available)
+
+
+@pytest.fixture(scope="module")
+def cst_protocol_negative_pyright_diagnostics(
+    pyright_available: bool,  # noqa: FBT001
+    tmp_path_factory: pytest.TempPathFactory,
+) -> dict[str, list[dict[str, Any]]]:
+    """Run pyright once over all negative CST-protocol fixture files (those that expect errors).
+
+    Batched separately so that expected errors in one file don't appear as noise when filtering
+    another file's results.
+    """
+    tmpdir = tmp_path_factory.mktemp("cst_protocol_negative_pyright")
+    write_pyright_config(tmpdir)
+    (tmpdir / "wrong_access_fixture.py").write_text(_WRONG_ACCESS_FIXTURE)
+    (tmpdir / "castless_probe.py").write_text(_CASTLESS_PROBE_FIXTURE)
+    return _run_pyright_over_dir(tmpdir, pyright_available=pyright_available)
 
 
 # ---------------------------------------------------------------------------
@@ -301,8 +326,7 @@ def _compare_wrong_labels(items: cstp.Items) -> bool:
 
 
 def test_wrong_label_value_not_flagged(
-    tmp_path: pathlib.Path,
-    pyright_available: bool,  # noqa: FBT001
+    cst_protocol_pyright_diagnostics: dict[str, list[dict[str, Any]]],
 ) -> None:
     """T2a (known limitation): wrong-but-existing label comparison is NOT flagged by pyright.
 
@@ -310,10 +334,7 @@ def test_wrong_label_value_not_flagged(
     comparison (e.g., Items.Label.ITEM == Items.Label.NO_WS) produces zero pyright errors.
     This documents the nominal-enum limitation so consumers don't over-trust the type safety.
     """
-    fixture = tmp_path / "wrong_label_value_fixture.py"
-    fixture.write_text(_WRONG_LABEL_VALUE_FIXTURE)
-    diags = run_pyright(fixture, pyright_available=pyright_available)
-    errors = [d for d in diags if d.get("severity") == "error"]
+    errors = _diags_for_file(cst_protocol_pyright_diagnostics, "wrong_label_value_fixture.py")
     assert errors == [], (
         "Unexpected: pyright now flags a valid-but-semantically-wrong label comparison. "
         "If pyright gained nominal-enum checking, update the Protocol's Label members to use a typed enum "
@@ -322,27 +343,19 @@ def test_wrong_label_value_not_flagged(
 
 
 def test_member_access_fixture_zero_errors(
-    tmp_path: pathlib.Path,
-    pyright_available: bool,  # noqa: FBT001
+    cst_protocol_pyright_diagnostics: dict[str, list[dict[str, Any]]],
 ) -> None:
     """T2a: CstModule-typed bindings resolve without pyright errors."""
-    fixture = tmp_path / "member_access_fixture.py"
-    fixture.write_text(_MEMBER_ACCESS_FIXTURE)
-    diags = run_pyright(fixture, pyright_available=pyright_available)
-    errors = [d for d in diags if d.get("severity") == "error"]
+    errors = _diags_for_file(cst_protocol_pyright_diagnostics, "member_access_fixture.py")
     assert errors == [], f"Unexpected pyright errors in member-access fixture:\n{errors}"
 
 
 def test_wrong_member_access_is_flagged(
-    tmp_path: pathlib.Path,
-    pyright_available: bool,  # noqa: FBT001
+    cst_protocol_negative_pyright_diagnostics: dict[str, list[dict[str, Any]]],
 ) -> None:
     """T2a (negative): accessing a non-existent method on a typed node is flagged."""
-    fixture = tmp_path / "wrong_access_fixture.py"
-    fixture.write_text(_WRONG_ACCESS_FIXTURE)
-    diags = run_pyright(fixture, pyright_available=pyright_available)
+    errors = _diags_for_file(cst_protocol_negative_pyright_diagnostics, "wrong_access_fixture.py")
     # Expect at least one error on or near line 6 (the wrong method call)
-    errors = [d for d in diags if d.get("severity") == "error"]
     assert errors, "Expected pyright to flag 'no_such_method' access but no errors were reported"
 
 
@@ -362,18 +375,14 @@ _m: cstp.CstModule = fltk_cst
 
 
 def test_boundary_probe_documents_label_mismatch(
-    tmp_path: pathlib.Path,
-    pyright_available: bool,  # noqa: FBT001
+    cst_protocol_negative_pyright_diagnostics: dict[str, list[dict[str, Any]]],
 ) -> None:
     """T2b: bare fltk_cst assignment to CstModule produces errors due to nested-Label nominal mismatch.
 
     This test confirms the cast in fltk2gsm.py _DEFAULT_CST is *required* (not optional).
     The number of errors should equal or exceed the number of label-bearing node types.
     """
-    fixture = tmp_path / "castless_probe.py"
-    fixture.write_text(_CASTLESS_PROBE_FIXTURE)
-    diags = run_pyright(fixture, pyright_available=pyright_available)
-    errors = [d for d in diags if d.get("severity") == "error"]
+    errors = _diags_for_file(cst_protocol_negative_pyright_diagnostics, "castless_probe.py")
     # Must have at least one error (the nested-Label nominal mismatch).
     assert errors, (
         "Expected pyright to report errors for bare fltk_cst -> CstModule assignment "
@@ -423,8 +432,7 @@ _STANDIN_FIXTURE = textwrap.dedent("""\
 
 
 def test_protocol_is_not_dataclass_specific(
-    tmp_path: pathlib.Path,
-    pyright_available: bool,  # noqa: FBT001
+    cst_protocol_pyright_diagnostics: dict[str, list[dict[str, Any]]],
 ) -> None:
     """T4: A plain-class stand-in cast to Grammar resolves members without errors.
 
@@ -432,10 +440,7 @@ def test_protocol_is_not_dataclass_specific(
     no enum.Enum, no specific base class). The Protocol is structurally matchable by
     any backend — Python dataclasses, PyO3 classes, or plain Python classes.
     """
-    fixture = tmp_path / "standin_fixture.py"
-    fixture.write_text(_STANDIN_FIXTURE)
-    diags = run_pyright(fixture, pyright_available=pyright_available)
-    errors = [d for d in diags if d.get("severity") == "error"]
+    errors = _diags_for_file(cst_protocol_pyright_diagnostics, "standin_fixture.py")
     assert errors == [], f"Unexpected pyright errors with plain-class stand-in:\n{errors}"
 
 
@@ -536,8 +541,7 @@ _RUST_BACKEND_CONSUMER_FIXTURE = textwrap.dedent("""\
 
 
 def test_python_backend_consumer_still_type_checks(
-    tmp_path: pathlib.Path,
-    pyright_available: bool,  # noqa: FBT001
+    cst_protocol_pyright_diagnostics: dict[str, list[dict[str, Any]]],
 ) -> None:
     """§4 item 8: Python-backend-only consumer type-checks unedited after span annotation widening.
 
@@ -545,28 +549,21 @@ def test_python_backend_consumer_still_type_checks(
     type-check without errors after the protocol widens to terminalsrc.Span | fltk._native.Span.
     This confirms the widening is additive (backward-compatible) per §2.7.
     """
-    fixture = tmp_path / "python_backend_consumer.py"
-    fixture.write_text(_PYTHON_BACKEND_CONSUMER_FIXTURE)
-    diags = run_pyright(fixture, pyright_available=pyright_available)
-    errors = [d for d in diags if d.get("severity") == "error"]
+    errors = _diags_for_file(cst_protocol_pyright_diagnostics, "python_backend_consumer.py")
     assert errors == [], (
         f"Python-backend consumer broke after protocol span widening — widening is not additive.\nErrors:\n{errors}"
     )
 
 
 def test_rust_backend_span_satisfies_widened_protocol(
-    tmp_path: pathlib.Path,
-    pyright_available: bool,  # noqa: FBT001
+    cst_protocol_pyright_diagnostics: dict[str, list[dict[str, Any]]],
 ) -> None:
     """§4 item 8: fltk._native.Span is a valid branch of the widened protocol span annotation.
 
     Confirms the Rust-backend span type appears in the union and pyright accepts a
     fltk._native.Span-annotated consumer interacting with a protocol-typed node.
     """
-    fixture = tmp_path / "rust_backend_consumer.py"
-    fixture.write_text(_RUST_BACKEND_CONSUMER_FIXTURE)
-    diags = run_pyright(fixture, pyright_available=pyright_available)
-    errors = [d for d in diags if d.get("severity") == "error"]
+    errors = _diags_for_file(cst_protocol_pyright_diagnostics, "rust_backend_consumer.py")
     assert errors == [], f"Rust-backend consumer failed pyright after protocol span widening.\nErrors:\n{errors}"
 
 
@@ -593,8 +590,7 @@ _PYTHON_BACKEND_UNCASTED_CALLSITE_FIXTURE = textwrap.dedent("""\
 
 
 def test_python_backend_uncasted_callsite_annotation_churn(
-    tmp_path: pathlib.Path,
-    pyright_available: bool,  # noqa: FBT001
+    cst_protocol_pyright_diagnostics: dict[str, list[dict[str, Any]]],
 ) -> None:
     """§4 item 8 / test-2: document whether uncast call sites require annotation changes after widening.
 
@@ -609,10 +605,7 @@ def test_python_backend_uncasted_callsite_annotation_churn(
     uncast assignments.  This test makes that explicit so future maintainers understand the
     boundary of the compatibility guarantee.
     """
-    fixture = tmp_path / "python_backend_uncasted_callsite.py"
-    fixture.write_text(_PYTHON_BACKEND_UNCASTED_CALLSITE_FIXTURE)
-    diags = run_pyright(fixture, pyright_available=pyright_available)
-    errors = [d for d in diags if d.get("severity") == "error"]
+    errors = _diags_for_file(cst_protocol_pyright_diagnostics, "python_backend_uncasted_callsite.py")
     # The fixture uses `type: ignore[arg-type]` to suppress the expected type error.
     # If pyright reports errors here, it means the suppressor did not work — unexpected.
     assert errors == [], (

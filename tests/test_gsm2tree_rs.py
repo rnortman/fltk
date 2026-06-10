@@ -20,6 +20,7 @@ from fltk.fegen import gsm
 from fltk.fegen.gsm2tree_rs import RustCstGenerator
 from tests.gsm2tree_helpers import make_generator as _make_generator
 from tests.gsm2tree_helpers import make_zero_label_grammar as _make_zero_label_grammar
+from tests.pyright_test_utils import _run_pyright_over_dir
 
 # ---------------------------------------------------------------------------
 # PoC grammar construction
@@ -1030,39 +1031,6 @@ def _run_pyright_in_tmpdir(
     return [d for d in data.get("generalDiagnostics", []) if d.get("severity") == "error"]
 
 
-def _run_pyright_over_dir(
-    tmpdir: pathlib.Path,
-    *,
-    pyright_available: bool,
-) -> dict[str, list[dict[str, Any]]]:
-    """Run pyright --outputjson over a directory; return errors partitioned by file path.
-
-    Returns a dict mapping each file's absolute path string to its list of error diagnostics.
-    Raises pytest.skip if pyright unavailable.
-    """
-    if not pyright_available:
-        pytest.skip("pyright not available in this environment")
-    result = subprocess.run(  # noqa: S603
-        ["uv", "run", "pyright", "--outputjson", str(tmpdir)],  # noqa: S607
-        capture_output=True,
-        text=True,
-        timeout=120,
-        check=False,
-        cwd=str(tmpdir),
-    )
-    try:
-        data = json.loads(result.stdout)
-    except json.JSONDecodeError:
-        pytest.fail(f"pyright produced non-JSON output: {result.stdout[:500]}")
-    partitioned: dict[str, list[dict[str, Any]]] = {}
-    for diag in data.get("generalDiagnostics", []):
-        if diag.get("severity") != "error":
-            continue
-        file_key = diag.get("file", "")
-        partitioned.setdefault(file_key, []).append(diag)
-    return partitioned
-
-
 _REPO_ROOT = pathlib.Path(__file__).parent.parent
 
 
@@ -1089,21 +1057,24 @@ def _write_pyi_tmpdir(tmp_path: pathlib.Path, pyi_text: str, mod_name: str = "fe
 @pytest.fixture(scope="module")
 def fegen_pyright_diagnostics(
     fegen_pyi: str,
+    poc_pyi: str,
     pyright_available: bool,  # noqa: FBT001
     tmp_path_factory: pytest.TempPathFactory,
 ) -> dict[str, list[dict[str, Any]]]:
-    """Run pyright once over a shared tmpdir holding all fegen .pyi check fixtures.
+    """Run pyright once over a shared tmpdir holding all .pyi check fixtures.
 
     Writes: fegen_cst.pyi (stub), fegen_cst.py (empty), pyrightconfig.json,
-    conformance_fixture.py (whole-module), per_class_fixture.py (per-class).
+    conformance_fixture.py (whole-module), per_class_fixture.py (per-class),
+    poc_cst.pyi (PoC stub), poc_cst.py (empty).
     Runs a single `uv run pyright --outputjson <dir>` invocation and returns
     diagnostics partitioned by absolute file path.
 
-    Batching the three fegen pyright tests (self-check, whole-module, per-class)
-    into one subprocess avoids 3x cold pyright startup cost.
+    Batching all four pyright tests (fegen self-check, whole-module, per-class,
+    and PoC self-check) into one subprocess avoids 4x cold pyright startup cost.
     """
     tmpdir = tmp_path_factory.mktemp("fegen_pyright")
     _write_pyi_tmpdir(tmpdir, fegen_pyi)
+    _write_pyi_tmpdir(tmpdir, poc_pyi, mod_name="poc_cst")
     _write_module_conformance_fixture(tmpdir)
     _write_per_class_conformance_fixture(tmpdir, FEGEN_CLASS_NAMES)
     return _run_pyright_over_dir(tmpdir, pyright_available=pyright_available)
@@ -1128,14 +1099,14 @@ class TestGeneratePyiSelfCheck:
 
     def test_poc_pyi_self_check_zero_errors(
         self,
-        tmp_path: pathlib.Path,
-        poc_pyi: str,
-        pyright_available: bool,  # noqa: FBT001
+        fegen_pyright_diagnostics: dict[str, list[dict[str, Any]]],
     ) -> None:
-        """The PoC grammar .pyi stub produces zero pyright errors when checked in isolation."""
-        pyi_path = _write_pyi_tmpdir(tmp_path, poc_pyi, mod_name="poc_cst")
-        errors = _run_pyright_in_tmpdir(pyi_path, pyright_available=pyright_available)
-        assert errors == [], f"Unexpected pyright errors in PoC .pyi self-check:\n{errors}"
+        """The PoC grammar .pyi stub produces zero pyright errors when checked in isolation.
+
+        Uses the shared fegen_pyright_diagnostics fixture (one pyright run for all .pyi tests).
+        """
+        pyi_errors = [d for path, errs in fegen_pyright_diagnostics.items() if "poc_cst.pyi" in path for d in errs]
+        assert pyi_errors == [], f"Unexpected pyright errors in PoC .pyi self-check:\n{pyi_errors}"
 
 
 # ---------------------------------------------------------------------------

@@ -34,6 +34,7 @@ from fltk.fegen import fltk_parser
 from fltk.fegen.pyrt import terminalsrc
 from fltk.fegen.pyrt.terminalsrc import SpanKind
 from fltk.plumbing import generate_parser, parse_grammar_file
+from tests.pyright_test_utils import _diags_for_file, _run_pyright_over_dir, write_pyright_config
 
 # ---------------------------------------------------------------------------
 # Module-level availability guards
@@ -104,6 +105,29 @@ def _run_pyright(file_path: pathlib.Path, *, pyright_available: bool) -> list[di
     except json.JSONDecodeError:
         pytest.fail(f"pyright produced non-JSON output:\n{result.stdout[:500]}")
     return [d for d in data.get("generalDiagnostics", []) if d.get("severity") == "error"]
+
+
+@pytest.fixture(scope="module")
+def protocol_pyright_diagnostics(
+    pyright_available: bool,  # noqa: FBT001
+    tmp_path_factory: pytest.TempPathFactory,
+) -> dict[str, list[dict]]:
+    """Run pyright once over all batched protocol tmp-fixture files.
+
+    Writes shapes_fixture.py, castless_probe.py, and python_backend_consumer.py
+    into a shared tmpdir with a pyrightconfig.json that resolves the repo venv,
+    then runs a single `uv run pyright --outputjson <dir>` invocation.
+    Returns error diagnostics partitioned by absolute file path.
+
+    test_fltk2gsm_pyright_clean is NOT batched here — it runs against the real repo
+    file using the repo-root pyright config and must remain a separate subprocess.
+    """
+    tmpdir = tmp_path_factory.mktemp("protocol_pyright")
+    write_pyright_config(tmpdir)
+    (tmpdir / "shapes_fixture.py").write_text(_SHAPES_FIXTURE)
+    (tmpdir / "castless_probe.py").write_text(_CASTLESS_PROBE_FIXTURE)
+    (tmpdir / "python_backend_consumer.py").write_text(_PYTHON_BACKEND_CONSUMER_FIXTURE)
+    return _run_pyright_over_dir(tmpdir, pyright_available=pyright_available)
 
 
 def _run_ruff(file_path: pathlib.Path) -> list[str]:
@@ -222,13 +246,10 @@ def shape2_match_dispatch(items: cst.Items) -> list[tuple[str, Any]]:
 
 
 def test_shapes_fixture_pyright_clean(
-    tmp_path: pathlib.Path,
-    pyright_available: bool,  # noqa: FBT001
+    protocol_pyright_diagnostics: dict[str, list[dict]],
 ) -> None:
     """§4 item 1 (AC 8a): Shape 1 + Shape 2 fixture is pyright-clean with zero errors."""
-    fixture = tmp_path / "shapes_fixture.py"
-    fixture.write_text(_SHAPES_FIXTURE)
-    errors = _run_pyright(fixture, pyright_available=pyright_available)
+    errors = _diags_for_file(protocol_pyright_diagnostics, "shapes_fixture.py")
     assert errors == [], f"Unexpected pyright errors in shapes fixture:\n{errors}"
 
 
@@ -825,18 +846,7 @@ class TestSpanEqualityHashUnchanged:
 # §4 item 9 — Structural-mismatch contract preserved (Option A)
 # ---------------------------------------------------------------------------
 
-
-def test_structural_mismatch_contract_preserved(
-    tmp_path: pathlib.Path,
-    pyright_available: bool,  # noqa: FBT001
-) -> None:
-    """§4 item 9: test_boundary_probe_documents_label_mismatch still passes.
-
-    Concrete enum.Enum Label remains non-assignable to the protocol plain-class Label.
-    Adding runtime values to Label members (Option A) must NOT make the protocol Label
-    structurally compatible with the concrete enum.Enum Label.
-    """
-    fixture_text = """\
+_CASTLESS_PROBE_FIXTURE = """\
 # ruff: noqa
 # Probe without type: ignore — used to count raw mismatches.
 from __future__ import annotations
@@ -845,9 +855,18 @@ from fltk.fegen import fltk_cst
 
 _m: cstp.CstModule = fltk_cst
 """
-    fixture = tmp_path / "castless_probe.py"
-    fixture.write_text(fixture_text)
-    errors = _run_pyright(fixture, pyright_available=pyright_available)
+
+
+def test_structural_mismatch_contract_preserved(
+    protocol_pyright_diagnostics: dict[str, list[dict]],
+) -> None:
+    """§4 item 9: test_boundary_probe_documents_label_mismatch still passes.
+
+    Concrete enum.Enum Label remains non-assignable to the protocol plain-class Label.
+    Adding runtime values to Label members (Option A) must NOT make the protocol Label
+    structurally compatible with the concrete enum.Enum Label.
+    """
+    errors = _diags_for_file(protocol_pyright_diagnostics, "castless_probe.py")
     assert errors, (
         "Expected pyright to report errors for bare fltk_cst -> CstModule assignment "
         "(nested-Label nominal mismatch). The structural-mismatch contract (Option A) has been broken — "
@@ -919,15 +938,12 @@ def process_node(node: fltk_cst.Identifier) -> str:
 
 
 def test_python_backend_consumer_pyright_clean(
-    tmp_path: pathlib.Path,
-    pyright_available: bool,  # noqa: FBT001
+    protocol_pyright_diagnostics: dict[str, list[dict]],
 ) -> None:
     """§4 item 8 (rust-cst-native-span): Python-backend consumer with terminalsrc.Span
     annotations type-checks unedited after protocol span widening (additive union).
     """
-    fixture = tmp_path / "python_backend_consumer.py"
-    fixture.write_text(_PYTHON_BACKEND_CONSUMER_FIXTURE)
-    errors = _run_pyright(fixture, pyright_available=pyright_available)
+    errors = _diags_for_file(protocol_pyright_diagnostics, "python_backend_consumer.py")
     assert errors == [], (
         "Python-backend-only consumer fixture has pyright errors after span annotation widening "
         "(widening must be additive — existing terminalsrc.Span code must not require edits):\n"
