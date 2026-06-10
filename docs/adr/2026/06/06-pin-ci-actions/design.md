@@ -59,7 +59,7 @@ Remove the `## `pin-ci-actions`` section (`TODO.md:15-17`) including its blank-l
 
 - **Annotated vs lightweight tag.** Pinning the tag-object SHA instead of the commit SHA would not match what the runner checks out. Mitigation: prefer the `^{}` peeled commit SHA when present (see above).
 - **Comment-format drift.** Dependabot and common scanners (e.g. `pinact`, `ratchet`) expect `@<sha>  # <ref>`. Use exactly that form so future automated bumps update the comment instead of duplicating it.
-- **`stable` semantics change.** Pinning `dtolnay/rust-toolchain@stable` freezes the Rust toolchain version at the SHA's snapshot. This is intentional (immutability) and is the point Dependabot weekly bumps address. No behavior change at pin time — same effective version.
+- **`stable` semantics change.** Pinning `dtolnay/rust-toolchain@stable` freezes the Rust toolchain version at the SHA's snapshot. This is intentional (immutability). **Note:** Dependabot weekly bumps address this for `actions/checkout` and `astral-sh/setup-uv` (semver-tagged), but **not** for `dtolnay/rust-toolchain` (branch-pinned, not semver-tagged) — Dependabot skips branch-referenced actions. See `TODO(dependabot-branch-pin-gap)`. No behavior change at pin time — same effective version.
 - **Wrong/stale SHA.** A typo'd or non-existent SHA fails the CI run loudly (action not found / checkout fails), not silently. Caught by the verification CI run below.
 - **Dependabot YAML invalid.** GitHub surfaces an error on the repo's Dependabot config page and opens no PRs; the config does not affect CI runs. Validate by schema before commit.
 
