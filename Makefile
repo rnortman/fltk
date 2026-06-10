@@ -128,6 +128,9 @@ gencode:
 		--pyi-output fltk/_native/fegen_cst.pyi
 	# Rust: tests/rust_cst_fixture/src/cst.rs (phase4_roundtrip.fltkg)
 	$(MAKE) gen-rust-cst GRAMMAR=fltk/fegen/test_data/phase4_roundtrip.fltkg RS_OUT=tests/rust_cst_fixture/src/cst.rs
+	# Rust: tests/rust_cst_fegen/src/cst.rs (fegen.fltkg) — must match src/cst_fegen.rs;
+	# regenerated here so staleness is visible to cargo check in the rust_cst_fegen workspace.
+	$(MAKE) gen-rust-cst GRAMMAR=fltk/fegen/fegen.fltkg RS_OUT=tests/rust_cst_fegen/src/cst.rs
 	# Rust: crates/fltk-cst-spike/src/cst.rs — same grammar as cst_generated.rs; cp makes identity explicit
 	cp src/cst_generated.rs crates/fltk-cst-spike/src/cst.rs
 	# Normalize formatting. Order matters:

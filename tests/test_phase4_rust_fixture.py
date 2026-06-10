@@ -238,9 +238,8 @@ class TestAC5ApiContract:
         child = Identifier()
         node.append(child)
         tup = node.children[0]
-        # Rust backend rebuilds a fresh wrapper per child access; use == not is.
-        # TODO(rust-cst-child-node-identity): cache if identity is needed.
-        assert tup[1] == child
+        # Phase 1: registry ensures the same Python handle is returned each time.
+        assert tup[1] is child
 
     def test_ac6_list_protocol_stride(self):
         """node.children[::2] and node.children[1::2] — stride slicing."""
@@ -272,9 +271,8 @@ class TestAC5ApiContract:
         node.append(a)
         node.append(b)
         last = node.children[-1]
-        # Rust backend rebuilds a fresh wrapper per child access; use == not is.
-        # TODO(rust-cst-child-node-identity): cache if identity is needed.
-        assert last[1] == b
+        # Phase 1: registry ensures the same Python handle is returned each time.
+        assert last[1] is b
 
     # --- item 7: tuple items ---
     def test_ac7_tuple_items(self):
@@ -287,9 +285,8 @@ class TestAC5ApiContract:
         tup = node.children[0]
         label, value = tup
         assert label == Entry.Label.KEY
-        # Rust backend rebuilds a fresh wrapper per child access; use == not is.
-        # TODO(rust-cst-child-node-identity): cache if identity is needed.
-        assert value == ident
+        # Phase 1: registry ensures the same Python handle is returned each time.
+        assert value is ident
 
     # --- item 8: label equality and containment ---
     def test_ac8_label_equality(self):
@@ -345,12 +342,10 @@ class TestAC5ApiContract:
         # children_key()
         keys = list(node.children_key())
         assert keys == [ident]
-        # child_key()
-        # Rust backend rebuilds a fresh wrapper per child access; use == not is.
-        # TODO(rust-cst-child-node-identity): cache if identity is needed.
-        assert node.child_key() == ident
+        # child_key() / maybe_key() — Phase 1: registry ensures same handle each time.
+        assert node.child_key() is ident
         # maybe_key()
-        assert node.maybe_key() == ident
+        assert node.maybe_key() is ident
         # Empty case
         node2 = Entry()
         assert node2.maybe_key() is None
@@ -367,9 +362,162 @@ class TestAC5ApiContract:
         node.append_key(ident)
         tup = node.child()
         assert tup[0] == Entry.Label.KEY
-        # Rust backend rebuilds a fresh wrapper per child access; use == not is.
-        # TODO(rust-cst-child-node-identity): cache if identity is needed.
-        assert tup[1] == ident
+        # Phase 1: registry ensures the same Python handle is returned each time.
+        assert tup[1] is ident
+
+
+# ── Phase 1 identity and mutation tests ───────────────────────────────────────
+
+
+class TestPhase1IdentityAndMutation:
+    """Phase 1 (rust-idiomatic-cst-api): Shared<T> ownership + canonical wrapper registry.
+
+    Verifies that:
+    - The same Python handle object is returned on every read (is-stable identity).
+    - Mutations made via one reference are visible through all others.
+    - Post-append aliasing: mutate after append, parent sees it.
+    - extend_children duplicates children entries (matches Python backend).
+    - `x == x` returns True without deadlock (ptr_eq short-circuit).
+    """
+
+    def test_repeated_child_reads_return_same_handle(self):
+        """children[0] read twice yields the same Python object (registry hit)."""
+        Entry = _rust_pr.cst_module.Entry
+        Identifier = _rust_pr.cst_module.Identifier
+        node = Entry()
+        ident = Identifier()
+        node.append_key(ident)
+        first = node.children[0][1]
+        second = node.children[0][1]
+        assert first is second, "repeated child reads must return the same handle"
+
+    def test_child_label_accessor_returns_same_handle(self):
+        """child_key() returns the same handle as the appended node."""
+        Entry = _rust_pr.cst_module.Entry
+        Identifier = _rust_pr.cst_module.Identifier
+        node = Entry()
+        ident = Identifier()
+        node.append_key(ident)
+        assert node.child_key() is ident
+
+    def test_mutation_propagates_python_to_python(self):
+        """Mutating a child's span via one handle is visible through the parent."""
+        Entry = _rust_pr.cst_module.Entry
+        Identifier = _rust_pr.cst_module.Identifier
+
+        node = Entry()
+        ident = Identifier()
+        node.append_key(ident)
+        new_span = Span(99, 199)
+        ident.span = new_span
+        # Read through the parent's accessor — should reflect the mutation.
+        key_via_parent = node.child_key()
+        assert key_via_parent.span == new_span, "mutation must be visible through parent accessor"
+
+    def test_post_append_alias_mutation_visible(self):
+        """Mutating a node after appending it is visible through the parent."""
+        Entry = _rust_pr.cst_module.Entry
+        Identifier = _rust_pr.cst_module.Identifier
+
+        node = Entry()
+        ident = Identifier()
+        node.append_key(ident)
+        # Mutate AFTER append.
+        ident.span = Span(42, 84)
+        assert node.child_key().span == Span(42, 84), "post-append mutation must be visible"
+
+    def test_extend_children_duplicates_entries(self):
+        """node.extend_children(node) duplicates children (matches Python backend)."""
+        Entry = _rust_pr.cst_module.Entry
+        Identifier = _rust_pr.cst_module.Identifier
+        node = Entry()
+        ident = Identifier()
+        node.append_key(ident)
+        assert len(node.children) == 1
+        node.extend_children(node)
+        assert len(node.children) == 2, "self-extend should duplicate children"
+        # Both entries reference the same child object.
+        first = node.children[0][1]
+        second = node.children[1][1]
+        assert first is second, "extended entries should alias the same node"
+
+    def test_extend_children_from_other(self):
+        """node.extend_children(other) appends other's children, sharing identity."""
+        Entry = _rust_pr.cst_module.Entry
+        Identifier = _rust_pr.cst_module.Identifier
+        src = Entry()
+        dst = Entry()
+        ident = Identifier()
+        src.append_key(ident)
+        dst.extend_children(src)
+        assert len(dst.children) == 1
+        assert dst.children[0][1] is ident, "extended child must be the same handle"
+
+    def test_node_eq_self_no_deadlock(self):
+        """node == node returns True without deadlock (ptr_eq short-circuit)."""
+        Entry = _rust_pr.cst_module.Entry
+        node = Entry()
+        same = node  # alias to satisfy ruff PLR0124 (name compared with itself)
+        assert node == same, "x == x must be True (ptr_eq short-circuit, no deadlock)"
+
+    def test_identity_stable_across_different_accessors(self):
+        """children[0][1] and child_key() return the same handle (registry hit)."""
+        Entry = _rust_pr.cst_module.Entry
+        Identifier = _rust_pr.cst_module.Identifier
+        node = Entry()
+        ident = Identifier()
+        node.append_key(ident)
+        via_children = node.children[0][1]
+        via_child_key = node.child_key()
+        assert via_children is via_child_key, "all accessors must return the same registered handle"
+
+    def test_new_node_append_readback_identity(self):
+        """py_new → append → read-back → is the original object."""
+        Entry = _rust_pr.cst_module.Entry
+        Identifier = _rust_pr.cst_module.Identifier
+        node = Entry()
+        ident = Identifier()
+        node.append(ident)
+        readback = node.children[0][1]
+        assert readback is ident, "appended then read-back node must be is the original"
+
+    def test_children_label_accessor_identity(self):
+        """children_<label>() returns the same handle (registry hit via to_pyobject, test-9)."""
+        Entry = _rust_pr.cst_module.Entry
+        Identifier = _rust_pr.cst_module.Identifier
+        node = Entry()
+        ident = Identifier()
+        node.append_key(ident)
+        keys = node.children_key()
+        assert len(keys) == 1, "expected one key child"
+        assert keys[0] is ident, "children_<label>() must return the same registered handle"
+
+    def test_extend_children_self_original_handle_survives(self):
+        """After self-extend, children alias original ident (handle not evicted, test-11)."""
+        Entry = _rust_pr.cst_module.Entry
+        Identifier = _rust_pr.cst_module.Identifier
+        node = Entry()
+        ident = Identifier()
+        node.append_key(ident)
+        node.extend_children(node)
+        first = node.children[0][1]
+        second = node.children[1][1]
+        assert first is second, "extended entries should alias the same node"
+        assert first is ident, "original handle must still be the canonical one after self-extend"
+
+    def test_shared_child_mutation_visible_through_two_parents(self):
+        """One child appended to two parents; mutation visible through both (Arc-clone, test-12)."""
+        Entry = _rust_pr.cst_module.Entry
+        Identifier = _rust_pr.cst_module.Identifier
+        ident = Identifier()
+        entry_a = Entry()
+        entry_b = Entry()
+        entry_a.append_key(ident)
+        entry_b.append_key(ident)
+        new_span = Span(99, 199)
+        ident.span = new_span
+        assert entry_a.child_key().span == new_span, "mutation must be visible through parent A"
+        assert entry_b.child_key().span == new_span, "mutation must be visible through parent B"
 
 
 # ── Error-path tests for extract_span (cross_cdylib.rs) ────────────────────

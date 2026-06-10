@@ -17,6 +17,14 @@ from fltk.iir.py import reg as pyreg
 # Valid identifier pattern (matches fegen.fltkg:16 grammar rule for identifiers)
 _IDENTIFIER_RE = re.compile(r"^[_a-z][_a-z0-9]*$")
 
+# Labels whose per-label generated methods collide with fixed method names on the
+# handle pyclass.  Rejection is a generation-time error naming the label and method.
+# Currently only "children": extend_<lbl> with lbl="children" emits a second
+# fn extend_children, which is a latent uncompilable-output bug.
+_RESERVED_LABELS: dict[str, str] = {
+    "children": "extend_children",
+}
+
 
 def _rust_variant_name(label: str) -> str:
     """Label -> CamelCase Rust enum variant. 'no_ws' -> 'NoWs'."""
@@ -55,12 +63,21 @@ class RustCstGenerator:
                 raise ValueError(msg)
             for alt in rule.alternatives:
                 for item in alt.items:
-                    if item.label is not None and not _IDENTIFIER_RE.match(item.label):
-                        msg = (
-                            f"Item label {item.label!r} in rule {rule.name!r} is not a valid identifier "
-                            f"(must match {_IDENTIFIER_RE.pattern!r})"
-                        )
-                        raise ValueError(msg)
+                    if item.label is not None:
+                        if not _IDENTIFIER_RE.match(item.label):
+                            msg = (
+                                f"Item label {item.label!r} in rule {rule.name!r} is not a valid identifier "
+                                f"(must match {_IDENTIFIER_RE.pattern!r})"
+                            )
+                            raise ValueError(msg)
+                        if item.label in _RESERVED_LABELS:
+                            colliding_method = _RESERVED_LABELS[item.label]
+                            msg = (
+                                f"Item label {item.label!r} in rule {rule.name!r} is reserved: "
+                                f"it would generate a method 'extend_{item.label}' that collides with "
+                                f"the fixed method '{colliding_method}'"
+                            )
+                            raise ValueError(msg)
 
     def _rule_info(self) -> list[tuple[str, list[str], str]]:
         """Return [(class_name, sorted_labels, rule_name)] for every rule in the grammar.
@@ -244,8 +261,11 @@ class RustCstGenerator:
     def _preamble(self) -> str:
         return (
             "use fltk_cst_core::Span;\n"
+            "use fltk_cst_core::Shared;\n"
             '#[cfg(feature = "python")]\n'
             "use fltk_cst_core::{extract_span, get_span_type, span_to_pyobject};\n"
+            '#[cfg(feature = "python")]\n'
+            "use fltk_cst_core::registry;\n"
             '#[cfg(feature = "python")]\n'
             "use pyo3::exceptions::{PyTypeError, PyValueError};\n"
             '#[cfg(feature = "python")]\n'
@@ -439,22 +459,31 @@ class RustCstGenerator:
     # ------------------------------------------------------------------
 
     def _child_enum_block(self, class_name: str, rule_name: str) -> str:
-        """Emit the per-node child value enum (<Name>Child) + Clone/PartialEq impls."""
+        """Emit the per-node child value enum (<Name>Child) + Clone/PartialEq impls.
+
+        Node-typed variants use Shared<T> instead of Box<T> (Phase 1 ownership model).
+        to_pyobject routes through the canonical-wrapper registry so repeated reads of
+        the same child return the same Python handle (is-stable identity).
+        extract_from_pyobject extracts the Shared<T> from the handle and hand-ins to registry.
+        """
         child_classes, has_span = self._child_variants_for_rule(rule_name)
         enum_name = f"{class_name}Child"
         lines: list[str] = []
 
-        lines.append(f"// {enum_name} — native child value enum for {class_name}")
+        lines.append(f"// {enum_name} — child value enum for {class_name}")
+        lines.append("// Node-typed variants hold Shared<T> (Arc<RwLock<T>>); Clone is shallow.")
         lines.append("#[derive(Clone)]")
         lines.append(f"pub enum {enum_name} {{")
         if has_span:
             lines.append("    Span(Span),")
         for child_cls in child_classes:
-            lines.append(f"    {child_cls}(Box<{child_cls}>),")
+            # Shared<T> instead of Box<T>
+            lines.append(f"    {child_cls}(Shared<{child_cls}>),")
         lines.append("}")
         lines.append("")
 
-        # Manual PartialEq (structural, using native span/node equality)
+        # Manual PartialEq (structural, using native span/node equality).
+        # Shared::eq short-circuits on ptr_eq (handles x==x and DAG), then deep-compares.
         # Only emit `_ => false` when there are multiple variants; with a single variant the
         # wildcard arm would be unreachable and trigger a clippy/rustc warning.
         num_variants = (1 if has_span else 0) + len(child_classes)
@@ -474,10 +503,13 @@ class RustCstGenerator:
 
         # to_pyobject/extract_from_pyobject: python-only, gate the entire impl block
         lines.append('#[cfg(feature = "python")]')
-        # to_pyobject: translate a native child variant back to a Python object
-        # py is needed when any variant exists; _span_type parameter dropped (no longer used by Span arm).
-        py_param = "py" if (child_classes or has_span) else "_py"
         lines.append(f"impl {enum_name} {{")
+
+        # to_pyobject: translate a native child variant back to a Python object.
+        # Node variants go through the canonical-wrapper registry so repeated reads
+        # return the same Python handle (is-stable identity — resolves
+        # TODO(rust-cst-child-node-identity)).
+        py_param = "py" if (child_classes or has_span) else "_py"
         lines.append(f"    fn to_pyobject(&self, {py_param}: Python<'_>) -> PyResult<PyObject> {{")
         lines.append("        match self {")
         if has_span:
@@ -485,14 +517,23 @@ class RustCstGenerator:
             lines.append("                span_to_pyobject(py, s)")
             lines.append("            }")
         for child_cls in child_classes:
-            lines.append(f"            Self::{child_cls}(n) => Py::new(py, (**n).clone()).map(|p| p.into_any()),")
+            py_handle = f"Py{child_cls}"
+            lines.append(f"            Self::{child_cls}(shared) => {{")
+            lines.append("                let addr = shared.arc_ptr();")
+            lines.append("                registry::get_or_insert_with(py, addr, || {")
+            lines.append(f"                    let handle = {py_handle} {{ inner: shared.clone() }};")
+            lines.append("                    Py::new(py, handle).map(|p| p.into_any())")
+            lines.append("                })")
+            lines.append("            }")
         lines.append("        }")
         lines.append("    }")
         lines.append("")
-        # extract_from_pyobject: convert a Python object to this child enum variant
-        # Use underscore-prefixed names when parameters are not used in the body
-        # to suppress unused_variables warnings (-D warnings in cargo clippy).
-        extract_py_param = "py" if has_span else "_py"
+
+        # extract_from_pyobject: convert a Python object to this child enum variant.
+        # For node variants, extracts the Shared<T> from the handle and hand-ins to registry.
+        # py is needed for span extraction OR for registry hand-in on node variants.
+        needs_py = has_span or bool(child_classes)
+        extract_py_param = "py" if needs_py else "_py"
         extract_span_type_param = "span_type" if has_span else "_span_type"
         lines.append("    fn extract_from_pyobject(")
         lines.append(f"        {extract_py_param}: Python<'_>,")
@@ -506,13 +547,23 @@ class RustCstGenerator:
             lines.append("            return extract_span(py, obj).map(Self::Span);")
             lines.append("        }")
         for child_cls in child_classes:
-            lines.append(f"        if obj.is_instance_of::<{child_cls}>() {{")
-            lines.append(f"            let node: PyRef<{child_cls}> = obj.extract()?;")
-            lines.append(f"            return Ok(Self::{child_cls}(Box::new((*node).clone())));")
+            py_handle = f"Py{child_cls}"
+            lines.append(f"        if obj.is_instance_of::<{py_handle}>() {{")
+            lines.append(f"            let handle: PyRef<{py_handle}> = obj.extract()?;")
+            lines.append("            let shared = handle.inner.clone();")
+            lines.append("            let addr = shared.arc_ptr();")
+            lines.append("            // Hand-in: register this Python handle as canonical for its Shared.")
+            lines.append("            drop(handle); // release the PyRef before calling Python")
+            lines.append("            // Propagate registry errors: a swallowed Err here would leave the")
+            lines.append("            // handle unregistered, causing the next wrap-out to mint a different")
+            lines.append("            // object and silently break is-stability.")
+            lines.append("            registry::register_if_absent(py, addr, obj)?;")
+            lines.append(f"            return Ok(Self::{child_cls}(shared));")
             lines.append("        }")
         if not has_span and not child_classes:
-            # Degenerate case: no known child types — always error
-            lines.append("        let _ = (py, span_type);")
+            # Degenerate case: no known child types — always error.
+            # Use the underscore-prefixed param names chosen above to suppress unused-variable warnings.
+            lines.append("        let _ = (_py, _span_type);")
         lines.append("        Err(pyo3::exceptions::PyTypeError::new_err(format!(")
         lines.append(f'            "{class_name}: unsupported child type {{}}",')
         lines.append("            obj.get_type().name()?")
@@ -524,14 +575,23 @@ class RustCstGenerator:
         return "\n".join(lines)
 
     # ------------------------------------------------------------------
-    # Node struct
+    # Node struct + handle pyclass
     # ------------------------------------------------------------------
 
     def _node_block(self, class_name: str, labels: list[str], rule_name: str) -> str:
-        """Emit the node struct definition and its #[pymethods] block."""
+        """Emit the node data struct, its plain impl, and the Python handle pyclass.
+
+        Phase 1 ownership restructure:
+        - Data struct (always compiled): carries `Shared<T>` children, suffixless native API.
+        - Handle pyclass (python-gated): wraps `Shared<DataStruct>`, carries all pymethods.
+          Python class name is unchanged (name = "ClassName").
+
+        The handle is named Py<ClassName> in Rust; the data struct keeps the original name.
+        """
         child_classes, has_span = self._child_variants_for_rule(rule_name)
         enum_name = f"{class_name}Child"
         label_type = f"Option<{class_name}_Label>" if labels else "Option<()>"
+        py_handle = f"Py{class_name}"
         lines: list[str] = []
 
         lines.append(f"// {'─' * 75}")
@@ -539,14 +599,23 @@ class RustCstGenerator:
         lines.append(f"// {'─' * 75}")
         lines.append("")
 
-        lines.append('#[cfg_attr(feature = "python", pyclass)]')
+        # ── Data struct (always compiled) ──────────────────────────────────────
+        # Clone is shallow (Arc clones for node children); called out in comment.
+        lines.append(f"/// CST data struct for `{class_name}`. Node-typed children are [`Shared<T>`] —")
+        lines.append("/// see [`fltk_cst_core::Shared`] for clone/equality/reference semantics.")
+        lines.append("#[derive(Clone)]")
         lines.append(f"pub struct {class_name} {{")
+        lines.append("    // Not pub: use span() / children() / push_child() — the stable accessor API.")
+        lines.append("    // Direct field access bypasses any future validation logic on setters.")
         lines.append("    span: Span,")
         lines.append(f"    children: Vec<({label_type}, {enum_name})>,")
         lines.append("}")
         lines.append("")
 
-        # Native PartialEq (used by child enums of parent nodes)
+        # Native PartialEq: compares span + children recursively.  For node-typed children,
+        # Shared::PartialEq applies a ptr_eq short-circuit which eliminates same-lock re-entry
+        # on `x == x`.  DAG comparisons (position-shifted sharing) still hold both guards
+        # simultaneously; deadlock-free only absent concurrent writers — see Shared<T> docs.
         lines.append(f"impl PartialEq for {class_name} {{")
         lines.append("    fn eq(&self, other: &Self) -> bool {")
         lines.append("        self.span == other.span && self.children == other.children")
@@ -554,53 +623,86 @@ class RustCstGenerator:
         lines.append("}")
         lines.append("")
 
-        # Clone (needed so child enum can clone boxed nodes for Python boundary)
-        lines.append(f"impl Clone for {class_name} {{")
-        lines.append("    fn clone(&self) -> Self {")
-        lines.append(f"        {class_name} {{")
-        lines.append("            span: self.span.clone(),")
-        lines.append("            children: self.children.clone(),")
-        lines.append("        }")
-        lines.append("    }")
-        lines.append("}")
-        lines.append("")
-
-        # Native plain-impl block: GIL-free constructors and accessors for pure-Rust use.
-        # These allow downstream Rust code (and #[cfg(test)] modules) to build and inspect
-        # node trees without acquiring the GIL or calling through pyo3.
+        # Plain impl: suffixless Rust-native API (no _native suffix).
+        # These are the stable public Rust surface that generated parsers build against.
         lines.append(f"impl {class_name} {{")
         lines.append("    /// Construct a node with the given span and no children.")
-        lines.append("    /// No GIL required.")
-        lines.append("    pub fn new_native(span: Span) -> Self {")
+        lines.append("    /// GIL-free.")
+        lines.append("    pub fn new(span: Span) -> Self {")
         lines.append(f"        {class_name} {{")
         lines.append("            span,")
         lines.append("            children: Vec::new(),")
         lines.append("        }")
         lines.append("    }")
         lines.append("")
-        lines.append("    /// Return a reference to the stored native `Span`.")
-        lines.append("    pub fn span_native(&self) -> &Span {")
+        lines.append("    /// Return a reference to the stored `Span`.")
+        lines.append("    pub fn span(&self) -> &Span {")
         lines.append("        &self.span")
         lines.append("    }")
         lines.append("")
-        lines.append("    /// Return a slice of the native children.")
-        lines.append(f"    pub fn children_native(&self) -> &[({label_type}, {enum_name})] {{")
+        lines.append("    /// Return a slice of the children.")
+        lines.append(f"    pub fn children(&self) -> &[({label_type}, {enum_name})] {{")
         lines.append("        self.children.as_slice()")
         lines.append("    }")
         lines.append("")
-        lines.append("    /// Push a child onto the native children `Vec`.")
-        lines.append(f"    pub fn push_child_native(&mut self, label: {label_type}, child: {enum_name}) {{")
+        lines.append("    /// Replace the node's span.")
+        lines.append("    pub fn set_span(&mut self, span: Span) {")
+        lines.append("        self.span = span;")
+        lines.append("    }")
+        lines.append("")
+        lines.append("    /// Push a child onto the children `Vec`.")
+        lines.append(f"    pub fn push_child(&mut self, label: {label_type}, child: {enum_name}) {{")
         lines.append("        self.children.push((label, child));")
         lines.append("    }")
         lines.append("}")
         lines.append("")
 
-        # pymethods block
+        # ── Handle pyclass (python-gated) ──────────────────────────────────────
+        # frozen: handle has no mutable fields (mutation goes through RwLock).
+        # weakref: required by the canonical-wrapper registry.
+        # name = "ClassName": Python class name is unchanged.
+        lines.append('#[cfg(feature = "python")]')
+        lines.append(f'#[pyclass(frozen, weakref, name = "{class_name}")]')
+        lines.append(f"pub struct {py_handle} {{")
+        lines.append("    // Not pub: all external access goes through shared() or to_py_canonical().")
+        lines.append("    // A pub field would let mixed-app Rust code construct an unregistered handle")
+        lines.append("    // (Py::new(py, PyFoo { inner: s.clone() })), silently breaking is-stability.")
+        lines.append(f"    inner: Shared<{class_name}>,")
+        lines.append("}")
+        lines.append("")
+
+        # Bridge methods on the handle struct (not pymethods — plain Rust)
+        lines.append('#[cfg(feature = "python")]')
+        lines.append(f"impl {py_handle} {{")
+        lines.append(f"    /// Return a reference to the inner `Shared<{class_name}>`.")
+        lines.append(f"    pub fn shared(&self) -> &Shared<{class_name}> {{")
+        lines.append("        &self.inner")
+        lines.append("    }")
+        lines.append("")
+        lines.append(f"    /// Wrap a `Shared<{class_name}>` into a canonical Python handle,")
+        lines.append("    /// looking up the registry first so the same handle is returned")
+        lines.append("    /// for the same `Shared` allocation.")
+        lines.append(
+            f"    pub fn to_py_canonical(py: Python<'_>, s: &Shared<{class_name}>) -> PyResult<Py<{py_handle}>> {{"
+        )
+        lines.append("        let addr = s.arc_ptr();")
+        lines.append("        let obj = registry::get_or_insert_with(py, addr, || {")
+        lines.append(f"            let handle = {py_handle} {{ inner: s.clone() }};")
+        lines.append("            Py::new(py, handle).map(|p| p.into_any())")
+        lines.append("        })?;")
+        lines.append(
+            f"        obj.bind(py).downcast::<{py_handle}>().map(|b| b.clone().unbind()).map_err(|e| e.into())"
+        )
+        lines.append("    }")
+        lines.append("}")
+        lines.append("")
+
+        # pymethods block on the handle
         lines.append('#[cfg(feature = "python")]')
         lines.append("#[pymethods]")
-        lines.append(f"impl {class_name} {{")
+        lines.append(f"impl {py_handle} {{")
 
-        lines.extend(self._new_method(class_name))
+        lines.extend(self._new_method(class_name, py_handle))
         lines.extend(self._span_getter_setter())
         lines.extend(self._kind_getter(class_name))
 
@@ -610,13 +712,13 @@ class RustCstGenerator:
         lines.extend(self._children_getter(class_name, enum_name))
         lines.extend(self._generic_append(class_name, enum_name, label_type, labels))
         lines.extend(self._generic_extend(class_name, enum_name, label_type, labels))
-        lines.extend(self._generic_extend_children(class_name))
+        lines.extend(self._generic_extend_children(class_name, py_handle))
         lines.extend(self._generic_child(class_name, enum_name, label_type, labels))
 
         for label in labels:
             lines.extend(self._per_label_methods(class_name, label, enum_name))
 
-        lines.extend(self._eq_method(class_name))
+        lines.extend(self._eq_method(class_name, py_handle))
         lines.extend(self._hash_method(class_name))
         lines.extend(self._repr_method(class_name, enum_name))
 
@@ -625,33 +727,50 @@ class RustCstGenerator:
 
         return "\n".join(lines)
 
-    def _new_method(self, class_name: str) -> list[str]:
+    def _new_method(self, class_name: str, py_handle: str) -> list[str]:
+        """Emit the #[new] constructor on the handle pyclass.
+
+        Creates a fresh Shared<DataStruct> and registers the handle as canonical.
+        """
         return [
             "    #[new]",
             "    #[pyo3(signature = (*, span = None))]",
-            "    fn new(py: Python<'_>, span: Option<&Bound<'_, PyAny>>) -> PyResult<Self> {",
+            f"    fn new(py: Python<'_>, span: Option<&Bound<'_, PyAny>>) -> PyResult<Py<{py_handle}>> {{",
             "        let native_span = match span {",
             "            Some(s) => extract_span(py, s)?,",
             "            None => Span::unknown(),",
             "        };",
-            f"        Ok({class_name} {{",
+            f"        let data = {class_name} {{",
             "            span: native_span,",
             "            children: Vec::new(),",
-            "        })",
+            "        };",
+            "        let shared = Shared::new(data);",
+            "        let addr = shared.arc_ptr();",
+            f"        let handle = {py_handle} {{ inner: shared }};",
+            "        let py_obj = Py::new(py, handle)?;",
+            "        // Register as canonical — fresh Shared, no alias can exist yet.",
+            "        registry::force_register(py, addr, py_obj.bind(py))?;",
+            "        Ok(py_obj)",
             "    }",
             "",
         ]
 
     def _span_getter_setter(self) -> list[str]:
+        # The handle is frozen (#[pyclass(frozen, ...)]), so all mutating pymethods
+        # take &self — mutation goes through the inner RwLock.
         return [
             "    #[getter]",
             "    fn span(&self, py: Python<'_>) -> PyResult<PyObject> {",
-            "        span_to_pyobject(py, &self.span)",
+            "        // Snapshot the span under the read lock, then drop the guard before",
+            "        // calling span_to_pyobject — which performs Python work (Py::new or",
+            "        // Python method calls) that must not happen while a node lock is held.",
+            "        let span = self.inner.read().span.clone();",
+            "        span_to_pyobject(py, &span)",
             "    }",
             "",
             "    #[setter]",
-            "    fn set_span(&mut self, py: Python<'_>, value: &Bound<'_, PyAny>) -> PyResult<()> {",
-            "        self.span = extract_span(py, value)?;",
+            "    fn set_span(&self, py: Python<'_>, value: &Bound<'_, PyAny>) -> PyResult<()> {",
+            "        self.inner.write().span = extract_span(py, value)?;",
             "        Ok(())",
             "    }",
             "",
@@ -687,12 +806,21 @@ class RustCstGenerator:
         list, so there is a known backend divergence on list-level identity.
         TODO(rust-cst-children-list-view): closing this would require a live sequence-proxy
         pyclass; deferred as additive per design ADR 2026/06/10-rust-idiomatic-cst-api §7 Q4.
+
+        Node-typed children are routed through the registry so element identity is stable
+        (the same child read twice returns the same Python handle object).
         """
         return [
             "    #[getter]",
             "    fn children(&self, py: Python<'_>) -> PyResult<Py<PyList>> {",
+            "        // Snapshot the children vec (Arc clones for node children — O(n) refcount bumps).",
+            "        // Lock scope: acquire read, snapshot, release before touching Python.",
+            "        let snapshot: Vec<_> = {",
+            "            let guard = self.inner.read();",
+            "            guard.children.clone()",
+            "        };",
             "        let result = PyList::empty(py);",
-            "        for (label, child) in &self.children {",
+            "        for (label, child) in &snapshot {",
             "            let label_obj: PyObject = match label {",
             "                None => py.None(),",
             "                Some(lbl) => lbl.clone().into_pyobject(py)?.into_any().unbind(),",
@@ -709,13 +837,13 @@ class RustCstGenerator:
     def _generic_append(self, class_name: str, enum_name: str, _label_type: str, labels: list[str]) -> list[str]:
         return [
             "    #[pyo3(signature = (child, label = None))]",
-            "    fn append(&mut self, py: Python<'_>, child: &Bound<'_, PyAny>, label: Option<PyObject>) -> PyResult<()> {",  # noqa: E501
+            "    fn append(&self, py: Python<'_>, child: &Bound<'_, PyAny>, label: Option<PyObject>) -> PyResult<()> {",
             "        let span_type = get_span_type(py)?;",
             f"        let native_child = {enum_name}::extract_from_pyobject(py, child, &span_type)?;",
             "        let native_label = match label {",
             *self._label_from_pyobject_match(class_name, labels, method_name="append"),
             "        };",
-            "        self.children.push((native_label, native_child));",
+            "        self.inner.write().children.push((native_label, native_child));",
             "        Ok(())",
             "    }",
             "",
@@ -754,7 +882,7 @@ class RustCstGenerator:
         return [
             "    #[pyo3(signature = (children, label = None))]",
             "    fn extend(",
-            "        &mut self,",
+            "        &self,",
             "        py: Python<'_>,",
             "        children: &Bound<'_, PyAny>,",
             "        label: Option<PyObject>,",
@@ -767,25 +895,38 @@ class RustCstGenerator:
             "        for child_result in iter {",
             "            let child = child_result?;",
             f"            let native_child = {enum_name}::extract_from_pyobject(py, &child, &span_type)?;",
-            "            self.children.push((native_label.clone(), native_child));",
+            "            self.inner.write().children.push((native_label.clone(), native_child));",
             "        }",
             "        Ok(())",
             "    }",
             "",
         ]
 
-    def _generic_extend_children(self, class_name: str) -> list[str]:
-        """Emit extend_children(&mut self, other: &NodeType) that bulk-copies children preserving labels.
+    def _generic_extend_children(self, _class_name: str, py_handle: str) -> list[str]:
+        """Emit extend_children(&self, other: &PyHandle) that bulk-copies children preserving labels.
 
-        Used by generated parsers for inline_to_parent items: instead of mutating the
-        throwaway list returned by the `children` getter, the parser calls this method to
-        transfer children from a sub-parser result into the parent node's native Vec.
+        Self-extend (node.extend_children(node)) is handled structurally: we snapshot
+        the other's children under a read lock, drop the lock, then push onto self.
+        No ptr_eq call is needed — once the read guard drops, the write lock below can
+        always be acquired, even when self and other are the same node.
+        This matches the Python backend's list-copy behavior.
         """
         return [
-            f"    fn extend_children(&mut self, other: PyRef<'_, {class_name}>) -> PyResult<()> {{",
-            "        for (label, child) in &other.children {",
-            "            self.children.push((label.clone(), child.clone()));",
-            "        }",
+            f"    fn extend_children(&self, _py: Python<'_>, other: &{py_handle}) -> PyResult<()> {{",
+            "        // Snapshot other's children first: the read guard is dropped at the end of",
+            "        // this block, so the write lock below is safe even when self and other are",
+            "        // the same node (self-extend). No ptr_eq call is needed here — the snapshot",
+            "        // approach handles self-extend structurally.",
+            "        // Lock scope: hold read only long enough to clone the Arc-based children vec.",
+            "        let snapshot: Vec<_> = {",
+            "            let guard = other.inner.read();",
+            "            guard.children.clone()",
+            "        };",
+            "        // Node-typed children are pushed directly as Shared<T> values.  Registry",
+            "        // consistency is maintained lazily: wrap-out registers on first Python read",
+            "        // via get_or_insert_with (registry.rs).  Eagerly registering here would be",
+            "        // a no-op — the WeakValueDictionary would evict handles held by nothing.",
+            "        self.inner.write().children.extend(snapshot);",
             "        Ok(())",
             "    }",
             "",
@@ -794,13 +935,20 @@ class RustCstGenerator:
     def _generic_child(self, _class_name: str, _enum_name: str, _label_type: str, _labels: list[str]) -> list[str]:
         return [
             "    fn child(&self, py: Python<'_>) -> PyResult<PyObject> {",
-            "        let n = self.children.len();",
+            "        // TODO(rust-cst-accessor-clone-efficiency): clones the full children Vec",
+            "        // before checking len. Could check len under the read guard and only clone",
+            "        // the single needed entry, avoiding O(total-children) allocation on the error path.",
+            "        let snapshot: Vec<_> = {",
+            "            let guard = self.inner.read();",
+            "            guard.children.clone()",
+            "        };",
+            "        let n = snapshot.len();",
             "        if n != 1 {",
             "            return Err(PyValueError::new_err(format!(",
             '                "Expected one child but have {n}"',
             "            )));",
             "        }",
-            "        let (label, child) = &self.children[0];",
+            "        let (label, child) = &snapshot[0];",
             "        let label_obj: PyObject = match label {",
             "            None => py.None(),",
             "            Some(lbl) => lbl.clone().into_pyobject(py)?.into_any().unbind(),",
@@ -820,10 +968,10 @@ class RustCstGenerator:
         # append_<label>: push one child with the given label
         lines.extend(
             [
-                f"    fn append_{label}(&mut self, py: Python<'_>, child: &Bound<'_, PyAny>) -> PyResult<()> {{",
+                f"    fn append_{label}(&self, py: Python<'_>, child: &Bound<'_, PyAny>) -> PyResult<()> {{",
                 "        let span_type = get_span_type(py)?;",
                 f"        let native_child = {child_enum_name}::extract_from_pyobject(py, child, &span_type)?;",
-                f"        self.children.push((Some({label_enum_name}::{rust_variant}), native_child));",
+                f"        self.inner.write().children.push((Some({label_enum_name}::{rust_variant}), native_child));",
                 "        Ok(())",
                 "    }",
                 "",
@@ -833,13 +981,14 @@ class RustCstGenerator:
         # extend_<label>: push multiple children with the given label
         lines.extend(
             [
-                f"    fn extend_{label}(&mut self, py: Python<'_>, children: &Bound<'_, PyAny>) -> PyResult<()> {{",
+                f"    fn extend_{label}(&self, py: Python<'_>, children: &Bound<'_, PyAny>) -> PyResult<()> {{",
                 "        let span_type = get_span_type(py)?;",
                 "        let iter = children.try_iter()?;",
                 "        for child_result in iter {",
                 "            let child = child_result?;",
                 f"            let native_child = {child_enum_name}::extract_from_pyobject(py, &child, &span_type)?;",
-                f"            self.children.push((Some({label_enum_name}::{rust_variant}), native_child));",
+                f"            let entry = (Some({label_enum_name}::{rust_variant}), native_child);",
+                "            self.inner.write().children.push(entry);",
                 "        }",
                 "        Ok(())",
                 "    }",
@@ -851,9 +1000,16 @@ class RustCstGenerator:
         lines.extend(
             [
                 f"    fn children_{label}(&self, py: Python<'_>) -> PyResult<Py<PyList>> {{",
+                "        // TODO(rust-cst-accessor-clone-efficiency): clones full Vec then filters outside the guard.",
+                "        // Could filter inside the read guard (clone only matching entries) to avoid",
+                "        // O(total-children) Arc clones for accessors that match a small subset.",
+                "        let snapshot: Vec<_> = {",
+                "            let guard = self.inner.read();",
+                "            guard.children.clone()",
+                "        };",
                 "        let result = PyList::empty(py);",
-                "        for (label, child) in &self.children {",
-                f"            if *label == Some({label_enum_name}::{rust_variant}) {{",
+                "        for (lbl, child) in &snapshot {",
+                f"            if *lbl == Some({label_enum_name}::{rust_variant}) {{",
                 "                result.append(child.to_pyobject(py)?)?;",
                 "            }",
                 "        }",
@@ -867,10 +1023,15 @@ class RustCstGenerator:
         lines.extend(
             [
                 f"    fn child_{label}(&self, py: Python<'_>) -> PyResult<PyObject> {{",
+                "        // TODO(rust-cst-accessor-clone-efficiency): see children_{label} above.",
+                "        let snapshot: Vec<_> = {",
+                "            let guard = self.inner.read();",
+                "            guard.children.clone()",
+                "        };",
                 "        let mut found: Option<PyObject> = None;",
                 "        let mut count = 0usize;",
-                "        for (label, child) in &self.children {",
-                f"            if *label == Some({label_enum_name}::{rust_variant}) {{",
+                "        for (lbl, child) in &snapshot {",
+                f"            if *lbl == Some({label_enum_name}::{rust_variant}) {{",
                 "                count += 1;",
                 "                if count == 1 {",
                 "                    found = Some(child.to_pyobject(py)?);",
@@ -892,10 +1053,15 @@ class RustCstGenerator:
         lines.extend(
             [
                 f"    fn maybe_{label}(&self, py: Python<'_>) -> PyResult<Option<PyObject>> {{",
+                "        // TODO(rust-cst-accessor-clone-efficiency): see children_{label} above.",
+                "        let snapshot: Vec<_> = {",
+                "            let guard = self.inner.read();",
+                "            guard.children.clone()",
+                "        };",
                 "        let mut found: Option<PyObject> = None;",
                 "        let mut count = 0usize;",
-                "        for (label, child) in &self.children {",
-                f"            if *label == Some({label_enum_name}::{rust_variant}) {{",
+                "        for (lbl, child) in &snapshot {",
+                f"            if *lbl == Some({label_enum_name}::{rust_variant}) {{",
                 "                count += 1;",
                 "                if count == 1 {",
                 "                    found = Some(child.to_pyobject(py)?);",
@@ -915,15 +1081,24 @@ class RustCstGenerator:
 
         return lines
 
-    def _eq_method(self, class_name: str) -> list[str]:
+    def _eq_method(self, _class_name: str, py_handle: str) -> list[str]:
+        """Emit __eq__ delegating to Shared<T>::PartialEq.
+
+        Shared<T>::PartialEq already implements the ptr_eq short-circuit (handles `x == x`
+        without taking the lock twice, which std::sync::RwLock may deadlock on one thread when
+        a writer is queued) followed by deep structural comparison.  Delegating here keeps the
+        short-circuit logic in one place (shared.rs) rather than duplicated across every
+        generated __eq__ body.
+        """
         return [
             "    fn __eq__(&self, py: Python<'_>, other: &Bound<'_, PyAny>) -> PyResult<PyObject> {",
-            f"        if !other.is_instance_of::<{class_name}>() {{",
+            f"        if !other.is_instance_of::<{py_handle}>() {{",
             "            return Ok(py.NotImplemented());",
             "        }",
-            f"        let other_node: PyRef<{class_name}> = other.extract()?;",
-            "        // Native structural equality: no Python .eq() on stored state",
-            "        let eq = self == &*other_node;",
+            f"        let other_handle: PyRef<{py_handle}> = other.extract()?;",
+            "        // Delegate to Shared<T>::PartialEq which applies the ptr_eq short-circuit",
+            "        // (avoids same-lock re-entry on `x == x`) then deep structural comparison.",
+            "        let eq = self.inner == other_handle.inner;",
             "        Ok(eq.into_pyobject(py)?.to_owned().unbind().into_any())",
             "    }",
             "",
@@ -940,8 +1115,9 @@ class RustCstGenerator:
     def _repr_method(self, class_name: str, _child_enum_name: str) -> list[str]:
         return [
             "    fn __repr__(&self, _py: Python<'_>) -> String {",
-            '        let span_repr = format!("Span(start={}, end={})", self.span.start(), self.span.end());',
-            "        let children_len = self.children.len();",
+            "        let guard = self.inner.read();",
+            '        let span_repr = format!("Span(start={}, end={})", guard.span.start(), guard.span.end());',
+            "        let children_len = guard.children.len();",
             "        format!(",
             f'            "{class_name}(span={{span_repr}}, children=[<{{children_len}} child(ren)>])"',
             "        )",
@@ -963,7 +1139,8 @@ class RustCstGenerator:
             if labels:
                 enum_name = f"{class_name}_Label"
                 lines.append(f"    module.add_class::<{enum_name}>()?;")
-            lines.append(f"    module.add_class::<{class_name}>()?;")
+            py_handle = f"Py{class_name}"
+            lines.append(f"    module.add_class::<{py_handle}>()?;")
         lines.append("    Ok(())")
         lines.append("}")
         lines.append("")

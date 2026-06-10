@@ -7,6 +7,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed (Rust API — breaking for the days-old `*_native`/`Box`-based surface)
+
+- **Rust CST Phase 1**: ownership restructure + suffix removal + shared identity.
+  - Generated node structs now own children as `Shared<T>` (`Arc<RwLock<T>>` newtype)
+    instead of `Box<T>`; `Clone` on a node struct is now shallow (Arc clone, not deep copy).
+  - Plain `impl` methods are now suffixless: `new`, `span`, `children`, `push_child`
+    (were `new_native`, `span_native`, `children_native`, `push_child_native`).
+  - Python class names are **unchanged**; Python API is unchanged.
+  - Python child-identity semantics now match the Python backend: a child read twice through
+    any accessor returns the same Python object (`is`-stable); mutations propagate across
+    all references and across the language boundary.
+  - `fltk-cst-core` gains `Shared<T>` (pyo3-free newtype) and a canonical-wrapper registry.
+  - `make gencode` now regenerates `tests/rust_cst_fegen/src/cst.rs` so all five Rust
+    outputs stay in sync.
+
 ### Fixed
 - Bazel rules now work when fltk is used as a submodule (use `cst_file.dirname` for output path)
 - Add `imports = ["."]` to py_library for correct Python imports when used as submodule

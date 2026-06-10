@@ -136,11 +136,12 @@ impl<T> Shared<T> {
     pub fn ptr_eq(&self, other: &Self) -> bool;
 }
 // Clone = shallow (Arc clone). PartialEq = ptr_eq short-circuit, then deep (read-locks both,
-// compares values). The short-circuit is load-bearing, not an optimization: without it,
-// comparing a Shared against itself (x == x from Python — CPython calls __eq__ even for
-// identical operands, and the registry makes repeated reads the same object — or a DAG
-// compare where one Shared sits at the same position on both sides) read-locks the same
-// std RwLock twice on one thread, which std documents may deadlock when a writer is queued.
+// compares values). The short-circuit handles x == x (same pointer on both sides) without
+// double-locking.  It does NOT prevent re-entry for position-shifted sharing (node A shared
+// in two different subtrees compared against each other) — both sides' guards can be held
+// simultaneously when a shared child is reached, potentially deadlocking under concurrent
+// writers.  DAG PartialEq is deadlock-free only absent concurrent writers; see §5 Lock
+// recursion / re-entrancy for the full analysis.
 // Debug = delegates through read(). From<T> for Shared<T>. No Hash impl: node structs derive no
 // Rust Hash, and generated nodes are deliberately unhashable Python-side (__hash__ raises
 // TypeError, gsm2tree_rs.py:925-931) — preserved unchanged.
@@ -399,11 +400,14 @@ work in this design beyond ensuring these methods exist.
 - **Lock recursion / re-entrancy.** std `RwLock` same-thread read-read can deadlock when a writer is queued,
   and write-then-read always deadlocks. Generated method bodies follow the snapshot-then-drop-guard rule
   (§4.0): no Python calls, no nested node access, while holding a guard. Deep `PartialEq` is the one
-  generated path that inherently holds guards across recursion and cannot follow that rule; its same-lock
-  re-entry cases (`x == x`, shared subtree at the same position on both sides) are eliminated by the
-  `ptr_eq` short-circuit in `Shared::eq` (§4.0) — residual same-lock re-entry under `eq` requires a true
-  cycle, already documented out of contract. `ptr_eq` self-extend handled explicitly. Mixed-app native code
-  can still misuse guards — documented rule, same class of contract as any `RwLock` API.
+  generated path that inherently holds guards across recursion and cannot follow that rule; the `ptr_eq`
+  short-circuit in `Shared::eq` (§4.0) eliminates same-lock re-entry for the `x == x` case (same pointer at
+  the same position on both sides). It does NOT cover position-shifted sharing: comparing node `B` (child `A`)
+  against node `C` (also child `A`) re-locks `A` while a guard from `B` or `C` is still held — same-thread
+  re-entry, potentially deadlocking when a concurrent writer is queued. Deep `PartialEq` on a DAG is
+  deadlock-free only in the absence of concurrent writers on any node in the compared trees. True reference
+  cycles (a node that is its own ancestor) are out of contract. `ptr_eq` self-extend handled explicitly.
+  Mixed-app native code can still misuse guards — documented rule, same class of contract as any `RwLock` API.
 - **Poisoning.** A panic while a guard is held poisons a std `RwLock`; `Shared` deliberately ignores poison
   (`PoisonError::into_inner`) so one panic cannot brick a tree. Alternative (parking_lot: no poisoning,
   faster) noted; std chosen to keep generated crates dependency-light. Revisit only if Phase 1 benchmarks

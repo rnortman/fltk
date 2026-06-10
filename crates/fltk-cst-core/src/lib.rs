@@ -1,9 +1,13 @@
 #[cfg(feature = "python")]
 mod cross_cdylib;
+#[cfg(feature = "python")]
+pub mod registry;
+mod shared;
 mod span;
 
 #[cfg(feature = "python")]
 pub use cross_cdylib::{extract_source_text, extract_span, get_source_text_type, get_span_type, span_to_pyobject};
+pub use shared::Shared;
 pub use span::{SourceText, Span, SpanError};
 
 #[cfg(test)]
@@ -12,7 +16,7 @@ mod tests {
 
     // Pure-Rust GIL-free Span construction and equality tests.
     // Full node-subtree tests live in tests/rust_cst_fixture/src/native_tests.rs,
-    // exercising generated node structs via new_native/push_child_native/span_native/children_native.
+    // exercising generated node structs via new/push_child/span/children.
 
     #[test]
     fn span_unknown_sourceless_gil_free() {

@@ -1,6 +1,9 @@
 use fltk_cst_core::Span;
+use fltk_cst_core::Shared;
 #[cfg(feature = "python")]
 use fltk_cst_core::{extract_span, get_span_type, span_to_pyobject};
+#[cfg(feature = "python")]
+use fltk_cst_core::registry;
 #[cfg(feature = "python")]
 use pyo3::exceptions::{PyTypeError, PyValueError};
 #[cfg(feature = "python")]
@@ -135,10 +138,11 @@ impl Config_Label {
     }
 }
 
-// ConfigChild — native child value enum for Config
+// ConfigChild — child value enum for Config
+// Node-typed variants hold Shared<T> (Arc<RwLock<T>>); Clone is shallow.
 #[derive(Clone)]
 pub enum ConfigChild {
-    Entry(Box<Entry>),
+    Entry(Shared<Entry>),
 }
 
 impl PartialEq for ConfigChild {
@@ -153,18 +157,32 @@ impl PartialEq for ConfigChild {
 impl ConfigChild {
     fn to_pyobject(&self, py: Python<'_>) -> PyResult<PyObject> {
         match self {
-            Self::Entry(n) => Py::new(py, (**n).clone()).map(|p| p.into_any()),
+            Self::Entry(shared) => {
+                let addr = shared.arc_ptr();
+                registry::get_or_insert_with(py, addr, || {
+                    let handle = PyEntry { inner: shared.clone() };
+                    Py::new(py, handle).map(|p| p.into_any())
+                })
+            }
         }
     }
 
     fn extract_from_pyobject(
-        _py: Python<'_>,
+        py: Python<'_>,
         obj: &Bound<'_, PyAny>,
         _span_type: &Bound<'_, PyType>,
     ) -> PyResult<Self> {
-        if obj.is_instance_of::<Entry>() {
-            let node: PyRef<Entry> = obj.extract()?;
-            return Ok(Self::Entry(Box::new((*node).clone())));
+        if obj.is_instance_of::<PyEntry>() {
+            let handle: PyRef<PyEntry> = obj.extract()?;
+            let shared = handle.inner.clone();
+            let addr = shared.arc_ptr();
+            // Hand-in: register this Python handle as canonical for its Shared.
+            drop(handle); // release the PyRef before calling Python
+            // Propagate registry errors: a swallowed Err here would leave the
+            // handle unregistered, causing the next wrap-out to mint a different
+            // object and silently break is-stability.
+            registry::register_if_absent(py, addr, obj)?;
+            return Ok(Self::Entry(shared));
         }
         Err(pyo3::exceptions::PyTypeError::new_err(format!(
             "Config: unsupported child type {}",
@@ -177,8 +195,12 @@ impl ConfigChild {
 // Config
 // ───────────────────────────────────────────────────────────────────────────
 
-#[cfg_attr(feature = "python", pyclass)]
+/// CST data struct for `Config`. Node-typed children are [`Shared<T>`] —
+/// see [`fltk_cst_core::Shared`] for clone/equality/reference semantics.
+#[derive(Clone)]
 pub struct Config {
+    // Not pub: use span() / children() / push_child() — the stable accessor API.
+    // Direct field access bypasses any future validation logic on setters.
     span: Span,
     children: Vec<(Option<Config_Label>, ConfigChild)>,
 }
@@ -189,65 +211,101 @@ impl PartialEq for Config {
     }
 }
 
-impl Clone for Config {
-    fn clone(&self) -> Self {
-        Config {
-            span: self.span.clone(),
-            children: self.children.clone(),
-        }
-    }
-}
-
 impl Config {
     /// Construct a node with the given span and no children.
-    /// No GIL required.
-    pub fn new_native(span: Span) -> Self {
+    /// GIL-free.
+    pub fn new(span: Span) -> Self {
         Config {
             span,
             children: Vec::new(),
         }
     }
 
-    /// Return a reference to the stored native `Span`.
-    pub fn span_native(&self) -> &Span {
+    /// Return a reference to the stored `Span`.
+    pub fn span(&self) -> &Span {
         &self.span
     }
 
-    /// Return a slice of the native children.
-    pub fn children_native(&self) -> &[(Option<Config_Label>, ConfigChild)] {
+    /// Return a slice of the children.
+    pub fn children(&self) -> &[(Option<Config_Label>, ConfigChild)] {
         self.children.as_slice()
     }
 
-    /// Push a child onto the native children `Vec`.
-    pub fn push_child_native(&mut self, label: Option<Config_Label>, child: ConfigChild) {
+    /// Replace the node's span.
+    pub fn set_span(&mut self, span: Span) {
+        self.span = span;
+    }
+
+    /// Push a child onto the children `Vec`.
+    pub fn push_child(&mut self, label: Option<Config_Label>, child: ConfigChild) {
         self.children.push((label, child));
     }
 }
 
 #[cfg(feature = "python")]
+#[pyclass(frozen, weakref, name = "Config")]
+pub struct PyConfig {
+    // Not pub: all external access goes through shared() or to_py_canonical().
+    // A pub field would let mixed-app Rust code construct an unregistered handle
+    // (Py::new(py, PyFoo { inner: s.clone() })), silently breaking is-stability.
+    inner: Shared<Config>,
+}
+
+#[cfg(feature = "python")]
+impl PyConfig {
+    /// Return a reference to the inner `Shared<Config>`.
+    pub fn shared(&self) -> &Shared<Config> {
+        &self.inner
+    }
+
+    /// Wrap a `Shared<Config>` into a canonical Python handle,
+    /// looking up the registry first so the same handle is returned
+    /// for the same `Shared` allocation.
+    pub fn to_py_canonical(py: Python<'_>, s: &Shared<Config>) -> PyResult<Py<PyConfig>> {
+        let addr = s.arc_ptr();
+        let obj = registry::get_or_insert_with(py, addr, || {
+            let handle = PyConfig { inner: s.clone() };
+            Py::new(py, handle).map(|p| p.into_any())
+        })?;
+        obj.bind(py).downcast::<PyConfig>().map(|b| b.clone().unbind()).map_err(|e| e.into())
+    }
+}
+
+#[cfg(feature = "python")]
 #[pymethods]
-impl Config {
+impl PyConfig {
     #[new]
     #[pyo3(signature = (*, span = None))]
-    fn new(py: Python<'_>, span: Option<&Bound<'_, PyAny>>) -> PyResult<Self> {
+    fn new(py: Python<'_>, span: Option<&Bound<'_, PyAny>>) -> PyResult<Py<PyConfig>> {
         let native_span = match span {
             Some(s) => extract_span(py, s)?,
             None => Span::unknown(),
         };
-        Ok(Config {
+        let data = Config {
             span: native_span,
             children: Vec::new(),
-        })
+        };
+        let shared = Shared::new(data);
+        let addr = shared.arc_ptr();
+        let handle = PyConfig { inner: shared };
+        let py_obj = Py::new(py, handle)?;
+        // Register as canonical — fresh Shared, no alias can exist yet.
+        registry::force_register(py, addr, py_obj.bind(py))?;
+        Ok(py_obj)
     }
 
     #[getter]
     fn span(&self, py: Python<'_>) -> PyResult<PyObject> {
-        span_to_pyobject(py, &self.span)
+        // Snapshot the span under the read lock, then drop the guard before
+        // calling span_to_pyobject — which performs Python work (Py::new or
+        // Python method calls) that must not happen while a node lock is held.
+        let span = self.inner.read().span.clone();
+        span_to_pyobject(py, &span)
     }
 
     #[setter]
-    fn set_span(&mut self, py: Python<'_>, value: &Bound<'_, PyAny>) -> PyResult<()> {
-        self.span = extract_span(py, value)?;
+    fn set_span(&self, py: Python<'_>, value: &Bound<'_, PyAny>) -> PyResult<()> {
+        self.inner.write().span = extract_span(py, value)?;
         Ok(())
     }
 
@@ -264,8 +322,14 @@ impl Config {
 
     #[getter]
     fn children(&self, py: Python<'_>) -> PyResult<Py<PyList>> {
+        // Snapshot the children vec (Arc clones for node children — O(n) refcount bumps).
+        // Lock scope: acquire read, snapshot, release before touching Python.
+        let snapshot: Vec<_> = {
+            let guard = self.inner.read();
+            guard.children.clone()
+        };
         let result = PyList::empty(py);
-        for (label, child) in &self.children {
+        for (label, child) in &snapshot {
             let label_obj: PyObject = match label {
                 None => py.None(),
                 Some(lbl) => lbl.clone().into_pyobject(py)?.into_any().unbind(),
@@ -278,7 +342,7 @@ impl Config {
     }
 
     #[pyo3(signature = (child, label = None))]
-    fn append(&mut self, py: Python<'_>, child: &Bound<'_, PyAny>, label: Option<PyObject>) -> PyResult<()> {
+    fn append(&self, py: Python<'_>, child: &Bound<'_, PyAny>, label: Option<PyObject>) -> PyResult<()> {
         let span_type = get_span_type(py)?;
         let native_child = ConfigChild::extract_from_pyobject(py, child, &span_type)?;
         let native_label = match label {
@@ -294,13 +358,13 @@ impl Config {
                 }
             }
         };
-        self.children.push((native_label, native_child));
+        self.inner.write().children.push((native_label, native_child));
         Ok(())
     }
 
     #[pyo3(signature = (children, label = None))]
     fn extend(
-        &mut self,
+        &self,
         py: Python<'_>,
         children: &Bound<'_, PyAny>,
         label: Option<PyObject>,
@@ -323,26 +387,41 @@ impl Config {
         for child_result in iter {
             let child = child_result?;
             let native_child = ConfigChild::extract_from_pyobject(py, &child, &span_type)?;
-            self.children.push((native_label.clone(), native_child));
+            self.inner.write().children.push((native_label.clone(), native_child));
         }
         Ok(())
     }
 
-    fn extend_children(&mut self, other: PyRef<'_, Config>) -> PyResult<()> {
-        for (label, child) in &other.children {
-            self.children.push((label.clone(), child.clone()));
-        }
+    fn extend_children(&self, _py: Python<'_>, other: &PyConfig) -> PyResult<()> {
+        // Snapshot other's children first: the read guard is dropped at the end of
+        // this block, so the write lock below is safe even when self and other are
+        // the same node (self-extend). No ptr_eq call is needed here — the snapshot
+        // approach handles self-extend structurally.
+        // Lock scope: hold read only long enough to clone the Arc-based children vec.
+        let snapshot: Vec<_> = {
+            let guard = other.inner.read();
+            guard.children.clone()
+        };
+        // Node-typed children are pushed directly as Shared<T> values.  Registry
+        // consistency is maintained lazily: wrap-out registers on first Python read
+        // via get_or_insert_with (registry.rs).  Eagerly registering here would be
+        // a no-op — the WeakValueDictionary would evict handles held by nothing.
+        self.inner.write().children.extend(snapshot);
         Ok(())
     }
 
     fn child(&self, py: Python<'_>) -> PyResult<PyObject> {
-        let n = self.children.len();
+        let snapshot: Vec<_> = {
+            let guard = self.inner.read();
+            guard.children.clone()
+        };
+        let n = snapshot.len();
         if n != 1 {
             return Err(PyValueError::new_err(format!(
                 "Expected one child but have {n}"
             )));
         }
-        let (label, child) = &self.children[0];
+        let (label, child) = &snapshot[0];
         let label_obj: PyObject = match label {
             None => py.None(),
             Some(lbl) => lbl.clone().into_pyobject(py)?.into_any().unbind(),
@@ -351,28 +430,33 @@ impl Config {
         Ok(PyTuple::new(py, [label_obj, child_obj])?.into_any().unbind())
     }
 
-    fn append_entry(&mut self, py: Python<'_>, child: &Bound<'_, PyAny>) -> PyResult<()> {
+    fn append_entry(&self, py: Python<'_>, child: &Bound<'_, PyAny>) -> PyResult<()> {
         let span_type = get_span_type(py)?;
         let native_child = ConfigChild::extract_from_pyobject(py, child, &span_type)?;
-        self.children.push((Some(Config_Label::Entry), native_child));
+        self.inner.write().children.push((Some(Config_Label::Entry), native_child));
         Ok(())
     }
 
-    fn extend_entry(&mut self, py: Python<'_>, children: &Bound<'_, PyAny>) -> PyResult<()> {
+    fn extend_entry(&self, py: Python<'_>, children: &Bound<'_, PyAny>) -> PyResult<()> {
         let span_type = get_span_type(py)?;
         let iter = children.try_iter()?;
         for child_result in iter {
             let child = child_result?;
             let native_child = ConfigChild::extract_from_pyobject(py, &child, &span_type)?;
-            self.children.push((Some(Config_Label::Entry), native_child));
+            let entry = (Some(Config_Label::Entry), native_child);
+            self.inner.write().children.push(entry);
         }
         Ok(())
     }
 
     fn children_entry(&self, py: Python<'_>) -> PyResult<Py<PyList>> {
+        let snapshot: Vec<_> = {
+            let guard = self.inner.read();
+            guard.children.clone()
+        };
         let result = PyList::empty(py);
-        for (label, child) in &self.children {
-            if *label == Some(Config_Label::Entry) {
+        for (lbl, child) in &snapshot {
+            if *lbl == Some(Config_Label::Entry) {
                 result.append(child.to_pyobject(py)?)?;
             }
         }
@@ -380,10 +464,14 @@ impl Config {
     }
 
     fn child_entry(&self, py: Python<'_>) -> PyResult<PyObject> {
+        let snapshot: Vec<_> = {
+            let guard = self.inner.read();
+            guard.children.clone()
+        };
         let mut found: Option<PyObject> = None;
         let mut count = 0usize;
-        for (label, child) in &self.children {
-            if *label == Some(Config_Label::Entry) {
+        for (lbl, child) in &snapshot {
+            if *lbl == Some(Config_Label::Entry) {
                 count += 1;
                 if count == 1 {
                     found = Some(child.to_pyobject(py)?);
@@ -399,10 +487,14 @@ impl Config {
     }
 
     fn maybe_entry(&self, py: Python<'_>) -> PyResult<Option<PyObject>> {
+        let snapshot: Vec<_> = {
+            let guard = self.inner.read();
+            guard.children.clone()
+        };
         let mut found: Option<PyObject> = None;
         let mut count = 0usize;
-        for (label, child) in &self.children {
-            if *label == Some(Config_Label::Entry) {
+        for (lbl, child) in &snapshot {
+            if *lbl == Some(Config_Label::Entry) {
                 count += 1;
                 if count == 1 {
                     found = Some(child.to_pyobject(py)?);
@@ -418,12 +510,13 @@ impl Config {
     }
 
     fn __eq__(&self, py: Python<'_>, other: &Bound<'_, PyAny>) -> PyResult<PyObject> {
-        if !other.is_instance_of::<Config>() {
+        if !other.is_instance_of::<PyConfig>() {
             return Ok(py.NotImplemented());
         }
-        let other_node: PyRef<Config> = other.extract()?;
-        // Native structural equality: no Python .eq() on stored state
-        let eq = self == &*other_node;
+        let other_handle: PyRef<PyConfig> = other.extract()?;
+        // Delegate to Shared<T>::PartialEq which applies the ptr_eq short-circuit
+        // (avoids same-lock re-entry on `x == x`) then deep structural comparison.
+        let eq = self.inner == other_handle.inner;
         Ok(eq.into_pyobject(py)?.to_owned().unbind().into_any())
     }
 
@@ -432,8 +525,9 @@ impl Config {
     }
 
     fn __repr__(&self, _py: Python<'_>) -> String {
-        let span_repr = format!("Span(start={}, end={})", self.span.start(), self.span.end());
-        let children_len = self.children.len();
+        let guard = self.inner.read();
+        let span_repr = format!("Span(start={}, end={})", guard.span.start(), guard.span.end());
+        let children_len = guard.children.len();
         format!(
             "Config(span={span_repr}, children=[<{children_len} child(ren)>])"
         )
@@ -502,13 +596,14 @@ impl Entry_Label {
     }
 }
 
-// EntryChild — native child value enum for Entry
+// EntryChild — child value enum for Entry
+// Node-typed variants hold Shared<T> (Arc<RwLock<T>>); Clone is shallow.
 #[derive(Clone)]
 pub enum EntryChild {
-    Identifier(Box<Identifier>),
-    Literal(Box<Literal>),
-    Operator(Box<Operator>),
-    Trivia(Box<Trivia>),
+    Identifier(Shared<Identifier>),
+    Literal(Shared<Literal>),
+    Operator(Shared<Operator>),
+    Trivia(Shared<Trivia>),
 }
 
 impl PartialEq for EntryChild {
@@ -527,33 +622,89 @@ impl PartialEq for EntryChild {
 impl EntryChild {
     fn to_pyobject(&self, py: Python<'_>) -> PyResult<PyObject> {
         match self {
-            Self::Identifier(n) => Py::new(py, (**n).clone()).map(|p| p.into_any()),
-            Self::Literal(n) => Py::new(py, (**n).clone()).map(|p| p.into_any()),
-            Self::Operator(n) => Py::new(py, (**n).clone()).map(|p| p.into_any()),
-            Self::Trivia(n) => Py::new(py, (**n).clone()).map(|p| p.into_any()),
+            Self::Identifier(shared) => {
+                let addr = shared.arc_ptr();
+                registry::get_or_insert_with(py, addr, || {
+                    let handle = PyIdentifier { inner: shared.clone() };
+                    Py::new(py, handle).map(|p| p.into_any())
+                })
+            }
+            Self::Literal(shared) => {
+                let addr = shared.arc_ptr();
+                registry::get_or_insert_with(py, addr, || {
+                    let handle = PyLiteral { inner: shared.clone() };
+                    Py::new(py, handle).map(|p| p.into_any())
+                })
+            }
+            Self::Operator(shared) => {
+                let addr = shared.arc_ptr();
+                registry::get_or_insert_with(py, addr, || {
+                    let handle = PyOperator { inner: shared.clone() };
+                    Py::new(py, handle).map(|p| p.into_any())
+                })
+            }
+            Self::Trivia(shared) => {
+                let addr = shared.arc_ptr();
+                registry::get_or_insert_with(py, addr, || {
+                    let handle = PyTrivia { inner: shared.clone() };
+                    Py::new(py, handle).map(|p| p.into_any())
+                })
+            }
         }
     }
 
     fn extract_from_pyobject(
-        _py: Python<'_>,
+        py: Python<'_>,
         obj: &Bound<'_, PyAny>,
         _span_type: &Bound<'_, PyType>,
     ) -> PyResult<Self> {
-        if obj.is_instance_of::<Identifier>() {
-            let node: PyRef<Identifier> = obj.extract()?;
-            return Ok(Self::Identifier(Box::new((*node).clone())));
+        if obj.is_instance_of::<PyIdentifier>() {
+            let handle: PyRef<PyIdentifier> = obj.extract()?;
+            let shared = handle.inner.clone();
+            let addr = shared.arc_ptr();
+            // Hand-in: register this Python handle as canonical for its Shared.
+            drop(handle); // release the PyRef before calling Python
+            // Propagate registry errors: a swallowed Err here would leave the
+            // handle unregistered, causing the next wrap-out to mint a different
+            // object and silently break is-stability.
+            registry::register_if_absent(py, addr, obj)?;
+            return Ok(Self::Identifier(shared));
         }
-        if obj.is_instance_of::<Literal>() {
-            let node: PyRef<Literal> = obj.extract()?;
-            return Ok(Self::Literal(Box::new((*node).clone())));
+        if obj.is_instance_of::<PyLiteral>() {
+            let handle: PyRef<PyLiteral> = obj.extract()?;
+            let shared = handle.inner.clone();
+            let addr = shared.arc_ptr();
+            // Hand-in: register this Python handle as canonical for its Shared.
+            drop(handle); // release the PyRef before calling Python
+            // Propagate registry errors: a swallowed Err here would leave the
+            // handle unregistered, causing the next wrap-out to mint a different
+            // object and silently break is-stability.
+            registry::register_if_absent(py, addr, obj)?;
+            return Ok(Self::Literal(shared));
         }
-        if obj.is_instance_of::<Operator>() {
-            let node: PyRef<Operator> = obj.extract()?;
-            return Ok(Self::Operator(Box::new((*node).clone())));
+        if obj.is_instance_of::<PyOperator>() {
+            let handle: PyRef<PyOperator> = obj.extract()?;
+            let shared = handle.inner.clone();
+            let addr = shared.arc_ptr();
+            // Hand-in: register this Python handle as canonical for its Shared.
+            drop(handle); // release the PyRef before calling Python
+            // Propagate registry errors: a swallowed Err here would leave the
+            // handle unregistered, causing the next wrap-out to mint a different
+            // object and silently break is-stability.
+            registry::register_if_absent(py, addr, obj)?;
+            return Ok(Self::Operator(shared));
         }
-        if obj.is_instance_of::<Trivia>() {
-            let node: PyRef<Trivia> = obj.extract()?;
-            return Ok(Self::Trivia(Box::new((*node).clone())));
+        if obj.is_instance_of::<PyTrivia>() {
+            let handle: PyRef<PyTrivia> = obj.extract()?;
+            let shared = handle.inner.clone();
+            let addr = shared.arc_ptr();
+            // Hand-in: register this Python handle as canonical for its Shared.
+            drop(handle); // release the PyRef before calling Python
+            // Propagate registry errors: a swallowed Err here would leave the
+            // handle unregistered, causing the next wrap-out to mint a different
+            // object and silently break is-stability.
+            registry::register_if_absent(py, addr, obj)?;
+            return Ok(Self::Trivia(shared));
         }
         Err(pyo3::exceptions::PyTypeError::new_err(format!(
             "Entry: unsupported child type {}",
@@ -566,8 +717,12 @@ impl EntryChild {
 // Entry
 // ───────────────────────────────────────────────────────────────────────────
 
-#[cfg_attr(feature = "python", pyclass)]
+/// CST data struct for `Entry`. Node-typed children are [`Shared<T>`] —
+/// see [`fltk_cst_core::Shared`] for clone/equality/reference semantics.
+#[derive(Clone)]
 pub struct Entry {
+    // Not pub: use span() / children() / push_child() — the stable accessor API.
+    // Direct field access bypasses any future validation logic on setters.
     span: Span,
     children: Vec<(Option<Entry_Label>, EntryChild)>,
 }
@@ -578,65 +733,101 @@ impl PartialEq for Entry {
     }
 }
 
-impl Clone for Entry {
-    fn clone(&self) -> Self {
-        Entry {
-            span: self.span.clone(),
-            children: self.children.clone(),
-        }
-    }
-}
-
 impl Entry {
     /// Construct a node with the given span and no children.
-    /// No GIL required.
-    pub fn new_native(span: Span) -> Self {
+    /// GIL-free.
+    pub fn new(span: Span) -> Self {
         Entry {
             span,
             children: Vec::new(),
         }
     }
 
-    /// Return a reference to the stored native `Span`.
-    pub fn span_native(&self) -> &Span {
+    /// Return a reference to the stored `Span`.
+    pub fn span(&self) -> &Span {
         &self.span
     }
 
-    /// Return a slice of the native children.
-    pub fn children_native(&self) -> &[(Option<Entry_Label>, EntryChild)] {
+    /// Return a slice of the children.
+    pub fn children(&self) -> &[(Option<Entry_Label>, EntryChild)] {
         self.children.as_slice()
     }
 
-    /// Push a child onto the native children `Vec`.
-    pub fn push_child_native(&mut self, label: Option<Entry_Label>, child: EntryChild) {
+    /// Replace the node's span.
+    pub fn set_span(&mut self, span: Span) {
+        self.span = span;
+    }
+
+    /// Push a child onto the children `Vec`.
+    pub fn push_child(&mut self, label: Option<Entry_Label>, child: EntryChild) {
         self.children.push((label, child));
     }
 }
 
 #[cfg(feature = "python")]
+#[pyclass(frozen, weakref, name = "Entry")]
+pub struct PyEntry {
+    // Not pub: all external access goes through shared() or to_py_canonical().
+    // A pub field would let mixed-app Rust code construct an unregistered handle
+    // (Py::new(py, PyFoo { inner: s.clone() })), silently breaking is-stability.
+    inner: Shared<Entry>,
+}
+
+#[cfg(feature = "python")]
+impl PyEntry {
+    /// Return a reference to the inner `Shared<Entry>`.
+    pub fn shared(&self) -> &Shared<Entry> {
+        &self.inner
+    }
+
+    /// Wrap a `Shared<Entry>` into a canonical Python handle,
+    /// looking up the registry first so the same handle is returned
+    /// for the same `Shared` allocation.
+    pub fn to_py_canonical(py: Python<'_>, s: &Shared<Entry>) -> PyResult<Py<PyEntry>> {
+        let addr = s.arc_ptr();
+        let obj = registry::get_or_insert_with(py, addr, || {
+            let handle = PyEntry { inner: s.clone() };
+            Py::new(py, handle).map(|p| p.into_any())
+        })?;
+        obj.bind(py).downcast::<PyEntry>().map(|b| b.clone().unbind()).map_err(|e| e.into())
+    }
+}
+
+#[cfg(feature = "python")]
 #[pymethods]
-impl Entry {
+impl PyEntry {
     #[new]
     #[pyo3(signature = (*, span = None))]
-    fn new(py: Python<'_>, span: Option<&Bound<'_, PyAny>>) -> PyResult<Self> {
+    fn new(py: Python<'_>, span: Option<&Bound<'_, PyAny>>) -> PyResult<Py<PyEntry>> {
         let native_span = match span {
             Some(s) => extract_span(py, s)?,
             None => Span::unknown(),
         };
-        Ok(Entry {
+        let data = Entry {
             span: native_span,
             children: Vec::new(),
-        })
+        };
+        let shared = Shared::new(data);
+        let addr = shared.arc_ptr();
+        let handle = PyEntry { inner: shared };
+        let py_obj = Py::new(py, handle)?;
+        // Register as canonical — fresh Shared, no alias can exist yet.
+        registry::force_register(py, addr, py_obj.bind(py))?;
+        Ok(py_obj)
     }
 
     #[getter]
     fn span(&self, py: Python<'_>) -> PyResult<PyObject> {
-        span_to_pyobject(py, &self.span)
+        // Snapshot the span under the read lock, then drop the guard before
+        // calling span_to_pyobject — which performs Python work (Py::new or
+        // Python method calls) that must not happen while a node lock is held.
+        let span = self.inner.read().span.clone();
+        span_to_pyobject(py, &span)
     }
 
     #[setter]
-    fn set_span(&mut self, py: Python<'_>, value: &Bound<'_, PyAny>) -> PyResult<()> {
-        self.span = extract_span(py, value)?;
+    fn set_span(&self, py: Python<'_>, value: &Bound<'_, PyAny>) -> PyResult<()> {
+        self.inner.write().span = extract_span(py, value)?;
         Ok(())
     }
 
@@ -653,8 +844,14 @@ impl Entry {
 
     #[getter]
     fn children(&self, py: Python<'_>) -> PyResult<Py<PyList>> {
+        // Snapshot the children vec (Arc clones for node children — O(n) refcount bumps).
+        // Lock scope: acquire read, snapshot, release before touching Python.
+        let snapshot: Vec<_> = {
+            let guard = self.inner.read();
+            guard.children.clone()
+        };
         let result = PyList::empty(py);
-        for (label, child) in &self.children {
+        for (label, child) in &snapshot {
             let label_obj: PyObject = match label {
                 None => py.None(),
                 Some(lbl) => lbl.clone().into_pyobject(py)?.into_any().unbind(),
@@ -667,7 +864,7 @@ impl Entry {
     }
 
     #[pyo3(signature = (child, label = None))]
-    fn append(&mut self, py: Python<'_>, child: &Bound<'_, PyAny>, label: Option<PyObject>) -> PyResult<()> {
+    fn append(&self, py: Python<'_>, child: &Bound<'_, PyAny>, label: Option<PyObject>) -> PyResult<()> {
         let span_type = get_span_type(py)?;
         let native_child = EntryChild::extract_from_pyobject(py, child, &span_type)?;
         let native_label = match label {
@@ -683,13 +880,13 @@ impl Entry {
                 }
             }
         };
-        self.children.push((native_label, native_child));
+        self.inner.write().children.push((native_label, native_child));
         Ok(())
     }
 
     #[pyo3(signature = (children, label = None))]
     fn extend(
-        &mut self,
+        &self,
         py: Python<'_>,
         children: &Bound<'_, PyAny>,
         label: Option<PyObject>,
@@ -712,26 +909,41 @@ impl Entry {
         for child_result in iter {
             let child = child_result?;
             let native_child = EntryChild::extract_from_pyobject(py, &child, &span_type)?;
-            self.children.push((native_label.clone(), native_child));
+            self.inner.write().children.push((native_label.clone(), native_child));
         }
         Ok(())
     }
 
-    fn extend_children(&mut self, other: PyRef<'_, Entry>) -> PyResult<()> {
-        for (label, child) in &other.children {
-            self.children.push((label.clone(), child.clone()));
-        }
+    fn extend_children(&self, _py: Python<'_>, other: &PyEntry) -> PyResult<()> {
+        // Snapshot other's children first: the read guard is dropped at the end of
+        // this block, so the write lock below is safe even when self and other are
+        // the same node (self-extend). No ptr_eq call is needed here — the snapshot
+        // approach handles self-extend structurally.
+        // Lock scope: hold read only long enough to clone the Arc-based children vec.
+        let snapshot: Vec<_> = {
+            let guard = other.inner.read();
+            guard.children.clone()
+        };
+        // Node-typed children are pushed directly as Shared<T> values.  Registry
+        // consistency is maintained lazily: wrap-out registers on first Python read
+        // via get_or_insert_with (registry.rs).  Eagerly registering here would be
+        // a no-op — the WeakValueDictionary would evict handles held by nothing.
+        self.inner.write().children.extend(snapshot);
         Ok(())
     }
 
     fn child(&self, py: Python<'_>) -> PyResult<PyObject> {
-        let n = self.children.len();
+        let snapshot: Vec<_> = {
+            let guard = self.inner.read();
+            guard.children.clone()
+        };
+        let n = snapshot.len();
         if n != 1 {
             return Err(PyValueError::new_err(format!(
                 "Expected one child but have {n}"
             )));
         }
-        let (label, child) = &self.children[0];
+        let (label, child) = &snapshot[0];
         let label_obj: PyObject = match label {
             None => py.None(),
             Some(lbl) => lbl.clone().into_pyobject(py)?.into_any().unbind(),
@@ -740,28 +952,33 @@ impl Entry {
         Ok(PyTuple::new(py, [label_obj, child_obj])?.into_any().unbind())
     }
 
-    fn append_key(&mut self, py: Python<'_>, child: &Bound<'_, PyAny>) -> PyResult<()> {
+    fn append_key(&self, py: Python<'_>, child: &Bound<'_, PyAny>) -> PyResult<()> {
         let span_type = get_span_type(py)?;
         let native_child = EntryChild::extract_from_pyobject(py, child, &span_type)?;
-        self.children.push((Some(Entry_Label::Key), native_child));
+        self.inner.write().children.push((Some(Entry_Label::Key), native_child));
         Ok(())
     }
 
-    fn extend_key(&mut self, py: Python<'_>, children: &Bound<'_, PyAny>) -> PyResult<()> {
+    fn extend_key(&self, py: Python<'_>, children: &Bound<'_, PyAny>) -> PyResult<()> {
         let span_type = get_span_type(py)?;
         let iter = children.try_iter()?;
         for child_result in iter {
             let child = child_result?;
             let native_child = EntryChild::extract_from_pyobject(py, &child, &span_type)?;
-            self.children.push((Some(Entry_Label::Key), native_child));
+            let entry = (Some(Entry_Label::Key), native_child);
+            self.inner.write().children.push(entry);
         }
         Ok(())
     }
 
     fn children_key(&self, py: Python<'_>) -> PyResult<Py<PyList>> {
+        let snapshot: Vec<_> = {
+            let guard = self.inner.read();
+            guard.children.clone()
+        };
         let result = PyList::empty(py);
-        for (label, child) in &self.children {
-            if *label == Some(Entry_Label::Key) {
+        for (lbl, child) in &snapshot {
+            if *lbl == Some(Entry_Label::Key) {
                 result.append(child.to_pyobject(py)?)?;
             }
         }
@@ -769,10 +986,14 @@ impl Entry {
     }
 
     fn child_key(&self, py: Python<'_>) -> PyResult<PyObject> {
+        let snapshot: Vec<_> = {
+            let guard = self.inner.read();
+            guard.children.clone()
+        };
         let mut found: Option<PyObject> = None;
         let mut count = 0usize;
-        for (label, child) in &self.children {
-            if *label == Some(Entry_Label::Key) {
+        for (lbl, child) in &snapshot {
+            if *lbl == Some(Entry_Label::Key) {
                 count += 1;
                 if count == 1 {
                     found = Some(child.to_pyobject(py)?);
@@ -788,10 +1009,14 @@ impl Entry {
     }
 
     fn maybe_key(&self, py: Python<'_>) -> PyResult<Option<PyObject>> {
+        let snapshot: Vec<_> = {
+            let guard = self.inner.read();
+            guard.children.clone()
+        };
         let mut found: Option<PyObject> = None;
         let mut count = 0usize;
-        for (label, child) in &self.children {
-            if *label == Some(Entry_Label::Key) {
+        for (lbl, child) in &snapshot {
+            if *lbl == Some(Entry_Label::Key) {
                 count += 1;
                 if count == 1 {
                     found = Some(child.to_pyobject(py)?);
@@ -806,28 +1031,33 @@ impl Entry {
         Ok(found)
     }
 
-    fn append_op(&mut self, py: Python<'_>, child: &Bound<'_, PyAny>) -> PyResult<()> {
+    fn append_op(&self, py: Python<'_>, child: &Bound<'_, PyAny>) -> PyResult<()> {
         let span_type = get_span_type(py)?;
         let native_child = EntryChild::extract_from_pyobject(py, child, &span_type)?;
-        self.children.push((Some(Entry_Label::Op), native_child));
+        self.inner.write().children.push((Some(Entry_Label::Op), native_child));
         Ok(())
     }
 
-    fn extend_op(&mut self, py: Python<'_>, children: &Bound<'_, PyAny>) -> PyResult<()> {
+    fn extend_op(&self, py: Python<'_>, children: &Bound<'_, PyAny>) -> PyResult<()> {
         let span_type = get_span_type(py)?;
         let iter = children.try_iter()?;
         for child_result in iter {
             let child = child_result?;
             let native_child = EntryChild::extract_from_pyobject(py, &child, &span_type)?;
-            self.children.push((Some(Entry_Label::Op), native_child));
+            let entry = (Some(Entry_Label::Op), native_child);
+            self.inner.write().children.push(entry);
         }
         Ok(())
     }
 
     fn children_op(&self, py: Python<'_>) -> PyResult<Py<PyList>> {
+        let snapshot: Vec<_> = {
+            let guard = self.inner.read();
+            guard.children.clone()
+        };
         let result = PyList::empty(py);
-        for (label, child) in &self.children {
-            if *label == Some(Entry_Label::Op) {
+        for (lbl, child) in &snapshot {
+            if *lbl == Some(Entry_Label::Op) {
                 result.append(child.to_pyobject(py)?)?;
             }
         }
@@ -835,10 +1065,14 @@ impl Entry {
     }
 
     fn child_op(&self, py: Python<'_>) -> PyResult<PyObject> {
+        let snapshot: Vec<_> = {
+            let guard = self.inner.read();
+            guard.children.clone()
+        };
         let mut found: Option<PyObject> = None;
         let mut count = 0usize;
-        for (label, child) in &self.children {
-            if *label == Some(Entry_Label::Op) {
+        for (lbl, child) in &snapshot {
+            if *lbl == Some(Entry_Label::Op) {
                 count += 1;
                 if count == 1 {
                     found = Some(child.to_pyobject(py)?);
@@ -854,10 +1088,14 @@ impl Entry {
     }
 
     fn maybe_op(&self, py: Python<'_>) -> PyResult<Option<PyObject>> {
+        let snapshot: Vec<_> = {
+            let guard = self.inner.read();
+            guard.children.clone()
+        };
         let mut found: Option<PyObject> = None;
         let mut count = 0usize;
-        for (label, child) in &self.children {
-            if *label == Some(Entry_Label::Op) {
+        for (lbl, child) in &snapshot {
+            if *lbl == Some(Entry_Label::Op) {
                 count += 1;
                 if count == 1 {
                     found = Some(child.to_pyobject(py)?);
@@ -872,28 +1110,33 @@ impl Entry {
         Ok(found)
     }
 
-    fn append_value(&mut self, py: Python<'_>, child: &Bound<'_, PyAny>) -> PyResult<()> {
+    fn append_value(&self, py: Python<'_>, child: &Bound<'_, PyAny>) -> PyResult<()> {
         let span_type = get_span_type(py)?;
         let native_child = EntryChild::extract_from_pyobject(py, child, &span_type)?;
-        self.children.push((Some(Entry_Label::Value), native_child));
+        self.inner.write().children.push((Some(Entry_Label::Value), native_child));
         Ok(())
     }
 
-    fn extend_value(&mut self, py: Python<'_>, children: &Bound<'_, PyAny>) -> PyResult<()> {
+    fn extend_value(&self, py: Python<'_>, children: &Bound<'_, PyAny>) -> PyResult<()> {
         let span_type = get_span_type(py)?;
         let iter = children.try_iter()?;
         for child_result in iter {
             let child = child_result?;
             let native_child = EntryChild::extract_from_pyobject(py, &child, &span_type)?;
-            self.children.push((Some(Entry_Label::Value), native_child));
+            let entry = (Some(Entry_Label::Value), native_child);
+            self.inner.write().children.push(entry);
         }
         Ok(())
     }
 
     fn children_value(&self, py: Python<'_>) -> PyResult<Py<PyList>> {
+        let snapshot: Vec<_> = {
+            let guard = self.inner.read();
+            guard.children.clone()
+        };
         let result = PyList::empty(py);
-        for (label, child) in &self.children {
-            if *label == Some(Entry_Label::Value) {
+        for (lbl, child) in &snapshot {
+            if *lbl == Some(Entry_Label::Value) {
                 result.append(child.to_pyobject(py)?)?;
             }
         }
@@ -901,10 +1144,14 @@ impl Entry {
     }
 
     fn child_value(&self, py: Python<'_>) -> PyResult<PyObject> {
+        let snapshot: Vec<_> = {
+            let guard = self.inner.read();
+            guard.children.clone()
+        };
         let mut found: Option<PyObject> = None;
         let mut count = 0usize;
-        for (label, child) in &self.children {
-            if *label == Some(Entry_Label::Value) {
+        for (lbl, child) in &snapshot {
+            if *lbl == Some(Entry_Label::Value) {
                 count += 1;
                 if count == 1 {
                     found = Some(child.to_pyobject(py)?);
@@ -920,10 +1167,14 @@ impl Entry {
     }
 
     fn maybe_value(&self, py: Python<'_>) -> PyResult<Option<PyObject>> {
+        let snapshot: Vec<_> = {
+            let guard = self.inner.read();
+            guard.children.clone()
+        };
         let mut found: Option<PyObject> = None;
         let mut count = 0usize;
-        for (label, child) in &self.children {
-            if *label == Some(Entry_Label::Value) {
+        for (lbl, child) in &snapshot {
+            if *lbl == Some(Entry_Label::Value) {
                 count += 1;
                 if count == 1 {
                     found = Some(child.to_pyobject(py)?);
@@ -939,12 +1190,13 @@ impl Entry {
     }
 
     fn __eq__(&self, py: Python<'_>, other: &Bound<'_, PyAny>) -> PyResult<PyObject> {
-        if !other.is_instance_of::<Entry>() {
+        if !other.is_instance_of::<PyEntry>() {
             return Ok(py.NotImplemented());
         }
-        let other_node: PyRef<Entry> = other.extract()?;
-        // Native structural equality: no Python .eq() on stored state
-        let eq = self == &*other_node;
+        let other_handle: PyRef<PyEntry> = other.extract()?;
+        // Delegate to Shared<T>::PartialEq which applies the ptr_eq short-circuit
+        // (avoids same-lock re-entry on `x == x`) then deep structural comparison.
+        let eq = self.inner == other_handle.inner;
         Ok(eq.into_pyobject(py)?.to_owned().unbind().into_any())
     }
 
@@ -953,8 +1205,9 @@ impl Entry {
     }
 
     fn __repr__(&self, _py: Python<'_>) -> String {
-        let span_repr = format!("Span(start={}, end={})", self.span.start(), self.span.end());
-        let children_len = self.children.len();
+        let guard = self.inner.read();
+        let span_repr = format!("Span(start={}, end={})", guard.span.start(), guard.span.end());
+        let children_len = guard.children.len();
         format!(
             "Entry(span={span_repr}, children=[<{children_len} child(ren)>])"
         )
@@ -1023,7 +1276,8 @@ impl Operator_Label {
     }
 }
 
-// OperatorChild — native child value enum for Operator
+// OperatorChild — child value enum for Operator
+// Node-typed variants hold Shared<T> (Arc<RwLock<T>>); Clone is shallow.
 #[derive(Clone)]
 pub enum OperatorChild {
     Span(Span),
@@ -1067,8 +1321,12 @@ impl OperatorChild {
 // Operator
 // ───────────────────────────────────────────────────────────────────────────
 
-#[cfg_attr(feature = "python", pyclass)]
+/// CST data struct for `Operator`. Node-typed children are [`Shared<T>`] —
+/// see [`fltk_cst_core::Shared`] for clone/equality/reference semantics.
+#[derive(Clone)]
 pub struct Operator {
+    // Not pub: use span() / children() / push_child() — the stable accessor API.
+    // Direct field access bypasses any future validation logic on setters.
     span: Span,
     children: Vec<(Option<Operator_Label>, OperatorChild)>,
 }
@@ -1079,65 +1337,101 @@ impl PartialEq for Operator {
     }
 }
 
-impl Clone for Operator {
-    fn clone(&self) -> Self {
-        Operator {
-            span: self.span.clone(),
-            children: self.children.clone(),
-        }
-    }
-}
-
 impl Operator {
     /// Construct a node with the given span and no children.
-    /// No GIL required.
-    pub fn new_native(span: Span) -> Self {
+    /// GIL-free.
+    pub fn new(span: Span) -> Self {
         Operator {
             span,
             children: Vec::new(),
         }
     }
 
-    /// Return a reference to the stored native `Span`.
-    pub fn span_native(&self) -> &Span {
+    /// Return a reference to the stored `Span`.
+    pub fn span(&self) -> &Span {
         &self.span
     }
 
-    /// Return a slice of the native children.
-    pub fn children_native(&self) -> &[(Option<Operator_Label>, OperatorChild)] {
+    /// Return a slice of the children.
+    pub fn children(&self) -> &[(Option<Operator_Label>, OperatorChild)] {
         self.children.as_slice()
     }
 
-    /// Push a child onto the native children `Vec`.
-    pub fn push_child_native(&mut self, label: Option<Operator_Label>, child: OperatorChild) {
+    /// Replace the node's span.
+    pub fn set_span(&mut self, span: Span) {
+        self.span = span;
+    }
+
+    /// Push a child onto the children `Vec`.
+    pub fn push_child(&mut self, label: Option<Operator_Label>, child: OperatorChild) {
         self.children.push((label, child));
     }
 }
 
 #[cfg(feature = "python")]
+#[pyclass(frozen, weakref, name = "Operator")]
+pub struct PyOperator {
+    // Not pub: all external access goes through shared() or to_py_canonical().
+    // A pub field would let mixed-app Rust code construct an unregistered handle
+    // (Py::new(py, PyFoo { inner: s.clone() })), silently breaking is-stability.
+    inner: Shared<Operator>,
+}
+
+#[cfg(feature = "python")]
+impl PyOperator {
+    /// Return a reference to the inner `Shared<Operator>`.
+    pub fn shared(&self) -> &Shared<Operator> {
+        &self.inner
+    }
+
+    /// Wrap a `Shared<Operator>` into a canonical Python handle,
+    /// looking up the registry first so the same handle is returned
+    /// for the same `Shared` allocation.
+    pub fn to_py_canonical(py: Python<'_>, s: &Shared<Operator>) -> PyResult<Py<PyOperator>> {
+        let addr = s.arc_ptr();
+        let obj = registry::get_or_insert_with(py, addr, || {
+            let handle = PyOperator { inner: s.clone() };
+            Py::new(py, handle).map(|p| p.into_any())
+        })?;
+        obj.bind(py).downcast::<PyOperator>().map(|b| b.clone().unbind()).map_err(|e| e.into())
+    }
+}
+
+#[cfg(feature = "python")]
 #[pymethods]
-impl Operator {
+impl PyOperator {
     #[new]
     #[pyo3(signature = (*, span = None))]
-    fn new(py: Python<'_>, span: Option<&Bound<'_, PyAny>>) -> PyResult<Self> {
+    fn new(py: Python<'_>, span: Option<&Bound<'_, PyAny>>) -> PyResult<Py<PyOperator>> {
         let native_span = match span {
             Some(s) => extract_span(py, s)?,
             None => Span::unknown(),
         };
-        Ok(Operator {
+        let data = Operator {
             span: native_span,
             children: Vec::new(),
-        })
+        };
+        let shared = Shared::new(data);
+        let addr = shared.arc_ptr();
+        let handle = PyOperator { inner: shared };
+        let py_obj = Py::new(py, handle)?;
+        // Register as canonical — fresh Shared, no alias can exist yet.
+        registry::force_register(py, addr, py_obj.bind(py))?;
+        Ok(py_obj)
     }
 
     #[getter]
     fn span(&self, py: Python<'_>) -> PyResult<PyObject> {
-        span_to_pyobject(py, &self.span)
+        // Snapshot the span under the read lock, then drop the guard before
+        // calling span_to_pyobject — which performs Python work (Py::new or
+        // Python method calls) that must not happen while a node lock is held.
+        let span = self.inner.read().span.clone();
+        span_to_pyobject(py, &span)
     }
 
     #[setter]
-    fn set_span(&mut self, py: Python<'_>, value: &Bound<'_, PyAny>) -> PyResult<()> {
-        self.span = extract_span(py, value)?;
+    fn set_span(&self, py: Python<'_>, value: &Bound<'_, PyAny>) -> PyResult<()> {
+        self.inner.write().span = extract_span(py, value)?;
         Ok(())
     }
 
@@ -1154,8 +1448,14 @@ impl Operator {
 
     #[getter]
     fn children(&self, py: Python<'_>) -> PyResult<Py<PyList>> {
+        // Snapshot the children vec (Arc clones for node children — O(n) refcount bumps).
+        // Lock scope: acquire read, snapshot, release before touching Python.
+        let snapshot: Vec<_> = {
+            let guard = self.inner.read();
+            guard.children.clone()
+        };
         let result = PyList::empty(py);
-        for (label, child) in &self.children {
+        for (label, child) in &snapshot {
             let label_obj: PyObject = match label {
                 None => py.None(),
                 Some(lbl) => lbl.clone().into_pyobject(py)?.into_any().unbind(),
@@ -1168,7 +1468,7 @@ impl Operator {
     }
 
     #[pyo3(signature = (child, label = None))]
-    fn append(&mut self, py: Python<'_>, child: &Bound<'_, PyAny>, label: Option<PyObject>) -> PyResult<()> {
+    fn append(&self, py: Python<'_>, child: &Bound<'_, PyAny>, label: Option<PyObject>) -> PyResult<()> {
         let span_type = get_span_type(py)?;
         let native_child = OperatorChild::extract_from_pyobject(py, child, &span_type)?;
         let native_label = match label {
@@ -1184,13 +1484,13 @@ impl Operator {
                 }
             }
         };
-        self.children.push((native_label, native_child));
+        self.inner.write().children.push((native_label, native_child));
         Ok(())
     }
 
     #[pyo3(signature = (children, label = None))]
     fn extend(
-        &mut self,
+        &self,
         py: Python<'_>,
         children: &Bound<'_, PyAny>,
         label: Option<PyObject>,
@@ -1213,26 +1513,41 @@ impl Operator {
         for child_result in iter {
             let child = child_result?;
             let native_child = OperatorChild::extract_from_pyobject(py, &child, &span_type)?;
-            self.children.push((native_label.clone(), native_child));
+            self.inner.write().children.push((native_label.clone(), native_child));
         }
         Ok(())
     }
 
-    fn extend_children(&mut self, other: PyRef<'_, Operator>) -> PyResult<()> {
-        for (label, child) in &other.children {
-            self.children.push((label.clone(), child.clone()));
-        }
+    fn extend_children(&self, _py: Python<'_>, other: &PyOperator) -> PyResult<()> {
+        // Snapshot other's children first: the read guard is dropped at the end of
+        // this block, so the write lock below is safe even when self and other are
+        // the same node (self-extend). No ptr_eq call is needed here — the snapshot
+        // approach handles self-extend structurally.
+        // Lock scope: hold read only long enough to clone the Arc-based children vec.
+        let snapshot: Vec<_> = {
+            let guard = other.inner.read();
+            guard.children.clone()
+        };
+        // Node-typed children are pushed directly as Shared<T> values.  Registry
+        // consistency is maintained lazily: wrap-out registers on first Python read
+        // via get_or_insert_with (registry.rs).  Eagerly registering here would be
+        // a no-op — the WeakValueDictionary would evict handles held by nothing.
+        self.inner.write().children.extend(snapshot);
         Ok(())
     }
 
     fn child(&self, py: Python<'_>) -> PyResult<PyObject> {
-        let n = self.children.len();
+        let snapshot: Vec<_> = {
+            let guard = self.inner.read();
+            guard.children.clone()
+        };
+        let n = snapshot.len();
         if n != 1 {
             return Err(PyValueError::new_err(format!(
                 "Expected one child but have {n}"
             )));
         }
-        let (label, child) = &self.children[0];
+        let (label, child) = &snapshot[0];
         let label_obj: PyObject = match label {
             None => py.None(),
             Some(lbl) => lbl.clone().into_pyobject(py)?.into_any().unbind(),
@@ -1241,28 +1556,33 @@ impl Operator {
         Ok(PyTuple::new(py, [label_obj, child_obj])?.into_any().unbind())
     }
 
-    fn append_append(&mut self, py: Python<'_>, child: &Bound<'_, PyAny>) -> PyResult<()> {
+    fn append_append(&self, py: Python<'_>, child: &Bound<'_, PyAny>) -> PyResult<()> {
         let span_type = get_span_type(py)?;
         let native_child = OperatorChild::extract_from_pyobject(py, child, &span_type)?;
-        self.children.push((Some(Operator_Label::Append), native_child));
+        self.inner.write().children.push((Some(Operator_Label::Append), native_child));
         Ok(())
     }
 
-    fn extend_append(&mut self, py: Python<'_>, children: &Bound<'_, PyAny>) -> PyResult<()> {
+    fn extend_append(&self, py: Python<'_>, children: &Bound<'_, PyAny>) -> PyResult<()> {
         let span_type = get_span_type(py)?;
         let iter = children.try_iter()?;
         for child_result in iter {
             let child = child_result?;
             let native_child = OperatorChild::extract_from_pyobject(py, &child, &span_type)?;
-            self.children.push((Some(Operator_Label::Append), native_child));
+            let entry = (Some(Operator_Label::Append), native_child);
+            self.inner.write().children.push(entry);
         }
         Ok(())
     }
 
     fn children_append(&self, py: Python<'_>) -> PyResult<Py<PyList>> {
+        let snapshot: Vec<_> = {
+            let guard = self.inner.read();
+            guard.children.clone()
+        };
         let result = PyList::empty(py);
-        for (label, child) in &self.children {
-            if *label == Some(Operator_Label::Append) {
+        for (lbl, child) in &snapshot {
+            if *lbl == Some(Operator_Label::Append) {
                 result.append(child.to_pyobject(py)?)?;
             }
         }
@@ -1270,10 +1590,14 @@ impl Operator {
     }
 
     fn child_append(&self, py: Python<'_>) -> PyResult<PyObject> {
+        let snapshot: Vec<_> = {
+            let guard = self.inner.read();
+            guard.children.clone()
+        };
         let mut found: Option<PyObject> = None;
         let mut count = 0usize;
-        for (label, child) in &self.children {
-            if *label == Some(Operator_Label::Append) {
+        for (lbl, child) in &snapshot {
+            if *lbl == Some(Operator_Label::Append) {
                 count += 1;
                 if count == 1 {
                     found = Some(child.to_pyobject(py)?);
@@ -1289,10 +1613,14 @@ impl Operator {
     }
 
     fn maybe_append(&self, py: Python<'_>) -> PyResult<Option<PyObject>> {
+        let snapshot: Vec<_> = {
+            let guard = self.inner.read();
+            guard.children.clone()
+        };
         let mut found: Option<PyObject> = None;
         let mut count = 0usize;
-        for (label, child) in &self.children {
-            if *label == Some(Operator_Label::Append) {
+        for (lbl, child) in &snapshot {
+            if *lbl == Some(Operator_Label::Append) {
                 count += 1;
                 if count == 1 {
                     found = Some(child.to_pyobject(py)?);
@@ -1307,28 +1635,33 @@ impl Operator {
         Ok(found)
     }
 
-    fn append_assign(&mut self, py: Python<'_>, child: &Bound<'_, PyAny>) -> PyResult<()> {
+    fn append_assign(&self, py: Python<'_>, child: &Bound<'_, PyAny>) -> PyResult<()> {
         let span_type = get_span_type(py)?;
         let native_child = OperatorChild::extract_from_pyobject(py, child, &span_type)?;
-        self.children.push((Some(Operator_Label::Assign), native_child));
+        self.inner.write().children.push((Some(Operator_Label::Assign), native_child));
         Ok(())
     }
 
-    fn extend_assign(&mut self, py: Python<'_>, children: &Bound<'_, PyAny>) -> PyResult<()> {
+    fn extend_assign(&self, py: Python<'_>, children: &Bound<'_, PyAny>) -> PyResult<()> {
         let span_type = get_span_type(py)?;
         let iter = children.try_iter()?;
         for child_result in iter {
             let child = child_result?;
             let native_child = OperatorChild::extract_from_pyobject(py, &child, &span_type)?;
-            self.children.push((Some(Operator_Label::Assign), native_child));
+            let entry = (Some(Operator_Label::Assign), native_child);
+            self.inner.write().children.push(entry);
         }
         Ok(())
     }
 
     fn children_assign(&self, py: Python<'_>) -> PyResult<Py<PyList>> {
+        let snapshot: Vec<_> = {
+            let guard = self.inner.read();
+            guard.children.clone()
+        };
         let result = PyList::empty(py);
-        for (label, child) in &self.children {
-            if *label == Some(Operator_Label::Assign) {
+        for (lbl, child) in &snapshot {
+            if *lbl == Some(Operator_Label::Assign) {
                 result.append(child.to_pyobject(py)?)?;
             }
         }
@@ -1336,10 +1669,14 @@ impl Operator {
     }
 
     fn child_assign(&self, py: Python<'_>) -> PyResult<PyObject> {
+        let snapshot: Vec<_> = {
+            let guard = self.inner.read();
+            guard.children.clone()
+        };
         let mut found: Option<PyObject> = None;
         let mut count = 0usize;
-        for (label, child) in &self.children {
-            if *label == Some(Operator_Label::Assign) {
+        for (lbl, child) in &snapshot {
+            if *lbl == Some(Operator_Label::Assign) {
                 count += 1;
                 if count == 1 {
                     found = Some(child.to_pyobject(py)?);
@@ -1355,10 +1692,14 @@ impl Operator {
     }
 
     fn maybe_assign(&self, py: Python<'_>) -> PyResult<Option<PyObject>> {
+        let snapshot: Vec<_> = {
+            let guard = self.inner.read();
+            guard.children.clone()
+        };
         let mut found: Option<PyObject> = None;
         let mut count = 0usize;
-        for (label, child) in &self.children {
-            if *label == Some(Operator_Label::Assign) {
+        for (lbl, child) in &snapshot {
+            if *lbl == Some(Operator_Label::Assign) {
                 count += 1;
                 if count == 1 {
                     found = Some(child.to_pyobject(py)?);
@@ -1373,28 +1714,33 @@ impl Operator {
         Ok(found)
     }
 
-    fn append_remove(&mut self, py: Python<'_>, child: &Bound<'_, PyAny>) -> PyResult<()> {
+    fn append_remove(&self, py: Python<'_>, child: &Bound<'_, PyAny>) -> PyResult<()> {
         let span_type = get_span_type(py)?;
         let native_child = OperatorChild::extract_from_pyobject(py, child, &span_type)?;
-        self.children.push((Some(Operator_Label::Remove), native_child));
+        self.inner.write().children.push((Some(Operator_Label::Remove), native_child));
         Ok(())
     }
 
-    fn extend_remove(&mut self, py: Python<'_>, children: &Bound<'_, PyAny>) -> PyResult<()> {
+    fn extend_remove(&self, py: Python<'_>, children: &Bound<'_, PyAny>) -> PyResult<()> {
         let span_type = get_span_type(py)?;
         let iter = children.try_iter()?;
         for child_result in iter {
             let child = child_result?;
             let native_child = OperatorChild::extract_from_pyobject(py, &child, &span_type)?;
-            self.children.push((Some(Operator_Label::Remove), native_child));
+            let entry = (Some(Operator_Label::Remove), native_child);
+            self.inner.write().children.push(entry);
         }
         Ok(())
     }
 
     fn children_remove(&self, py: Python<'_>) -> PyResult<Py<PyList>> {
+        let snapshot: Vec<_> = {
+            let guard = self.inner.read();
+            guard.children.clone()
+        };
         let result = PyList::empty(py);
-        for (label, child) in &self.children {
-            if *label == Some(Operator_Label::Remove) {
+        for (lbl, child) in &snapshot {
+            if *lbl == Some(Operator_Label::Remove) {
                 result.append(child.to_pyobject(py)?)?;
             }
         }
@@ -1402,10 +1748,14 @@ impl Operator {
     }
 
     fn child_remove(&self, py: Python<'_>) -> PyResult<PyObject> {
+        let snapshot: Vec<_> = {
+            let guard = self.inner.read();
+            guard.children.clone()
+        };
         let mut found: Option<PyObject> = None;
         let mut count = 0usize;
-        for (label, child) in &self.children {
-            if *label == Some(Operator_Label::Remove) {
+        for (lbl, child) in &snapshot {
+            if *lbl == Some(Operator_Label::Remove) {
                 count += 1;
                 if count == 1 {
                     found = Some(child.to_pyobject(py)?);
@@ -1421,10 +1771,14 @@ impl Operator {
     }
 
     fn maybe_remove(&self, py: Python<'_>) -> PyResult<Option<PyObject>> {
+        let snapshot: Vec<_> = {
+            let guard = self.inner.read();
+            guard.children.clone()
+        };
         let mut found: Option<PyObject> = None;
         let mut count = 0usize;
-        for (label, child) in &self.children {
-            if *label == Some(Operator_Label::Remove) {
+        for (lbl, child) in &snapshot {
+            if *lbl == Some(Operator_Label::Remove) {
                 count += 1;
                 if count == 1 {
                     found = Some(child.to_pyobject(py)?);
@@ -1440,12 +1794,13 @@ impl Operator {
     }
 
     fn __eq__(&self, py: Python<'_>, other: &Bound<'_, PyAny>) -> PyResult<PyObject> {
-        if !other.is_instance_of::<Operator>() {
+        if !other.is_instance_of::<PyOperator>() {
             return Ok(py.NotImplemented());
         }
-        let other_node: PyRef<Operator> = other.extract()?;
-        // Native structural equality: no Python .eq() on stored state
-        let eq = self == &*other_node;
+        let other_handle: PyRef<PyOperator> = other.extract()?;
+        // Delegate to Shared<T>::PartialEq which applies the ptr_eq short-circuit
+        // (avoids same-lock re-entry on `x == x`) then deep structural comparison.
+        let eq = self.inner == other_handle.inner;
         Ok(eq.into_pyobject(py)?.to_owned().unbind().into_any())
     }
 
@@ -1454,8 +1809,9 @@ impl Operator {
     }
 
     fn __repr__(&self, _py: Python<'_>) -> String {
-        let span_repr = format!("Span(start={}, end={})", self.span.start(), self.span.end());
-        let children_len = self.children.len();
+        let guard = self.inner.read();
+        let span_repr = format!("Span(start={}, end={})", guard.span.start(), guard.span.end());
+        let children_len = guard.children.len();
         format!(
             "Operator(span={span_repr}, children=[<{children_len} child(ren)>])"
         )
@@ -1516,7 +1872,8 @@ impl Identifier_Label {
     }
 }
 
-// IdentifierChild — native child value enum for Identifier
+// IdentifierChild — child value enum for Identifier
+// Node-typed variants hold Shared<T> (Arc<RwLock<T>>); Clone is shallow.
 #[derive(Clone)]
 pub enum IdentifierChild {
     Span(Span),
@@ -1560,8 +1917,12 @@ impl IdentifierChild {
 // Identifier
 // ───────────────────────────────────────────────────────────────────────────
 
-#[cfg_attr(feature = "python", pyclass)]
+/// CST data struct for `Identifier`. Node-typed children are [`Shared<T>`] —
+/// see [`fltk_cst_core::Shared`] for clone/equality/reference semantics.
+#[derive(Clone)]
 pub struct Identifier {
+    // Not pub: use span() / children() / push_child() — the stable accessor API.
+    // Direct field access bypasses any future validation logic on setters.
     span: Span,
     children: Vec<(Option<Identifier_Label>, IdentifierChild)>,
 }
@@ -1572,65 +1933,101 @@ impl PartialEq for Identifier {
     }
 }
 
-impl Clone for Identifier {
-    fn clone(&self) -> Self {
-        Identifier {
-            span: self.span.clone(),
-            children: self.children.clone(),
-        }
-    }
-}
-
 impl Identifier {
     /// Construct a node with the given span and no children.
-    /// No GIL required.
-    pub fn new_native(span: Span) -> Self {
+    /// GIL-free.
+    pub fn new(span: Span) -> Self {
         Identifier {
             span,
             children: Vec::new(),
         }
     }
 
-    /// Return a reference to the stored native `Span`.
-    pub fn span_native(&self) -> &Span {
+    /// Return a reference to the stored `Span`.
+    pub fn span(&self) -> &Span {
         &self.span
     }
 
-    /// Return a slice of the native children.
-    pub fn children_native(&self) -> &[(Option<Identifier_Label>, IdentifierChild)] {
+    /// Return a slice of the children.
+    pub fn children(&self) -> &[(Option<Identifier_Label>, IdentifierChild)] {
         self.children.as_slice()
     }
 
-    /// Push a child onto the native children `Vec`.
-    pub fn push_child_native(&mut self, label: Option<Identifier_Label>, child: IdentifierChild) {
+    /// Replace the node's span.
+    pub fn set_span(&mut self, span: Span) {
+        self.span = span;
+    }
+
+    /// Push a child onto the children `Vec`.
+    pub fn push_child(&mut self, label: Option<Identifier_Label>, child: IdentifierChild) {
         self.children.push((label, child));
     }
 }
 
 #[cfg(feature = "python")]
+#[pyclass(frozen, weakref, name = "Identifier")]
+pub struct PyIdentifier {
+    // Not pub: all external access goes through shared() or to_py_canonical().
+    // A pub field would let mixed-app Rust code construct an unregistered handle
+    // (Py::new(py, PyFoo { inner: s.clone() })), silently breaking is-stability.
+    inner: Shared<Identifier>,
+}
+
+#[cfg(feature = "python")]
+impl PyIdentifier {
+    /// Return a reference to the inner `Shared<Identifier>`.
+    pub fn shared(&self) -> &Shared<Identifier> {
+        &self.inner
+    }
+
+    /// Wrap a `Shared<Identifier>` into a canonical Python handle,
+    /// looking up the registry first so the same handle is returned
+    /// for the same `Shared` allocation.
+    pub fn to_py_canonical(py: Python<'_>, s: &Shared<Identifier>) -> PyResult<Py<PyIdentifier>> {
+        let addr = s.arc_ptr();
+        let obj = registry::get_or_insert_with(py, addr, || {
+            let handle = PyIdentifier { inner: s.clone() };
+            Py::new(py, handle).map(|p| p.into_any())
+        })?;
+        obj.bind(py).downcast::<PyIdentifier>().map(|b| b.clone().unbind()).map_err(|e| e.into())
+    }
+}
+
+#[cfg(feature = "python")]
 #[pymethods]
-impl Identifier {
+impl PyIdentifier {
     #[new]
     #[pyo3(signature = (*, span = None))]
-    fn new(py: Python<'_>, span: Option<&Bound<'_, PyAny>>) -> PyResult<Self> {
+    fn new(py: Python<'_>, span: Option<&Bound<'_, PyAny>>) -> PyResult<Py<PyIdentifier>> {
         let native_span = match span {
             Some(s) => extract_span(py, s)?,
             None => Span::unknown(),
         };
-        Ok(Identifier {
+        let data = Identifier {
             span: native_span,
             children: Vec::new(),
-        })
+        };
+        let shared = Shared::new(data);
+        let addr = shared.arc_ptr();
+        let handle = PyIdentifier { inner: shared };
+        let py_obj = Py::new(py, handle)?;
+        // Register as canonical — fresh Shared, no alias can exist yet.
+        registry::force_register(py, addr, py_obj.bind(py))?;
+        Ok(py_obj)
     }
 
     #[getter]
     fn span(&self, py: Python<'_>) -> PyResult<PyObject> {
-        span_to_pyobject(py, &self.span)
+        // Snapshot the span under the read lock, then drop the guard before
+        // calling span_to_pyobject — which performs Python work (Py::new or
+        // Python method calls) that must not happen while a node lock is held.
+        let span = self.inner.read().span.clone();
+        span_to_pyobject(py, &span)
     }
 
     #[setter]
-    fn set_span(&mut self, py: Python<'_>, value: &Bound<'_, PyAny>) -> PyResult<()> {
-        self.span = extract_span(py, value)?;
+    fn set_span(&self, py: Python<'_>, value: &Bound<'_, PyAny>) -> PyResult<()> {
+        self.inner.write().span = extract_span(py, value)?;
         Ok(())
     }
 
@@ -1647,8 +2044,14 @@ impl Identifier {
 
     #[getter]
     fn children(&self, py: Python<'_>) -> PyResult<Py<PyList>> {
+        // Snapshot the children vec (Arc clones for node children — O(n) refcount bumps).
+        // Lock scope: acquire read, snapshot, release before touching Python.
+        let snapshot: Vec<_> = {
+            let guard = self.inner.read();
+            guard.children.clone()
+        };
         let result = PyList::empty(py);
-        for (label, child) in &self.children {
+        for (label, child) in &snapshot {
             let label_obj: PyObject = match label {
                 None => py.None(),
                 Some(lbl) => lbl.clone().into_pyobject(py)?.into_any().unbind(),
@@ -1661,7 +2064,7 @@ impl Identifier {
     }
 
     #[pyo3(signature = (child, label = None))]
-    fn append(&mut self, py: Python<'_>, child: &Bound<'_, PyAny>, label: Option<PyObject>) -> PyResult<()> {
+    fn append(&self, py: Python<'_>, child: &Bound<'_, PyAny>, label: Option<PyObject>) -> PyResult<()> {
         let span_type = get_span_type(py)?;
         let native_child = IdentifierChild::extract_from_pyobject(py, child, &span_type)?;
         let native_label = match label {
@@ -1677,13 +2080,13 @@ impl Identifier {
                 }
             }
         };
-        self.children.push((native_label, native_child));
+        self.inner.write().children.push((native_label, native_child));
         Ok(())
     }
 
     #[pyo3(signature = (children, label = None))]
     fn extend(
-        &mut self,
+        &self,
         py: Python<'_>,
         children: &Bound<'_, PyAny>,
         label: Option<PyObject>,
@@ -1706,26 +2109,41 @@ impl Identifier {
         for child_result in iter {
             let child = child_result?;
             let native_child = IdentifierChild::extract_from_pyobject(py, &child, &span_type)?;
-            self.children.push((native_label.clone(), native_child));
+            self.inner.write().children.push((native_label.clone(), native_child));
         }
         Ok(())
     }
 
-    fn extend_children(&mut self, other: PyRef<'_, Identifier>) -> PyResult<()> {
-        for (label, child) in &other.children {
-            self.children.push((label.clone(), child.clone()));
-        }
+    fn extend_children(&self, _py: Python<'_>, other: &PyIdentifier) -> PyResult<()> {
+        // Snapshot other's children first: the read guard is dropped at the end of
+        // this block, so the write lock below is safe even when self and other are
+        // the same node (self-extend). No ptr_eq call is needed here — the snapshot
+        // approach handles self-extend structurally.
+        // Lock scope: hold read only long enough to clone the Arc-based children vec.
+        let snapshot: Vec<_> = {
+            let guard = other.inner.read();
+            guard.children.clone()
+        };
+        // Node-typed children are pushed directly as Shared<T> values.  Registry
+        // consistency is maintained lazily: wrap-out registers on first Python read
+        // via get_or_insert_with (registry.rs).  Eagerly registering here would be
+        // a no-op — the WeakValueDictionary would evict handles held by nothing.
+        self.inner.write().children.extend(snapshot);
         Ok(())
     }
 
     fn child(&self, py: Python<'_>) -> PyResult<PyObject> {
-        let n = self.children.len();
+        let snapshot: Vec<_> = {
+            let guard = self.inner.read();
+            guard.children.clone()
+        };
+        let n = snapshot.len();
         if n != 1 {
             return Err(PyValueError::new_err(format!(
                 "Expected one child but have {n}"
             )));
         }
-        let (label, child) = &self.children[0];
+        let (label, child) = &snapshot[0];
         let label_obj: PyObject = match label {
             None => py.None(),
             Some(lbl) => lbl.clone().into_pyobject(py)?.into_any().unbind(),
@@ -1734,28 +2152,33 @@ impl Identifier {
         Ok(PyTuple::new(py, [label_obj, child_obj])?.into_any().unbind())
     }
 
-    fn append_name(&mut self, py: Python<'_>, child: &Bound<'_, PyAny>) -> PyResult<()> {
+    fn append_name(&self, py: Python<'_>, child: &Bound<'_, PyAny>) -> PyResult<()> {
         let span_type = get_span_type(py)?;
         let native_child = IdentifierChild::extract_from_pyobject(py, child, &span_type)?;
-        self.children.push((Some(Identifier_Label::Name), native_child));
+        self.inner.write().children.push((Some(Identifier_Label::Name), native_child));
         Ok(())
     }
 
-    fn extend_name(&mut self, py: Python<'_>, children: &Bound<'_, PyAny>) -> PyResult<()> {
+    fn extend_name(&self, py: Python<'_>, children: &Bound<'_, PyAny>) -> PyResult<()> {
         let span_type = get_span_type(py)?;
         let iter = children.try_iter()?;
         for child_result in iter {
             let child = child_result?;
             let native_child = IdentifierChild::extract_from_pyobject(py, &child, &span_type)?;
-            self.children.push((Some(Identifier_Label::Name), native_child));
+            let entry = (Some(Identifier_Label::Name), native_child);
+            self.inner.write().children.push(entry);
         }
         Ok(())
     }
 
     fn children_name(&self, py: Python<'_>) -> PyResult<Py<PyList>> {
+        let snapshot: Vec<_> = {
+            let guard = self.inner.read();
+            guard.children.clone()
+        };
         let result = PyList::empty(py);
-        for (label, child) in &self.children {
-            if *label == Some(Identifier_Label::Name) {
+        for (lbl, child) in &snapshot {
+            if *lbl == Some(Identifier_Label::Name) {
                 result.append(child.to_pyobject(py)?)?;
             }
         }
@@ -1763,10 +2186,14 @@ impl Identifier {
     }
 
     fn child_name(&self, py: Python<'_>) -> PyResult<PyObject> {
+        let snapshot: Vec<_> = {
+            let guard = self.inner.read();
+            guard.children.clone()
+        };
         let mut found: Option<PyObject> = None;
         let mut count = 0usize;
-        for (label, child) in &self.children {
-            if *label == Some(Identifier_Label::Name) {
+        for (lbl, child) in &snapshot {
+            if *lbl == Some(Identifier_Label::Name) {
                 count += 1;
                 if count == 1 {
                     found = Some(child.to_pyobject(py)?);
@@ -1782,10 +2209,14 @@ impl Identifier {
     }
 
     fn maybe_name(&self, py: Python<'_>) -> PyResult<Option<PyObject>> {
+        let snapshot: Vec<_> = {
+            let guard = self.inner.read();
+            guard.children.clone()
+        };
         let mut found: Option<PyObject> = None;
         let mut count = 0usize;
-        for (label, child) in &self.children {
-            if *label == Some(Identifier_Label::Name) {
+        for (lbl, child) in &snapshot {
+            if *lbl == Some(Identifier_Label::Name) {
                 count += 1;
                 if count == 1 {
                     found = Some(child.to_pyobject(py)?);
@@ -1801,12 +2232,13 @@ impl Identifier {
     }
 
     fn __eq__(&self, py: Python<'_>, other: &Bound<'_, PyAny>) -> PyResult<PyObject> {
-        if !other.is_instance_of::<Identifier>() {
+        if !other.is_instance_of::<PyIdentifier>() {
             return Ok(py.NotImplemented());
         }
-        let other_node: PyRef<Identifier> = other.extract()?;
-        // Native structural equality: no Python .eq() on stored state
-        let eq = self == &*other_node;
+        let other_handle: PyRef<PyIdentifier> = other.extract()?;
+        // Delegate to Shared<T>::PartialEq which applies the ptr_eq short-circuit
+        // (avoids same-lock re-entry on `x == x`) then deep structural comparison.
+        let eq = self.inner == other_handle.inner;
         Ok(eq.into_pyobject(py)?.to_owned().unbind().into_any())
     }
 
@@ -1815,8 +2247,9 @@ impl Identifier {
     }
 
     fn __repr__(&self, _py: Python<'_>) -> String {
-        let span_repr = format!("Span(start={}, end={})", self.span.start(), self.span.end());
-        let children_len = self.children.len();
+        let guard = self.inner.read();
+        let span_repr = format!("Span(start={}, end={})", guard.span.start(), guard.span.end());
+        let children_len = guard.children.len();
         format!(
             "Identifier(span={span_repr}, children=[<{children_len} child(ren)>])"
         )
@@ -1881,7 +2314,8 @@ impl Literal_Label {
     }
 }
 
-// LiteralChild — native child value enum for Literal
+// LiteralChild — child value enum for Literal
+// Node-typed variants hold Shared<T> (Arc<RwLock<T>>); Clone is shallow.
 #[derive(Clone)]
 pub enum LiteralChild {
     Span(Span),
@@ -1925,8 +2359,12 @@ impl LiteralChild {
 // Literal
 // ───────────────────────────────────────────────────────────────────────────
 
-#[cfg_attr(feature = "python", pyclass)]
+/// CST data struct for `Literal`. Node-typed children are [`Shared<T>`] —
+/// see [`fltk_cst_core::Shared`] for clone/equality/reference semantics.
+#[derive(Clone)]
 pub struct Literal {
+    // Not pub: use span() / children() / push_child() — the stable accessor API.
+    // Direct field access bypasses any future validation logic on setters.
     span: Span,
     children: Vec<(Option<Literal_Label>, LiteralChild)>,
 }
@@ -1937,65 +2375,101 @@ impl PartialEq for Literal {
     }
 }
 
-impl Clone for Literal {
-    fn clone(&self) -> Self {
-        Literal {
-            span: self.span.clone(),
-            children: self.children.clone(),
-        }
-    }
-}
-
 impl Literal {
     /// Construct a node with the given span and no children.
-    /// No GIL required.
-    pub fn new_native(span: Span) -> Self {
+    /// GIL-free.
+    pub fn new(span: Span) -> Self {
         Literal {
             span,
             children: Vec::new(),
         }
     }
 
-    /// Return a reference to the stored native `Span`.
-    pub fn span_native(&self) -> &Span {
+    /// Return a reference to the stored `Span`.
+    pub fn span(&self) -> &Span {
         &self.span
     }
 
-    /// Return a slice of the native children.
-    pub fn children_native(&self) -> &[(Option<Literal_Label>, LiteralChild)] {
+    /// Return a slice of the children.
+    pub fn children(&self) -> &[(Option<Literal_Label>, LiteralChild)] {
         self.children.as_slice()
     }
 
-    /// Push a child onto the native children `Vec`.
-    pub fn push_child_native(&mut self, label: Option<Literal_Label>, child: LiteralChild) {
+    /// Replace the node's span.
+    pub fn set_span(&mut self, span: Span) {
+        self.span = span;
+    }
+
+    /// Push a child onto the children `Vec`.
+    pub fn push_child(&mut self, label: Option<Literal_Label>, child: LiteralChild) {
         self.children.push((label, child));
     }
 }
 
 #[cfg(feature = "python")]
+#[pyclass(frozen, weakref, name = "Literal")]
+pub struct PyLiteral {
+    // Not pub: all external access goes through shared() or to_py_canonical().
+    // A pub field would let mixed-app Rust code construct an unregistered handle
+    // (Py::new(py, PyFoo { inner: s.clone() })), silently breaking is-stability.
+    inner: Shared<Literal>,
+}
+
+#[cfg(feature = "python")]
+impl PyLiteral {
+    /// Return a reference to the inner `Shared<Literal>`.
+    pub fn shared(&self) -> &Shared<Literal> {
+        &self.inner
+    }
+
+    /// Wrap a `Shared<Literal>` into a canonical Python handle,
+    /// looking up the registry first so the same handle is returned
+    /// for the same `Shared` allocation.
+    pub fn to_py_canonical(py: Python<'_>, s: &Shared<Literal>) -> PyResult<Py<PyLiteral>> {
+        let addr = s.arc_ptr();
+        let obj = registry::get_or_insert_with(py, addr, || {
+            let handle = PyLiteral { inner: s.clone() };
+            Py::new(py, handle).map(|p| p.into_any())
+        })?;
+        obj.bind(py).downcast::<PyLiteral>().map(|b| b.clone().unbind()).map_err(|e| e.into())
+    }
+}
+
+#[cfg(feature = "python")]
 #[pymethods]
-impl Literal {
+impl PyLiteral {
     #[new]
     #[pyo3(signature = (*, span = None))]
-    fn new(py: Python<'_>, span: Option<&Bound<'_, PyAny>>) -> PyResult<Self> {
+    fn new(py: Python<'_>, span: Option<&Bound<'_, PyAny>>) -> PyResult<Py<PyLiteral>> {
         let native_span = match span {
             Some(s) => extract_span(py, s)?,
             None => Span::unknown(),
         };
-        Ok(Literal {
+        let data = Literal {
             span: native_span,
             children: Vec::new(),
-        })
+        };
+        let shared = Shared::new(data);
+        let addr = shared.arc_ptr();
+        let handle = PyLiteral { inner: shared };
+        let py_obj = Py::new(py, handle)?;
+        // Register as canonical — fresh Shared, no alias can exist yet.
+        registry::force_register(py, addr, py_obj.bind(py))?;
+        Ok(py_obj)
     }
 
     #[getter]
     fn span(&self, py: Python<'_>) -> PyResult<PyObject> {
-        span_to_pyobject(py, &self.span)
+        // Snapshot the span under the read lock, then drop the guard before
+        // calling span_to_pyobject — which performs Python work (Py::new or
+        // Python method calls) that must not happen while a node lock is held.
+        let span = self.inner.read().span.clone();
+        span_to_pyobject(py, &span)
     }
 
     #[setter]
-    fn set_span(&mut self, py: Python<'_>, value: &Bound<'_, PyAny>) -> PyResult<()> {
-        self.span = extract_span(py, value)?;
+    fn set_span(&self, py: Python<'_>, value: &Bound<'_, PyAny>) -> PyResult<()> {
+        self.inner.write().span = extract_span(py, value)?;
         Ok(())
     }
 
@@ -2012,8 +2486,14 @@ impl Literal {
 
     #[getter]
     fn children(&self, py: Python<'_>) -> PyResult<Py<PyList>> {
+        // Snapshot the children vec (Arc clones for node children — O(n) refcount bumps).
+        // Lock scope: acquire read, snapshot, release before touching Python.
+        let snapshot: Vec<_> = {
+            let guard = self.inner.read();
+            guard.children.clone()
+        };
         let result = PyList::empty(py);
-        for (label, child) in &self.children {
+        for (label, child) in &snapshot {
             let label_obj: PyObject = match label {
                 None => py.None(),
                 Some(lbl) => lbl.clone().into_pyobject(py)?.into_any().unbind(),
@@ -2026,7 +2506,7 @@ impl Literal {
     }
 
     #[pyo3(signature = (child, label = None))]
-    fn append(&mut self, py: Python<'_>, child: &Bound<'_, PyAny>, label: Option<PyObject>) -> PyResult<()> {
+    fn append(&self, py: Python<'_>, child: &Bound<'_, PyAny>, label: Option<PyObject>) -> PyResult<()> {
         let span_type = get_span_type(py)?;
         let native_child = LiteralChild::extract_from_pyobject(py, child, &span_type)?;
         let native_label = match label {
@@ -2042,13 +2522,13 @@ impl Literal {
                 }
             }
         };
-        self.children.push((native_label, native_child));
+        self.inner.write().children.push((native_label, native_child));
         Ok(())
     }
 
     #[pyo3(signature = (children, label = None))]
     fn extend(
-        &mut self,
+        &self,
         py: Python<'_>,
         children: &Bound<'_, PyAny>,
         label: Option<PyObject>,
@@ -2071,26 +2551,41 @@ impl Literal {
         for child_result in iter {
             let child = child_result?;
             let native_child = LiteralChild::extract_from_pyobject(py, &child, &span_type)?;
-            self.children.push((native_label.clone(), native_child));
+            self.inner.write().children.push((native_label.clone(), native_child));
         }
         Ok(())
     }
 
-    fn extend_children(&mut self, other: PyRef<'_, Literal>) -> PyResult<()> {
-        for (label, child) in &other.children {
-            self.children.push((label.clone(), child.clone()));
-        }
+    fn extend_children(&self, _py: Python<'_>, other: &PyLiteral) -> PyResult<()> {
+        // Snapshot other's children first: the read guard is dropped at the end of
+        // this block, so the write lock below is safe even when self and other are
+        // the same node (self-extend). No ptr_eq call is needed here — the snapshot
+        // approach handles self-extend structurally.
+        // Lock scope: hold read only long enough to clone the Arc-based children vec.
+        let snapshot: Vec<_> = {
+            let guard = other.inner.read();
+            guard.children.clone()
+        };
+        // Node-typed children are pushed directly as Shared<T> values.  Registry
+        // consistency is maintained lazily: wrap-out registers on first Python read
+        // via get_or_insert_with (registry.rs).  Eagerly registering here would be
+        // a no-op — the WeakValueDictionary would evict handles held by nothing.
+        self.inner.write().children.extend(snapshot);
         Ok(())
     }
 
     fn child(&self, py: Python<'_>) -> PyResult<PyObject> {
-        let n = self.children.len();
+        let snapshot: Vec<_> = {
+            let guard = self.inner.read();
+            guard.children.clone()
+        };
+        let n = snapshot.len();
         if n != 1 {
             return Err(PyValueError::new_err(format!(
                 "Expected one child but have {n}"
             )));
         }
-        let (label, child) = &self.children[0];
+        let (label, child) = &snapshot[0];
         let label_obj: PyObject = match label {
             None => py.None(),
             Some(lbl) => lbl.clone().into_pyobject(py)?.into_any().unbind(),
@@ -2099,28 +2594,33 @@ impl Literal {
         Ok(PyTuple::new(py, [label_obj, child_obj])?.into_any().unbind())
     }
 
-    fn append_int_val(&mut self, py: Python<'_>, child: &Bound<'_, PyAny>) -> PyResult<()> {
+    fn append_int_val(&self, py: Python<'_>, child: &Bound<'_, PyAny>) -> PyResult<()> {
         let span_type = get_span_type(py)?;
         let native_child = LiteralChild::extract_from_pyobject(py, child, &span_type)?;
-        self.children.push((Some(Literal_Label::IntVal), native_child));
+        self.inner.write().children.push((Some(Literal_Label::IntVal), native_child));
         Ok(())
     }
 
-    fn extend_int_val(&mut self, py: Python<'_>, children: &Bound<'_, PyAny>) -> PyResult<()> {
+    fn extend_int_val(&self, py: Python<'_>, children: &Bound<'_, PyAny>) -> PyResult<()> {
         let span_type = get_span_type(py)?;
         let iter = children.try_iter()?;
         for child_result in iter {
             let child = child_result?;
             let native_child = LiteralChild::extract_from_pyobject(py, &child, &span_type)?;
-            self.children.push((Some(Literal_Label::IntVal), native_child));
+            let entry = (Some(Literal_Label::IntVal), native_child);
+            self.inner.write().children.push(entry);
         }
         Ok(())
     }
 
     fn children_int_val(&self, py: Python<'_>) -> PyResult<Py<PyList>> {
+        let snapshot: Vec<_> = {
+            let guard = self.inner.read();
+            guard.children.clone()
+        };
         let result = PyList::empty(py);
-        for (label, child) in &self.children {
-            if *label == Some(Literal_Label::IntVal) {
+        for (lbl, child) in &snapshot {
+            if *lbl == Some(Literal_Label::IntVal) {
                 result.append(child.to_pyobject(py)?)?;
             }
         }
@@ -2128,10 +2628,14 @@ impl Literal {
     }
 
     fn child_int_val(&self, py: Python<'_>) -> PyResult<PyObject> {
+        let snapshot: Vec<_> = {
+            let guard = self.inner.read();
+            guard.children.clone()
+        };
         let mut found: Option<PyObject> = None;
         let mut count = 0usize;
-        for (label, child) in &self.children {
-            if *label == Some(Literal_Label::IntVal) {
+        for (lbl, child) in &snapshot {
+            if *lbl == Some(Literal_Label::IntVal) {
                 count += 1;
                 if count == 1 {
                     found = Some(child.to_pyobject(py)?);
@@ -2147,10 +2651,14 @@ impl Literal {
     }
 
     fn maybe_int_val(&self, py: Python<'_>) -> PyResult<Option<PyObject>> {
+        let snapshot: Vec<_> = {
+            let guard = self.inner.read();
+            guard.children.clone()
+        };
         let mut found: Option<PyObject> = None;
         let mut count = 0usize;
-        for (label, child) in &self.children {
-            if *label == Some(Literal_Label::IntVal) {
+        for (lbl, child) in &snapshot {
+            if *lbl == Some(Literal_Label::IntVal) {
                 count += 1;
                 if count == 1 {
                     found = Some(child.to_pyobject(py)?);
@@ -2165,28 +2673,33 @@ impl Literal {
         Ok(found)
     }
 
-    fn append_str_val(&mut self, py: Python<'_>, child: &Bound<'_, PyAny>) -> PyResult<()> {
+    fn append_str_val(&self, py: Python<'_>, child: &Bound<'_, PyAny>) -> PyResult<()> {
         let span_type = get_span_type(py)?;
         let native_child = LiteralChild::extract_from_pyobject(py, child, &span_type)?;
-        self.children.push((Some(Literal_Label::StrVal), native_child));
+        self.inner.write().children.push((Some(Literal_Label::StrVal), native_child));
         Ok(())
     }
 
-    fn extend_str_val(&mut self, py: Python<'_>, children: &Bound<'_, PyAny>) -> PyResult<()> {
+    fn extend_str_val(&self, py: Python<'_>, children: &Bound<'_, PyAny>) -> PyResult<()> {
         let span_type = get_span_type(py)?;
         let iter = children.try_iter()?;
         for child_result in iter {
             let child = child_result?;
             let native_child = LiteralChild::extract_from_pyobject(py, &child, &span_type)?;
-            self.children.push((Some(Literal_Label::StrVal), native_child));
+            let entry = (Some(Literal_Label::StrVal), native_child);
+            self.inner.write().children.push(entry);
         }
         Ok(())
     }
 
     fn children_str_val(&self, py: Python<'_>) -> PyResult<Py<PyList>> {
+        let snapshot: Vec<_> = {
+            let guard = self.inner.read();
+            guard.children.clone()
+        };
         let result = PyList::empty(py);
-        for (label, child) in &self.children {
-            if *label == Some(Literal_Label::StrVal) {
+        for (lbl, child) in &snapshot {
+            if *lbl == Some(Literal_Label::StrVal) {
                 result.append(child.to_pyobject(py)?)?;
             }
         }
@@ -2194,10 +2707,14 @@ impl Literal {
     }
 
     fn child_str_val(&self, py: Python<'_>) -> PyResult<PyObject> {
+        let snapshot: Vec<_> = {
+            let guard = self.inner.read();
+            guard.children.clone()
+        };
         let mut found: Option<PyObject> = None;
         let mut count = 0usize;
-        for (label, child) in &self.children {
-            if *label == Some(Literal_Label::StrVal) {
+        for (lbl, child) in &snapshot {
+            if *lbl == Some(Literal_Label::StrVal) {
                 count += 1;
                 if count == 1 {
                     found = Some(child.to_pyobject(py)?);
@@ -2213,10 +2730,14 @@ impl Literal {
     }
 
     fn maybe_str_val(&self, py: Python<'_>) -> PyResult<Option<PyObject>> {
+        let snapshot: Vec<_> = {
+            let guard = self.inner.read();
+            guard.children.clone()
+        };
         let mut found: Option<PyObject> = None;
         let mut count = 0usize;
-        for (label, child) in &self.children {
-            if *label == Some(Literal_Label::StrVal) {
+        for (lbl, child) in &snapshot {
+            if *lbl == Some(Literal_Label::StrVal) {
                 count += 1;
                 if count == 1 {
                     found = Some(child.to_pyobject(py)?);
@@ -2232,12 +2753,13 @@ impl Literal {
     }
 
     fn __eq__(&self, py: Python<'_>, other: &Bound<'_, PyAny>) -> PyResult<PyObject> {
-        if !other.is_instance_of::<Literal>() {
+        if !other.is_instance_of::<PyLiteral>() {
             return Ok(py.NotImplemented());
         }
-        let other_node: PyRef<Literal> = other.extract()?;
-        // Native structural equality: no Python .eq() on stored state
-        let eq = self == &*other_node;
+        let other_handle: PyRef<PyLiteral> = other.extract()?;
+        // Delegate to Shared<T>::PartialEq which applies the ptr_eq short-circuit
+        // (avoids same-lock re-entry on `x == x`) then deep structural comparison.
+        let eq = self.inner == other_handle.inner;
         Ok(eq.into_pyobject(py)?.to_owned().unbind().into_any())
     }
 
@@ -2246,8 +2768,9 @@ impl Literal {
     }
 
     fn __repr__(&self, _py: Python<'_>) -> String {
-        let span_repr = format!("Span(start={}, end={})", self.span.start(), self.span.end());
-        let children_len = self.children.len();
+        let guard = self.inner.read();
+        let span_repr = format!("Span(start={}, end={})", guard.span.start(), guard.span.end());
+        let children_len = guard.children.len();
         format!(
             "Literal(span={span_repr}, children=[<{children_len} child(ren)>])"
         )
@@ -2308,7 +2831,8 @@ impl Trivia_Label {
     }
 }
 
-// TriviaChild — native child value enum for Trivia
+// TriviaChild — child value enum for Trivia
+// Node-typed variants hold Shared<T> (Arc<RwLock<T>>); Clone is shallow.
 #[derive(Clone)]
 pub enum TriviaChild {
     Span(Span),
@@ -2352,8 +2876,12 @@ impl TriviaChild {
 // Trivia
 // ───────────────────────────────────────────────────────────────────────────
 
-#[cfg_attr(feature = "python", pyclass)]
+/// CST data struct for `Trivia`. Node-typed children are [`Shared<T>`] —
+/// see [`fltk_cst_core::Shared`] for clone/equality/reference semantics.
+#[derive(Clone)]
 pub struct Trivia {
+    // Not pub: use span() / children() / push_child() — the stable accessor API.
+    // Direct field access bypasses any future validation logic on setters.
     span: Span,
     children: Vec<(Option<Trivia_Label>, TriviaChild)>,
 }
@@ -2364,65 +2892,101 @@ impl PartialEq for Trivia {
     }
 }
 
-impl Clone for Trivia {
-    fn clone(&self) -> Self {
-        Trivia {
-            span: self.span.clone(),
-            children: self.children.clone(),
-        }
-    }
-}
-
 impl Trivia {
     /// Construct a node with the given span and no children.
-    /// No GIL required.
-    pub fn new_native(span: Span) -> Self {
+    /// GIL-free.
+    pub fn new(span: Span) -> Self {
         Trivia {
             span,
             children: Vec::new(),
         }
     }
 
-    /// Return a reference to the stored native `Span`.
-    pub fn span_native(&self) -> &Span {
+    /// Return a reference to the stored `Span`.
+    pub fn span(&self) -> &Span {
         &self.span
     }
 
-    /// Return a slice of the native children.
-    pub fn children_native(&self) -> &[(Option<Trivia_Label>, TriviaChild)] {
+    /// Return a slice of the children.
+    pub fn children(&self) -> &[(Option<Trivia_Label>, TriviaChild)] {
         self.children.as_slice()
     }
 
-    /// Push a child onto the native children `Vec`.
-    pub fn push_child_native(&mut self, label: Option<Trivia_Label>, child: TriviaChild) {
+    /// Replace the node's span.
+    pub fn set_span(&mut self, span: Span) {
+        self.span = span;
+    }
+
+    /// Push a child onto the children `Vec`.
+    pub fn push_child(&mut self, label: Option<Trivia_Label>, child: TriviaChild) {
         self.children.push((label, child));
     }
 }
 
 #[cfg(feature = "python")]
+#[pyclass(frozen, weakref, name = "Trivia")]
+pub struct PyTrivia {
+    // Not pub: all external access goes through shared() or to_py_canonical().
+    // A pub field would let mixed-app Rust code construct an unregistered handle
+    // (Py::new(py, PyFoo { inner: s.clone() })), silently breaking is-stability.
+    inner: Shared<Trivia>,
+}
+
+#[cfg(feature = "python")]
+impl PyTrivia {
+    /// Return a reference to the inner `Shared<Trivia>`.
+    pub fn shared(&self) -> &Shared<Trivia> {
+        &self.inner
+    }
+
+    /// Wrap a `Shared<Trivia>` into a canonical Python handle,
+    /// looking up the registry first so the same handle is returned
+    /// for the same `Shared` allocation.
+    pub fn to_py_canonical(py: Python<'_>, s: &Shared<Trivia>) -> PyResult<Py<PyTrivia>> {
+        let addr = s.arc_ptr();
+        let obj = registry::get_or_insert_with(py, addr, || {
+            let handle = PyTrivia { inner: s.clone() };
+            Py::new(py, handle).map(|p| p.into_any())
+        })?;
+        obj.bind(py).downcast::<PyTrivia>().map(|b| b.clone().unbind()).map_err(|e| e.into())
+    }
+}
+
+#[cfg(feature = "python")]
 #[pymethods]
-impl Trivia {
+impl PyTrivia {
     #[new]
     #[pyo3(signature = (*, span = None))]
-    fn new(py: Python<'_>, span: Option<&Bound<'_, PyAny>>) -> PyResult<Self> {
+    fn new(py: Python<'_>, span: Option<&Bound<'_, PyAny>>) -> PyResult<Py<PyTrivia>> {
         let native_span = match span {
             Some(s) => extract_span(py, s)?,
             None => Span::unknown(),
         };
-        Ok(Trivia {
+        let data = Trivia {
             span: native_span,
             children: Vec::new(),
-        })
+        };
+        let shared = Shared::new(data);
+        let addr = shared.arc_ptr();
+        let handle = PyTrivia { inner: shared };
+        let py_obj = Py::new(py, handle)?;
+        // Register as canonical — fresh Shared, no alias can exist yet.
+        registry::force_register(py, addr, py_obj.bind(py))?;
+        Ok(py_obj)
     }
 
     #[getter]
     fn span(&self, py: Python<'_>) -> PyResult<PyObject> {
-        span_to_pyobject(py, &self.span)
+        // Snapshot the span under the read lock, then drop the guard before
+        // calling span_to_pyobject — which performs Python work (Py::new or
+        // Python method calls) that must not happen while a node lock is held.
+        let span = self.inner.read().span.clone();
+        span_to_pyobject(py, &span)
     }
 
     #[setter]
-    fn set_span(&mut self, py: Python<'_>, value: &Bound<'_, PyAny>) -> PyResult<()> {
-        self.span = extract_span(py, value)?;
+    fn set_span(&self, py: Python<'_>, value: &Bound<'_, PyAny>) -> PyResult<()> {
+        self.inner.write().span = extract_span(py, value)?;
         Ok(())
     }
 
@@ -2439,8 +3003,14 @@ impl Trivia {
 
     #[getter]
     fn children(&self, py: Python<'_>) -> PyResult<Py<PyList>> {
+        // Snapshot the children vec (Arc clones for node children — O(n) refcount bumps).
+        // Lock scope: acquire read, snapshot, release before touching Python.
+        let snapshot: Vec<_> = {
+            let guard = self.inner.read();
+            guard.children.clone()
+        };
         let result = PyList::empty(py);
-        for (label, child) in &self.children {
+        for (label, child) in &snapshot {
             let label_obj: PyObject = match label {
                 None => py.None(),
                 Some(lbl) => lbl.clone().into_pyobject(py)?.into_any().unbind(),
@@ -2453,7 +3023,7 @@ impl Trivia {
     }
 
     #[pyo3(signature = (child, label = None))]
-    fn append(&mut self, py: Python<'_>, child: &Bound<'_, PyAny>, label: Option<PyObject>) -> PyResult<()> {
+    fn append(&self, py: Python<'_>, child: &Bound<'_, PyAny>, label: Option<PyObject>) -> PyResult<()> {
         let span_type = get_span_type(py)?;
         let native_child = TriviaChild::extract_from_pyobject(py, child, &span_type)?;
         let native_label = match label {
@@ -2469,13 +3039,13 @@ impl Trivia {
                 }
             }
         };
-        self.children.push((native_label, native_child));
+        self.inner.write().children.push((native_label, native_child));
         Ok(())
     }
 
     #[pyo3(signature = (children, label = None))]
     fn extend(
-        &mut self,
+        &self,
         py: Python<'_>,
         children: &Bound<'_, PyAny>,
         label: Option<PyObject>,
@@ -2498,26 +3068,41 @@ impl Trivia {
         for child_result in iter {
             let child = child_result?;
             let native_child = TriviaChild::extract_from_pyobject(py, &child, &span_type)?;
-            self.children.push((native_label.clone(), native_child));
+            self.inner.write().children.push((native_label.clone(), native_child));
         }
         Ok(())
     }
 
-    fn extend_children(&mut self, other: PyRef<'_, Trivia>) -> PyResult<()> {
-        for (label, child) in &other.children {
-            self.children.push((label.clone(), child.clone()));
-        }
+    fn extend_children(&self, _py: Python<'_>, other: &PyTrivia) -> PyResult<()> {
+        // Snapshot other's children first: the read guard is dropped at the end of
+        // this block, so the write lock below is safe even when self and other are
+        // the same node (self-extend). No ptr_eq call is needed here — the snapshot
+        // approach handles self-extend structurally.
+        // Lock scope: hold read only long enough to clone the Arc-based children vec.
+        let snapshot: Vec<_> = {
+            let guard = other.inner.read();
+            guard.children.clone()
+        };
+        // Node-typed children are pushed directly as Shared<T> values.  Registry
+        // consistency is maintained lazily: wrap-out registers on first Python read
+        // via get_or_insert_with (registry.rs).  Eagerly registering here would be
+        // a no-op — the WeakValueDictionary would evict handles held by nothing.
+        self.inner.write().children.extend(snapshot);
         Ok(())
     }
 
     fn child(&self, py: Python<'_>) -> PyResult<PyObject> {
-        let n = self.children.len();
+        let snapshot: Vec<_> = {
+            let guard = self.inner.read();
+            guard.children.clone()
+        };
+        let n = snapshot.len();
         if n != 1 {
             return Err(PyValueError::new_err(format!(
                 "Expected one child but have {n}"
             )));
         }
-        let (label, child) = &self.children[0];
+        let (label, child) = &snapshot[0];
         let label_obj: PyObject = match label {
             None => py.None(),
             Some(lbl) => lbl.clone().into_pyobject(py)?.into_any().unbind(),
@@ -2526,28 +3111,33 @@ impl Trivia {
         Ok(PyTuple::new(py, [label_obj, child_obj])?.into_any().unbind())
     }
 
-    fn append_content(&mut self, py: Python<'_>, child: &Bound<'_, PyAny>) -> PyResult<()> {
+    fn append_content(&self, py: Python<'_>, child: &Bound<'_, PyAny>) -> PyResult<()> {
         let span_type = get_span_type(py)?;
         let native_child = TriviaChild::extract_from_pyobject(py, child, &span_type)?;
-        self.children.push((Some(Trivia_Label::Content), native_child));
+        self.inner.write().children.push((Some(Trivia_Label::Content), native_child));
         Ok(())
     }
 
-    fn extend_content(&mut self, py: Python<'_>, children: &Bound<'_, PyAny>) -> PyResult<()> {
+    fn extend_content(&self, py: Python<'_>, children: &Bound<'_, PyAny>) -> PyResult<()> {
         let span_type = get_span_type(py)?;
         let iter = children.try_iter()?;
         for child_result in iter {
             let child = child_result?;
             let native_child = TriviaChild::extract_from_pyobject(py, &child, &span_type)?;
-            self.children.push((Some(Trivia_Label::Content), native_child));
+            let entry = (Some(Trivia_Label::Content), native_child);
+            self.inner.write().children.push(entry);
         }
         Ok(())
     }
 
     fn children_content(&self, py: Python<'_>) -> PyResult<Py<PyList>> {
+        let snapshot: Vec<_> = {
+            let guard = self.inner.read();
+            guard.children.clone()
+        };
         let result = PyList::empty(py);
-        for (label, child) in &self.children {
-            if *label == Some(Trivia_Label::Content) {
+        for (lbl, child) in &snapshot {
+            if *lbl == Some(Trivia_Label::Content) {
                 result.append(child.to_pyobject(py)?)?;
             }
         }
@@ -2555,10 +3145,14 @@ impl Trivia {
     }
 
     fn child_content(&self, py: Python<'_>) -> PyResult<PyObject> {
+        let snapshot: Vec<_> = {
+            let guard = self.inner.read();
+            guard.children.clone()
+        };
         let mut found: Option<PyObject> = None;
         let mut count = 0usize;
-        for (label, child) in &self.children {
-            if *label == Some(Trivia_Label::Content) {
+        for (lbl, child) in &snapshot {
+            if *lbl == Some(Trivia_Label::Content) {
                 count += 1;
                 if count == 1 {
                     found = Some(child.to_pyobject(py)?);
@@ -2574,10 +3168,14 @@ impl Trivia {
     }
 
     fn maybe_content(&self, py: Python<'_>) -> PyResult<Option<PyObject>> {
+        let snapshot: Vec<_> = {
+            let guard = self.inner.read();
+            guard.children.clone()
+        };
         let mut found: Option<PyObject> = None;
         let mut count = 0usize;
-        for (label, child) in &self.children {
-            if *label == Some(Trivia_Label::Content) {
+        for (lbl, child) in &snapshot {
+            if *lbl == Some(Trivia_Label::Content) {
                 count += 1;
                 if count == 1 {
                     found = Some(child.to_pyobject(py)?);
@@ -2593,12 +3191,13 @@ impl Trivia {
     }
 
     fn __eq__(&self, py: Python<'_>, other: &Bound<'_, PyAny>) -> PyResult<PyObject> {
-        if !other.is_instance_of::<Trivia>() {
+        if !other.is_instance_of::<PyTrivia>() {
             return Ok(py.NotImplemented());
         }
-        let other_node: PyRef<Trivia> = other.extract()?;
-        // Native structural equality: no Python .eq() on stored state
-        let eq = self == &*other_node;
+        let other_handle: PyRef<PyTrivia> = other.extract()?;
+        // Delegate to Shared<T>::PartialEq which applies the ptr_eq short-circuit
+        // (avoids same-lock re-entry on `x == x`) then deep structural comparison.
+        let eq = self.inner == other_handle.inner;
         Ok(eq.into_pyobject(py)?.to_owned().unbind().into_any())
     }
 
@@ -2607,8 +3206,9 @@ impl Trivia {
     }
 
     fn __repr__(&self, _py: Python<'_>) -> String {
-        let span_repr = format!("Span(start={}, end={})", self.span.start(), self.span.end());
-        let children_len = self.children.len();
+        let guard = self.inner.read();
+        let span_repr = format!("Span(start={}, end={})", guard.span.start(), guard.span.end());
+        let children_len = guard.children.len();
         format!(
             "Trivia(span={span_repr}, children=[<{children_len} child(ren)>])"
         )
@@ -2620,16 +3220,16 @@ impl Trivia {
 pub fn register_classes(module: &Bound<'_, PyModule>) -> PyResult<()> {
     module.add_class::<NodeKind>()?;
     module.add_class::<Config_Label>()?;
-    module.add_class::<Config>()?;
+    module.add_class::<PyConfig>()?;
     module.add_class::<Entry_Label>()?;
-    module.add_class::<Entry>()?;
+    module.add_class::<PyEntry>()?;
     module.add_class::<Operator_Label>()?;
-    module.add_class::<Operator>()?;
+    module.add_class::<PyOperator>()?;
     module.add_class::<Identifier_Label>()?;
-    module.add_class::<Identifier>()?;
+    module.add_class::<PyIdentifier>()?;
     module.add_class::<Literal_Label>()?;
-    module.add_class::<Literal>()?;
+    module.add_class::<PyLiteral>()?;
     module.add_class::<Trivia_Label>()?;
-    module.add_class::<Trivia>()?;
+    module.add_class::<PyTrivia>()?;
     Ok(())
 }

@@ -315,8 +315,10 @@ class TestNodeStructure:
         assert "fn span(&self, py: Python<'_>) -> PyResult<PyObject> {" in poc_source
 
     def test_span_setter_emitted(self, poc_source: str) -> None:
-        """§2.2: explicit span setter (cross-cdylib compatible via extract_span helper)."""
-        assert "fn set_span(&mut self, py: Python<'_>, value: &Bound<'_, PyAny>) -> PyResult<()> {" in poc_source
+        """§2.2: explicit span setter (cross-cdylib compatible via extract_span helper).
+        Phase 1: handle is frozen, setter takes &self (mutation through RwLock).
+        """
+        assert "fn set_span(&self, py: Python<'_>, value: &Bound<'_, PyAny>) -> PyResult<()> {" in poc_source
 
     def test_children_field_native_vec(self, poc_source: str) -> None:
         """§2.3: children field is a native Vec, not Py<PyList>."""
@@ -330,14 +332,18 @@ class TestNodeStructure:
         assert "fn children(&self, py: Python<'_>) -> PyResult<Py<PyList>> {" in poc_source
 
     def test_child_enum_emitted(self, poc_source: str) -> None:
-        """§2.3: per-node child enum is emitted for each node class."""
+        """§2.3: per-node child enum is emitted for each node class.
+        Phase 1: node-typed variants use Shared<T> instead of Box<T>.
+        """
         assert "pub enum IdentifierChild {" in poc_source
         assert "pub enum ItemsChild {" in poc_source
         # Identifier only has Span children (regex terminal)
         assert "IdentifierChild {\n    Span(Span)," in poc_source
         # Items has Span (literals) and Identifier (rule ref) children
         assert "Span(Span)," in poc_source
-        assert "Identifier(Box<Identifier>)," in poc_source
+        # Phase 1: Shared<T> not Box<T>
+        assert "Identifier(Shared<Identifier>)," in poc_source
+        assert "Identifier(Box<Identifier>)," not in poc_source
 
     def test_label_classattr_present(self, poc_source: str) -> None:
         assert "#[classattr]" in poc_source
@@ -345,9 +351,12 @@ class TestNodeStructure:
         assert "fn Label(py: Python<'_>) -> PyResult<PyObject> {" in poc_source
 
     def test_extend_children_emitted(self, poc_source: str) -> None:
-        """§2.3/§2.5: extend_children method is emitted for each node class."""
+        """§2.3/§2.5: extend_children method is emitted for each node class.
+        Phase 1: handle is frozen (&self); takes handle ref, not PyRef.
+        """
         assert "fn extend_children(" in poc_source
-        assert "fn extend_children(&mut self, other: PyRef<'_, Identifier>) -> PyResult<()> {" in poc_source
+        # Phase 1: frozen handle uses &self; parameter is &PyHandle.
+        assert "fn extend_children(&self, _py: Python<'_>, other: &PyIdentifier) -> PyResult<()> {" in poc_source
 
     def test_get_span_type_helper_not_emitted(self, poc_source: str) -> None:
         """quality-1: helpers now in fltk-cst-core; no local helper or per-method init block."""
@@ -374,18 +383,21 @@ class TestRegisterClasses:
         assert "module.add_class::<Identifier_Label>()?;" in poc_source
 
     def test_register_classes_adds_identifier(self, poc_source: str) -> None:
-        assert "module.add_class::<Identifier>()?;" in poc_source
+        # Phase 1: registers the handle pyclass PyIdentifier (Python name stays "Identifier")
+        assert "module.add_class::<PyIdentifier>()?;" in poc_source
 
     def test_register_classes_adds_items_label(self, poc_source: str) -> None:
         assert "module.add_class::<Items_Label>()?;" in poc_source
 
     def test_register_classes_adds_items(self, poc_source: str) -> None:
-        assert "module.add_class::<Items>()?;" in poc_source
+        # Phase 1: registers the handle pyclass PyItems (Python name stays "Items")
+        assert "module.add_class::<PyItems>()?;" in poc_source
 
     def test_register_classes_label_before_struct(self, poc_source: str) -> None:
         """Label enum must be registered before the node struct — PyO3 requires referenced types registered first."""
         idx_label = poc_source.index("module.add_class::<Identifier_Label>()?;")
-        idx_struct = poc_source.index("module.add_class::<Identifier>()?;")
+        # Phase 1: handle is PyIdentifier
+        idx_struct = poc_source.index("module.add_class::<PyIdentifier>()?;")
         assert idx_label < idx_struct
 
     def test_register_classes_returns_ok(self, poc_source: str) -> None:
@@ -422,12 +434,19 @@ class TestCfgFeatureGate:
                 )
 
     def test_node_struct_pyclass_gated(self, poc_source: str) -> None:
-        """Node structs use #[cfg_attr(feature = \"python\", pyclass)] not raw #[pyclass]."""
-        assert '#[cfg_attr(feature = "python", pyclass)]' in poc_source
-        # No raw bare #[pyclass] without attributes (only #[pyclass(...)]) forms present
+        """Phase 1: data struct uses #[derive(Clone)] (no pyclass); handle uses
+        #[cfg(feature = "python")] + #[pyclass(frozen, weakref, name = "...")] .
+        """
+        # Data struct still derives Clone (and PartialEq)
+        assert "#[derive(Clone)]" in poc_source
+        # Handle pyclass gate
+        assert '#[cfg(feature = "python")]' in poc_source
+        # No raw bare #[pyclass] without attributes
         lines = poc_source.splitlines()
         for line in lines:
-            assert line.strip() != "#[pyclass]", f"Found raw #[pyclass] line: {line!r}"
+            assert line.strip() != "#[pyclass]", f"Found raw bare #[pyclass] line: {line!r}"
+        # Handle uses frozen + weakref (Phase 1)
+        assert '#[pyclass(frozen, weakref, name = "Identifier")]' in poc_source
 
     def test_child_enum_pyo3_impl_gated(self, poc_source: str) -> None:
         """The to_pyobject/extract_from_pyobject impl block on child enums is gated."""
@@ -532,10 +551,15 @@ class TestFegenGrammar:
         )
 
     def test_all_14_classes_registered(self, fegen_source: str) -> None:
-        """AC-7: all 14 classes have add_class calls in register_classes."""
+        """AC-7: all 14 classes have add_class calls in register_classes.
+
+        Phase 1: handle structs are named Py<ClassName>; Python class name is
+        preserved via #[pyclass(name = "ClassName")].
+        """
         for class_name in FEGEN_CLASS_NAMES:
-            assert f"module.add_class::<{class_name}>()?;" in fegen_source, (
-                f"Expected 'module.add_class::<{class_name}>()?;' in fegen source"
+            py_handle = f"Py{class_name}"
+            assert f"module.add_class::<{py_handle}>()?;" in fegen_source, (
+                f"Expected 'module.add_class::<{py_handle}>()?;' in fegen source"
             )
 
     def test_preamble_in_fegen_source(self, fegen_source: str) -> None:
@@ -692,7 +716,8 @@ class TestEmptyLabelEnumOmitted:
         gen = RustCstGenerator(_make_zero_label_grammar())
         source = gen.generate()
         assert "module.add_class::<Foo_Label>()?;" not in source
-        assert "module.add_class::<Foo>()?;" in source
+        # Phase 1: handle type is PyFoo; Python class name is "Foo" via name = "Foo"
+        assert "module.add_class::<PyFoo>()?;" in source
 
 
 # ---------------------------------------------------------------------------
@@ -745,7 +770,8 @@ class TestNodeKindEnum:
     def test_node_kind_registered_first(self, poc_source: str) -> None:
         """NodeKind must be registered before node structs in register_classes."""
         idx_node_kind = poc_source.index("module.add_class::<NodeKind>()?;")
-        idx_identifier = poc_source.index("module.add_class::<Identifier>()?;")
+        # Phase 1: handle type is PyIdentifier; Python class name is "Identifier"
+        idx_identifier = poc_source.index("module.add_class::<PyIdentifier>()?;")
         assert idx_node_kind < idx_identifier
 
     def test_node_kind_before_label_enums(self, poc_source: str) -> None:
@@ -845,9 +871,16 @@ class TestNoPyObjectAudit:
 
 class TestNativeEqualityGenerated:
     def test_eq_uses_native_structural_equality(self, poc_source: str) -> None:
-        """§2.4: __eq__ uses native Rust PartialEq (self == &*other_node), not Python .eq()."""
-        assert "self == &*other_node" in poc_source
-        assert "// Native structural equality: no Python .eq() on stored state" in poc_source
+        """§2.4: __eq__ delegates to Shared<T>::PartialEq, not Python .eq().
+
+        Phase 1: the handle's __eq__ delegates to Shared<T>::PartialEq (which applies the
+        ptr_eq short-circuit then deep structural comparison) rather than inlining the logic.
+        This keeps the short-circuit invariant in one place (shared.rs).
+        """
+        # Delegation to Shared<T>::PartialEq via `==` operator
+        assert "let eq = self.inner == other_handle.inner;" in poc_source
+        # Confirm the old inlined read-locks are gone (delegation, not duplication)
+        assert "*self.inner.read() == *other_handle.inner.read()" not in poc_source
 
     def test_eq_no_python_span_eq(self, poc_source: str) -> None:
         """§2.4: Python .eq() on span must not appear in __eq__."""
@@ -858,10 +891,47 @@ class TestNativeEqualityGenerated:
         assert "self.children.bind(py).eq(" not in poc_source
 
     def test_repr_uses_native_span_repr(self, poc_source: str) -> None:
-        """§2.4: __repr__ uses native span start()/end() accessors, not Python .repr() on a bound obj."""
-        assert "self.span.start()" in poc_source
-        assert "self.span.end()" in poc_source
+        """§2.4: __repr__ uses native span start()/end() accessors, not Python .repr() on a bound obj.
+
+        Phase 1: the handle's __repr__ acquires a read guard on the inner Shared and
+        accesses span through it (guard.span.start(), guard.span.end()).
+        """
+        # Accesses span via the read guard on inner Shared
+        assert "guard.span.start()" in poc_source
+        assert "guard.span.end()" in poc_source
         assert "self.span.bind(py).repr()" not in poc_source
+
+
+# ---------------------------------------------------------------------------
+# Phase 1 structural invariants — generator source level (test-6/7/8)
+# ---------------------------------------------------------------------------
+
+
+class TestPhase1HandleStructure:
+    """Verify the generator emits the handle struct, to_py_canonical, and py_new registration.
+
+    These tests pin the core Phase 1 artifacts at the generator level so that a regression
+    producing wrong field types or omitting registry calls fails the string-match gate before
+    any compile or runtime test.
+    """
+
+    def test_handle_struct_emitted(self, poc_source: str) -> None:
+        """Generator emits the PyX handle struct with a private Shared<X> inner field (test-6)."""
+        # Handle struct for Identifier
+        assert "pub struct PyIdentifier {" in poc_source
+        # Field is private (no pub) and typed Shared<Identifier>
+        assert "inner: Shared<Identifier>," in poc_source
+        # Confirm the old pub form is absent
+        assert "pub inner: Shared<Identifier>," not in poc_source
+
+    def test_to_py_canonical_uses_registry(self, poc_source: str) -> None:
+        """Generator emits to_py_canonical and routes wrap-out through registry (test-7)."""
+        assert "pub fn to_py_canonical(" in poc_source
+        assert "registry::get_or_insert_with(" in poc_source
+
+    def test_py_new_uses_force_register(self, poc_source: str) -> None:
+        """Generator emits force_register in the #[new] constructor (test-8)."""
+        assert "registry::force_register(" in poc_source
 
 
 # ---------------------------------------------------------------------------
@@ -1070,12 +1140,21 @@ class TestGeneratePyiModuleLevelClassAttrs:
 
 
 class TestGeneratePyiClassLabelSetMatchesRs:
-    """Class/label set of the .pyi must equal that of the .rs (drift guard)."""
+    """Class/label set of the .pyi must equal that of the .rs (drift guard).
 
-    def _extract_rs_classes(self, rs_source: str) -> set[str]:
+    Phase 1: the .rs contains both the data struct (e.g. ``pub struct Identifier``)
+    and the Python handle (e.g. ``pub struct PyIdentifier``).  The .pyi only exposes
+    the Python-facing class name (``Identifier``), so we extract *data-struct* names
+    only from the .rs — filtering out the ``Py``-prefixed handle structs.
+    """
+
+    def _extract_rs_data_struct_classes(self, rs_source: str) -> set[str]:
+        """Return pub struct names that are NOT Py-prefixed (i.e. data structs)."""
         import re  # noqa: PLC0415
 
-        return set(re.findall(r"pub struct (\w+) \{", rs_source))
+        all_structs = set(re.findall(r"pub struct (\w+) \{", rs_source))
+        # Filter out Py-prefixed handle structs introduced by Phase 1.
+        return {name for name in all_structs if not name.startswith("Py")}
 
     def _extract_pyi_classes(self, pyi_source: str) -> set[str]:
         import re  # noqa: PLC0415
@@ -1083,16 +1162,59 @@ class TestGeneratePyiClassLabelSetMatchesRs:
         return set(re.findall(r"^class (\w+):", pyi_source, re.MULTILINE))
 
     def test_poc_class_set_matches(self, poc_source: str, poc_pyi: str) -> None:
-        """PoC grammar: class names in .pyi equal class names in .rs."""
-        rs_classes = self._extract_rs_classes(poc_source)
+        """PoC grammar: data-struct class names in .rs equal class names in .pyi."""
+        rs_classes = self._extract_rs_data_struct_classes(poc_source)
         pyi_classes = self._extract_pyi_classes(poc_pyi)
         assert rs_classes == pyi_classes
 
     def test_fegen_class_set_matches(self, fegen_source: str, fegen_pyi: str) -> None:
-        """Fegen grammar: class names in .pyi equal class names in .rs."""
-        rs_classes = self._extract_rs_classes(fegen_source)
+        """Fegen grammar: data-struct class names in .rs equal class names in .pyi."""
+        rs_classes = self._extract_rs_data_struct_classes(fegen_source)
         pyi_classes = self._extract_pyi_classes(fegen_pyi)
         assert rs_classes == pyi_classes
+
+
+# ---------------------------------------------------------------------------
+# Reserved label rejection (§4.2 of design ADR 2026/06/10-rust-idiomatic-cst-api)
+# ---------------------------------------------------------------------------
+
+
+class TestReservedLabelRejection:
+    """Generator must reject labels whose per-label methods collide with fixed method names."""
+
+    def _make_reserved_label_grammar(self, label: str) -> gsm.Grammar:
+        """Single-rule grammar with one item whose label is the given reserved name."""
+        rule = gsm.Rule(
+            name="node",
+            alternatives=[
+                gsm.Items(
+                    items=[
+                        gsm.Item(
+                            label=label,
+                            disposition=gsm.Disposition.INCLUDE,
+                            term=gsm.Regex(r"[a-z]+"),
+                            quantifier=gsm.REQUIRED,
+                        ),
+                    ],
+                    sep_after=[gsm.Separator.NO_WS],
+                ),
+            ],
+        )
+        return gsm.Grammar(rules=(rule,), identifiers={"node": rule})
+
+    def test_children_label_rejected(self) -> None:
+        """Label 'children' is reserved: extend_children would collide with the fixed method."""
+        grammar = self._make_reserved_label_grammar("children")
+        with pytest.raises(ValueError, match="children") as exc_info:
+            RustCstGenerator(grammar)
+        # Error message must name both the label and the colliding method.
+        assert "extend_children" in str(exc_info.value)
+
+    def test_non_reserved_label_accepted(self) -> None:
+        """A non-reserved label does not raise."""
+        grammar = self._make_reserved_label_grammar("name")
+        gen = RustCstGenerator(grammar)
+        assert gen is not None
 
 
 # ---------------------------------------------------------------------------
