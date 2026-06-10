@@ -3,6 +3,8 @@ use crate::cross_cdylib::{extract_source_text, FLTK_CST_CORE_ABI};
 #[cfg(feature = "python")]
 use pyo3::exceptions::PyValueError;
 #[cfg(feature = "python")]
+use pyo3::impl_::pycell::PyClassObject;
+#[cfg(feature = "python")]
 use pyo3::prelude::*;
 #[cfg(feature = "python")]
 use pyo3::sync::GILOnceCell;
@@ -93,11 +95,30 @@ impl SourceText {
     /// The marker is a plain string (debuggable, mismatch message trivially constructible).
     /// It is deliberately *not* a PyCapsule: anything readable from Python is replayable,
     /// so a capsule adds API surface without removing the pure-Python-reachable UB path.
-    /// Strengthening the derivation (pyo3 version, layout hash) is owned by the
-    /// ``crosscdylib-abi-sentinel`` TODO; this attribute is the seed mechanism.
     #[classattr]
     fn _fltk_cst_core_abi() -> &'static str {
         FLTK_CST_CORE_ABI
+    }
+
+    /// Layout probe: ``size_of::<PyClassObject<SourceText>>()`` baked at compile time.
+    ///
+    /// Compared numerically (not by string equality) by ``extract_source_text``
+    /// (``cross_cdylib.rs``) alongside ``_fltk_cst_core_abi``. A pyo3 version bump that
+    /// changes ``PyClassObject`` layout will typically produce a different integer here,
+    /// so a layout mismatch fails with ``TypeError`` instead of proceeding to
+    /// ``downcast_unchecked`` UB.
+    ///
+    /// **Limitation**: size equality is necessary but not sufficient for layout identity —
+    /// a pyo3 build that reorders internal fields while preserving total size passes the
+    /// probe. The check narrows — not closes — the layout-skew window.
+    /// See ``TODO(crosscdylib-abi-size-probe)`` for the path to a complete fix.
+    ///
+    /// ``PyClassObject<T>`` is a pyo3 internal type; its layout is intentionally NOT
+    /// stable across pyo3 minor versions — that instability is exactly what this probe
+    /// is designed to detect.
+    #[classattr]
+    fn _fltk_cst_core_abi_layout() -> usize {
+        std::mem::size_of::<PyClassObject<SourceText>>()
     }
 }
 
@@ -333,6 +354,32 @@ impl Span {
 #[cfg(feature = "python")]
 #[pymethods]
 impl Span {
+    /// ABI marker for ``Span``: identical value to ``SourceText._fltk_cst_core_abi``.
+    ///
+    /// Checked once in ``get_span_type``'s ``GILOnceCell`` init (``cross_cdylib.rs``) so that
+    /// version skew on the ``Span`` path fails with a clear ``TypeError`` naming both ABI
+    /// strings instead of proceeding to ``downcast_unchecked`` UB in ``extract_span``.
+    #[classattr]
+    fn _fltk_cst_core_abi() -> &'static str {
+        FLTK_CST_CORE_ABI
+    }
+
+    /// Layout probe for ``Span``: ``size_of::<PyClassObject<Span>>()`` baked at compile time.
+    ///
+    /// Checked numerically alongside ``_fltk_cst_core_abi`` in ``get_span_type``'s init.
+    /// A pyo3 version bump that changes ``PyClassObject`` layout will typically produce a
+    /// different integer here, catching pyo3-resolution skew that the version string alone
+    /// cannot detect.
+    ///
+    /// **Limitation**: size equality is necessary but not sufficient for layout identity —
+    /// a pyo3 build that reorders internal fields while preserving total size passes the
+    /// probe. The check narrows — not closes — the layout-skew window.
+    /// See ``TODO(crosscdylib-abi-size-probe)`` for the path to a complete fix.
+    #[classattr]
+    fn _fltk_cst_core_abi_layout() -> usize {
+        std::mem::size_of::<PyClassObject<Span>>()
+    }
+
     /// Construct a sourceless span ``[start, end)``.
     ///
     /// ``start`` and ``end`` are codepoint (Unicode character) indices.

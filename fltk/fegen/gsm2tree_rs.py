@@ -680,7 +680,14 @@ class RustCstGenerator:
         ]
 
     def _children_getter(self, _class_name: str, _enum_name: str) -> list[str]:
-        """Emit the `children` Python getter that rebuilds a list from the native Vec."""
+        """Emit the `children` Python getter that rebuilds a list from the native Vec.
+
+        The returned list is a per-call snapshot; in-place mutation of the list is a
+        silent no-op on the tree.  The Python backend returns the node's actual internal
+        list, so there is a known backend divergence on list-level identity.
+        TODO(rust-cst-children-list-view): closing this would require a live sequence-proxy
+        pyclass; deferred as additive per design ADR 2026/06/10-rust-idiomatic-cst-api §7 Q4.
+        """
         return [
             "    #[getter]",
             "    fn children(&self, py: Python<'_>) -> PyResult<Py<PyList>> {",
