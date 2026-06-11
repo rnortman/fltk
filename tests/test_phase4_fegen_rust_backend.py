@@ -231,3 +231,52 @@ class TestAC9LabelBackendIndependence:
         terminals_obj = tsrc.TerminalSource(_SIMPLE_GRAMMAR)
         cst2gsm_instance = fltk2gsm.Cst2Gsm(terminals_obj.terminals)
         assert not hasattr(cst2gsm_instance, "cst"), "self.cst should be absent from Cst2Gsm"
+
+
+# ── Self-hosting: Rust parser → Rust CST → real Cst2Gsm ──────────────────
+
+
+class TestRustParserSelfHosting:
+    """Self-hosting: Rust-generated parser → Rust CST → real Cst2Gsm equals Python path.
+
+    Exercises fegen_rust_cst.Parser directly (not via plumbing.parse_grammar):
+      1. Instantiate fegen_rust_cst.Parser(text, capture_trivia=False)
+      2. Call parser.apply__parse_grammar(0)
+      3. Assert result is not None and result.pos == len(text)
+      4. Run fltk2gsm.Cst2Gsm(text).visit_grammar(result.result)
+      5. Compare to plumbing.parse_grammar(text) (pure-Python reference path)
+
+    Satisfies §5 item 4 of the controlling design: Rust-parser → Rust-CST → real Cst2Gsm
+    over fegen.fltkg, equal to the Python path's GSM.
+    """
+
+    def _assert_rust_parser_equals_python(self, text: str) -> None:
+        """Parse text with the Rust parser and compare the resulting GSM to the Python path."""
+        parser = fegen_rust_cst.Parser(text, capture_trivia=False)
+        result = parser.apply__parse_grammar(0)
+        assert result is not None, parser.error_message()
+        assert result.pos == len(text), (
+            f"Partial parse: consumed {result.pos}/{len(text)} chars. Error tracker: {parser.error_message()}"
+        )
+        assert isinstance(result.result, fegen_rust_cst.Grammar), type(result.result)
+        gsm_rust = fltk2gsm.Cst2Gsm(text).visit_grammar(result.result)
+        gsm_python = parse_grammar(text)
+        assert gsm_rust == gsm_python
+
+    def test_simple_grammar(self):
+        """Minimal grammar: Rust parser → Rust CST → Cst2Gsm equals Python path."""
+        self._assert_rust_parser_equals_python(_SIMPLE_GRAMMAR)
+
+    def test_multi_rule_grammar(self):
+        """Multi-rule grammar with alternatives: Rust parser path equals Python path."""
+        self._assert_rust_parser_equals_python(_MULTI_RULE_GRAMMAR)
+
+    def test_fegen_grammar_self_hosted(self):
+        """fegen.fltkg self-hosted through the Rust parser; GSM must equal Python path.
+
+        This is the §5 item 4 requirement: the grammar that parses all user grammars,
+        parsed by the Rust parser it generated, producing a GSM equal to the Python path.
+        """
+        assert _FEGEN_FLTKG_PATH.exists(), f"fegen.fltkg not found at {_FEGEN_FLTKG_PATH}"
+        text = _FEGEN_FLTKG_PATH.read_text(encoding="utf-8")
+        self._assert_rust_parser_equals_python(text)

@@ -2,6 +2,15 @@
 
 Generates a standalone .rs file implementing a packrat parser that
 produces CST nodes from the generated cst.rs module.
+
+Regex subset restriction: grammar regexes must use the common subset of Python ``re``
+and the Rust ``regex`` crate.  Lookahead, lookbehind, and backreferences are not
+supported; the Rust ``regex`` crate rejects them at compile time.  The generated
+``#[test] fn all_regex_patterns_compile`` (emitted into every generated parser) enforces
+this by attempting ``Regex::new(pattern)`` for each pattern at ``cargo test`` time,
+naming any unsupported pattern in the failure message.  See ADR
+``docs/adr/2026/06/10-rust-parser-codegen/README.md`` §Regex subset for the full
+constraint and the rationale for keeping it as the permanent default.
 """
 
 from __future__ import annotations

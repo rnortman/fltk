@@ -71,8 +71,8 @@ cargo-clippy-no-python:
 	cargo clippy -q --manifest-path tests/rust_cst_fegen/Cargo.toml --no-default-features -- -D warnings
 
 # Mechanical check: verify pyo3 is absent from the python-off dependency graphs.
-# Uses a positive control (fltk-cst-core present) before the negative assertion
-# to prevent false passes when cargo tree fails silently.
+# Uses a positive control (a crate guaranteed present in that graph) before the negative
+# assertion to prevent false passes when cargo tree fails silently.
 check-no-pyo3:
 	@set -e; \
 	out="$$(cargo tree -p fltk-cst-spike --edges normal,build)"; \
@@ -84,6 +84,12 @@ check-no-pyo3:
 	parser="$$(cargo tree -p fltk-parser-core --edges normal,build)"; \
 	echo "$$parser" | grep -q fltk-cst-core || { echo "FAIL: check-no-pyo3 broken: cargo tree output lacks fltk-cst-core"; exit 1; }; \
 	! echo "$$parser" | grep -q pyo3 || { echo "FAIL: pyo3 present in fltk-parser-core dependency graph"; exit 1; }; \
+	fixture="$$(cargo tree --manifest-path tests/rust_parser_fixture/Cargo.toml --edges normal,build)"; \
+	echo "$$fixture" | grep -q fltk-parser-core || { echo "FAIL: check-no-pyo3 broken: cargo tree output lacks fltk-parser-core"; exit 1; }; \
+	! echo "$$fixture" | grep -q pyo3 || { echo "FAIL: pyo3 present in rust_parser_fixture default-features graph"; exit 1; }; \
+	fegen="$$(cargo tree --manifest-path tests/rust_cst_fegen/Cargo.toml --no-default-features --edges normal,build)"; \
+	echo "$$fegen" | grep -q fltk-parser-core || { echo "FAIL: check-no-pyo3 broken: cargo tree output lacks fltk-parser-core"; exit 1; }; \
+	! echo "$$fegen" | grep -q pyo3 || { echo "FAIL: pyo3 present in rust_cst_fegen --no-default-features graph"; exit 1; }; \
 	echo "check-no-pyo3: pyo3 absent from python-off graphs"
 
 # ── FLTK-internal Rust artifact targets ──────────────────────────────────────
