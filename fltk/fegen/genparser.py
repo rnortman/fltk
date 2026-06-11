@@ -4,13 +4,14 @@ Generates parsers from FLTK grammar files with options for trivia handling.
 """
 
 import ast
+import re
 from pathlib import Path
 from typing import TYPE_CHECKING, Annotated, cast
 
 import typer
 
 from fltk import pygen
-from fltk.fegen import fltk2gsm, fltk_parser, gsm, gsm2parser, gsm2tree, gsm2tree_rs
+from fltk.fegen import fltk2gsm, fltk_parser, gsm, gsm2parser, gsm2parser_rs, gsm2tree, gsm2tree_rs
 from fltk.fegen.pyrt import errors, terminalsrc
 from fltk.iir.context import CompilerContext, create_default_context
 from fltk.iir.py import compiler
@@ -342,6 +343,41 @@ def gen_rust_cst(
         except Exception as e:
             typer.echo(f"Error: Failed to write .pyi stub '{stub_path}': {e}", err=True)
             raise typer.Exit(1) from e
+
+
+_CST_MOD_PATH_RE = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*(::[A-Za-z_][A-Za-z0-9_]*)*$")
+
+
+@app.command(name="gen-rust-parser")
+def gen_rust_parser(
+    grammar_file: Annotated[Path, typer.Argument(help="Path to the FLTK grammar file (.fltkg)")],
+    output_file: Annotated[Path, typer.Argument(help="Path to write the .rs source")],
+    cst_mod_path: Annotated[
+        str,
+        typer.Option(
+            "--cst-mod-path",
+            help="Rust module path to the generated CST module (e.g. 'super::cst')",
+        ),
+    ] = "super::cst",
+) -> None:
+    """Emit Rust parser source (.rs) from a grammar file."""
+    if not _CST_MOD_PATH_RE.match(cst_mod_path):
+        typer.echo(f"Error: --cst-mod-path {cst_mod_path!r} is not a valid Rust module path", err=True)
+        raise typer.Exit(1)
+
+    grammar = _parse_grammar_raw(grammar_file)
+    try:
+        gen = gsm2parser_rs.RustParserGenerator(grammar, cst_mod_path=cst_mod_path, source_name=str(grammar_file))
+        src = gen.generate()
+    except (ValueError, RuntimeError, NotImplementedError) as e:
+        typer.echo(f"Error: {e}", err=True)
+        raise typer.Exit(1) from e
+
+    try:
+        output_file.write_text(src)
+    except Exception as e:
+        typer.echo(f"Error: Failed to write output file '{output_file}': {e}", err=True)
+        raise typer.Exit(1) from e
 
 
 if __name__ == "__main__":

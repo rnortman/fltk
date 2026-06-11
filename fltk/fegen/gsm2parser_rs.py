@@ -1,0 +1,859 @@
+"""Rust parser code generator for fltk.fegen grammars.
+
+Generates a standalone .rs file implementing a packrat parser that
+produces CST nodes from the generated cst.rs module.
+"""
+
+from __future__ import annotations
+
+import itertools
+from collections.abc import Sequence
+from dataclasses import dataclass
+
+from fltk.fegen import gsm
+from fltk.fegen.gsm2tree_rs import RustCstGenerator
+
+# Code point thresholds for Rust string literal escaping
+_CTRL_MAX = 0x20  # exclusive: code points < 0x20 get \u{XX} escaping
+_DEL = 0x7F  # DEL character: also gets \u{XX} escaping
+
+
+# TODO(rust-str-lit-shared): _rust_str_lit is only defined here; gsm2tree_rs.py embeds
+# Rust string literals in f-strings without escaping.  If escaping rules ever change
+# (e.g. non-BMP characters), both files need updating.  Extract to a shared module.
+def _rust_str_lit(s: str) -> str:
+    """Return the Rust string literal content (no outer quotes) for string s."""
+    out = []
+    for ch in s:
+        cp = ord(ch)
+        if ch == "\\":
+            out.append("\\\\")
+        elif ch == '"':
+            out.append('\\"')
+        elif cp < _CTRL_MAX or cp == _DEL:
+            out.append(f"\\u{{{cp:02x}}}")
+        else:
+            out.append(ch)
+    return "".join(out)
+
+
+@dataclass
+class ResultTy:
+    """Type information for a parser function's return value."""
+
+    is_span: bool
+    class_name: str | None  # None for span results; class name for node results
+
+
+@dataclass
+class RustParserFn:
+    """Metadata for a generated Rust parser function."""
+
+    name: str  # e.g. "parse_grammar" or "parse_grammar__alt0__item0__alts"
+    apply_name: str  # "apply__parse_grammar" iff memoized, else == name
+    cache_field: str | None  # "cache__parse_grammar" iff memoized, else None
+    result: ResultTy
+    rule_id: int | None  # index into grammar.rules iff memoized, else None
+    inline_to_parent: bool
+
+
+class RustParserGenerator:
+    """Generates a complete .rs parser file from a gsm.Grammar.
+
+    Takes a raw gsm.Grammar (not yet trivia-processed) and produces a string
+    containing a complete, compilable .rs file.
+    """
+
+    def __init__(
+        self,
+        grammar: gsm.Grammar,
+        cst_mod_path: str = "super::cst",
+        source_name: str | None = None,
+    ):
+        self._cst = RustCstGenerator(grammar)
+        # Work from the grammar with trivia rules added and classified
+        self._grammar = self._cst.grammar
+        self._cst_mod_path = cst_mod_path
+        # None means "omit the 'from <source_name>' clause" in the header (design §2.2).
+        self._source_name: str | None = source_name
+
+        # Regex table: pattern -> index
+        self._regex_patterns: list[str] = []
+        self._regex_index: dict[str, int] = {}
+
+        # Track which helper methods are needed
+        self._uses_literal: bool = False
+        self._uses_regex: bool = False
+
+        # Parser function registry: path tuple -> RustParserFn
+        self._parsers: dict[tuple[str, ...], RustParserFn] = {}
+
+        # Rule ID counter (for memoized rules)
+        self._rule_id_seq = itertools.count(0)
+
+        # Accumulated function body code strings (in order)
+        self._fn_bodies: list[str] = []
+
+        # Memoized result of generate() — set on first call to prevent double-emit
+        self._generated: str | None = None
+
+        # First pass: register all top-level rule parser infos (memoized).
+        # Also validate that every Identifier term in every rule body references
+        # a rule present in the grammar.  Doing this here (a) catches dangling
+        # references at construction time alongside the other validation, and (b)
+        # ensures the bare dict lookup in _gen_consume_term never KeyErrors at
+        # generation time.
+        known_rule_names: set[str] = {rule.name for rule in self._grammar.rules}
+
+        def _validate_term(rule_name: str, term: gsm.Term) -> None:
+            """Recursively validate all Identifier terms in a term, including sub-expressions."""
+            if isinstance(term, gsm.Identifier):
+                if term.value not in known_rule_names:
+                    msg = f"Rule '{rule_name}' references unknown rule '{term.value}'"
+                    raise ValueError(msg)
+            elif isinstance(term, list | tuple):
+                # Sub-expression: list/tuple of Items — recurse into each alternative's items.
+                for sub_alt in term:
+                    for sub_item in sub_alt.items:
+                        _validate_term(rule_name, sub_item.term)
+
+        for rule in self._grammar.rules:
+            class_name = self._cst._py_gen.class_name_for_rule_node(rule.name)
+            result = ResultTy(is_span=False, class_name=class_name)
+            path = (rule.name,)
+            self._make_parser_info(path, result, memoize=True)
+            for alt in rule.alternatives:
+                for item in alt.items:
+                    _validate_term(rule.name, item.term)
+
+    def _regex_idx(self, pattern: str) -> int:
+        """Add pattern to regex table if not present; return its index."""
+        if pattern not in self._regex_index:
+            self._regex_index[pattern] = len(self._regex_patterns)
+            self._regex_patterns.append(pattern)
+        return self._regex_index[pattern]
+
+    def _make_parser_info(
+        self,
+        path: tuple[str, ...],
+        result: ResultTy,
+        *,
+        memoize: bool = False,
+        inline_to_parent: bool = False,
+    ) -> RustParserFn:
+        """Create and store a RustParserFn for the given path."""
+        name = "parse_" + "__".join(path)
+        if memoize:
+            apply_name = "apply__" + name
+            cache_field = "cache__" + name
+            rule_id = next(self._rule_id_seq)
+        else:
+            apply_name = name
+            cache_field = None
+            rule_id = None
+
+        fn = RustParserFn(
+            name=name,
+            apply_name=apply_name,
+            cache_field=cache_field,
+            result=result,
+            rule_id=rule_id,
+            inline_to_parent=inline_to_parent,
+        )
+        self._parsers[path] = fn
+        return fn
+
+    def _cache_parser_info(
+        self,
+        path: tuple[str, ...],
+        result: ResultTy,
+        *,
+        memoize: bool = False,
+        inline_to_parent: bool = False,
+    ) -> RustParserFn:
+        """Return existing RustParserFn for path, or create a new one."""
+        if path in self._parsers:
+            return self._parsers[path]
+        return self._make_parser_info(path, result, memoize=memoize, inline_to_parent=inline_to_parent)
+
+    def _class_name(self, rule_name: str) -> str:
+        """Return CamelCase class name for a rule."""
+        return self._cst._py_gen.class_name_for_rule_node(rule_name)
+
+    def _child_enum_name(self, rule_name: str) -> str:
+        # TODO(rust-naming-shared): The "Child" and enum-name conventions are also
+        # encoded inline in gsm2tree_rs.py (_label_enum_rust_name, _child_enum_block).
+        # A rename there must be matched here; extract to RustCstGenerator helpers to
+        # enforce that single-source-of-truth.
+        return self._class_name(rule_name) + "Child"
+
+    def _label_type_info(self, rule_name: str, label: str) -> tuple[str, str | None, int]:
+        """Delegate to the CST generator's label type info."""
+        return self._cst._label_type_info(rule_name, label)
+
+    def generate(self) -> str:
+        """Generate the complete .rs parser source.
+
+        Idempotent: a second call on the same instance returns the previously
+        generated string without re-running emission (which would duplicate fn
+        definitions and produce uncompilable output — correctness-3).
+        """
+        if self._generated is not None:
+            return self._generated
+        # Second pass: generate all function bodies
+        for rule in self._grammar.rules:
+            self._gen_rule(rule)
+
+        parts: list[str] = []
+
+        # Section 1: Header
+        parts.append(self._gen_header())
+
+        # Section 2: RULE_NAMES + regex table
+        parts.append(self._gen_constants())
+
+        # Section 3: Parser struct + constructors
+        parts.append(self._gen_parser_struct())
+
+        # Section 4: consume_literal / consume_regex helpers (only if used)
+        if self._uses_literal or self._uses_regex:
+            parts.append(self._gen_consume_helpers())
+
+        # Section 5+: all accumulated function bodies
+        parts.append("\n".join(self._fn_bodies))
+
+        # Close the impl block
+        parts.append("}")
+
+        # Section 6: generated regex compile test (only when regex table is non-empty)
+        if self._regex_patterns:
+            parts.append(self._gen_regex_compile_test())
+
+        self._generated = "\n".join(p for p in parts if p) + "\n"
+        return self._generated
+
+    # ------------------------------------------------------------------
+    # Header
+    # ------------------------------------------------------------------
+
+    def _gen_header(self) -> str:
+        lines = []
+        if self._source_name is not None:
+            escaped = _rust_str_lit(self._source_name)
+            lines.append(f"//! Generated by fltk gen-rust-parser from `{escaped}`. Do not edit.")
+        else:
+            lines.append("//! Generated by fltk gen-rust-parser. Do not edit.")
+        lines.append("//! **Stack depth warning**: this parser is recursive-descent with no depth limit.")
+        lines.append("//! Deeply nested input (e.g. `((((…))))`) is proportional to native stack depth.")
+        lines.append("//! Stack exhaustion aborts the process (cannot be caught with `catch_unwind`).")
+        lines.append("//! Callers parsing untrusted input should impose a nesting-depth limit upstream")
+        lines.append("//! or run the parser on a thread with a known stack size.")
+        lines.append("//! TODO(parser-depth-limit): emit a configurable depth counter in the generated Parser.")
+        lines.append("// Allow double-underscore names used in generated parse function paths.")
+        lines.append("#![allow(non_snake_case)]")
+        lines.append("")
+
+        # OnceLock + Regex only if regex table is non-empty (populated during body gen)
+        if self._regex_patterns:
+            lines.append("use std::sync::OnceLock;")
+            lines.append("use fltk_parser_core::regex::Regex;")
+            lines.append("")
+
+        lines.append("use fltk_cst_core::{Shared, SourceText, Span};")
+        lines.append("use fltk_parser_core::{apply, ApplyResult, Cache, ErrorTracker, PackratState, TerminalSource};")
+        lines.append("")
+
+        # CST module import
+        segments = self._cst_mod_path.split("::")
+        if segments[-1] == "cst":
+            cst_import = f"use {self._cst_mod_path};"
+        else:
+            cst_import = f"use {self._cst_mod_path} as cst;"
+        lines.append(cst_import)
+        lines.append("")
+
+        return "\n".join(lines)
+
+    # ------------------------------------------------------------------
+    # Constants: RULE_NAMES + regex table
+    # ------------------------------------------------------------------
+
+    def _gen_constants(self) -> str:
+        lines = []
+        rule_names = [rule.name for rule in self._grammar.rules]
+        n = len(rule_names)
+        names_lit = ", ".join(f'"{_rust_str_lit(name)}"' for name in rule_names)
+        lines.append(f"pub const RULE_NAMES: [&str; {n}] = [{names_lit}];")
+        lines.append("")
+
+        # generate() calls _gen_rule() for all rules before calling _gen_constants(), so
+        # self._regex_patterns is complete here.
+
+        if self._regex_patterns:
+            r = len(self._regex_patterns)
+            patterns_lit = ", ".join(f'"{_rust_str_lit(p)}"' for p in self._regex_patterns)
+            lines.append(f"const REGEX_PATTERNS: [&str; {r}] = [{patterns_lit}];")
+            # Static array of OnceLock<Regex>
+            cells = ", ".join("OnceLock::new()" for _ in self._regex_patterns)
+            lines.append(f"static REGEX_CELLS: [OnceLock<Regex>; {r}] = [{cells}];")
+            lines.append("")
+            lines.append("fn regex_at(idx: usize) -> &'static Regex {")
+            lines.append("    REGEX_CELLS[idx].get_or_init(|| {")
+            lines.append(
+                "        Regex::new(REGEX_PATTERNS[idx])"
+                '\n            .unwrap_or_else(|e| panic!("invalid regex pattern {:?}: {e}",'
+                " REGEX_PATTERNS[idx]))"
+            )
+            lines.append("    })")
+            lines.append("}")
+            lines.append("")
+
+        return "\n".join(lines)
+
+    # ------------------------------------------------------------------
+    # Parser struct + constructors
+    # ------------------------------------------------------------------
+
+    def _gen_parser_struct(self) -> str:
+        """Generate the Parser struct, its impl block header, and public accessors.
+
+        Opens but does not close the impl Parser block; _gen_consume_helpers and
+        the per-rule fn bodies are appended inside the same block by generate().
+        """
+        lines = []
+        lines.append("pub struct Parser {")
+        lines.append("    terminals: TerminalSource,")
+        lines.append("    packrat: PackratState,")
+        lines.append("    error_tracker: ErrorTracker,")
+        lines.append("    capture_trivia: bool,")
+
+        # One cache field per top-level (memoized) rule
+        for rule in self._grammar.rules:
+            path = (rule.name,)
+            fn_info = self._parsers[path]
+            class_name = self._class_name(rule.name)
+            lines.append(f"    {fn_info.cache_field}: Cache<Shared<cst::{class_name}>>,")
+
+        lines.append("}")
+        lines.append("")
+
+        # impl Parser constructors and helpers
+        lines.append("impl Parser {")
+        lines.append("    pub fn new(text: &str, capture_trivia: bool) -> Self {")
+        lines.append("        Self::from_source_text(SourceText::from_str(text), capture_trivia)")
+        lines.append("    }")
+        lines.append("")
+        lines.append("    pub fn from_source_text(source: SourceText, capture_trivia: bool) -> Self {")
+        lines.append("        let terminals = TerminalSource::from_source_text(source);")
+        lines.append("        Self {")
+        lines.append("            terminals,")
+        lines.append("            packrat: PackratState::default(),")
+        lines.append("            error_tracker: ErrorTracker::default(),")
+        lines.append("            capture_trivia,")
+        for rule in self._grammar.rules:
+            path = (rule.name,)
+            fn_info = self._parsers[path]
+            lines.append(f"            {fn_info.cache_field}: Cache::new(),")
+        lines.append("        }")
+        lines.append("    }")
+        lines.append("")
+        lines.append("    pub fn terminals(&self) -> &TerminalSource { &self.terminals }")
+        lines.append("    pub fn capture_trivia(&self) -> bool { self.capture_trivia }")
+        lines.append("    pub fn rule_names(&self) -> &'static [&'static str] { &RULE_NAMES }")
+        lines.append("")
+        lines.append("    pub fn error_message(&self) -> String {")
+        lines.append(
+            "        fltk_parser_core::format_error_message(&self.error_tracker, &self.terminals, &RULE_NAMES)"
+        )
+        lines.append("    }")
+        lines.append("")
+        lines.append("    pub fn error_position(&self) -> Option<i64> {")
+        lines.append(
+            "        (self.error_tracker.longest_parse_len >= 0).then_some(self.error_tracker.longest_parse_len)"
+        )
+        lines.append("    }")
+
+        lines.append("")
+
+        return "\n".join(lines)
+
+    # ------------------------------------------------------------------
+    # Consume helpers
+    # ------------------------------------------------------------------
+
+    def _gen_consume_helpers(self) -> str:
+        lines = []
+
+        if self._uses_literal:
+            lines.append(
+                "    fn consume_literal(&mut self, pos: i64, literal: &'static str) -> Option<ApplyResult<Span>> {"
+            )
+            lines.append("        if let Some(span) = self.terminals.consume_literal(pos, literal) {")
+            lines.append("            return Some(ApplyResult { pos: span.end(), result: span });")
+            lines.append("        }")
+            lines.append("        let rule_id = *self.packrat.invocation_stack.last()")
+            lines.append('            .expect("consume_literal called outside apply__* frame");')
+            lines.append("        self.error_tracker.fail_literal(pos, rule_id, literal);")
+            lines.append("        None")
+            lines.append("    }")
+            lines.append("")
+
+        if self._uses_regex:
+            lines.append("    fn consume_regex(&mut self, pos: i64, regex_idx: usize) -> Option<ApplyResult<Span>> {")
+            lines.append("        if let Some(span) = self.terminals.consume_regex(pos, regex_at(regex_idx)) {")
+            lines.append("            return Some(ApplyResult { pos: span.end(), result: span });")
+            lines.append("        }")
+            lines.append("        let rule_id = *self.packrat.invocation_stack.last()")
+            lines.append('            .expect("consume_regex called outside apply__* frame");')
+            lines.append("        self.error_tracker.fail_regex(pos, rule_id, REGEX_PATTERNS[regex_idx]);")
+            lines.append("        None")
+            lines.append("    }")
+            lines.append("")
+
+        return "\n".join(lines)
+
+    # ------------------------------------------------------------------
+    # Rule generation (second pass)
+    # ------------------------------------------------------------------
+
+    def _gen_rule(self, rule: gsm.Rule) -> None:
+        """Generate all parser functions for a grammar rule."""
+        path = (rule.name,)
+        fn_info = self._parsers[path]
+        class_name = self._class_name(rule.name)
+
+        # apply__ wrapper (memoized)
+        self._emit_apply_wrapper(fn_info, class_name)
+
+        # parse_X function: tries alternatives, wraps result in Shared::new
+        self._emit_rule_body(path, fn_info, class_name, rule)
+
+    def _emit_apply_wrapper(self, fn_info: RustParserFn, class_name: str) -> None:
+        """Emit the pub apply__ memoized wrapper."""
+        lines = []
+        rule_id = fn_info.rule_id
+        lines.append(
+            f"    pub fn {fn_info.apply_name}(&mut self, pos: i64) -> Option<ApplyResult<Shared<cst::{class_name}>>> {{"
+        )
+        lines.append(
+            f"        apply(self, {rule_id}u32, pos,"
+            f" |p| &mut p.packrat,"
+            f" |p| &mut p.{fn_info.cache_field},"
+            f" Self::{fn_info.name})"
+        )
+        lines.append("    }")
+        lines.append("")
+        self._fn_bodies.append("\n".join(lines))
+
+    def _emit_rule_body(self, path: tuple[str, ...], fn_info: RustParserFn, class_name: str, rule: gsm.Rule) -> None:
+        """Emit the private parse_X function that tries each alternative."""
+        lines = []
+        lines.append(f"    fn {fn_info.name}(&mut self, pos: i64) -> Option<ApplyResult<Shared<cst::{class_name}>>> {{")
+
+        for alt_idx, alt in enumerate(rule.alternatives):
+            alt_path = (*path, f"alt{alt_idx}")
+            alt_fn = self._gen_alternative(alt_path, rule, alt)
+            alt_var = f"alt{alt_idx}"
+            lines.append(f"        if let Some({alt_var}) = self.{alt_fn.name}(pos) {{")
+            lines.append(
+                f"            return Some(ApplyResult {{ pos: {alt_var}.pos, result: Shared::new({alt_var}.result) }});"
+            )
+            lines.append("        }")
+
+        lines.append("        None")
+        lines.append("    }")
+        lines.append("")
+        self._fn_bodies.append("\n".join(lines))
+
+    # ------------------------------------------------------------------
+    # Alternative generation
+    # ------------------------------------------------------------------
+
+    def _gen_alternative(self, path: tuple[str, ...], rule: gsm.Rule, alt: gsm.Items) -> RustParserFn:
+        """Generate the alternative body function and return its RustParserFn."""
+        class_name = self._class_name(rule.name)
+        result = ResultTy(is_span=False, class_name=class_name)
+        fn_info = self._cache_parser_info(path, result)
+
+        lines = []
+        lines.append(f"    fn {fn_info.name}(&mut self, mut pos: i64) -> Option<ApplyResult<cst::{class_name}>> {{")
+        lines.append("        let span_start = pos;")
+        # Use Span::unknown() for the placeholder; set_span below supplies the real span.
+        # Avoids an Arc clone of the source text on every (typically failing) alternative
+        # attempt (efficiency-2).
+        lines.append(f"        let mut result = cst::{class_name}::new(Span::unknown());")
+
+        # Handle initial_sep
+        if alt.initial_sep != gsm.Separator.NO_WS:
+            sep_code = self._gen_separator_code(alt.initial_sep, rule)
+            if sep_code:
+                lines.append(sep_code)
+
+        # Handle each item
+        for item_idx, item in enumerate(alt.items):
+            item_path = (*path, f"item{item_idx}")
+            item_fn = self._gen_item(item_path, rule, item, class_name)
+
+            item_var = f"item{item_idx}"
+            if item.quantifier.is_optional():
+                # Optional item: no else clause
+                lines.append(f"        if let Some({item_var}) = self.{item_fn.name}(pos) {{")
+                lines.append(f"            pos = {item_var}.pos;")
+                append_code = self._gen_append_code(item, item_var, item_fn, rule, class_name)
+                if append_code:
+                    lines.append(f"            {append_code}")
+                lines.append("        }")
+            else:
+                # Required item
+                lines.append(f"        if let Some({item_var}) = self.{item_fn.name}(pos) {{")
+                lines.append(f"            pos = {item_var}.pos;")
+                append_code = self._gen_append_code(item, item_var, item_fn, rule, class_name)
+                if append_code:
+                    lines.append(f"            {append_code}")
+                lines.append("        } else {")
+                lines.append("            return None;")
+                lines.append("        }")
+
+            # sep_after for this item (if not last item or always)
+            if item_idx < len(alt.sep_after):
+                sep = alt.sep_after[item_idx]
+                if sep != gsm.Separator.NO_WS:
+                    sep_code = self._gen_separator_code(sep, rule)
+                    if sep_code:
+                        lines.append(sep_code)
+
+        lines.append("        result.set_span(Span::new_with_source(span_start, pos, self.terminals.source_text()));")
+        lines.append("        Some(ApplyResult { pos, result })")
+        lines.append("    }")
+        lines.append("")
+        self._fn_bodies.append("\n".join(lines))
+
+        return fn_info
+
+    def _gen_separator_code(self, sep: gsm.Separator, rule: gsm.Rule) -> str:
+        """Generate Rust code for a separator."""
+        if sep == gsm.Separator.NO_WS:
+            return ""
+
+        child_enum = self._child_enum_name(rule.name)
+
+        if rule.is_trivia_rule:
+            # Within trivia rules, whitespace is just a regex (matches Python reference \s+).
+            ws_pattern = r"\s+"
+            ws_idx = self._regex_idx(ws_pattern)
+            self._uses_regex = True
+            trivia_span_variant = "Span"
+            if sep == gsm.Separator.WS_ALLOWED:
+                return (
+                    f"        if let Some(ws) = self.consume_regex(pos, {ws_idx}) {{\n"
+                    f"            pos = ws.pos;\n"
+                    f"            if self.capture_trivia {{\n"
+                    f"                result.push_child(None, cst::{child_enum}::{trivia_span_variant}(ws.result));\n"
+                    f"            }}\n"
+                    f"        }}"
+                )
+            else:  # WS_REQUIRED
+                return (
+                    f"        if let Some(ws) = self.consume_regex(pos, {ws_idx}) {{\n"
+                    f"            pos = ws.pos;\n"
+                    f"            if self.capture_trivia {{\n"
+                    f"                result.push_child(None, cst::{child_enum}::{trivia_span_variant}(ws.result));\n"
+                    f"            }}\n"
+                    f"        }} else {{\n"
+                    f"            return None;\n"
+                    f"        }}"
+                )
+        else:
+            # Non-trivia rules: call apply__parse__trivia
+            trivia_class = self._class_name(gsm.TRIVIA_RULE_NAME)
+            trivia_variant = trivia_class  # variant name in child enum
+            if sep == gsm.Separator.WS_ALLOWED:
+                return (
+                    f"        if let Some(ws) = self.apply__parse__trivia(pos) {{\n"
+                    f"            pos = ws.pos;\n"
+                    f"            if self.capture_trivia {{\n"
+                    f"                result.push_child(None, cst::{child_enum}::{trivia_variant}(ws.result));\n"
+                    f"            }}\n"
+                    f"        }}"
+                )
+            elif sep == gsm.Separator.WS_REQUIRED:
+                return (
+                    f"        if let Some(ws) = self.apply__parse__trivia(pos) {{\n"
+                    f"            pos = ws.pos;\n"
+                    f"            if self.capture_trivia {{\n"
+                    f"                result.push_child(None, cst::{child_enum}::{trivia_variant}(ws.result));\n"
+                    f"            }}\n"
+                    f"        }} else {{\n"
+                    f"            return None;\n"
+                    f"        }}"
+                )
+            else:
+                msg = f"Unhandled separator: {sep!r}"
+                raise NotImplementedError(msg)
+
+    # ------------------------------------------------------------------
+    # Item generation
+    # ------------------------------------------------------------------
+
+    def _gen_item(self, path: tuple[str, ...], rule: gsm.Rule, item: gsm.Item, parent_class_name: str) -> RustParserFn:
+        """Generate item parser function. Returns the RustParserFn."""
+        if item.quantifier.is_multiple():
+            return self._gen_item_multiple(path, rule, item, parent_class_name)
+        else:
+            return self._gen_item_single_or_optional(path, rule, item, parent_class_name)
+
+    def _gen_item_single_or_optional(
+        self, path: tuple[str, ...], rule: gsm.Rule, item: gsm.Item, parent_class_name: str
+    ) -> RustParserFn:
+        """Generate a single/optional item parser that delegates to the consume expression."""
+        consume_expr, result_ty, inline_to_parent = self._gen_consume_term(path, item.term, rule, parent_class_name)
+
+        fn_info = self._cache_parser_info(path, result_ty, inline_to_parent=inline_to_parent)
+
+        # Emit the item parser function
+        if result_ty.is_span:
+            ret_type = "Span"
+        elif result_ty.class_name == parent_class_name and inline_to_parent:
+            ret_type = f"cst::{parent_class_name}"
+        elif result_ty.class_name is not None:
+            ret_type = f"Shared<cst::{result_ty.class_name}>"
+        else:
+            ret_type = "Span"
+
+        lines = []
+        lines.append(f"    fn {fn_info.name}(&mut self, pos: i64) -> Option<ApplyResult<{ret_type}>> {{")
+        lines.append(f"        {consume_expr}")
+        lines.append("    }")
+        lines.append("")
+        self._fn_bodies.append("\n".join(lines))
+
+        return fn_info
+
+    def _gen_item_multiple(
+        self, path: tuple[str, ...], rule: gsm.Rule, item: gsm.Item, parent_class_name: str
+    ) -> RustParserFn:
+        """Generate a +/* item parser that loops and accumulates into parent node type."""
+        # The item parser for multiple items returns the parent node type
+        parent_result_ty = ResultTy(is_span=False, class_name=parent_class_name)
+        fn_info = self._cache_parser_info(path, parent_result_ty, inline_to_parent=True)
+
+        # Generate the consume expression for one item.
+        # Pass path (not (*path, "one")) to match Python reference path tuple scheme
+        # and preserve side-by-side auditability of generated function names (correctness-4).
+        consume_expr, consumed_result_ty, one_is_inline = self._gen_consume_term(
+            path, item.term, rule, parent_class_name
+        )
+
+        is_one_or_more = item.quantifier.is_required()
+
+        lines = []
+        lines.append(
+            f"    fn {fn_info.name}(&mut self, mut pos: i64) -> Option<ApplyResult<cst::{parent_class_name}>> {{"
+        )
+        lines.append("        let span_start = pos;")
+        # Use Span::unknown() for the placeholder; set_span below supplies the real span
+        # (efficiency-2: avoids Arc clone on every loop entry).
+        lines.append(f"        let mut result = cst::{parent_class_name}::new(Span::unknown());")
+        # TODO(nullable-loop): if the repeated term can match empty at a fixed position the
+        # loop below never advances and runs forever (100% CPU DoS on crafted input).
+        # Deliberately mirrors Python's identical behavior for cross-backend parity (design §3),
+        # but both backends should add a per-iteration progress guard in lockstep.
+        # See gsm2parser.py for the matching Python location.
+        lines.append("        while let Some(one_result) = {")
+        lines.append(f"            {consume_expr}")
+        lines.append("        } {")
+        lines.append("            pos = one_result.pos;")
+        # Generate append statement
+        if one_is_inline:
+            # Sub-expression that returns parent type: extend_children.
+            # TODO(extend-children-owned): extend_children clones every child Arc even
+            # though the donor (one_result.result) is immediately dropped.  A consuming
+            # variant (e.g. extend_children_owned) using Vec::append would avoid the
+            # atomic inc+dec pairs on the parse hot path.  Blocked on gsm2tree_rs adding
+            # the method to the generated CST API.
+            if item.disposition != gsm.Disposition.SUPPRESS:
+                lines.append("            result.extend_children(&one_result.result);")
+        else:
+            append_code = self._gen_append_code_for_consumed(
+                item, "one_result", consumed_result_ty, rule, parent_class_name
+            )
+            if append_code:
+                lines.append(f"            {append_code}")
+        lines.append("        }")
+        if is_one_or_more:
+            lines.append("        if pos == span_start {")
+            lines.append("            return None;")
+            lines.append("        }")
+        lines.append("        result.set_span(Span::new_with_source(span_start, pos, self.terminals.source_text()));")
+        lines.append("        Some(ApplyResult { pos, result })")
+        lines.append("    }")
+        lines.append("")
+        self._fn_bodies.append("\n".join(lines))
+
+        return fn_info
+
+    # ------------------------------------------------------------------
+    # Consume term expression generation
+    # ------------------------------------------------------------------
+
+    def _gen_consume_term(
+        self,
+        path: tuple[str, ...],
+        term: gsm.Term,
+        rule: gsm.Rule,
+        parent_class_name: str,
+    ) -> tuple[str, ResultTy, bool]:
+        """Return (rust_expr, result_ty, inline_to_parent) for a term."""
+        if isinstance(term, gsm.Identifier):
+            rule_name = term.value
+            class_name = self._class_name(rule_name)
+            fn_info = self._parsers[(rule_name,)]
+            result_ty = ResultTy(is_span=False, class_name=class_name)
+            return f"self.{fn_info.apply_name}(pos)", result_ty, False
+
+        elif isinstance(term, gsm.Literal):
+            escaped = _rust_str_lit(term.value)
+            self._uses_literal = True
+            result_ty = ResultTy(is_span=True, class_name=None)
+            return f'self.consume_literal(pos, "{escaped}")', result_ty, False
+
+        elif isinstance(term, gsm.Regex):
+            idx = self._regex_idx(term.value)
+            self._uses_regex = True
+            result_ty = ResultTy(is_span=True, class_name=None)
+            return f"self.consume_regex(pos, {idx})", result_ty, False
+
+        elif isinstance(term, list | tuple):
+            # Sub-expression: parenthesized alternatives (gsm.Term is Sequence[Items];
+            # fltk2gsm produces list, but tuple is also valid per the GSM type — correctness-5).
+            return self._gen_subexpr_term(path, term, rule, parent_class_name)
+
+        elif isinstance(term, gsm.Invocation):
+            msg = f"Invocation terms are not supported in Rust parser generation: {term}"
+            raise NotImplementedError(msg)
+
+        else:
+            msg = f"Unknown term type: {type(term)}"
+            raise NotImplementedError(msg)
+
+    def _gen_subexpr_term(
+        self,
+        path: tuple[str, ...],
+        alternatives: Sequence[gsm.Items],
+        rule: gsm.Rule,
+        parent_class_name: str,
+    ) -> tuple[str, ResultTy, bool]:
+        """Generate a sub-expression (parenthesized alternatives) and return its call expression."""
+        alts_path = (*path, "alts")
+        parent_result_ty = ResultTy(is_span=False, class_name=parent_class_name)
+        alts_fn = self._cache_parser_info(alts_path, parent_result_ty, inline_to_parent=True)
+
+        # Generate the __alts function
+        alts_lines = []
+        alts_lines.append(
+            f"    fn {alts_fn.name}(&mut self, pos: i64) -> Option<ApplyResult<cst::{parent_class_name}>> {{"
+        )
+        for alt_idx, alt in enumerate(alternatives):
+            sub_alt_path = (*alts_path, f"alt{alt_idx}")
+            sub_alt_fn = self._gen_alternative(sub_alt_path, rule, alt)
+            alts_lines.append(f"        if let Some(r) = self.{sub_alt_fn.name}(pos) {{")
+            alts_lines.append("            return Some(r);")
+            alts_lines.append("        }")
+        alts_lines.append("        None")
+        alts_lines.append("    }")
+        alts_lines.append("")
+        self._fn_bodies.append("\n".join(alts_lines))
+
+        return f"self.{alts_fn.name}(pos)", parent_result_ty, True
+
+    # ------------------------------------------------------------------
+    # Append code generation
+    # ------------------------------------------------------------------
+
+    def _gen_append_code(
+        self,
+        item: gsm.Item,
+        item_var: str,
+        item_fn: RustParserFn,
+        rule: gsm.Rule,
+        parent_class_name: str,
+    ) -> str:
+        """Generate the code to append an item result to the parent node."""
+        result_ty = item_fn.result
+
+        if item.disposition == gsm.Disposition.SUPPRESS:
+            return ""
+
+        if item.disposition == gsm.Disposition.INLINE:
+            msg = "INLINE disposition is not supported in Rust parser generation"
+            raise NotImplementedError(msg)
+
+        if item_fn.inline_to_parent:
+            # Sub-expression or multiple-items: extend children from item result
+            return f"result.extend_children(&{item_var}.result);"
+
+        return self._gen_append_code_for_consumed(item, item_var, result_ty, rule, parent_class_name)
+
+    # ------------------------------------------------------------------
+    # Generated regex compile test
+    # ------------------------------------------------------------------
+
+    def _gen_regex_compile_test(self) -> str:
+        """Emit the cfg(test) block that verifies all regex patterns compile.
+
+        Emitted only when the regex table is non-empty (design §2.4).
+        Runs under each downstream consumer's cargo test, naming any unsupported pattern.
+        """
+        lines = []
+        lines.append("#[cfg(test)]")
+        lines.append("mod generated_regex_tests {")
+        lines.append("    #[test]")
+        lines.append("    fn all_regex_patterns_compile() {")
+        lines.append("        for pat in super::REGEX_PATTERNS.iter() {")
+        lines.append("            if let Err(e) = fltk_parser_core::regex::Regex::new(pat) {")
+        lines.append('                panic!("grammar regex {pat:?} is not supported by the regex crate: {e}");')
+        lines.append("            }")
+        lines.append("        }")
+        lines.append("    }")
+        lines.append("}")
+        return "\n".join(lines)
+
+    def _gen_append_code_for_consumed(
+        self,
+        item: gsm.Item,
+        item_var: str,
+        result_ty: ResultTy,
+        rule: gsm.Rule,
+        _parent_class_name: str,
+    ) -> str:
+        """Generate append code given the consumed result type."""
+        if item.disposition == gsm.Disposition.SUPPRESS:
+            return ""
+
+        if item.disposition == gsm.Disposition.INLINE:
+            msg = "INLINE disposition is not supported in Rust parser generation"
+            raise NotImplementedError(msg)
+
+        child_enum = self._child_enum_name(rule.name)
+        rule_name = rule.name
+
+        if item.label is not None:
+            label = item.label
+            ref_type, single_node_cls, _total = self._label_type_info(rule_name, label)
+
+            if ref_type == "&Span":
+                return f"result.append_{label}({item_var}.result);"
+            elif single_node_cls is not None:
+                return f"result.append_{label}({item_var}.result);"
+            # Union label: need to wrap in child enum variant
+            elif result_ty.is_span:
+                return f"result.append_{label}(cst::{child_enum}::Span({item_var}.result));"
+            else:
+                child_cls = result_ty.class_name
+                return f"result.append_{label}(cst::{child_enum}::{child_cls}({item_var}.result));"
+        # Unlabeled INCLUDE: push_child with None label
+        elif result_ty.is_span:
+            return f"result.push_child(None, cst::{child_enum}::Span({item_var}.result));"
+        else:
+            child_cls = result_ty.class_name
+            return f"result.push_child(None, cst::{child_enum}::{child_cls}({item_var}.result));"

@@ -1,4 +1,4 @@
-"""Tests for the gen-rust-cst CLI subcommand: source emission, sentinel decoupling, and no-double-trivia contract."""
+"""Tests for gen-rust-cst and gen-rust-parser CLI subcommands."""
 
 from __future__ import annotations
 
@@ -268,3 +268,73 @@ def test_gen_rust_cst_rs_unchanged_with_protocol_module(
     assert output_rs_no_pyi.read_text() == output_rs_with_pyi.read_text(), (
         "--protocol-module must not change .rs output"
     )
+
+
+# ---------------------------------------------------------------------------
+# gen-rust-parser CLI tests  (design §4 item 2)
+# ---------------------------------------------------------------------------
+
+
+def test_gen_rust_parser_happy_path(simple_grammar_file: pathlib.Path, tmp_path: pathlib.Path) -> None:
+    """gen-rust-parser happy path: writes the output file, exits 0, and emits valid content."""
+    output_rs = tmp_path / "parser.rs"
+    runner = CliRunner()
+    result = runner.invoke(app, ["gen-rust-parser", str(simple_grammar_file), str(output_rs)])
+
+    assert result.exit_code == 0, f"gen-rust-parser failed:\n{result.output}\n{result.exception}"
+    assert output_rs.exists(), "Expected .rs output file was not created"
+
+    src = output_rs.read_text()
+    assert "pub fn apply__parse_word(" in src
+    assert "Parser" in src
+
+
+def test_gen_rust_parser_missing_grammar_file(tmp_path: pathlib.Path) -> None:
+    """gen-rust-parser with a non-existent grammar file exits 1."""
+    missing = tmp_path / "no_such.fltkg"
+    output_rs = tmp_path / "parser.rs"
+    runner = CliRunner()
+    result = runner.invoke(app, ["gen-rust-parser", str(missing), str(output_rs)])
+
+    assert result.exit_code != 0, "Expected non-zero exit for missing grammar file"
+    assert not output_rs.exists(), "No output file should be created on error"
+
+
+def test_gen_rust_parser_generation_error_no_partial_file(tmp_path: pathlib.Path) -> None:
+    """gen-rust-parser exits 1 on generation error and leaves no partial output file."""
+    # A grammar that triggers NotImplementedError: use INLINE disposition on an identifier.
+    bad_grammar = tmp_path / "bad.fltkg"
+    bad_grammar.write_text("parent := !child:child ;\nchild := value:/[a-z]+/ ;\n")
+    output_rs = tmp_path / "parser.rs"
+    runner = CliRunner()
+    result = runner.invoke(app, ["gen-rust-parser", str(bad_grammar), str(output_rs)])
+
+    assert result.exit_code != 0, "Expected non-zero exit for unsupported grammar feature"
+    assert not output_rs.exists(), "No partial output file should be created on generation error"
+
+
+def test_gen_rust_parser_invalid_cst_mod_path(simple_grammar_file: pathlib.Path, tmp_path: pathlib.Path) -> None:
+    """gen-rust-parser rejects invalid --cst-mod-path with exit 1 and no output file."""
+    output_rs = tmp_path / "parser.rs"
+    runner = CliRunner()
+    result = runner.invoke(
+        app,
+        ["gen-rust-parser", str(simple_grammar_file), str(output_rs), "--cst-mod-path", "123bad"],
+    )
+
+    assert result.exit_code != 0, "Expected non-zero exit for invalid --cst-mod-path"
+    assert not output_rs.exists(), "No output file should be created when --cst-mod-path is invalid"
+
+
+def test_gen_rust_parser_custom_cst_mod_path(simple_grammar_file: pathlib.Path, tmp_path: pathlib.Path) -> None:
+    """gen-rust-parser --cst-mod-path propagates to the generated use statement."""
+    output_rs = tmp_path / "parser.rs"
+    runner = CliRunner()
+    result = runner.invoke(
+        app,
+        ["gen-rust-parser", str(simple_grammar_file), str(output_rs), "--cst-mod-path", "my::cst"],
+    )
+
+    assert result.exit_code == 0, f"gen-rust-parser failed:\n{result.output}"
+    src = output_rs.read_text()
+    assert "use my::cst;" in src

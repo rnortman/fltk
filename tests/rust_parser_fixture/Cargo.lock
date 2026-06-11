@@ -24,15 +24,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "9330f8b2ff13f34540b44e946ef35111825727b38d33286ef986142615121801"
 
 [[package]]
-name = "fegen-rust-cst"
-version = "0.1.0"
-dependencies = [
- "fltk-cst-core",
- "fltk-parser-core",
- "pyo3",
-]
-
-[[package]]
 name = "fltk-cst-core"
 version = "0.1.0"
 dependencies = [
@@ -204,6 +195,15 @@ name = "regex-syntax"
 version = "0.8.11"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "d6f6ff9a378485b298a5286656da665ba74413d36db0979633275d2e708145d4"
+
+[[package]]
+name = "rust-parser-fixture"
+version = "0.1.0"
+dependencies = [
+ "fltk-cst-core",
+ "fltk-parser-core",
+ "pyo3",
+]
 
 [[package]]
 name = "rustversion"

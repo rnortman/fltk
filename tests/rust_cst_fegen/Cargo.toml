@@ -9,13 +9,14 @@ edition = "2021"
 
 [lib]
 name = "fegen_rust_cst"
-crate-type = ["cdylib"]
+crate-type = ["cdylib", "rlib"]
 
 [features]
 default = ["extension-module"]
 extension-module = ["python", "pyo3/extension-module"]
-python = ["fltk-cst-core/python"]
+python = ["dep:pyo3", "fltk-cst-core/python"]
 
 [dependencies]
-pyo3 = { version = "0.23", features = ["abi3-py310"] }
+pyo3 = { version = "0.23", features = ["abi3-py310"], optional = true }
 fltk-cst-core = { path = "../../crates/fltk-cst-core", default-features = false }
+fltk-parser-core = { path = "../../crates/fltk-parser-core" }

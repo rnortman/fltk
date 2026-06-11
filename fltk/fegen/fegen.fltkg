@@ -18,4 +18,4 @@ raw_string := value:/([^\/\n\\]|\\.)+/ ;
 literal := value:/("([^"\n\\]|\\.)+"|'([^'\n\\]|\\.)+')/ ;
 _trivia := ( line_comment | line_comment? : | block_comment )+ ;
 line_comment := prefix:"//" . content:/[^\n]*/ . "\n" ;
-block_comment := start:"/*" , content:/[^*]*(?:\*(?!\/)[^*]*)*/ . end:"*/" ;
+block_comment := start:"/*" . content:/(?:[^*]|\*+[^\/\*])*/ . end:/\*+\// ;

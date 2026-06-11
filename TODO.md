@@ -61,6 +61,26 @@ breaking the Phase 3 parity comparator. Fix Python and Rust together: escape C0 
 (except `\n`/`\t`) in `line_text`, then update the comparator.
 Location: `crates/fltk-parser-core/src/errors.rs` (`format_error_message`).
 
+## `rust-str-lit-shared`
+
+`_rust_str_lit` is only defined in `fltk/fegen/gsm2parser_rs.py`. `gsm2tree_rs.py` embeds Rust string literals in f-strings without going through an escaping helper, meaning any rule name or label containing characters that require escaping (backslash, double-quote, control chars) would produce malformed Rust there. Extract to a shared utility so both generators use the same escaping path. Location: `fltk/fegen/gsm2parser_rs.py` (`_rust_str_lit`, module level).
+
+## `rust-naming-shared`
+
+The `XChild` and `XLabel` naming conventions for generated Rust enums are encoded independently in `gsm2parser_rs.py` (`_child_enum_name`, `_class_name`) and `gsm2tree_rs.py` (`_label_enum_rust_name`, inline `f"{class_name}Child"` in `_child_enum_block`). A rename in one place without the other produces parser code that references non-existent CST enum names (caught only at `cargo` compile time). Extract naming helpers to `RustCstGenerator` so both generators read from a single source. Location: `fltk/fegen/gsm2parser_rs.py` (`_child_enum_name`), `fltk/fegen/gsm2tree_rs.py` (`_label_enum_rust_name`, `_child_enum_block`).
+
+## `nullable-loop`
+
+`_gen_item_multiple` emits a `while let` loop with no per-iteration progress guard. For a grammar where the repeated term can match empty at a fixed position (e.g. an inner alternative whose items are all optional), the loop never advances and runs forever (100% CPU). This deliberately mirrors the Python backend (`gsm2parser.py`) for cross-backend parity (design §3), but both backends should add `if one_result.pos == pos { break; }` in lockstep. Location: `fltk/fegen/gsm2parser_rs.py` (`_gen_item_multiple`), `fltk/fegen/gsm2parser.py` (corresponding Python loop).
+
+## `parser-depth-limit`
+
+Generated parsers are recursive-descent with no depth limit. Deeply nested input exhausts the thread stack and aborts the process (cannot be caught with `catch_unwind`). Python raises a catchable `RecursionError`; the Rust backend is strictly worse for untrusted input. Fix: emit a depth counter in the generated `Parser` struct, increment/decrement in `apply__*` wrappers, and return a parse failure (with a distinguishable error) when a configurable limit is exceeded. Closely related to `apply-depth-limit` (Phase 1 runtime TODO) — the generated parser and the runtime counter should be wired together. Location: `fltk/fegen/gsm2parser_rs.py` (`_gen_apply_wrapper`, `_gen_parser_struct`).
+
+## `extend-children-owned`
+
+`extend_children(&Self)` clones every child Arc even though the donor node is immediately dropped after the call (inline-to-parent sub-expression and `+`/`*` loop paths). A consuming variant `extend_children_owned(other: Self)` using `Vec::append` would avoid the atomic inc+dec pairs per child on the parse hot path. Blocked on `gsm2tree_rs.py` adding the method to the generated CST node API. Location: `fltk/fegen/gsm2parser_rs.py` (`_gen_item_multiple`, `_gen_append_code`), `fltk/fegen/gsm2tree_rs.py` (generated `impl <Node>` blocks).
+
 ## `rust-cst-debug-depth`
 
 `derive(Debug)` on generated node structs recurses through `Shared<T>` children with no depth bound and no cycle detection. For downstream apps that parse untrusted input (the design's primary use case via R4), tree depth is attacker-controlled; debug-logging a deeply-nested tree causes stack exhaustion → uncatchable process abort. The cycle case is design-accepted (§5); this TODO tracks the unbounded-depth DoS on acyclic attacker-controlled input, which is new exposure introduced by Phase 2's `derive(Debug)`. Fix: emit a manual depth-capped `Debug` (elide children past depth N or print child count beyond a cutoff — the existing non-recursive `__repr__` in gsm2tree_rs.py is the model) instead of `derive(Debug)`. Alternatively, extend Phase-3 docs to explicitly warn authors of parsers over untrusted input not to `{:?}` unbounded trees. Location: `fltk/fegen/gsm2tree_rs.py` (the `#[derive(Clone, Debug)]` emit on node data structs, ~line 638).

@@ -1293,9 +1293,6 @@ class Parser:
             result.append_start(child=item0.result)
         else:
             return None
-        if ws_after__item0 := self.consume_regex(pos=pos, regex="\\s+"):
-            pos = ws_after__item0.pos
-            result.append(child=ws_after__item0.result, label=None)
         if item1 := self.parse_block_comment__alt0__item1(pos=pos):
             pos = item1.pos
             result.append_content(child=item1.result)
@@ -1317,9 +1314,9 @@ class Parser:
     def parse_block_comment__alt0__item1(
         self, pos: int
     ) -> fltk.fegen.pyrt.memo.ApplyResult[int, fltk.fegen.pyrt.span.Span] | None:
-        return self.consume_regex(pos=pos, regex="[^*]*(?:\\*(?!\\/)[^*]*)*")
+        return self.consume_regex(pos=pos, regex="(?:[^*]|\\*+[^\\/\\*])*")
 
     def parse_block_comment__alt0__item2(
         self, pos: int
     ) -> fltk.fegen.pyrt.memo.ApplyResult[int, fltk.fegen.pyrt.span.Span] | None:
-        return self.consume_literal(pos=pos, literal="*/")
+        return self.consume_regex(pos=pos, regex="\\*+\\/")

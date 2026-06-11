@@ -1,0 +1,53 @@
+// Fixture grammar for Rust parser generator tests.
+// Covers: literal, regex, quantifiers (+, ?, *), WS_REQUIRED separator,
+//         sub-expression, union label, suppress, include,
+//         direct + indirect left recursion, multibyte literal + regex.
+
+// A number (one or more digits)
+num := value:/[0-9]+/ ;
+
+// A name (one or more lowercase letters)
+name := value:/[a-z]+/ ;
+
+// An atom: either a number or a name, or a parenthesised expression
+atom := num:num | name:name ;
+
+// Parenthesised expression (sub-expression with WS_ALLOWED inner separators)
+paren_expr := %"(" , inner:atom , %")" ;
+
+// A statement requiring whitespace between lhs and operator and rhs
+stmt := lhs:atom : "=" : rhs:atom ;
+
+// One or more atoms
+items := item:atom+ ;
+
+// Zero or one atom
+opt_item := item:atom? ;
+
+// Zero or more atoms
+zero_items := item:atom* ;
+
+// Direct left recursion: expr := expr "+" rhs | atom
+// Tests that the packrat memoizer handles left-recursive grammars correctly.
+expr := lhs:expr . "+" . rhs:atom | atom:atom ;
+
+// Indirect left recursion: lval and rval are mutually left-recursive via each other.
+// lval can start with rval (indirect), rval can start with lval (indirect).
+lval := inner:rval . "!" | base:name ;
+rval := inner:lval . "?" | base:num ;
+
+// Multibyte literal: arrow operator (→, U+2192, 3 UTF-8 bytes).
+// Span offsets must be codepoint-indexed, not byte-indexed.
+arrow := %"→" . target:name ;
+
+// Multibyte regex: matches one or more characters in the range U+00C0..U+00FF
+// (Latin Extended characters, all multi-byte in UTF-8).
+latin_word := value:/[À-ÿ]+/ ;
+
+// $-included unlabeled literal: "tag" span appears as an unlabeled child.
+tagged := $"tag" . value:/[a-z]+/ ;
+
+// Union label: the same label "item" applies to two different types (num node, name node,
+// or a bare regex span).  The third alternative exercises the union-span arm
+// (cst::ValChild::Span) of the append path (design §2.6B).
+val := item:num | item:name | item:/[!@#$]+/ ;

@@ -39,6 +39,7 @@ test:
 
 cargo-check:
 	cargo check -q
+	cargo check -q --manifest-path tests/rust_cst_fegen/Cargo.toml
 
 cargo-test:
 	cargo test -q
@@ -52,12 +53,16 @@ cargo-test-no-python:
 	cargo test -q -p fltk-cst-core --no-default-features
 	cargo test -q -p fltk-cst-spike
 	cargo test -q -p fltk-parser-core
+	cargo test -q --manifest-path tests/rust_parser_fixture/Cargo.toml
+	cargo test -q --manifest-path tests/rust_cst_fegen/Cargo.toml --no-default-features
 
 cargo-clippy-no-python:
 	cargo clippy -q -p fltk-cst-core --no-default-features -- -D warnings
 	cargo clippy -q -p fltk-cst-spike -- -D warnings
 	cargo clippy -q -p fltk-cst-spike --features python -- -D warnings
 	cargo clippy -q -p fltk-parser-core -- -D warnings
+	cargo clippy -q --manifest-path tests/rust_parser_fixture/Cargo.toml -- -D warnings
+	cargo clippy -q --manifest-path tests/rust_cst_fegen/Cargo.toml --no-default-features -- -D warnings
 
 # Mechanical check: verify pyo3 is absent from the python-off dependency graphs.
 # Uses a positive control (fltk-cst-core present) before the negative assertion
@@ -99,6 +104,24 @@ build-fegen-rust-cst:
 gen-rust-cst:
 	uv run python -m fltk.fegen.genparser gen-rust-cst $(GRAMMAR) $(RS_OUT)
 
+# Emit Rust parser source from a grammar (no compilation).
+# Usage: make gen-rust-parser GRAMMAR=path/to/grammar.fltkg RS_OUT=path/to/output.rs
+gen-rust-parser:
+	uv run python -m fltk.fegen.genparser gen-rust-parser $(GRAMMAR) $(RS_OUT)
+
+# Regenerate the parser for the fegen grammar into the rust_cst_fegen test crate.
+build-fegen-rust-parser:
+	uv run python -m fltk.fegen.genparser gen-rust-parser \
+		fltk/fegen/fegen.fltkg tests/rust_cst_fegen/src/parser.rs
+
+# Run native (no-Python) Rust parser tests for the fegen grammar.
+test-native-parser:
+	cd tests/rust_cst_fegen && cargo test --no-default-features
+
+# Run native Rust parser tests for the fixture grammar.
+test-rust-parser-fixture:
+	cd tests/rust_parser_fixture && cargo test
+
 # Regenerate ALL generated code from their source grammars, then normalize formatting.
 # Covers:
 #   - Python CST/parser/protocol for fltk, fegen/bootstrap, toy, and unparsefmt grammars
@@ -136,6 +159,11 @@ gencode:
 	# Rust: tests/rust_cst_fegen/src/cst.rs (fegen.fltkg) — must match src/cst_fegen.rs;
 	# regenerated here so staleness is visible to cargo check in the rust_cst_fegen workspace.
 	$(MAKE) gen-rust-cst GRAMMAR=fltk/fegen/fegen.fltkg RS_OUT=tests/rust_cst_fegen/src/cst.rs
+	# Rust: tests/rust_cst_fegen/src/parser.rs (fegen.fltkg) — generated Rust parser.
+	$(MAKE) build-fegen-rust-parser
+	# Rust: tests/rust_parser_fixture/src/cst.rs and parser.rs (rust_parser_fixture.fltkg)
+	$(MAKE) gen-rust-cst GRAMMAR=fltk/fegen/test_data/rust_parser_fixture.fltkg RS_OUT=tests/rust_parser_fixture/src/cst.rs
+	$(MAKE) gen-rust-parser GRAMMAR=fltk/fegen/test_data/rust_parser_fixture.fltkg RS_OUT=tests/rust_parser_fixture/src/parser.rs
 	# Rust: crates/fltk-cst-spike/src/cst.rs — same grammar as cst_generated.rs; cp makes identity explicit
 	cp src/cst_generated.rs crates/fltk-cst-spike/src/cst.rs
 	# Normalize formatting. Order matters:
