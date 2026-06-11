@@ -51,11 +51,13 @@ cargo-clippy:
 cargo-test-no-python:
 	cargo test -q -p fltk-cst-core --no-default-features
 	cargo test -q -p fltk-cst-spike
+	cargo test -q -p fltk-parser-core
 
 cargo-clippy-no-python:
 	cargo clippy -q -p fltk-cst-core --no-default-features -- -D warnings
 	cargo clippy -q -p fltk-cst-spike -- -D warnings
 	cargo clippy -q -p fltk-cst-spike --features python -- -D warnings
+	cargo clippy -q -p fltk-parser-core -- -D warnings
 
 # Mechanical check: verify pyo3 is absent from the python-off dependency graphs.
 # Uses a positive control (fltk-cst-core present) before the negative assertion
@@ -68,6 +70,9 @@ check-no-pyo3:
 	core="$$(cargo tree -p fltk-cst-core --no-default-features --edges normal,build)"; \
 	echo "$$core" | grep -q fltk-cst-core || { echo "FAIL: check-no-pyo3 broken: cargo tree output lacks fltk-cst-core"; exit 1; }; \
 	! echo "$$core" | grep -q pyo3 || { echo "FAIL: pyo3 present in fltk-cst-core --no-default-features graph"; exit 1; }; \
+	parser="$$(cargo tree -p fltk-parser-core --edges normal,build)"; \
+	echo "$$parser" | grep -q fltk-cst-core || { echo "FAIL: check-no-pyo3 broken: cargo tree output lacks fltk-cst-core"; exit 1; }; \
+	! echo "$$parser" | grep -q pyo3 || { echo "FAIL: pyo3 present in fltk-parser-core dependency graph"; exit 1; }; \
 	echo "check-no-pyo3: pyo3 absent from python-off graphs"
 
 # ── FLTK-internal Rust artifact targets ──────────────────────────────────────

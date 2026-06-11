@@ -1,0 +1,16 @@
+[package]
+name = "fltk-parser-core"
+version = "0.1.0"
+edition = "2021"
+
+[lib]
+name = "fltk_parser_core"
+crate-type = ["rlib"]
+
+# No `python` feature: pyo3-freedom is structural absence, not a disabled feature.
+# The generated parser's Python surface lives in the generated file and uses
+# fltk-cst-core's python-gated machinery.  This crate never links pyo3.
+
+[dependencies]
+fltk-cst-core = { path = "../fltk-cst-core", default-features = false }
+regex = "1"

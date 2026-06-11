@@ -71,6 +71,13 @@ impl SourceText {
             }),
         }
     }
+
+    /// Borrow the underlying source text as a ``&str``.
+    ///
+    /// The returned reference is valid for the lifetime of this ``SourceText``.
+    pub fn text(&self) -> &str {
+        &self.inner.text
+    }
 }
 
 #[cfg(feature = "python")]
