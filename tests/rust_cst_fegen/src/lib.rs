@@ -18,5 +18,6 @@ fn fegen_rust_cst(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_class::<Span>()?;
     m.add_class::<SourceText>()?;
     cst::register_classes(m)?;
+    parser::register_classes(m)?;
     Ok(())
 }

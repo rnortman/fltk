@@ -218,6 +218,7 @@ _EXPECTED_NON_APPLY_PUB_FNS = {
     "rule_names",
     "error_message",
     "error_position",
+    "register_classes",
 }
 
 
@@ -225,7 +226,8 @@ def test_private_rule_bodies_not_pub() -> None:
     """parse_X body functions must be private (not pub).
 
     The only pub fn names that are not apply__ wrappers must be the fixed
-    set of Parser struct accessors/constructors listed in _EXPECTED_NON_APPLY_PUB_FNS.
+    set of Parser struct accessors/constructors and python bindings helpers
+    listed in _EXPECTED_NON_APPLY_PUB_FNS.
     """
     grammar = _make_simple_grammar()
     gen = RustParserGenerator(grammar)
@@ -920,6 +922,110 @@ def test_dangling_identifier_at_top_level_raises() -> None:
     grammar = gsm.Grammar(rules=[rule], identifiers={"broken": rule})
     with pytest.raises(ValueError, match="nosuchrule"):
         RustParserGenerator(grammar)
+
+
+# ---------------------------------------------------------------------------
+# Python bindings block tests
+# ---------------------------------------------------------------------------
+
+
+def test_python_bindings_block_emitted() -> None:
+    """Generated text must contain the gated python_bindings module."""
+    grammar = _make_simple_grammar()
+    gen = RustParserGenerator(grammar)
+    src = gen.generate()
+    assert '#[cfg(feature = "python")]' in src
+    assert "mod python_bindings {" in src
+
+
+def test_python_bindings_has_pyparser() -> None:
+    """Generated text must contain the PyParser pyclass (not frozen)."""
+    grammar = _make_simple_grammar()
+    gen = RustParserGenerator(grammar)
+    src = gen.generate()
+    assert '#[pyclass(name = "Parser")]' in src
+    assert "pub struct PyParser {" in src
+
+
+def test_python_bindings_has_pyapplyresult_frozen() -> None:
+    """Generated text must contain the frozen PyApplyResult pyclass."""
+    grammar = _make_simple_grammar()
+    gen = RustParserGenerator(grammar)
+    src = gen.generate()
+    assert '#[pyclass(frozen, name = "ApplyResult")]' in src
+    assert "pub struct PyApplyResult {" in src
+
+
+def test_python_bindings_apply_methods_per_rule() -> None:
+    """One apply__parse_<rule> method per rule (including trivia) must be in the bindings block."""
+    grammar = _make_two_rule_grammar()
+    gen = RustParserGenerator(grammar)
+    src = gen.generate()
+    # Scope to just the python_bindings module content so native pub fn occurrences don't false-pass.
+    bindings_block = src.split("mod python_bindings {", 1)[1].split("\n}", 1)[0]
+    assert "fn apply__parse_items(" in bindings_block
+    assert "fn apply__parse_item(" in bindings_block
+    assert "fn apply__parse__trivia(" in bindings_block
+
+
+def test_python_bindings_apply_methods_use_correct_class_names() -> None:
+    """Each apply method must canonicalize via the correct Py<ClassName>, not a mismatched class."""
+    grammar = _make_two_rule_grammar()
+    gen = RustParserGenerator(grammar)
+    src = gen.generate()
+    bindings_block = src.split("mod python_bindings {", 1)[1].split("\n}", 1)[0]
+    # apply__parse_items must use cst::PyItems (not PyItem)
+    assert "cst::PyItems::to_py_canonical" in bindings_block
+    # apply__parse_item must use cst::PyItem (not PyItems)
+    assert "cst::PyItem::to_py_canonical" in bindings_block
+    # Both must be present and distinct
+    assert bindings_block.count("to_py_canonical") >= 3  # items + item + _trivia rules
+
+
+def test_python_bindings_check_pos_present() -> None:
+    """check_pos function must appear in the python_bindings block."""
+    grammar = _make_simple_grammar()
+    gen = RustParserGenerator(grammar)
+    src = gen.generate()
+    assert "fn check_pos(&self, pos: i64) -> PyResult<()>" in src
+
+
+def test_python_bindings_register_classes_two_classes() -> None:
+    """register_classes must register exactly PyApplyResult and PyParser."""
+    grammar = _make_simple_grammar()
+    gen = RustParserGenerator(grammar)
+    src = gen.generate()
+    assert "module.add_class::<PyApplyResult>()?;" in src
+    assert "module.add_class::<PyParser>()?;" in src
+    # Only those two — no other add_class calls in the bindings block
+    bindings_block = src.split("mod python_bindings {", 1)[1].split("\n}", 1)[0]
+    assert bindings_block.count("add_class") == 2
+
+
+def test_python_bindings_pub_use_reexport() -> None:
+    """Gated pub use python_bindings::register_classes must be present."""
+    grammar = _make_simple_grammar()
+    gen = RustParserGenerator(grammar)
+    src = gen.generate()
+    assert "pub use python_bindings::register_classes;" in src
+
+
+def test_python_bindings_deterministic() -> None:
+    """Two generator instances on the same grammar must produce byte-identical output."""
+    grammar = _make_two_rule_grammar()
+    gen1 = RustParserGenerator(grammar)
+    gen2 = RustParserGenerator(grammar)
+    src1 = gen1.generate()
+    src2 = gen2.generate()
+    assert src1 == src2, "Generator output must be deterministic"
+
+
+def test_python_bindings_emitted_for_zero_regex_grammar() -> None:
+    """The python bindings block must be emitted even for grammars with no regex patterns."""
+    grammar = _make_literal_grammar()
+    gen = RustParserGenerator(grammar)
+    src = gen.generate()
+    assert "mod python_bindings {" in src, "python_bindings must be emitted for zero-regex grammars"
 
 
 def test_dangling_identifier_in_subexpression_raises() -> None:

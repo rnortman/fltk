@@ -229,6 +229,9 @@ class RustParserGenerator:
         if self._regex_patterns:
             parts.append(self._gen_regex_compile_test())
 
+        # Section 7: python-gated bindings block
+        parts.append(self._gen_python_bindings())
+
         self._generated = "\n".join(p for p in parts if p) + "\n"
         return self._generated
 
@@ -793,6 +796,122 @@ class RustParserGenerator:
             return f"result.extend_children(&{item_var}.result);"
 
         return self._gen_append_code_for_consumed(item, item_var, result_ty, rule, parent_class_name)
+
+    # ------------------------------------------------------------------
+    # Python bindings block
+    # ------------------------------------------------------------------
+
+    def _gen_python_bindings(self) -> str:
+        """Generate the python-gated bindings block for the parser.
+
+        TODO(parser-bindings-name-collision): add a generation-time check that raises an
+        error when any grammar rule's CamelCase class name collides with the fixed registered
+        names ('Parser', 'ApplyResult', 'Span', 'SourceText') to prevent silent module-level
+        shadowing of generated CST node classes.
+        """
+        # Boilerplate skeleton: all non-parametric structure in one template string.
+        boilerplate = """\
+
+#[cfg(feature = "python")]
+mod python_bindings {
+    use pyo3::exceptions::PyValueError;
+    use pyo3::prelude::*;
+    use super::cst;
+    use super::Parser;
+
+    #[pyclass(frozen, name = "ApplyResult")]
+    pub struct PyApplyResult {
+        pos: i64,
+        result: PyObject,
+    }
+
+    #[pymethods]
+    impl PyApplyResult {
+        #[getter]
+        fn pos(&self) -> i64 { self.pos }
+        #[getter]
+        fn result(&self, py: Python<'_>) -> PyObject { self.result.clone_ref(py) }
+    }
+
+    /// **Stack depth warning**: this parser is recursive-descent with no depth limit.
+    /// Deeply nested input (e.g. `((((…))))`) is proportional to native stack depth.
+    /// Stack exhaustion aborts the process — it cannot be caught from Python.
+    /// Callers parsing untrusted input should impose a nesting-depth limit upstream
+    /// or run the parser on a thread with a known stack size.
+    #[pyclass(name = "Parser")]
+    pub struct PyParser {
+        inner: Parser,
+    }
+
+    impl PyParser {
+        fn check_pos(&self, pos: i64) -> PyResult<()> {
+            let len = self.inner.terminals().len();
+            if pos < 0 || pos > len {
+                return Err(PyValueError::new_err(format!(
+                    "pos {pos} out of range for input of length {len}"
+                )));
+            }
+            Ok(())
+        }
+    }
+
+    #[pymethods]
+    impl PyParser {
+        #[new]
+        #[pyo3(signature = (text, capture_trivia = false))]
+        fn new(text: &str, capture_trivia: bool) -> Self {
+            PyParser { inner: Parser::new(text, capture_trivia) }
+        }
+
+        #[getter]
+        fn capture_trivia(&self) -> bool { self.inner.capture_trivia() }
+
+        #[getter]
+        fn rule_names(&self) -> Vec<&'static str> { self.inner.rule_names().to_vec() }
+
+        fn error_message(&self) -> String { self.inner.error_message() }
+
+        fn error_position(&self) -> Option<i64> { self.inner.error_position() }
+"""
+
+        # Per-rule apply methods (parametric: one method per grammar rule).
+        per_rule_lines = []
+        for rule in self._grammar.rules:
+            fn_info = self._parsers[(rule.name,)]
+            class_name = self._class_name(rule.name)
+            apply_name = fn_info.apply_name
+            per_rule_lines.append(
+                f"        fn {apply_name}(&mut self, py: Python<'_>, pos: i64) -> PyResult<Option<PyApplyResult>> {{"
+            )
+            per_rule_lines.append("            self.check_pos(pos)?;")
+            per_rule_lines.append(f"            match self.inner.{apply_name}(pos) {{")
+            per_rule_lines.append("                Some(r) => {")
+            per_rule_lines.append(
+                f"                    let handle = cst::Py{class_name}::to_py_canonical(py, &r.result)?;"
+            )
+            per_rule_lines.append(
+                "                    Ok(Some(PyApplyResult { pos: r.pos, result: handle.into_any() }))"
+            )
+            per_rule_lines.append("                }")
+            per_rule_lines.append("                None => Ok(None),")
+            per_rule_lines.append("            }")
+            per_rule_lines.append("        }")
+            per_rule_lines.append("")
+
+        # Closing skeleton.
+        closing = """\
+    }
+
+    pub fn register_classes(module: &Bound<'_, PyModule>) -> PyResult<()> {
+        module.add_class::<PyApplyResult>()?;
+        module.add_class::<PyParser>()?;
+        Ok(())
+    }
+}
+#[cfg(feature = "python")]
+pub use python_bindings::register_classes;"""
+
+        return boilerplate + "\n".join(per_rule_lines) + closing
 
     # ------------------------------------------------------------------
     # Generated regex compile test

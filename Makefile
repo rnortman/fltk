@@ -1,6 +1,6 @@
 .PHONY: check lint format-check typecheck test cargo-check cargo-test cargo-clippy \
         cargo-test-no-python cargo-clippy-no-python check-no-pyo3 \
-        build-native build-test-user-ext build-fegen-rust-cst gen-rust-cst fix gencode
+        build-native build-test-user-ext build-fegen-rust-cst build-rust-parser-fixture gen-rust-cst fix gencode
 
 # Run all checks: lint, format, type-check, tests, and Rust checks. This is the canonical
 # entry point used by CI. On success prints one line; on failure prints the failing step name
@@ -37,15 +37,21 @@ typecheck:
 test:
 	uv run --group lint --group test pytest -q
 
+# cargo-check: fast compile for the workspace. Test-crate per-feature checks are omitted
+# here because cargo-clippy (a strict superset of cargo-check) already covers them at the
+# same feature sets; running both in make check would double-compile each fixture crate.
 cargo-check:
 	cargo check -q
-	cargo check -q --manifest-path tests/rust_cst_fegen/Cargo.toml
 
 cargo-test:
 	cargo test -q
 
+# cargo-clippy covers test crates at their python-on feature set (the only non-default
+# feature that adds code; default features for rust_cst_fegen are already python-on).
 cargo-clippy:
 	cargo clippy -q -- -D warnings
+	cargo clippy -q --manifest-path tests/rust_cst_fegen/Cargo.toml -- -D warnings
+	cargo clippy -q --manifest-path tests/rust_parser_fixture/Cargo.toml --features python -- -D warnings
 
 # python-off lane: feature isolation requires -p selection (workspace unification would
 # re-enable pyo3 via fltk-native's dependency).
@@ -98,6 +104,11 @@ build-test-user-ext:
 # and the AC8 Tier-2 test (real Cst2Gsm on Rust fegen backend).
 build-fegen-rust-cst:
 	cd tests/rust_cst_fegen && uv run --group dev maturin develop
+
+# Build the fixture Rust parser extension (separate cdylib crate).
+# Produces the importable module 'rust_parser_fixture' used by parity tests.
+build-rust-parser-fixture:
+	cd tests/rust_parser_fixture && uv run --group dev maturin develop --features extension-module
 
 # Emit Rust CST source from a grammar (no compilation).
 # Usage: make gen-rust-cst GRAMMAR=path/to/grammar.fltkg RS_OUT=path/to/output.rs

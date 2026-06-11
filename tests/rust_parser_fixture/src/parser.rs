@@ -16,7 +16,7 @@ use fltk_parser_core::{apply, ApplyResult, Cache, ErrorTracker, PackratState, Te
 
 use super::cst;
 
-pub const RULE_NAMES: [&str; 16] = ["num", "name", "atom", "paren_expr", "stmt", "items", "opt_item", "zero_items", "expr", "lval", "rval", "arrow", "latin_word", "tagged", "val", "_trivia"];
+pub const RULE_NAMES: [&str; 19] = ["num", "name", "atom", "paren_expr", "stmt", "items", "opt_item", "zero_items", "expr", "lval", "rval", "arrow", "latin_word", "tagged", "val", "leading_ws", "grouped", "rec_via_sub", "_trivia"];
 
 const REGEX_PATTERNS: [&str; 5] = ["[0-9]+", "[a-z]+", "[À-ÿ]+", "[!@#$]+", "[\\s]+"];
 static REGEX_CELLS: [OnceLock<Regex>; 5] = [OnceLock::new(), OnceLock::new(), OnceLock::new(), OnceLock::new(), OnceLock::new()];
@@ -48,6 +48,9 @@ pub struct Parser {
     cache__parse_latin_word: Cache<Shared<cst::LatinWord>>,
     cache__parse_tagged: Cache<Shared<cst::Tagged>>,
     cache__parse_val: Cache<Shared<cst::Val>>,
+    cache__parse_leading_ws: Cache<Shared<cst::LeadingWs>>,
+    cache__parse_grouped: Cache<Shared<cst::Grouped>>,
+    cache__parse_rec_via_sub: Cache<Shared<cst::RecViaSub>>,
     cache__parse__trivia: Cache<Shared<cst::Trivia>>,
 }
 
@@ -78,6 +81,9 @@ impl Parser {
             cache__parse_latin_word: Cache::new(),
             cache__parse_tagged: Cache::new(),
             cache__parse_val: Cache::new(),
+            cache__parse_leading_ws: Cache::new(),
+            cache__parse_grouped: Cache::new(),
+            cache__parse_rec_via_sub: Cache::new(),
             cache__parse__trivia: Cache::new(),
         }
     }
@@ -792,8 +798,235 @@ impl Parser {
         None
     }
 
+    pub fn apply__parse_leading_ws(&mut self, pos: i64) -> Option<ApplyResult<Shared<cst::LeadingWs>>> {
+        apply(self, 15u32, pos, |p| &mut p.packrat, |p| &mut p.cache__parse_leading_ws, Self::parse_leading_ws)
+    }
+
+    fn parse_leading_ws__alt0__item0(&mut self, pos: i64) -> Option<ApplyResult<Shared<cst::Num>>> {
+        self.apply__parse_num(pos)
+    }
+
+    fn parse_leading_ws__alt0(&mut self, mut pos: i64) -> Option<ApplyResult<cst::LeadingWs>> {
+        let span_start = pos;
+        let mut result = cst::LeadingWs::new(Span::unknown());
+        if let Some(ws) = self.apply__parse__trivia(pos) {
+            pos = ws.pos;
+            if self.capture_trivia {
+                result.push_child(None, cst::LeadingWsChild::Trivia(ws.result));
+            }
+        }
+        if let Some(item0) = self.parse_leading_ws__alt0__item0(pos) {
+            pos = item0.pos;
+            result.append_num(item0.result);
+        } else {
+            return None;
+        }
+        result.set_span(Span::new_with_source(span_start, pos, self.terminals.source_text()));
+        Some(ApplyResult { pos, result })
+    }
+
+    fn parse_leading_ws(&mut self, pos: i64) -> Option<ApplyResult<Shared<cst::LeadingWs>>> {
+        if let Some(alt0) = self.parse_leading_ws__alt0(pos) {
+            return Some(ApplyResult { pos: alt0.pos, result: Shared::new(alt0.result) });
+        }
+        None
+    }
+
+    pub fn apply__parse_grouped(&mut self, pos: i64) -> Option<ApplyResult<Shared<cst::Grouped>>> {
+        apply(self, 16u32, pos, |p| &mut p.packrat, |p| &mut p.cache__parse_grouped, Self::parse_grouped)
+    }
+
+    fn parse_grouped__alt0__item0(&mut self, pos: i64) -> Option<ApplyResult<Span>> {
+        self.consume_literal(pos, "(")
+    }
+
+    fn parse_grouped__alt0__item1__alts__alt0__item0(&mut self, pos: i64) -> Option<ApplyResult<Shared<cst::Num>>> {
+        self.apply__parse_num(pos)
+    }
+
+    fn parse_grouped__alt0__item1__alts__alt0(&mut self, mut pos: i64) -> Option<ApplyResult<cst::Grouped>> {
+        let span_start = pos;
+        let mut result = cst::Grouped::new(Span::unknown());
+        if let Some(item0) = self.parse_grouped__alt0__item1__alts__alt0__item0(pos) {
+            pos = item0.pos;
+            result.append_left(cst::GroupedChild::Num(item0.result));
+        } else {
+            return None;
+        }
+        result.set_span(Span::new_with_source(span_start, pos, self.terminals.source_text()));
+        Some(ApplyResult { pos, result })
+    }
+
+    fn parse_grouped__alt0__item1__alts__alt1__item0(&mut self, pos: i64) -> Option<ApplyResult<Shared<cst::Name>>> {
+        self.apply__parse_name(pos)
+    }
+
+    fn parse_grouped__alt0__item1__alts__alt1(&mut self, mut pos: i64) -> Option<ApplyResult<cst::Grouped>> {
+        let span_start = pos;
+        let mut result = cst::Grouped::new(Span::unknown());
+        if let Some(item0) = self.parse_grouped__alt0__item1__alts__alt1__item0(pos) {
+            pos = item0.pos;
+            result.append_left(cst::GroupedChild::Name(item0.result));
+        } else {
+            return None;
+        }
+        result.set_span(Span::new_with_source(span_start, pos, self.terminals.source_text()));
+        Some(ApplyResult { pos, result })
+    }
+
+    fn parse_grouped__alt0__item1__alts(&mut self, pos: i64) -> Option<ApplyResult<cst::Grouped>> {
+        if let Some(r) = self.parse_grouped__alt0__item1__alts__alt0(pos) {
+            return Some(r);
+        }
+        if let Some(r) = self.parse_grouped__alt0__item1__alts__alt1(pos) {
+            return Some(r);
+        }
+        None
+    }
+
+    fn parse_grouped__alt0__item1(&mut self, pos: i64) -> Option<ApplyResult<cst::Grouped>> {
+        self.parse_grouped__alt0__item1__alts(pos)
+    }
+
+    fn parse_grouped__alt0__item2(&mut self, pos: i64) -> Option<ApplyResult<Span>> {
+        self.consume_literal(pos, ")")
+    }
+
+    fn parse_grouped__alt0(&mut self, mut pos: i64) -> Option<ApplyResult<cst::Grouped>> {
+        let span_start = pos;
+        let mut result = cst::Grouped::new(Span::unknown());
+        if let Some(item0) = self.parse_grouped__alt0__item0(pos) {
+            pos = item0.pos;
+        } else {
+            return None;
+        }
+        if let Some(ws) = self.apply__parse__trivia(pos) {
+            pos = ws.pos;
+            if self.capture_trivia {
+                result.push_child(None, cst::GroupedChild::Trivia(ws.result));
+            }
+        }
+        if let Some(item1) = self.parse_grouped__alt0__item1(pos) {
+            pos = item1.pos;
+            result.extend_children(&item1.result);
+        } else {
+            return None;
+        }
+        if let Some(ws) = self.apply__parse__trivia(pos) {
+            pos = ws.pos;
+            if self.capture_trivia {
+                result.push_child(None, cst::GroupedChild::Trivia(ws.result));
+            }
+        }
+        if let Some(item2) = self.parse_grouped__alt0__item2(pos) {
+            pos = item2.pos;
+        } else {
+            return None;
+        }
+        result.set_span(Span::new_with_source(span_start, pos, self.terminals.source_text()));
+        Some(ApplyResult { pos, result })
+    }
+
+    fn parse_grouped(&mut self, pos: i64) -> Option<ApplyResult<Shared<cst::Grouped>>> {
+        if let Some(alt0) = self.parse_grouped__alt0(pos) {
+            return Some(ApplyResult { pos: alt0.pos, result: Shared::new(alt0.result) });
+        }
+        None
+    }
+
+    pub fn apply__parse_rec_via_sub(&mut self, pos: i64) -> Option<ApplyResult<Shared<cst::RecViaSub>>> {
+        apply(self, 17u32, pos, |p| &mut p.packrat, |p| &mut p.cache__parse_rec_via_sub, Self::parse_rec_via_sub)
+    }
+
+    fn parse_rec_via_sub__alt0__item0__alts__alt0__item0(&mut self, pos: i64) -> Option<ApplyResult<Shared<cst::RecViaSub>>> {
+        self.apply__parse_rec_via_sub(pos)
+    }
+
+    fn parse_rec_via_sub__alt0__item0__alts__alt0__item1(&mut self, pos: i64) -> Option<ApplyResult<Span>> {
+        self.consume_literal(pos, "+")
+    }
+
+    fn parse_rec_via_sub__alt0__item0__alts__alt0(&mut self, mut pos: i64) -> Option<ApplyResult<cst::RecViaSub>> {
+        let span_start = pos;
+        let mut result = cst::RecViaSub::new(Span::unknown());
+        if let Some(item0) = self.parse_rec_via_sub__alt0__item0__alts__alt0__item0(pos) {
+            pos = item0.pos;
+            result.append_inner(cst::RecViaSubChild::RecViaSub(item0.result));
+        } else {
+            return None;
+        }
+        if let Some(item1) = self.parse_rec_via_sub__alt0__item0__alts__alt0__item1(pos) {
+            pos = item1.pos;
+        } else {
+            return None;
+        }
+        result.set_span(Span::new_with_source(span_start, pos, self.terminals.source_text()));
+        Some(ApplyResult { pos, result })
+    }
+
+    fn parse_rec_via_sub__alt0__item0__alts__alt1__item0(&mut self, pos: i64) -> Option<ApplyResult<Shared<cst::Atom>>> {
+        self.apply__parse_atom(pos)
+    }
+
+    fn parse_rec_via_sub__alt0__item0__alts__alt1(&mut self, mut pos: i64) -> Option<ApplyResult<cst::RecViaSub>> {
+        let span_start = pos;
+        let mut result = cst::RecViaSub::new(Span::unknown());
+        if let Some(item0) = self.parse_rec_via_sub__alt0__item0__alts__alt1__item0(pos) {
+            pos = item0.pos;
+            result.append_inner(cst::RecViaSubChild::Atom(item0.result));
+        } else {
+            return None;
+        }
+        result.set_span(Span::new_with_source(span_start, pos, self.terminals.source_text()));
+        Some(ApplyResult { pos, result })
+    }
+
+    fn parse_rec_via_sub__alt0__item0__alts(&mut self, pos: i64) -> Option<ApplyResult<cst::RecViaSub>> {
+        if let Some(r) = self.parse_rec_via_sub__alt0__item0__alts__alt0(pos) {
+            return Some(r);
+        }
+        if let Some(r) = self.parse_rec_via_sub__alt0__item0__alts__alt1(pos) {
+            return Some(r);
+        }
+        None
+    }
+
+    fn parse_rec_via_sub__alt0__item0(&mut self, pos: i64) -> Option<ApplyResult<cst::RecViaSub>> {
+        self.parse_rec_via_sub__alt0__item0__alts(pos)
+    }
+
+    fn parse_rec_via_sub__alt0__item1(&mut self, pos: i64) -> Option<ApplyResult<Shared<cst::Name>>> {
+        self.apply__parse_name(pos)
+    }
+
+    fn parse_rec_via_sub__alt0(&mut self, mut pos: i64) -> Option<ApplyResult<cst::RecViaSub>> {
+        let span_start = pos;
+        let mut result = cst::RecViaSub::new(Span::unknown());
+        if let Some(item0) = self.parse_rec_via_sub__alt0__item0(pos) {
+            pos = item0.pos;
+            result.extend_children(&item0.result);
+        } else {
+            return None;
+        }
+        if let Some(item1) = self.parse_rec_via_sub__alt0__item1(pos) {
+            pos = item1.pos;
+            result.append_suffix(item1.result);
+        } else {
+            return None;
+        }
+        result.set_span(Span::new_with_source(span_start, pos, self.terminals.source_text()));
+        Some(ApplyResult { pos, result })
+    }
+
+    fn parse_rec_via_sub(&mut self, pos: i64) -> Option<ApplyResult<Shared<cst::RecViaSub>>> {
+        if let Some(alt0) = self.parse_rec_via_sub__alt0(pos) {
+            return Some(ApplyResult { pos: alt0.pos, result: Shared::new(alt0.result) });
+        }
+        None
+    }
+
     pub fn apply__parse__trivia(&mut self, pos: i64) -> Option<ApplyResult<Shared<cst::Trivia>>> {
-        apply(self, 15u32, pos, |p| &mut p.packrat, |p| &mut p.cache__parse__trivia, Self::parse__trivia)
+        apply(self, 18u32, pos, |p| &mut p.packrat, |p| &mut p.cache__parse__trivia, Self::parse__trivia)
     }
 
     fn parse__trivia__alt0__item0(&mut self, pos: i64) -> Option<ApplyResult<Span>> {
@@ -832,3 +1065,282 @@ mod generated_regex_tests {
         }
     }
 }
+
+#[cfg(feature = "python")]
+mod python_bindings {
+    use pyo3::exceptions::PyValueError;
+    use pyo3::prelude::*;
+    use super::cst;
+    use super::Parser;
+
+    #[pyclass(frozen, name = "ApplyResult")]
+    pub struct PyApplyResult {
+        pos: i64,
+        result: PyObject,
+    }
+
+    #[pymethods]
+    impl PyApplyResult {
+        #[getter]
+        fn pos(&self) -> i64 { self.pos }
+        #[getter]
+        fn result(&self, py: Python<'_>) -> PyObject { self.result.clone_ref(py) }
+    }
+
+    /// **Stack depth warning**: this parser is recursive-descent with no depth limit.
+    /// Deeply nested input (e.g. `((((…))))`) is proportional to native stack depth.
+    /// Stack exhaustion aborts the process — it cannot be caught from Python.
+    /// Callers parsing untrusted input should impose a nesting-depth limit upstream
+    /// or run the parser on a thread with a known stack size.
+    #[pyclass(name = "Parser")]
+    pub struct PyParser {
+        inner: Parser,
+    }
+
+    impl PyParser {
+        fn check_pos(&self, pos: i64) -> PyResult<()> {
+            let len = self.inner.terminals().len();
+            if pos < 0 || pos > len {
+                return Err(PyValueError::new_err(format!(
+                    "pos {pos} out of range for input of length {len}"
+                )));
+            }
+            Ok(())
+        }
+    }
+
+    #[pymethods]
+    impl PyParser {
+        #[new]
+        #[pyo3(signature = (text, capture_trivia = false))]
+        fn new(text: &str, capture_trivia: bool) -> Self {
+            PyParser { inner: Parser::new(text, capture_trivia) }
+        }
+
+        #[getter]
+        fn capture_trivia(&self) -> bool { self.inner.capture_trivia() }
+
+        #[getter]
+        fn rule_names(&self) -> Vec<&'static str> { self.inner.rule_names().to_vec() }
+
+        fn error_message(&self) -> String { self.inner.error_message() }
+
+        fn error_position(&self) -> Option<i64> { self.inner.error_position() }
+        fn apply__parse_num(&mut self, py: Python<'_>, pos: i64) -> PyResult<Option<PyApplyResult>> {
+            self.check_pos(pos)?;
+            match self.inner.apply__parse_num(pos) {
+                Some(r) => {
+                    let handle = cst::PyNum::to_py_canonical(py, &r.result)?;
+                    Ok(Some(PyApplyResult { pos: r.pos, result: handle.into_any() }))
+                }
+                None => Ok(None),
+            }
+        }
+
+        fn apply__parse_name(&mut self, py: Python<'_>, pos: i64) -> PyResult<Option<PyApplyResult>> {
+            self.check_pos(pos)?;
+            match self.inner.apply__parse_name(pos) {
+                Some(r) => {
+                    let handle = cst::PyName::to_py_canonical(py, &r.result)?;
+                    Ok(Some(PyApplyResult { pos: r.pos, result: handle.into_any() }))
+                }
+                None => Ok(None),
+            }
+        }
+
+        fn apply__parse_atom(&mut self, py: Python<'_>, pos: i64) -> PyResult<Option<PyApplyResult>> {
+            self.check_pos(pos)?;
+            match self.inner.apply__parse_atom(pos) {
+                Some(r) => {
+                    let handle = cst::PyAtom::to_py_canonical(py, &r.result)?;
+                    Ok(Some(PyApplyResult { pos: r.pos, result: handle.into_any() }))
+                }
+                None => Ok(None),
+            }
+        }
+
+        fn apply__parse_paren_expr(&mut self, py: Python<'_>, pos: i64) -> PyResult<Option<PyApplyResult>> {
+            self.check_pos(pos)?;
+            match self.inner.apply__parse_paren_expr(pos) {
+                Some(r) => {
+                    let handle = cst::PyParenExpr::to_py_canonical(py, &r.result)?;
+                    Ok(Some(PyApplyResult { pos: r.pos, result: handle.into_any() }))
+                }
+                None => Ok(None),
+            }
+        }
+
+        fn apply__parse_stmt(&mut self, py: Python<'_>, pos: i64) -> PyResult<Option<PyApplyResult>> {
+            self.check_pos(pos)?;
+            match self.inner.apply__parse_stmt(pos) {
+                Some(r) => {
+                    let handle = cst::PyStmt::to_py_canonical(py, &r.result)?;
+                    Ok(Some(PyApplyResult { pos: r.pos, result: handle.into_any() }))
+                }
+                None => Ok(None),
+            }
+        }
+
+        fn apply__parse_items(&mut self, py: Python<'_>, pos: i64) -> PyResult<Option<PyApplyResult>> {
+            self.check_pos(pos)?;
+            match self.inner.apply__parse_items(pos) {
+                Some(r) => {
+                    let handle = cst::PyItems::to_py_canonical(py, &r.result)?;
+                    Ok(Some(PyApplyResult { pos: r.pos, result: handle.into_any() }))
+                }
+                None => Ok(None),
+            }
+        }
+
+        fn apply__parse_opt_item(&mut self, py: Python<'_>, pos: i64) -> PyResult<Option<PyApplyResult>> {
+            self.check_pos(pos)?;
+            match self.inner.apply__parse_opt_item(pos) {
+                Some(r) => {
+                    let handle = cst::PyOptItem::to_py_canonical(py, &r.result)?;
+                    Ok(Some(PyApplyResult { pos: r.pos, result: handle.into_any() }))
+                }
+                None => Ok(None),
+            }
+        }
+
+        fn apply__parse_zero_items(&mut self, py: Python<'_>, pos: i64) -> PyResult<Option<PyApplyResult>> {
+            self.check_pos(pos)?;
+            match self.inner.apply__parse_zero_items(pos) {
+                Some(r) => {
+                    let handle = cst::PyZeroItems::to_py_canonical(py, &r.result)?;
+                    Ok(Some(PyApplyResult { pos: r.pos, result: handle.into_any() }))
+                }
+                None => Ok(None),
+            }
+        }
+
+        fn apply__parse_expr(&mut self, py: Python<'_>, pos: i64) -> PyResult<Option<PyApplyResult>> {
+            self.check_pos(pos)?;
+            match self.inner.apply__parse_expr(pos) {
+                Some(r) => {
+                    let handle = cst::PyExpr::to_py_canonical(py, &r.result)?;
+                    Ok(Some(PyApplyResult { pos: r.pos, result: handle.into_any() }))
+                }
+                None => Ok(None),
+            }
+        }
+
+        fn apply__parse_lval(&mut self, py: Python<'_>, pos: i64) -> PyResult<Option<PyApplyResult>> {
+            self.check_pos(pos)?;
+            match self.inner.apply__parse_lval(pos) {
+                Some(r) => {
+                    let handle = cst::PyLval::to_py_canonical(py, &r.result)?;
+                    Ok(Some(PyApplyResult { pos: r.pos, result: handle.into_any() }))
+                }
+                None => Ok(None),
+            }
+        }
+
+        fn apply__parse_rval(&mut self, py: Python<'_>, pos: i64) -> PyResult<Option<PyApplyResult>> {
+            self.check_pos(pos)?;
+            match self.inner.apply__parse_rval(pos) {
+                Some(r) => {
+                    let handle = cst::PyRval::to_py_canonical(py, &r.result)?;
+                    Ok(Some(PyApplyResult { pos: r.pos, result: handle.into_any() }))
+                }
+                None => Ok(None),
+            }
+        }
+
+        fn apply__parse_arrow(&mut self, py: Python<'_>, pos: i64) -> PyResult<Option<PyApplyResult>> {
+            self.check_pos(pos)?;
+            match self.inner.apply__parse_arrow(pos) {
+                Some(r) => {
+                    let handle = cst::PyArrow::to_py_canonical(py, &r.result)?;
+                    Ok(Some(PyApplyResult { pos: r.pos, result: handle.into_any() }))
+                }
+                None => Ok(None),
+            }
+        }
+
+        fn apply__parse_latin_word(&mut self, py: Python<'_>, pos: i64) -> PyResult<Option<PyApplyResult>> {
+            self.check_pos(pos)?;
+            match self.inner.apply__parse_latin_word(pos) {
+                Some(r) => {
+                    let handle = cst::PyLatinWord::to_py_canonical(py, &r.result)?;
+                    Ok(Some(PyApplyResult { pos: r.pos, result: handle.into_any() }))
+                }
+                None => Ok(None),
+            }
+        }
+
+        fn apply__parse_tagged(&mut self, py: Python<'_>, pos: i64) -> PyResult<Option<PyApplyResult>> {
+            self.check_pos(pos)?;
+            match self.inner.apply__parse_tagged(pos) {
+                Some(r) => {
+                    let handle = cst::PyTagged::to_py_canonical(py, &r.result)?;
+                    Ok(Some(PyApplyResult { pos: r.pos, result: handle.into_any() }))
+                }
+                None => Ok(None),
+            }
+        }
+
+        fn apply__parse_val(&mut self, py: Python<'_>, pos: i64) -> PyResult<Option<PyApplyResult>> {
+            self.check_pos(pos)?;
+            match self.inner.apply__parse_val(pos) {
+                Some(r) => {
+                    let handle = cst::PyVal::to_py_canonical(py, &r.result)?;
+                    Ok(Some(PyApplyResult { pos: r.pos, result: handle.into_any() }))
+                }
+                None => Ok(None),
+            }
+        }
+
+        fn apply__parse_leading_ws(&mut self, py: Python<'_>, pos: i64) -> PyResult<Option<PyApplyResult>> {
+            self.check_pos(pos)?;
+            match self.inner.apply__parse_leading_ws(pos) {
+                Some(r) => {
+                    let handle = cst::PyLeadingWs::to_py_canonical(py, &r.result)?;
+                    Ok(Some(PyApplyResult { pos: r.pos, result: handle.into_any() }))
+                }
+                None => Ok(None),
+            }
+        }
+
+        fn apply__parse_grouped(&mut self, py: Python<'_>, pos: i64) -> PyResult<Option<PyApplyResult>> {
+            self.check_pos(pos)?;
+            match self.inner.apply__parse_grouped(pos) {
+                Some(r) => {
+                    let handle = cst::PyGrouped::to_py_canonical(py, &r.result)?;
+                    Ok(Some(PyApplyResult { pos: r.pos, result: handle.into_any() }))
+                }
+                None => Ok(None),
+            }
+        }
+
+        fn apply__parse_rec_via_sub(&mut self, py: Python<'_>, pos: i64) -> PyResult<Option<PyApplyResult>> {
+            self.check_pos(pos)?;
+            match self.inner.apply__parse_rec_via_sub(pos) {
+                Some(r) => {
+                    let handle = cst::PyRecViaSub::to_py_canonical(py, &r.result)?;
+                    Ok(Some(PyApplyResult { pos: r.pos, result: handle.into_any() }))
+                }
+                None => Ok(None),
+            }
+        }
+
+        fn apply__parse__trivia(&mut self, py: Python<'_>, pos: i64) -> PyResult<Option<PyApplyResult>> {
+            self.check_pos(pos)?;
+            match self.inner.apply__parse__trivia(pos) {
+                Some(r) => {
+                    let handle = cst::PyTrivia::to_py_canonical(py, &r.result)?;
+                    Ok(Some(PyApplyResult { pos: r.pos, result: handle.into_any() }))
+                }
+                None => Ok(None),
+            }
+        }
+    }
+
+    pub fn register_classes(module: &Bound<'_, PyModule>) -> PyResult<()> {
+        module.add_class::<PyApplyResult>()?;
+        module.add_class::<PyParser>()?;
+        Ok(())
+    }
+}
+#[cfg(feature = "python")]
+pub use python_bindings::register_classes;

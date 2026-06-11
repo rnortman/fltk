@@ -1319,3 +1319,227 @@ mod generated_regex_tests {
         }
     }
 }
+
+#[cfg(feature = "python")]
+mod python_bindings {
+    use pyo3::exceptions::PyValueError;
+    use pyo3::prelude::*;
+    use super::cst;
+    use super::Parser;
+
+    #[pyclass(frozen, name = "ApplyResult")]
+    pub struct PyApplyResult {
+        pos: i64,
+        result: PyObject,
+    }
+
+    #[pymethods]
+    impl PyApplyResult {
+        #[getter]
+        fn pos(&self) -> i64 { self.pos }
+        #[getter]
+        fn result(&self, py: Python<'_>) -> PyObject { self.result.clone_ref(py) }
+    }
+
+    /// **Stack depth warning**: this parser is recursive-descent with no depth limit.
+    /// Deeply nested input (e.g. `((((…))))`) is proportional to native stack depth.
+    /// Stack exhaustion aborts the process — it cannot be caught from Python.
+    /// Callers parsing untrusted input should impose a nesting-depth limit upstream
+    /// or run the parser on a thread with a known stack size.
+    #[pyclass(name = "Parser")]
+    pub struct PyParser {
+        inner: Parser,
+    }
+
+    impl PyParser {
+        fn check_pos(&self, pos: i64) -> PyResult<()> {
+            let len = self.inner.terminals().len();
+            if pos < 0 || pos > len {
+                return Err(PyValueError::new_err(format!(
+                    "pos {pos} out of range for input of length {len}"
+                )));
+            }
+            Ok(())
+        }
+    }
+
+    #[pymethods]
+    impl PyParser {
+        #[new]
+        #[pyo3(signature = (text, capture_trivia = false))]
+        fn new(text: &str, capture_trivia: bool) -> Self {
+            PyParser { inner: Parser::new(text, capture_trivia) }
+        }
+
+        #[getter]
+        fn capture_trivia(&self) -> bool { self.inner.capture_trivia() }
+
+        #[getter]
+        fn rule_names(&self) -> Vec<&'static str> { self.inner.rule_names().to_vec() }
+
+        fn error_message(&self) -> String { self.inner.error_message() }
+
+        fn error_position(&self) -> Option<i64> { self.inner.error_position() }
+        fn apply__parse_grammar(&mut self, py: Python<'_>, pos: i64) -> PyResult<Option<PyApplyResult>> {
+            self.check_pos(pos)?;
+            match self.inner.apply__parse_grammar(pos) {
+                Some(r) => {
+                    let handle = cst::PyGrammar::to_py_canonical(py, &r.result)?;
+                    Ok(Some(PyApplyResult { pos: r.pos, result: handle.into_any() }))
+                }
+                None => Ok(None),
+            }
+        }
+
+        fn apply__parse_rule(&mut self, py: Python<'_>, pos: i64) -> PyResult<Option<PyApplyResult>> {
+            self.check_pos(pos)?;
+            match self.inner.apply__parse_rule(pos) {
+                Some(r) => {
+                    let handle = cst::PyRule::to_py_canonical(py, &r.result)?;
+                    Ok(Some(PyApplyResult { pos: r.pos, result: handle.into_any() }))
+                }
+                None => Ok(None),
+            }
+        }
+
+        fn apply__parse_alternatives(&mut self, py: Python<'_>, pos: i64) -> PyResult<Option<PyApplyResult>> {
+            self.check_pos(pos)?;
+            match self.inner.apply__parse_alternatives(pos) {
+                Some(r) => {
+                    let handle = cst::PyAlternatives::to_py_canonical(py, &r.result)?;
+                    Ok(Some(PyApplyResult { pos: r.pos, result: handle.into_any() }))
+                }
+                None => Ok(None),
+            }
+        }
+
+        fn apply__parse_items(&mut self, py: Python<'_>, pos: i64) -> PyResult<Option<PyApplyResult>> {
+            self.check_pos(pos)?;
+            match self.inner.apply__parse_items(pos) {
+                Some(r) => {
+                    let handle = cst::PyItems::to_py_canonical(py, &r.result)?;
+                    Ok(Some(PyApplyResult { pos: r.pos, result: handle.into_any() }))
+                }
+                None => Ok(None),
+            }
+        }
+
+        fn apply__parse_item(&mut self, py: Python<'_>, pos: i64) -> PyResult<Option<PyApplyResult>> {
+            self.check_pos(pos)?;
+            match self.inner.apply__parse_item(pos) {
+                Some(r) => {
+                    let handle = cst::PyItem::to_py_canonical(py, &r.result)?;
+                    Ok(Some(PyApplyResult { pos: r.pos, result: handle.into_any() }))
+                }
+                None => Ok(None),
+            }
+        }
+
+        fn apply__parse_term(&mut self, py: Python<'_>, pos: i64) -> PyResult<Option<PyApplyResult>> {
+            self.check_pos(pos)?;
+            match self.inner.apply__parse_term(pos) {
+                Some(r) => {
+                    let handle = cst::PyTerm::to_py_canonical(py, &r.result)?;
+                    Ok(Some(PyApplyResult { pos: r.pos, result: handle.into_any() }))
+                }
+                None => Ok(None),
+            }
+        }
+
+        fn apply__parse_disposition(&mut self, py: Python<'_>, pos: i64) -> PyResult<Option<PyApplyResult>> {
+            self.check_pos(pos)?;
+            match self.inner.apply__parse_disposition(pos) {
+                Some(r) => {
+                    let handle = cst::PyDisposition::to_py_canonical(py, &r.result)?;
+                    Ok(Some(PyApplyResult { pos: r.pos, result: handle.into_any() }))
+                }
+                None => Ok(None),
+            }
+        }
+
+        fn apply__parse_quantifier(&mut self, py: Python<'_>, pos: i64) -> PyResult<Option<PyApplyResult>> {
+            self.check_pos(pos)?;
+            match self.inner.apply__parse_quantifier(pos) {
+                Some(r) => {
+                    let handle = cst::PyQuantifier::to_py_canonical(py, &r.result)?;
+                    Ok(Some(PyApplyResult { pos: r.pos, result: handle.into_any() }))
+                }
+                None => Ok(None),
+            }
+        }
+
+        fn apply__parse_identifier(&mut self, py: Python<'_>, pos: i64) -> PyResult<Option<PyApplyResult>> {
+            self.check_pos(pos)?;
+            match self.inner.apply__parse_identifier(pos) {
+                Some(r) => {
+                    let handle = cst::PyIdentifier::to_py_canonical(py, &r.result)?;
+                    Ok(Some(PyApplyResult { pos: r.pos, result: handle.into_any() }))
+                }
+                None => Ok(None),
+            }
+        }
+
+        fn apply__parse_raw_string(&mut self, py: Python<'_>, pos: i64) -> PyResult<Option<PyApplyResult>> {
+            self.check_pos(pos)?;
+            match self.inner.apply__parse_raw_string(pos) {
+                Some(r) => {
+                    let handle = cst::PyRawString::to_py_canonical(py, &r.result)?;
+                    Ok(Some(PyApplyResult { pos: r.pos, result: handle.into_any() }))
+                }
+                None => Ok(None),
+            }
+        }
+
+        fn apply__parse_literal(&mut self, py: Python<'_>, pos: i64) -> PyResult<Option<PyApplyResult>> {
+            self.check_pos(pos)?;
+            match self.inner.apply__parse_literal(pos) {
+                Some(r) => {
+                    let handle = cst::PyLiteral::to_py_canonical(py, &r.result)?;
+                    Ok(Some(PyApplyResult { pos: r.pos, result: handle.into_any() }))
+                }
+                None => Ok(None),
+            }
+        }
+
+        fn apply__parse__trivia(&mut self, py: Python<'_>, pos: i64) -> PyResult<Option<PyApplyResult>> {
+            self.check_pos(pos)?;
+            match self.inner.apply__parse__trivia(pos) {
+                Some(r) => {
+                    let handle = cst::PyTrivia::to_py_canonical(py, &r.result)?;
+                    Ok(Some(PyApplyResult { pos: r.pos, result: handle.into_any() }))
+                }
+                None => Ok(None),
+            }
+        }
+
+        fn apply__parse_line_comment(&mut self, py: Python<'_>, pos: i64) -> PyResult<Option<PyApplyResult>> {
+            self.check_pos(pos)?;
+            match self.inner.apply__parse_line_comment(pos) {
+                Some(r) => {
+                    let handle = cst::PyLineComment::to_py_canonical(py, &r.result)?;
+                    Ok(Some(PyApplyResult { pos: r.pos, result: handle.into_any() }))
+                }
+                None => Ok(None),
+            }
+        }
+
+        fn apply__parse_block_comment(&mut self, py: Python<'_>, pos: i64) -> PyResult<Option<PyApplyResult>> {
+            self.check_pos(pos)?;
+            match self.inner.apply__parse_block_comment(pos) {
+                Some(r) => {
+                    let handle = cst::PyBlockComment::to_py_canonical(py, &r.result)?;
+                    Ok(Some(PyApplyResult { pos: r.pos, result: handle.into_any() }))
+                }
+                None => Ok(None),
+            }
+        }
+    }
+
+    pub fn register_classes(module: &Bound<'_, PyModule>) -> PyResult<()> {
+        module.add_class::<PyApplyResult>()?;
+        module.add_class::<PyParser>()?;
+        Ok(())
+    }
+}
+#[cfg(feature = "python")]
+pub use python_bindings::register_classes;

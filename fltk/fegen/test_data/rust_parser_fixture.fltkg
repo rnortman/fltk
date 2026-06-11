@@ -51,3 +51,16 @@ tagged := $"tag" . value:/[a-z]+/ ;
 // or a bare regex span).  The third alternative exercises the union-span arm
 // (cst::ValChild::Span) of the append path (design §2.6B).
 val := item:num | item:name | item:/[!@#$]+/ ;
+
+// Rule with a leading WS_ALLOWED separator (initial_sep).
+// Tests that initial_sep is handled correctly in the Rust generator.
+leading_ws := , num:num ;
+
+// Sub-expression with WS_ALLOWED separator between the alternatives inside.
+// Tests that separators inside sub-expressions are generated correctly in Rust.
+grouped := %"(" , (left:num | left:name) , %")" ;
+
+// Recursion through a sub-expression: the inner sub-expression returns the
+// parent node type (inline_to_parent=True path).
+// Tests the extend_children path through recursive sub-expression inlining.
+rec_via_sub := (inner:rec_via_sub . "+" | inner:atom) . suffix:name ;

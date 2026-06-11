@@ -57,6 +57,12 @@ pub enum NodeKind {
     Tagged,
     #[pyo3(name = "VAL")]
     Val,
+    #[pyo3(name = "LEADINGWS")]
+    LeadingWs,
+    #[pyo3(name = "GROUPED")]
+    Grouped,
+    #[pyo3(name = "RECVIASUB")]
+    RecViaSub,
     #[pyo3(name = "TRIVIA")]
     Trivia,
 }
@@ -79,6 +85,9 @@ pub enum NodeKind {
     LatinWord,
     Tagged,
     Val,
+    LeadingWs,
+    Grouped,
+    RecViaSub,
     Trivia,
 }
 
@@ -102,6 +111,9 @@ impl NodeKind {
             NodeKind::LatinWord => "NodeKind.LATINWORD",
             NodeKind::Tagged => "NodeKind.TAGGED",
             NodeKind::Val => "NodeKind.VAL",
+            NodeKind::LeadingWs => "NodeKind.LEADINGWS",
+            NodeKind::Grouped => "NodeKind.GROUPED",
+            NodeKind::RecViaSub => "NodeKind.RECVIASUB",
             NodeKind::Trivia => "NodeKind.TRIVIA",
         }
     }
@@ -9647,6 +9659,1960 @@ impl PyVal {
 }
 
 // ───────────────────────────────────────────────────────────────────────────
+// LeadingWsLabel
+// ───────────────────────────────────────────────────────────────────────────
+
+/// Label discriminant enum for children of this node type.
+///
+/// Python-visible name is `LeadingWs_Label` (preserved for compatibility).
+/// Rust consumers use the CamelCase `LeadingWsLabel` name.
+#[cfg(feature = "python")]
+#[pyclass(frozen, name = "LeadingWs_Label")]
+#[derive(Clone, Debug, PartialEq, Eq, Hash)]
+pub enum LeadingWsLabel {
+    #[pyo3(name = "NUM")]
+    Num,
+}
+
+#[cfg(not(feature = "python"))]
+#[derive(Clone, Debug, PartialEq, Eq, Hash)]
+pub enum LeadingWsLabel {
+    Num,
+}
+
+#[cfg(feature = "python")]
+#[pymethods]
+impl LeadingWsLabel {
+    fn __repr__(&self) -> &'static str {
+        match self {
+            LeadingWsLabel::Num => "LeadingWs.Label.NUM",
+        }
+    }
+
+    #[getter]
+    fn _fltk_canonical_name(&self) -> &'static str {
+        self.__repr__()
+    }
+
+    fn __eq__(&self, py: Python<'_>, other: &Bound<'_, PyAny>) -> PyResult<PyObject> {
+        if let Ok(other_kind) = other.extract::<LeadingWsLabel>() {
+            return Ok((self == &other_kind).into_pyobject(py)?.to_owned().unbind().into_any());
+        }
+        if let Ok(cn) = other.getattr(pyo3::intern!(py, "_fltk_canonical_name")) {
+            if let Ok(cn_str) = cn.extract::<&str>() {
+                return Ok((self.__repr__() == cn_str).into_pyobject(py)?.to_owned().unbind().into_any());
+            }
+        }
+        Ok(py.NotImplemented())
+    }
+
+    fn __hash__(&self, py: Python<'_>) -> PyResult<isize> {
+        pyo3::types::PyAnyMethods::hash(
+            pyo3::types::PyString::new(py, self.__repr__()).as_any()
+        )
+    }
+}
+
+/// Child value enum for `LeadingWs` nodes.
+///
+/// Node-typed variants hold `Shared<T>` (`Arc<RwLock<T>>`); `Clone` is shallow
+/// (increments the reference count, does not copy the node).
+#[derive(Clone, Debug)]
+pub enum LeadingWsChild {
+    Num(Shared<Num>),
+    Trivia(Shared<Trivia>),
+}
+
+impl PartialEq for LeadingWsChild {
+    fn eq(&self, other: &Self) -> bool {
+        match (self, other) {
+            (LeadingWsChild::Num(a), LeadingWsChild::Num(b)) => a == b,
+            (LeadingWsChild::Trivia(a), LeadingWsChild::Trivia(b)) => a == b,
+            _ => false,
+        }
+    }
+}
+
+#[cfg(feature = "python")]
+impl LeadingWsChild {
+    fn to_pyobject(&self, py: Python<'_>) -> PyResult<PyObject> {
+        match self {
+            Self::Num(shared) => {
+                let addr = shared.arc_ptr();
+                registry::get_or_insert_with(py, addr, || {
+                    let handle = PyNum { inner: shared.clone() };
+                    Py::new(py, handle).map(|p| p.into_any())
+                })
+            }
+            Self::Trivia(shared) => {
+                let addr = shared.arc_ptr();
+                registry::get_or_insert_with(py, addr, || {
+                    let handle = PyTrivia { inner: shared.clone() };
+                    Py::new(py, handle).map(|p| p.into_any())
+                })
+            }
+        }
+    }
+
+    fn extract_from_pyobject(
+        py: Python<'_>,
+        obj: &Bound<'_, PyAny>,
+        _span_type: &Bound<'_, PyType>,
+    ) -> PyResult<Self> {
+        if obj.is_instance_of::<PyNum>() {
+            let handle: PyRef<PyNum> = obj.extract()?;
+            let shared = handle.inner.clone();
+            let addr = shared.arc_ptr();
+            // Hand-in: register this Python handle as canonical for its Shared.
+            drop(handle); // release the PyRef before calling Python
+            // Propagate registry errors: a swallowed Err here would leave the
+            // handle unregistered, causing the next wrap-out to mint a different
+            // object and silently break is-stability.
+            registry::register_if_absent(py, addr, obj)?;
+            return Ok(Self::Num(shared));
+        }
+        if obj.is_instance_of::<PyTrivia>() {
+            let handle: PyRef<PyTrivia> = obj.extract()?;
+            let shared = handle.inner.clone();
+            let addr = shared.arc_ptr();
+            // Hand-in: register this Python handle as canonical for its Shared.
+            drop(handle); // release the PyRef before calling Python
+            // Propagate registry errors: a swallowed Err here would leave the
+            // handle unregistered, causing the next wrap-out to mint a different
+            // object and silently break is-stability.
+            registry::register_if_absent(py, addr, obj)?;
+            return Ok(Self::Trivia(shared));
+        }
+        Err(pyo3::exceptions::PyTypeError::new_err(format!(
+            "LeadingWs: unsupported child type {}",
+            obj.get_type().name()?
+        )))
+    }
+}
+
+// ───────────────────────────────────────────────────────────────────────────
+// LeadingWs
+// ───────────────────────────────────────────────────────────────────────────
+
+/// CST data struct for `LeadingWs`. See [`fltk_cst_core::Shared`] for clone/equality/reference semantics.
+#[derive(Clone, Debug)]
+pub struct LeadingWs {
+    // Not pub: use span() / children() / push_child() — the stable accessor API.
+    // Direct field access bypasses any future validation logic on setters.
+    span: Span,
+    children: Vec<(Option<LeadingWsLabel>, LeadingWsChild)>,
+}
+
+impl PartialEq for LeadingWs {
+    fn eq(&self, other: &Self) -> bool {
+        self.span == other.span && self.children == other.children
+    }
+}
+
+impl LeadingWs {
+    /// Construct a node with the given span and no children. GIL-free.
+    pub fn new(span: Span) -> Self {
+        LeadingWs {
+            span,
+            children: Vec::new(),
+        }
+    }
+
+    /// Return the [`NodeKind`] discriminant for this node type.
+    pub fn kind(&self) -> NodeKind {
+        NodeKind::LeadingWs
+    }
+
+    /// Return a reference to the stored [`Span`].
+    pub fn span(&self) -> &Span {
+        &self.span
+    }
+
+    /// Replace the node's span.
+    pub fn set_span(&mut self, span: Span) {
+        self.span = span;
+    }
+
+    /// Return a slice of all children (unfiltered).
+    ///
+    /// Each entry is `(label, child)`. Use the per-label accessors
+    /// (`children_<lbl>`, `child_<lbl>`, `maybe_<lbl>`) for type-safe access.
+    pub fn children(&self) -> &[(Option<LeadingWsLabel>, LeadingWsChild)] {
+        self.children.as_slice()
+    }
+
+    /// Push a child onto the children `Vec`.
+    ///
+    /// No type-checking is performed: any child variant may be stored under
+    /// any label. Per-label typed mutators (`append_<lbl>`, `extend_<lbl>`)
+    /// provide type-constrained alternatives.
+    pub fn push_child(&mut self, label: Option<LeadingWsLabel>, child: LeadingWsChild) {
+        self.children.push((label, child));
+    }
+
+    /// Return the single child (any label), or `Err` if there is not exactly one.
+    ///
+    /// Mirrors the Python `child()` method: count violation → `CstError::ChildCount`.
+    pub fn child(&self) -> Result<&(Option<LeadingWsLabel>, LeadingWsChild), CstError> {
+        match self.children.as_slice() {
+            [single] => Ok(single),
+            slice => Err(CstError::ChildCount {
+                label: "<any>",
+                expected: "1",
+                found: slice.len(),
+            }),
+        }
+    }
+
+    /// Copy all children from `other` into `self`, sharing the `Shared<T>` arcs.
+    ///
+    /// Children are appended (Arc reference-count bumps, not deep copies),
+    /// matching the Python backend's reference-copy behavior. Labels are preserved.
+    ///
+    /// The borrow checker prevents `self.extend_children(self)` at the data-struct
+    /// level (`&mut` + `&` of the same value don't coexist). For self-extend from
+    /// Python, the handle pymethod handles it via snapshotting.
+    pub fn extend_children(&mut self, other: &Self) {
+        self.children.extend(other.children.iter().cloned());
+    }
+
+    /// Return an iterator over `Shared<Num>` children labelled `num`.
+    ///
+    /// Off-type variants stored under the `num` label are silently skipped.
+    /// Use `children()` (the untyped slice) for a lossless view.
+    pub fn children_num(&self) -> impl Iterator<Item = &Shared<Num>> + '_ {
+        self.children.iter()
+            .filter(|(lbl, _)| *lbl == Some(LeadingWsLabel::Num))
+            .filter_map(|(_, child)| match child {
+                LeadingWsChild::Num(s) => Some(s),
+                _ => None,
+            })
+    }
+
+    /// Return the single child labelled `num`, or `Err` if not exactly one.
+    ///
+    /// Count is checked by label match first (`CstError::ChildCount`); if the
+    /// count is valid and the surviving child has the wrong variant type,
+    /// `CstError::UnexpectedChildType` is returned (single-typed labels only).
+    pub fn child_num(&self) -> Result<&Shared<Num>, CstError> {
+        let mut it = self.children.iter()
+            .filter(|(lbl, _)| *lbl == Some(LeadingWsLabel::Num));
+        match (it.next(), it.next()) {
+            (Some((_, child)), None) => match child {
+                LeadingWsChild::Num(s) => Ok(s),
+                _ => Err(CstError::UnexpectedChildType { label: "num" }),
+            },
+            _ => Err(CstError::ChildCount {
+                label: "num",
+                expected: "1",
+                found: self.children.iter()
+                    .filter(|(lbl, _)| *lbl == Some(LeadingWsLabel::Num))
+                    .count(),
+            }),
+        }
+    }
+
+    /// Return the optional child labelled `num`, or `Err` if more than one.
+    ///
+    /// Returns `Ok(None)` for zero, `Ok(Some(...))` for one,
+    /// `Err(CstError::ChildCount)` for two or more.
+    pub fn maybe_num(&self) -> Result<Option<&Shared<Num>>, CstError> {
+        let mut it = self.children.iter()
+            .filter(|(lbl, _)| *lbl == Some(LeadingWsLabel::Num));
+        match (it.next(), it.next()) {
+            (None, _) => Ok(None),
+            (Some((_, child)), None) => match child {
+                LeadingWsChild::Num(s) => Ok(Some(s)),
+                _ => Err(CstError::UnexpectedChildType { label: "num" }),
+            },
+            _ => Err(CstError::ChildCount {
+                label: "num",
+                expected: "0 or 1",
+                found: self.children.iter()
+                    .filter(|(lbl, _)| *lbl == Some(LeadingWsLabel::Num))
+                    .count(),
+            }),
+        }
+    }
+
+    /// Append a child with label `num`, accepting `Num` or `Shared<Num>`.
+    pub fn append_num(&mut self, child: impl Into<Shared<Num>>) {
+        self.children.push((Some(LeadingWsLabel::Num), LeadingWsChild::Num(child.into())));
+    }
+
+    /// Append multiple children with label `num`.
+    pub fn extend_num(&mut self, children: impl IntoIterator<Item = impl Into<Shared<Num>>>) {
+        self.children.extend(children.into_iter().map(|c| (Some(LeadingWsLabel::Num), LeadingWsChild::Num(c.into()))));
+    }
+}
+
+#[cfg(feature = "python")]
+#[pyclass(frozen, weakref, name = "LeadingWs")]
+pub struct PyLeadingWs {
+    // Not pub: all external access goes through shared() or to_py_canonical().
+    // A pub field would let mixed-app Rust code construct an unregistered handle
+    // (Py::new(py, PyFoo { inner: s.clone() })), silently breaking is-stability.
+    inner: Shared<LeadingWs>,
+}
+
+#[cfg(feature = "python")]
+impl PyLeadingWs {
+    /// Return a reference to the inner `Shared<LeadingWs>`.
+    pub fn shared(&self) -> &Shared<LeadingWs> {
+        &self.inner
+    }
+
+    /// Wrap a `Shared<LeadingWs>` into a canonical Python handle,
+    /// looking up the registry first so the same handle is returned
+    /// for the same `Shared` allocation.
+    pub fn to_py_canonical(py: Python<'_>, s: &Shared<LeadingWs>) -> PyResult<Py<PyLeadingWs>> {
+        let addr = s.arc_ptr();
+        let obj = registry::get_or_insert_with(py, addr, || {
+            let handle = PyLeadingWs { inner: s.clone() };
+            Py::new(py, handle).map(|p| p.into_any())
+        })?;
+        obj.bind(py).downcast::<PyLeadingWs>().map(|b| b.clone().unbind()).map_err(|e| e.into())
+    }
+}
+
+#[cfg(feature = "python")]
+#[pymethods]
+impl PyLeadingWs {
+    #[new]
+    #[pyo3(signature = (*, span = None))]
+    fn new(py: Python<'_>, span: Option<&Bound<'_, PyAny>>) -> PyResult<Py<PyLeadingWs>> {
+        let native_span = match span {
+            Some(s) => extract_span(py, s)?,
+            None => Span::unknown(),
+        };
+        let data = LeadingWs {
+            span: native_span,
+            children: Vec::new(),
+        };
+        let shared = Shared::new(data);
+        let addr = shared.arc_ptr();
+        let handle = PyLeadingWs { inner: shared };
+        let py_obj = Py::new(py, handle)?;
+        // Register as canonical — fresh Shared, no alias can exist yet.
+        registry::force_register(py, addr, py_obj.bind(py))?;
+        Ok(py_obj)
+    }
+
+    #[getter]
+    fn span(&self, py: Python<'_>) -> PyResult<PyObject> {
+        // Snapshot the span under the read lock, then drop the guard before
+        // calling span_to_pyobject — which performs Python work (Py::new or
+        // Python method calls) that must not happen while a node lock is held.
+        let span = self.inner.read().span.clone();
+        span_to_pyobject(py, &span)
+    }
+
+    #[setter]
+    fn set_span(&self, py: Python<'_>, value: &Bound<'_, PyAny>) -> PyResult<()> {
+        self.inner.write().span = extract_span(py, value)?;
+        Ok(())
+    }
+
+    #[getter]
+    fn kind(&self) -> NodeKind {
+        NodeKind::LeadingWs
+    }
+
+    #[classattr]
+    #[allow(non_snake_case)]
+    fn Label(py: Python<'_>) -> PyResult<PyObject> {
+        Ok(LeadingWsLabel::type_object(py).into_any().unbind())
+    }
+
+    #[getter]
+    fn children(&self, py: Python<'_>) -> PyResult<Py<PyList>> {
+        // Snapshot the children vec (Arc clones for node children — O(n) refcount bumps).
+        // Lock scope: acquire read, snapshot, release before touching Python.
+        let snapshot: Vec<_> = {
+            let guard = self.inner.read();
+            guard.children.clone()
+        };
+        let result = PyList::empty(py);
+        for (label, child) in &snapshot {
+            let label_obj: PyObject = match label {
+                None => py.None(),
+                Some(lbl) => lbl.clone().into_pyobject(py)?.into_any().unbind(),
+            };
+            let child_obj = child.to_pyobject(py)?;
+            let tup = PyTuple::new(py, [label_obj, child_obj])?;
+            result.append(tup)?;
+        }
+        Ok(result.unbind())
+    }
+
+    #[pyo3(signature = (child, label = None))]
+    fn append(&self, py: Python<'_>, child: &Bound<'_, PyAny>, label: Option<PyObject>) -> PyResult<()> {
+        let span_type = get_span_type(py)?;
+        let native_child = LeadingWsChild::extract_from_pyobject(py, child, &span_type)?;
+        let native_label = match label {
+            None => None,
+            Some(lbl) => {
+                if let Ok(native_lbl) = lbl.bind(py).extract::<LeadingWsLabel>() {
+                    Some(native_lbl)
+                } else {
+                    return Err(PyTypeError::new_err(format!(
+                        "LeadingWs.append: label argument is not a LeadingWs_Label; got {}",
+                        lbl.bind(py).get_type().name()?
+                    )));
+                }
+            }
+        };
+        self.inner.write().children.push((native_label, native_child));
+        Ok(())
+    }
+
+    #[pyo3(signature = (children, label = None))]
+    fn extend(
+        &self,
+        py: Python<'_>,
+        children: &Bound<'_, PyAny>,
+        label: Option<PyObject>,
+    ) -> PyResult<()> {
+        let span_type = get_span_type(py)?;
+        let native_label = match label {
+            None => None,
+            Some(lbl) => {
+                if let Ok(native_lbl) = lbl.bind(py).extract::<LeadingWsLabel>() {
+                    Some(native_lbl)
+                } else {
+                    return Err(PyTypeError::new_err(format!(
+                        "LeadingWs.extend: label argument is not a LeadingWs_Label; got {}",
+                        lbl.bind(py).get_type().name()?
+                    )));
+                }
+            }
+        };
+        let iter = children.try_iter()?;
+        for child_result in iter {
+            let child = child_result?;
+            let native_child = LeadingWsChild::extract_from_pyobject(py, &child, &span_type)?;
+            self.inner.write().children.push((native_label.clone(), native_child));
+        }
+        Ok(())
+    }
+
+    fn extend_children(&self, _py: Python<'_>, other: &PyLeadingWs) -> PyResult<()> {
+        // Snapshot other's children first: the read guard is dropped at the end of
+        // this block, so the write lock below is safe even when self and other are
+        // the same node (self-extend). No ptr_eq call is needed here — the snapshot
+        // approach handles self-extend structurally.
+        // Lock scope: hold read only long enough to clone the Arc-based children vec.
+        let snapshot: Vec<_> = {
+            let guard = other.inner.read();
+            guard.children.clone()
+        };
+        // Node-typed children are pushed directly as Shared<T> values.  Registry
+        // consistency is maintained lazily: wrap-out registers on first Python read
+        // via get_or_insert_with (registry.rs).  Eagerly registering here would be
+        // a no-op — the WeakValueDictionary would evict handles held by nothing.
+        self.inner.write().children.extend(snapshot);
+        Ok(())
+    }
+
+    fn child(&self, py: Python<'_>) -> PyResult<PyObject> {
+        // TODO(rust-cst-accessor-clone-efficiency): clones the full children Vec
+        // before checking len. Could check len under the read guard and only clone
+        // the single needed entry, avoiding O(total-children) allocation on the error path.
+        let snapshot: Vec<_> = {
+            let guard = self.inner.read();
+            guard.children.clone()
+        };
+        let n = snapshot.len();
+        if n != 1 {
+            return Err(PyValueError::new_err(format!(
+                "Expected one child but have {n}"
+            )));
+        }
+        let (label, child) = &snapshot[0];
+        let label_obj: PyObject = match label {
+            None => py.None(),
+            Some(lbl) => lbl.clone().into_pyobject(py)?.into_any().unbind(),
+        };
+        let child_obj = child.to_pyobject(py)?;
+        Ok(PyTuple::new(py, [label_obj, child_obj])?.into_any().unbind())
+    }
+
+    fn append_num(&self, py: Python<'_>, child: &Bound<'_, PyAny>) -> PyResult<()> {
+        let span_type = get_span_type(py)?;
+        let native_child = LeadingWsChild::extract_from_pyobject(py, child, &span_type)?;
+        self.inner.write().children.push((Some(LeadingWsLabel::Num), native_child));
+        Ok(())
+    }
+
+    fn extend_num(&self, py: Python<'_>, children: &Bound<'_, PyAny>) -> PyResult<()> {
+        let span_type = get_span_type(py)?;
+        let iter = children.try_iter()?;
+        for child_result in iter {
+            let child = child_result?;
+            let native_child = LeadingWsChild::extract_from_pyobject(py, &child, &span_type)?;
+            let entry = (Some(LeadingWsLabel::Num), native_child);
+            self.inner.write().children.push(entry);
+        }
+        Ok(())
+    }
+
+    fn children_num(&self, py: Python<'_>) -> PyResult<Py<PyList>> {
+        // TODO(rust-cst-accessor-clone-efficiency): clones full Vec then filters outside the guard.
+        // Could filter inside the read guard (clone only matching entries) to avoid
+        // O(total-children) Arc clones for accessors that match a small subset.
+        let snapshot: Vec<_> = {
+            let guard = self.inner.read();
+            guard.children.clone()
+        };
+        let result = PyList::empty(py);
+        for (lbl, child) in &snapshot {
+            if *lbl == Some(LeadingWsLabel::Num) {
+                result.append(child.to_pyobject(py)?)?;
+            }
+        }
+        Ok(result.unbind())
+    }
+
+    fn child_num(&self, py: Python<'_>) -> PyResult<PyObject> {
+        // TODO(rust-cst-accessor-clone-efficiency): see children_num above.
+        let snapshot: Vec<_> = {
+            let guard = self.inner.read();
+            guard.children.clone()
+        };
+        let mut found: Option<PyObject> = None;
+        let mut count = 0usize;
+        for (lbl, child) in &snapshot {
+            if *lbl == Some(LeadingWsLabel::Num) {
+                count += 1;
+                if count == 1 {
+                    found = Some(child.to_pyobject(py)?);
+                }
+            }
+        }
+        if count != 1 {
+            return Err(PyValueError::new_err(format!(
+                "Expected one num child but have {count}"
+            )));
+        }
+        Ok(found.expect("invariant: LeadingWs.child_num: count==1 but found==None; logic error"))
+    }
+
+    fn maybe_num(&self, py: Python<'_>) -> PyResult<Option<PyObject>> {
+        // TODO(rust-cst-accessor-clone-efficiency): see children_num above.
+        let snapshot: Vec<_> = {
+            let guard = self.inner.read();
+            guard.children.clone()
+        };
+        let mut found: Option<PyObject> = None;
+        let mut count = 0usize;
+        for (lbl, child) in &snapshot {
+            if *lbl == Some(LeadingWsLabel::Num) {
+                count += 1;
+                if count == 1 {
+                    found = Some(child.to_pyobject(py)?);
+                }
+            }
+        }
+        if count > 1 {
+            return Err(PyValueError::new_err(
+                "Expected at most one num child but have at least 2",
+            ));
+        }
+        Ok(found)
+    }
+
+    fn __eq__(&self, py: Python<'_>, other: &Bound<'_, PyAny>) -> PyResult<PyObject> {
+        if !other.is_instance_of::<PyLeadingWs>() {
+            return Ok(py.NotImplemented());
+        }
+        let other_handle: PyRef<PyLeadingWs> = other.extract()?;
+        // Delegate to Shared<T>::PartialEq which applies the ptr_eq short-circuit
+        // (avoids same-lock re-entry on `x == x`) then deep structural comparison.
+        let eq = self.inner == other_handle.inner;
+        Ok(eq.into_pyobject(py)?.to_owned().unbind().into_any())
+    }
+
+    fn __hash__(&self) -> PyResult<isize> {
+        Err(PyTypeError::new_err("unhashable type: 'LeadingWs'"))
+    }
+
+    fn __repr__(&self, _py: Python<'_>) -> String {
+        let guard = self.inner.read();
+        let span_repr = format!("Span(start={}, end={})", guard.span.start(), guard.span.end());
+        let children_len = guard.children.len();
+        format!(
+            "LeadingWs(span={span_repr}, children=[<{children_len} child(ren)>])"
+        )
+    }
+
+}
+
+// ───────────────────────────────────────────────────────────────────────────
+// GroupedLabel
+// ───────────────────────────────────────────────────────────────────────────
+
+/// Label discriminant enum for children of this node type.
+///
+/// Python-visible name is `Grouped_Label` (preserved for compatibility).
+/// Rust consumers use the CamelCase `GroupedLabel` name.
+#[cfg(feature = "python")]
+#[pyclass(frozen, name = "Grouped_Label")]
+#[derive(Clone, Debug, PartialEq, Eq, Hash)]
+pub enum GroupedLabel {
+    #[pyo3(name = "LEFT")]
+    Left,
+}
+
+#[cfg(not(feature = "python"))]
+#[derive(Clone, Debug, PartialEq, Eq, Hash)]
+pub enum GroupedLabel {
+    Left,
+}
+
+#[cfg(feature = "python")]
+#[pymethods]
+impl GroupedLabel {
+    fn __repr__(&self) -> &'static str {
+        match self {
+            GroupedLabel::Left => "Grouped.Label.LEFT",
+        }
+    }
+
+    #[getter]
+    fn _fltk_canonical_name(&self) -> &'static str {
+        self.__repr__()
+    }
+
+    fn __eq__(&self, py: Python<'_>, other: &Bound<'_, PyAny>) -> PyResult<PyObject> {
+        if let Ok(other_kind) = other.extract::<GroupedLabel>() {
+            return Ok((self == &other_kind).into_pyobject(py)?.to_owned().unbind().into_any());
+        }
+        if let Ok(cn) = other.getattr(pyo3::intern!(py, "_fltk_canonical_name")) {
+            if let Ok(cn_str) = cn.extract::<&str>() {
+                return Ok((self.__repr__() == cn_str).into_pyobject(py)?.to_owned().unbind().into_any());
+            }
+        }
+        Ok(py.NotImplemented())
+    }
+
+    fn __hash__(&self, py: Python<'_>) -> PyResult<isize> {
+        pyo3::types::PyAnyMethods::hash(
+            pyo3::types::PyString::new(py, self.__repr__()).as_any()
+        )
+    }
+}
+
+/// Child value enum for `Grouped` nodes.
+///
+/// Node-typed variants hold `Shared<T>` (`Arc<RwLock<T>>`); `Clone` is shallow
+/// (increments the reference count, does not copy the node).
+#[derive(Clone, Debug)]
+pub enum GroupedChild {
+    Name(Shared<Name>),
+    Num(Shared<Num>),
+    Trivia(Shared<Trivia>),
+}
+
+impl PartialEq for GroupedChild {
+    fn eq(&self, other: &Self) -> bool {
+        match (self, other) {
+            (GroupedChild::Name(a), GroupedChild::Name(b)) => a == b,
+            (GroupedChild::Num(a), GroupedChild::Num(b)) => a == b,
+            (GroupedChild::Trivia(a), GroupedChild::Trivia(b)) => a == b,
+            _ => false,
+        }
+    }
+}
+
+#[cfg(feature = "python")]
+impl GroupedChild {
+    fn to_pyobject(&self, py: Python<'_>) -> PyResult<PyObject> {
+        match self {
+            Self::Name(shared) => {
+                let addr = shared.arc_ptr();
+                registry::get_or_insert_with(py, addr, || {
+                    let handle = PyName { inner: shared.clone() };
+                    Py::new(py, handle).map(|p| p.into_any())
+                })
+            }
+            Self::Num(shared) => {
+                let addr = shared.arc_ptr();
+                registry::get_or_insert_with(py, addr, || {
+                    let handle = PyNum { inner: shared.clone() };
+                    Py::new(py, handle).map(|p| p.into_any())
+                })
+            }
+            Self::Trivia(shared) => {
+                let addr = shared.arc_ptr();
+                registry::get_or_insert_with(py, addr, || {
+                    let handle = PyTrivia { inner: shared.clone() };
+                    Py::new(py, handle).map(|p| p.into_any())
+                })
+            }
+        }
+    }
+
+    fn extract_from_pyobject(
+        py: Python<'_>,
+        obj: &Bound<'_, PyAny>,
+        _span_type: &Bound<'_, PyType>,
+    ) -> PyResult<Self> {
+        if obj.is_instance_of::<PyName>() {
+            let handle: PyRef<PyName> = obj.extract()?;
+            let shared = handle.inner.clone();
+            let addr = shared.arc_ptr();
+            // Hand-in: register this Python handle as canonical for its Shared.
+            drop(handle); // release the PyRef before calling Python
+            // Propagate registry errors: a swallowed Err here would leave the
+            // handle unregistered, causing the next wrap-out to mint a different
+            // object and silently break is-stability.
+            registry::register_if_absent(py, addr, obj)?;
+            return Ok(Self::Name(shared));
+        }
+        if obj.is_instance_of::<PyNum>() {
+            let handle: PyRef<PyNum> = obj.extract()?;
+            let shared = handle.inner.clone();
+            let addr = shared.arc_ptr();
+            // Hand-in: register this Python handle as canonical for its Shared.
+            drop(handle); // release the PyRef before calling Python
+            // Propagate registry errors: a swallowed Err here would leave the
+            // handle unregistered, causing the next wrap-out to mint a different
+            // object and silently break is-stability.
+            registry::register_if_absent(py, addr, obj)?;
+            return Ok(Self::Num(shared));
+        }
+        if obj.is_instance_of::<PyTrivia>() {
+            let handle: PyRef<PyTrivia> = obj.extract()?;
+            let shared = handle.inner.clone();
+            let addr = shared.arc_ptr();
+            // Hand-in: register this Python handle as canonical for its Shared.
+            drop(handle); // release the PyRef before calling Python
+            // Propagate registry errors: a swallowed Err here would leave the
+            // handle unregistered, causing the next wrap-out to mint a different
+            // object and silently break is-stability.
+            registry::register_if_absent(py, addr, obj)?;
+            return Ok(Self::Trivia(shared));
+        }
+        Err(pyo3::exceptions::PyTypeError::new_err(format!(
+            "Grouped: unsupported child type {}",
+            obj.get_type().name()?
+        )))
+    }
+}
+
+// ───────────────────────────────────────────────────────────────────────────
+// Grouped
+// ───────────────────────────────────────────────────────────────────────────
+
+/// CST data struct for `Grouped`. See [`fltk_cst_core::Shared`] for clone/equality/reference semantics.
+#[derive(Clone, Debug)]
+pub struct Grouped {
+    // Not pub: use span() / children() / push_child() — the stable accessor API.
+    // Direct field access bypasses any future validation logic on setters.
+    span: Span,
+    children: Vec<(Option<GroupedLabel>, GroupedChild)>,
+}
+
+impl PartialEq for Grouped {
+    fn eq(&self, other: &Self) -> bool {
+        self.span == other.span && self.children == other.children
+    }
+}
+
+impl Grouped {
+    /// Construct a node with the given span and no children. GIL-free.
+    pub fn new(span: Span) -> Self {
+        Grouped {
+            span,
+            children: Vec::new(),
+        }
+    }
+
+    /// Return the [`NodeKind`] discriminant for this node type.
+    pub fn kind(&self) -> NodeKind {
+        NodeKind::Grouped
+    }
+
+    /// Return a reference to the stored [`Span`].
+    pub fn span(&self) -> &Span {
+        &self.span
+    }
+
+    /// Replace the node's span.
+    pub fn set_span(&mut self, span: Span) {
+        self.span = span;
+    }
+
+    /// Return a slice of all children (unfiltered).
+    ///
+    /// Each entry is `(label, child)`. Use the per-label accessors
+    /// (`children_<lbl>`, `child_<lbl>`, `maybe_<lbl>`) for type-safe access.
+    pub fn children(&self) -> &[(Option<GroupedLabel>, GroupedChild)] {
+        self.children.as_slice()
+    }
+
+    /// Push a child onto the children `Vec`.
+    ///
+    /// No type-checking is performed: any child variant may be stored under
+    /// any label. Per-label typed mutators (`append_<lbl>`, `extend_<lbl>`)
+    /// provide type-constrained alternatives.
+    pub fn push_child(&mut self, label: Option<GroupedLabel>, child: GroupedChild) {
+        self.children.push((label, child));
+    }
+
+    /// Return the single child (any label), or `Err` if there is not exactly one.
+    ///
+    /// Mirrors the Python `child()` method: count violation → `CstError::ChildCount`.
+    pub fn child(&self) -> Result<&(Option<GroupedLabel>, GroupedChild), CstError> {
+        match self.children.as_slice() {
+            [single] => Ok(single),
+            slice => Err(CstError::ChildCount {
+                label: "<any>",
+                expected: "1",
+                found: slice.len(),
+            }),
+        }
+    }
+
+    /// Copy all children from `other` into `self`, sharing the `Shared<T>` arcs.
+    ///
+    /// Children are appended (Arc reference-count bumps, not deep copies),
+    /// matching the Python backend's reference-copy behavior. Labels are preserved.
+    ///
+    /// The borrow checker prevents `self.extend_children(self)` at the data-struct
+    /// level (`&mut` + `&` of the same value don't coexist). For self-extend from
+    /// Python, the handle pymethod handles it via snapshotting.
+    pub fn extend_children(&mut self, other: &Self) {
+        self.children.extend(other.children.iter().cloned());
+    }
+
+    /// Return an iterator over children labelled `left`.
+    pub fn children_left(&self) -> impl Iterator<Item = &GroupedChild> + '_ {
+        self.children.iter()
+            .filter(|(lbl, _)| *lbl == Some(GroupedLabel::Left))
+            .map(|(_, child)| child)
+    }
+
+    /// Return the single child labelled `left`, or `Err` if not exactly one.
+    ///
+    /// Count is checked by label match first (`CstError::ChildCount`); if the
+    /// count is valid and the surviving child has the wrong variant type,
+    /// `CstError::UnexpectedChildType` is returned (single-typed labels only).
+    pub fn child_left(&self) -> Result<&GroupedChild, CstError> {
+        let mut matching = self.children.iter()
+            .filter(|(lbl, _)| *lbl == Some(GroupedLabel::Left));
+        match (matching.next(), matching.next()) {
+            (Some((_, child)), None) => Ok(child),
+            _ => {
+                let count = self.children.iter()
+                    .filter(|(lbl, _)| *lbl == Some(GroupedLabel::Left))
+                    .count();
+                Err(CstError::ChildCount {
+                    label: "left",
+                    expected: "1",
+                    found: count,
+                })
+            }
+        }
+    }
+
+    /// Return the optional child labelled `left`, or `Err` if more than one.
+    ///
+    /// Returns `Ok(None)` for zero, `Ok(Some(...))` for one,
+    /// `Err(CstError::ChildCount)` for two or more.
+    pub fn maybe_left(&self) -> Result<Option<&GroupedChild>, CstError> {
+        let mut matching = self.children.iter()
+            .filter(|(lbl, _)| *lbl == Some(GroupedLabel::Left));
+        match (matching.next(), matching.next()) {
+            (None, _) => Ok(None),
+            (Some((_, child)), None) => Ok(Some(child)),
+            _ => {
+                let count = self.children.iter()
+                    .filter(|(lbl, _)| *lbl == Some(GroupedLabel::Left))
+                    .count();
+                Err(CstError::ChildCount {
+                    label: "left",
+                    expected: "0 or 1",
+                    found: count,
+                })
+            }
+        }
+    }
+
+    /// Append a child with label `left` (any child enum variant).
+    pub fn append_left(&mut self, child: GroupedChild) {
+        self.children.push((Some(GroupedLabel::Left), child));
+    }
+
+    /// Append multiple children with label `left`.
+    pub fn extend_left(&mut self, children: impl IntoIterator<Item = GroupedChild>) {
+        self.children.extend(children.into_iter().map(|c| (Some(GroupedLabel::Left), c)));
+    }
+}
+
+#[cfg(feature = "python")]
+#[pyclass(frozen, weakref, name = "Grouped")]
+pub struct PyGrouped {
+    // Not pub: all external access goes through shared() or to_py_canonical().
+    // A pub field would let mixed-app Rust code construct an unregistered handle
+    // (Py::new(py, PyFoo { inner: s.clone() })), silently breaking is-stability.
+    inner: Shared<Grouped>,
+}
+
+#[cfg(feature = "python")]
+impl PyGrouped {
+    /// Return a reference to the inner `Shared<Grouped>`.
+    pub fn shared(&self) -> &Shared<Grouped> {
+        &self.inner
+    }
+
+    /// Wrap a `Shared<Grouped>` into a canonical Python handle,
+    /// looking up the registry first so the same handle is returned
+    /// for the same `Shared` allocation.
+    pub fn to_py_canonical(py: Python<'_>, s: &Shared<Grouped>) -> PyResult<Py<PyGrouped>> {
+        let addr = s.arc_ptr();
+        let obj = registry::get_or_insert_with(py, addr, || {
+            let handle = PyGrouped { inner: s.clone() };
+            Py::new(py, handle).map(|p| p.into_any())
+        })?;
+        obj.bind(py).downcast::<PyGrouped>().map(|b| b.clone().unbind()).map_err(|e| e.into())
+    }
+}
+
+#[cfg(feature = "python")]
+#[pymethods]
+impl PyGrouped {
+    #[new]
+    #[pyo3(signature = (*, span = None))]
+    fn new(py: Python<'_>, span: Option<&Bound<'_, PyAny>>) -> PyResult<Py<PyGrouped>> {
+        let native_span = match span {
+            Some(s) => extract_span(py, s)?,
+            None => Span::unknown(),
+        };
+        let data = Grouped {
+            span: native_span,
+            children: Vec::new(),
+        };
+        let shared = Shared::new(data);
+        let addr = shared.arc_ptr();
+        let handle = PyGrouped { inner: shared };
+        let py_obj = Py::new(py, handle)?;
+        // Register as canonical — fresh Shared, no alias can exist yet.
+        registry::force_register(py, addr, py_obj.bind(py))?;
+        Ok(py_obj)
+    }
+
+    #[getter]
+    fn span(&self, py: Python<'_>) -> PyResult<PyObject> {
+        // Snapshot the span under the read lock, then drop the guard before
+        // calling span_to_pyobject — which performs Python work (Py::new or
+        // Python method calls) that must not happen while a node lock is held.
+        let span = self.inner.read().span.clone();
+        span_to_pyobject(py, &span)
+    }
+
+    #[setter]
+    fn set_span(&self, py: Python<'_>, value: &Bound<'_, PyAny>) -> PyResult<()> {
+        self.inner.write().span = extract_span(py, value)?;
+        Ok(())
+    }
+
+    #[getter]
+    fn kind(&self) -> NodeKind {
+        NodeKind::Grouped
+    }
+
+    #[classattr]
+    #[allow(non_snake_case)]
+    fn Label(py: Python<'_>) -> PyResult<PyObject> {
+        Ok(GroupedLabel::type_object(py).into_any().unbind())
+    }
+
+    #[getter]
+    fn children(&self, py: Python<'_>) -> PyResult<Py<PyList>> {
+        // Snapshot the children vec (Arc clones for node children — O(n) refcount bumps).
+        // Lock scope: acquire read, snapshot, release before touching Python.
+        let snapshot: Vec<_> = {
+            let guard = self.inner.read();
+            guard.children.clone()
+        };
+        let result = PyList::empty(py);
+        for (label, child) in &snapshot {
+            let label_obj: PyObject = match label {
+                None => py.None(),
+                Some(lbl) => lbl.clone().into_pyobject(py)?.into_any().unbind(),
+            };
+            let child_obj = child.to_pyobject(py)?;
+            let tup = PyTuple::new(py, [label_obj, child_obj])?;
+            result.append(tup)?;
+        }
+        Ok(result.unbind())
+    }
+
+    #[pyo3(signature = (child, label = None))]
+    fn append(&self, py: Python<'_>, child: &Bound<'_, PyAny>, label: Option<PyObject>) -> PyResult<()> {
+        let span_type = get_span_type(py)?;
+        let native_child = GroupedChild::extract_from_pyobject(py, child, &span_type)?;
+        let native_label = match label {
+            None => None,
+            Some(lbl) => {
+                if let Ok(native_lbl) = lbl.bind(py).extract::<GroupedLabel>() {
+                    Some(native_lbl)
+                } else {
+                    return Err(PyTypeError::new_err(format!(
+                        "Grouped.append: label argument is not a Grouped_Label; got {}",
+                        lbl.bind(py).get_type().name()?
+                    )));
+                }
+            }
+        };
+        self.inner.write().children.push((native_label, native_child));
+        Ok(())
+    }
+
+    #[pyo3(signature = (children, label = None))]
+    fn extend(
+        &self,
+        py: Python<'_>,
+        children: &Bound<'_, PyAny>,
+        label: Option<PyObject>,
+    ) -> PyResult<()> {
+        let span_type = get_span_type(py)?;
+        let native_label = match label {
+            None => None,
+            Some(lbl) => {
+                if let Ok(native_lbl) = lbl.bind(py).extract::<GroupedLabel>() {
+                    Some(native_lbl)
+                } else {
+                    return Err(PyTypeError::new_err(format!(
+                        "Grouped.extend: label argument is not a Grouped_Label; got {}",
+                        lbl.bind(py).get_type().name()?
+                    )));
+                }
+            }
+        };
+        let iter = children.try_iter()?;
+        for child_result in iter {
+            let child = child_result?;
+            let native_child = GroupedChild::extract_from_pyobject(py, &child, &span_type)?;
+            self.inner.write().children.push((native_label.clone(), native_child));
+        }
+        Ok(())
+    }
+
+    fn extend_children(&self, _py: Python<'_>, other: &PyGrouped) -> PyResult<()> {
+        // Snapshot other's children first: the read guard is dropped at the end of
+        // this block, so the write lock below is safe even when self and other are
+        // the same node (self-extend). No ptr_eq call is needed here — the snapshot
+        // approach handles self-extend structurally.
+        // Lock scope: hold read only long enough to clone the Arc-based children vec.
+        let snapshot: Vec<_> = {
+            let guard = other.inner.read();
+            guard.children.clone()
+        };
+        // Node-typed children are pushed directly as Shared<T> values.  Registry
+        // consistency is maintained lazily: wrap-out registers on first Python read
+        // via get_or_insert_with (registry.rs).  Eagerly registering here would be
+        // a no-op — the WeakValueDictionary would evict handles held by nothing.
+        self.inner.write().children.extend(snapshot);
+        Ok(())
+    }
+
+    fn child(&self, py: Python<'_>) -> PyResult<PyObject> {
+        // TODO(rust-cst-accessor-clone-efficiency): clones the full children Vec
+        // before checking len. Could check len under the read guard and only clone
+        // the single needed entry, avoiding O(total-children) allocation on the error path.
+        let snapshot: Vec<_> = {
+            let guard = self.inner.read();
+            guard.children.clone()
+        };
+        let n = snapshot.len();
+        if n != 1 {
+            return Err(PyValueError::new_err(format!(
+                "Expected one child but have {n}"
+            )));
+        }
+        let (label, child) = &snapshot[0];
+        let label_obj: PyObject = match label {
+            None => py.None(),
+            Some(lbl) => lbl.clone().into_pyobject(py)?.into_any().unbind(),
+        };
+        let child_obj = child.to_pyobject(py)?;
+        Ok(PyTuple::new(py, [label_obj, child_obj])?.into_any().unbind())
+    }
+
+    fn append_left(&self, py: Python<'_>, child: &Bound<'_, PyAny>) -> PyResult<()> {
+        let span_type = get_span_type(py)?;
+        let native_child = GroupedChild::extract_from_pyobject(py, child, &span_type)?;
+        self.inner.write().children.push((Some(GroupedLabel::Left), native_child));
+        Ok(())
+    }
+
+    fn extend_left(&self, py: Python<'_>, children: &Bound<'_, PyAny>) -> PyResult<()> {
+        let span_type = get_span_type(py)?;
+        let iter = children.try_iter()?;
+        for child_result in iter {
+            let child = child_result?;
+            let native_child = GroupedChild::extract_from_pyobject(py, &child, &span_type)?;
+            let entry = (Some(GroupedLabel::Left), native_child);
+            self.inner.write().children.push(entry);
+        }
+        Ok(())
+    }
+
+    fn children_left(&self, py: Python<'_>) -> PyResult<Py<PyList>> {
+        // TODO(rust-cst-accessor-clone-efficiency): clones full Vec then filters outside the guard.
+        // Could filter inside the read guard (clone only matching entries) to avoid
+        // O(total-children) Arc clones for accessors that match a small subset.
+        let snapshot: Vec<_> = {
+            let guard = self.inner.read();
+            guard.children.clone()
+        };
+        let result = PyList::empty(py);
+        for (lbl, child) in &snapshot {
+            if *lbl == Some(GroupedLabel::Left) {
+                result.append(child.to_pyobject(py)?)?;
+            }
+        }
+        Ok(result.unbind())
+    }
+
+    fn child_left(&self, py: Python<'_>) -> PyResult<PyObject> {
+        // TODO(rust-cst-accessor-clone-efficiency): see children_left above.
+        let snapshot: Vec<_> = {
+            let guard = self.inner.read();
+            guard.children.clone()
+        };
+        let mut found: Option<PyObject> = None;
+        let mut count = 0usize;
+        for (lbl, child) in &snapshot {
+            if *lbl == Some(GroupedLabel::Left) {
+                count += 1;
+                if count == 1 {
+                    found = Some(child.to_pyobject(py)?);
+                }
+            }
+        }
+        if count != 1 {
+            return Err(PyValueError::new_err(format!(
+                "Expected one left child but have {count}"
+            )));
+        }
+        Ok(found.expect("invariant: Grouped.child_left: count==1 but found==None; logic error"))
+    }
+
+    fn maybe_left(&self, py: Python<'_>) -> PyResult<Option<PyObject>> {
+        // TODO(rust-cst-accessor-clone-efficiency): see children_left above.
+        let snapshot: Vec<_> = {
+            let guard = self.inner.read();
+            guard.children.clone()
+        };
+        let mut found: Option<PyObject> = None;
+        let mut count = 0usize;
+        for (lbl, child) in &snapshot {
+            if *lbl == Some(GroupedLabel::Left) {
+                count += 1;
+                if count == 1 {
+                    found = Some(child.to_pyobject(py)?);
+                }
+            }
+        }
+        if count > 1 {
+            return Err(PyValueError::new_err(
+                "Expected at most one left child but have at least 2",
+            ));
+        }
+        Ok(found)
+    }
+
+    fn __eq__(&self, py: Python<'_>, other: &Bound<'_, PyAny>) -> PyResult<PyObject> {
+        if !other.is_instance_of::<PyGrouped>() {
+            return Ok(py.NotImplemented());
+        }
+        let other_handle: PyRef<PyGrouped> = other.extract()?;
+        // Delegate to Shared<T>::PartialEq which applies the ptr_eq short-circuit
+        // (avoids same-lock re-entry on `x == x`) then deep structural comparison.
+        let eq = self.inner == other_handle.inner;
+        Ok(eq.into_pyobject(py)?.to_owned().unbind().into_any())
+    }
+
+    fn __hash__(&self) -> PyResult<isize> {
+        Err(PyTypeError::new_err("unhashable type: 'Grouped'"))
+    }
+
+    fn __repr__(&self, _py: Python<'_>) -> String {
+        let guard = self.inner.read();
+        let span_repr = format!("Span(start={}, end={})", guard.span.start(), guard.span.end());
+        let children_len = guard.children.len();
+        format!(
+            "Grouped(span={span_repr}, children=[<{children_len} child(ren)>])"
+        )
+    }
+
+}
+
+// ───────────────────────────────────────────────────────────────────────────
+// RecViaSubLabel
+// ───────────────────────────────────────────────────────────────────────────
+
+/// Label discriminant enum for children of this node type.
+///
+/// Python-visible name is `RecViaSub_Label` (preserved for compatibility).
+/// Rust consumers use the CamelCase `RecViaSubLabel` name.
+#[cfg(feature = "python")]
+#[pyclass(frozen, name = "RecViaSub_Label")]
+#[derive(Clone, Debug, PartialEq, Eq, Hash)]
+pub enum RecViaSubLabel {
+    #[pyo3(name = "INNER")]
+    Inner,
+    #[pyo3(name = "SUFFIX")]
+    Suffix,
+}
+
+#[cfg(not(feature = "python"))]
+#[derive(Clone, Debug, PartialEq, Eq, Hash)]
+pub enum RecViaSubLabel {
+    Inner,
+    Suffix,
+}
+
+#[cfg(feature = "python")]
+#[pymethods]
+impl RecViaSubLabel {
+    fn __repr__(&self) -> &'static str {
+        match self {
+            RecViaSubLabel::Inner => "RecViaSub.Label.INNER",
+            RecViaSubLabel::Suffix => "RecViaSub.Label.SUFFIX",
+        }
+    }
+
+    #[getter]
+    fn _fltk_canonical_name(&self) -> &'static str {
+        self.__repr__()
+    }
+
+    fn __eq__(&self, py: Python<'_>, other: &Bound<'_, PyAny>) -> PyResult<PyObject> {
+        if let Ok(other_kind) = other.extract::<RecViaSubLabel>() {
+            return Ok((self == &other_kind).into_pyobject(py)?.to_owned().unbind().into_any());
+        }
+        if let Ok(cn) = other.getattr(pyo3::intern!(py, "_fltk_canonical_name")) {
+            if let Ok(cn_str) = cn.extract::<&str>() {
+                return Ok((self.__repr__() == cn_str).into_pyobject(py)?.to_owned().unbind().into_any());
+            }
+        }
+        Ok(py.NotImplemented())
+    }
+
+    fn __hash__(&self, py: Python<'_>) -> PyResult<isize> {
+        pyo3::types::PyAnyMethods::hash(
+            pyo3::types::PyString::new(py, self.__repr__()).as_any()
+        )
+    }
+}
+
+/// Child value enum for `RecViaSub` nodes.
+///
+/// Node-typed variants hold `Shared<T>` (`Arc<RwLock<T>>`); `Clone` is shallow
+/// (increments the reference count, does not copy the node).
+#[derive(Clone, Debug)]
+pub enum RecViaSubChild {
+    Atom(Shared<Atom>),
+    Name(Shared<Name>),
+    RecViaSub(Shared<RecViaSub>),
+}
+
+impl PartialEq for RecViaSubChild {
+    fn eq(&self, other: &Self) -> bool {
+        match (self, other) {
+            (RecViaSubChild::Atom(a), RecViaSubChild::Atom(b)) => a == b,
+            (RecViaSubChild::Name(a), RecViaSubChild::Name(b)) => a == b,
+            (RecViaSubChild::RecViaSub(a), RecViaSubChild::RecViaSub(b)) => a == b,
+            _ => false,
+        }
+    }
+}
+
+#[cfg(feature = "python")]
+impl RecViaSubChild {
+    fn to_pyobject(&self, py: Python<'_>) -> PyResult<PyObject> {
+        match self {
+            Self::Atom(shared) => {
+                let addr = shared.arc_ptr();
+                registry::get_or_insert_with(py, addr, || {
+                    let handle = PyAtom { inner: shared.clone() };
+                    Py::new(py, handle).map(|p| p.into_any())
+                })
+            }
+            Self::Name(shared) => {
+                let addr = shared.arc_ptr();
+                registry::get_or_insert_with(py, addr, || {
+                    let handle = PyName { inner: shared.clone() };
+                    Py::new(py, handle).map(|p| p.into_any())
+                })
+            }
+            Self::RecViaSub(shared) => {
+                let addr = shared.arc_ptr();
+                registry::get_or_insert_with(py, addr, || {
+                    let handle = PyRecViaSub { inner: shared.clone() };
+                    Py::new(py, handle).map(|p| p.into_any())
+                })
+            }
+        }
+    }
+
+    fn extract_from_pyobject(
+        py: Python<'_>,
+        obj: &Bound<'_, PyAny>,
+        _span_type: &Bound<'_, PyType>,
+    ) -> PyResult<Self> {
+        if obj.is_instance_of::<PyAtom>() {
+            let handle: PyRef<PyAtom> = obj.extract()?;
+            let shared = handle.inner.clone();
+            let addr = shared.arc_ptr();
+            // Hand-in: register this Python handle as canonical for its Shared.
+            drop(handle); // release the PyRef before calling Python
+            // Propagate registry errors: a swallowed Err here would leave the
+            // handle unregistered, causing the next wrap-out to mint a different
+            // object and silently break is-stability.
+            registry::register_if_absent(py, addr, obj)?;
+            return Ok(Self::Atom(shared));
+        }
+        if obj.is_instance_of::<PyName>() {
+            let handle: PyRef<PyName> = obj.extract()?;
+            let shared = handle.inner.clone();
+            let addr = shared.arc_ptr();
+            // Hand-in: register this Python handle as canonical for its Shared.
+            drop(handle); // release the PyRef before calling Python
+            // Propagate registry errors: a swallowed Err here would leave the
+            // handle unregistered, causing the next wrap-out to mint a different
+            // object and silently break is-stability.
+            registry::register_if_absent(py, addr, obj)?;
+            return Ok(Self::Name(shared));
+        }
+        if obj.is_instance_of::<PyRecViaSub>() {
+            let handle: PyRef<PyRecViaSub> = obj.extract()?;
+            let shared = handle.inner.clone();
+            let addr = shared.arc_ptr();
+            // Hand-in: register this Python handle as canonical for its Shared.
+            drop(handle); // release the PyRef before calling Python
+            // Propagate registry errors: a swallowed Err here would leave the
+            // handle unregistered, causing the next wrap-out to mint a different
+            // object and silently break is-stability.
+            registry::register_if_absent(py, addr, obj)?;
+            return Ok(Self::RecViaSub(shared));
+        }
+        Err(pyo3::exceptions::PyTypeError::new_err(format!(
+            "RecViaSub: unsupported child type {}",
+            obj.get_type().name()?
+        )))
+    }
+}
+
+// ───────────────────────────────────────────────────────────────────────────
+// RecViaSub
+// ───────────────────────────────────────────────────────────────────────────
+
+/// CST data struct for `RecViaSub`. See [`fltk_cst_core::Shared`] for clone/equality/reference semantics.
+#[derive(Clone, Debug)]
+pub struct RecViaSub {
+    // Not pub: use span() / children() / push_child() — the stable accessor API.
+    // Direct field access bypasses any future validation logic on setters.
+    span: Span,
+    children: Vec<(Option<RecViaSubLabel>, RecViaSubChild)>,
+}
+
+impl PartialEq for RecViaSub {
+    fn eq(&self, other: &Self) -> bool {
+        self.span == other.span && self.children == other.children
+    }
+}
+
+impl RecViaSub {
+    /// Construct a node with the given span and no children. GIL-free.
+    pub fn new(span: Span) -> Self {
+        RecViaSub {
+            span,
+            children: Vec::new(),
+        }
+    }
+
+    /// Return the [`NodeKind`] discriminant for this node type.
+    pub fn kind(&self) -> NodeKind {
+        NodeKind::RecViaSub
+    }
+
+    /// Return a reference to the stored [`Span`].
+    pub fn span(&self) -> &Span {
+        &self.span
+    }
+
+    /// Replace the node's span.
+    pub fn set_span(&mut self, span: Span) {
+        self.span = span;
+    }
+
+    /// Return a slice of all children (unfiltered).
+    ///
+    /// Each entry is `(label, child)`. Use the per-label accessors
+    /// (`children_<lbl>`, `child_<lbl>`, `maybe_<lbl>`) for type-safe access.
+    pub fn children(&self) -> &[(Option<RecViaSubLabel>, RecViaSubChild)] {
+        self.children.as_slice()
+    }
+
+    /// Push a child onto the children `Vec`.
+    ///
+    /// No type-checking is performed: any child variant may be stored under
+    /// any label. Per-label typed mutators (`append_<lbl>`, `extend_<lbl>`)
+    /// provide type-constrained alternatives.
+    pub fn push_child(&mut self, label: Option<RecViaSubLabel>, child: RecViaSubChild) {
+        self.children.push((label, child));
+    }
+
+    /// Return the single child (any label), or `Err` if there is not exactly one.
+    ///
+    /// Mirrors the Python `child()` method: count violation → `CstError::ChildCount`.
+    pub fn child(&self) -> Result<&(Option<RecViaSubLabel>, RecViaSubChild), CstError> {
+        match self.children.as_slice() {
+            [single] => Ok(single),
+            slice => Err(CstError::ChildCount {
+                label: "<any>",
+                expected: "1",
+                found: slice.len(),
+            }),
+        }
+    }
+
+    /// Copy all children from `other` into `self`, sharing the `Shared<T>` arcs.
+    ///
+    /// Children are appended (Arc reference-count bumps, not deep copies),
+    /// matching the Python backend's reference-copy behavior. Labels are preserved.
+    ///
+    /// The borrow checker prevents `self.extend_children(self)` at the data-struct
+    /// level (`&mut` + `&` of the same value don't coexist). For self-extend from
+    /// Python, the handle pymethod handles it via snapshotting.
+    pub fn extend_children(&mut self, other: &Self) {
+        self.children.extend(other.children.iter().cloned());
+    }
+
+    /// Return an iterator over children labelled `inner`.
+    pub fn children_inner(&self) -> impl Iterator<Item = &RecViaSubChild> + '_ {
+        self.children.iter()
+            .filter(|(lbl, _)| *lbl == Some(RecViaSubLabel::Inner))
+            .map(|(_, child)| child)
+    }
+
+    /// Return the single child labelled `inner`, or `Err` if not exactly one.
+    ///
+    /// Count is checked by label match first (`CstError::ChildCount`); if the
+    /// count is valid and the surviving child has the wrong variant type,
+    /// `CstError::UnexpectedChildType` is returned (single-typed labels only).
+    pub fn child_inner(&self) -> Result<&RecViaSubChild, CstError> {
+        let mut matching = self.children.iter()
+            .filter(|(lbl, _)| *lbl == Some(RecViaSubLabel::Inner));
+        match (matching.next(), matching.next()) {
+            (Some((_, child)), None) => Ok(child),
+            _ => {
+                let count = self.children.iter()
+                    .filter(|(lbl, _)| *lbl == Some(RecViaSubLabel::Inner))
+                    .count();
+                Err(CstError::ChildCount {
+                    label: "inner",
+                    expected: "1",
+                    found: count,
+                })
+            }
+        }
+    }
+
+    /// Return the optional child labelled `inner`, or `Err` if more than one.
+    ///
+    /// Returns `Ok(None)` for zero, `Ok(Some(...))` for one,
+    /// `Err(CstError::ChildCount)` for two or more.
+    pub fn maybe_inner(&self) -> Result<Option<&RecViaSubChild>, CstError> {
+        let mut matching = self.children.iter()
+            .filter(|(lbl, _)| *lbl == Some(RecViaSubLabel::Inner));
+        match (matching.next(), matching.next()) {
+            (None, _) => Ok(None),
+            (Some((_, child)), None) => Ok(Some(child)),
+            _ => {
+                let count = self.children.iter()
+                    .filter(|(lbl, _)| *lbl == Some(RecViaSubLabel::Inner))
+                    .count();
+                Err(CstError::ChildCount {
+                    label: "inner",
+                    expected: "0 or 1",
+                    found: count,
+                })
+            }
+        }
+    }
+
+    /// Append a child with label `inner` (any child enum variant).
+    pub fn append_inner(&mut self, child: RecViaSubChild) {
+        self.children.push((Some(RecViaSubLabel::Inner), child));
+    }
+
+    /// Append multiple children with label `inner`.
+    pub fn extend_inner(&mut self, children: impl IntoIterator<Item = RecViaSubChild>) {
+        self.children.extend(children.into_iter().map(|c| (Some(RecViaSubLabel::Inner), c)));
+    }
+
+    /// Return an iterator over `Shared<Name>` children labelled `suffix`.
+    ///
+    /// Off-type variants stored under the `suffix` label are silently skipped.
+    /// Use `children()` (the untyped slice) for a lossless view.
+    pub fn children_suffix(&self) -> impl Iterator<Item = &Shared<Name>> + '_ {
+        self.children.iter()
+            .filter(|(lbl, _)| *lbl == Some(RecViaSubLabel::Suffix))
+            .filter_map(|(_, child)| match child {
+                RecViaSubChild::Name(s) => Some(s),
+                _ => None,
+            })
+    }
+
+    /// Return the single child labelled `suffix`, or `Err` if not exactly one.
+    ///
+    /// Count is checked by label match first (`CstError::ChildCount`); if the
+    /// count is valid and the surviving child has the wrong variant type,
+    /// `CstError::UnexpectedChildType` is returned (single-typed labels only).
+    pub fn child_suffix(&self) -> Result<&Shared<Name>, CstError> {
+        let mut it = self.children.iter()
+            .filter(|(lbl, _)| *lbl == Some(RecViaSubLabel::Suffix));
+        match (it.next(), it.next()) {
+            (Some((_, child)), None) => match child {
+                RecViaSubChild::Name(s) => Ok(s),
+                _ => Err(CstError::UnexpectedChildType { label: "suffix" }),
+            },
+            _ => Err(CstError::ChildCount {
+                label: "suffix",
+                expected: "1",
+                found: self.children.iter()
+                    .filter(|(lbl, _)| *lbl == Some(RecViaSubLabel::Suffix))
+                    .count(),
+            }),
+        }
+    }
+
+    /// Return the optional child labelled `suffix`, or `Err` if more than one.
+    ///
+    /// Returns `Ok(None)` for zero, `Ok(Some(...))` for one,
+    /// `Err(CstError::ChildCount)` for two or more.
+    pub fn maybe_suffix(&self) -> Result<Option<&Shared<Name>>, CstError> {
+        let mut it = self.children.iter()
+            .filter(|(lbl, _)| *lbl == Some(RecViaSubLabel::Suffix));
+        match (it.next(), it.next()) {
+            (None, _) => Ok(None),
+            (Some((_, child)), None) => match child {
+                RecViaSubChild::Name(s) => Ok(Some(s)),
+                _ => Err(CstError::UnexpectedChildType { label: "suffix" }),
+            },
+            _ => Err(CstError::ChildCount {
+                label: "suffix",
+                expected: "0 or 1",
+                found: self.children.iter()
+                    .filter(|(lbl, _)| *lbl == Some(RecViaSubLabel::Suffix))
+                    .count(),
+            }),
+        }
+    }
+
+    /// Append a child with label `suffix`, accepting `Name` or `Shared<Name>`.
+    pub fn append_suffix(&mut self, child: impl Into<Shared<Name>>) {
+        self.children.push((Some(RecViaSubLabel::Suffix), RecViaSubChild::Name(child.into())));
+    }
+
+    /// Append multiple children with label `suffix`.
+    pub fn extend_suffix(&mut self, children: impl IntoIterator<Item = impl Into<Shared<Name>>>) {
+        self.children.extend(children.into_iter().map(|c| (Some(RecViaSubLabel::Suffix), RecViaSubChild::Name(c.into()))));
+    }
+}
+
+#[cfg(feature = "python")]
+#[pyclass(frozen, weakref, name = "RecViaSub")]
+pub struct PyRecViaSub {
+    // Not pub: all external access goes through shared() or to_py_canonical().
+    // A pub field would let mixed-app Rust code construct an unregistered handle
+    // (Py::new(py, PyFoo { inner: s.clone() })), silently breaking is-stability.
+    inner: Shared<RecViaSub>,
+}
+
+#[cfg(feature = "python")]
+impl PyRecViaSub {
+    /// Return a reference to the inner `Shared<RecViaSub>`.
+    pub fn shared(&self) -> &Shared<RecViaSub> {
+        &self.inner
+    }
+
+    /// Wrap a `Shared<RecViaSub>` into a canonical Python handle,
+    /// looking up the registry first so the same handle is returned
+    /// for the same `Shared` allocation.
+    pub fn to_py_canonical(py: Python<'_>, s: &Shared<RecViaSub>) -> PyResult<Py<PyRecViaSub>> {
+        let addr = s.arc_ptr();
+        let obj = registry::get_or_insert_with(py, addr, || {
+            let handle = PyRecViaSub { inner: s.clone() };
+            Py::new(py, handle).map(|p| p.into_any())
+        })?;
+        obj.bind(py).downcast::<PyRecViaSub>().map(|b| b.clone().unbind()).map_err(|e| e.into())
+    }
+}
+
+#[cfg(feature = "python")]
+#[pymethods]
+impl PyRecViaSub {
+    #[new]
+    #[pyo3(signature = (*, span = None))]
+    fn new(py: Python<'_>, span: Option<&Bound<'_, PyAny>>) -> PyResult<Py<PyRecViaSub>> {
+        let native_span = match span {
+            Some(s) => extract_span(py, s)?,
+            None => Span::unknown(),
+        };
+        let data = RecViaSub {
+            span: native_span,
+            children: Vec::new(),
+        };
+        let shared = Shared::new(data);
+        let addr = shared.arc_ptr();
+        let handle = PyRecViaSub { inner: shared };
+        let py_obj = Py::new(py, handle)?;
+        // Register as canonical — fresh Shared, no alias can exist yet.
+        registry::force_register(py, addr, py_obj.bind(py))?;
+        Ok(py_obj)
+    }
+
+    #[getter]
+    fn span(&self, py: Python<'_>) -> PyResult<PyObject> {
+        // Snapshot the span under the read lock, then drop the guard before
+        // calling span_to_pyobject — which performs Python work (Py::new or
+        // Python method calls) that must not happen while a node lock is held.
+        let span = self.inner.read().span.clone();
+        span_to_pyobject(py, &span)
+    }
+
+    #[setter]
+    fn set_span(&self, py: Python<'_>, value: &Bound<'_, PyAny>) -> PyResult<()> {
+        self.inner.write().span = extract_span(py, value)?;
+        Ok(())
+    }
+
+    #[getter]
+    fn kind(&self) -> NodeKind {
+        NodeKind::RecViaSub
+    }
+
+    #[classattr]
+    #[allow(non_snake_case)]
+    fn Label(py: Python<'_>) -> PyResult<PyObject> {
+        Ok(RecViaSubLabel::type_object(py).into_any().unbind())
+    }
+
+    #[getter]
+    fn children(&self, py: Python<'_>) -> PyResult<Py<PyList>> {
+        // Snapshot the children vec (Arc clones for node children — O(n) refcount bumps).
+        // Lock scope: acquire read, snapshot, release before touching Python.
+        let snapshot: Vec<_> = {
+            let guard = self.inner.read();
+            guard.children.clone()
+        };
+        let result = PyList::empty(py);
+        for (label, child) in &snapshot {
+            let label_obj: PyObject = match label {
+                None => py.None(),
+                Some(lbl) => lbl.clone().into_pyobject(py)?.into_any().unbind(),
+            };
+            let child_obj = child.to_pyobject(py)?;
+            let tup = PyTuple::new(py, [label_obj, child_obj])?;
+            result.append(tup)?;
+        }
+        Ok(result.unbind())
+    }
+
+    #[pyo3(signature = (child, label = None))]
+    fn append(&self, py: Python<'_>, child: &Bound<'_, PyAny>, label: Option<PyObject>) -> PyResult<()> {
+        let span_type = get_span_type(py)?;
+        let native_child = RecViaSubChild::extract_from_pyobject(py, child, &span_type)?;
+        let native_label = match label {
+            None => None,
+            Some(lbl) => {
+                if let Ok(native_lbl) = lbl.bind(py).extract::<RecViaSubLabel>() {
+                    Some(native_lbl)
+                } else {
+                    return Err(PyTypeError::new_err(format!(
+                        "RecViaSub.append: label argument is not a RecViaSub_Label; got {}",
+                        lbl.bind(py).get_type().name()?
+                    )));
+                }
+            }
+        };
+        self.inner.write().children.push((native_label, native_child));
+        Ok(())
+    }
+
+    #[pyo3(signature = (children, label = None))]
+    fn extend(
+        &self,
+        py: Python<'_>,
+        children: &Bound<'_, PyAny>,
+        label: Option<PyObject>,
+    ) -> PyResult<()> {
+        let span_type = get_span_type(py)?;
+        let native_label = match label {
+            None => None,
+            Some(lbl) => {
+                if let Ok(native_lbl) = lbl.bind(py).extract::<RecViaSubLabel>() {
+                    Some(native_lbl)
+                } else {
+                    return Err(PyTypeError::new_err(format!(
+                        "RecViaSub.extend: label argument is not a RecViaSub_Label; got {}",
+                        lbl.bind(py).get_type().name()?
+                    )));
+                }
+            }
+        };
+        let iter = children.try_iter()?;
+        for child_result in iter {
+            let child = child_result?;
+            let native_child = RecViaSubChild::extract_from_pyobject(py, &child, &span_type)?;
+            self.inner.write().children.push((native_label.clone(), native_child));
+        }
+        Ok(())
+    }
+
+    fn extend_children(&self, _py: Python<'_>, other: &PyRecViaSub) -> PyResult<()> {
+        // Snapshot other's children first: the read guard is dropped at the end of
+        // this block, so the write lock below is safe even when self and other are
+        // the same node (self-extend). No ptr_eq call is needed here — the snapshot
+        // approach handles self-extend structurally.
+        // Lock scope: hold read only long enough to clone the Arc-based children vec.
+        let snapshot: Vec<_> = {
+            let guard = other.inner.read();
+            guard.children.clone()
+        };
+        // Node-typed children are pushed directly as Shared<T> values.  Registry
+        // consistency is maintained lazily: wrap-out registers on first Python read
+        // via get_or_insert_with (registry.rs).  Eagerly registering here would be
+        // a no-op — the WeakValueDictionary would evict handles held by nothing.
+        self.inner.write().children.extend(snapshot);
+        Ok(())
+    }
+
+    fn child(&self, py: Python<'_>) -> PyResult<PyObject> {
+        // TODO(rust-cst-accessor-clone-efficiency): clones the full children Vec
+        // before checking len. Could check len under the read guard and only clone
+        // the single needed entry, avoiding O(total-children) allocation on the error path.
+        let snapshot: Vec<_> = {
+            let guard = self.inner.read();
+            guard.children.clone()
+        };
+        let n = snapshot.len();
+        if n != 1 {
+            return Err(PyValueError::new_err(format!(
+                "Expected one child but have {n}"
+            )));
+        }
+        let (label, child) = &snapshot[0];
+        let label_obj: PyObject = match label {
+            None => py.None(),
+            Some(lbl) => lbl.clone().into_pyobject(py)?.into_any().unbind(),
+        };
+        let child_obj = child.to_pyobject(py)?;
+        Ok(PyTuple::new(py, [label_obj, child_obj])?.into_any().unbind())
+    }
+
+    fn append_inner(&self, py: Python<'_>, child: &Bound<'_, PyAny>) -> PyResult<()> {
+        let span_type = get_span_type(py)?;
+        let native_child = RecViaSubChild::extract_from_pyobject(py, child, &span_type)?;
+        self.inner.write().children.push((Some(RecViaSubLabel::Inner), native_child));
+        Ok(())
+    }
+
+    fn extend_inner(&self, py: Python<'_>, children: &Bound<'_, PyAny>) -> PyResult<()> {
+        let span_type = get_span_type(py)?;
+        let iter = children.try_iter()?;
+        for child_result in iter {
+            let child = child_result?;
+            let native_child = RecViaSubChild::extract_from_pyobject(py, &child, &span_type)?;
+            let entry = (Some(RecViaSubLabel::Inner), native_child);
+            self.inner.write().children.push(entry);
+        }
+        Ok(())
+    }
+
+    fn children_inner(&self, py: Python<'_>) -> PyResult<Py<PyList>> {
+        // TODO(rust-cst-accessor-clone-efficiency): clones full Vec then filters outside the guard.
+        // Could filter inside the read guard (clone only matching entries) to avoid
+        // O(total-children) Arc clones for accessors that match a small subset.
+        let snapshot: Vec<_> = {
+            let guard = self.inner.read();
+            guard.children.clone()
+        };
+        let result = PyList::empty(py);
+        for (lbl, child) in &snapshot {
+            if *lbl == Some(RecViaSubLabel::Inner) {
+                result.append(child.to_pyobject(py)?)?;
+            }
+        }
+        Ok(result.unbind())
+    }
+
+    fn child_inner(&self, py: Python<'_>) -> PyResult<PyObject> {
+        // TODO(rust-cst-accessor-clone-efficiency): see children_inner above.
+        let snapshot: Vec<_> = {
+            let guard = self.inner.read();
+            guard.children.clone()
+        };
+        let mut found: Option<PyObject> = None;
+        let mut count = 0usize;
+        for (lbl, child) in &snapshot {
+            if *lbl == Some(RecViaSubLabel::Inner) {
+                count += 1;
+                if count == 1 {
+                    found = Some(child.to_pyobject(py)?);
+                }
+            }
+        }
+        if count != 1 {
+            return Err(PyValueError::new_err(format!(
+                "Expected one inner child but have {count}"
+            )));
+        }
+        Ok(found.expect("invariant: RecViaSub.child_inner: count==1 but found==None; logic error"))
+    }
+
+    fn maybe_inner(&self, py: Python<'_>) -> PyResult<Option<PyObject>> {
+        // TODO(rust-cst-accessor-clone-efficiency): see children_inner above.
+        let snapshot: Vec<_> = {
+            let guard = self.inner.read();
+            guard.children.clone()
+        };
+        let mut found: Option<PyObject> = None;
+        let mut count = 0usize;
+        for (lbl, child) in &snapshot {
+            if *lbl == Some(RecViaSubLabel::Inner) {
+                count += 1;
+                if count == 1 {
+                    found = Some(child.to_pyobject(py)?);
+                }
+            }
+        }
+        if count > 1 {
+            return Err(PyValueError::new_err(
+                "Expected at most one inner child but have at least 2",
+            ));
+        }
+        Ok(found)
+    }
+
+    fn append_suffix(&self, py: Python<'_>, child: &Bound<'_, PyAny>) -> PyResult<()> {
+        let span_type = get_span_type(py)?;
+        let native_child = RecViaSubChild::extract_from_pyobject(py, child, &span_type)?;
+        self.inner.write().children.push((Some(RecViaSubLabel::Suffix), native_child));
+        Ok(())
+    }
+
+    fn extend_suffix(&self, py: Python<'_>, children: &Bound<'_, PyAny>) -> PyResult<()> {
+        let span_type = get_span_type(py)?;
+        let iter = children.try_iter()?;
+        for child_result in iter {
+            let child = child_result?;
+            let native_child = RecViaSubChild::extract_from_pyobject(py, &child, &span_type)?;
+            let entry = (Some(RecViaSubLabel::Suffix), native_child);
+            self.inner.write().children.push(entry);
+        }
+        Ok(())
+    }
+
+    fn children_suffix(&self, py: Python<'_>) -> PyResult<Py<PyList>> {
+        // TODO(rust-cst-accessor-clone-efficiency): clones full Vec then filters outside the guard.
+        // Could filter inside the read guard (clone only matching entries) to avoid
+        // O(total-children) Arc clones for accessors that match a small subset.
+        let snapshot: Vec<_> = {
+            let guard = self.inner.read();
+            guard.children.clone()
+        };
+        let result = PyList::empty(py);
+        for (lbl, child) in &snapshot {
+            if *lbl == Some(RecViaSubLabel::Suffix) {
+                result.append(child.to_pyobject(py)?)?;
+            }
+        }
+        Ok(result.unbind())
+    }
+
+    fn child_suffix(&self, py: Python<'_>) -> PyResult<PyObject> {
+        // TODO(rust-cst-accessor-clone-efficiency): see children_suffix above.
+        let snapshot: Vec<_> = {
+            let guard = self.inner.read();
+            guard.children.clone()
+        };
+        let mut found: Option<PyObject> = None;
+        let mut count = 0usize;
+        for (lbl, child) in &snapshot {
+            if *lbl == Some(RecViaSubLabel::Suffix) {
+                count += 1;
+                if count == 1 {
+                    found = Some(child.to_pyobject(py)?);
+                }
+            }
+        }
+        if count != 1 {
+            return Err(PyValueError::new_err(format!(
+                "Expected one suffix child but have {count}"
+            )));
+        }
+        Ok(found.expect("invariant: RecViaSub.child_suffix: count==1 but found==None; logic error"))
+    }
+
+    fn maybe_suffix(&self, py: Python<'_>) -> PyResult<Option<PyObject>> {
+        // TODO(rust-cst-accessor-clone-efficiency): see children_suffix above.
+        let snapshot: Vec<_> = {
+            let guard = self.inner.read();
+            guard.children.clone()
+        };
+        let mut found: Option<PyObject> = None;
+        let mut count = 0usize;
+        for (lbl, child) in &snapshot {
+            if *lbl == Some(RecViaSubLabel::Suffix) {
+                count += 1;
+                if count == 1 {
+                    found = Some(child.to_pyobject(py)?);
+                }
+            }
+        }
+        if count > 1 {
+            return Err(PyValueError::new_err(
+                "Expected at most one suffix child but have at least 2",
+            ));
+        }
+        Ok(found)
+    }
+
+    fn __eq__(&self, py: Python<'_>, other: &Bound<'_, PyAny>) -> PyResult<PyObject> {
+        if !other.is_instance_of::<PyRecViaSub>() {
+            return Ok(py.NotImplemented());
+        }
+        let other_handle: PyRef<PyRecViaSub> = other.extract()?;
+        // Delegate to Shared<T>::PartialEq which applies the ptr_eq short-circuit
+        // (avoids same-lock re-entry on `x == x`) then deep structural comparison.
+        let eq = self.inner == other_handle.inner;
+        Ok(eq.into_pyobject(py)?.to_owned().unbind().into_any())
+    }
+
+    fn __hash__(&self) -> PyResult<isize> {
+        Err(PyTypeError::new_err("unhashable type: 'RecViaSub'"))
+    }
+
+    fn __repr__(&self, _py: Python<'_>) -> String {
+        let guard = self.inner.read();
+        let span_repr = format!("Span(start={}, end={})", guard.span.start(), guard.span.end());
+        let children_len = guard.children.len();
+        format!(
+            "RecViaSub(span={span_repr}, children=[<{children_len} child(ren)>])"
+        )
+    }
+
+}
+
+// ───────────────────────────────────────────────────────────────────────────
 // TriviaLabel
 // ───────────────────────────────────────────────────────────────────────────
 
@@ -10229,6 +12195,12 @@ pub fn register_classes(module: &Bound<'_, PyModule>) -> PyResult<()> {
     module.add_class::<PyTagged>()?;
     module.add_class::<ValLabel>()?;
     module.add_class::<PyVal>()?;
+    module.add_class::<LeadingWsLabel>()?;
+    module.add_class::<PyLeadingWs>()?;
+    module.add_class::<GroupedLabel>()?;
+    module.add_class::<PyGrouped>()?;
+    module.add_class::<RecViaSubLabel>()?;
+    module.add_class::<PyRecViaSub>()?;
     module.add_class::<TriviaLabel>()?;
     module.add_class::<PyTrivia>()?;
     Ok(())
