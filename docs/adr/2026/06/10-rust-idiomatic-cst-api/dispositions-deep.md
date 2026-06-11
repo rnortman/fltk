@@ -149,3 +149,209 @@ Reviewed commit: 807d56a. Round-1 fixes at: 655b99b. Round-2 fixes at: 798c9d1.
 - Disposition: TODO(abi-gate-test-consolidation)
 - Action: Added `TODO(abi-gate-test-consolidation)` to `TestSpanPathAbiGate` docstring and to `TODO.md`. Added a note that GILOnceCell does not cache errors so consolidation is feasible. No test restructuring — three separate subprocess tests remain for readability and isolation (now five, with the two new correctness-2 tests). `tests/test_rust_span.py`, `TODO.md`.
 - Severity assessment: 5 vs 1 subprocess interpreter spawns is a real but modest overhead per CI run. The prior commit (3217a14) batched 14→4 for the same reason, so the project has established appetite for this optimization. Deferred rather than skipped — the TODO documents the feasibility argument.
+
+---
+
+# Phase 2 deep-review dispositions
+
+Reviewer notes: notes-deep-{error-handling,correctness,security,test,reuse,quality,efficiency}-reviewer.md.
+Phase 2 diff: 7e39dfb..fb8852f. Fix commit: see HEAD.
+
+---
+
+## errhandling-1 (Phase 2)
+
+- Disposition: Won't-Do
+- Action: No change.
+- Severity assessment: `get_span_type` propagates raw `AttributeError` when `_fltk_cst_core_abi` is absent on `fltk._native.Span`. Finding applies to Phase 0 code unchanged by Phase 2.
+- Rationale (Won't-Do): `get_span_type` operates against the canonical `fltk._native.Span` — the same artifact as this cdylib. The attr is present by construction; absent-attr is only reachable if a user manually deletes the classattr post-import, which is unsupported. The design scoped the sentinel to the cross-cdylib barrier (A2); `get_span_type` is within-cdylib. These findings were already handled in Phase 0 round 2 for the paths where they are reachable; this path is not.
+
+## errhandling-2 (Phase 2)
+
+- Disposition: Won't-Do
+- Action: No change.
+- Severity assessment: `get_span_type` layout getattr propagates raw `AttributeError` on partial-upgrade.
+- Rationale (Won't-Do): Same argument as errhandling-1 (Phase 2). Both attrs are added in the same commit; partial-upgrade where one is present and the other absent requires surgical deletion.
+
+## errhandling-3 (Phase 2)
+
+- Disposition: Won't-Do
+- Action: No change.
+- Severity assessment: `extract_source_text` layout getattr propagates raw `AttributeError` when string matched but layout attr absent.
+- Rationale (Won't-Do): Phase 0 code unchanged by Phase 2. A legitimate finding on Phase 0 code; however, this was already fixed in Phase 0 round 2 (`errhandling-3` disposition there is Fixed). The reviewer's Phase 2 notes appear to have re-raised this without noticing the Phase 0 round-2 fix. Verified: the current code has `.map_err` on this getattr.
+
+## errhandling-4 (Phase 2)
+
+- Disposition: Fixed
+- Action: Generator template `fltk/fegen/gsm2tree_rs.py` (hand-in sites, ~line 557): changed `let _ = registry::register_if_absent(py, addr, obj);` to `registry::register_if_absent(py, addr, obj)?;`. Regenerated all five outputs (`src/cst_generated.rs`, `src/cst_fegen.rs`, `tests/rust_cst_fixture/src/cst.rs`, `tests/rust_cst_fegen/src/cst.rs`, `crates/fltk-cst-spike/src/cst.rs`) — all ~54 hand-in sites updated.
+- Severity assessment: A `MemoryError` or future error from `get_registry` would be swallowed; caller returns `Ok` while the registry entry is absent; subsequent reads of that child mint new handles, silently breaking `is`-identity with no error signal. High severity.
+
+## correctness-1 (Phase 2)
+
+- Disposition: Fixed
+- Action: `fltk/fegen/gsm2tree_rs.py` — removed `rule_name_map` dict comprehension and `.get()` fallback from `_native_per_label_methods`; removed `class_name` parameter (now unused); added `rule_name: str` parameter; updated the single call site in `_node_block` to pass `rule_name` directly; replaced the conditional `if rule_name:` guard with an unconditional `self._label_type_info(rule_name, label)` call; removed the dead else fallback branch. Regenerated all five outputs.
+- Severity assessment: The dead fallback branch (`ref_type = f"&{enum_name}", None, 2`) would silently emit wrong-shaped union accessors for span-only or single-node labels on a lookup miss. The O(rules) dict inversion per call was also eliminated.
+
+## correctness-2 (Phase 2)
+
+- Disposition: Fixed
+- Action: `fltk/fegen/gsm2tree_rs.py:1409,1439` — added `f` prefix to both TODO comment strings inside `_per_label_methods`. Regenerated all five outputs; generated code now reads e.g. `see children_name above` instead of the literal `{label}`.
+- Severity assessment: Comment-only; no behavioral effect. Misleading to readers of generated code.
+
+## security-1 (Phase 2)
+
+- Disposition: TODO(rust-cst-debug-depth)
+- Action: Added `TODO(rust-cst-debug-depth)` to `TODO.md`; added `// TODO(rust-cst-debug-depth): derived Debug recurses without depth bound` comment at `fltk/fegen/gsm2tree_rs.py` on the `#[derive(Clone, Debug)]` emit line for node data structs (~line 638). Design §5 already documents the cycle case; the TODO extends the documented hazard to cover unbounded-depth DoS on acyclic attacker-controlled input.
+- Severity assessment: `derive(Debug)` recurses through `Shared<T>` children with no depth bound. Parser input is frequently untrusted; tree depth is attacker-controlled via input nesting. Downstream services that debug-log nodes from untrusted input risk stack exhaustion → uncatchable abort. The cycle case is design-accepted (§5); unbounded-depth DoS on acyclic input is the new exposure from Phase 2.
+
+## test-1 through test-5 (Phase 2)
+
+- Disposition: Won't-Do (Phase 0 findings; outside Phase 2 scope)
+- Action: No change. These findings target `test_rust_span.py` Phase 0 tests and were addressed in the Phase 0 round-2 respond. Verified already fixed at HEAD.
+- Severity assessment: N/A for Phase 2 round.
+
+## test-6 (Phase 2)
+
+- Disposition: Fixed (already present at HEAD before this round)
+- Action: `tests/test_gsm2tree_rs.py` — `test_handle_struct_emitted` pins `pub struct PyIdentifier {` and `inner: Shared<Identifier>,` (private field). Present at HEAD.
+- Severity assessment: A generator regression emitting a wrong handle field type would pass all prior string-match tests.
+
+## test-7 (Phase 2)
+
+- Disposition: Fixed (already present at HEAD before this round)
+- Action: `tests/test_gsm2tree_rs.py` — `test_to_py_canonical_uses_registry` added. Present at HEAD.
+- Severity assessment: A generator emitting `Py::new` directly in `to_py_canonical` would break identity undetected.
+
+## test-8 (Phase 2)
+
+- Disposition: Fixed (already present at HEAD before this round)
+- Action: `tests/test_gsm2tree_rs.py` — `test_py_new_uses_force_register` added. Present at HEAD.
+- Severity assessment: Omitting `force_register` in `#[new]` would allow identity to hold only via hand-in, not construction.
+
+## test-9 (Phase 2)
+
+- Disposition: Fixed (already present at HEAD before this round)
+- Action: `tests/test_phase4_rust_fixture.py` — `test_children_label_accessor_identity` added. Present at HEAD.
+- Severity assessment: `children_<label>()` returning a freshly-minted handle instead of going through the registry would break identity on that path.
+
+## test-10 (Phase 2)
+
+- Disposition: TODO(registry-unit-tests)
+- Action: TODO already in `TODO.md` and `TODO(registry-unit-tests)` comment at `crates/fltk-cst-core/src/registry.rs:128–130`. The comment explains the pyo3/cdylib linkage blocker. No new action.
+- Severity assessment: Registry logic tested only through Python integration tests; a logic inversion in `register_if_absent` would require Python-level identity tests to detect.
+
+## test-11 (Phase 2)
+
+- Disposition: Fixed (already present at HEAD before this round)
+- Action: `tests/test_phase4_rust_fixture.py:test_extend_children_duplicates_entries` — `assert first is ident` added. Present at HEAD.
+- Severity assessment: Premature-eviction bug could produce two mutually-`is`-equal new handles not equal to the original; missing assertion would not catch it.
+
+## test-12 (Phase 2)
+
+- Disposition: Fixed (already present at HEAD before this round)
+- Action: `tests/test_phase4_rust_fixture.py` — `test_shared_child_mutation_visible_through_two_parents` added. Present at HEAD.
+- Severity assessment: Arc-clone semantics of `extract_from_pyobject` (hand-in) were unverified at the Python level.
+
+## test-13 (Phase 2)
+
+- Disposition: Fixed
+- Action: `crates/fltk-cst-spike/src/spike_tests.rs` — added `child_item_unexpected_child_type` (pushes `ItemsChild::Span` under `ItemsLabel::Item`, asserts `UnexpectedChildType`) and `child_item_count_error_beats_type_error` (two wrong-type children → `ChildCount` wins). `tests/rust_cst_fixture/src/native_tests.rs` — added `child_lbl_unexpected_child_type_returned_by_accessor` (pushes `EntryChild::Literal` under `EntryLabel::Key`, asserts `UnexpectedChildType`) and `child_lbl_count_error_beats_type_error_with_wrong_types` (two `Literal` children → `ChildCount` wins).
+- Severity assessment: The `UnexpectedChildType` arm in every generated `child_<lbl>` / `maybe_<lbl>` was dead from a test coverage perspective; a regression removing or inverting that branch would pass all tests.
+
+## test-14 (Phase 2)
+
+- Disposition: Fixed
+- Action: `crates/fltk-cst-spike/src/spike_tests.rs` — added `children_item_skips_off_type_variant`. `tests/rust_cst_fixture/src/native_tests.rs` — added `children_key_skips_off_type_variant`. Both: push one typed child and one off-type child under the same label; assert `children_<lbl>().count() == 1` and `children().len() == 2`.
+- Severity assessment: A regression changing `filter_map` to `map` (panicking) or dropping the filter entirely would pass all tests.
+
+## test-15 (Phase 2)
+
+- Disposition: Fixed
+- Action: `crates/fltk-cst-spike/src/spike_tests.rs` — added `child_item_exactly_one_ok` and `child_item_zero_returns_child_count_error` for the node-typed `item` label.
+- Severity assessment: Node-typed label path of `child_<lbl>` had no compiled test coverage in spike; generator bug for `ItemsLabel::Item` would be undetected.
+
+## test-16 (Phase 2)
+
+- Disposition: Fixed
+- Action: `crates/fltk-cst-spike/src/spike_tests.rs` — added `maybe_item_two_returns_child_count_error`.
+- Severity assessment: `"0 or 1"` string in `maybe_<lbl>` error messages was unpinned by spike tests; generator emitting `"1"` instead would pass spike.
+
+## reuse-1 (Phase 2)
+
+- Disposition: TODO(crosscdylib-abi-check-helper)
+- Action: TODO already in `TODO.md` as `crosscdylib-abi-check-helper`. Phase 0 code unchanged by Phase 2. No new action.
+- Severity assessment: Three copies of `py_type_name` inline pattern diverge on fallback-string changes. Minor.
+
+## reuse-2 (Phase 2)
+
+- Disposition: TODO(crosscdylib-abi-check-helper)
+- Action: Same TODO as reuse-1. No new action.
+- Severity assessment: Two per-type ABI-pair-check blocks with already-diverging error-message wording. Minor.
+
+## reuse-3 (Phase 2)
+
+- Disposition: Fixed (already present at HEAD)
+- Action: `_eq_method` emits `let eq = self.inner == other_handle.inner;`, delegating to `Shared<T>::PartialEq`. Present at HEAD.
+- Severity assessment: ptr_eq short-circuit correctness maintained in two places; a change to `Shared::PartialEq` would leave 37 generated `__eq__` bodies stale.
+
+## reuse-4 (Phase 2)
+
+- Disposition: Won't-Do
+- Action: No change.
+- Severity assessment: `Shared<T>` behavioral tests duplicated across two crates with no unit tests in `fltk-cst-core`.
+- Rationale (Won't-Do): Moving tests into `shared.rs` requires pyo3 linkage — same blocker as `registry-unit-tests`. The two-crate duplication provides equivalent coverage from different grammar perspectives. Slight divergence (spike lacks `shared_deep_eq_distinct_allocations`) is acceptable. Deferred to `registry-unit-tests`.
+
+## reuse-5 (Phase 2)
+
+- Disposition: Won't-Do
+- Action: No change.
+- Severity assessment: `child_<lbl>` single-node and span generator branches emit structurally identical Rust code differing only in match-arm variant name.
+- Rationale (Won't-Do): The two branches vary along a type-safety dimension (node vs span return type) that benefits from being explicit. The efficiency-1 fix already unified both branches to the alloc-free iterator-match pattern; remaining duplication is internal generator organization, not a correctness or behavioral risk.
+
+## reuse-6 (Phase 2)
+
+- Disposition: Won't-Do
+- Action: No change. Same argument as reuse-5 (Phase 2).
+- Severity assessment: Same structural duplication in `maybe_<lbl>` branches.
+
+## reuse-7 (Phase 2)
+
+- Disposition: Won't-Do
+- Action: No change. Same argument as reuse-5 (Phase 2).
+- Severity assessment: `children_<lbl>` iterator body duplicated across single-node and span branches.
+
+## reuse-8 (Phase 2)
+
+- Disposition: Fixed (superseded by efficiency-1)
+- Action: The `TODO(rust-cst-accessor-clone-efficiency)` scope concern is moot: `child_<lbl>` and `maybe_<lbl>` native methods now use zero-alloc iterator match (efficiency-1 fix). No allocation to annotate.
+- Severity assessment: The O(n) Vec allocation noted by reuse-8 no longer exists in native `child_<lbl>` / `maybe_<lbl>` after efficiency-1.
+
+## quality-1 (Phase 2)
+
+- Disposition: Fixed (same as correctness-1 Phase 2)
+- Action: See correctness-1 (Phase 2). `rule_name_map` eliminated; `rule_name` passed directly.
+- Severity assessment: Same as correctness-1 (Phase 2).
+
+## quality-2 (Phase 2)
+
+- Disposition: Fixed
+- Action: Added `value_node := operand:identifier | operand:literal` to `fltk/fegen/test_data/phase4_roundtrip.fltkg` — first in-tree union-labeled rule. Regenerated `tests/rust_cst_fixture/src/cst.rs` with union accessors (`child_operand`, `maybe_operand`, `children_operand`, `append_operand`, `extend_operand`). Added 9 compiled Rust tests to `tests/rust_cst_fixture/src/native_tests.rs` covering: both Identifier and Literal variants via `child_operand`; zero/one/two-child count errors for `child_operand` and `maybe_operand`; `children_operand` yielding both variants; `append_operand` / `extend_operand` write paths. Added 7 generator-level string tests in `tests/test_gsm2tree_rs.py::TestUnionLabelNativeAccessors` verifying signatures, absence of `UnexpectedChildType` arm in union branch, `.map()` (not `filter_map`) for `children_operand`, and accept-child-enum write-side forms. Removed `TODO(union-label-native-accessor-tests)` comments from `gsm2tree_rs.py` and `TODO.md` entry.
+- Severity assessment: Union-branch native accessor code was uncompiled and untested at the Rust level. A generator bug there would be undetected until a downstream grammar with a union label was processed. Now pinned by both generator-level string tests and compiled Rust tests.
+
+## efficiency-1 (Phase 2)
+
+- Disposition: Fixed
+- Action: `fltk/fegen/gsm2tree_rs.py` `_native_per_label_methods` — replaced `let matching: Vec<_> = ...collect()` in `child_<lbl>` and `maybe_<lbl>` for single-node and span-typed label branches with the alloc-free `let mut it = ...; match (it.next(), it.next())` pattern. Recount via `filter().count()` on error path only. Regenerated all five outputs.
+- Severity assessment: Every `child_<lbl>` / `maybe_<lbl>` call on the GIL-free data-struct API previously heap-allocated a `Vec` and did a full O(children) filter pass on every success. Now zero-alloc on the success path.
+
+## efficiency-2 (Phase 2)
+
+- Disposition: Fixed
+- Action: `fltk/fegen/gsm2tree_rs.py` `_native_per_label_methods` — replaced per-item `push` loop in `extend_<lbl>` for all three label kinds (single-node, span, union) with `self.children.extend(iter.map(...))`. Regenerated all five outputs.
+- Severity assessment: Per-item push incurs incremental capacity checks; `extend` pre-reserves via `size_hint`. Pure waste on the bulk-append path the future Rust parser is expected to use.
+
+## efficiency-3 (Phase 2)
+
+- Disposition: Fixed (same as correctness-1 Phase 2)
+- Action: See correctness-1 (Phase 2). Per-call O(rules) dict rebuild eliminated.
+- Severity assessment: O(rules²) generation-time work; negligible at current sizes but dead work either way.
