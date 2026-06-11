@@ -145,6 +145,19 @@ pub struct Span {
     pub(crate) source: Option<Arc<SourceInner>>,
 }
 
+impl fmt::Debug for Span {
+    /// Format as `Span { start: <start>, end: <end>, has_source: <bool> }`.
+    ///
+    /// Source text is deliberately elided — it can be the entire input file.
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("Span")
+            .field("start", &self.start)
+            .field("end", &self.end)
+            .field("has_source", &self.source.is_some())
+            .finish()
+    }
+}
+
 impl PartialEq for Span {
     fn eq(&self, other: &Self) -> bool {
         self.start == other.start && self.end == other.end

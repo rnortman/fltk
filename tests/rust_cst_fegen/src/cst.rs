@@ -1,3 +1,4 @@
+use fltk_cst_core::CstError;
 use fltk_cst_core::Span;
 use fltk_cst_core::Shared;
 #[cfg(feature = "python")]
@@ -18,9 +19,13 @@ use pyo3::PyTypeInfo;
 // NodeKind
 // ───────────────────────────────────────────────────────────────────────────
 
+/// Discriminant enum identifying the concrete node type of a CST node.
+///
+/// One variant per grammar rule. Returned by `kind()` on every data struct
+/// and handle. Python-visible name is the same ALL_CAPS form as the protocol.
 #[cfg(feature = "python")]
 #[pyclass(frozen, name = "NodeKind")]
-#[derive(Clone, PartialEq, Eq, Hash)]
+#[derive(Clone, Debug, PartialEq, Eq, Hash)]
 pub enum NodeKind {
     #[pyo3(name = "GRAMMAR")]
     Grammar,
@@ -53,7 +58,7 @@ pub enum NodeKind {
 }
 
 #[cfg(not(feature = "python"))]
-#[derive(Clone, PartialEq, Eq, Hash)]
+#[derive(Clone, Debug, PartialEq, Eq, Hash)]
 pub enum NodeKind {
     Grammar,
     Rule,
@@ -118,31 +123,33 @@ impl NodeKind {
 }
 
 // ───────────────────────────────────────────────────────────────────────────
-// Grammar_Label
+// GrammarLabel
 // ───────────────────────────────────────────────────────────────────────────
 
-#[allow(non_camel_case_types)]
+/// Label discriminant enum for children of this node type.
+///
+/// Python-visible name is `Grammar_Label` (preserved for compatibility).
+/// Rust consumers use the CamelCase `GrammarLabel` name.
 #[cfg(feature = "python")]
 #[pyclass(frozen, name = "Grammar_Label")]
-#[derive(Clone, PartialEq, Eq, Hash)]
-pub enum Grammar_Label {
+#[derive(Clone, Debug, PartialEq, Eq, Hash)]
+pub enum GrammarLabel {
     #[pyo3(name = "RULE")]
     Rule,
 }
 
-#[allow(non_camel_case_types)]
 #[cfg(not(feature = "python"))]
-#[derive(Clone, PartialEq, Eq, Hash)]
-pub enum Grammar_Label {
+#[derive(Clone, Debug, PartialEq, Eq, Hash)]
+pub enum GrammarLabel {
     Rule,
 }
 
 #[cfg(feature = "python")]
 #[pymethods]
-impl Grammar_Label {
+impl GrammarLabel {
     fn __repr__(&self) -> &'static str {
         match self {
-            Grammar_Label::Rule => "Grammar.Label.RULE",
+            GrammarLabel::Rule => "Grammar.Label.RULE",
         }
     }
 
@@ -152,7 +159,7 @@ impl Grammar_Label {
     }
 
     fn __eq__(&self, py: Python<'_>, other: &Bound<'_, PyAny>) -> PyResult<PyObject> {
-        if let Ok(other_kind) = other.extract::<Grammar_Label>() {
+        if let Ok(other_kind) = other.extract::<GrammarLabel>() {
             return Ok((self == &other_kind).into_pyobject(py)?.to_owned().unbind().into_any());
         }
         if let Ok(cn) = other.getattr(pyo3::intern!(py, "_fltk_canonical_name")) {
@@ -170,9 +177,11 @@ impl Grammar_Label {
     }
 }
 
-// GrammarChild — child value enum for Grammar
-// Node-typed variants hold Shared<T> (Arc<RwLock<T>>); Clone is shallow.
-#[derive(Clone)]
+/// Child value enum for `Grammar` nodes.
+///
+/// Node-typed variants hold `Shared<T>` (`Arc<RwLock<T>>`); `Clone` is shallow
+/// (increments the reference count, does not copy the node).
+#[derive(Clone, Debug)]
 pub enum GrammarChild {
     Rule(Shared<Rule>),
     Trivia(Shared<Trivia>),
@@ -249,14 +258,13 @@ impl GrammarChild {
 // Grammar
 // ───────────────────────────────────────────────────────────────────────────
 
-/// CST data struct for `Grammar`. Node-typed children are [`Shared<T>`] —
-/// see [`fltk_cst_core::Shared`] for clone/equality/reference semantics.
-#[derive(Clone)]
+/// CST data struct for `Grammar`. See [`fltk_cst_core::Shared`] for clone/equality/reference semantics.
+#[derive(Clone, Debug)]
 pub struct Grammar {
     // Not pub: use span() / children() / push_child() — the stable accessor API.
     // Direct field access bypasses any future validation logic on setters.
     span: Span,
-    children: Vec<(Option<Grammar_Label>, GrammarChild)>,
+    children: Vec<(Option<GrammarLabel>, GrammarChild)>,
 }
 
 impl PartialEq for Grammar {
@@ -266,8 +274,7 @@ impl PartialEq for Grammar {
 }
 
 impl Grammar {
-    /// Construct a node with the given span and no children.
-    /// GIL-free.
+    /// Construct a node with the given span and no children. GIL-free.
     pub fn new(span: Span) -> Self {
         Grammar {
             span,
@@ -275,14 +282,14 @@ impl Grammar {
         }
     }
 
-    /// Return a reference to the stored `Span`.
-    pub fn span(&self) -> &Span {
-        &self.span
+    /// Return the [`NodeKind`] discriminant for this node type.
+    pub fn kind(&self) -> NodeKind {
+        NodeKind::Grammar
     }
 
-    /// Return a slice of the children.
-    pub fn children(&self) -> &[(Option<Grammar_Label>, GrammarChild)] {
-        self.children.as_slice()
+    /// Return a reference to the stored [`Span`].
+    pub fn span(&self) -> &Span {
+        &self.span
     }
 
     /// Replace the node's span.
@@ -290,9 +297,116 @@ impl Grammar {
         self.span = span;
     }
 
+    /// Return a slice of all children (unfiltered).
+    ///
+    /// Each entry is `(label, child)`. Use the per-label accessors
+    /// (`children_<lbl>`, `child_<lbl>`, `maybe_<lbl>`) for type-safe access.
+    pub fn children(&self) -> &[(Option<GrammarLabel>, GrammarChild)] {
+        self.children.as_slice()
+    }
+
     /// Push a child onto the children `Vec`.
-    pub fn push_child(&mut self, label: Option<Grammar_Label>, child: GrammarChild) {
+    ///
+    /// No type-checking is performed: any child variant may be stored under
+    /// any label. Per-label typed mutators (`append_<lbl>`, `extend_<lbl>`)
+    /// provide type-constrained alternatives.
+    pub fn push_child(&mut self, label: Option<GrammarLabel>, child: GrammarChild) {
         self.children.push((label, child));
+    }
+
+    /// Return the single child (any label), or `Err` if there is not exactly one.
+    ///
+    /// Mirrors the Python `child()` method: count violation → `CstError::ChildCount`.
+    pub fn child(&self) -> Result<&(Option<GrammarLabel>, GrammarChild), CstError> {
+        match self.children.as_slice() {
+            [single] => Ok(single),
+            slice => Err(CstError::ChildCount {
+                label: "<any>",
+                expected: "1",
+                found: slice.len(),
+            }),
+        }
+    }
+
+    /// Copy all children from `other` into `self`, sharing the `Shared<T>` arcs.
+    ///
+    /// Children are appended (Arc reference-count bumps, not deep copies),
+    /// matching the Python backend's reference-copy behavior. Labels are preserved.
+    ///
+    /// The borrow checker prevents `self.extend_children(self)` at the data-struct
+    /// level (`&mut` + `&` of the same value don't coexist). For self-extend from
+    /// Python, the handle pymethod handles it via snapshotting.
+    pub fn extend_children(&mut self, other: &Self) {
+        self.children.extend(other.children.iter().cloned());
+    }
+
+    /// Return an iterator over `Shared<Rule>` children labelled `rule`.
+    ///
+    /// Off-type variants stored under the `rule` label are silently skipped.
+    /// Use `children()` (the untyped slice) for a lossless view.
+    pub fn children_rule(&self) -> impl Iterator<Item = &Shared<Rule>> + '_ {
+        self.children.iter()
+            .filter(|(lbl, _)| *lbl == Some(GrammarLabel::Rule))
+            .filter_map(|(_, child)| match child {
+                GrammarChild::Rule(s) => Some(s),
+                _ => None,
+            })
+    }
+
+    /// Return the single child labelled `rule`, or `Err` if not exactly one.
+    ///
+    /// Count is checked by label match first (`CstError::ChildCount`); if the
+    /// count is valid and the surviving child has the wrong variant type,
+    /// `CstError::UnexpectedChildType` is returned (single-typed labels only).
+    pub fn child_rule(&self) -> Result<&Shared<Rule>, CstError> {
+        let mut it = self.children.iter()
+            .filter(|(lbl, _)| *lbl == Some(GrammarLabel::Rule));
+        match (it.next(), it.next()) {
+            (Some((_, child)), None) => match child {
+                GrammarChild::Rule(s) => Ok(s),
+                _ => Err(CstError::UnexpectedChildType { label: "rule" }),
+            },
+            _ => Err(CstError::ChildCount {
+                label: "rule",
+                expected: "1",
+                found: self.children.iter()
+                    .filter(|(lbl, _)| *lbl == Some(GrammarLabel::Rule))
+                    .count(),
+            }),
+        }
+    }
+
+    /// Return the optional child labelled `rule`, or `Err` if more than one.
+    ///
+    /// Returns `Ok(None)` for zero, `Ok(Some(...))` for one,
+    /// `Err(CstError::ChildCount)` for two or more.
+    pub fn maybe_rule(&self) -> Result<Option<&Shared<Rule>>, CstError> {
+        let mut it = self.children.iter()
+            .filter(|(lbl, _)| *lbl == Some(GrammarLabel::Rule));
+        match (it.next(), it.next()) {
+            (None, _) => Ok(None),
+            (Some((_, child)), None) => match child {
+                GrammarChild::Rule(s) => Ok(Some(s)),
+                _ => Err(CstError::UnexpectedChildType { label: "rule" }),
+            },
+            _ => Err(CstError::ChildCount {
+                label: "rule",
+                expected: "0 or 1",
+                found: self.children.iter()
+                    .filter(|(lbl, _)| *lbl == Some(GrammarLabel::Rule))
+                    .count(),
+            }),
+        }
+    }
+
+    /// Append a child with label `rule`, accepting `Rule` or `Shared<Rule>`.
+    pub fn append_rule(&mut self, child: impl Into<Shared<Rule>>) {
+        self.children.push((Some(GrammarLabel::Rule), GrammarChild::Rule(child.into())));
+    }
+
+    /// Append multiple children with label `rule`.
+    pub fn extend_rule(&mut self, children: impl IntoIterator<Item = impl Into<Shared<Rule>>>) {
+        self.children.extend(children.into_iter().map(|c| (Some(GrammarLabel::Rule), GrammarChild::Rule(c.into()))));
     }
 }
 
@@ -371,7 +485,7 @@ impl PyGrammar {
     #[classattr]
     #[allow(non_snake_case)]
     fn Label(py: Python<'_>) -> PyResult<PyObject> {
-        Ok(Grammar_Label::type_object(py).into_any().unbind())
+        Ok(GrammarLabel::type_object(py).into_any().unbind())
     }
 
     #[getter]
@@ -402,7 +516,7 @@ impl PyGrammar {
         let native_label = match label {
             None => None,
             Some(lbl) => {
-                if let Ok(native_lbl) = lbl.bind(py).extract::<Grammar_Label>() {
+                if let Ok(native_lbl) = lbl.bind(py).extract::<GrammarLabel>() {
                     Some(native_lbl)
                 } else {
                     return Err(PyTypeError::new_err(format!(
@@ -427,7 +541,7 @@ impl PyGrammar {
         let native_label = match label {
             None => None,
             Some(lbl) => {
-                if let Ok(native_lbl) = lbl.bind(py).extract::<Grammar_Label>() {
+                if let Ok(native_lbl) = lbl.bind(py).extract::<GrammarLabel>() {
                     Some(native_lbl)
                 } else {
                     return Err(PyTypeError::new_err(format!(
@@ -465,6 +579,9 @@ impl PyGrammar {
     }
 
     fn child(&self, py: Python<'_>) -> PyResult<PyObject> {
+        // TODO(rust-cst-accessor-clone-efficiency): clones the full children Vec
+        // before checking len. Could check len under the read guard and only clone
+        // the single needed entry, avoiding O(total-children) allocation on the error path.
         let snapshot: Vec<_> = {
             let guard = self.inner.read();
             guard.children.clone()
@@ -487,7 +604,7 @@ impl PyGrammar {
     fn append_rule(&self, py: Python<'_>, child: &Bound<'_, PyAny>) -> PyResult<()> {
         let span_type = get_span_type(py)?;
         let native_child = GrammarChild::extract_from_pyobject(py, child, &span_type)?;
-        self.inner.write().children.push((Some(Grammar_Label::Rule), native_child));
+        self.inner.write().children.push((Some(GrammarLabel::Rule), native_child));
         Ok(())
     }
 
@@ -497,20 +614,23 @@ impl PyGrammar {
         for child_result in iter {
             let child = child_result?;
             let native_child = GrammarChild::extract_from_pyobject(py, &child, &span_type)?;
-            let entry = (Some(Grammar_Label::Rule), native_child);
+            let entry = (Some(GrammarLabel::Rule), native_child);
             self.inner.write().children.push(entry);
         }
         Ok(())
     }
 
     fn children_rule(&self, py: Python<'_>) -> PyResult<Py<PyList>> {
+        // TODO(rust-cst-accessor-clone-efficiency): clones full Vec then filters outside the guard.
+        // Could filter inside the read guard (clone only matching entries) to avoid
+        // O(total-children) Arc clones for accessors that match a small subset.
         let snapshot: Vec<_> = {
             let guard = self.inner.read();
             guard.children.clone()
         };
         let result = PyList::empty(py);
         for (lbl, child) in &snapshot {
-            if *lbl == Some(Grammar_Label::Rule) {
+            if *lbl == Some(GrammarLabel::Rule) {
                 result.append(child.to_pyobject(py)?)?;
             }
         }
@@ -518,6 +638,7 @@ impl PyGrammar {
     }
 
     fn child_rule(&self, py: Python<'_>) -> PyResult<PyObject> {
+        // TODO(rust-cst-accessor-clone-efficiency): see children_rule above.
         let snapshot: Vec<_> = {
             let guard = self.inner.read();
             guard.children.clone()
@@ -525,7 +646,7 @@ impl PyGrammar {
         let mut found: Option<PyObject> = None;
         let mut count = 0usize;
         for (lbl, child) in &snapshot {
-            if *lbl == Some(Grammar_Label::Rule) {
+            if *lbl == Some(GrammarLabel::Rule) {
                 count += 1;
                 if count == 1 {
                     found = Some(child.to_pyobject(py)?);
@@ -541,6 +662,7 @@ impl PyGrammar {
     }
 
     fn maybe_rule(&self, py: Python<'_>) -> PyResult<Option<PyObject>> {
+        // TODO(rust-cst-accessor-clone-efficiency): see children_rule above.
         let snapshot: Vec<_> = {
             let guard = self.inner.read();
             guard.children.clone()
@@ -548,7 +670,7 @@ impl PyGrammar {
         let mut found: Option<PyObject> = None;
         let mut count = 0usize;
         for (lbl, child) in &snapshot {
-            if *lbl == Some(Grammar_Label::Rule) {
+            if *lbl == Some(GrammarLabel::Rule) {
                 count += 1;
                 if count == 1 {
                     found = Some(child.to_pyobject(py)?);
@@ -590,35 +712,37 @@ impl PyGrammar {
 }
 
 // ───────────────────────────────────────────────────────────────────────────
-// Rule_Label
+// RuleLabel
 // ───────────────────────────────────────────────────────────────────────────
 
-#[allow(non_camel_case_types)]
+/// Label discriminant enum for children of this node type.
+///
+/// Python-visible name is `Rule_Label` (preserved for compatibility).
+/// Rust consumers use the CamelCase `RuleLabel` name.
 #[cfg(feature = "python")]
 #[pyclass(frozen, name = "Rule_Label")]
-#[derive(Clone, PartialEq, Eq, Hash)]
-pub enum Rule_Label {
+#[derive(Clone, Debug, PartialEq, Eq, Hash)]
+pub enum RuleLabel {
     #[pyo3(name = "ALTERNATIVES")]
     Alternatives,
     #[pyo3(name = "NAME")]
     Name,
 }
 
-#[allow(non_camel_case_types)]
 #[cfg(not(feature = "python"))]
-#[derive(Clone, PartialEq, Eq, Hash)]
-pub enum Rule_Label {
+#[derive(Clone, Debug, PartialEq, Eq, Hash)]
+pub enum RuleLabel {
     Alternatives,
     Name,
 }
 
 #[cfg(feature = "python")]
 #[pymethods]
-impl Rule_Label {
+impl RuleLabel {
     fn __repr__(&self) -> &'static str {
         match self {
-            Rule_Label::Alternatives => "Rule.Label.ALTERNATIVES",
-            Rule_Label::Name => "Rule.Label.NAME",
+            RuleLabel::Alternatives => "Rule.Label.ALTERNATIVES",
+            RuleLabel::Name => "Rule.Label.NAME",
         }
     }
 
@@ -628,7 +752,7 @@ impl Rule_Label {
     }
 
     fn __eq__(&self, py: Python<'_>, other: &Bound<'_, PyAny>) -> PyResult<PyObject> {
-        if let Ok(other_kind) = other.extract::<Rule_Label>() {
+        if let Ok(other_kind) = other.extract::<RuleLabel>() {
             return Ok((self == &other_kind).into_pyobject(py)?.to_owned().unbind().into_any());
         }
         if let Ok(cn) = other.getattr(pyo3::intern!(py, "_fltk_canonical_name")) {
@@ -646,9 +770,11 @@ impl Rule_Label {
     }
 }
 
-// RuleChild — child value enum for Rule
-// Node-typed variants hold Shared<T> (Arc<RwLock<T>>); Clone is shallow.
-#[derive(Clone)]
+/// Child value enum for `Rule` nodes.
+///
+/// Node-typed variants hold `Shared<T>` (`Arc<RwLock<T>>`); `Clone` is shallow
+/// (increments the reference count, does not copy the node).
+#[derive(Clone, Debug)]
 pub enum RuleChild {
     Alternatives(Shared<Alternatives>),
     Identifier(Shared<Identifier>),
@@ -746,14 +872,13 @@ impl RuleChild {
 // Rule
 // ───────────────────────────────────────────────────────────────────────────
 
-/// CST data struct for `Rule`. Node-typed children are [`Shared<T>`] —
-/// see [`fltk_cst_core::Shared`] for clone/equality/reference semantics.
-#[derive(Clone)]
+/// CST data struct for `Rule`. See [`fltk_cst_core::Shared`] for clone/equality/reference semantics.
+#[derive(Clone, Debug)]
 pub struct Rule {
     // Not pub: use span() / children() / push_child() — the stable accessor API.
     // Direct field access bypasses any future validation logic on setters.
     span: Span,
-    children: Vec<(Option<Rule_Label>, RuleChild)>,
+    children: Vec<(Option<RuleLabel>, RuleChild)>,
 }
 
 impl PartialEq for Rule {
@@ -763,8 +888,7 @@ impl PartialEq for Rule {
 }
 
 impl Rule {
-    /// Construct a node with the given span and no children.
-    /// GIL-free.
+    /// Construct a node with the given span and no children. GIL-free.
     pub fn new(span: Span) -> Self {
         Rule {
             span,
@@ -772,14 +896,14 @@ impl Rule {
         }
     }
 
-    /// Return a reference to the stored `Span`.
-    pub fn span(&self) -> &Span {
-        &self.span
+    /// Return the [`NodeKind`] discriminant for this node type.
+    pub fn kind(&self) -> NodeKind {
+        NodeKind::Rule
     }
 
-    /// Return a slice of the children.
-    pub fn children(&self) -> &[(Option<Rule_Label>, RuleChild)] {
-        self.children.as_slice()
+    /// Return a reference to the stored [`Span`].
+    pub fn span(&self) -> &Span {
+        &self.span
     }
 
     /// Replace the node's span.
@@ -787,9 +911,185 @@ impl Rule {
         self.span = span;
     }
 
+    /// Return a slice of all children (unfiltered).
+    ///
+    /// Each entry is `(label, child)`. Use the per-label accessors
+    /// (`children_<lbl>`, `child_<lbl>`, `maybe_<lbl>`) for type-safe access.
+    pub fn children(&self) -> &[(Option<RuleLabel>, RuleChild)] {
+        self.children.as_slice()
+    }
+
     /// Push a child onto the children `Vec`.
-    pub fn push_child(&mut self, label: Option<Rule_Label>, child: RuleChild) {
+    ///
+    /// No type-checking is performed: any child variant may be stored under
+    /// any label. Per-label typed mutators (`append_<lbl>`, `extend_<lbl>`)
+    /// provide type-constrained alternatives.
+    pub fn push_child(&mut self, label: Option<RuleLabel>, child: RuleChild) {
         self.children.push((label, child));
+    }
+
+    /// Return the single child (any label), or `Err` if there is not exactly one.
+    ///
+    /// Mirrors the Python `child()` method: count violation → `CstError::ChildCount`.
+    pub fn child(&self) -> Result<&(Option<RuleLabel>, RuleChild), CstError> {
+        match self.children.as_slice() {
+            [single] => Ok(single),
+            slice => Err(CstError::ChildCount {
+                label: "<any>",
+                expected: "1",
+                found: slice.len(),
+            }),
+        }
+    }
+
+    /// Copy all children from `other` into `self`, sharing the `Shared<T>` arcs.
+    ///
+    /// Children are appended (Arc reference-count bumps, not deep copies),
+    /// matching the Python backend's reference-copy behavior. Labels are preserved.
+    ///
+    /// The borrow checker prevents `self.extend_children(self)` at the data-struct
+    /// level (`&mut` + `&` of the same value don't coexist). For self-extend from
+    /// Python, the handle pymethod handles it via snapshotting.
+    pub fn extend_children(&mut self, other: &Self) {
+        self.children.extend(other.children.iter().cloned());
+    }
+
+    /// Return an iterator over `Shared<Alternatives>` children labelled `alternatives`.
+    ///
+    /// Off-type variants stored under the `alternatives` label are silently skipped.
+    /// Use `children()` (the untyped slice) for a lossless view.
+    pub fn children_alternatives(&self) -> impl Iterator<Item = &Shared<Alternatives>> + '_ {
+        self.children.iter()
+            .filter(|(lbl, _)| *lbl == Some(RuleLabel::Alternatives))
+            .filter_map(|(_, child)| match child {
+                RuleChild::Alternatives(s) => Some(s),
+                _ => None,
+            })
+    }
+
+    /// Return the single child labelled `alternatives`, or `Err` if not exactly one.
+    ///
+    /// Count is checked by label match first (`CstError::ChildCount`); if the
+    /// count is valid and the surviving child has the wrong variant type,
+    /// `CstError::UnexpectedChildType` is returned (single-typed labels only).
+    pub fn child_alternatives(&self) -> Result<&Shared<Alternatives>, CstError> {
+        let mut it = self.children.iter()
+            .filter(|(lbl, _)| *lbl == Some(RuleLabel::Alternatives));
+        match (it.next(), it.next()) {
+            (Some((_, child)), None) => match child {
+                RuleChild::Alternatives(s) => Ok(s),
+                _ => Err(CstError::UnexpectedChildType { label: "alternatives" }),
+            },
+            _ => Err(CstError::ChildCount {
+                label: "alternatives",
+                expected: "1",
+                found: self.children.iter()
+                    .filter(|(lbl, _)| *lbl == Some(RuleLabel::Alternatives))
+                    .count(),
+            }),
+        }
+    }
+
+    /// Return the optional child labelled `alternatives`, or `Err` if more than one.
+    ///
+    /// Returns `Ok(None)` for zero, `Ok(Some(...))` for one,
+    /// `Err(CstError::ChildCount)` for two or more.
+    pub fn maybe_alternatives(&self) -> Result<Option<&Shared<Alternatives>>, CstError> {
+        let mut it = self.children.iter()
+            .filter(|(lbl, _)| *lbl == Some(RuleLabel::Alternatives));
+        match (it.next(), it.next()) {
+            (None, _) => Ok(None),
+            (Some((_, child)), None) => match child {
+                RuleChild::Alternatives(s) => Ok(Some(s)),
+                _ => Err(CstError::UnexpectedChildType { label: "alternatives" }),
+            },
+            _ => Err(CstError::ChildCount {
+                label: "alternatives",
+                expected: "0 or 1",
+                found: self.children.iter()
+                    .filter(|(lbl, _)| *lbl == Some(RuleLabel::Alternatives))
+                    .count(),
+            }),
+        }
+    }
+
+    /// Append a child with label `alternatives`, accepting `Alternatives` or `Shared<Alternatives>`.
+    pub fn append_alternatives(&mut self, child: impl Into<Shared<Alternatives>>) {
+        self.children.push((Some(RuleLabel::Alternatives), RuleChild::Alternatives(child.into())));
+    }
+
+    /// Append multiple children with label `alternatives`.
+    pub fn extend_alternatives(&mut self, children: impl IntoIterator<Item = impl Into<Shared<Alternatives>>>) {
+        self.children.extend(children.into_iter().map(|c| (Some(RuleLabel::Alternatives), RuleChild::Alternatives(c.into()))));
+    }
+
+    /// Return an iterator over `Shared<Identifier>` children labelled `name`.
+    ///
+    /// Off-type variants stored under the `name` label are silently skipped.
+    /// Use `children()` (the untyped slice) for a lossless view.
+    pub fn children_name(&self) -> impl Iterator<Item = &Shared<Identifier>> + '_ {
+        self.children.iter()
+            .filter(|(lbl, _)| *lbl == Some(RuleLabel::Name))
+            .filter_map(|(_, child)| match child {
+                RuleChild::Identifier(s) => Some(s),
+                _ => None,
+            })
+    }
+
+    /// Return the single child labelled `name`, or `Err` if not exactly one.
+    ///
+    /// Count is checked by label match first (`CstError::ChildCount`); if the
+    /// count is valid and the surviving child has the wrong variant type,
+    /// `CstError::UnexpectedChildType` is returned (single-typed labels only).
+    pub fn child_name(&self) -> Result<&Shared<Identifier>, CstError> {
+        let mut it = self.children.iter()
+            .filter(|(lbl, _)| *lbl == Some(RuleLabel::Name));
+        match (it.next(), it.next()) {
+            (Some((_, child)), None) => match child {
+                RuleChild::Identifier(s) => Ok(s),
+                _ => Err(CstError::UnexpectedChildType { label: "name" }),
+            },
+            _ => Err(CstError::ChildCount {
+                label: "name",
+                expected: "1",
+                found: self.children.iter()
+                    .filter(|(lbl, _)| *lbl == Some(RuleLabel::Name))
+                    .count(),
+            }),
+        }
+    }
+
+    /// Return the optional child labelled `name`, or `Err` if more than one.
+    ///
+    /// Returns `Ok(None)` for zero, `Ok(Some(...))` for one,
+    /// `Err(CstError::ChildCount)` for two or more.
+    pub fn maybe_name(&self) -> Result<Option<&Shared<Identifier>>, CstError> {
+        let mut it = self.children.iter()
+            .filter(|(lbl, _)| *lbl == Some(RuleLabel::Name));
+        match (it.next(), it.next()) {
+            (None, _) => Ok(None),
+            (Some((_, child)), None) => match child {
+                RuleChild::Identifier(s) => Ok(Some(s)),
+                _ => Err(CstError::UnexpectedChildType { label: "name" }),
+            },
+            _ => Err(CstError::ChildCount {
+                label: "name",
+                expected: "0 or 1",
+                found: self.children.iter()
+                    .filter(|(lbl, _)| *lbl == Some(RuleLabel::Name))
+                    .count(),
+            }),
+        }
+    }
+
+    /// Append a child with label `name`, accepting `Identifier` or `Shared<Identifier>`.
+    pub fn append_name(&mut self, child: impl Into<Shared<Identifier>>) {
+        self.children.push((Some(RuleLabel::Name), RuleChild::Identifier(child.into())));
+    }
+
+    /// Append multiple children with label `name`.
+    pub fn extend_name(&mut self, children: impl IntoIterator<Item = impl Into<Shared<Identifier>>>) {
+        self.children.extend(children.into_iter().map(|c| (Some(RuleLabel::Name), RuleChild::Identifier(c.into()))));
     }
 }
 
@@ -868,7 +1168,7 @@ impl PyRule {
     #[classattr]
     #[allow(non_snake_case)]
     fn Label(py: Python<'_>) -> PyResult<PyObject> {
-        Ok(Rule_Label::type_object(py).into_any().unbind())
+        Ok(RuleLabel::type_object(py).into_any().unbind())
     }
 
     #[getter]
@@ -899,7 +1199,7 @@ impl PyRule {
         let native_label = match label {
             None => None,
             Some(lbl) => {
-                if let Ok(native_lbl) = lbl.bind(py).extract::<Rule_Label>() {
+                if let Ok(native_lbl) = lbl.bind(py).extract::<RuleLabel>() {
                     Some(native_lbl)
                 } else {
                     return Err(PyTypeError::new_err(format!(
@@ -924,7 +1224,7 @@ impl PyRule {
         let native_label = match label {
             None => None,
             Some(lbl) => {
-                if let Ok(native_lbl) = lbl.bind(py).extract::<Rule_Label>() {
+                if let Ok(native_lbl) = lbl.bind(py).extract::<RuleLabel>() {
                     Some(native_lbl)
                 } else {
                     return Err(PyTypeError::new_err(format!(
@@ -962,6 +1262,9 @@ impl PyRule {
     }
 
     fn child(&self, py: Python<'_>) -> PyResult<PyObject> {
+        // TODO(rust-cst-accessor-clone-efficiency): clones the full children Vec
+        // before checking len. Could check len under the read guard and only clone
+        // the single needed entry, avoiding O(total-children) allocation on the error path.
         let snapshot: Vec<_> = {
             let guard = self.inner.read();
             guard.children.clone()
@@ -984,7 +1287,7 @@ impl PyRule {
     fn append_alternatives(&self, py: Python<'_>, child: &Bound<'_, PyAny>) -> PyResult<()> {
         let span_type = get_span_type(py)?;
         let native_child = RuleChild::extract_from_pyobject(py, child, &span_type)?;
-        self.inner.write().children.push((Some(Rule_Label::Alternatives), native_child));
+        self.inner.write().children.push((Some(RuleLabel::Alternatives), native_child));
         Ok(())
     }
 
@@ -994,20 +1297,23 @@ impl PyRule {
         for child_result in iter {
             let child = child_result?;
             let native_child = RuleChild::extract_from_pyobject(py, &child, &span_type)?;
-            let entry = (Some(Rule_Label::Alternatives), native_child);
+            let entry = (Some(RuleLabel::Alternatives), native_child);
             self.inner.write().children.push(entry);
         }
         Ok(())
     }
 
     fn children_alternatives(&self, py: Python<'_>) -> PyResult<Py<PyList>> {
+        // TODO(rust-cst-accessor-clone-efficiency): clones full Vec then filters outside the guard.
+        // Could filter inside the read guard (clone only matching entries) to avoid
+        // O(total-children) Arc clones for accessors that match a small subset.
         let snapshot: Vec<_> = {
             let guard = self.inner.read();
             guard.children.clone()
         };
         let result = PyList::empty(py);
         for (lbl, child) in &snapshot {
-            if *lbl == Some(Rule_Label::Alternatives) {
+            if *lbl == Some(RuleLabel::Alternatives) {
                 result.append(child.to_pyobject(py)?)?;
             }
         }
@@ -1015,6 +1321,7 @@ impl PyRule {
     }
 
     fn child_alternatives(&self, py: Python<'_>) -> PyResult<PyObject> {
+        // TODO(rust-cst-accessor-clone-efficiency): see children_alternatives above.
         let snapshot: Vec<_> = {
             let guard = self.inner.read();
             guard.children.clone()
@@ -1022,7 +1329,7 @@ impl PyRule {
         let mut found: Option<PyObject> = None;
         let mut count = 0usize;
         for (lbl, child) in &snapshot {
-            if *lbl == Some(Rule_Label::Alternatives) {
+            if *lbl == Some(RuleLabel::Alternatives) {
                 count += 1;
                 if count == 1 {
                     found = Some(child.to_pyobject(py)?);
@@ -1038,6 +1345,7 @@ impl PyRule {
     }
 
     fn maybe_alternatives(&self, py: Python<'_>) -> PyResult<Option<PyObject>> {
+        // TODO(rust-cst-accessor-clone-efficiency): see children_alternatives above.
         let snapshot: Vec<_> = {
             let guard = self.inner.read();
             guard.children.clone()
@@ -1045,7 +1353,7 @@ impl PyRule {
         let mut found: Option<PyObject> = None;
         let mut count = 0usize;
         for (lbl, child) in &snapshot {
-            if *lbl == Some(Rule_Label::Alternatives) {
+            if *lbl == Some(RuleLabel::Alternatives) {
                 count += 1;
                 if count == 1 {
                     found = Some(child.to_pyobject(py)?);
@@ -1063,7 +1371,7 @@ impl PyRule {
     fn append_name(&self, py: Python<'_>, child: &Bound<'_, PyAny>) -> PyResult<()> {
         let span_type = get_span_type(py)?;
         let native_child = RuleChild::extract_from_pyobject(py, child, &span_type)?;
-        self.inner.write().children.push((Some(Rule_Label::Name), native_child));
+        self.inner.write().children.push((Some(RuleLabel::Name), native_child));
         Ok(())
     }
 
@@ -1073,20 +1381,23 @@ impl PyRule {
         for child_result in iter {
             let child = child_result?;
             let native_child = RuleChild::extract_from_pyobject(py, &child, &span_type)?;
-            let entry = (Some(Rule_Label::Name), native_child);
+            let entry = (Some(RuleLabel::Name), native_child);
             self.inner.write().children.push(entry);
         }
         Ok(())
     }
 
     fn children_name(&self, py: Python<'_>) -> PyResult<Py<PyList>> {
+        // TODO(rust-cst-accessor-clone-efficiency): clones full Vec then filters outside the guard.
+        // Could filter inside the read guard (clone only matching entries) to avoid
+        // O(total-children) Arc clones for accessors that match a small subset.
         let snapshot: Vec<_> = {
             let guard = self.inner.read();
             guard.children.clone()
         };
         let result = PyList::empty(py);
         for (lbl, child) in &snapshot {
-            if *lbl == Some(Rule_Label::Name) {
+            if *lbl == Some(RuleLabel::Name) {
                 result.append(child.to_pyobject(py)?)?;
             }
         }
@@ -1094,6 +1405,7 @@ impl PyRule {
     }
 
     fn child_name(&self, py: Python<'_>) -> PyResult<PyObject> {
+        // TODO(rust-cst-accessor-clone-efficiency): see children_name above.
         let snapshot: Vec<_> = {
             let guard = self.inner.read();
             guard.children.clone()
@@ -1101,7 +1413,7 @@ impl PyRule {
         let mut found: Option<PyObject> = None;
         let mut count = 0usize;
         for (lbl, child) in &snapshot {
-            if *lbl == Some(Rule_Label::Name) {
+            if *lbl == Some(RuleLabel::Name) {
                 count += 1;
                 if count == 1 {
                     found = Some(child.to_pyobject(py)?);
@@ -1117,6 +1429,7 @@ impl PyRule {
     }
 
     fn maybe_name(&self, py: Python<'_>) -> PyResult<Option<PyObject>> {
+        // TODO(rust-cst-accessor-clone-efficiency): see children_name above.
         let snapshot: Vec<_> = {
             let guard = self.inner.read();
             guard.children.clone()
@@ -1124,7 +1437,7 @@ impl PyRule {
         let mut found: Option<PyObject> = None;
         let mut count = 0usize;
         for (lbl, child) in &snapshot {
-            if *lbl == Some(Rule_Label::Name) {
+            if *lbl == Some(RuleLabel::Name) {
                 count += 1;
                 if count == 1 {
                     found = Some(child.to_pyobject(py)?);
@@ -1166,31 +1479,33 @@ impl PyRule {
 }
 
 // ───────────────────────────────────────────────────────────────────────────
-// Alternatives_Label
+// AlternativesLabel
 // ───────────────────────────────────────────────────────────────────────────
 
-#[allow(non_camel_case_types)]
+/// Label discriminant enum for children of this node type.
+///
+/// Python-visible name is `Alternatives_Label` (preserved for compatibility).
+/// Rust consumers use the CamelCase `AlternativesLabel` name.
 #[cfg(feature = "python")]
 #[pyclass(frozen, name = "Alternatives_Label")]
-#[derive(Clone, PartialEq, Eq, Hash)]
-pub enum Alternatives_Label {
+#[derive(Clone, Debug, PartialEq, Eq, Hash)]
+pub enum AlternativesLabel {
     #[pyo3(name = "ITEMS")]
     Items,
 }
 
-#[allow(non_camel_case_types)]
 #[cfg(not(feature = "python"))]
-#[derive(Clone, PartialEq, Eq, Hash)]
-pub enum Alternatives_Label {
+#[derive(Clone, Debug, PartialEq, Eq, Hash)]
+pub enum AlternativesLabel {
     Items,
 }
 
 #[cfg(feature = "python")]
 #[pymethods]
-impl Alternatives_Label {
+impl AlternativesLabel {
     fn __repr__(&self) -> &'static str {
         match self {
-            Alternatives_Label::Items => "Alternatives.Label.ITEMS",
+            AlternativesLabel::Items => "Alternatives.Label.ITEMS",
         }
     }
 
@@ -1200,7 +1515,7 @@ impl Alternatives_Label {
     }
 
     fn __eq__(&self, py: Python<'_>, other: &Bound<'_, PyAny>) -> PyResult<PyObject> {
-        if let Ok(other_kind) = other.extract::<Alternatives_Label>() {
+        if let Ok(other_kind) = other.extract::<AlternativesLabel>() {
             return Ok((self == &other_kind).into_pyobject(py)?.to_owned().unbind().into_any());
         }
         if let Ok(cn) = other.getattr(pyo3::intern!(py, "_fltk_canonical_name")) {
@@ -1218,9 +1533,11 @@ impl Alternatives_Label {
     }
 }
 
-// AlternativesChild — child value enum for Alternatives
-// Node-typed variants hold Shared<T> (Arc<RwLock<T>>); Clone is shallow.
-#[derive(Clone)]
+/// Child value enum for `Alternatives` nodes.
+///
+/// Node-typed variants hold `Shared<T>` (`Arc<RwLock<T>>`); `Clone` is shallow
+/// (increments the reference count, does not copy the node).
+#[derive(Clone, Debug)]
 pub enum AlternativesChild {
     Items(Shared<Items>),
     Trivia(Shared<Trivia>),
@@ -1297,14 +1614,13 @@ impl AlternativesChild {
 // Alternatives
 // ───────────────────────────────────────────────────────────────────────────
 
-/// CST data struct for `Alternatives`. Node-typed children are [`Shared<T>`] —
-/// see [`fltk_cst_core::Shared`] for clone/equality/reference semantics.
-#[derive(Clone)]
+/// CST data struct for `Alternatives`. See [`fltk_cst_core::Shared`] for clone/equality/reference semantics.
+#[derive(Clone, Debug)]
 pub struct Alternatives {
     // Not pub: use span() / children() / push_child() — the stable accessor API.
     // Direct field access bypasses any future validation logic on setters.
     span: Span,
-    children: Vec<(Option<Alternatives_Label>, AlternativesChild)>,
+    children: Vec<(Option<AlternativesLabel>, AlternativesChild)>,
 }
 
 impl PartialEq for Alternatives {
@@ -1314,8 +1630,7 @@ impl PartialEq for Alternatives {
 }
 
 impl Alternatives {
-    /// Construct a node with the given span and no children.
-    /// GIL-free.
+    /// Construct a node with the given span and no children. GIL-free.
     pub fn new(span: Span) -> Self {
         Alternatives {
             span,
@@ -1323,14 +1638,14 @@ impl Alternatives {
         }
     }
 
-    /// Return a reference to the stored `Span`.
-    pub fn span(&self) -> &Span {
-        &self.span
+    /// Return the [`NodeKind`] discriminant for this node type.
+    pub fn kind(&self) -> NodeKind {
+        NodeKind::Alternatives
     }
 
-    /// Return a slice of the children.
-    pub fn children(&self) -> &[(Option<Alternatives_Label>, AlternativesChild)] {
-        self.children.as_slice()
+    /// Return a reference to the stored [`Span`].
+    pub fn span(&self) -> &Span {
+        &self.span
     }
 
     /// Replace the node's span.
@@ -1338,9 +1653,116 @@ impl Alternatives {
         self.span = span;
     }
 
+    /// Return a slice of all children (unfiltered).
+    ///
+    /// Each entry is `(label, child)`. Use the per-label accessors
+    /// (`children_<lbl>`, `child_<lbl>`, `maybe_<lbl>`) for type-safe access.
+    pub fn children(&self) -> &[(Option<AlternativesLabel>, AlternativesChild)] {
+        self.children.as_slice()
+    }
+
     /// Push a child onto the children `Vec`.
-    pub fn push_child(&mut self, label: Option<Alternatives_Label>, child: AlternativesChild) {
+    ///
+    /// No type-checking is performed: any child variant may be stored under
+    /// any label. Per-label typed mutators (`append_<lbl>`, `extend_<lbl>`)
+    /// provide type-constrained alternatives.
+    pub fn push_child(&mut self, label: Option<AlternativesLabel>, child: AlternativesChild) {
         self.children.push((label, child));
+    }
+
+    /// Return the single child (any label), or `Err` if there is not exactly one.
+    ///
+    /// Mirrors the Python `child()` method: count violation → `CstError::ChildCount`.
+    pub fn child(&self) -> Result<&(Option<AlternativesLabel>, AlternativesChild), CstError> {
+        match self.children.as_slice() {
+            [single] => Ok(single),
+            slice => Err(CstError::ChildCount {
+                label: "<any>",
+                expected: "1",
+                found: slice.len(),
+            }),
+        }
+    }
+
+    /// Copy all children from `other` into `self`, sharing the `Shared<T>` arcs.
+    ///
+    /// Children are appended (Arc reference-count bumps, not deep copies),
+    /// matching the Python backend's reference-copy behavior. Labels are preserved.
+    ///
+    /// The borrow checker prevents `self.extend_children(self)` at the data-struct
+    /// level (`&mut` + `&` of the same value don't coexist). For self-extend from
+    /// Python, the handle pymethod handles it via snapshotting.
+    pub fn extend_children(&mut self, other: &Self) {
+        self.children.extend(other.children.iter().cloned());
+    }
+
+    /// Return an iterator over `Shared<Items>` children labelled `items`.
+    ///
+    /// Off-type variants stored under the `items` label are silently skipped.
+    /// Use `children()` (the untyped slice) for a lossless view.
+    pub fn children_items(&self) -> impl Iterator<Item = &Shared<Items>> + '_ {
+        self.children.iter()
+            .filter(|(lbl, _)| *lbl == Some(AlternativesLabel::Items))
+            .filter_map(|(_, child)| match child {
+                AlternativesChild::Items(s) => Some(s),
+                _ => None,
+            })
+    }
+
+    /// Return the single child labelled `items`, or `Err` if not exactly one.
+    ///
+    /// Count is checked by label match first (`CstError::ChildCount`); if the
+    /// count is valid and the surviving child has the wrong variant type,
+    /// `CstError::UnexpectedChildType` is returned (single-typed labels only).
+    pub fn child_items(&self) -> Result<&Shared<Items>, CstError> {
+        let mut it = self.children.iter()
+            .filter(|(lbl, _)| *lbl == Some(AlternativesLabel::Items));
+        match (it.next(), it.next()) {
+            (Some((_, child)), None) => match child {
+                AlternativesChild::Items(s) => Ok(s),
+                _ => Err(CstError::UnexpectedChildType { label: "items" }),
+            },
+            _ => Err(CstError::ChildCount {
+                label: "items",
+                expected: "1",
+                found: self.children.iter()
+                    .filter(|(lbl, _)| *lbl == Some(AlternativesLabel::Items))
+                    .count(),
+            }),
+        }
+    }
+
+    /// Return the optional child labelled `items`, or `Err` if more than one.
+    ///
+    /// Returns `Ok(None)` for zero, `Ok(Some(...))` for one,
+    /// `Err(CstError::ChildCount)` for two or more.
+    pub fn maybe_items(&self) -> Result<Option<&Shared<Items>>, CstError> {
+        let mut it = self.children.iter()
+            .filter(|(lbl, _)| *lbl == Some(AlternativesLabel::Items));
+        match (it.next(), it.next()) {
+            (None, _) => Ok(None),
+            (Some((_, child)), None) => match child {
+                AlternativesChild::Items(s) => Ok(Some(s)),
+                _ => Err(CstError::UnexpectedChildType { label: "items" }),
+            },
+            _ => Err(CstError::ChildCount {
+                label: "items",
+                expected: "0 or 1",
+                found: self.children.iter()
+                    .filter(|(lbl, _)| *lbl == Some(AlternativesLabel::Items))
+                    .count(),
+            }),
+        }
+    }
+
+    /// Append a child with label `items`, accepting `Items` or `Shared<Items>`.
+    pub fn append_items(&mut self, child: impl Into<Shared<Items>>) {
+        self.children.push((Some(AlternativesLabel::Items), AlternativesChild::Items(child.into())));
+    }
+
+    /// Append multiple children with label `items`.
+    pub fn extend_items(&mut self, children: impl IntoIterator<Item = impl Into<Shared<Items>>>) {
+        self.children.extend(children.into_iter().map(|c| (Some(AlternativesLabel::Items), AlternativesChild::Items(c.into()))));
     }
 }
 
@@ -1419,7 +1841,7 @@ impl PyAlternatives {
     #[classattr]
     #[allow(non_snake_case)]
     fn Label(py: Python<'_>) -> PyResult<PyObject> {
-        Ok(Alternatives_Label::type_object(py).into_any().unbind())
+        Ok(AlternativesLabel::type_object(py).into_any().unbind())
     }
 
     #[getter]
@@ -1450,7 +1872,7 @@ impl PyAlternatives {
         let native_label = match label {
             None => None,
             Some(lbl) => {
-                if let Ok(native_lbl) = lbl.bind(py).extract::<Alternatives_Label>() {
+                if let Ok(native_lbl) = lbl.bind(py).extract::<AlternativesLabel>() {
                     Some(native_lbl)
                 } else {
                     return Err(PyTypeError::new_err(format!(
@@ -1475,7 +1897,7 @@ impl PyAlternatives {
         let native_label = match label {
             None => None,
             Some(lbl) => {
-                if let Ok(native_lbl) = lbl.bind(py).extract::<Alternatives_Label>() {
+                if let Ok(native_lbl) = lbl.bind(py).extract::<AlternativesLabel>() {
                     Some(native_lbl)
                 } else {
                     return Err(PyTypeError::new_err(format!(
@@ -1513,6 +1935,9 @@ impl PyAlternatives {
     }
 
     fn child(&self, py: Python<'_>) -> PyResult<PyObject> {
+        // TODO(rust-cst-accessor-clone-efficiency): clones the full children Vec
+        // before checking len. Could check len under the read guard and only clone
+        // the single needed entry, avoiding O(total-children) allocation on the error path.
         let snapshot: Vec<_> = {
             let guard = self.inner.read();
             guard.children.clone()
@@ -1535,7 +1960,7 @@ impl PyAlternatives {
     fn append_items(&self, py: Python<'_>, child: &Bound<'_, PyAny>) -> PyResult<()> {
         let span_type = get_span_type(py)?;
         let native_child = AlternativesChild::extract_from_pyobject(py, child, &span_type)?;
-        self.inner.write().children.push((Some(Alternatives_Label::Items), native_child));
+        self.inner.write().children.push((Some(AlternativesLabel::Items), native_child));
         Ok(())
     }
 
@@ -1545,20 +1970,23 @@ impl PyAlternatives {
         for child_result in iter {
             let child = child_result?;
             let native_child = AlternativesChild::extract_from_pyobject(py, &child, &span_type)?;
-            let entry = (Some(Alternatives_Label::Items), native_child);
+            let entry = (Some(AlternativesLabel::Items), native_child);
             self.inner.write().children.push(entry);
         }
         Ok(())
     }
 
     fn children_items(&self, py: Python<'_>) -> PyResult<Py<PyList>> {
+        // TODO(rust-cst-accessor-clone-efficiency): clones full Vec then filters outside the guard.
+        // Could filter inside the read guard (clone only matching entries) to avoid
+        // O(total-children) Arc clones for accessors that match a small subset.
         let snapshot: Vec<_> = {
             let guard = self.inner.read();
             guard.children.clone()
         };
         let result = PyList::empty(py);
         for (lbl, child) in &snapshot {
-            if *lbl == Some(Alternatives_Label::Items) {
+            if *lbl == Some(AlternativesLabel::Items) {
                 result.append(child.to_pyobject(py)?)?;
             }
         }
@@ -1566,6 +1994,7 @@ impl PyAlternatives {
     }
 
     fn child_items(&self, py: Python<'_>) -> PyResult<PyObject> {
+        // TODO(rust-cst-accessor-clone-efficiency): see children_items above.
         let snapshot: Vec<_> = {
             let guard = self.inner.read();
             guard.children.clone()
@@ -1573,7 +2002,7 @@ impl PyAlternatives {
         let mut found: Option<PyObject> = None;
         let mut count = 0usize;
         for (lbl, child) in &snapshot {
-            if *lbl == Some(Alternatives_Label::Items) {
+            if *lbl == Some(AlternativesLabel::Items) {
                 count += 1;
                 if count == 1 {
                     found = Some(child.to_pyobject(py)?);
@@ -1589,6 +2018,7 @@ impl PyAlternatives {
     }
 
     fn maybe_items(&self, py: Python<'_>) -> PyResult<Option<PyObject>> {
+        // TODO(rust-cst-accessor-clone-efficiency): see children_items above.
         let snapshot: Vec<_> = {
             let guard = self.inner.read();
             guard.children.clone()
@@ -1596,7 +2026,7 @@ impl PyAlternatives {
         let mut found: Option<PyObject> = None;
         let mut count = 0usize;
         for (lbl, child) in &snapshot {
-            if *lbl == Some(Alternatives_Label::Items) {
+            if *lbl == Some(AlternativesLabel::Items) {
                 count += 1;
                 if count == 1 {
                     found = Some(child.to_pyobject(py)?);
@@ -1638,14 +2068,17 @@ impl PyAlternatives {
 }
 
 // ───────────────────────────────────────────────────────────────────────────
-// Items_Label
+// ItemsLabel
 // ───────────────────────────────────────────────────────────────────────────
 
-#[allow(non_camel_case_types)]
+/// Label discriminant enum for children of this node type.
+///
+/// Python-visible name is `Items_Label` (preserved for compatibility).
+/// Rust consumers use the CamelCase `ItemsLabel` name.
 #[cfg(feature = "python")]
 #[pyclass(frozen, name = "Items_Label")]
-#[derive(Clone, PartialEq, Eq, Hash)]
-pub enum Items_Label {
+#[derive(Clone, Debug, PartialEq, Eq, Hash)]
+pub enum ItemsLabel {
     #[pyo3(name = "ITEM")]
     Item,
     #[pyo3(name = "NO_WS")]
@@ -1656,10 +2089,9 @@ pub enum Items_Label {
     WsRequired,
 }
 
-#[allow(non_camel_case_types)]
 #[cfg(not(feature = "python"))]
-#[derive(Clone, PartialEq, Eq, Hash)]
-pub enum Items_Label {
+#[derive(Clone, Debug, PartialEq, Eq, Hash)]
+pub enum ItemsLabel {
     Item,
     NoWs,
     WsAllowed,
@@ -1668,13 +2100,13 @@ pub enum Items_Label {
 
 #[cfg(feature = "python")]
 #[pymethods]
-impl Items_Label {
+impl ItemsLabel {
     fn __repr__(&self) -> &'static str {
         match self {
-            Items_Label::Item => "Items.Label.ITEM",
-            Items_Label::NoWs => "Items.Label.NO_WS",
-            Items_Label::WsAllowed => "Items.Label.WS_ALLOWED",
-            Items_Label::WsRequired => "Items.Label.WS_REQUIRED",
+            ItemsLabel::Item => "Items.Label.ITEM",
+            ItemsLabel::NoWs => "Items.Label.NO_WS",
+            ItemsLabel::WsAllowed => "Items.Label.WS_ALLOWED",
+            ItemsLabel::WsRequired => "Items.Label.WS_REQUIRED",
         }
     }
 
@@ -1684,7 +2116,7 @@ impl Items_Label {
     }
 
     fn __eq__(&self, py: Python<'_>, other: &Bound<'_, PyAny>) -> PyResult<PyObject> {
-        if let Ok(other_kind) = other.extract::<Items_Label>() {
+        if let Ok(other_kind) = other.extract::<ItemsLabel>() {
             return Ok((self == &other_kind).into_pyobject(py)?.to_owned().unbind().into_any());
         }
         if let Ok(cn) = other.getattr(pyo3::intern!(py, "_fltk_canonical_name")) {
@@ -1702,9 +2134,11 @@ impl Items_Label {
     }
 }
 
-// ItemsChild — child value enum for Items
-// Node-typed variants hold Shared<T> (Arc<RwLock<T>>); Clone is shallow.
-#[derive(Clone)]
+/// Child value enum for `Items` nodes.
+///
+/// Node-typed variants hold `Shared<T>` (`Arc<RwLock<T>>`); `Clone` is shallow
+/// (increments the reference count, does not copy the node).
+#[derive(Clone, Debug)]
 pub enum ItemsChild {
     Span(Span),
     Item(Shared<Item>),
@@ -1790,14 +2224,13 @@ impl ItemsChild {
 // Items
 // ───────────────────────────────────────────────────────────────────────────
 
-/// CST data struct for `Items`. Node-typed children are [`Shared<T>`] —
-/// see [`fltk_cst_core::Shared`] for clone/equality/reference semantics.
-#[derive(Clone)]
+/// CST data struct for `Items`. See [`fltk_cst_core::Shared`] for clone/equality/reference semantics.
+#[derive(Clone, Debug)]
 pub struct Items {
     // Not pub: use span() / children() / push_child() — the stable accessor API.
     // Direct field access bypasses any future validation logic on setters.
     span: Span,
-    children: Vec<(Option<Items_Label>, ItemsChild)>,
+    children: Vec<(Option<ItemsLabel>, ItemsChild)>,
 }
 
 impl PartialEq for Items {
@@ -1807,8 +2240,7 @@ impl PartialEq for Items {
 }
 
 impl Items {
-    /// Construct a node with the given span and no children.
-    /// GIL-free.
+    /// Construct a node with the given span and no children. GIL-free.
     pub fn new(span: Span) -> Self {
         Items {
             span,
@@ -1816,14 +2248,14 @@ impl Items {
         }
     }
 
-    /// Return a reference to the stored `Span`.
-    pub fn span(&self) -> &Span {
-        &self.span
+    /// Return the [`NodeKind`] discriminant for this node type.
+    pub fn kind(&self) -> NodeKind {
+        NodeKind::Items
     }
 
-    /// Return a slice of the children.
-    pub fn children(&self) -> &[(Option<Items_Label>, ItemsChild)] {
-        self.children.as_slice()
+    /// Return a reference to the stored [`Span`].
+    pub fn span(&self) -> &Span {
+        &self.span
     }
 
     /// Replace the node's span.
@@ -1831,9 +2263,323 @@ impl Items {
         self.span = span;
     }
 
+    /// Return a slice of all children (unfiltered).
+    ///
+    /// Each entry is `(label, child)`. Use the per-label accessors
+    /// (`children_<lbl>`, `child_<lbl>`, `maybe_<lbl>`) for type-safe access.
+    pub fn children(&self) -> &[(Option<ItemsLabel>, ItemsChild)] {
+        self.children.as_slice()
+    }
+
     /// Push a child onto the children `Vec`.
-    pub fn push_child(&mut self, label: Option<Items_Label>, child: ItemsChild) {
+    ///
+    /// No type-checking is performed: any child variant may be stored under
+    /// any label. Per-label typed mutators (`append_<lbl>`, `extend_<lbl>`)
+    /// provide type-constrained alternatives.
+    pub fn push_child(&mut self, label: Option<ItemsLabel>, child: ItemsChild) {
         self.children.push((label, child));
+    }
+
+    /// Return the single child (any label), or `Err` if there is not exactly one.
+    ///
+    /// Mirrors the Python `child()` method: count violation → `CstError::ChildCount`.
+    pub fn child(&self) -> Result<&(Option<ItemsLabel>, ItemsChild), CstError> {
+        match self.children.as_slice() {
+            [single] => Ok(single),
+            slice => Err(CstError::ChildCount {
+                label: "<any>",
+                expected: "1",
+                found: slice.len(),
+            }),
+        }
+    }
+
+    /// Copy all children from `other` into `self`, sharing the `Shared<T>` arcs.
+    ///
+    /// Children are appended (Arc reference-count bumps, not deep copies),
+    /// matching the Python backend's reference-copy behavior. Labels are preserved.
+    ///
+    /// The borrow checker prevents `self.extend_children(self)` at the data-struct
+    /// level (`&mut` + `&` of the same value don't coexist). For self-extend from
+    /// Python, the handle pymethod handles it via snapshotting.
+    pub fn extend_children(&mut self, other: &Self) {
+        self.children.extend(other.children.iter().cloned());
+    }
+
+    /// Return an iterator over `Shared<Item>` children labelled `item`.
+    ///
+    /// Off-type variants stored under the `item` label are silently skipped.
+    /// Use `children()` (the untyped slice) for a lossless view.
+    pub fn children_item(&self) -> impl Iterator<Item = &Shared<Item>> + '_ {
+        self.children.iter()
+            .filter(|(lbl, _)| *lbl == Some(ItemsLabel::Item))
+            .filter_map(|(_, child)| match child {
+                ItemsChild::Item(s) => Some(s),
+                _ => None,
+            })
+    }
+
+    /// Return the single child labelled `item`, or `Err` if not exactly one.
+    ///
+    /// Count is checked by label match first (`CstError::ChildCount`); if the
+    /// count is valid and the surviving child has the wrong variant type,
+    /// `CstError::UnexpectedChildType` is returned (single-typed labels only).
+    pub fn child_item(&self) -> Result<&Shared<Item>, CstError> {
+        let mut it = self.children.iter()
+            .filter(|(lbl, _)| *lbl == Some(ItemsLabel::Item));
+        match (it.next(), it.next()) {
+            (Some((_, child)), None) => match child {
+                ItemsChild::Item(s) => Ok(s),
+                _ => Err(CstError::UnexpectedChildType { label: "item" }),
+            },
+            _ => Err(CstError::ChildCount {
+                label: "item",
+                expected: "1",
+                found: self.children.iter()
+                    .filter(|(lbl, _)| *lbl == Some(ItemsLabel::Item))
+                    .count(),
+            }),
+        }
+    }
+
+    /// Return the optional child labelled `item`, or `Err` if more than one.
+    ///
+    /// Returns `Ok(None)` for zero, `Ok(Some(...))` for one,
+    /// `Err(CstError::ChildCount)` for two or more.
+    pub fn maybe_item(&self) -> Result<Option<&Shared<Item>>, CstError> {
+        let mut it = self.children.iter()
+            .filter(|(lbl, _)| *lbl == Some(ItemsLabel::Item));
+        match (it.next(), it.next()) {
+            (None, _) => Ok(None),
+            (Some((_, child)), None) => match child {
+                ItemsChild::Item(s) => Ok(Some(s)),
+                _ => Err(CstError::UnexpectedChildType { label: "item" }),
+            },
+            _ => Err(CstError::ChildCount {
+                label: "item",
+                expected: "0 or 1",
+                found: self.children.iter()
+                    .filter(|(lbl, _)| *lbl == Some(ItemsLabel::Item))
+                    .count(),
+            }),
+        }
+    }
+
+    /// Append a child with label `item`, accepting `Item` or `Shared<Item>`.
+    pub fn append_item(&mut self, child: impl Into<Shared<Item>>) {
+        self.children.push((Some(ItemsLabel::Item), ItemsChild::Item(child.into())));
+    }
+
+    /// Append multiple children with label `item`.
+    pub fn extend_item(&mut self, children: impl IntoIterator<Item = impl Into<Shared<Item>>>) {
+        self.children.extend(children.into_iter().map(|c| (Some(ItemsLabel::Item), ItemsChild::Item(c.into()))));
+    }
+
+    /// Return an iterator over `Span` children labelled `no_ws`.
+    ///
+    /// Off-type variants stored under the `no_ws` label are silently skipped.
+    /// Use `children()` (the untyped slice) for a lossless view.
+    pub fn children_no_ws(&self) -> impl Iterator<Item = &Span> + '_ {
+        self.children.iter()
+            .filter(|(lbl, _)| *lbl == Some(ItemsLabel::NoWs))
+            .filter_map(|(_, child)| match child {
+                ItemsChild::Span(s) => Some(s),
+                _ => None,
+            })
+    }
+
+    /// Return the single child labelled `no_ws`, or `Err` if not exactly one.
+    ///
+    /// Count is checked by label match first (`CstError::ChildCount`); if the
+    /// count is valid and the surviving child has the wrong variant type,
+    /// `CstError::UnexpectedChildType` is returned (single-typed labels only).
+    pub fn child_no_ws(&self) -> Result<&Span, CstError> {
+        let mut it = self.children.iter()
+            .filter(|(lbl, _)| *lbl == Some(ItemsLabel::NoWs));
+        match (it.next(), it.next()) {
+            (Some((_, child)), None) => match child {
+                ItemsChild::Span(s) => Ok(s),
+                _ => Err(CstError::UnexpectedChildType { label: "no_ws" }),
+            },
+            _ => Err(CstError::ChildCount {
+                label: "no_ws",
+                expected: "1",
+                found: self.children.iter()
+                    .filter(|(lbl, _)| *lbl == Some(ItemsLabel::NoWs))
+                    .count(),
+            }),
+        }
+    }
+
+    /// Return the optional child labelled `no_ws`, or `Err` if more than one.
+    ///
+    /// Returns `Ok(None)` for zero, `Ok(Some(...))` for one,
+    /// `Err(CstError::ChildCount)` for two or more.
+    pub fn maybe_no_ws(&self) -> Result<Option<&Span>, CstError> {
+        let mut it = self.children.iter()
+            .filter(|(lbl, _)| *lbl == Some(ItemsLabel::NoWs));
+        match (it.next(), it.next()) {
+            (None, _) => Ok(None),
+            (Some((_, child)), None) => match child {
+                ItemsChild::Span(s) => Ok(Some(s)),
+                _ => Err(CstError::UnexpectedChildType { label: "no_ws" }),
+            },
+            _ => Err(CstError::ChildCount {
+                label: "no_ws",
+                expected: "0 or 1",
+                found: self.children.iter()
+                    .filter(|(lbl, _)| *lbl == Some(ItemsLabel::NoWs))
+                    .count(),
+            }),
+        }
+    }
+
+    /// Append a `Span` child with label `no_ws`.
+    pub fn append_no_ws(&mut self, span: Span) {
+        self.children.push((Some(ItemsLabel::NoWs), ItemsChild::Span(span)));
+    }
+
+    /// Append multiple `Span` children with label `no_ws`.
+    pub fn extend_no_ws(&mut self, spans: impl IntoIterator<Item = Span>) {
+        self.children.extend(spans.into_iter().map(|s| (Some(ItemsLabel::NoWs), ItemsChild::Span(s))));
+    }
+
+    /// Return an iterator over `Span` children labelled `ws_allowed`.
+    ///
+    /// Off-type variants stored under the `ws_allowed` label are silently skipped.
+    /// Use `children()` (the untyped slice) for a lossless view.
+    pub fn children_ws_allowed(&self) -> impl Iterator<Item = &Span> + '_ {
+        self.children.iter()
+            .filter(|(lbl, _)| *lbl == Some(ItemsLabel::WsAllowed))
+            .filter_map(|(_, child)| match child {
+                ItemsChild::Span(s) => Some(s),
+                _ => None,
+            })
+    }
+
+    /// Return the single child labelled `ws_allowed`, or `Err` if not exactly one.
+    ///
+    /// Count is checked by label match first (`CstError::ChildCount`); if the
+    /// count is valid and the surviving child has the wrong variant type,
+    /// `CstError::UnexpectedChildType` is returned (single-typed labels only).
+    pub fn child_ws_allowed(&self) -> Result<&Span, CstError> {
+        let mut it = self.children.iter()
+            .filter(|(lbl, _)| *lbl == Some(ItemsLabel::WsAllowed));
+        match (it.next(), it.next()) {
+            (Some((_, child)), None) => match child {
+                ItemsChild::Span(s) => Ok(s),
+                _ => Err(CstError::UnexpectedChildType { label: "ws_allowed" }),
+            },
+            _ => Err(CstError::ChildCount {
+                label: "ws_allowed",
+                expected: "1",
+                found: self.children.iter()
+                    .filter(|(lbl, _)| *lbl == Some(ItemsLabel::WsAllowed))
+                    .count(),
+            }),
+        }
+    }
+
+    /// Return the optional child labelled `ws_allowed`, or `Err` if more than one.
+    ///
+    /// Returns `Ok(None)` for zero, `Ok(Some(...))` for one,
+    /// `Err(CstError::ChildCount)` for two or more.
+    pub fn maybe_ws_allowed(&self) -> Result<Option<&Span>, CstError> {
+        let mut it = self.children.iter()
+            .filter(|(lbl, _)| *lbl == Some(ItemsLabel::WsAllowed));
+        match (it.next(), it.next()) {
+            (None, _) => Ok(None),
+            (Some((_, child)), None) => match child {
+                ItemsChild::Span(s) => Ok(Some(s)),
+                _ => Err(CstError::UnexpectedChildType { label: "ws_allowed" }),
+            },
+            _ => Err(CstError::ChildCount {
+                label: "ws_allowed",
+                expected: "0 or 1",
+                found: self.children.iter()
+                    .filter(|(lbl, _)| *lbl == Some(ItemsLabel::WsAllowed))
+                    .count(),
+            }),
+        }
+    }
+
+    /// Append a `Span` child with label `ws_allowed`.
+    pub fn append_ws_allowed(&mut self, span: Span) {
+        self.children.push((Some(ItemsLabel::WsAllowed), ItemsChild::Span(span)));
+    }
+
+    /// Append multiple `Span` children with label `ws_allowed`.
+    pub fn extend_ws_allowed(&mut self, spans: impl IntoIterator<Item = Span>) {
+        self.children.extend(spans.into_iter().map(|s| (Some(ItemsLabel::WsAllowed), ItemsChild::Span(s))));
+    }
+
+    /// Return an iterator over `Span` children labelled `ws_required`.
+    ///
+    /// Off-type variants stored under the `ws_required` label are silently skipped.
+    /// Use `children()` (the untyped slice) for a lossless view.
+    pub fn children_ws_required(&self) -> impl Iterator<Item = &Span> + '_ {
+        self.children.iter()
+            .filter(|(lbl, _)| *lbl == Some(ItemsLabel::WsRequired))
+            .filter_map(|(_, child)| match child {
+                ItemsChild::Span(s) => Some(s),
+                _ => None,
+            })
+    }
+
+    /// Return the single child labelled `ws_required`, or `Err` if not exactly one.
+    ///
+    /// Count is checked by label match first (`CstError::ChildCount`); if the
+    /// count is valid and the surviving child has the wrong variant type,
+    /// `CstError::UnexpectedChildType` is returned (single-typed labels only).
+    pub fn child_ws_required(&self) -> Result<&Span, CstError> {
+        let mut it = self.children.iter()
+            .filter(|(lbl, _)| *lbl == Some(ItemsLabel::WsRequired));
+        match (it.next(), it.next()) {
+            (Some((_, child)), None) => match child {
+                ItemsChild::Span(s) => Ok(s),
+                _ => Err(CstError::UnexpectedChildType { label: "ws_required" }),
+            },
+            _ => Err(CstError::ChildCount {
+                label: "ws_required",
+                expected: "1",
+                found: self.children.iter()
+                    .filter(|(lbl, _)| *lbl == Some(ItemsLabel::WsRequired))
+                    .count(),
+            }),
+        }
+    }
+
+    /// Return the optional child labelled `ws_required`, or `Err` if more than one.
+    ///
+    /// Returns `Ok(None)` for zero, `Ok(Some(...))` for one,
+    /// `Err(CstError::ChildCount)` for two or more.
+    pub fn maybe_ws_required(&self) -> Result<Option<&Span>, CstError> {
+        let mut it = self.children.iter()
+            .filter(|(lbl, _)| *lbl == Some(ItemsLabel::WsRequired));
+        match (it.next(), it.next()) {
+            (None, _) => Ok(None),
+            (Some((_, child)), None) => match child {
+                ItemsChild::Span(s) => Ok(Some(s)),
+                _ => Err(CstError::UnexpectedChildType { label: "ws_required" }),
+            },
+            _ => Err(CstError::ChildCount {
+                label: "ws_required",
+                expected: "0 or 1",
+                found: self.children.iter()
+                    .filter(|(lbl, _)| *lbl == Some(ItemsLabel::WsRequired))
+                    .count(),
+            }),
+        }
+    }
+
+    /// Append a `Span` child with label `ws_required`.
+    pub fn append_ws_required(&mut self, span: Span) {
+        self.children.push((Some(ItemsLabel::WsRequired), ItemsChild::Span(span)));
+    }
+
+    /// Append multiple `Span` children with label `ws_required`.
+    pub fn extend_ws_required(&mut self, spans: impl IntoIterator<Item = Span>) {
+        self.children.extend(spans.into_iter().map(|s| (Some(ItemsLabel::WsRequired), ItemsChild::Span(s))));
     }
 }
 
@@ -1912,7 +2658,7 @@ impl PyItems {
     #[classattr]
     #[allow(non_snake_case)]
     fn Label(py: Python<'_>) -> PyResult<PyObject> {
-        Ok(Items_Label::type_object(py).into_any().unbind())
+        Ok(ItemsLabel::type_object(py).into_any().unbind())
     }
 
     #[getter]
@@ -1943,7 +2689,7 @@ impl PyItems {
         let native_label = match label {
             None => None,
             Some(lbl) => {
-                if let Ok(native_lbl) = lbl.bind(py).extract::<Items_Label>() {
+                if let Ok(native_lbl) = lbl.bind(py).extract::<ItemsLabel>() {
                     Some(native_lbl)
                 } else {
                     return Err(PyTypeError::new_err(format!(
@@ -1968,7 +2714,7 @@ impl PyItems {
         let native_label = match label {
             None => None,
             Some(lbl) => {
-                if let Ok(native_lbl) = lbl.bind(py).extract::<Items_Label>() {
+                if let Ok(native_lbl) = lbl.bind(py).extract::<ItemsLabel>() {
                     Some(native_lbl)
                 } else {
                     return Err(PyTypeError::new_err(format!(
@@ -2006,6 +2752,9 @@ impl PyItems {
     }
 
     fn child(&self, py: Python<'_>) -> PyResult<PyObject> {
+        // TODO(rust-cst-accessor-clone-efficiency): clones the full children Vec
+        // before checking len. Could check len under the read guard and only clone
+        // the single needed entry, avoiding O(total-children) allocation on the error path.
         let snapshot: Vec<_> = {
             let guard = self.inner.read();
             guard.children.clone()
@@ -2028,7 +2777,7 @@ impl PyItems {
     fn append_item(&self, py: Python<'_>, child: &Bound<'_, PyAny>) -> PyResult<()> {
         let span_type = get_span_type(py)?;
         let native_child = ItemsChild::extract_from_pyobject(py, child, &span_type)?;
-        self.inner.write().children.push((Some(Items_Label::Item), native_child));
+        self.inner.write().children.push((Some(ItemsLabel::Item), native_child));
         Ok(())
     }
 
@@ -2038,20 +2787,23 @@ impl PyItems {
         for child_result in iter {
             let child = child_result?;
             let native_child = ItemsChild::extract_from_pyobject(py, &child, &span_type)?;
-            let entry = (Some(Items_Label::Item), native_child);
+            let entry = (Some(ItemsLabel::Item), native_child);
             self.inner.write().children.push(entry);
         }
         Ok(())
     }
 
     fn children_item(&self, py: Python<'_>) -> PyResult<Py<PyList>> {
+        // TODO(rust-cst-accessor-clone-efficiency): clones full Vec then filters outside the guard.
+        // Could filter inside the read guard (clone only matching entries) to avoid
+        // O(total-children) Arc clones for accessors that match a small subset.
         let snapshot: Vec<_> = {
             let guard = self.inner.read();
             guard.children.clone()
         };
         let result = PyList::empty(py);
         for (lbl, child) in &snapshot {
-            if *lbl == Some(Items_Label::Item) {
+            if *lbl == Some(ItemsLabel::Item) {
                 result.append(child.to_pyobject(py)?)?;
             }
         }
@@ -2059,6 +2811,7 @@ impl PyItems {
     }
 
     fn child_item(&self, py: Python<'_>) -> PyResult<PyObject> {
+        // TODO(rust-cst-accessor-clone-efficiency): see children_item above.
         let snapshot: Vec<_> = {
             let guard = self.inner.read();
             guard.children.clone()
@@ -2066,7 +2819,7 @@ impl PyItems {
         let mut found: Option<PyObject> = None;
         let mut count = 0usize;
         for (lbl, child) in &snapshot {
-            if *lbl == Some(Items_Label::Item) {
+            if *lbl == Some(ItemsLabel::Item) {
                 count += 1;
                 if count == 1 {
                     found = Some(child.to_pyobject(py)?);
@@ -2082,6 +2835,7 @@ impl PyItems {
     }
 
     fn maybe_item(&self, py: Python<'_>) -> PyResult<Option<PyObject>> {
+        // TODO(rust-cst-accessor-clone-efficiency): see children_item above.
         let snapshot: Vec<_> = {
             let guard = self.inner.read();
             guard.children.clone()
@@ -2089,7 +2843,7 @@ impl PyItems {
         let mut found: Option<PyObject> = None;
         let mut count = 0usize;
         for (lbl, child) in &snapshot {
-            if *lbl == Some(Items_Label::Item) {
+            if *lbl == Some(ItemsLabel::Item) {
                 count += 1;
                 if count == 1 {
                     found = Some(child.to_pyobject(py)?);
@@ -2107,7 +2861,7 @@ impl PyItems {
     fn append_no_ws(&self, py: Python<'_>, child: &Bound<'_, PyAny>) -> PyResult<()> {
         let span_type = get_span_type(py)?;
         let native_child = ItemsChild::extract_from_pyobject(py, child, &span_type)?;
-        self.inner.write().children.push((Some(Items_Label::NoWs), native_child));
+        self.inner.write().children.push((Some(ItemsLabel::NoWs), native_child));
         Ok(())
     }
 
@@ -2117,20 +2871,23 @@ impl PyItems {
         for child_result in iter {
             let child = child_result?;
             let native_child = ItemsChild::extract_from_pyobject(py, &child, &span_type)?;
-            let entry = (Some(Items_Label::NoWs), native_child);
+            let entry = (Some(ItemsLabel::NoWs), native_child);
             self.inner.write().children.push(entry);
         }
         Ok(())
     }
 
     fn children_no_ws(&self, py: Python<'_>) -> PyResult<Py<PyList>> {
+        // TODO(rust-cst-accessor-clone-efficiency): clones full Vec then filters outside the guard.
+        // Could filter inside the read guard (clone only matching entries) to avoid
+        // O(total-children) Arc clones for accessors that match a small subset.
         let snapshot: Vec<_> = {
             let guard = self.inner.read();
             guard.children.clone()
         };
         let result = PyList::empty(py);
         for (lbl, child) in &snapshot {
-            if *lbl == Some(Items_Label::NoWs) {
+            if *lbl == Some(ItemsLabel::NoWs) {
                 result.append(child.to_pyobject(py)?)?;
             }
         }
@@ -2138,6 +2895,7 @@ impl PyItems {
     }
 
     fn child_no_ws(&self, py: Python<'_>) -> PyResult<PyObject> {
+        // TODO(rust-cst-accessor-clone-efficiency): see children_no_ws above.
         let snapshot: Vec<_> = {
             let guard = self.inner.read();
             guard.children.clone()
@@ -2145,7 +2903,7 @@ impl PyItems {
         let mut found: Option<PyObject> = None;
         let mut count = 0usize;
         for (lbl, child) in &snapshot {
-            if *lbl == Some(Items_Label::NoWs) {
+            if *lbl == Some(ItemsLabel::NoWs) {
                 count += 1;
                 if count == 1 {
                     found = Some(child.to_pyobject(py)?);
@@ -2161,6 +2919,7 @@ impl PyItems {
     }
 
     fn maybe_no_ws(&self, py: Python<'_>) -> PyResult<Option<PyObject>> {
+        // TODO(rust-cst-accessor-clone-efficiency): see children_no_ws above.
         let snapshot: Vec<_> = {
             let guard = self.inner.read();
             guard.children.clone()
@@ -2168,7 +2927,7 @@ impl PyItems {
         let mut found: Option<PyObject> = None;
         let mut count = 0usize;
         for (lbl, child) in &snapshot {
-            if *lbl == Some(Items_Label::NoWs) {
+            if *lbl == Some(ItemsLabel::NoWs) {
                 count += 1;
                 if count == 1 {
                     found = Some(child.to_pyobject(py)?);
@@ -2186,7 +2945,7 @@ impl PyItems {
     fn append_ws_allowed(&self, py: Python<'_>, child: &Bound<'_, PyAny>) -> PyResult<()> {
         let span_type = get_span_type(py)?;
         let native_child = ItemsChild::extract_from_pyobject(py, child, &span_type)?;
-        self.inner.write().children.push((Some(Items_Label::WsAllowed), native_child));
+        self.inner.write().children.push((Some(ItemsLabel::WsAllowed), native_child));
         Ok(())
     }
 
@@ -2196,20 +2955,23 @@ impl PyItems {
         for child_result in iter {
             let child = child_result?;
             let native_child = ItemsChild::extract_from_pyobject(py, &child, &span_type)?;
-            let entry = (Some(Items_Label::WsAllowed), native_child);
+            let entry = (Some(ItemsLabel::WsAllowed), native_child);
             self.inner.write().children.push(entry);
         }
         Ok(())
     }
 
     fn children_ws_allowed(&self, py: Python<'_>) -> PyResult<Py<PyList>> {
+        // TODO(rust-cst-accessor-clone-efficiency): clones full Vec then filters outside the guard.
+        // Could filter inside the read guard (clone only matching entries) to avoid
+        // O(total-children) Arc clones for accessors that match a small subset.
         let snapshot: Vec<_> = {
             let guard = self.inner.read();
             guard.children.clone()
         };
         let result = PyList::empty(py);
         for (lbl, child) in &snapshot {
-            if *lbl == Some(Items_Label::WsAllowed) {
+            if *lbl == Some(ItemsLabel::WsAllowed) {
                 result.append(child.to_pyobject(py)?)?;
             }
         }
@@ -2217,6 +2979,7 @@ impl PyItems {
     }
 
     fn child_ws_allowed(&self, py: Python<'_>) -> PyResult<PyObject> {
+        // TODO(rust-cst-accessor-clone-efficiency): see children_ws_allowed above.
         let snapshot: Vec<_> = {
             let guard = self.inner.read();
             guard.children.clone()
@@ -2224,7 +2987,7 @@ impl PyItems {
         let mut found: Option<PyObject> = None;
         let mut count = 0usize;
         for (lbl, child) in &snapshot {
-            if *lbl == Some(Items_Label::WsAllowed) {
+            if *lbl == Some(ItemsLabel::WsAllowed) {
                 count += 1;
                 if count == 1 {
                     found = Some(child.to_pyobject(py)?);
@@ -2240,6 +3003,7 @@ impl PyItems {
     }
 
     fn maybe_ws_allowed(&self, py: Python<'_>) -> PyResult<Option<PyObject>> {
+        // TODO(rust-cst-accessor-clone-efficiency): see children_ws_allowed above.
         let snapshot: Vec<_> = {
             let guard = self.inner.read();
             guard.children.clone()
@@ -2247,7 +3011,7 @@ impl PyItems {
         let mut found: Option<PyObject> = None;
         let mut count = 0usize;
         for (lbl, child) in &snapshot {
-            if *lbl == Some(Items_Label::WsAllowed) {
+            if *lbl == Some(ItemsLabel::WsAllowed) {
                 count += 1;
                 if count == 1 {
                     found = Some(child.to_pyobject(py)?);
@@ -2265,7 +3029,7 @@ impl PyItems {
     fn append_ws_required(&self, py: Python<'_>, child: &Bound<'_, PyAny>) -> PyResult<()> {
         let span_type = get_span_type(py)?;
         let native_child = ItemsChild::extract_from_pyobject(py, child, &span_type)?;
-        self.inner.write().children.push((Some(Items_Label::WsRequired), native_child));
+        self.inner.write().children.push((Some(ItemsLabel::WsRequired), native_child));
         Ok(())
     }
 
@@ -2275,20 +3039,23 @@ impl PyItems {
         for child_result in iter {
             let child = child_result?;
             let native_child = ItemsChild::extract_from_pyobject(py, &child, &span_type)?;
-            let entry = (Some(Items_Label::WsRequired), native_child);
+            let entry = (Some(ItemsLabel::WsRequired), native_child);
             self.inner.write().children.push(entry);
         }
         Ok(())
     }
 
     fn children_ws_required(&self, py: Python<'_>) -> PyResult<Py<PyList>> {
+        // TODO(rust-cst-accessor-clone-efficiency): clones full Vec then filters outside the guard.
+        // Could filter inside the read guard (clone only matching entries) to avoid
+        // O(total-children) Arc clones for accessors that match a small subset.
         let snapshot: Vec<_> = {
             let guard = self.inner.read();
             guard.children.clone()
         };
         let result = PyList::empty(py);
         for (lbl, child) in &snapshot {
-            if *lbl == Some(Items_Label::WsRequired) {
+            if *lbl == Some(ItemsLabel::WsRequired) {
                 result.append(child.to_pyobject(py)?)?;
             }
         }
@@ -2296,6 +3063,7 @@ impl PyItems {
     }
 
     fn child_ws_required(&self, py: Python<'_>) -> PyResult<PyObject> {
+        // TODO(rust-cst-accessor-clone-efficiency): see children_ws_required above.
         let snapshot: Vec<_> = {
             let guard = self.inner.read();
             guard.children.clone()
@@ -2303,7 +3071,7 @@ impl PyItems {
         let mut found: Option<PyObject> = None;
         let mut count = 0usize;
         for (lbl, child) in &snapshot {
-            if *lbl == Some(Items_Label::WsRequired) {
+            if *lbl == Some(ItemsLabel::WsRequired) {
                 count += 1;
                 if count == 1 {
                     found = Some(child.to_pyobject(py)?);
@@ -2319,6 +3087,7 @@ impl PyItems {
     }
 
     fn maybe_ws_required(&self, py: Python<'_>) -> PyResult<Option<PyObject>> {
+        // TODO(rust-cst-accessor-clone-efficiency): see children_ws_required above.
         let snapshot: Vec<_> = {
             let guard = self.inner.read();
             guard.children.clone()
@@ -2326,7 +3095,7 @@ impl PyItems {
         let mut found: Option<PyObject> = None;
         let mut count = 0usize;
         for (lbl, child) in &snapshot {
-            if *lbl == Some(Items_Label::WsRequired) {
+            if *lbl == Some(ItemsLabel::WsRequired) {
                 count += 1;
                 if count == 1 {
                     found = Some(child.to_pyobject(py)?);
@@ -2368,14 +3137,17 @@ impl PyItems {
 }
 
 // ───────────────────────────────────────────────────────────────────────────
-// Item_Label
+// ItemLabel
 // ───────────────────────────────────────────────────────────────────────────
 
-#[allow(non_camel_case_types)]
+/// Label discriminant enum for children of this node type.
+///
+/// Python-visible name is `Item_Label` (preserved for compatibility).
+/// Rust consumers use the CamelCase `ItemLabel` name.
 #[cfg(feature = "python")]
 #[pyclass(frozen, name = "Item_Label")]
-#[derive(Clone, PartialEq, Eq, Hash)]
-pub enum Item_Label {
+#[derive(Clone, Debug, PartialEq, Eq, Hash)]
+pub enum ItemLabel {
     #[pyo3(name = "DISPOSITION")]
     Disposition,
     #[pyo3(name = "LABEL")]
@@ -2386,10 +3158,9 @@ pub enum Item_Label {
     Term,
 }
 
-#[allow(non_camel_case_types)]
 #[cfg(not(feature = "python"))]
-#[derive(Clone, PartialEq, Eq, Hash)]
-pub enum Item_Label {
+#[derive(Clone, Debug, PartialEq, Eq, Hash)]
+pub enum ItemLabel {
     Disposition,
     Label,
     Quantifier,
@@ -2398,13 +3169,13 @@ pub enum Item_Label {
 
 #[cfg(feature = "python")]
 #[pymethods]
-impl Item_Label {
+impl ItemLabel {
     fn __repr__(&self) -> &'static str {
         match self {
-            Item_Label::Disposition => "Item.Label.DISPOSITION",
-            Item_Label::Label => "Item.Label.LABEL",
-            Item_Label::Quantifier => "Item.Label.QUANTIFIER",
-            Item_Label::Term => "Item.Label.TERM",
+            ItemLabel::Disposition => "Item.Label.DISPOSITION",
+            ItemLabel::Label => "Item.Label.LABEL",
+            ItemLabel::Quantifier => "Item.Label.QUANTIFIER",
+            ItemLabel::Term => "Item.Label.TERM",
         }
     }
 
@@ -2414,7 +3185,7 @@ impl Item_Label {
     }
 
     fn __eq__(&self, py: Python<'_>, other: &Bound<'_, PyAny>) -> PyResult<PyObject> {
-        if let Ok(other_kind) = other.extract::<Item_Label>() {
+        if let Ok(other_kind) = other.extract::<ItemLabel>() {
             return Ok((self == &other_kind).into_pyobject(py)?.to_owned().unbind().into_any());
         }
         if let Ok(cn) = other.getattr(pyo3::intern!(py, "_fltk_canonical_name")) {
@@ -2432,9 +3203,11 @@ impl Item_Label {
     }
 }
 
-// ItemChild — child value enum for Item
-// Node-typed variants hold Shared<T> (Arc<RwLock<T>>); Clone is shallow.
-#[derive(Clone)]
+/// Child value enum for `Item` nodes.
+///
+/// Node-typed variants hold `Shared<T>` (`Arc<RwLock<T>>`); `Clone` is shallow
+/// (increments the reference count, does not copy the node).
+#[derive(Clone, Debug)]
 pub enum ItemChild {
     Disposition(Shared<Disposition>),
     Identifier(Shared<Identifier>),
@@ -2574,14 +3347,13 @@ impl ItemChild {
 // Item
 // ───────────────────────────────────────────────────────────────────────────
 
-/// CST data struct for `Item`. Node-typed children are [`Shared<T>`] —
-/// see [`fltk_cst_core::Shared`] for clone/equality/reference semantics.
-#[derive(Clone)]
+/// CST data struct for `Item`. See [`fltk_cst_core::Shared`] for clone/equality/reference semantics.
+#[derive(Clone, Debug)]
 pub struct Item {
     // Not pub: use span() / children() / push_child() — the stable accessor API.
     // Direct field access bypasses any future validation logic on setters.
     span: Span,
-    children: Vec<(Option<Item_Label>, ItemChild)>,
+    children: Vec<(Option<ItemLabel>, ItemChild)>,
 }
 
 impl PartialEq for Item {
@@ -2591,8 +3363,7 @@ impl PartialEq for Item {
 }
 
 impl Item {
-    /// Construct a node with the given span and no children.
-    /// GIL-free.
+    /// Construct a node with the given span and no children. GIL-free.
     pub fn new(span: Span) -> Self {
         Item {
             span,
@@ -2600,14 +3371,14 @@ impl Item {
         }
     }
 
-    /// Return a reference to the stored `Span`.
-    pub fn span(&self) -> &Span {
-        &self.span
+    /// Return the [`NodeKind`] discriminant for this node type.
+    pub fn kind(&self) -> NodeKind {
+        NodeKind::Item
     }
 
-    /// Return a slice of the children.
-    pub fn children(&self) -> &[(Option<Item_Label>, ItemChild)] {
-        self.children.as_slice()
+    /// Return a reference to the stored [`Span`].
+    pub fn span(&self) -> &Span {
+        &self.span
     }
 
     /// Replace the node's span.
@@ -2615,9 +3386,323 @@ impl Item {
         self.span = span;
     }
 
+    /// Return a slice of all children (unfiltered).
+    ///
+    /// Each entry is `(label, child)`. Use the per-label accessors
+    /// (`children_<lbl>`, `child_<lbl>`, `maybe_<lbl>`) for type-safe access.
+    pub fn children(&self) -> &[(Option<ItemLabel>, ItemChild)] {
+        self.children.as_slice()
+    }
+
     /// Push a child onto the children `Vec`.
-    pub fn push_child(&mut self, label: Option<Item_Label>, child: ItemChild) {
+    ///
+    /// No type-checking is performed: any child variant may be stored under
+    /// any label. Per-label typed mutators (`append_<lbl>`, `extend_<lbl>`)
+    /// provide type-constrained alternatives.
+    pub fn push_child(&mut self, label: Option<ItemLabel>, child: ItemChild) {
         self.children.push((label, child));
+    }
+
+    /// Return the single child (any label), or `Err` if there is not exactly one.
+    ///
+    /// Mirrors the Python `child()` method: count violation → `CstError::ChildCount`.
+    pub fn child(&self) -> Result<&(Option<ItemLabel>, ItemChild), CstError> {
+        match self.children.as_slice() {
+            [single] => Ok(single),
+            slice => Err(CstError::ChildCount {
+                label: "<any>",
+                expected: "1",
+                found: slice.len(),
+            }),
+        }
+    }
+
+    /// Copy all children from `other` into `self`, sharing the `Shared<T>` arcs.
+    ///
+    /// Children are appended (Arc reference-count bumps, not deep copies),
+    /// matching the Python backend's reference-copy behavior. Labels are preserved.
+    ///
+    /// The borrow checker prevents `self.extend_children(self)` at the data-struct
+    /// level (`&mut` + `&` of the same value don't coexist). For self-extend from
+    /// Python, the handle pymethod handles it via snapshotting.
+    pub fn extend_children(&mut self, other: &Self) {
+        self.children.extend(other.children.iter().cloned());
+    }
+
+    /// Return an iterator over `Shared<Disposition>` children labelled `disposition`.
+    ///
+    /// Off-type variants stored under the `disposition` label are silently skipped.
+    /// Use `children()` (the untyped slice) for a lossless view.
+    pub fn children_disposition(&self) -> impl Iterator<Item = &Shared<Disposition>> + '_ {
+        self.children.iter()
+            .filter(|(lbl, _)| *lbl == Some(ItemLabel::Disposition))
+            .filter_map(|(_, child)| match child {
+                ItemChild::Disposition(s) => Some(s),
+                _ => None,
+            })
+    }
+
+    /// Return the single child labelled `disposition`, or `Err` if not exactly one.
+    ///
+    /// Count is checked by label match first (`CstError::ChildCount`); if the
+    /// count is valid and the surviving child has the wrong variant type,
+    /// `CstError::UnexpectedChildType` is returned (single-typed labels only).
+    pub fn child_disposition(&self) -> Result<&Shared<Disposition>, CstError> {
+        let mut it = self.children.iter()
+            .filter(|(lbl, _)| *lbl == Some(ItemLabel::Disposition));
+        match (it.next(), it.next()) {
+            (Some((_, child)), None) => match child {
+                ItemChild::Disposition(s) => Ok(s),
+                _ => Err(CstError::UnexpectedChildType { label: "disposition" }),
+            },
+            _ => Err(CstError::ChildCount {
+                label: "disposition",
+                expected: "1",
+                found: self.children.iter()
+                    .filter(|(lbl, _)| *lbl == Some(ItemLabel::Disposition))
+                    .count(),
+            }),
+        }
+    }
+
+    /// Return the optional child labelled `disposition`, or `Err` if more than one.
+    ///
+    /// Returns `Ok(None)` for zero, `Ok(Some(...))` for one,
+    /// `Err(CstError::ChildCount)` for two or more.
+    pub fn maybe_disposition(&self) -> Result<Option<&Shared<Disposition>>, CstError> {
+        let mut it = self.children.iter()
+            .filter(|(lbl, _)| *lbl == Some(ItemLabel::Disposition));
+        match (it.next(), it.next()) {
+            (None, _) => Ok(None),
+            (Some((_, child)), None) => match child {
+                ItemChild::Disposition(s) => Ok(Some(s)),
+                _ => Err(CstError::UnexpectedChildType { label: "disposition" }),
+            },
+            _ => Err(CstError::ChildCount {
+                label: "disposition",
+                expected: "0 or 1",
+                found: self.children.iter()
+                    .filter(|(lbl, _)| *lbl == Some(ItemLabel::Disposition))
+                    .count(),
+            }),
+        }
+    }
+
+    /// Append a child with label `disposition`, accepting `Disposition` or `Shared<Disposition>`.
+    pub fn append_disposition(&mut self, child: impl Into<Shared<Disposition>>) {
+        self.children.push((Some(ItemLabel::Disposition), ItemChild::Disposition(child.into())));
+    }
+
+    /// Append multiple children with label `disposition`.
+    pub fn extend_disposition(&mut self, children: impl IntoIterator<Item = impl Into<Shared<Disposition>>>) {
+        self.children.extend(children.into_iter().map(|c| (Some(ItemLabel::Disposition), ItemChild::Disposition(c.into()))));
+    }
+
+    /// Return an iterator over `Shared<Identifier>` children labelled `label`.
+    ///
+    /// Off-type variants stored under the `label` label are silently skipped.
+    /// Use `children()` (the untyped slice) for a lossless view.
+    pub fn children_label(&self) -> impl Iterator<Item = &Shared<Identifier>> + '_ {
+        self.children.iter()
+            .filter(|(lbl, _)| *lbl == Some(ItemLabel::Label))
+            .filter_map(|(_, child)| match child {
+                ItemChild::Identifier(s) => Some(s),
+                _ => None,
+            })
+    }
+
+    /// Return the single child labelled `label`, or `Err` if not exactly one.
+    ///
+    /// Count is checked by label match first (`CstError::ChildCount`); if the
+    /// count is valid and the surviving child has the wrong variant type,
+    /// `CstError::UnexpectedChildType` is returned (single-typed labels only).
+    pub fn child_label(&self) -> Result<&Shared<Identifier>, CstError> {
+        let mut it = self.children.iter()
+            .filter(|(lbl, _)| *lbl == Some(ItemLabel::Label));
+        match (it.next(), it.next()) {
+            (Some((_, child)), None) => match child {
+                ItemChild::Identifier(s) => Ok(s),
+                _ => Err(CstError::UnexpectedChildType { label: "label" }),
+            },
+            _ => Err(CstError::ChildCount {
+                label: "label",
+                expected: "1",
+                found: self.children.iter()
+                    .filter(|(lbl, _)| *lbl == Some(ItemLabel::Label))
+                    .count(),
+            }),
+        }
+    }
+
+    /// Return the optional child labelled `label`, or `Err` if more than one.
+    ///
+    /// Returns `Ok(None)` for zero, `Ok(Some(...))` for one,
+    /// `Err(CstError::ChildCount)` for two or more.
+    pub fn maybe_label(&self) -> Result<Option<&Shared<Identifier>>, CstError> {
+        let mut it = self.children.iter()
+            .filter(|(lbl, _)| *lbl == Some(ItemLabel::Label));
+        match (it.next(), it.next()) {
+            (None, _) => Ok(None),
+            (Some((_, child)), None) => match child {
+                ItemChild::Identifier(s) => Ok(Some(s)),
+                _ => Err(CstError::UnexpectedChildType { label: "label" }),
+            },
+            _ => Err(CstError::ChildCount {
+                label: "label",
+                expected: "0 or 1",
+                found: self.children.iter()
+                    .filter(|(lbl, _)| *lbl == Some(ItemLabel::Label))
+                    .count(),
+            }),
+        }
+    }
+
+    /// Append a child with label `label`, accepting `Identifier` or `Shared<Identifier>`.
+    pub fn append_label(&mut self, child: impl Into<Shared<Identifier>>) {
+        self.children.push((Some(ItemLabel::Label), ItemChild::Identifier(child.into())));
+    }
+
+    /// Append multiple children with label `label`.
+    pub fn extend_label(&mut self, children: impl IntoIterator<Item = impl Into<Shared<Identifier>>>) {
+        self.children.extend(children.into_iter().map(|c| (Some(ItemLabel::Label), ItemChild::Identifier(c.into()))));
+    }
+
+    /// Return an iterator over `Shared<Quantifier>` children labelled `quantifier`.
+    ///
+    /// Off-type variants stored under the `quantifier` label are silently skipped.
+    /// Use `children()` (the untyped slice) for a lossless view.
+    pub fn children_quantifier(&self) -> impl Iterator<Item = &Shared<Quantifier>> + '_ {
+        self.children.iter()
+            .filter(|(lbl, _)| *lbl == Some(ItemLabel::Quantifier))
+            .filter_map(|(_, child)| match child {
+                ItemChild::Quantifier(s) => Some(s),
+                _ => None,
+            })
+    }
+
+    /// Return the single child labelled `quantifier`, or `Err` if not exactly one.
+    ///
+    /// Count is checked by label match first (`CstError::ChildCount`); if the
+    /// count is valid and the surviving child has the wrong variant type,
+    /// `CstError::UnexpectedChildType` is returned (single-typed labels only).
+    pub fn child_quantifier(&self) -> Result<&Shared<Quantifier>, CstError> {
+        let mut it = self.children.iter()
+            .filter(|(lbl, _)| *lbl == Some(ItemLabel::Quantifier));
+        match (it.next(), it.next()) {
+            (Some((_, child)), None) => match child {
+                ItemChild::Quantifier(s) => Ok(s),
+                _ => Err(CstError::UnexpectedChildType { label: "quantifier" }),
+            },
+            _ => Err(CstError::ChildCount {
+                label: "quantifier",
+                expected: "1",
+                found: self.children.iter()
+                    .filter(|(lbl, _)| *lbl == Some(ItemLabel::Quantifier))
+                    .count(),
+            }),
+        }
+    }
+
+    /// Return the optional child labelled `quantifier`, or `Err` if more than one.
+    ///
+    /// Returns `Ok(None)` for zero, `Ok(Some(...))` for one,
+    /// `Err(CstError::ChildCount)` for two or more.
+    pub fn maybe_quantifier(&self) -> Result<Option<&Shared<Quantifier>>, CstError> {
+        let mut it = self.children.iter()
+            .filter(|(lbl, _)| *lbl == Some(ItemLabel::Quantifier));
+        match (it.next(), it.next()) {
+            (None, _) => Ok(None),
+            (Some((_, child)), None) => match child {
+                ItemChild::Quantifier(s) => Ok(Some(s)),
+                _ => Err(CstError::UnexpectedChildType { label: "quantifier" }),
+            },
+            _ => Err(CstError::ChildCount {
+                label: "quantifier",
+                expected: "0 or 1",
+                found: self.children.iter()
+                    .filter(|(lbl, _)| *lbl == Some(ItemLabel::Quantifier))
+                    .count(),
+            }),
+        }
+    }
+
+    /// Append a child with label `quantifier`, accepting `Quantifier` or `Shared<Quantifier>`.
+    pub fn append_quantifier(&mut self, child: impl Into<Shared<Quantifier>>) {
+        self.children.push((Some(ItemLabel::Quantifier), ItemChild::Quantifier(child.into())));
+    }
+
+    /// Append multiple children with label `quantifier`.
+    pub fn extend_quantifier(&mut self, children: impl IntoIterator<Item = impl Into<Shared<Quantifier>>>) {
+        self.children.extend(children.into_iter().map(|c| (Some(ItemLabel::Quantifier), ItemChild::Quantifier(c.into()))));
+    }
+
+    /// Return an iterator over `Shared<Term>` children labelled `term`.
+    ///
+    /// Off-type variants stored under the `term` label are silently skipped.
+    /// Use `children()` (the untyped slice) for a lossless view.
+    pub fn children_term(&self) -> impl Iterator<Item = &Shared<Term>> + '_ {
+        self.children.iter()
+            .filter(|(lbl, _)| *lbl == Some(ItemLabel::Term))
+            .filter_map(|(_, child)| match child {
+                ItemChild::Term(s) => Some(s),
+                _ => None,
+            })
+    }
+
+    /// Return the single child labelled `term`, or `Err` if not exactly one.
+    ///
+    /// Count is checked by label match first (`CstError::ChildCount`); if the
+    /// count is valid and the surviving child has the wrong variant type,
+    /// `CstError::UnexpectedChildType` is returned (single-typed labels only).
+    pub fn child_term(&self) -> Result<&Shared<Term>, CstError> {
+        let mut it = self.children.iter()
+            .filter(|(lbl, _)| *lbl == Some(ItemLabel::Term));
+        match (it.next(), it.next()) {
+            (Some((_, child)), None) => match child {
+                ItemChild::Term(s) => Ok(s),
+                _ => Err(CstError::UnexpectedChildType { label: "term" }),
+            },
+            _ => Err(CstError::ChildCount {
+                label: "term",
+                expected: "1",
+                found: self.children.iter()
+                    .filter(|(lbl, _)| *lbl == Some(ItemLabel::Term))
+                    .count(),
+            }),
+        }
+    }
+
+    /// Return the optional child labelled `term`, or `Err` if more than one.
+    ///
+    /// Returns `Ok(None)` for zero, `Ok(Some(...))` for one,
+    /// `Err(CstError::ChildCount)` for two or more.
+    pub fn maybe_term(&self) -> Result<Option<&Shared<Term>>, CstError> {
+        let mut it = self.children.iter()
+            .filter(|(lbl, _)| *lbl == Some(ItemLabel::Term));
+        match (it.next(), it.next()) {
+            (None, _) => Ok(None),
+            (Some((_, child)), None) => match child {
+                ItemChild::Term(s) => Ok(Some(s)),
+                _ => Err(CstError::UnexpectedChildType { label: "term" }),
+            },
+            _ => Err(CstError::ChildCount {
+                label: "term",
+                expected: "0 or 1",
+                found: self.children.iter()
+                    .filter(|(lbl, _)| *lbl == Some(ItemLabel::Term))
+                    .count(),
+            }),
+        }
+    }
+
+    /// Append a child with label `term`, accepting `Term` or `Shared<Term>`.
+    pub fn append_term(&mut self, child: impl Into<Shared<Term>>) {
+        self.children.push((Some(ItemLabel::Term), ItemChild::Term(child.into())));
+    }
+
+    /// Append multiple children with label `term`.
+    pub fn extend_term(&mut self, children: impl IntoIterator<Item = impl Into<Shared<Term>>>) {
+        self.children.extend(children.into_iter().map(|c| (Some(ItemLabel::Term), ItemChild::Term(c.into()))));
     }
 }
 
@@ -2696,7 +3781,7 @@ impl PyItem {
     #[classattr]
     #[allow(non_snake_case)]
     fn Label(py: Python<'_>) -> PyResult<PyObject> {
-        Ok(Item_Label::type_object(py).into_any().unbind())
+        Ok(ItemLabel::type_object(py).into_any().unbind())
     }
 
     #[getter]
@@ -2727,7 +3812,7 @@ impl PyItem {
         let native_label = match label {
             None => None,
             Some(lbl) => {
-                if let Ok(native_lbl) = lbl.bind(py).extract::<Item_Label>() {
+                if let Ok(native_lbl) = lbl.bind(py).extract::<ItemLabel>() {
                     Some(native_lbl)
                 } else {
                     return Err(PyTypeError::new_err(format!(
@@ -2752,7 +3837,7 @@ impl PyItem {
         let native_label = match label {
             None => None,
             Some(lbl) => {
-                if let Ok(native_lbl) = lbl.bind(py).extract::<Item_Label>() {
+                if let Ok(native_lbl) = lbl.bind(py).extract::<ItemLabel>() {
                     Some(native_lbl)
                 } else {
                     return Err(PyTypeError::new_err(format!(
@@ -2790,6 +3875,9 @@ impl PyItem {
     }
 
     fn child(&self, py: Python<'_>) -> PyResult<PyObject> {
+        // TODO(rust-cst-accessor-clone-efficiency): clones the full children Vec
+        // before checking len. Could check len under the read guard and only clone
+        // the single needed entry, avoiding O(total-children) allocation on the error path.
         let snapshot: Vec<_> = {
             let guard = self.inner.read();
             guard.children.clone()
@@ -2812,7 +3900,7 @@ impl PyItem {
     fn append_disposition(&self, py: Python<'_>, child: &Bound<'_, PyAny>) -> PyResult<()> {
         let span_type = get_span_type(py)?;
         let native_child = ItemChild::extract_from_pyobject(py, child, &span_type)?;
-        self.inner.write().children.push((Some(Item_Label::Disposition), native_child));
+        self.inner.write().children.push((Some(ItemLabel::Disposition), native_child));
         Ok(())
     }
 
@@ -2822,20 +3910,23 @@ impl PyItem {
         for child_result in iter {
             let child = child_result?;
             let native_child = ItemChild::extract_from_pyobject(py, &child, &span_type)?;
-            let entry = (Some(Item_Label::Disposition), native_child);
+            let entry = (Some(ItemLabel::Disposition), native_child);
             self.inner.write().children.push(entry);
         }
         Ok(())
     }
 
     fn children_disposition(&self, py: Python<'_>) -> PyResult<Py<PyList>> {
+        // TODO(rust-cst-accessor-clone-efficiency): clones full Vec then filters outside the guard.
+        // Could filter inside the read guard (clone only matching entries) to avoid
+        // O(total-children) Arc clones for accessors that match a small subset.
         let snapshot: Vec<_> = {
             let guard = self.inner.read();
             guard.children.clone()
         };
         let result = PyList::empty(py);
         for (lbl, child) in &snapshot {
-            if *lbl == Some(Item_Label::Disposition) {
+            if *lbl == Some(ItemLabel::Disposition) {
                 result.append(child.to_pyobject(py)?)?;
             }
         }
@@ -2843,6 +3934,7 @@ impl PyItem {
     }
 
     fn child_disposition(&self, py: Python<'_>) -> PyResult<PyObject> {
+        // TODO(rust-cst-accessor-clone-efficiency): see children_disposition above.
         let snapshot: Vec<_> = {
             let guard = self.inner.read();
             guard.children.clone()
@@ -2850,7 +3942,7 @@ impl PyItem {
         let mut found: Option<PyObject> = None;
         let mut count = 0usize;
         for (lbl, child) in &snapshot {
-            if *lbl == Some(Item_Label::Disposition) {
+            if *lbl == Some(ItemLabel::Disposition) {
                 count += 1;
                 if count == 1 {
                     found = Some(child.to_pyobject(py)?);
@@ -2866,6 +3958,7 @@ impl PyItem {
     }
 
     fn maybe_disposition(&self, py: Python<'_>) -> PyResult<Option<PyObject>> {
+        // TODO(rust-cst-accessor-clone-efficiency): see children_disposition above.
         let snapshot: Vec<_> = {
             let guard = self.inner.read();
             guard.children.clone()
@@ -2873,7 +3966,7 @@ impl PyItem {
         let mut found: Option<PyObject> = None;
         let mut count = 0usize;
         for (lbl, child) in &snapshot {
-            if *lbl == Some(Item_Label::Disposition) {
+            if *lbl == Some(ItemLabel::Disposition) {
                 count += 1;
                 if count == 1 {
                     found = Some(child.to_pyobject(py)?);
@@ -2891,7 +3984,7 @@ impl PyItem {
     fn append_label(&self, py: Python<'_>, child: &Bound<'_, PyAny>) -> PyResult<()> {
         let span_type = get_span_type(py)?;
         let native_child = ItemChild::extract_from_pyobject(py, child, &span_type)?;
-        self.inner.write().children.push((Some(Item_Label::Label), native_child));
+        self.inner.write().children.push((Some(ItemLabel::Label), native_child));
         Ok(())
     }
 
@@ -2901,20 +3994,23 @@ impl PyItem {
         for child_result in iter {
             let child = child_result?;
             let native_child = ItemChild::extract_from_pyobject(py, &child, &span_type)?;
-            let entry = (Some(Item_Label::Label), native_child);
+            let entry = (Some(ItemLabel::Label), native_child);
             self.inner.write().children.push(entry);
         }
         Ok(())
     }
 
     fn children_label(&self, py: Python<'_>) -> PyResult<Py<PyList>> {
+        // TODO(rust-cst-accessor-clone-efficiency): clones full Vec then filters outside the guard.
+        // Could filter inside the read guard (clone only matching entries) to avoid
+        // O(total-children) Arc clones for accessors that match a small subset.
         let snapshot: Vec<_> = {
             let guard = self.inner.read();
             guard.children.clone()
         };
         let result = PyList::empty(py);
         for (lbl, child) in &snapshot {
-            if *lbl == Some(Item_Label::Label) {
+            if *lbl == Some(ItemLabel::Label) {
                 result.append(child.to_pyobject(py)?)?;
             }
         }
@@ -2922,6 +4018,7 @@ impl PyItem {
     }
 
     fn child_label(&self, py: Python<'_>) -> PyResult<PyObject> {
+        // TODO(rust-cst-accessor-clone-efficiency): see children_label above.
         let snapshot: Vec<_> = {
             let guard = self.inner.read();
             guard.children.clone()
@@ -2929,7 +4026,7 @@ impl PyItem {
         let mut found: Option<PyObject> = None;
         let mut count = 0usize;
         for (lbl, child) in &snapshot {
-            if *lbl == Some(Item_Label::Label) {
+            if *lbl == Some(ItemLabel::Label) {
                 count += 1;
                 if count == 1 {
                     found = Some(child.to_pyobject(py)?);
@@ -2945,6 +4042,7 @@ impl PyItem {
     }
 
     fn maybe_label(&self, py: Python<'_>) -> PyResult<Option<PyObject>> {
+        // TODO(rust-cst-accessor-clone-efficiency): see children_label above.
         let snapshot: Vec<_> = {
             let guard = self.inner.read();
             guard.children.clone()
@@ -2952,7 +4050,7 @@ impl PyItem {
         let mut found: Option<PyObject> = None;
         let mut count = 0usize;
         for (lbl, child) in &snapshot {
-            if *lbl == Some(Item_Label::Label) {
+            if *lbl == Some(ItemLabel::Label) {
                 count += 1;
                 if count == 1 {
                     found = Some(child.to_pyobject(py)?);
@@ -2970,7 +4068,7 @@ impl PyItem {
     fn append_quantifier(&self, py: Python<'_>, child: &Bound<'_, PyAny>) -> PyResult<()> {
         let span_type = get_span_type(py)?;
         let native_child = ItemChild::extract_from_pyobject(py, child, &span_type)?;
-        self.inner.write().children.push((Some(Item_Label::Quantifier), native_child));
+        self.inner.write().children.push((Some(ItemLabel::Quantifier), native_child));
         Ok(())
     }
 
@@ -2980,20 +4078,23 @@ impl PyItem {
         for child_result in iter {
             let child = child_result?;
             let native_child = ItemChild::extract_from_pyobject(py, &child, &span_type)?;
-            let entry = (Some(Item_Label::Quantifier), native_child);
+            let entry = (Some(ItemLabel::Quantifier), native_child);
             self.inner.write().children.push(entry);
         }
         Ok(())
     }
 
     fn children_quantifier(&self, py: Python<'_>) -> PyResult<Py<PyList>> {
+        // TODO(rust-cst-accessor-clone-efficiency): clones full Vec then filters outside the guard.
+        // Could filter inside the read guard (clone only matching entries) to avoid
+        // O(total-children) Arc clones for accessors that match a small subset.
         let snapshot: Vec<_> = {
             let guard = self.inner.read();
             guard.children.clone()
         };
         let result = PyList::empty(py);
         for (lbl, child) in &snapshot {
-            if *lbl == Some(Item_Label::Quantifier) {
+            if *lbl == Some(ItemLabel::Quantifier) {
                 result.append(child.to_pyobject(py)?)?;
             }
         }
@@ -3001,6 +4102,7 @@ impl PyItem {
     }
 
     fn child_quantifier(&self, py: Python<'_>) -> PyResult<PyObject> {
+        // TODO(rust-cst-accessor-clone-efficiency): see children_quantifier above.
         let snapshot: Vec<_> = {
             let guard = self.inner.read();
             guard.children.clone()
@@ -3008,7 +4110,7 @@ impl PyItem {
         let mut found: Option<PyObject> = None;
         let mut count = 0usize;
         for (lbl, child) in &snapshot {
-            if *lbl == Some(Item_Label::Quantifier) {
+            if *lbl == Some(ItemLabel::Quantifier) {
                 count += 1;
                 if count == 1 {
                     found = Some(child.to_pyobject(py)?);
@@ -3024,6 +4126,7 @@ impl PyItem {
     }
 
     fn maybe_quantifier(&self, py: Python<'_>) -> PyResult<Option<PyObject>> {
+        // TODO(rust-cst-accessor-clone-efficiency): see children_quantifier above.
         let snapshot: Vec<_> = {
             let guard = self.inner.read();
             guard.children.clone()
@@ -3031,7 +4134,7 @@ impl PyItem {
         let mut found: Option<PyObject> = None;
         let mut count = 0usize;
         for (lbl, child) in &snapshot {
-            if *lbl == Some(Item_Label::Quantifier) {
+            if *lbl == Some(ItemLabel::Quantifier) {
                 count += 1;
                 if count == 1 {
                     found = Some(child.to_pyobject(py)?);
@@ -3049,7 +4152,7 @@ impl PyItem {
     fn append_term(&self, py: Python<'_>, child: &Bound<'_, PyAny>) -> PyResult<()> {
         let span_type = get_span_type(py)?;
         let native_child = ItemChild::extract_from_pyobject(py, child, &span_type)?;
-        self.inner.write().children.push((Some(Item_Label::Term), native_child));
+        self.inner.write().children.push((Some(ItemLabel::Term), native_child));
         Ok(())
     }
 
@@ -3059,20 +4162,23 @@ impl PyItem {
         for child_result in iter {
             let child = child_result?;
             let native_child = ItemChild::extract_from_pyobject(py, &child, &span_type)?;
-            let entry = (Some(Item_Label::Term), native_child);
+            let entry = (Some(ItemLabel::Term), native_child);
             self.inner.write().children.push(entry);
         }
         Ok(())
     }
 
     fn children_term(&self, py: Python<'_>) -> PyResult<Py<PyList>> {
+        // TODO(rust-cst-accessor-clone-efficiency): clones full Vec then filters outside the guard.
+        // Could filter inside the read guard (clone only matching entries) to avoid
+        // O(total-children) Arc clones for accessors that match a small subset.
         let snapshot: Vec<_> = {
             let guard = self.inner.read();
             guard.children.clone()
         };
         let result = PyList::empty(py);
         for (lbl, child) in &snapshot {
-            if *lbl == Some(Item_Label::Term) {
+            if *lbl == Some(ItemLabel::Term) {
                 result.append(child.to_pyobject(py)?)?;
             }
         }
@@ -3080,6 +4186,7 @@ impl PyItem {
     }
 
     fn child_term(&self, py: Python<'_>) -> PyResult<PyObject> {
+        // TODO(rust-cst-accessor-clone-efficiency): see children_term above.
         let snapshot: Vec<_> = {
             let guard = self.inner.read();
             guard.children.clone()
@@ -3087,7 +4194,7 @@ impl PyItem {
         let mut found: Option<PyObject> = None;
         let mut count = 0usize;
         for (lbl, child) in &snapshot {
-            if *lbl == Some(Item_Label::Term) {
+            if *lbl == Some(ItemLabel::Term) {
                 count += 1;
                 if count == 1 {
                     found = Some(child.to_pyobject(py)?);
@@ -3103,6 +4210,7 @@ impl PyItem {
     }
 
     fn maybe_term(&self, py: Python<'_>) -> PyResult<Option<PyObject>> {
+        // TODO(rust-cst-accessor-clone-efficiency): see children_term above.
         let snapshot: Vec<_> = {
             let guard = self.inner.read();
             guard.children.clone()
@@ -3110,7 +4218,7 @@ impl PyItem {
         let mut found: Option<PyObject> = None;
         let mut count = 0usize;
         for (lbl, child) in &snapshot {
-            if *lbl == Some(Item_Label::Term) {
+            if *lbl == Some(ItemLabel::Term) {
                 count += 1;
                 if count == 1 {
                     found = Some(child.to_pyobject(py)?);
@@ -3152,14 +4260,17 @@ impl PyItem {
 }
 
 // ───────────────────────────────────────────────────────────────────────────
-// Term_Label
+// TermLabel
 // ───────────────────────────────────────────────────────────────────────────
 
-#[allow(non_camel_case_types)]
+/// Label discriminant enum for children of this node type.
+///
+/// Python-visible name is `Term_Label` (preserved for compatibility).
+/// Rust consumers use the CamelCase `TermLabel` name.
 #[cfg(feature = "python")]
 #[pyclass(frozen, name = "Term_Label")]
-#[derive(Clone, PartialEq, Eq, Hash)]
-pub enum Term_Label {
+#[derive(Clone, Debug, PartialEq, Eq, Hash)]
+pub enum TermLabel {
     #[pyo3(name = "ALTERNATIVES")]
     Alternatives,
     #[pyo3(name = "IDENTIFIER")]
@@ -3170,10 +4281,9 @@ pub enum Term_Label {
     Regex,
 }
 
-#[allow(non_camel_case_types)]
 #[cfg(not(feature = "python"))]
-#[derive(Clone, PartialEq, Eq, Hash)]
-pub enum Term_Label {
+#[derive(Clone, Debug, PartialEq, Eq, Hash)]
+pub enum TermLabel {
     Alternatives,
     Identifier,
     Literal,
@@ -3182,13 +4292,13 @@ pub enum Term_Label {
 
 #[cfg(feature = "python")]
 #[pymethods]
-impl Term_Label {
+impl TermLabel {
     fn __repr__(&self) -> &'static str {
         match self {
-            Term_Label::Alternatives => "Term.Label.ALTERNATIVES",
-            Term_Label::Identifier => "Term.Label.IDENTIFIER",
-            Term_Label::Literal => "Term.Label.LITERAL",
-            Term_Label::Regex => "Term.Label.REGEX",
+            TermLabel::Alternatives => "Term.Label.ALTERNATIVES",
+            TermLabel::Identifier => "Term.Label.IDENTIFIER",
+            TermLabel::Literal => "Term.Label.LITERAL",
+            TermLabel::Regex => "Term.Label.REGEX",
         }
     }
 
@@ -3198,7 +4308,7 @@ impl Term_Label {
     }
 
     fn __eq__(&self, py: Python<'_>, other: &Bound<'_, PyAny>) -> PyResult<PyObject> {
-        if let Ok(other_kind) = other.extract::<Term_Label>() {
+        if let Ok(other_kind) = other.extract::<TermLabel>() {
             return Ok((self == &other_kind).into_pyobject(py)?.to_owned().unbind().into_any());
         }
         if let Ok(cn) = other.getattr(pyo3::intern!(py, "_fltk_canonical_name")) {
@@ -3216,9 +4326,11 @@ impl Term_Label {
     }
 }
 
-// TermChild — child value enum for Term
-// Node-typed variants hold Shared<T> (Arc<RwLock<T>>); Clone is shallow.
-#[derive(Clone)]
+/// Child value enum for `Term` nodes.
+///
+/// Node-typed variants hold `Shared<T>` (`Arc<RwLock<T>>`); `Clone` is shallow
+/// (increments the reference count, does not copy the node).
+#[derive(Clone, Debug)]
 pub enum TermChild {
     Alternatives(Shared<Alternatives>),
     Identifier(Shared<Identifier>),
@@ -3358,14 +4470,13 @@ impl TermChild {
 // Term
 // ───────────────────────────────────────────────────────────────────────────
 
-/// CST data struct for `Term`. Node-typed children are [`Shared<T>`] —
-/// see [`fltk_cst_core::Shared`] for clone/equality/reference semantics.
-#[derive(Clone)]
+/// CST data struct for `Term`. See [`fltk_cst_core::Shared`] for clone/equality/reference semantics.
+#[derive(Clone, Debug)]
 pub struct Term {
     // Not pub: use span() / children() / push_child() — the stable accessor API.
     // Direct field access bypasses any future validation logic on setters.
     span: Span,
-    children: Vec<(Option<Term_Label>, TermChild)>,
+    children: Vec<(Option<TermLabel>, TermChild)>,
 }
 
 impl PartialEq for Term {
@@ -3375,8 +4486,7 @@ impl PartialEq for Term {
 }
 
 impl Term {
-    /// Construct a node with the given span and no children.
-    /// GIL-free.
+    /// Construct a node with the given span and no children. GIL-free.
     pub fn new(span: Span) -> Self {
         Term {
             span,
@@ -3384,14 +4494,14 @@ impl Term {
         }
     }
 
-    /// Return a reference to the stored `Span`.
-    pub fn span(&self) -> &Span {
-        &self.span
+    /// Return the [`NodeKind`] discriminant for this node type.
+    pub fn kind(&self) -> NodeKind {
+        NodeKind::Term
     }
 
-    /// Return a slice of the children.
-    pub fn children(&self) -> &[(Option<Term_Label>, TermChild)] {
-        self.children.as_slice()
+    /// Return a reference to the stored [`Span`].
+    pub fn span(&self) -> &Span {
+        &self.span
     }
 
     /// Replace the node's span.
@@ -3399,9 +4509,323 @@ impl Term {
         self.span = span;
     }
 
+    /// Return a slice of all children (unfiltered).
+    ///
+    /// Each entry is `(label, child)`. Use the per-label accessors
+    /// (`children_<lbl>`, `child_<lbl>`, `maybe_<lbl>`) for type-safe access.
+    pub fn children(&self) -> &[(Option<TermLabel>, TermChild)] {
+        self.children.as_slice()
+    }
+
     /// Push a child onto the children `Vec`.
-    pub fn push_child(&mut self, label: Option<Term_Label>, child: TermChild) {
+    ///
+    /// No type-checking is performed: any child variant may be stored under
+    /// any label. Per-label typed mutators (`append_<lbl>`, `extend_<lbl>`)
+    /// provide type-constrained alternatives.
+    pub fn push_child(&mut self, label: Option<TermLabel>, child: TermChild) {
         self.children.push((label, child));
+    }
+
+    /// Return the single child (any label), or `Err` if there is not exactly one.
+    ///
+    /// Mirrors the Python `child()` method: count violation → `CstError::ChildCount`.
+    pub fn child(&self) -> Result<&(Option<TermLabel>, TermChild), CstError> {
+        match self.children.as_slice() {
+            [single] => Ok(single),
+            slice => Err(CstError::ChildCount {
+                label: "<any>",
+                expected: "1",
+                found: slice.len(),
+            }),
+        }
+    }
+
+    /// Copy all children from `other` into `self`, sharing the `Shared<T>` arcs.
+    ///
+    /// Children are appended (Arc reference-count bumps, not deep copies),
+    /// matching the Python backend's reference-copy behavior. Labels are preserved.
+    ///
+    /// The borrow checker prevents `self.extend_children(self)` at the data-struct
+    /// level (`&mut` + `&` of the same value don't coexist). For self-extend from
+    /// Python, the handle pymethod handles it via snapshotting.
+    pub fn extend_children(&mut self, other: &Self) {
+        self.children.extend(other.children.iter().cloned());
+    }
+
+    /// Return an iterator over `Shared<Alternatives>` children labelled `alternatives`.
+    ///
+    /// Off-type variants stored under the `alternatives` label are silently skipped.
+    /// Use `children()` (the untyped slice) for a lossless view.
+    pub fn children_alternatives(&self) -> impl Iterator<Item = &Shared<Alternatives>> + '_ {
+        self.children.iter()
+            .filter(|(lbl, _)| *lbl == Some(TermLabel::Alternatives))
+            .filter_map(|(_, child)| match child {
+                TermChild::Alternatives(s) => Some(s),
+                _ => None,
+            })
+    }
+
+    /// Return the single child labelled `alternatives`, or `Err` if not exactly one.
+    ///
+    /// Count is checked by label match first (`CstError::ChildCount`); if the
+    /// count is valid and the surviving child has the wrong variant type,
+    /// `CstError::UnexpectedChildType` is returned (single-typed labels only).
+    pub fn child_alternatives(&self) -> Result<&Shared<Alternatives>, CstError> {
+        let mut it = self.children.iter()
+            .filter(|(lbl, _)| *lbl == Some(TermLabel::Alternatives));
+        match (it.next(), it.next()) {
+            (Some((_, child)), None) => match child {
+                TermChild::Alternatives(s) => Ok(s),
+                _ => Err(CstError::UnexpectedChildType { label: "alternatives" }),
+            },
+            _ => Err(CstError::ChildCount {
+                label: "alternatives",
+                expected: "1",
+                found: self.children.iter()
+                    .filter(|(lbl, _)| *lbl == Some(TermLabel::Alternatives))
+                    .count(),
+            }),
+        }
+    }
+
+    /// Return the optional child labelled `alternatives`, or `Err` if more than one.
+    ///
+    /// Returns `Ok(None)` for zero, `Ok(Some(...))` for one,
+    /// `Err(CstError::ChildCount)` for two or more.
+    pub fn maybe_alternatives(&self) -> Result<Option<&Shared<Alternatives>>, CstError> {
+        let mut it = self.children.iter()
+            .filter(|(lbl, _)| *lbl == Some(TermLabel::Alternatives));
+        match (it.next(), it.next()) {
+            (None, _) => Ok(None),
+            (Some((_, child)), None) => match child {
+                TermChild::Alternatives(s) => Ok(Some(s)),
+                _ => Err(CstError::UnexpectedChildType { label: "alternatives" }),
+            },
+            _ => Err(CstError::ChildCount {
+                label: "alternatives",
+                expected: "0 or 1",
+                found: self.children.iter()
+                    .filter(|(lbl, _)| *lbl == Some(TermLabel::Alternatives))
+                    .count(),
+            }),
+        }
+    }
+
+    /// Append a child with label `alternatives`, accepting `Alternatives` or `Shared<Alternatives>`.
+    pub fn append_alternatives(&mut self, child: impl Into<Shared<Alternatives>>) {
+        self.children.push((Some(TermLabel::Alternatives), TermChild::Alternatives(child.into())));
+    }
+
+    /// Append multiple children with label `alternatives`.
+    pub fn extend_alternatives(&mut self, children: impl IntoIterator<Item = impl Into<Shared<Alternatives>>>) {
+        self.children.extend(children.into_iter().map(|c| (Some(TermLabel::Alternatives), TermChild::Alternatives(c.into()))));
+    }
+
+    /// Return an iterator over `Shared<Identifier>` children labelled `identifier`.
+    ///
+    /// Off-type variants stored under the `identifier` label are silently skipped.
+    /// Use `children()` (the untyped slice) for a lossless view.
+    pub fn children_identifier(&self) -> impl Iterator<Item = &Shared<Identifier>> + '_ {
+        self.children.iter()
+            .filter(|(lbl, _)| *lbl == Some(TermLabel::Identifier))
+            .filter_map(|(_, child)| match child {
+                TermChild::Identifier(s) => Some(s),
+                _ => None,
+            })
+    }
+
+    /// Return the single child labelled `identifier`, or `Err` if not exactly one.
+    ///
+    /// Count is checked by label match first (`CstError::ChildCount`); if the
+    /// count is valid and the surviving child has the wrong variant type,
+    /// `CstError::UnexpectedChildType` is returned (single-typed labels only).
+    pub fn child_identifier(&self) -> Result<&Shared<Identifier>, CstError> {
+        let mut it = self.children.iter()
+            .filter(|(lbl, _)| *lbl == Some(TermLabel::Identifier));
+        match (it.next(), it.next()) {
+            (Some((_, child)), None) => match child {
+                TermChild::Identifier(s) => Ok(s),
+                _ => Err(CstError::UnexpectedChildType { label: "identifier" }),
+            },
+            _ => Err(CstError::ChildCount {
+                label: "identifier",
+                expected: "1",
+                found: self.children.iter()
+                    .filter(|(lbl, _)| *lbl == Some(TermLabel::Identifier))
+                    .count(),
+            }),
+        }
+    }
+
+    /// Return the optional child labelled `identifier`, or `Err` if more than one.
+    ///
+    /// Returns `Ok(None)` for zero, `Ok(Some(...))` for one,
+    /// `Err(CstError::ChildCount)` for two or more.
+    pub fn maybe_identifier(&self) -> Result<Option<&Shared<Identifier>>, CstError> {
+        let mut it = self.children.iter()
+            .filter(|(lbl, _)| *lbl == Some(TermLabel::Identifier));
+        match (it.next(), it.next()) {
+            (None, _) => Ok(None),
+            (Some((_, child)), None) => match child {
+                TermChild::Identifier(s) => Ok(Some(s)),
+                _ => Err(CstError::UnexpectedChildType { label: "identifier" }),
+            },
+            _ => Err(CstError::ChildCount {
+                label: "identifier",
+                expected: "0 or 1",
+                found: self.children.iter()
+                    .filter(|(lbl, _)| *lbl == Some(TermLabel::Identifier))
+                    .count(),
+            }),
+        }
+    }
+
+    /// Append a child with label `identifier`, accepting `Identifier` or `Shared<Identifier>`.
+    pub fn append_identifier(&mut self, child: impl Into<Shared<Identifier>>) {
+        self.children.push((Some(TermLabel::Identifier), TermChild::Identifier(child.into())));
+    }
+
+    /// Append multiple children with label `identifier`.
+    pub fn extend_identifier(&mut self, children: impl IntoIterator<Item = impl Into<Shared<Identifier>>>) {
+        self.children.extend(children.into_iter().map(|c| (Some(TermLabel::Identifier), TermChild::Identifier(c.into()))));
+    }
+
+    /// Return an iterator over `Shared<Literal>` children labelled `literal`.
+    ///
+    /// Off-type variants stored under the `literal` label are silently skipped.
+    /// Use `children()` (the untyped slice) for a lossless view.
+    pub fn children_literal(&self) -> impl Iterator<Item = &Shared<Literal>> + '_ {
+        self.children.iter()
+            .filter(|(lbl, _)| *lbl == Some(TermLabel::Literal))
+            .filter_map(|(_, child)| match child {
+                TermChild::Literal(s) => Some(s),
+                _ => None,
+            })
+    }
+
+    /// Return the single child labelled `literal`, or `Err` if not exactly one.
+    ///
+    /// Count is checked by label match first (`CstError::ChildCount`); if the
+    /// count is valid and the surviving child has the wrong variant type,
+    /// `CstError::UnexpectedChildType` is returned (single-typed labels only).
+    pub fn child_literal(&self) -> Result<&Shared<Literal>, CstError> {
+        let mut it = self.children.iter()
+            .filter(|(lbl, _)| *lbl == Some(TermLabel::Literal));
+        match (it.next(), it.next()) {
+            (Some((_, child)), None) => match child {
+                TermChild::Literal(s) => Ok(s),
+                _ => Err(CstError::UnexpectedChildType { label: "literal" }),
+            },
+            _ => Err(CstError::ChildCount {
+                label: "literal",
+                expected: "1",
+                found: self.children.iter()
+                    .filter(|(lbl, _)| *lbl == Some(TermLabel::Literal))
+                    .count(),
+            }),
+        }
+    }
+
+    /// Return the optional child labelled `literal`, or `Err` if more than one.
+    ///
+    /// Returns `Ok(None)` for zero, `Ok(Some(...))` for one,
+    /// `Err(CstError::ChildCount)` for two or more.
+    pub fn maybe_literal(&self) -> Result<Option<&Shared<Literal>>, CstError> {
+        let mut it = self.children.iter()
+            .filter(|(lbl, _)| *lbl == Some(TermLabel::Literal));
+        match (it.next(), it.next()) {
+            (None, _) => Ok(None),
+            (Some((_, child)), None) => match child {
+                TermChild::Literal(s) => Ok(Some(s)),
+                _ => Err(CstError::UnexpectedChildType { label: "literal" }),
+            },
+            _ => Err(CstError::ChildCount {
+                label: "literal",
+                expected: "0 or 1",
+                found: self.children.iter()
+                    .filter(|(lbl, _)| *lbl == Some(TermLabel::Literal))
+                    .count(),
+            }),
+        }
+    }
+
+    /// Append a child with label `literal`, accepting `Literal` or `Shared<Literal>`.
+    pub fn append_literal(&mut self, child: impl Into<Shared<Literal>>) {
+        self.children.push((Some(TermLabel::Literal), TermChild::Literal(child.into())));
+    }
+
+    /// Append multiple children with label `literal`.
+    pub fn extend_literal(&mut self, children: impl IntoIterator<Item = impl Into<Shared<Literal>>>) {
+        self.children.extend(children.into_iter().map(|c| (Some(TermLabel::Literal), TermChild::Literal(c.into()))));
+    }
+
+    /// Return an iterator over `Shared<RawString>` children labelled `regex`.
+    ///
+    /// Off-type variants stored under the `regex` label are silently skipped.
+    /// Use `children()` (the untyped slice) for a lossless view.
+    pub fn children_regex(&self) -> impl Iterator<Item = &Shared<RawString>> + '_ {
+        self.children.iter()
+            .filter(|(lbl, _)| *lbl == Some(TermLabel::Regex))
+            .filter_map(|(_, child)| match child {
+                TermChild::RawString(s) => Some(s),
+                _ => None,
+            })
+    }
+
+    /// Return the single child labelled `regex`, or `Err` if not exactly one.
+    ///
+    /// Count is checked by label match first (`CstError::ChildCount`); if the
+    /// count is valid and the surviving child has the wrong variant type,
+    /// `CstError::UnexpectedChildType` is returned (single-typed labels only).
+    pub fn child_regex(&self) -> Result<&Shared<RawString>, CstError> {
+        let mut it = self.children.iter()
+            .filter(|(lbl, _)| *lbl == Some(TermLabel::Regex));
+        match (it.next(), it.next()) {
+            (Some((_, child)), None) => match child {
+                TermChild::RawString(s) => Ok(s),
+                _ => Err(CstError::UnexpectedChildType { label: "regex" }),
+            },
+            _ => Err(CstError::ChildCount {
+                label: "regex",
+                expected: "1",
+                found: self.children.iter()
+                    .filter(|(lbl, _)| *lbl == Some(TermLabel::Regex))
+                    .count(),
+            }),
+        }
+    }
+
+    /// Return the optional child labelled `regex`, or `Err` if more than one.
+    ///
+    /// Returns `Ok(None)` for zero, `Ok(Some(...))` for one,
+    /// `Err(CstError::ChildCount)` for two or more.
+    pub fn maybe_regex(&self) -> Result<Option<&Shared<RawString>>, CstError> {
+        let mut it = self.children.iter()
+            .filter(|(lbl, _)| *lbl == Some(TermLabel::Regex));
+        match (it.next(), it.next()) {
+            (None, _) => Ok(None),
+            (Some((_, child)), None) => match child {
+                TermChild::RawString(s) => Ok(Some(s)),
+                _ => Err(CstError::UnexpectedChildType { label: "regex" }),
+            },
+            _ => Err(CstError::ChildCount {
+                label: "regex",
+                expected: "0 or 1",
+                found: self.children.iter()
+                    .filter(|(lbl, _)| *lbl == Some(TermLabel::Regex))
+                    .count(),
+            }),
+        }
+    }
+
+    /// Append a child with label `regex`, accepting `RawString` or `Shared<RawString>`.
+    pub fn append_regex(&mut self, child: impl Into<Shared<RawString>>) {
+        self.children.push((Some(TermLabel::Regex), TermChild::RawString(child.into())));
+    }
+
+    /// Append multiple children with label `regex`.
+    pub fn extend_regex(&mut self, children: impl IntoIterator<Item = impl Into<Shared<RawString>>>) {
+        self.children.extend(children.into_iter().map(|c| (Some(TermLabel::Regex), TermChild::RawString(c.into()))));
     }
 }
 
@@ -3480,7 +4904,7 @@ impl PyTerm {
     #[classattr]
     #[allow(non_snake_case)]
     fn Label(py: Python<'_>) -> PyResult<PyObject> {
-        Ok(Term_Label::type_object(py).into_any().unbind())
+        Ok(TermLabel::type_object(py).into_any().unbind())
     }
 
     #[getter]
@@ -3511,7 +4935,7 @@ impl PyTerm {
         let native_label = match label {
             None => None,
             Some(lbl) => {
-                if let Ok(native_lbl) = lbl.bind(py).extract::<Term_Label>() {
+                if let Ok(native_lbl) = lbl.bind(py).extract::<TermLabel>() {
                     Some(native_lbl)
                 } else {
                     return Err(PyTypeError::new_err(format!(
@@ -3536,7 +4960,7 @@ impl PyTerm {
         let native_label = match label {
             None => None,
             Some(lbl) => {
-                if let Ok(native_lbl) = lbl.bind(py).extract::<Term_Label>() {
+                if let Ok(native_lbl) = lbl.bind(py).extract::<TermLabel>() {
                     Some(native_lbl)
                 } else {
                     return Err(PyTypeError::new_err(format!(
@@ -3574,6 +4998,9 @@ impl PyTerm {
     }
 
     fn child(&self, py: Python<'_>) -> PyResult<PyObject> {
+        // TODO(rust-cst-accessor-clone-efficiency): clones the full children Vec
+        // before checking len. Could check len under the read guard and only clone
+        // the single needed entry, avoiding O(total-children) allocation on the error path.
         let snapshot: Vec<_> = {
             let guard = self.inner.read();
             guard.children.clone()
@@ -3596,7 +5023,7 @@ impl PyTerm {
     fn append_alternatives(&self, py: Python<'_>, child: &Bound<'_, PyAny>) -> PyResult<()> {
         let span_type = get_span_type(py)?;
         let native_child = TermChild::extract_from_pyobject(py, child, &span_type)?;
-        self.inner.write().children.push((Some(Term_Label::Alternatives), native_child));
+        self.inner.write().children.push((Some(TermLabel::Alternatives), native_child));
         Ok(())
     }
 
@@ -3606,20 +5033,23 @@ impl PyTerm {
         for child_result in iter {
             let child = child_result?;
             let native_child = TermChild::extract_from_pyobject(py, &child, &span_type)?;
-            let entry = (Some(Term_Label::Alternatives), native_child);
+            let entry = (Some(TermLabel::Alternatives), native_child);
             self.inner.write().children.push(entry);
         }
         Ok(())
     }
 
     fn children_alternatives(&self, py: Python<'_>) -> PyResult<Py<PyList>> {
+        // TODO(rust-cst-accessor-clone-efficiency): clones full Vec then filters outside the guard.
+        // Could filter inside the read guard (clone only matching entries) to avoid
+        // O(total-children) Arc clones for accessors that match a small subset.
         let snapshot: Vec<_> = {
             let guard = self.inner.read();
             guard.children.clone()
         };
         let result = PyList::empty(py);
         for (lbl, child) in &snapshot {
-            if *lbl == Some(Term_Label::Alternatives) {
+            if *lbl == Some(TermLabel::Alternatives) {
                 result.append(child.to_pyobject(py)?)?;
             }
         }
@@ -3627,6 +5057,7 @@ impl PyTerm {
     }
 
     fn child_alternatives(&self, py: Python<'_>) -> PyResult<PyObject> {
+        // TODO(rust-cst-accessor-clone-efficiency): see children_alternatives above.
         let snapshot: Vec<_> = {
             let guard = self.inner.read();
             guard.children.clone()
@@ -3634,7 +5065,7 @@ impl PyTerm {
         let mut found: Option<PyObject> = None;
         let mut count = 0usize;
         for (lbl, child) in &snapshot {
-            if *lbl == Some(Term_Label::Alternatives) {
+            if *lbl == Some(TermLabel::Alternatives) {
                 count += 1;
                 if count == 1 {
                     found = Some(child.to_pyobject(py)?);
@@ -3650,6 +5081,7 @@ impl PyTerm {
     }
 
     fn maybe_alternatives(&self, py: Python<'_>) -> PyResult<Option<PyObject>> {
+        // TODO(rust-cst-accessor-clone-efficiency): see children_alternatives above.
         let snapshot: Vec<_> = {
             let guard = self.inner.read();
             guard.children.clone()
@@ -3657,7 +5089,7 @@ impl PyTerm {
         let mut found: Option<PyObject> = None;
         let mut count = 0usize;
         for (lbl, child) in &snapshot {
-            if *lbl == Some(Term_Label::Alternatives) {
+            if *lbl == Some(TermLabel::Alternatives) {
                 count += 1;
                 if count == 1 {
                     found = Some(child.to_pyobject(py)?);
@@ -3675,7 +5107,7 @@ impl PyTerm {
     fn append_identifier(&self, py: Python<'_>, child: &Bound<'_, PyAny>) -> PyResult<()> {
         let span_type = get_span_type(py)?;
         let native_child = TermChild::extract_from_pyobject(py, child, &span_type)?;
-        self.inner.write().children.push((Some(Term_Label::Identifier), native_child));
+        self.inner.write().children.push((Some(TermLabel::Identifier), native_child));
         Ok(())
     }
 
@@ -3685,20 +5117,23 @@ impl PyTerm {
         for child_result in iter {
             let child = child_result?;
             let native_child = TermChild::extract_from_pyobject(py, &child, &span_type)?;
-            let entry = (Some(Term_Label::Identifier), native_child);
+            let entry = (Some(TermLabel::Identifier), native_child);
             self.inner.write().children.push(entry);
         }
         Ok(())
     }
 
     fn children_identifier(&self, py: Python<'_>) -> PyResult<Py<PyList>> {
+        // TODO(rust-cst-accessor-clone-efficiency): clones full Vec then filters outside the guard.
+        // Could filter inside the read guard (clone only matching entries) to avoid
+        // O(total-children) Arc clones for accessors that match a small subset.
         let snapshot: Vec<_> = {
             let guard = self.inner.read();
             guard.children.clone()
         };
         let result = PyList::empty(py);
         for (lbl, child) in &snapshot {
-            if *lbl == Some(Term_Label::Identifier) {
+            if *lbl == Some(TermLabel::Identifier) {
                 result.append(child.to_pyobject(py)?)?;
             }
         }
@@ -3706,6 +5141,7 @@ impl PyTerm {
     }
 
     fn child_identifier(&self, py: Python<'_>) -> PyResult<PyObject> {
+        // TODO(rust-cst-accessor-clone-efficiency): see children_identifier above.
         let snapshot: Vec<_> = {
             let guard = self.inner.read();
             guard.children.clone()
@@ -3713,7 +5149,7 @@ impl PyTerm {
         let mut found: Option<PyObject> = None;
         let mut count = 0usize;
         for (lbl, child) in &snapshot {
-            if *lbl == Some(Term_Label::Identifier) {
+            if *lbl == Some(TermLabel::Identifier) {
                 count += 1;
                 if count == 1 {
                     found = Some(child.to_pyobject(py)?);
@@ -3729,6 +5165,7 @@ impl PyTerm {
     }
 
     fn maybe_identifier(&self, py: Python<'_>) -> PyResult<Option<PyObject>> {
+        // TODO(rust-cst-accessor-clone-efficiency): see children_identifier above.
         let snapshot: Vec<_> = {
             let guard = self.inner.read();
             guard.children.clone()
@@ -3736,7 +5173,7 @@ impl PyTerm {
         let mut found: Option<PyObject> = None;
         let mut count = 0usize;
         for (lbl, child) in &snapshot {
-            if *lbl == Some(Term_Label::Identifier) {
+            if *lbl == Some(TermLabel::Identifier) {
                 count += 1;
                 if count == 1 {
                     found = Some(child.to_pyobject(py)?);
@@ -3754,7 +5191,7 @@ impl PyTerm {
     fn append_literal(&self, py: Python<'_>, child: &Bound<'_, PyAny>) -> PyResult<()> {
         let span_type = get_span_type(py)?;
         let native_child = TermChild::extract_from_pyobject(py, child, &span_type)?;
-        self.inner.write().children.push((Some(Term_Label::Literal), native_child));
+        self.inner.write().children.push((Some(TermLabel::Literal), native_child));
         Ok(())
     }
 
@@ -3764,20 +5201,23 @@ impl PyTerm {
         for child_result in iter {
             let child = child_result?;
             let native_child = TermChild::extract_from_pyobject(py, &child, &span_type)?;
-            let entry = (Some(Term_Label::Literal), native_child);
+            let entry = (Some(TermLabel::Literal), native_child);
             self.inner.write().children.push(entry);
         }
         Ok(())
     }
 
     fn children_literal(&self, py: Python<'_>) -> PyResult<Py<PyList>> {
+        // TODO(rust-cst-accessor-clone-efficiency): clones full Vec then filters outside the guard.
+        // Could filter inside the read guard (clone only matching entries) to avoid
+        // O(total-children) Arc clones for accessors that match a small subset.
         let snapshot: Vec<_> = {
             let guard = self.inner.read();
             guard.children.clone()
         };
         let result = PyList::empty(py);
         for (lbl, child) in &snapshot {
-            if *lbl == Some(Term_Label::Literal) {
+            if *lbl == Some(TermLabel::Literal) {
                 result.append(child.to_pyobject(py)?)?;
             }
         }
@@ -3785,6 +5225,7 @@ impl PyTerm {
     }
 
     fn child_literal(&self, py: Python<'_>) -> PyResult<PyObject> {
+        // TODO(rust-cst-accessor-clone-efficiency): see children_literal above.
         let snapshot: Vec<_> = {
             let guard = self.inner.read();
             guard.children.clone()
@@ -3792,7 +5233,7 @@ impl PyTerm {
         let mut found: Option<PyObject> = None;
         let mut count = 0usize;
         for (lbl, child) in &snapshot {
-            if *lbl == Some(Term_Label::Literal) {
+            if *lbl == Some(TermLabel::Literal) {
                 count += 1;
                 if count == 1 {
                     found = Some(child.to_pyobject(py)?);
@@ -3808,6 +5249,7 @@ impl PyTerm {
     }
 
     fn maybe_literal(&self, py: Python<'_>) -> PyResult<Option<PyObject>> {
+        // TODO(rust-cst-accessor-clone-efficiency): see children_literal above.
         let snapshot: Vec<_> = {
             let guard = self.inner.read();
             guard.children.clone()
@@ -3815,7 +5257,7 @@ impl PyTerm {
         let mut found: Option<PyObject> = None;
         let mut count = 0usize;
         for (lbl, child) in &snapshot {
-            if *lbl == Some(Term_Label::Literal) {
+            if *lbl == Some(TermLabel::Literal) {
                 count += 1;
                 if count == 1 {
                     found = Some(child.to_pyobject(py)?);
@@ -3833,7 +5275,7 @@ impl PyTerm {
     fn append_regex(&self, py: Python<'_>, child: &Bound<'_, PyAny>) -> PyResult<()> {
         let span_type = get_span_type(py)?;
         let native_child = TermChild::extract_from_pyobject(py, child, &span_type)?;
-        self.inner.write().children.push((Some(Term_Label::Regex), native_child));
+        self.inner.write().children.push((Some(TermLabel::Regex), native_child));
         Ok(())
     }
 
@@ -3843,20 +5285,23 @@ impl PyTerm {
         for child_result in iter {
             let child = child_result?;
             let native_child = TermChild::extract_from_pyobject(py, &child, &span_type)?;
-            let entry = (Some(Term_Label::Regex), native_child);
+            let entry = (Some(TermLabel::Regex), native_child);
             self.inner.write().children.push(entry);
         }
         Ok(())
     }
 
     fn children_regex(&self, py: Python<'_>) -> PyResult<Py<PyList>> {
+        // TODO(rust-cst-accessor-clone-efficiency): clones full Vec then filters outside the guard.
+        // Could filter inside the read guard (clone only matching entries) to avoid
+        // O(total-children) Arc clones for accessors that match a small subset.
         let snapshot: Vec<_> = {
             let guard = self.inner.read();
             guard.children.clone()
         };
         let result = PyList::empty(py);
         for (lbl, child) in &snapshot {
-            if *lbl == Some(Term_Label::Regex) {
+            if *lbl == Some(TermLabel::Regex) {
                 result.append(child.to_pyobject(py)?)?;
             }
         }
@@ -3864,6 +5309,7 @@ impl PyTerm {
     }
 
     fn child_regex(&self, py: Python<'_>) -> PyResult<PyObject> {
+        // TODO(rust-cst-accessor-clone-efficiency): see children_regex above.
         let snapshot: Vec<_> = {
             let guard = self.inner.read();
             guard.children.clone()
@@ -3871,7 +5317,7 @@ impl PyTerm {
         let mut found: Option<PyObject> = None;
         let mut count = 0usize;
         for (lbl, child) in &snapshot {
-            if *lbl == Some(Term_Label::Regex) {
+            if *lbl == Some(TermLabel::Regex) {
                 count += 1;
                 if count == 1 {
                     found = Some(child.to_pyobject(py)?);
@@ -3887,6 +5333,7 @@ impl PyTerm {
     }
 
     fn maybe_regex(&self, py: Python<'_>) -> PyResult<Option<PyObject>> {
+        // TODO(rust-cst-accessor-clone-efficiency): see children_regex above.
         let snapshot: Vec<_> = {
             let guard = self.inner.read();
             guard.children.clone()
@@ -3894,7 +5341,7 @@ impl PyTerm {
         let mut found: Option<PyObject> = None;
         let mut count = 0usize;
         for (lbl, child) in &snapshot {
-            if *lbl == Some(Term_Label::Regex) {
+            if *lbl == Some(TermLabel::Regex) {
                 count += 1;
                 if count == 1 {
                     found = Some(child.to_pyobject(py)?);
@@ -3936,14 +5383,17 @@ impl PyTerm {
 }
 
 // ───────────────────────────────────────────────────────────────────────────
-// Disposition_Label
+// DispositionLabel
 // ───────────────────────────────────────────────────────────────────────────
 
-#[allow(non_camel_case_types)]
+/// Label discriminant enum for children of this node type.
+///
+/// Python-visible name is `Disposition_Label` (preserved for compatibility).
+/// Rust consumers use the CamelCase `DispositionLabel` name.
 #[cfg(feature = "python")]
 #[pyclass(frozen, name = "Disposition_Label")]
-#[derive(Clone, PartialEq, Eq, Hash)]
-pub enum Disposition_Label {
+#[derive(Clone, Debug, PartialEq, Eq, Hash)]
+pub enum DispositionLabel {
     #[pyo3(name = "INCLUDE")]
     Include,
     #[pyo3(name = "INLINE")]
@@ -3952,10 +5402,9 @@ pub enum Disposition_Label {
     Suppress,
 }
 
-#[allow(non_camel_case_types)]
 #[cfg(not(feature = "python"))]
-#[derive(Clone, PartialEq, Eq, Hash)]
-pub enum Disposition_Label {
+#[derive(Clone, Debug, PartialEq, Eq, Hash)]
+pub enum DispositionLabel {
     Include,
     Inline,
     Suppress,
@@ -3963,12 +5412,12 @@ pub enum Disposition_Label {
 
 #[cfg(feature = "python")]
 #[pymethods]
-impl Disposition_Label {
+impl DispositionLabel {
     fn __repr__(&self) -> &'static str {
         match self {
-            Disposition_Label::Include => "Disposition.Label.INCLUDE",
-            Disposition_Label::Inline => "Disposition.Label.INLINE",
-            Disposition_Label::Suppress => "Disposition.Label.SUPPRESS",
+            DispositionLabel::Include => "Disposition.Label.INCLUDE",
+            DispositionLabel::Inline => "Disposition.Label.INLINE",
+            DispositionLabel::Suppress => "Disposition.Label.SUPPRESS",
         }
     }
 
@@ -3978,7 +5427,7 @@ impl Disposition_Label {
     }
 
     fn __eq__(&self, py: Python<'_>, other: &Bound<'_, PyAny>) -> PyResult<PyObject> {
-        if let Ok(other_kind) = other.extract::<Disposition_Label>() {
+        if let Ok(other_kind) = other.extract::<DispositionLabel>() {
             return Ok((self == &other_kind).into_pyobject(py)?.to_owned().unbind().into_any());
         }
         if let Ok(cn) = other.getattr(pyo3::intern!(py, "_fltk_canonical_name")) {
@@ -3996,9 +5445,11 @@ impl Disposition_Label {
     }
 }
 
-// DispositionChild — child value enum for Disposition
-// Node-typed variants hold Shared<T> (Arc<RwLock<T>>); Clone is shallow.
-#[derive(Clone)]
+/// Child value enum for `Disposition` nodes.
+///
+/// Node-typed variants hold `Shared<T>` (`Arc<RwLock<T>>`); `Clone` is shallow
+/// (increments the reference count, does not copy the node).
+#[derive(Clone, Debug)]
 pub enum DispositionChild {
     Span(Span),
 }
@@ -4041,14 +5492,13 @@ impl DispositionChild {
 // Disposition
 // ───────────────────────────────────────────────────────────────────────────
 
-/// CST data struct for `Disposition`. Node-typed children are [`Shared<T>`] —
-/// see [`fltk_cst_core::Shared`] for clone/equality/reference semantics.
-#[derive(Clone)]
+/// CST data struct for `Disposition`. See [`fltk_cst_core::Shared`] for clone/equality/reference semantics.
+#[derive(Clone, Debug)]
 pub struct Disposition {
     // Not pub: use span() / children() / push_child() — the stable accessor API.
     // Direct field access bypasses any future validation logic on setters.
     span: Span,
-    children: Vec<(Option<Disposition_Label>, DispositionChild)>,
+    children: Vec<(Option<DispositionLabel>, DispositionChild)>,
 }
 
 impl PartialEq for Disposition {
@@ -4058,8 +5508,7 @@ impl PartialEq for Disposition {
 }
 
 impl Disposition {
-    /// Construct a node with the given span and no children.
-    /// GIL-free.
+    /// Construct a node with the given span and no children. GIL-free.
     pub fn new(span: Span) -> Self {
         Disposition {
             span,
@@ -4067,14 +5516,14 @@ impl Disposition {
         }
     }
 
-    /// Return a reference to the stored `Span`.
-    pub fn span(&self) -> &Span {
-        &self.span
+    /// Return the [`NodeKind`] discriminant for this node type.
+    pub fn kind(&self) -> NodeKind {
+        NodeKind::Disposition
     }
 
-    /// Return a slice of the children.
-    pub fn children(&self) -> &[(Option<Disposition_Label>, DispositionChild)] {
-        self.children.as_slice()
+    /// Return a reference to the stored [`Span`].
+    pub fn span(&self) -> &Span {
+        &self.span
     }
 
     /// Replace the node's span.
@@ -4082,9 +5531,239 @@ impl Disposition {
         self.span = span;
     }
 
+    /// Return a slice of all children (unfiltered).
+    ///
+    /// Each entry is `(label, child)`. Use the per-label accessors
+    /// (`children_<lbl>`, `child_<lbl>`, `maybe_<lbl>`) for type-safe access.
+    pub fn children(&self) -> &[(Option<DispositionLabel>, DispositionChild)] {
+        self.children.as_slice()
+    }
+
     /// Push a child onto the children `Vec`.
-    pub fn push_child(&mut self, label: Option<Disposition_Label>, child: DispositionChild) {
+    ///
+    /// No type-checking is performed: any child variant may be stored under
+    /// any label. Per-label typed mutators (`append_<lbl>`, `extend_<lbl>`)
+    /// provide type-constrained alternatives.
+    pub fn push_child(&mut self, label: Option<DispositionLabel>, child: DispositionChild) {
         self.children.push((label, child));
+    }
+
+    /// Return the single child (any label), or `Err` if there is not exactly one.
+    ///
+    /// Mirrors the Python `child()` method: count violation → `CstError::ChildCount`.
+    pub fn child(&self) -> Result<&(Option<DispositionLabel>, DispositionChild), CstError> {
+        match self.children.as_slice() {
+            [single] => Ok(single),
+            slice => Err(CstError::ChildCount {
+                label: "<any>",
+                expected: "1",
+                found: slice.len(),
+            }),
+        }
+    }
+
+    /// Copy all children from `other` into `self`, sharing the `Shared<T>` arcs.
+    ///
+    /// Children are appended (Arc reference-count bumps, not deep copies),
+    /// matching the Python backend's reference-copy behavior. Labels are preserved.
+    ///
+    /// The borrow checker prevents `self.extend_children(self)` at the data-struct
+    /// level (`&mut` + `&` of the same value don't coexist). For self-extend from
+    /// Python, the handle pymethod handles it via snapshotting.
+    pub fn extend_children(&mut self, other: &Self) {
+        self.children.extend(other.children.iter().cloned());
+    }
+
+    /// Return an iterator over `Span` children labelled `include`.
+    ///
+    /// Off-type variants stored under the `include` label are silently skipped.
+    /// Use `children()` (the untyped slice) for a lossless view.
+    pub fn children_include(&self) -> impl Iterator<Item = &Span> + '_ {
+        self.children.iter()
+            .filter(|(lbl, _)| *lbl == Some(DispositionLabel::Include))
+            .map(|(_, child)| match child { DispositionChild::Span(s) => s })
+    }
+
+    /// Return the single child labelled `include`, or `Err` if not exactly one.
+    ///
+    /// Count is checked by label match first (`CstError::ChildCount`); if the
+    /// count is valid and the surviving child has the wrong variant type,
+    /// `CstError::UnexpectedChildType` is returned (single-typed labels only).
+    pub fn child_include(&self) -> Result<&Span, CstError> {
+        let mut it = self.children.iter()
+            .filter(|(lbl, _)| *lbl == Some(DispositionLabel::Include));
+        match (it.next(), it.next()) {
+            (Some((_, child)), None) => match child {
+                DispositionChild::Span(s) => Ok(s),
+            },
+            _ => Err(CstError::ChildCount {
+                label: "include",
+                expected: "1",
+                found: self.children.iter()
+                    .filter(|(lbl, _)| *lbl == Some(DispositionLabel::Include))
+                    .count(),
+            }),
+        }
+    }
+
+    /// Return the optional child labelled `include`, or `Err` if more than one.
+    ///
+    /// Returns `Ok(None)` for zero, `Ok(Some(...))` for one,
+    /// `Err(CstError::ChildCount)` for two or more.
+    pub fn maybe_include(&self) -> Result<Option<&Span>, CstError> {
+        let mut it = self.children.iter()
+            .filter(|(lbl, _)| *lbl == Some(DispositionLabel::Include));
+        match (it.next(), it.next()) {
+            (None, _) => Ok(None),
+            (Some((_, child)), None) => match child {
+                DispositionChild::Span(s) => Ok(Some(s)),
+            },
+            _ => Err(CstError::ChildCount {
+                label: "include",
+                expected: "0 or 1",
+                found: self.children.iter()
+                    .filter(|(lbl, _)| *lbl == Some(DispositionLabel::Include))
+                    .count(),
+            }),
+        }
+    }
+
+    /// Append a `Span` child with label `include`.
+    pub fn append_include(&mut self, span: Span) {
+        self.children.push((Some(DispositionLabel::Include), DispositionChild::Span(span)));
+    }
+
+    /// Append multiple `Span` children with label `include`.
+    pub fn extend_include(&mut self, spans: impl IntoIterator<Item = Span>) {
+        self.children.extend(spans.into_iter().map(|s| (Some(DispositionLabel::Include), DispositionChild::Span(s))));
+    }
+
+    /// Return an iterator over `Span` children labelled `inline`.
+    ///
+    /// Off-type variants stored under the `inline` label are silently skipped.
+    /// Use `children()` (the untyped slice) for a lossless view.
+    pub fn children_inline(&self) -> impl Iterator<Item = &Span> + '_ {
+        self.children.iter()
+            .filter(|(lbl, _)| *lbl == Some(DispositionLabel::Inline))
+            .map(|(_, child)| match child { DispositionChild::Span(s) => s })
+    }
+
+    /// Return the single child labelled `inline`, or `Err` if not exactly one.
+    ///
+    /// Count is checked by label match first (`CstError::ChildCount`); if the
+    /// count is valid and the surviving child has the wrong variant type,
+    /// `CstError::UnexpectedChildType` is returned (single-typed labels only).
+    pub fn child_inline(&self) -> Result<&Span, CstError> {
+        let mut it = self.children.iter()
+            .filter(|(lbl, _)| *lbl == Some(DispositionLabel::Inline));
+        match (it.next(), it.next()) {
+            (Some((_, child)), None) => match child {
+                DispositionChild::Span(s) => Ok(s),
+            },
+            _ => Err(CstError::ChildCount {
+                label: "inline",
+                expected: "1",
+                found: self.children.iter()
+                    .filter(|(lbl, _)| *lbl == Some(DispositionLabel::Inline))
+                    .count(),
+            }),
+        }
+    }
+
+    /// Return the optional child labelled `inline`, or `Err` if more than one.
+    ///
+    /// Returns `Ok(None)` for zero, `Ok(Some(...))` for one,
+    /// `Err(CstError::ChildCount)` for two or more.
+    pub fn maybe_inline(&self) -> Result<Option<&Span>, CstError> {
+        let mut it = self.children.iter()
+            .filter(|(lbl, _)| *lbl == Some(DispositionLabel::Inline));
+        match (it.next(), it.next()) {
+            (None, _) => Ok(None),
+            (Some((_, child)), None) => match child {
+                DispositionChild::Span(s) => Ok(Some(s)),
+            },
+            _ => Err(CstError::ChildCount {
+                label: "inline",
+                expected: "0 or 1",
+                found: self.children.iter()
+                    .filter(|(lbl, _)| *lbl == Some(DispositionLabel::Inline))
+                    .count(),
+            }),
+        }
+    }
+
+    /// Append a `Span` child with label `inline`.
+    pub fn append_inline(&mut self, span: Span) {
+        self.children.push((Some(DispositionLabel::Inline), DispositionChild::Span(span)));
+    }
+
+    /// Append multiple `Span` children with label `inline`.
+    pub fn extend_inline(&mut self, spans: impl IntoIterator<Item = Span>) {
+        self.children.extend(spans.into_iter().map(|s| (Some(DispositionLabel::Inline), DispositionChild::Span(s))));
+    }
+
+    /// Return an iterator over `Span` children labelled `suppress`.
+    ///
+    /// Off-type variants stored under the `suppress` label are silently skipped.
+    /// Use `children()` (the untyped slice) for a lossless view.
+    pub fn children_suppress(&self) -> impl Iterator<Item = &Span> + '_ {
+        self.children.iter()
+            .filter(|(lbl, _)| *lbl == Some(DispositionLabel::Suppress))
+            .map(|(_, child)| match child { DispositionChild::Span(s) => s })
+    }
+
+    /// Return the single child labelled `suppress`, or `Err` if not exactly one.
+    ///
+    /// Count is checked by label match first (`CstError::ChildCount`); if the
+    /// count is valid and the surviving child has the wrong variant type,
+    /// `CstError::UnexpectedChildType` is returned (single-typed labels only).
+    pub fn child_suppress(&self) -> Result<&Span, CstError> {
+        let mut it = self.children.iter()
+            .filter(|(lbl, _)| *lbl == Some(DispositionLabel::Suppress));
+        match (it.next(), it.next()) {
+            (Some((_, child)), None) => match child {
+                DispositionChild::Span(s) => Ok(s),
+            },
+            _ => Err(CstError::ChildCount {
+                label: "suppress",
+                expected: "1",
+                found: self.children.iter()
+                    .filter(|(lbl, _)| *lbl == Some(DispositionLabel::Suppress))
+                    .count(),
+            }),
+        }
+    }
+
+    /// Return the optional child labelled `suppress`, or `Err` if more than one.
+    ///
+    /// Returns `Ok(None)` for zero, `Ok(Some(...))` for one,
+    /// `Err(CstError::ChildCount)` for two or more.
+    pub fn maybe_suppress(&self) -> Result<Option<&Span>, CstError> {
+        let mut it = self.children.iter()
+            .filter(|(lbl, _)| *lbl == Some(DispositionLabel::Suppress));
+        match (it.next(), it.next()) {
+            (None, _) => Ok(None),
+            (Some((_, child)), None) => match child {
+                DispositionChild::Span(s) => Ok(Some(s)),
+            },
+            _ => Err(CstError::ChildCount {
+                label: "suppress",
+                expected: "0 or 1",
+                found: self.children.iter()
+                    .filter(|(lbl, _)| *lbl == Some(DispositionLabel::Suppress))
+                    .count(),
+            }),
+        }
+    }
+
+    /// Append a `Span` child with label `suppress`.
+    pub fn append_suppress(&mut self, span: Span) {
+        self.children.push((Some(DispositionLabel::Suppress), DispositionChild::Span(span)));
+    }
+
+    /// Append multiple `Span` children with label `suppress`.
+    pub fn extend_suppress(&mut self, spans: impl IntoIterator<Item = Span>) {
+        self.children.extend(spans.into_iter().map(|s| (Some(DispositionLabel::Suppress), DispositionChild::Span(s))));
     }
 }
 
@@ -4163,7 +5842,7 @@ impl PyDisposition {
     #[classattr]
     #[allow(non_snake_case)]
     fn Label(py: Python<'_>) -> PyResult<PyObject> {
-        Ok(Disposition_Label::type_object(py).into_any().unbind())
+        Ok(DispositionLabel::type_object(py).into_any().unbind())
     }
 
     #[getter]
@@ -4194,7 +5873,7 @@ impl PyDisposition {
         let native_label = match label {
             None => None,
             Some(lbl) => {
-                if let Ok(native_lbl) = lbl.bind(py).extract::<Disposition_Label>() {
+                if let Ok(native_lbl) = lbl.bind(py).extract::<DispositionLabel>() {
                     Some(native_lbl)
                 } else {
                     return Err(PyTypeError::new_err(format!(
@@ -4219,7 +5898,7 @@ impl PyDisposition {
         let native_label = match label {
             None => None,
             Some(lbl) => {
-                if let Ok(native_lbl) = lbl.bind(py).extract::<Disposition_Label>() {
+                if let Ok(native_lbl) = lbl.bind(py).extract::<DispositionLabel>() {
                     Some(native_lbl)
                 } else {
                     return Err(PyTypeError::new_err(format!(
@@ -4257,6 +5936,9 @@ impl PyDisposition {
     }
 
     fn child(&self, py: Python<'_>) -> PyResult<PyObject> {
+        // TODO(rust-cst-accessor-clone-efficiency): clones the full children Vec
+        // before checking len. Could check len under the read guard and only clone
+        // the single needed entry, avoiding O(total-children) allocation on the error path.
         let snapshot: Vec<_> = {
             let guard = self.inner.read();
             guard.children.clone()
@@ -4279,7 +5961,7 @@ impl PyDisposition {
     fn append_include(&self, py: Python<'_>, child: &Bound<'_, PyAny>) -> PyResult<()> {
         let span_type = get_span_type(py)?;
         let native_child = DispositionChild::extract_from_pyobject(py, child, &span_type)?;
-        self.inner.write().children.push((Some(Disposition_Label::Include), native_child));
+        self.inner.write().children.push((Some(DispositionLabel::Include), native_child));
         Ok(())
     }
 
@@ -4289,20 +5971,23 @@ impl PyDisposition {
         for child_result in iter {
             let child = child_result?;
             let native_child = DispositionChild::extract_from_pyobject(py, &child, &span_type)?;
-            let entry = (Some(Disposition_Label::Include), native_child);
+            let entry = (Some(DispositionLabel::Include), native_child);
             self.inner.write().children.push(entry);
         }
         Ok(())
     }
 
     fn children_include(&self, py: Python<'_>) -> PyResult<Py<PyList>> {
+        // TODO(rust-cst-accessor-clone-efficiency): clones full Vec then filters outside the guard.
+        // Could filter inside the read guard (clone only matching entries) to avoid
+        // O(total-children) Arc clones for accessors that match a small subset.
         let snapshot: Vec<_> = {
             let guard = self.inner.read();
             guard.children.clone()
         };
         let result = PyList::empty(py);
         for (lbl, child) in &snapshot {
-            if *lbl == Some(Disposition_Label::Include) {
+            if *lbl == Some(DispositionLabel::Include) {
                 result.append(child.to_pyobject(py)?)?;
             }
         }
@@ -4310,6 +5995,7 @@ impl PyDisposition {
     }
 
     fn child_include(&self, py: Python<'_>) -> PyResult<PyObject> {
+        // TODO(rust-cst-accessor-clone-efficiency): see children_include above.
         let snapshot: Vec<_> = {
             let guard = self.inner.read();
             guard.children.clone()
@@ -4317,7 +6003,7 @@ impl PyDisposition {
         let mut found: Option<PyObject> = None;
         let mut count = 0usize;
         for (lbl, child) in &snapshot {
-            if *lbl == Some(Disposition_Label::Include) {
+            if *lbl == Some(DispositionLabel::Include) {
                 count += 1;
                 if count == 1 {
                     found = Some(child.to_pyobject(py)?);
@@ -4333,6 +6019,7 @@ impl PyDisposition {
     }
 
     fn maybe_include(&self, py: Python<'_>) -> PyResult<Option<PyObject>> {
+        // TODO(rust-cst-accessor-clone-efficiency): see children_include above.
         let snapshot: Vec<_> = {
             let guard = self.inner.read();
             guard.children.clone()
@@ -4340,7 +6027,7 @@ impl PyDisposition {
         let mut found: Option<PyObject> = None;
         let mut count = 0usize;
         for (lbl, child) in &snapshot {
-            if *lbl == Some(Disposition_Label::Include) {
+            if *lbl == Some(DispositionLabel::Include) {
                 count += 1;
                 if count == 1 {
                     found = Some(child.to_pyobject(py)?);
@@ -4358,7 +6045,7 @@ impl PyDisposition {
     fn append_inline(&self, py: Python<'_>, child: &Bound<'_, PyAny>) -> PyResult<()> {
         let span_type = get_span_type(py)?;
         let native_child = DispositionChild::extract_from_pyobject(py, child, &span_type)?;
-        self.inner.write().children.push((Some(Disposition_Label::Inline), native_child));
+        self.inner.write().children.push((Some(DispositionLabel::Inline), native_child));
         Ok(())
     }
 
@@ -4368,20 +6055,23 @@ impl PyDisposition {
         for child_result in iter {
             let child = child_result?;
             let native_child = DispositionChild::extract_from_pyobject(py, &child, &span_type)?;
-            let entry = (Some(Disposition_Label::Inline), native_child);
+            let entry = (Some(DispositionLabel::Inline), native_child);
             self.inner.write().children.push(entry);
         }
         Ok(())
     }
 
     fn children_inline(&self, py: Python<'_>) -> PyResult<Py<PyList>> {
+        // TODO(rust-cst-accessor-clone-efficiency): clones full Vec then filters outside the guard.
+        // Could filter inside the read guard (clone only matching entries) to avoid
+        // O(total-children) Arc clones for accessors that match a small subset.
         let snapshot: Vec<_> = {
             let guard = self.inner.read();
             guard.children.clone()
         };
         let result = PyList::empty(py);
         for (lbl, child) in &snapshot {
-            if *lbl == Some(Disposition_Label::Inline) {
+            if *lbl == Some(DispositionLabel::Inline) {
                 result.append(child.to_pyobject(py)?)?;
             }
         }
@@ -4389,6 +6079,7 @@ impl PyDisposition {
     }
 
     fn child_inline(&self, py: Python<'_>) -> PyResult<PyObject> {
+        // TODO(rust-cst-accessor-clone-efficiency): see children_inline above.
         let snapshot: Vec<_> = {
             let guard = self.inner.read();
             guard.children.clone()
@@ -4396,7 +6087,7 @@ impl PyDisposition {
         let mut found: Option<PyObject> = None;
         let mut count = 0usize;
         for (lbl, child) in &snapshot {
-            if *lbl == Some(Disposition_Label::Inline) {
+            if *lbl == Some(DispositionLabel::Inline) {
                 count += 1;
                 if count == 1 {
                     found = Some(child.to_pyobject(py)?);
@@ -4412,6 +6103,7 @@ impl PyDisposition {
     }
 
     fn maybe_inline(&self, py: Python<'_>) -> PyResult<Option<PyObject>> {
+        // TODO(rust-cst-accessor-clone-efficiency): see children_inline above.
         let snapshot: Vec<_> = {
             let guard = self.inner.read();
             guard.children.clone()
@@ -4419,7 +6111,7 @@ impl PyDisposition {
         let mut found: Option<PyObject> = None;
         let mut count = 0usize;
         for (lbl, child) in &snapshot {
-            if *lbl == Some(Disposition_Label::Inline) {
+            if *lbl == Some(DispositionLabel::Inline) {
                 count += 1;
                 if count == 1 {
                     found = Some(child.to_pyobject(py)?);
@@ -4437,7 +6129,7 @@ impl PyDisposition {
     fn append_suppress(&self, py: Python<'_>, child: &Bound<'_, PyAny>) -> PyResult<()> {
         let span_type = get_span_type(py)?;
         let native_child = DispositionChild::extract_from_pyobject(py, child, &span_type)?;
-        self.inner.write().children.push((Some(Disposition_Label::Suppress), native_child));
+        self.inner.write().children.push((Some(DispositionLabel::Suppress), native_child));
         Ok(())
     }
 
@@ -4447,20 +6139,23 @@ impl PyDisposition {
         for child_result in iter {
             let child = child_result?;
             let native_child = DispositionChild::extract_from_pyobject(py, &child, &span_type)?;
-            let entry = (Some(Disposition_Label::Suppress), native_child);
+            let entry = (Some(DispositionLabel::Suppress), native_child);
             self.inner.write().children.push(entry);
         }
         Ok(())
     }
 
     fn children_suppress(&self, py: Python<'_>) -> PyResult<Py<PyList>> {
+        // TODO(rust-cst-accessor-clone-efficiency): clones full Vec then filters outside the guard.
+        // Could filter inside the read guard (clone only matching entries) to avoid
+        // O(total-children) Arc clones for accessors that match a small subset.
         let snapshot: Vec<_> = {
             let guard = self.inner.read();
             guard.children.clone()
         };
         let result = PyList::empty(py);
         for (lbl, child) in &snapshot {
-            if *lbl == Some(Disposition_Label::Suppress) {
+            if *lbl == Some(DispositionLabel::Suppress) {
                 result.append(child.to_pyobject(py)?)?;
             }
         }
@@ -4468,6 +6163,7 @@ impl PyDisposition {
     }
 
     fn child_suppress(&self, py: Python<'_>) -> PyResult<PyObject> {
+        // TODO(rust-cst-accessor-clone-efficiency): see children_suppress above.
         let snapshot: Vec<_> = {
             let guard = self.inner.read();
             guard.children.clone()
@@ -4475,7 +6171,7 @@ impl PyDisposition {
         let mut found: Option<PyObject> = None;
         let mut count = 0usize;
         for (lbl, child) in &snapshot {
-            if *lbl == Some(Disposition_Label::Suppress) {
+            if *lbl == Some(DispositionLabel::Suppress) {
                 count += 1;
                 if count == 1 {
                     found = Some(child.to_pyobject(py)?);
@@ -4491,6 +6187,7 @@ impl PyDisposition {
     }
 
     fn maybe_suppress(&self, py: Python<'_>) -> PyResult<Option<PyObject>> {
+        // TODO(rust-cst-accessor-clone-efficiency): see children_suppress above.
         let snapshot: Vec<_> = {
             let guard = self.inner.read();
             guard.children.clone()
@@ -4498,7 +6195,7 @@ impl PyDisposition {
         let mut found: Option<PyObject> = None;
         let mut count = 0usize;
         for (lbl, child) in &snapshot {
-            if *lbl == Some(Disposition_Label::Suppress) {
+            if *lbl == Some(DispositionLabel::Suppress) {
                 count += 1;
                 if count == 1 {
                     found = Some(child.to_pyobject(py)?);
@@ -4540,14 +6237,17 @@ impl PyDisposition {
 }
 
 // ───────────────────────────────────────────────────────────────────────────
-// Quantifier_Label
+// QuantifierLabel
 // ───────────────────────────────────────────────────────────────────────────
 
-#[allow(non_camel_case_types)]
+/// Label discriminant enum for children of this node type.
+///
+/// Python-visible name is `Quantifier_Label` (preserved for compatibility).
+/// Rust consumers use the CamelCase `QuantifierLabel` name.
 #[cfg(feature = "python")]
 #[pyclass(frozen, name = "Quantifier_Label")]
-#[derive(Clone, PartialEq, Eq, Hash)]
-pub enum Quantifier_Label {
+#[derive(Clone, Debug, PartialEq, Eq, Hash)]
+pub enum QuantifierLabel {
     #[pyo3(name = "ONE_OR_MORE")]
     OneOrMore,
     #[pyo3(name = "OPTIONAL")]
@@ -4556,10 +6256,9 @@ pub enum Quantifier_Label {
     ZeroOrMore,
 }
 
-#[allow(non_camel_case_types)]
 #[cfg(not(feature = "python"))]
-#[derive(Clone, PartialEq, Eq, Hash)]
-pub enum Quantifier_Label {
+#[derive(Clone, Debug, PartialEq, Eq, Hash)]
+pub enum QuantifierLabel {
     OneOrMore,
     Optional,
     ZeroOrMore,
@@ -4567,12 +6266,12 @@ pub enum Quantifier_Label {
 
 #[cfg(feature = "python")]
 #[pymethods]
-impl Quantifier_Label {
+impl QuantifierLabel {
     fn __repr__(&self) -> &'static str {
         match self {
-            Quantifier_Label::OneOrMore => "Quantifier.Label.ONE_OR_MORE",
-            Quantifier_Label::Optional => "Quantifier.Label.OPTIONAL",
-            Quantifier_Label::ZeroOrMore => "Quantifier.Label.ZERO_OR_MORE",
+            QuantifierLabel::OneOrMore => "Quantifier.Label.ONE_OR_MORE",
+            QuantifierLabel::Optional => "Quantifier.Label.OPTIONAL",
+            QuantifierLabel::ZeroOrMore => "Quantifier.Label.ZERO_OR_MORE",
         }
     }
 
@@ -4582,7 +6281,7 @@ impl Quantifier_Label {
     }
 
     fn __eq__(&self, py: Python<'_>, other: &Bound<'_, PyAny>) -> PyResult<PyObject> {
-        if let Ok(other_kind) = other.extract::<Quantifier_Label>() {
+        if let Ok(other_kind) = other.extract::<QuantifierLabel>() {
             return Ok((self == &other_kind).into_pyobject(py)?.to_owned().unbind().into_any());
         }
         if let Ok(cn) = other.getattr(pyo3::intern!(py, "_fltk_canonical_name")) {
@@ -4600,9 +6299,11 @@ impl Quantifier_Label {
     }
 }
 
-// QuantifierChild — child value enum for Quantifier
-// Node-typed variants hold Shared<T> (Arc<RwLock<T>>); Clone is shallow.
-#[derive(Clone)]
+/// Child value enum for `Quantifier` nodes.
+///
+/// Node-typed variants hold `Shared<T>` (`Arc<RwLock<T>>`); `Clone` is shallow
+/// (increments the reference count, does not copy the node).
+#[derive(Clone, Debug)]
 pub enum QuantifierChild {
     Span(Span),
 }
@@ -4645,14 +6346,13 @@ impl QuantifierChild {
 // Quantifier
 // ───────────────────────────────────────────────────────────────────────────
 
-/// CST data struct for `Quantifier`. Node-typed children are [`Shared<T>`] —
-/// see [`fltk_cst_core::Shared`] for clone/equality/reference semantics.
-#[derive(Clone)]
+/// CST data struct for `Quantifier`. See [`fltk_cst_core::Shared`] for clone/equality/reference semantics.
+#[derive(Clone, Debug)]
 pub struct Quantifier {
     // Not pub: use span() / children() / push_child() — the stable accessor API.
     // Direct field access bypasses any future validation logic on setters.
     span: Span,
-    children: Vec<(Option<Quantifier_Label>, QuantifierChild)>,
+    children: Vec<(Option<QuantifierLabel>, QuantifierChild)>,
 }
 
 impl PartialEq for Quantifier {
@@ -4662,8 +6362,7 @@ impl PartialEq for Quantifier {
 }
 
 impl Quantifier {
-    /// Construct a node with the given span and no children.
-    /// GIL-free.
+    /// Construct a node with the given span and no children. GIL-free.
     pub fn new(span: Span) -> Self {
         Quantifier {
             span,
@@ -4671,14 +6370,14 @@ impl Quantifier {
         }
     }
 
-    /// Return a reference to the stored `Span`.
-    pub fn span(&self) -> &Span {
-        &self.span
+    /// Return the [`NodeKind`] discriminant for this node type.
+    pub fn kind(&self) -> NodeKind {
+        NodeKind::Quantifier
     }
 
-    /// Return a slice of the children.
-    pub fn children(&self) -> &[(Option<Quantifier_Label>, QuantifierChild)] {
-        self.children.as_slice()
+    /// Return a reference to the stored [`Span`].
+    pub fn span(&self) -> &Span {
+        &self.span
     }
 
     /// Replace the node's span.
@@ -4686,9 +6385,239 @@ impl Quantifier {
         self.span = span;
     }
 
+    /// Return a slice of all children (unfiltered).
+    ///
+    /// Each entry is `(label, child)`. Use the per-label accessors
+    /// (`children_<lbl>`, `child_<lbl>`, `maybe_<lbl>`) for type-safe access.
+    pub fn children(&self) -> &[(Option<QuantifierLabel>, QuantifierChild)] {
+        self.children.as_slice()
+    }
+
     /// Push a child onto the children `Vec`.
-    pub fn push_child(&mut self, label: Option<Quantifier_Label>, child: QuantifierChild) {
+    ///
+    /// No type-checking is performed: any child variant may be stored under
+    /// any label. Per-label typed mutators (`append_<lbl>`, `extend_<lbl>`)
+    /// provide type-constrained alternatives.
+    pub fn push_child(&mut self, label: Option<QuantifierLabel>, child: QuantifierChild) {
         self.children.push((label, child));
+    }
+
+    /// Return the single child (any label), or `Err` if there is not exactly one.
+    ///
+    /// Mirrors the Python `child()` method: count violation → `CstError::ChildCount`.
+    pub fn child(&self) -> Result<&(Option<QuantifierLabel>, QuantifierChild), CstError> {
+        match self.children.as_slice() {
+            [single] => Ok(single),
+            slice => Err(CstError::ChildCount {
+                label: "<any>",
+                expected: "1",
+                found: slice.len(),
+            }),
+        }
+    }
+
+    /// Copy all children from `other` into `self`, sharing the `Shared<T>` arcs.
+    ///
+    /// Children are appended (Arc reference-count bumps, not deep copies),
+    /// matching the Python backend's reference-copy behavior. Labels are preserved.
+    ///
+    /// The borrow checker prevents `self.extend_children(self)` at the data-struct
+    /// level (`&mut` + `&` of the same value don't coexist). For self-extend from
+    /// Python, the handle pymethod handles it via snapshotting.
+    pub fn extend_children(&mut self, other: &Self) {
+        self.children.extend(other.children.iter().cloned());
+    }
+
+    /// Return an iterator over `Span` children labelled `one_or_more`.
+    ///
+    /// Off-type variants stored under the `one_or_more` label are silently skipped.
+    /// Use `children()` (the untyped slice) for a lossless view.
+    pub fn children_one_or_more(&self) -> impl Iterator<Item = &Span> + '_ {
+        self.children.iter()
+            .filter(|(lbl, _)| *lbl == Some(QuantifierLabel::OneOrMore))
+            .map(|(_, child)| match child { QuantifierChild::Span(s) => s })
+    }
+
+    /// Return the single child labelled `one_or_more`, or `Err` if not exactly one.
+    ///
+    /// Count is checked by label match first (`CstError::ChildCount`); if the
+    /// count is valid and the surviving child has the wrong variant type,
+    /// `CstError::UnexpectedChildType` is returned (single-typed labels only).
+    pub fn child_one_or_more(&self) -> Result<&Span, CstError> {
+        let mut it = self.children.iter()
+            .filter(|(lbl, _)| *lbl == Some(QuantifierLabel::OneOrMore));
+        match (it.next(), it.next()) {
+            (Some((_, child)), None) => match child {
+                QuantifierChild::Span(s) => Ok(s),
+            },
+            _ => Err(CstError::ChildCount {
+                label: "one_or_more",
+                expected: "1",
+                found: self.children.iter()
+                    .filter(|(lbl, _)| *lbl == Some(QuantifierLabel::OneOrMore))
+                    .count(),
+            }),
+        }
+    }
+
+    /// Return the optional child labelled `one_or_more`, or `Err` if more than one.
+    ///
+    /// Returns `Ok(None)` for zero, `Ok(Some(...))` for one,
+    /// `Err(CstError::ChildCount)` for two or more.
+    pub fn maybe_one_or_more(&self) -> Result<Option<&Span>, CstError> {
+        let mut it = self.children.iter()
+            .filter(|(lbl, _)| *lbl == Some(QuantifierLabel::OneOrMore));
+        match (it.next(), it.next()) {
+            (None, _) => Ok(None),
+            (Some((_, child)), None) => match child {
+                QuantifierChild::Span(s) => Ok(Some(s)),
+            },
+            _ => Err(CstError::ChildCount {
+                label: "one_or_more",
+                expected: "0 or 1",
+                found: self.children.iter()
+                    .filter(|(lbl, _)| *lbl == Some(QuantifierLabel::OneOrMore))
+                    .count(),
+            }),
+        }
+    }
+
+    /// Append a `Span` child with label `one_or_more`.
+    pub fn append_one_or_more(&mut self, span: Span) {
+        self.children.push((Some(QuantifierLabel::OneOrMore), QuantifierChild::Span(span)));
+    }
+
+    /// Append multiple `Span` children with label `one_or_more`.
+    pub fn extend_one_or_more(&mut self, spans: impl IntoIterator<Item = Span>) {
+        self.children.extend(spans.into_iter().map(|s| (Some(QuantifierLabel::OneOrMore), QuantifierChild::Span(s))));
+    }
+
+    /// Return an iterator over `Span` children labelled `optional`.
+    ///
+    /// Off-type variants stored under the `optional` label are silently skipped.
+    /// Use `children()` (the untyped slice) for a lossless view.
+    pub fn children_optional(&self) -> impl Iterator<Item = &Span> + '_ {
+        self.children.iter()
+            .filter(|(lbl, _)| *lbl == Some(QuantifierLabel::Optional))
+            .map(|(_, child)| match child { QuantifierChild::Span(s) => s })
+    }
+
+    /// Return the single child labelled `optional`, or `Err` if not exactly one.
+    ///
+    /// Count is checked by label match first (`CstError::ChildCount`); if the
+    /// count is valid and the surviving child has the wrong variant type,
+    /// `CstError::UnexpectedChildType` is returned (single-typed labels only).
+    pub fn child_optional(&self) -> Result<&Span, CstError> {
+        let mut it = self.children.iter()
+            .filter(|(lbl, _)| *lbl == Some(QuantifierLabel::Optional));
+        match (it.next(), it.next()) {
+            (Some((_, child)), None) => match child {
+                QuantifierChild::Span(s) => Ok(s),
+            },
+            _ => Err(CstError::ChildCount {
+                label: "optional",
+                expected: "1",
+                found: self.children.iter()
+                    .filter(|(lbl, _)| *lbl == Some(QuantifierLabel::Optional))
+                    .count(),
+            }),
+        }
+    }
+
+    /// Return the optional child labelled `optional`, or `Err` if more than one.
+    ///
+    /// Returns `Ok(None)` for zero, `Ok(Some(...))` for one,
+    /// `Err(CstError::ChildCount)` for two or more.
+    pub fn maybe_optional(&self) -> Result<Option<&Span>, CstError> {
+        let mut it = self.children.iter()
+            .filter(|(lbl, _)| *lbl == Some(QuantifierLabel::Optional));
+        match (it.next(), it.next()) {
+            (None, _) => Ok(None),
+            (Some((_, child)), None) => match child {
+                QuantifierChild::Span(s) => Ok(Some(s)),
+            },
+            _ => Err(CstError::ChildCount {
+                label: "optional",
+                expected: "0 or 1",
+                found: self.children.iter()
+                    .filter(|(lbl, _)| *lbl == Some(QuantifierLabel::Optional))
+                    .count(),
+            }),
+        }
+    }
+
+    /// Append a `Span` child with label `optional`.
+    pub fn append_optional(&mut self, span: Span) {
+        self.children.push((Some(QuantifierLabel::Optional), QuantifierChild::Span(span)));
+    }
+
+    /// Append multiple `Span` children with label `optional`.
+    pub fn extend_optional(&mut self, spans: impl IntoIterator<Item = Span>) {
+        self.children.extend(spans.into_iter().map(|s| (Some(QuantifierLabel::Optional), QuantifierChild::Span(s))));
+    }
+
+    /// Return an iterator over `Span` children labelled `zero_or_more`.
+    ///
+    /// Off-type variants stored under the `zero_or_more` label are silently skipped.
+    /// Use `children()` (the untyped slice) for a lossless view.
+    pub fn children_zero_or_more(&self) -> impl Iterator<Item = &Span> + '_ {
+        self.children.iter()
+            .filter(|(lbl, _)| *lbl == Some(QuantifierLabel::ZeroOrMore))
+            .map(|(_, child)| match child { QuantifierChild::Span(s) => s })
+    }
+
+    /// Return the single child labelled `zero_or_more`, or `Err` if not exactly one.
+    ///
+    /// Count is checked by label match first (`CstError::ChildCount`); if the
+    /// count is valid and the surviving child has the wrong variant type,
+    /// `CstError::UnexpectedChildType` is returned (single-typed labels only).
+    pub fn child_zero_or_more(&self) -> Result<&Span, CstError> {
+        let mut it = self.children.iter()
+            .filter(|(lbl, _)| *lbl == Some(QuantifierLabel::ZeroOrMore));
+        match (it.next(), it.next()) {
+            (Some((_, child)), None) => match child {
+                QuantifierChild::Span(s) => Ok(s),
+            },
+            _ => Err(CstError::ChildCount {
+                label: "zero_or_more",
+                expected: "1",
+                found: self.children.iter()
+                    .filter(|(lbl, _)| *lbl == Some(QuantifierLabel::ZeroOrMore))
+                    .count(),
+            }),
+        }
+    }
+
+    /// Return the optional child labelled `zero_or_more`, or `Err` if more than one.
+    ///
+    /// Returns `Ok(None)` for zero, `Ok(Some(...))` for one,
+    /// `Err(CstError::ChildCount)` for two or more.
+    pub fn maybe_zero_or_more(&self) -> Result<Option<&Span>, CstError> {
+        let mut it = self.children.iter()
+            .filter(|(lbl, _)| *lbl == Some(QuantifierLabel::ZeroOrMore));
+        match (it.next(), it.next()) {
+            (None, _) => Ok(None),
+            (Some((_, child)), None) => match child {
+                QuantifierChild::Span(s) => Ok(Some(s)),
+            },
+            _ => Err(CstError::ChildCount {
+                label: "zero_or_more",
+                expected: "0 or 1",
+                found: self.children.iter()
+                    .filter(|(lbl, _)| *lbl == Some(QuantifierLabel::ZeroOrMore))
+                    .count(),
+            }),
+        }
+    }
+
+    /// Append a `Span` child with label `zero_or_more`.
+    pub fn append_zero_or_more(&mut self, span: Span) {
+        self.children.push((Some(QuantifierLabel::ZeroOrMore), QuantifierChild::Span(span)));
+    }
+
+    /// Append multiple `Span` children with label `zero_or_more`.
+    pub fn extend_zero_or_more(&mut self, spans: impl IntoIterator<Item = Span>) {
+        self.children.extend(spans.into_iter().map(|s| (Some(QuantifierLabel::ZeroOrMore), QuantifierChild::Span(s))));
     }
 }
 
@@ -4767,7 +6696,7 @@ impl PyQuantifier {
     #[classattr]
     #[allow(non_snake_case)]
     fn Label(py: Python<'_>) -> PyResult<PyObject> {
-        Ok(Quantifier_Label::type_object(py).into_any().unbind())
+        Ok(QuantifierLabel::type_object(py).into_any().unbind())
     }
 
     #[getter]
@@ -4798,7 +6727,7 @@ impl PyQuantifier {
         let native_label = match label {
             None => None,
             Some(lbl) => {
-                if let Ok(native_lbl) = lbl.bind(py).extract::<Quantifier_Label>() {
+                if let Ok(native_lbl) = lbl.bind(py).extract::<QuantifierLabel>() {
                     Some(native_lbl)
                 } else {
                     return Err(PyTypeError::new_err(format!(
@@ -4823,7 +6752,7 @@ impl PyQuantifier {
         let native_label = match label {
             None => None,
             Some(lbl) => {
-                if let Ok(native_lbl) = lbl.bind(py).extract::<Quantifier_Label>() {
+                if let Ok(native_lbl) = lbl.bind(py).extract::<QuantifierLabel>() {
                     Some(native_lbl)
                 } else {
                     return Err(PyTypeError::new_err(format!(
@@ -4861,6 +6790,9 @@ impl PyQuantifier {
     }
 
     fn child(&self, py: Python<'_>) -> PyResult<PyObject> {
+        // TODO(rust-cst-accessor-clone-efficiency): clones the full children Vec
+        // before checking len. Could check len under the read guard and only clone
+        // the single needed entry, avoiding O(total-children) allocation on the error path.
         let snapshot: Vec<_> = {
             let guard = self.inner.read();
             guard.children.clone()
@@ -4883,7 +6815,7 @@ impl PyQuantifier {
     fn append_one_or_more(&self, py: Python<'_>, child: &Bound<'_, PyAny>) -> PyResult<()> {
         let span_type = get_span_type(py)?;
         let native_child = QuantifierChild::extract_from_pyobject(py, child, &span_type)?;
-        self.inner.write().children.push((Some(Quantifier_Label::OneOrMore), native_child));
+        self.inner.write().children.push((Some(QuantifierLabel::OneOrMore), native_child));
         Ok(())
     }
 
@@ -4893,20 +6825,23 @@ impl PyQuantifier {
         for child_result in iter {
             let child = child_result?;
             let native_child = QuantifierChild::extract_from_pyobject(py, &child, &span_type)?;
-            let entry = (Some(Quantifier_Label::OneOrMore), native_child);
+            let entry = (Some(QuantifierLabel::OneOrMore), native_child);
             self.inner.write().children.push(entry);
         }
         Ok(())
     }
 
     fn children_one_or_more(&self, py: Python<'_>) -> PyResult<Py<PyList>> {
+        // TODO(rust-cst-accessor-clone-efficiency): clones full Vec then filters outside the guard.
+        // Could filter inside the read guard (clone only matching entries) to avoid
+        // O(total-children) Arc clones for accessors that match a small subset.
         let snapshot: Vec<_> = {
             let guard = self.inner.read();
             guard.children.clone()
         };
         let result = PyList::empty(py);
         for (lbl, child) in &snapshot {
-            if *lbl == Some(Quantifier_Label::OneOrMore) {
+            if *lbl == Some(QuantifierLabel::OneOrMore) {
                 result.append(child.to_pyobject(py)?)?;
             }
         }
@@ -4914,6 +6849,7 @@ impl PyQuantifier {
     }
 
     fn child_one_or_more(&self, py: Python<'_>) -> PyResult<PyObject> {
+        // TODO(rust-cst-accessor-clone-efficiency): see children_one_or_more above.
         let snapshot: Vec<_> = {
             let guard = self.inner.read();
             guard.children.clone()
@@ -4921,7 +6857,7 @@ impl PyQuantifier {
         let mut found: Option<PyObject> = None;
         let mut count = 0usize;
         for (lbl, child) in &snapshot {
-            if *lbl == Some(Quantifier_Label::OneOrMore) {
+            if *lbl == Some(QuantifierLabel::OneOrMore) {
                 count += 1;
                 if count == 1 {
                     found = Some(child.to_pyobject(py)?);
@@ -4937,6 +6873,7 @@ impl PyQuantifier {
     }
 
     fn maybe_one_or_more(&self, py: Python<'_>) -> PyResult<Option<PyObject>> {
+        // TODO(rust-cst-accessor-clone-efficiency): see children_one_or_more above.
         let snapshot: Vec<_> = {
             let guard = self.inner.read();
             guard.children.clone()
@@ -4944,7 +6881,7 @@ impl PyQuantifier {
         let mut found: Option<PyObject> = None;
         let mut count = 0usize;
         for (lbl, child) in &snapshot {
-            if *lbl == Some(Quantifier_Label::OneOrMore) {
+            if *lbl == Some(QuantifierLabel::OneOrMore) {
                 count += 1;
                 if count == 1 {
                     found = Some(child.to_pyobject(py)?);
@@ -4962,7 +6899,7 @@ impl PyQuantifier {
     fn append_optional(&self, py: Python<'_>, child: &Bound<'_, PyAny>) -> PyResult<()> {
         let span_type = get_span_type(py)?;
         let native_child = QuantifierChild::extract_from_pyobject(py, child, &span_type)?;
-        self.inner.write().children.push((Some(Quantifier_Label::Optional), native_child));
+        self.inner.write().children.push((Some(QuantifierLabel::Optional), native_child));
         Ok(())
     }
 
@@ -4972,20 +6909,23 @@ impl PyQuantifier {
         for child_result in iter {
             let child = child_result?;
             let native_child = QuantifierChild::extract_from_pyobject(py, &child, &span_type)?;
-            let entry = (Some(Quantifier_Label::Optional), native_child);
+            let entry = (Some(QuantifierLabel::Optional), native_child);
             self.inner.write().children.push(entry);
         }
         Ok(())
     }
 
     fn children_optional(&self, py: Python<'_>) -> PyResult<Py<PyList>> {
+        // TODO(rust-cst-accessor-clone-efficiency): clones full Vec then filters outside the guard.
+        // Could filter inside the read guard (clone only matching entries) to avoid
+        // O(total-children) Arc clones for accessors that match a small subset.
         let snapshot: Vec<_> = {
             let guard = self.inner.read();
             guard.children.clone()
         };
         let result = PyList::empty(py);
         for (lbl, child) in &snapshot {
-            if *lbl == Some(Quantifier_Label::Optional) {
+            if *lbl == Some(QuantifierLabel::Optional) {
                 result.append(child.to_pyobject(py)?)?;
             }
         }
@@ -4993,6 +6933,7 @@ impl PyQuantifier {
     }
 
     fn child_optional(&self, py: Python<'_>) -> PyResult<PyObject> {
+        // TODO(rust-cst-accessor-clone-efficiency): see children_optional above.
         let snapshot: Vec<_> = {
             let guard = self.inner.read();
             guard.children.clone()
@@ -5000,7 +6941,7 @@ impl PyQuantifier {
         let mut found: Option<PyObject> = None;
         let mut count = 0usize;
         for (lbl, child) in &snapshot {
-            if *lbl == Some(Quantifier_Label::Optional) {
+            if *lbl == Some(QuantifierLabel::Optional) {
                 count += 1;
                 if count == 1 {
                     found = Some(child.to_pyobject(py)?);
@@ -5016,6 +6957,7 @@ impl PyQuantifier {
     }
 
     fn maybe_optional(&self, py: Python<'_>) -> PyResult<Option<PyObject>> {
+        // TODO(rust-cst-accessor-clone-efficiency): see children_optional above.
         let snapshot: Vec<_> = {
             let guard = self.inner.read();
             guard.children.clone()
@@ -5023,7 +6965,7 @@ impl PyQuantifier {
         let mut found: Option<PyObject> = None;
         let mut count = 0usize;
         for (lbl, child) in &snapshot {
-            if *lbl == Some(Quantifier_Label::Optional) {
+            if *lbl == Some(QuantifierLabel::Optional) {
                 count += 1;
                 if count == 1 {
                     found = Some(child.to_pyobject(py)?);
@@ -5041,7 +6983,7 @@ impl PyQuantifier {
     fn append_zero_or_more(&self, py: Python<'_>, child: &Bound<'_, PyAny>) -> PyResult<()> {
         let span_type = get_span_type(py)?;
         let native_child = QuantifierChild::extract_from_pyobject(py, child, &span_type)?;
-        self.inner.write().children.push((Some(Quantifier_Label::ZeroOrMore), native_child));
+        self.inner.write().children.push((Some(QuantifierLabel::ZeroOrMore), native_child));
         Ok(())
     }
 
@@ -5051,20 +6993,23 @@ impl PyQuantifier {
         for child_result in iter {
             let child = child_result?;
             let native_child = QuantifierChild::extract_from_pyobject(py, &child, &span_type)?;
-            let entry = (Some(Quantifier_Label::ZeroOrMore), native_child);
+            let entry = (Some(QuantifierLabel::ZeroOrMore), native_child);
             self.inner.write().children.push(entry);
         }
         Ok(())
     }
 
     fn children_zero_or_more(&self, py: Python<'_>) -> PyResult<Py<PyList>> {
+        // TODO(rust-cst-accessor-clone-efficiency): clones full Vec then filters outside the guard.
+        // Could filter inside the read guard (clone only matching entries) to avoid
+        // O(total-children) Arc clones for accessors that match a small subset.
         let snapshot: Vec<_> = {
             let guard = self.inner.read();
             guard.children.clone()
         };
         let result = PyList::empty(py);
         for (lbl, child) in &snapshot {
-            if *lbl == Some(Quantifier_Label::ZeroOrMore) {
+            if *lbl == Some(QuantifierLabel::ZeroOrMore) {
                 result.append(child.to_pyobject(py)?)?;
             }
         }
@@ -5072,6 +7017,7 @@ impl PyQuantifier {
     }
 
     fn child_zero_or_more(&self, py: Python<'_>) -> PyResult<PyObject> {
+        // TODO(rust-cst-accessor-clone-efficiency): see children_zero_or_more above.
         let snapshot: Vec<_> = {
             let guard = self.inner.read();
             guard.children.clone()
@@ -5079,7 +7025,7 @@ impl PyQuantifier {
         let mut found: Option<PyObject> = None;
         let mut count = 0usize;
         for (lbl, child) in &snapshot {
-            if *lbl == Some(Quantifier_Label::ZeroOrMore) {
+            if *lbl == Some(QuantifierLabel::ZeroOrMore) {
                 count += 1;
                 if count == 1 {
                     found = Some(child.to_pyobject(py)?);
@@ -5095,6 +7041,7 @@ impl PyQuantifier {
     }
 
     fn maybe_zero_or_more(&self, py: Python<'_>) -> PyResult<Option<PyObject>> {
+        // TODO(rust-cst-accessor-clone-efficiency): see children_zero_or_more above.
         let snapshot: Vec<_> = {
             let guard = self.inner.read();
             guard.children.clone()
@@ -5102,7 +7049,7 @@ impl PyQuantifier {
         let mut found: Option<PyObject> = None;
         let mut count = 0usize;
         for (lbl, child) in &snapshot {
-            if *lbl == Some(Quantifier_Label::ZeroOrMore) {
+            if *lbl == Some(QuantifierLabel::ZeroOrMore) {
                 count += 1;
                 if count == 1 {
                     found = Some(child.to_pyobject(py)?);
@@ -5144,31 +7091,33 @@ impl PyQuantifier {
 }
 
 // ───────────────────────────────────────────────────────────────────────────
-// Identifier_Label
+// IdentifierLabel
 // ───────────────────────────────────────────────────────────────────────────
 
-#[allow(non_camel_case_types)]
+/// Label discriminant enum for children of this node type.
+///
+/// Python-visible name is `Identifier_Label` (preserved for compatibility).
+/// Rust consumers use the CamelCase `IdentifierLabel` name.
 #[cfg(feature = "python")]
 #[pyclass(frozen, name = "Identifier_Label")]
-#[derive(Clone, PartialEq, Eq, Hash)]
-pub enum Identifier_Label {
+#[derive(Clone, Debug, PartialEq, Eq, Hash)]
+pub enum IdentifierLabel {
     #[pyo3(name = "NAME")]
     Name,
 }
 
-#[allow(non_camel_case_types)]
 #[cfg(not(feature = "python"))]
-#[derive(Clone, PartialEq, Eq, Hash)]
-pub enum Identifier_Label {
+#[derive(Clone, Debug, PartialEq, Eq, Hash)]
+pub enum IdentifierLabel {
     Name,
 }
 
 #[cfg(feature = "python")]
 #[pymethods]
-impl Identifier_Label {
+impl IdentifierLabel {
     fn __repr__(&self) -> &'static str {
         match self {
-            Identifier_Label::Name => "Identifier.Label.NAME",
+            IdentifierLabel::Name => "Identifier.Label.NAME",
         }
     }
 
@@ -5178,7 +7127,7 @@ impl Identifier_Label {
     }
 
     fn __eq__(&self, py: Python<'_>, other: &Bound<'_, PyAny>) -> PyResult<PyObject> {
-        if let Ok(other_kind) = other.extract::<Identifier_Label>() {
+        if let Ok(other_kind) = other.extract::<IdentifierLabel>() {
             return Ok((self == &other_kind).into_pyobject(py)?.to_owned().unbind().into_any());
         }
         if let Ok(cn) = other.getattr(pyo3::intern!(py, "_fltk_canonical_name")) {
@@ -5196,9 +7145,11 @@ impl Identifier_Label {
     }
 }
 
-// IdentifierChild — child value enum for Identifier
-// Node-typed variants hold Shared<T> (Arc<RwLock<T>>); Clone is shallow.
-#[derive(Clone)]
+/// Child value enum for `Identifier` nodes.
+///
+/// Node-typed variants hold `Shared<T>` (`Arc<RwLock<T>>`); `Clone` is shallow
+/// (increments the reference count, does not copy the node).
+#[derive(Clone, Debug)]
 pub enum IdentifierChild {
     Span(Span),
 }
@@ -5241,14 +7192,13 @@ impl IdentifierChild {
 // Identifier
 // ───────────────────────────────────────────────────────────────────────────
 
-/// CST data struct for `Identifier`. Node-typed children are [`Shared<T>`] —
-/// see [`fltk_cst_core::Shared`] for clone/equality/reference semantics.
-#[derive(Clone)]
+/// CST data struct for `Identifier`. See [`fltk_cst_core::Shared`] for clone/equality/reference semantics.
+#[derive(Clone, Debug)]
 pub struct Identifier {
     // Not pub: use span() / children() / push_child() — the stable accessor API.
     // Direct field access bypasses any future validation logic on setters.
     span: Span,
-    children: Vec<(Option<Identifier_Label>, IdentifierChild)>,
+    children: Vec<(Option<IdentifierLabel>, IdentifierChild)>,
 }
 
 impl PartialEq for Identifier {
@@ -5258,8 +7208,7 @@ impl PartialEq for Identifier {
 }
 
 impl Identifier {
-    /// Construct a node with the given span and no children.
-    /// GIL-free.
+    /// Construct a node with the given span and no children. GIL-free.
     pub fn new(span: Span) -> Self {
         Identifier {
             span,
@@ -5267,14 +7216,14 @@ impl Identifier {
         }
     }
 
-    /// Return a reference to the stored `Span`.
-    pub fn span(&self) -> &Span {
-        &self.span
+    /// Return the [`NodeKind`] discriminant for this node type.
+    pub fn kind(&self) -> NodeKind {
+        NodeKind::Identifier
     }
 
-    /// Return a slice of the children.
-    pub fn children(&self) -> &[(Option<Identifier_Label>, IdentifierChild)] {
-        self.children.as_slice()
+    /// Return a reference to the stored [`Span`].
+    pub fn span(&self) -> &Span {
+        &self.span
     }
 
     /// Replace the node's span.
@@ -5282,9 +7231,111 @@ impl Identifier {
         self.span = span;
     }
 
+    /// Return a slice of all children (unfiltered).
+    ///
+    /// Each entry is `(label, child)`. Use the per-label accessors
+    /// (`children_<lbl>`, `child_<lbl>`, `maybe_<lbl>`) for type-safe access.
+    pub fn children(&self) -> &[(Option<IdentifierLabel>, IdentifierChild)] {
+        self.children.as_slice()
+    }
+
     /// Push a child onto the children `Vec`.
-    pub fn push_child(&mut self, label: Option<Identifier_Label>, child: IdentifierChild) {
+    ///
+    /// No type-checking is performed: any child variant may be stored under
+    /// any label. Per-label typed mutators (`append_<lbl>`, `extend_<lbl>`)
+    /// provide type-constrained alternatives.
+    pub fn push_child(&mut self, label: Option<IdentifierLabel>, child: IdentifierChild) {
         self.children.push((label, child));
+    }
+
+    /// Return the single child (any label), or `Err` if there is not exactly one.
+    ///
+    /// Mirrors the Python `child()` method: count violation → `CstError::ChildCount`.
+    pub fn child(&self) -> Result<&(Option<IdentifierLabel>, IdentifierChild), CstError> {
+        match self.children.as_slice() {
+            [single] => Ok(single),
+            slice => Err(CstError::ChildCount {
+                label: "<any>",
+                expected: "1",
+                found: slice.len(),
+            }),
+        }
+    }
+
+    /// Copy all children from `other` into `self`, sharing the `Shared<T>` arcs.
+    ///
+    /// Children are appended (Arc reference-count bumps, not deep copies),
+    /// matching the Python backend's reference-copy behavior. Labels are preserved.
+    ///
+    /// The borrow checker prevents `self.extend_children(self)` at the data-struct
+    /// level (`&mut` + `&` of the same value don't coexist). For self-extend from
+    /// Python, the handle pymethod handles it via snapshotting.
+    pub fn extend_children(&mut self, other: &Self) {
+        self.children.extend(other.children.iter().cloned());
+    }
+
+    /// Return an iterator over `Span` children labelled `name`.
+    ///
+    /// Off-type variants stored under the `name` label are silently skipped.
+    /// Use `children()` (the untyped slice) for a lossless view.
+    pub fn children_name(&self) -> impl Iterator<Item = &Span> + '_ {
+        self.children.iter()
+            .filter(|(lbl, _)| *lbl == Some(IdentifierLabel::Name))
+            .map(|(_, child)| match child { IdentifierChild::Span(s) => s })
+    }
+
+    /// Return the single child labelled `name`, or `Err` if not exactly one.
+    ///
+    /// Count is checked by label match first (`CstError::ChildCount`); if the
+    /// count is valid and the surviving child has the wrong variant type,
+    /// `CstError::UnexpectedChildType` is returned (single-typed labels only).
+    pub fn child_name(&self) -> Result<&Span, CstError> {
+        let mut it = self.children.iter()
+            .filter(|(lbl, _)| *lbl == Some(IdentifierLabel::Name));
+        match (it.next(), it.next()) {
+            (Some((_, child)), None) => match child {
+                IdentifierChild::Span(s) => Ok(s),
+            },
+            _ => Err(CstError::ChildCount {
+                label: "name",
+                expected: "1",
+                found: self.children.iter()
+                    .filter(|(lbl, _)| *lbl == Some(IdentifierLabel::Name))
+                    .count(),
+            }),
+        }
+    }
+
+    /// Return the optional child labelled `name`, or `Err` if more than one.
+    ///
+    /// Returns `Ok(None)` for zero, `Ok(Some(...))` for one,
+    /// `Err(CstError::ChildCount)` for two or more.
+    pub fn maybe_name(&self) -> Result<Option<&Span>, CstError> {
+        let mut it = self.children.iter()
+            .filter(|(lbl, _)| *lbl == Some(IdentifierLabel::Name));
+        match (it.next(), it.next()) {
+            (None, _) => Ok(None),
+            (Some((_, child)), None) => match child {
+                IdentifierChild::Span(s) => Ok(Some(s)),
+            },
+            _ => Err(CstError::ChildCount {
+                label: "name",
+                expected: "0 or 1",
+                found: self.children.iter()
+                    .filter(|(lbl, _)| *lbl == Some(IdentifierLabel::Name))
+                    .count(),
+            }),
+        }
+    }
+
+    /// Append a `Span` child with label `name`.
+    pub fn append_name(&mut self, span: Span) {
+        self.children.push((Some(IdentifierLabel::Name), IdentifierChild::Span(span)));
+    }
+
+    /// Append multiple `Span` children with label `name`.
+    pub fn extend_name(&mut self, spans: impl IntoIterator<Item = Span>) {
+        self.children.extend(spans.into_iter().map(|s| (Some(IdentifierLabel::Name), IdentifierChild::Span(s))));
     }
 }
 
@@ -5363,7 +7414,7 @@ impl PyIdentifier {
     #[classattr]
     #[allow(non_snake_case)]
     fn Label(py: Python<'_>) -> PyResult<PyObject> {
-        Ok(Identifier_Label::type_object(py).into_any().unbind())
+        Ok(IdentifierLabel::type_object(py).into_any().unbind())
     }
 
     #[getter]
@@ -5394,7 +7445,7 @@ impl PyIdentifier {
         let native_label = match label {
             None => None,
             Some(lbl) => {
-                if let Ok(native_lbl) = lbl.bind(py).extract::<Identifier_Label>() {
+                if let Ok(native_lbl) = lbl.bind(py).extract::<IdentifierLabel>() {
                     Some(native_lbl)
                 } else {
                     return Err(PyTypeError::new_err(format!(
@@ -5419,7 +7470,7 @@ impl PyIdentifier {
         let native_label = match label {
             None => None,
             Some(lbl) => {
-                if let Ok(native_lbl) = lbl.bind(py).extract::<Identifier_Label>() {
+                if let Ok(native_lbl) = lbl.bind(py).extract::<IdentifierLabel>() {
                     Some(native_lbl)
                 } else {
                     return Err(PyTypeError::new_err(format!(
@@ -5457,6 +7508,9 @@ impl PyIdentifier {
     }
 
     fn child(&self, py: Python<'_>) -> PyResult<PyObject> {
+        // TODO(rust-cst-accessor-clone-efficiency): clones the full children Vec
+        // before checking len. Could check len under the read guard and only clone
+        // the single needed entry, avoiding O(total-children) allocation on the error path.
         let snapshot: Vec<_> = {
             let guard = self.inner.read();
             guard.children.clone()
@@ -5479,7 +7533,7 @@ impl PyIdentifier {
     fn append_name(&self, py: Python<'_>, child: &Bound<'_, PyAny>) -> PyResult<()> {
         let span_type = get_span_type(py)?;
         let native_child = IdentifierChild::extract_from_pyobject(py, child, &span_type)?;
-        self.inner.write().children.push((Some(Identifier_Label::Name), native_child));
+        self.inner.write().children.push((Some(IdentifierLabel::Name), native_child));
         Ok(())
     }
 
@@ -5489,20 +7543,23 @@ impl PyIdentifier {
         for child_result in iter {
             let child = child_result?;
             let native_child = IdentifierChild::extract_from_pyobject(py, &child, &span_type)?;
-            let entry = (Some(Identifier_Label::Name), native_child);
+            let entry = (Some(IdentifierLabel::Name), native_child);
             self.inner.write().children.push(entry);
         }
         Ok(())
     }
 
     fn children_name(&self, py: Python<'_>) -> PyResult<Py<PyList>> {
+        // TODO(rust-cst-accessor-clone-efficiency): clones full Vec then filters outside the guard.
+        // Could filter inside the read guard (clone only matching entries) to avoid
+        // O(total-children) Arc clones for accessors that match a small subset.
         let snapshot: Vec<_> = {
             let guard = self.inner.read();
             guard.children.clone()
         };
         let result = PyList::empty(py);
         for (lbl, child) in &snapshot {
-            if *lbl == Some(Identifier_Label::Name) {
+            if *lbl == Some(IdentifierLabel::Name) {
                 result.append(child.to_pyobject(py)?)?;
             }
         }
@@ -5510,6 +7567,7 @@ impl PyIdentifier {
     }
 
     fn child_name(&self, py: Python<'_>) -> PyResult<PyObject> {
+        // TODO(rust-cst-accessor-clone-efficiency): see children_name above.
         let snapshot: Vec<_> = {
             let guard = self.inner.read();
             guard.children.clone()
@@ -5517,7 +7575,7 @@ impl PyIdentifier {
         let mut found: Option<PyObject> = None;
         let mut count = 0usize;
         for (lbl, child) in &snapshot {
-            if *lbl == Some(Identifier_Label::Name) {
+            if *lbl == Some(IdentifierLabel::Name) {
                 count += 1;
                 if count == 1 {
                     found = Some(child.to_pyobject(py)?);
@@ -5533,6 +7591,7 @@ impl PyIdentifier {
     }
 
     fn maybe_name(&self, py: Python<'_>) -> PyResult<Option<PyObject>> {
+        // TODO(rust-cst-accessor-clone-efficiency): see children_name above.
         let snapshot: Vec<_> = {
             let guard = self.inner.read();
             guard.children.clone()
@@ -5540,7 +7599,7 @@ impl PyIdentifier {
         let mut found: Option<PyObject> = None;
         let mut count = 0usize;
         for (lbl, child) in &snapshot {
-            if *lbl == Some(Identifier_Label::Name) {
+            if *lbl == Some(IdentifierLabel::Name) {
                 count += 1;
                 if count == 1 {
                     found = Some(child.to_pyobject(py)?);
@@ -5582,31 +7641,33 @@ impl PyIdentifier {
 }
 
 // ───────────────────────────────────────────────────────────────────────────
-// RawString_Label
+// RawStringLabel
 // ───────────────────────────────────────────────────────────────────────────
 
-#[allow(non_camel_case_types)]
+/// Label discriminant enum for children of this node type.
+///
+/// Python-visible name is `RawString_Label` (preserved for compatibility).
+/// Rust consumers use the CamelCase `RawStringLabel` name.
 #[cfg(feature = "python")]
 #[pyclass(frozen, name = "RawString_Label")]
-#[derive(Clone, PartialEq, Eq, Hash)]
-pub enum RawString_Label {
+#[derive(Clone, Debug, PartialEq, Eq, Hash)]
+pub enum RawStringLabel {
     #[pyo3(name = "VALUE")]
     Value,
 }
 
-#[allow(non_camel_case_types)]
 #[cfg(not(feature = "python"))]
-#[derive(Clone, PartialEq, Eq, Hash)]
-pub enum RawString_Label {
+#[derive(Clone, Debug, PartialEq, Eq, Hash)]
+pub enum RawStringLabel {
     Value,
 }
 
 #[cfg(feature = "python")]
 #[pymethods]
-impl RawString_Label {
+impl RawStringLabel {
     fn __repr__(&self) -> &'static str {
         match self {
-            RawString_Label::Value => "RawString.Label.VALUE",
+            RawStringLabel::Value => "RawString.Label.VALUE",
         }
     }
 
@@ -5616,7 +7677,7 @@ impl RawString_Label {
     }
 
     fn __eq__(&self, py: Python<'_>, other: &Bound<'_, PyAny>) -> PyResult<PyObject> {
-        if let Ok(other_kind) = other.extract::<RawString_Label>() {
+        if let Ok(other_kind) = other.extract::<RawStringLabel>() {
             return Ok((self == &other_kind).into_pyobject(py)?.to_owned().unbind().into_any());
         }
         if let Ok(cn) = other.getattr(pyo3::intern!(py, "_fltk_canonical_name")) {
@@ -5634,9 +7695,11 @@ impl RawString_Label {
     }
 }
 
-// RawStringChild — child value enum for RawString
-// Node-typed variants hold Shared<T> (Arc<RwLock<T>>); Clone is shallow.
-#[derive(Clone)]
+/// Child value enum for `RawString` nodes.
+///
+/// Node-typed variants hold `Shared<T>` (`Arc<RwLock<T>>`); `Clone` is shallow
+/// (increments the reference count, does not copy the node).
+#[derive(Clone, Debug)]
 pub enum RawStringChild {
     Span(Span),
 }
@@ -5679,14 +7742,13 @@ impl RawStringChild {
 // RawString
 // ───────────────────────────────────────────────────────────────────────────
 
-/// CST data struct for `RawString`. Node-typed children are [`Shared<T>`] —
-/// see [`fltk_cst_core::Shared`] for clone/equality/reference semantics.
-#[derive(Clone)]
+/// CST data struct for `RawString`. See [`fltk_cst_core::Shared`] for clone/equality/reference semantics.
+#[derive(Clone, Debug)]
 pub struct RawString {
     // Not pub: use span() / children() / push_child() — the stable accessor API.
     // Direct field access bypasses any future validation logic on setters.
     span: Span,
-    children: Vec<(Option<RawString_Label>, RawStringChild)>,
+    children: Vec<(Option<RawStringLabel>, RawStringChild)>,
 }
 
 impl PartialEq for RawString {
@@ -5696,8 +7758,7 @@ impl PartialEq for RawString {
 }
 
 impl RawString {
-    /// Construct a node with the given span and no children.
-    /// GIL-free.
+    /// Construct a node with the given span and no children. GIL-free.
     pub fn new(span: Span) -> Self {
         RawString {
             span,
@@ -5705,14 +7766,14 @@ impl RawString {
         }
     }
 
-    /// Return a reference to the stored `Span`.
-    pub fn span(&self) -> &Span {
-        &self.span
+    /// Return the [`NodeKind`] discriminant for this node type.
+    pub fn kind(&self) -> NodeKind {
+        NodeKind::RawString
     }
 
-    /// Return a slice of the children.
-    pub fn children(&self) -> &[(Option<RawString_Label>, RawStringChild)] {
-        self.children.as_slice()
+    /// Return a reference to the stored [`Span`].
+    pub fn span(&self) -> &Span {
+        &self.span
     }
 
     /// Replace the node's span.
@@ -5720,9 +7781,111 @@ impl RawString {
         self.span = span;
     }
 
+    /// Return a slice of all children (unfiltered).
+    ///
+    /// Each entry is `(label, child)`. Use the per-label accessors
+    /// (`children_<lbl>`, `child_<lbl>`, `maybe_<lbl>`) for type-safe access.
+    pub fn children(&self) -> &[(Option<RawStringLabel>, RawStringChild)] {
+        self.children.as_slice()
+    }
+
     /// Push a child onto the children `Vec`.
-    pub fn push_child(&mut self, label: Option<RawString_Label>, child: RawStringChild) {
+    ///
+    /// No type-checking is performed: any child variant may be stored under
+    /// any label. Per-label typed mutators (`append_<lbl>`, `extend_<lbl>`)
+    /// provide type-constrained alternatives.
+    pub fn push_child(&mut self, label: Option<RawStringLabel>, child: RawStringChild) {
         self.children.push((label, child));
+    }
+
+    /// Return the single child (any label), or `Err` if there is not exactly one.
+    ///
+    /// Mirrors the Python `child()` method: count violation → `CstError::ChildCount`.
+    pub fn child(&self) -> Result<&(Option<RawStringLabel>, RawStringChild), CstError> {
+        match self.children.as_slice() {
+            [single] => Ok(single),
+            slice => Err(CstError::ChildCount {
+                label: "<any>",
+                expected: "1",
+                found: slice.len(),
+            }),
+        }
+    }
+
+    /// Copy all children from `other` into `self`, sharing the `Shared<T>` arcs.
+    ///
+    /// Children are appended (Arc reference-count bumps, not deep copies),
+    /// matching the Python backend's reference-copy behavior. Labels are preserved.
+    ///
+    /// The borrow checker prevents `self.extend_children(self)` at the data-struct
+    /// level (`&mut` + `&` of the same value don't coexist). For self-extend from
+    /// Python, the handle pymethod handles it via snapshotting.
+    pub fn extend_children(&mut self, other: &Self) {
+        self.children.extend(other.children.iter().cloned());
+    }
+
+    /// Return an iterator over `Span` children labelled `value`.
+    ///
+    /// Off-type variants stored under the `value` label are silently skipped.
+    /// Use `children()` (the untyped slice) for a lossless view.
+    pub fn children_value(&self) -> impl Iterator<Item = &Span> + '_ {
+        self.children.iter()
+            .filter(|(lbl, _)| *lbl == Some(RawStringLabel::Value))
+            .map(|(_, child)| match child { RawStringChild::Span(s) => s })
+    }
+
+    /// Return the single child labelled `value`, or `Err` if not exactly one.
+    ///
+    /// Count is checked by label match first (`CstError::ChildCount`); if the
+    /// count is valid and the surviving child has the wrong variant type,
+    /// `CstError::UnexpectedChildType` is returned (single-typed labels only).
+    pub fn child_value(&self) -> Result<&Span, CstError> {
+        let mut it = self.children.iter()
+            .filter(|(lbl, _)| *lbl == Some(RawStringLabel::Value));
+        match (it.next(), it.next()) {
+            (Some((_, child)), None) => match child {
+                RawStringChild::Span(s) => Ok(s),
+            },
+            _ => Err(CstError::ChildCount {
+                label: "value",
+                expected: "1",
+                found: self.children.iter()
+                    .filter(|(lbl, _)| *lbl == Some(RawStringLabel::Value))
+                    .count(),
+            }),
+        }
+    }
+
+    /// Return the optional child labelled `value`, or `Err` if more than one.
+    ///
+    /// Returns `Ok(None)` for zero, `Ok(Some(...))` for one,
+    /// `Err(CstError::ChildCount)` for two or more.
+    pub fn maybe_value(&self) -> Result<Option<&Span>, CstError> {
+        let mut it = self.children.iter()
+            .filter(|(lbl, _)| *lbl == Some(RawStringLabel::Value));
+        match (it.next(), it.next()) {
+            (None, _) => Ok(None),
+            (Some((_, child)), None) => match child {
+                RawStringChild::Span(s) => Ok(Some(s)),
+            },
+            _ => Err(CstError::ChildCount {
+                label: "value",
+                expected: "0 or 1",
+                found: self.children.iter()
+                    .filter(|(lbl, _)| *lbl == Some(RawStringLabel::Value))
+                    .count(),
+            }),
+        }
+    }
+
+    /// Append a `Span` child with label `value`.
+    pub fn append_value(&mut self, span: Span) {
+        self.children.push((Some(RawStringLabel::Value), RawStringChild::Span(span)));
+    }
+
+    /// Append multiple `Span` children with label `value`.
+    pub fn extend_value(&mut self, spans: impl IntoIterator<Item = Span>) {
+        self.children.extend(spans.into_iter().map(|s| (Some(RawStringLabel::Value), RawStringChild::Span(s))));
     }
 }
 
@@ -5801,7 +7964,7 @@ impl PyRawString {
     #[classattr]
     #[allow(non_snake_case)]
     fn Label(py: Python<'_>) -> PyResult<PyObject> {
-        Ok(RawString_Label::type_object(py).into_any().unbind())
+        Ok(RawStringLabel::type_object(py).into_any().unbind())
     }
 
     #[getter]
@@ -5832,7 +7995,7 @@ impl PyRawString {
         let native_label = match label {
             None => None,
             Some(lbl) => {
-                if let Ok(native_lbl) = lbl.bind(py).extract::<RawString_Label>() {
+                if let Ok(native_lbl) = lbl.bind(py).extract::<RawStringLabel>() {
                     Some(native_lbl)
                 } else {
                     return Err(PyTypeError::new_err(format!(
@@ -5857,7 +8020,7 @@ impl PyRawString {
         let native_label = match label {
             None => None,
             Some(lbl) => {
-                if let Ok(native_lbl) = lbl.bind(py).extract::<RawString_Label>() {
+                if let Ok(native_lbl) = lbl.bind(py).extract::<RawStringLabel>() {
                     Some(native_lbl)
                 } else {
                     return Err(PyTypeError::new_err(format!(
@@ -5895,6 +8058,9 @@ impl PyRawString {
     }
 
     fn child(&self, py: Python<'_>) -> PyResult<PyObject> {
+        // TODO(rust-cst-accessor-clone-efficiency): clones the full children Vec
+        // before checking len. Could check len under the read guard and only clone
+        // the single needed entry, avoiding O(total-children) allocation on the error path.
         let snapshot: Vec<_> = {
             let guard = self.inner.read();
             guard.children.clone()
@@ -5917,7 +8083,7 @@ impl PyRawString {
     fn append_value(&self, py: Python<'_>, child: &Bound<'_, PyAny>) -> PyResult<()> {
         let span_type = get_span_type(py)?;
         let native_child = RawStringChild::extract_from_pyobject(py, child, &span_type)?;
-        self.inner.write().children.push((Some(RawString_Label::Value), native_child));
+        self.inner.write().children.push((Some(RawStringLabel::Value), native_child));
         Ok(())
     }
 
@@ -5927,20 +8093,23 @@ impl PyRawString {
         for child_result in iter {
             let child = child_result?;
             let native_child = RawStringChild::extract_from_pyobject(py, &child, &span_type)?;
-            let entry = (Some(RawString_Label::Value), native_child);
+            let entry = (Some(RawStringLabel::Value), native_child);
             self.inner.write().children.push(entry);
         }
         Ok(())
     }
 
     fn children_value(&self, py: Python<'_>) -> PyResult<Py<PyList>> {
+        // TODO(rust-cst-accessor-clone-efficiency): clones full Vec then filters outside the guard.
+        // Could filter inside the read guard (clone only matching entries) to avoid
+        // O(total-children) Arc clones for accessors that match a small subset.
         let snapshot: Vec<_> = {
             let guard = self.inner.read();
             guard.children.clone()
         };
         let result = PyList::empty(py);
         for (lbl, child) in &snapshot {
-            if *lbl == Some(RawString_Label::Value) {
+            if *lbl == Some(RawStringLabel::Value) {
                 result.append(child.to_pyobject(py)?)?;
             }
         }
@@ -5948,6 +8117,7 @@ impl PyRawString {
     }
 
     fn child_value(&self, py: Python<'_>) -> PyResult<PyObject> {
+        // TODO(rust-cst-accessor-clone-efficiency): see children_value above.
         let snapshot: Vec<_> = {
             let guard = self.inner.read();
             guard.children.clone()
@@ -5955,7 +8125,7 @@ impl PyRawString {
         let mut found: Option<PyObject> = None;
         let mut count = 0usize;
         for (lbl, child) in &snapshot {
-            if *lbl == Some(RawString_Label::Value) {
+            if *lbl == Some(RawStringLabel::Value) {
                 count += 1;
                 if count == 1 {
                     found = Some(child.to_pyobject(py)?);
@@ -5971,6 +8141,7 @@ impl PyRawString {
     }
 
     fn maybe_value(&self, py: Python<'_>) -> PyResult<Option<PyObject>> {
+        // TODO(rust-cst-accessor-clone-efficiency): see children_value above.
         let snapshot: Vec<_> = {
             let guard = self.inner.read();
             guard.children.clone()
@@ -5978,7 +8149,7 @@ impl PyRawString {
         let mut found: Option<PyObject> = None;
         let mut count = 0usize;
         for (lbl, child) in &snapshot {
-            if *lbl == Some(RawString_Label::Value) {
+            if *lbl == Some(RawStringLabel::Value) {
                 count += 1;
                 if count == 1 {
                     found = Some(child.to_pyobject(py)?);
@@ -6020,31 +8191,33 @@ impl PyRawString {
 }
 
 // ───────────────────────────────────────────────────────────────────────────
-// Literal_Label
+// LiteralLabel
 // ───────────────────────────────────────────────────────────────────────────
 
-#[allow(non_camel_case_types)]
+/// Label discriminant enum for children of this node type.
+///
+/// Python-visible name is `Literal_Label` (preserved for compatibility).
+/// Rust consumers use the CamelCase `LiteralLabel` name.
 #[cfg(feature = "python")]
 #[pyclass(frozen, name = "Literal_Label")]
-#[derive(Clone, PartialEq, Eq, Hash)]
-pub enum Literal_Label {
+#[derive(Clone, Debug, PartialEq, Eq, Hash)]
+pub enum LiteralLabel {
     #[pyo3(name = "VALUE")]
     Value,
 }
 
-#[allow(non_camel_case_types)]
 #[cfg(not(feature = "python"))]
-#[derive(Clone, PartialEq, Eq, Hash)]
-pub enum Literal_Label {
+#[derive(Clone, Debug, PartialEq, Eq, Hash)]
+pub enum LiteralLabel {
     Value,
 }
 
 #[cfg(feature = "python")]
 #[pymethods]
-impl Literal_Label {
+impl LiteralLabel {
     fn __repr__(&self) -> &'static str {
         match self {
-            Literal_Label::Value => "Literal.Label.VALUE",
+            LiteralLabel::Value => "Literal.Label.VALUE",
         }
     }
 
@@ -6054,7 +8227,7 @@ impl Literal_Label {
     }
 
     fn __eq__(&self, py: Python<'_>, other: &Bound<'_, PyAny>) -> PyResult<PyObject> {
-        if let Ok(other_kind) = other.extract::<Literal_Label>() {
+        if let Ok(other_kind) = other.extract::<LiteralLabel>() {
             return Ok((self == &other_kind).into_pyobject(py)?.to_owned().unbind().into_any());
         }
         if let Ok(cn) = other.getattr(pyo3::intern!(py, "_fltk_canonical_name")) {
@@ -6072,9 +8245,11 @@ impl Literal_Label {
     }
 }
 
-// LiteralChild — child value enum for Literal
-// Node-typed variants hold Shared<T> (Arc<RwLock<T>>); Clone is shallow.
-#[derive(Clone)]
+/// Child value enum for `Literal` nodes.
+///
+/// Node-typed variants hold `Shared<T>` (`Arc<RwLock<T>>`); `Clone` is shallow
+/// (increments the reference count, does not copy the node).
+#[derive(Clone, Debug)]
 pub enum LiteralChild {
     Span(Span),
 }
@@ -6117,14 +8292,13 @@ impl LiteralChild {
 // Literal
 // ───────────────────────────────────────────────────────────────────────────
 
-/// CST data struct for `Literal`. Node-typed children are [`Shared<T>`] —
-/// see [`fltk_cst_core::Shared`] for clone/equality/reference semantics.
-#[derive(Clone)]
+/// CST data struct for `Literal`. See [`fltk_cst_core::Shared`] for clone/equality/reference semantics.
+#[derive(Clone, Debug)]
 pub struct Literal {
     // Not pub: use span() / children() / push_child() — the stable accessor API.
     // Direct field access bypasses any future validation logic on setters.
     span: Span,
-    children: Vec<(Option<Literal_Label>, LiteralChild)>,
+    children: Vec<(Option<LiteralLabel>, LiteralChild)>,
 }
 
 impl PartialEq for Literal {
@@ -6134,8 +8308,7 @@ impl PartialEq for Literal {
 }
 
 impl Literal {
-    /// Construct a node with the given span and no children.
-    /// GIL-free.
+    /// Construct a node with the given span and no children. GIL-free.
     pub fn new(span: Span) -> Self {
         Literal {
             span,
@@ -6143,14 +8316,14 @@ impl Literal {
         }
     }
 
-    /// Return a reference to the stored `Span`.
-    pub fn span(&self) -> &Span {
-        &self.span
+    /// Return the [`NodeKind`] discriminant for this node type.
+    pub fn kind(&self) -> NodeKind {
+        NodeKind::Literal
     }
 
-    /// Return a slice of the children.
-    pub fn children(&self) -> &[(Option<Literal_Label>, LiteralChild)] {
-        self.children.as_slice()
+    /// Return a reference to the stored [`Span`].
+    pub fn span(&self) -> &Span {
+        &self.span
     }
 
     /// Replace the node's span.
@@ -6158,9 +8331,111 @@ impl Literal {
         self.span = span;
     }
 
+    /// Return a slice of all children (unfiltered).
+    ///
+    /// Each entry is `(label, child)`. Use the per-label accessors
+    /// (`children_<lbl>`, `child_<lbl>`, `maybe_<lbl>`) for type-safe access.
+    pub fn children(&self) -> &[(Option<LiteralLabel>, LiteralChild)] {
+        self.children.as_slice()
+    }
+
     /// Push a child onto the children `Vec`.
-    pub fn push_child(&mut self, label: Option<Literal_Label>, child: LiteralChild) {
+    ///
+    /// No type-checking is performed: any child variant may be stored under
+    /// any label. Per-label typed mutators (`append_<lbl>`, `extend_<lbl>`)
+    /// provide type-constrained alternatives.
+    pub fn push_child(&mut self, label: Option<LiteralLabel>, child: LiteralChild) {
         self.children.push((label, child));
+    }
+
+    /// Return the single child (any label), or `Err` if there is not exactly one.
+    ///
+    /// Mirrors the Python `child()` method: count violation → `CstError::ChildCount`.
+    pub fn child(&self) -> Result<&(Option<LiteralLabel>, LiteralChild), CstError> {
+        match self.children.as_slice() {
+            [single] => Ok(single),
+            slice => Err(CstError::ChildCount {
+                label: "<any>",
+                expected: "1",
+                found: slice.len(),
+            }),
+        }
+    }
+
+    /// Copy all children from `other` into `self`, sharing the `Shared<T>` arcs.
+    ///
+    /// Children are appended (Arc reference-count bumps, not deep copies),
+    /// matching the Python backend's reference-copy behavior. Labels are preserved.
+    ///
+    /// The borrow checker prevents `self.extend_children(self)` at the data-struct
+    /// level (`&mut` + `&` of the same value don't coexist). For self-extend from
+    /// Python, the handle pymethod handles it via snapshotting.
+    pub fn extend_children(&mut self, other: &Self) {
+        self.children.extend(other.children.iter().cloned());
+    }
+
+    /// Return an iterator over `Span` children labelled `value`.
+    ///
+    /// Off-type variants stored under the `value` label are silently skipped.
+    /// Use `children()` (the untyped slice) for a lossless view.
+    pub fn children_value(&self) -> impl Iterator<Item = &Span> + '_ {
+        self.children.iter()
+            .filter(|(lbl, _)| *lbl == Some(LiteralLabel::Value))
+            .map(|(_, child)| match child { LiteralChild::Span(s) => s })
+    }
+
+    /// Return the single child labelled `value`, or `Err` if not exactly one.
+    ///
+    /// Count is checked by label match first (`CstError::ChildCount`); if the
+    /// count is valid and the surviving child has the wrong variant type,
+    /// `CstError::UnexpectedChildType` is returned (single-typed labels only).
+    pub fn child_value(&self) -> Result<&Span, CstError> {
+        let mut it = self.children.iter()
+            .filter(|(lbl, _)| *lbl == Some(LiteralLabel::Value));
+        match (it.next(), it.next()) {
+            (Some((_, child)), None) => match child {
+                LiteralChild::Span(s) => Ok(s),
+            },
+            _ => Err(CstError::ChildCount {
+                label: "value",
+                expected: "1",
+                found: self.children.iter()
+                    .filter(|(lbl, _)| *lbl == Some(LiteralLabel::Value))
+                    .count(),
+            }),
+        }
+    }
+
+    /// Return the optional child labelled `value`, or `Err` if more than one.
+    ///
+    /// Returns `Ok(None)` for zero, `Ok(Some(...))` for one,
+    /// `Err(CstError::ChildCount)` for two or more.
+    pub fn maybe_value(&self) -> Result<Option<&Span>, CstError> {
+        let mut it = self.children.iter()
+            .filter(|(lbl, _)| *lbl == Some(LiteralLabel::Value));
+        match (it.next(), it.next()) {
+            (None, _) => Ok(None),
+            (Some((_, child)), None) => match child {
+                LiteralChild::Span(s) => Ok(Some(s)),
+            },
+            _ => Err(CstError::ChildCount {
+                label: "value",
+                expected: "0 or 1",
+                found: self.children.iter()
+                    .filter(|(lbl, _)| *lbl == Some(LiteralLabel::Value))
+                    .count(),
+            }),
+        }
+    }
+
+    /// Append a `Span` child with label `value`.
+    pub fn append_value(&mut self, span: Span) {
+        self.children.push((Some(LiteralLabel::Value), LiteralChild::Span(span)));
+    }
+
+    /// Append multiple `Span` children with label `value`.
+    pub fn extend_value(&mut self, spans: impl IntoIterator<Item = Span>) {
+        self.children.extend(spans.into_iter().map(|s| (Some(LiteralLabel::Value), LiteralChild::Span(s))));
     }
 }
 
@@ -6239,7 +8514,7 @@ impl PyLiteral {
     #[classattr]
     #[allow(non_snake_case)]
     fn Label(py: Python<'_>) -> PyResult<PyObject> {
-        Ok(Literal_Label::type_object(py).into_any().unbind())
+        Ok(LiteralLabel::type_object(py).into_any().unbind())
     }
 
     #[getter]
@@ -6270,7 +8545,7 @@ impl PyLiteral {
         let native_label = match label {
             None => None,
             Some(lbl) => {
-                if let Ok(native_lbl) = lbl.bind(py).extract::<Literal_Label>() {
+                if let Ok(native_lbl) = lbl.bind(py).extract::<LiteralLabel>() {
                     Some(native_lbl)
                 } else {
                     return Err(PyTypeError::new_err(format!(
@@ -6295,7 +8570,7 @@ impl PyLiteral {
         let native_label = match label {
             None => None,
             Some(lbl) => {
-                if let Ok(native_lbl) = lbl.bind(py).extract::<Literal_Label>() {
+                if let Ok(native_lbl) = lbl.bind(py).extract::<LiteralLabel>() {
                     Some(native_lbl)
                 } else {
                     return Err(PyTypeError::new_err(format!(
@@ -6333,6 +8608,9 @@ impl PyLiteral {
     }
 
     fn child(&self, py: Python<'_>) -> PyResult<PyObject> {
+        // TODO(rust-cst-accessor-clone-efficiency): clones the full children Vec
+        // before checking len. Could check len under the read guard and only clone
+        // the single needed entry, avoiding O(total-children) allocation on the error path.
         let snapshot: Vec<_> = {
             let guard = self.inner.read();
             guard.children.clone()
@@ -6355,7 +8633,7 @@ impl PyLiteral {
     fn append_value(&self, py: Python<'_>, child: &Bound<'_, PyAny>) -> PyResult<()> {
         let span_type = get_span_type(py)?;
         let native_child = LiteralChild::extract_from_pyobject(py, child, &span_type)?;
-        self.inner.write().children.push((Some(Literal_Label::Value), native_child));
+        self.inner.write().children.push((Some(LiteralLabel::Value), native_child));
         Ok(())
     }
 
@@ -6365,20 +8643,23 @@ impl PyLiteral {
         for child_result in iter {
             let child = child_result?;
             let native_child = LiteralChild::extract_from_pyobject(py, &child, &span_type)?;
-            let entry = (Some(Literal_Label::Value), native_child);
+            let entry = (Some(LiteralLabel::Value), native_child);
             self.inner.write().children.push(entry);
         }
         Ok(())
     }
 
     fn children_value(&self, py: Python<'_>) -> PyResult<Py<PyList>> {
+        // TODO(rust-cst-accessor-clone-efficiency): clones full Vec then filters outside the guard.
+        // Could filter inside the read guard (clone only matching entries) to avoid
+        // O(total-children) Arc clones for accessors that match a small subset.
         let snapshot: Vec<_> = {
             let guard = self.inner.read();
             guard.children.clone()
         };
         let result = PyList::empty(py);
         for (lbl, child) in &snapshot {
-            if *lbl == Some(Literal_Label::Value) {
+            if *lbl == Some(LiteralLabel::Value) {
                 result.append(child.to_pyobject(py)?)?;
             }
         }
@@ -6386,6 +8667,7 @@ impl PyLiteral {
     }
 
     fn child_value(&self, py: Python<'_>) -> PyResult<PyObject> {
+        // TODO(rust-cst-accessor-clone-efficiency): see children_value above.
         let snapshot: Vec<_> = {
             let guard = self.inner.read();
             guard.children.clone()
@@ -6393,7 +8675,7 @@ impl PyLiteral {
         let mut found: Option<PyObject> = None;
         let mut count = 0usize;
         for (lbl, child) in &snapshot {
-            if *lbl == Some(Literal_Label::Value) {
+            if *lbl == Some(LiteralLabel::Value) {
                 count += 1;
                 if count == 1 {
                     found = Some(child.to_pyobject(py)?);
@@ -6409,6 +8691,7 @@ impl PyLiteral {
     }
 
     fn maybe_value(&self, py: Python<'_>) -> PyResult<Option<PyObject>> {
+        // TODO(rust-cst-accessor-clone-efficiency): see children_value above.
         let snapshot: Vec<_> = {
             let guard = self.inner.read();
             guard.children.clone()
@@ -6416,7 +8699,7 @@ impl PyLiteral {
         let mut found: Option<PyObject> = None;
         let mut count = 0usize;
         for (lbl, child) in &snapshot {
-            if *lbl == Some(Literal_Label::Value) {
+            if *lbl == Some(LiteralLabel::Value) {
                 count += 1;
                 if count == 1 {
                     found = Some(child.to_pyobject(py)?);
@@ -6458,35 +8741,37 @@ impl PyLiteral {
 }
 
 // ───────────────────────────────────────────────────────────────────────────
-// Trivia_Label
+// TriviaLabel
 // ───────────────────────────────────────────────────────────────────────────
 
-#[allow(non_camel_case_types)]
+/// Label discriminant enum for children of this node type.
+///
+/// Python-visible name is `Trivia_Label` (preserved for compatibility).
+/// Rust consumers use the CamelCase `TriviaLabel` name.
 #[cfg(feature = "python")]
 #[pyclass(frozen, name = "Trivia_Label")]
-#[derive(Clone, PartialEq, Eq, Hash)]
-pub enum Trivia_Label {
+#[derive(Clone, Debug, PartialEq, Eq, Hash)]
+pub enum TriviaLabel {
     #[pyo3(name = "BLOCK_COMMENT")]
     BlockComment,
     #[pyo3(name = "LINE_COMMENT")]
     LineComment,
 }
 
-#[allow(non_camel_case_types)]
 #[cfg(not(feature = "python"))]
-#[derive(Clone, PartialEq, Eq, Hash)]
-pub enum Trivia_Label {
+#[derive(Clone, Debug, PartialEq, Eq, Hash)]
+pub enum TriviaLabel {
     BlockComment,
     LineComment,
 }
 
 #[cfg(feature = "python")]
 #[pymethods]
-impl Trivia_Label {
+impl TriviaLabel {
     fn __repr__(&self) -> &'static str {
         match self {
-            Trivia_Label::BlockComment => "Trivia.Label.BLOCK_COMMENT",
-            Trivia_Label::LineComment => "Trivia.Label.LINE_COMMENT",
+            TriviaLabel::BlockComment => "Trivia.Label.BLOCK_COMMENT",
+            TriviaLabel::LineComment => "Trivia.Label.LINE_COMMENT",
         }
     }
 
@@ -6496,7 +8781,7 @@ impl Trivia_Label {
     }
 
     fn __eq__(&self, py: Python<'_>, other: &Bound<'_, PyAny>) -> PyResult<PyObject> {
-        if let Ok(other_kind) = other.extract::<Trivia_Label>() {
+        if let Ok(other_kind) = other.extract::<TriviaLabel>() {
             return Ok((self == &other_kind).into_pyobject(py)?.to_owned().unbind().into_any());
         }
         if let Ok(cn) = other.getattr(pyo3::intern!(py, "_fltk_canonical_name")) {
@@ -6514,9 +8799,11 @@ impl Trivia_Label {
     }
 }
 
-// TriviaChild — child value enum for Trivia
-// Node-typed variants hold Shared<T> (Arc<RwLock<T>>); Clone is shallow.
-#[derive(Clone)]
+/// Child value enum for `Trivia` nodes.
+///
+/// Node-typed variants hold `Shared<T>` (`Arc<RwLock<T>>`); `Clone` is shallow
+/// (increments the reference count, does not copy the node).
+#[derive(Clone, Debug)]
 pub enum TriviaChild {
     Span(Span),
     BlockComment(Shared<BlockComment>),
@@ -6602,14 +8889,13 @@ impl TriviaChild {
 // Trivia
 // ───────────────────────────────────────────────────────────────────────────
 
-/// CST data struct for `Trivia`. Node-typed children are [`Shared<T>`] —
-/// see [`fltk_cst_core::Shared`] for clone/equality/reference semantics.
-#[derive(Clone)]
+/// CST data struct for `Trivia`. See [`fltk_cst_core::Shared`] for clone/equality/reference semantics.
+#[derive(Clone, Debug)]
 pub struct Trivia {
     // Not pub: use span() / children() / push_child() — the stable accessor API.
     // Direct field access bypasses any future validation logic on setters.
     span: Span,
-    children: Vec<(Option<Trivia_Label>, TriviaChild)>,
+    children: Vec<(Option<TriviaLabel>, TriviaChild)>,
 }
 
 impl PartialEq for Trivia {
@@ -6619,8 +8905,7 @@ impl PartialEq for Trivia {
 }
 
 impl Trivia {
-    /// Construct a node with the given span and no children.
-    /// GIL-free.
+    /// Construct a node with the given span and no children. GIL-free.
     pub fn new(span: Span) -> Self {
         Trivia {
             span,
@@ -6628,14 +8913,14 @@ impl Trivia {
         }
     }
 
-    /// Return a reference to the stored `Span`.
-    pub fn span(&self) -> &Span {
-        &self.span
+    /// Return the [`NodeKind`] discriminant for this node type.
+    pub fn kind(&self) -> NodeKind {
+        NodeKind::Trivia
     }
 
-    /// Return a slice of the children.
-    pub fn children(&self) -> &[(Option<Trivia_Label>, TriviaChild)] {
-        self.children.as_slice()
+    /// Return a reference to the stored [`Span`].
+    pub fn span(&self) -> &Span {
+        &self.span
     }
 
     /// Replace the node's span.
@@ -6643,9 +8928,185 @@ impl Trivia {
         self.span = span;
     }
 
+    /// Return a slice of all children (unfiltered).
+    ///
+    /// Each entry is `(label, child)`. Use the per-label accessors
+    /// (`children_<lbl>`, `child_<lbl>`, `maybe_<lbl>`) for type-safe access.
+    pub fn children(&self) -> &[(Option<TriviaLabel>, TriviaChild)] {
+        self.children.as_slice()
+    }
+
     /// Push a child onto the children `Vec`.
-    pub fn push_child(&mut self, label: Option<Trivia_Label>, child: TriviaChild) {
+    ///
+    /// No type-checking is performed: any child variant may be stored under
+    /// any label. Per-label typed mutators (`append_<lbl>`, `extend_<lbl>`)
+    /// provide type-constrained alternatives.
+    pub fn push_child(&mut self, label: Option<TriviaLabel>, child: TriviaChild) {
         self.children.push((label, child));
+    }
+
+    /// Return the single child (any label), or `Err` if there is not exactly one.
+    ///
+    /// Mirrors the Python `child()` method: count violation → `CstError::ChildCount`.
+    pub fn child(&self) -> Result<&(Option<TriviaLabel>, TriviaChild), CstError> {
+        match self.children.as_slice() {
+            [single] => Ok(single),
+            slice => Err(CstError::ChildCount {
+                label: "<any>",
+                expected: "1",
+                found: slice.len(),
+            }),
+        }
+    }
+
+    /// Copy all children from `other` into `self`, sharing the `Shared<T>` arcs.
+    ///
+    /// Children are appended (Arc reference-count bumps, not deep copies),
+    /// matching the Python backend's reference-copy behavior. Labels are preserved.
+    ///
+    /// The borrow checker prevents `self.extend_children(self)` at the data-struct
+    /// level (`&mut` + `&` of the same value don't coexist). For self-extend from
+    /// Python, the handle pymethod handles it via snapshotting.
+    pub fn extend_children(&mut self, other: &Self) {
+        self.children.extend(other.children.iter().cloned());
+    }
+
+    /// Return an iterator over `Shared<BlockComment>` children labelled `block_comment`.
+    ///
+    /// Off-type variants stored under the `block_comment` label are silently skipped.
+    /// Use `children()` (the untyped slice) for a lossless view.
+    pub fn children_block_comment(&self) -> impl Iterator<Item = &Shared<BlockComment>> + '_ {
+        self.children.iter()
+            .filter(|(lbl, _)| *lbl == Some(TriviaLabel::BlockComment))
+            .filter_map(|(_, child)| match child {
+                TriviaChild::BlockComment(s) => Some(s),
+                _ => None,
+            })
+    }
+
+    /// Return the single child labelled `block_comment`, or `Err` if not exactly one.
+    ///
+    /// Count is checked by label match first (`CstError::ChildCount`); if the
+    /// count is valid and the surviving child has the wrong variant type,
+    /// `CstError::UnexpectedChildType` is returned (single-typed labels only).
+    pub fn child_block_comment(&self) -> Result<&Shared<BlockComment>, CstError> {
+        let mut it = self.children.iter()
+            .filter(|(lbl, _)| *lbl == Some(TriviaLabel::BlockComment));
+        match (it.next(), it.next()) {
+            (Some((_, child)), None) => match child {
+                TriviaChild::BlockComment(s) => Ok(s),
+                _ => Err(CstError::UnexpectedChildType { label: "block_comment" }),
+            },
+            _ => Err(CstError::ChildCount {
+                label: "block_comment",
+                expected: "1",
+                found: self.children.iter()
+                    .filter(|(lbl, _)| *lbl == Some(TriviaLabel::BlockComment))
+                    .count(),
+            }),
+        }
+    }
+
+    /// Return the optional child labelled `block_comment`, or `Err` if more than one.
+    ///
+    /// Returns `Ok(None)` for zero, `Ok(Some(...))` for one,
+    /// `Err(CstError::ChildCount)` for two or more.
+    pub fn maybe_block_comment(&self) -> Result<Option<&Shared<BlockComment>>, CstError> {
+        let mut it = self.children.iter()
+            .filter(|(lbl, _)| *lbl == Some(TriviaLabel::BlockComment));
+        match (it.next(), it.next()) {
+            (None, _) => Ok(None),
+            (Some((_, child)), None) => match child {
+                TriviaChild::BlockComment(s) => Ok(Some(s)),
+                _ => Err(CstError::UnexpectedChildType { label: "block_comment" }),
+            },
+            _ => Err(CstError::ChildCount {
+                label: "block_comment",
+                expected: "0 or 1",
+                found: self.children.iter()
+                    .filter(|(lbl, _)| *lbl == Some(TriviaLabel::BlockComment))
+                    .count(),
+            }),
+        }
+    }
+
+    /// Append a child with label `block_comment`, accepting `BlockComment` or `Shared<BlockComment>`.
+    pub fn append_block_comment(&mut self, child: impl Into<Shared<BlockComment>>) {
+        self.children.push((Some(TriviaLabel::BlockComment), TriviaChild::BlockComment(child.into())));
+    }
+
+    /// Append multiple children with label `block_comment`.
+    pub fn extend_block_comment(&mut self, children: impl IntoIterator<Item = impl Into<Shared<BlockComment>>>) {
+        self.children.extend(children.into_iter().map(|c| (Some(TriviaLabel::BlockComment), TriviaChild::BlockComment(c.into()))));
+    }
+
+    /// Return an iterator over `Shared<LineComment>` children labelled `line_comment`.
+    ///
+    /// Off-type variants stored under the `line_comment` label are silently skipped.
+    /// Use `children()` (the untyped slice) for a lossless view.
+    pub fn children_line_comment(&self) -> impl Iterator<Item = &Shared<LineComment>> + '_ {
+        self.children.iter()
+            .filter(|(lbl, _)| *lbl == Some(TriviaLabel::LineComment))
+            .filter_map(|(_, child)| match child {
+                TriviaChild::LineComment(s) => Some(s),
+                _ => None,
+            })
+    }
+
+    /// Return the single child labelled `line_comment`, or `Err` if not exactly one.
+    ///
+    /// Count is checked by label match first (`CstError::ChildCount`); if the
+    /// count is valid and the surviving child has the wrong variant type,
+    /// `CstError::UnexpectedChildType` is returned (single-typed labels only).
+    pub fn child_line_comment(&self) -> Result<&Shared<LineComment>, CstError> {
+        let mut it = self.children.iter()
+            .filter(|(lbl, _)| *lbl == Some(TriviaLabel::LineComment));
+        match (it.next(), it.next()) {
+            (Some((_, child)), None) => match child {
+                TriviaChild::LineComment(s) => Ok(s),
+                _ => Err(CstError::UnexpectedChildType { label: "line_comment" }),
+            },
+            _ => Err(CstError::ChildCount {
+                label: "line_comment",
+                expected: "1",
+                found: self.children.iter()
+                    .filter(|(lbl, _)| *lbl == Some(TriviaLabel::LineComment))
+                    .count(),
+            }),
+        }
+    }
+
+    /// Return the optional child labelled `line_comment`, or `Err` if more than one.
+    ///
+    /// Returns `Ok(None)` for zero, `Ok(Some(...))` for one,
+    /// `Err(CstError::ChildCount)` for two or more.
+    pub fn maybe_line_comment(&self) -> Result<Option<&Shared<LineComment>>, CstError> {
+        let mut it = self.children.iter()
+            .filter(|(lbl, _)| *lbl == Some(TriviaLabel::LineComment));
+        match (it.next(), it.next()) {
+            (None, _) => Ok(None),
+            (Some((_, child)), None) => match child {
+                TriviaChild::LineComment(s) => Ok(Some(s)),
+                _ => Err(CstError::UnexpectedChildType { label: "line_comment" }),
+            },
+            _ => Err(CstError::ChildCount {
+                label: "line_comment",
+                expected: "0 or 1",
+                found: self.children.iter()
+                    .filter(|(lbl, _)| *lbl == Some(TriviaLabel::LineComment))
+                    .count(),
+            }),
+        }
+    }
+
+    /// Append a child with label `line_comment`, accepting `LineComment` or `Shared<LineComment>`.
+    pub fn append_line_comment(&mut self, child: impl Into<Shared<LineComment>>) {
+        self.children.push((Some(TriviaLabel::LineComment), TriviaChild::LineComment(child.into())));
+    }
+
+    /// Append multiple children with label `line_comment`.
+    pub fn extend_line_comment(&mut self, children: impl IntoIterator<Item = impl Into<Shared<LineComment>>>) {
+        self.children.extend(children.into_iter().map(|c| (Some(TriviaLabel::LineComment), TriviaChild::LineComment(c.into()))));
     }
 }
 
@@ -6724,7 +9185,7 @@ impl PyTrivia {
     #[classattr]
     #[allow(non_snake_case)]
     fn Label(py: Python<'_>) -> PyResult<PyObject> {
-        Ok(Trivia_Label::type_object(py).into_any().unbind())
+        Ok(TriviaLabel::type_object(py).into_any().unbind())
     }
 
     #[getter]
@@ -6755,7 +9216,7 @@ impl PyTrivia {
         let native_label = match label {
             None => None,
             Some(lbl) => {
-                if let Ok(native_lbl) = lbl.bind(py).extract::<Trivia_Label>() {
+                if let Ok(native_lbl) = lbl.bind(py).extract::<TriviaLabel>() {
                     Some(native_lbl)
                 } else {
                     return Err(PyTypeError::new_err(format!(
@@ -6780,7 +9241,7 @@ impl PyTrivia {
         let native_label = match label {
             None => None,
             Some(lbl) => {
-                if let Ok(native_lbl) = lbl.bind(py).extract::<Trivia_Label>() {
+                if let Ok(native_lbl) = lbl.bind(py).extract::<TriviaLabel>() {
                     Some(native_lbl)
                 } else {
                     return Err(PyTypeError::new_err(format!(
@@ -6818,6 +9279,9 @@ impl PyTrivia {
     }
 
     fn child(&self, py: Python<'_>) -> PyResult<PyObject> {
+        // TODO(rust-cst-accessor-clone-efficiency): clones the full children Vec
+        // before checking len. Could check len under the read guard and only clone
+        // the single needed entry, avoiding O(total-children) allocation on the error path.
         let snapshot: Vec<_> = {
             let guard = self.inner.read();
             guard.children.clone()
@@ -6840,7 +9304,7 @@ impl PyTrivia {
     fn append_block_comment(&self, py: Python<'_>, child: &Bound<'_, PyAny>) -> PyResult<()> {
         let span_type = get_span_type(py)?;
         let native_child = TriviaChild::extract_from_pyobject(py, child, &span_type)?;
-        self.inner.write().children.push((Some(Trivia_Label::BlockComment), native_child));
+        self.inner.write().children.push((Some(TriviaLabel::BlockComment), native_child));
         Ok(())
     }
 
@@ -6850,20 +9314,23 @@ impl PyTrivia {
         for child_result in iter {
             let child = child_result?;
             let native_child = TriviaChild::extract_from_pyobject(py, &child, &span_type)?;
-            let entry = (Some(Trivia_Label::BlockComment), native_child);
+            let entry = (Some(TriviaLabel::BlockComment), native_child);
             self.inner.write().children.push(entry);
         }
         Ok(())
     }
 
     fn children_block_comment(&self, py: Python<'_>) -> PyResult<Py<PyList>> {
+        // TODO(rust-cst-accessor-clone-efficiency): clones full Vec then filters outside the guard.
+        // Could filter inside the read guard (clone only matching entries) to avoid
+        // O(total-children) Arc clones for accessors that match a small subset.
         let snapshot: Vec<_> = {
             let guard = self.inner.read();
             guard.children.clone()
         };
         let result = PyList::empty(py);
         for (lbl, child) in &snapshot {
-            if *lbl == Some(Trivia_Label::BlockComment) {
+            if *lbl == Some(TriviaLabel::BlockComment) {
                 result.append(child.to_pyobject(py)?)?;
             }
         }
@@ -6871,6 +9338,7 @@ impl PyTrivia {
     }
 
     fn child_block_comment(&self, py: Python<'_>) -> PyResult<PyObject> {
+        // TODO(rust-cst-accessor-clone-efficiency): see children_block_comment above.
         let snapshot: Vec<_> = {
             let guard = self.inner.read();
             guard.children.clone()
@@ -6878,7 +9346,7 @@ impl PyTrivia {
         let mut found: Option<PyObject> = None;
         let mut count = 0usize;
         for (lbl, child) in &snapshot {
-            if *lbl == Some(Trivia_Label::BlockComment) {
+            if *lbl == Some(TriviaLabel::BlockComment) {
                 count += 1;
                 if count == 1 {
                     found = Some(child.to_pyobject(py)?);
@@ -6894,6 +9362,7 @@ impl PyTrivia {
     }
 
     fn maybe_block_comment(&self, py: Python<'_>) -> PyResult<Option<PyObject>> {
+        // TODO(rust-cst-accessor-clone-efficiency): see children_block_comment above.
         let snapshot: Vec<_> = {
             let guard = self.inner.read();
             guard.children.clone()
@@ -6901,7 +9370,7 @@ impl PyTrivia {
         let mut found: Option<PyObject> = None;
         let mut count = 0usize;
         for (lbl, child) in &snapshot {
-            if *lbl == Some(Trivia_Label::BlockComment) {
+            if *lbl == Some(TriviaLabel::BlockComment) {
                 count += 1;
                 if count == 1 {
                     found = Some(child.to_pyobject(py)?);
@@ -6919,7 +9388,7 @@ impl PyTrivia {
     fn append_line_comment(&self, py: Python<'_>, child: &Bound<'_, PyAny>) -> PyResult<()> {
         let span_type = get_span_type(py)?;
         let native_child = TriviaChild::extract_from_pyobject(py, child, &span_type)?;
-        self.inner.write().children.push((Some(Trivia_Label::LineComment), native_child));
+        self.inner.write().children.push((Some(TriviaLabel::LineComment), native_child));
         Ok(())
     }
 
@@ -6929,20 +9398,23 @@ impl PyTrivia {
         for child_result in iter {
             let child = child_result?;
             let native_child = TriviaChild::extract_from_pyobject(py, &child, &span_type)?;
-            let entry = (Some(Trivia_Label::LineComment), native_child);
+            let entry = (Some(TriviaLabel::LineComment), native_child);
             self.inner.write().children.push(entry);
         }
         Ok(())
     }
 
     fn children_line_comment(&self, py: Python<'_>) -> PyResult<Py<PyList>> {
+        // TODO(rust-cst-accessor-clone-efficiency): clones full Vec then filters outside the guard.
+        // Could filter inside the read guard (clone only matching entries) to avoid
+        // O(total-children) Arc clones for accessors that match a small subset.
         let snapshot: Vec<_> = {
             let guard = self.inner.read();
             guard.children.clone()
         };
         let result = PyList::empty(py);
         for (lbl, child) in &snapshot {
-            if *lbl == Some(Trivia_Label::LineComment) {
+            if *lbl == Some(TriviaLabel::LineComment) {
                 result.append(child.to_pyobject(py)?)?;
             }
         }
@@ -6950,6 +9422,7 @@ impl PyTrivia {
     }
 
     fn child_line_comment(&self, py: Python<'_>) -> PyResult<PyObject> {
+        // TODO(rust-cst-accessor-clone-efficiency): see children_line_comment above.
         let snapshot: Vec<_> = {
             let guard = self.inner.read();
             guard.children.clone()
@@ -6957,7 +9430,7 @@ impl PyTrivia {
         let mut found: Option<PyObject> = None;
         let mut count = 0usize;
         for (lbl, child) in &snapshot {
-            if *lbl == Some(Trivia_Label::LineComment) {
+            if *lbl == Some(TriviaLabel::LineComment) {
                 count += 1;
                 if count == 1 {
                     found = Some(child.to_pyobject(py)?);
@@ -6973,6 +9446,7 @@ impl PyTrivia {
     }
 
     fn maybe_line_comment(&self, py: Python<'_>) -> PyResult<Option<PyObject>> {
+        // TODO(rust-cst-accessor-clone-efficiency): see children_line_comment above.
         let snapshot: Vec<_> = {
             let guard = self.inner.read();
             guard.children.clone()
@@ -6980,7 +9454,7 @@ impl PyTrivia {
         let mut found: Option<PyObject> = None;
         let mut count = 0usize;
         for (lbl, child) in &snapshot {
-            if *lbl == Some(Trivia_Label::LineComment) {
+            if *lbl == Some(TriviaLabel::LineComment) {
                 count += 1;
                 if count == 1 {
                     found = Some(child.to_pyobject(py)?);
@@ -7022,35 +9496,37 @@ impl PyTrivia {
 }
 
 // ───────────────────────────────────────────────────────────────────────────
-// LineComment_Label
+// LineCommentLabel
 // ───────────────────────────────────────────────────────────────────────────
 
-#[allow(non_camel_case_types)]
+/// Label discriminant enum for children of this node type.
+///
+/// Python-visible name is `LineComment_Label` (preserved for compatibility).
+/// Rust consumers use the CamelCase `LineCommentLabel` name.
 #[cfg(feature = "python")]
 #[pyclass(frozen, name = "LineComment_Label")]
-#[derive(Clone, PartialEq, Eq, Hash)]
-pub enum LineComment_Label {
+#[derive(Clone, Debug, PartialEq, Eq, Hash)]
+pub enum LineCommentLabel {
     #[pyo3(name = "CONTENT")]
     Content,
     #[pyo3(name = "PREFIX")]
     Prefix,
 }
 
-#[allow(non_camel_case_types)]
 #[cfg(not(feature = "python"))]
-#[derive(Clone, PartialEq, Eq, Hash)]
-pub enum LineComment_Label {
+#[derive(Clone, Debug, PartialEq, Eq, Hash)]
+pub enum LineCommentLabel {
     Content,
     Prefix,
 }
 
 #[cfg(feature = "python")]
 #[pymethods]
-impl LineComment_Label {
+impl LineCommentLabel {
     fn __repr__(&self) -> &'static str {
         match self {
-            LineComment_Label::Content => "LineComment.Label.CONTENT",
-            LineComment_Label::Prefix => "LineComment.Label.PREFIX",
+            LineCommentLabel::Content => "LineComment.Label.CONTENT",
+            LineCommentLabel::Prefix => "LineComment.Label.PREFIX",
         }
     }
 
@@ -7060,7 +9536,7 @@ impl LineComment_Label {
     }
 
     fn __eq__(&self, py: Python<'_>, other: &Bound<'_, PyAny>) -> PyResult<PyObject> {
-        if let Ok(other_kind) = other.extract::<LineComment_Label>() {
+        if let Ok(other_kind) = other.extract::<LineCommentLabel>() {
             return Ok((self == &other_kind).into_pyobject(py)?.to_owned().unbind().into_any());
         }
         if let Ok(cn) = other.getattr(pyo3::intern!(py, "_fltk_canonical_name")) {
@@ -7078,9 +9554,11 @@ impl LineComment_Label {
     }
 }
 
-// LineCommentChild — child value enum for LineComment
-// Node-typed variants hold Shared<T> (Arc<RwLock<T>>); Clone is shallow.
-#[derive(Clone)]
+/// Child value enum for `LineComment` nodes.
+///
+/// Node-typed variants hold `Shared<T>` (`Arc<RwLock<T>>`); `Clone` is shallow
+/// (increments the reference count, does not copy the node).
+#[derive(Clone, Debug)]
 pub enum LineCommentChild {
     Span(Span),
 }
@@ -7123,14 +9601,13 @@ impl LineCommentChild {
 // LineComment
 // ───────────────────────────────────────────────────────────────────────────
 
-/// CST data struct for `LineComment`. Node-typed children are [`Shared<T>`] —
-/// see [`fltk_cst_core::Shared`] for clone/equality/reference semantics.
-#[derive(Clone)]
+/// CST data struct for `LineComment`. See [`fltk_cst_core::Shared`] for clone/equality/reference semantics.
+#[derive(Clone, Debug)]
 pub struct LineComment {
     // Not pub: use span() / children() / push_child() — the stable accessor API.
     // Direct field access bypasses any future validation logic on setters.
     span: Span,
-    children: Vec<(Option<LineComment_Label>, LineCommentChild)>,
+    children: Vec<(Option<LineCommentLabel>, LineCommentChild)>,
 }
 
 impl PartialEq for LineComment {
@@ -7140,8 +9617,7 @@ impl PartialEq for LineComment {
 }
 
 impl LineComment {
-    /// Construct a node with the given span and no children.
-    /// GIL-free.
+    /// Construct a node with the given span and no children. GIL-free.
     pub fn new(span: Span) -> Self {
         LineComment {
             span,
@@ -7149,14 +9625,14 @@ impl LineComment {
         }
     }
 
-    /// Return a reference to the stored `Span`.
-    pub fn span(&self) -> &Span {
-        &self.span
+    /// Return the [`NodeKind`] discriminant for this node type.
+    pub fn kind(&self) -> NodeKind {
+        NodeKind::LineComment
     }
 
-    /// Return a slice of the children.
-    pub fn children(&self) -> &[(Option<LineComment_Label>, LineCommentChild)] {
-        self.children.as_slice()
+    /// Return a reference to the stored [`Span`].
+    pub fn span(&self) -> &Span {
+        &self.span
     }
 
     /// Replace the node's span.
@@ -7164,9 +9640,175 @@ impl LineComment {
         self.span = span;
     }
 
+    /// Return a slice of all children (unfiltered).
+    ///
+    /// Each entry is `(label, child)`. Use the per-label accessors
+    /// (`children_<lbl>`, `child_<lbl>`, `maybe_<lbl>`) for type-safe access.
+    pub fn children(&self) -> &[(Option<LineCommentLabel>, LineCommentChild)] {
+        self.children.as_slice()
+    }
+
     /// Push a child onto the children `Vec`.
-    pub fn push_child(&mut self, label: Option<LineComment_Label>, child: LineCommentChild) {
+    ///
+    /// No type-checking is performed: any child variant may be stored under
+    /// any label. Per-label typed mutators (`append_<lbl>`, `extend_<lbl>`)
+    /// provide type-constrained alternatives.
+    pub fn push_child(&mut self, label: Option<LineCommentLabel>, child: LineCommentChild) {
         self.children.push((label, child));
+    }
+
+    /// Return the single child (any label), or `Err` if there is not exactly one.
+    ///
+    /// Mirrors the Python `child()` method: count violation → `CstError::ChildCount`.
+    pub fn child(&self) -> Result<&(Option<LineCommentLabel>, LineCommentChild), CstError> {
+        match self.children.as_slice() {
+            [single] => Ok(single),
+            slice => Err(CstError::ChildCount {
+                label: "<any>",
+                expected: "1",
+                found: slice.len(),
+            }),
+        }
+    }
+
+    /// Copy all children from `other` into `self`, sharing the `Shared<T>` arcs.
+    ///
+    /// Children are appended (Arc reference-count bumps, not deep copies),
+    /// matching the Python backend's reference-copy behavior. Labels are preserved.
+    ///
+    /// The borrow checker prevents `self.extend_children(self)` at the data-struct
+    /// level (`&mut` + `&` of the same value don't coexist). For self-extend from
+    /// Python, the handle pymethod handles it via snapshotting.
+    pub fn extend_children(&mut self, other: &Self) {
+        self.children.extend(other.children.iter().cloned());
+    }
+
+    /// Return an iterator over `Span` children labelled `content`.
+    ///
+    /// Off-type variants stored under the `content` label are silently skipped.
+    /// Use `children()` (the untyped slice) for a lossless view.
+    pub fn children_content(&self) -> impl Iterator<Item = &Span> + '_ {
+        self.children.iter()
+            .filter(|(lbl, _)| *lbl == Some(LineCommentLabel::Content))
+            .map(|(_, child)| match child { LineCommentChild::Span(s) => s })
+    }
+
+    /// Return the single child labelled `content`, or `Err` if not exactly one.
+    ///
+    /// Count is checked by label match first (`CstError::ChildCount`); if the
+    /// count is valid and the surviving child has the wrong variant type,
+    /// `CstError::UnexpectedChildType` is returned (single-typed labels only).
+    pub fn child_content(&self) -> Result<&Span, CstError> {
+        let mut it = self.children.iter()
+            .filter(|(lbl, _)| *lbl == Some(LineCommentLabel::Content));
+        match (it.next(), it.next()) {
+            (Some((_, child)), None) => match child {
+                LineCommentChild::Span(s) => Ok(s),
+            },
+            _ => Err(CstError::ChildCount {
+                label: "content",
+                expected: "1",
+                found: self.children.iter()
+                    .filter(|(lbl, _)| *lbl == Some(LineCommentLabel::Content))
+                    .count(),
+            }),
+        }
+    }
+
+    /// Return the optional child labelled `content`, or `Err` if more than one.
+    ///
+    /// Returns `Ok(None)` for zero, `Ok(Some(...))` for one,
+    /// `Err(CstError::ChildCount)` for two or more.
+    pub fn maybe_content(&self) -> Result<Option<&Span>, CstError> {
+        let mut it = self.children.iter()
+            .filter(|(lbl, _)| *lbl == Some(LineCommentLabel::Content));
+        match (it.next(), it.next()) {
+            (None, _) => Ok(None),
+            (Some((_, child)), None) => match child {
+                LineCommentChild::Span(s) => Ok(Some(s)),
+            },
+            _ => Err(CstError::ChildCount {
+                label: "content",
+                expected: "0 or 1",
+                found: self.children.iter()
+                    .filter(|(lbl, _)| *lbl == Some(LineCommentLabel::Content))
+                    .count(),
+            }),
+        }
+    }
+
+    /// Append a `Span` child with label `content`.
+    pub fn append_content(&mut self, span: Span) {
+        self.children.push((Some(LineCommentLabel::Content), LineCommentChild::Span(span)));
+    }
+
+    /// Append multiple `Span` children with label `content`.
+    pub fn extend_content(&mut self, spans: impl IntoIterator<Item = Span>) {
+        self.children.extend(spans.into_iter().map(|s| (Some(LineCommentLabel::Content), LineCommentChild::Span(s))));
+    }
+
+    /// Return an iterator over `Span` children labelled `prefix`.
+    ///
+    /// Off-type variants stored under the `prefix` label are silently skipped.
+    /// Use `children()` (the untyped slice) for a lossless view.
+    pub fn children_prefix(&self) -> impl Iterator<Item = &Span> + '_ {
+        self.children.iter()
+            .filter(|(lbl, _)| *lbl == Some(LineCommentLabel::Prefix))
+            .map(|(_, child)| match child { LineCommentChild::Span(s) => s })
+    }
+
+    /// Return the single child labelled `prefix`, or `Err` if not exactly one.
+    ///
+    /// Count is checked by label match first (`CstError::ChildCount`); if the
+    /// count is valid and the surviving child has the wrong variant type,
+    /// `CstError::UnexpectedChildType` is returned (single-typed labels only).
+    pub fn child_prefix(&self) -> Result<&Span, CstError> {
+        let mut it = self.children.iter()
+            .filter(|(lbl, _)| *lbl == Some(LineCommentLabel::Prefix));
+        match (it.next(), it.next()) {
+            (Some((_, child)), None) => match child {
+                LineCommentChild::Span(s) => Ok(s),
+            },
+            _ => Err(CstError::ChildCount {
+                label: "prefix",
+                expected: "1",
+                found: self.children.iter()
+                    .filter(|(lbl, _)| *lbl == Some(LineCommentLabel::Prefix))
+                    .count(),
+            }),
+        }
+    }
+
+    /// Return the optional child labelled `prefix`, or `Err` if more than one.
+    ///
+    /// Returns `Ok(None)` for zero, `Ok(Some(...))` for one,
+    /// `Err(CstError::ChildCount)` for two or more.
+    pub fn maybe_prefix(&self) -> Result<Option<&Span>, CstError> {
+        let mut it = self.children.iter()
+            .filter(|(lbl, _)| *lbl == Some(LineCommentLabel::Prefix));
+        match (it.next(), it.next()) {
+            (None, _) => Ok(None),
+            (Some((_, child)), None) => match child {
+                LineCommentChild::Span(s) => Ok(Some(s)),
+            },
+            _ => Err(CstError::ChildCount {
+                label: "prefix",
+                expected: "0 or 1",
+                found: self.children.iter()
+                    .filter(|(lbl, _)| *lbl == Some(LineCommentLabel::Prefix))
+                    .count(),
+            }),
+        }
+    }
+
+    /// Append a `Span` child with label `prefix`.
+    pub fn append_prefix(&mut self, span: Span) {
+        self.children.push((Some(LineCommentLabel::Prefix), LineCommentChild::Span(span)));
+    }
+
+    /// Append multiple `Span` children with label `prefix`.
+    pub fn extend_prefix(&mut self, spans: impl IntoIterator<Item = Span>) {
+        self.children.extend(spans.into_iter().map(|s| (Some(LineCommentLabel::Prefix), LineCommentChild::Span(s))));
     }
 }
 
@@ -7245,7 +9887,7 @@ impl PyLineComment {
     #[classattr]
     #[allow(non_snake_case)]
     fn Label(py: Python<'_>) -> PyResult<PyObject> {
-        Ok(LineComment_Label::type_object(py).into_any().unbind())
+        Ok(LineCommentLabel::type_object(py).into_any().unbind())
     }
 
     #[getter]
@@ -7276,7 +9918,7 @@ impl PyLineComment {
         let native_label = match label {
             None => None,
             Some(lbl) => {
-                if let Ok(native_lbl) = lbl.bind(py).extract::<LineComment_Label>() {
+                if let Ok(native_lbl) = lbl.bind(py).extract::<LineCommentLabel>() {
                     Some(native_lbl)
                 } else {
                     return Err(PyTypeError::new_err(format!(
@@ -7301,7 +9943,7 @@ impl PyLineComment {
         let native_label = match label {
             None => None,
             Some(lbl) => {
-                if let Ok(native_lbl) = lbl.bind(py).extract::<LineComment_Label>() {
+                if let Ok(native_lbl) = lbl.bind(py).extract::<LineCommentLabel>() {
                     Some(native_lbl)
                 } else {
                     return Err(PyTypeError::new_err(format!(
@@ -7339,6 +9981,9 @@ impl PyLineComment {
     }
 
     fn child(&self, py: Python<'_>) -> PyResult<PyObject> {
+        // TODO(rust-cst-accessor-clone-efficiency): clones the full children Vec
+        // before checking len. Could check len under the read guard and only clone
+        // the single needed entry, avoiding O(total-children) allocation on the error path.
         let snapshot: Vec<_> = {
             let guard = self.inner.read();
             guard.children.clone()
@@ -7361,7 +10006,7 @@ impl PyLineComment {
     fn append_content(&self, py: Python<'_>, child: &Bound<'_, PyAny>) -> PyResult<()> {
         let span_type = get_span_type(py)?;
         let native_child = LineCommentChild::extract_from_pyobject(py, child, &span_type)?;
-        self.inner.write().children.push((Some(LineComment_Label::Content), native_child));
+        self.inner.write().children.push((Some(LineCommentLabel::Content), native_child));
         Ok(())
     }
 
@@ -7371,20 +10016,23 @@ impl PyLineComment {
         for child_result in iter {
             let child = child_result?;
             let native_child = LineCommentChild::extract_from_pyobject(py, &child, &span_type)?;
-            let entry = (Some(LineComment_Label::Content), native_child);
+            let entry = (Some(LineCommentLabel::Content), native_child);
             self.inner.write().children.push(entry);
         }
         Ok(())
     }
 
     fn children_content(&self, py: Python<'_>) -> PyResult<Py<PyList>> {
+        // TODO(rust-cst-accessor-clone-efficiency): clones full Vec then filters outside the guard.
+        // Could filter inside the read guard (clone only matching entries) to avoid
+        // O(total-children) Arc clones for accessors that match a small subset.
         let snapshot: Vec<_> = {
             let guard = self.inner.read();
             guard.children.clone()
         };
         let result = PyList::empty(py);
         for (lbl, child) in &snapshot {
-            if *lbl == Some(LineComment_Label::Content) {
+            if *lbl == Some(LineCommentLabel::Content) {
                 result.append(child.to_pyobject(py)?)?;
             }
         }
@@ -7392,6 +10040,7 @@ impl PyLineComment {
     }
 
     fn child_content(&self, py: Python<'_>) -> PyResult<PyObject> {
+        // TODO(rust-cst-accessor-clone-efficiency): see children_content above.
         let snapshot: Vec<_> = {
             let guard = self.inner.read();
             guard.children.clone()
@@ -7399,7 +10048,7 @@ impl PyLineComment {
         let mut found: Option<PyObject> = None;
         let mut count = 0usize;
         for (lbl, child) in &snapshot {
-            if *lbl == Some(LineComment_Label::Content) {
+            if *lbl == Some(LineCommentLabel::Content) {
                 count += 1;
                 if count == 1 {
                     found = Some(child.to_pyobject(py)?);
@@ -7415,6 +10064,7 @@ impl PyLineComment {
     }
 
     fn maybe_content(&self, py: Python<'_>) -> PyResult<Option<PyObject>> {
+        // TODO(rust-cst-accessor-clone-efficiency): see children_content above.
         let snapshot: Vec<_> = {
             let guard = self.inner.read();
             guard.children.clone()
@@ -7422,7 +10072,7 @@ impl PyLineComment {
         let mut found: Option<PyObject> = None;
         let mut count = 0usize;
         for (lbl, child) in &snapshot {
-            if *lbl == Some(LineComment_Label::Content) {
+            if *lbl == Some(LineCommentLabel::Content) {
                 count += 1;
                 if count == 1 {
                     found = Some(child.to_pyobject(py)?);
@@ -7440,7 +10090,7 @@ impl PyLineComment {
     fn append_prefix(&self, py: Python<'_>, child: &Bound<'_, PyAny>) -> PyResult<()> {
         let span_type = get_span_type(py)?;
         let native_child = LineCommentChild::extract_from_pyobject(py, child, &span_type)?;
-        self.inner.write().children.push((Some(LineComment_Label::Prefix), native_child));
+        self.inner.write().children.push((Some(LineCommentLabel::Prefix), native_child));
         Ok(())
     }
 
@@ -7450,20 +10100,23 @@ impl PyLineComment {
         for child_result in iter {
             let child = child_result?;
             let native_child = LineCommentChild::extract_from_pyobject(py, &child, &span_type)?;
-            let entry = (Some(LineComment_Label::Prefix), native_child);
+            let entry = (Some(LineCommentLabel::Prefix), native_child);
             self.inner.write().children.push(entry);
         }
         Ok(())
     }
 
     fn children_prefix(&self, py: Python<'_>) -> PyResult<Py<PyList>> {
+        // TODO(rust-cst-accessor-clone-efficiency): clones full Vec then filters outside the guard.
+        // Could filter inside the read guard (clone only matching entries) to avoid
+        // O(total-children) Arc clones for accessors that match a small subset.
         let snapshot: Vec<_> = {
             let guard = self.inner.read();
             guard.children.clone()
         };
         let result = PyList::empty(py);
         for (lbl, child) in &snapshot {
-            if *lbl == Some(LineComment_Label::Prefix) {
+            if *lbl == Some(LineCommentLabel::Prefix) {
                 result.append(child.to_pyobject(py)?)?;
             }
         }
@@ -7471,6 +10124,7 @@ impl PyLineComment {
     }
 
     fn child_prefix(&self, py: Python<'_>) -> PyResult<PyObject> {
+        // TODO(rust-cst-accessor-clone-efficiency): see children_prefix above.
         let snapshot: Vec<_> = {
             let guard = self.inner.read();
             guard.children.clone()
@@ -7478,7 +10132,7 @@ impl PyLineComment {
         let mut found: Option<PyObject> = None;
         let mut count = 0usize;
         for (lbl, child) in &snapshot {
-            if *lbl == Some(LineComment_Label::Prefix) {
+            if *lbl == Some(LineCommentLabel::Prefix) {
                 count += 1;
                 if count == 1 {
                     found = Some(child.to_pyobject(py)?);
@@ -7494,6 +10148,7 @@ impl PyLineComment {
     }
 
     fn maybe_prefix(&self, py: Python<'_>) -> PyResult<Option<PyObject>> {
+        // TODO(rust-cst-accessor-clone-efficiency): see children_prefix above.
         let snapshot: Vec<_> = {
             let guard = self.inner.read();
             guard.children.clone()
@@ -7501,7 +10156,7 @@ impl PyLineComment {
         let mut found: Option<PyObject> = None;
         let mut count = 0usize;
         for (lbl, child) in &snapshot {
-            if *lbl == Some(LineComment_Label::Prefix) {
+            if *lbl == Some(LineCommentLabel::Prefix) {
                 count += 1;
                 if count == 1 {
                     found = Some(child.to_pyobject(py)?);
@@ -7543,14 +10198,17 @@ impl PyLineComment {
 }
 
 // ───────────────────────────────────────────────────────────────────────────
-// BlockComment_Label
+// BlockCommentLabel
 // ───────────────────────────────────────────────────────────────────────────
 
-#[allow(non_camel_case_types)]
+/// Label discriminant enum for children of this node type.
+///
+/// Python-visible name is `BlockComment_Label` (preserved for compatibility).
+/// Rust consumers use the CamelCase `BlockCommentLabel` name.
 #[cfg(feature = "python")]
 #[pyclass(frozen, name = "BlockComment_Label")]
-#[derive(Clone, PartialEq, Eq, Hash)]
-pub enum BlockComment_Label {
+#[derive(Clone, Debug, PartialEq, Eq, Hash)]
+pub enum BlockCommentLabel {
     #[pyo3(name = "CONTENT")]
     Content,
     #[pyo3(name = "END")]
@@ -7559,10 +10217,9 @@ pub enum BlockComment_Label {
     Start,
 }
 
-#[allow(non_camel_case_types)]
 #[cfg(not(feature = "python"))]
-#[derive(Clone, PartialEq, Eq, Hash)]
-pub enum BlockComment_Label {
+#[derive(Clone, Debug, PartialEq, Eq, Hash)]
+pub enum BlockCommentLabel {
     Content,
     End,
     Start,
@@ -7570,12 +10227,12 @@ pub enum BlockComment_Label {
 
 #[cfg(feature = "python")]
 #[pymethods]
-impl BlockComment_Label {
+impl BlockCommentLabel {
     fn __repr__(&self) -> &'static str {
         match self {
-            BlockComment_Label::Content => "BlockComment.Label.CONTENT",
-            BlockComment_Label::End => "BlockComment.Label.END",
-            BlockComment_Label::Start => "BlockComment.Label.START",
+            BlockCommentLabel::Content => "BlockComment.Label.CONTENT",
+            BlockCommentLabel::End => "BlockComment.Label.END",
+            BlockCommentLabel::Start => "BlockComment.Label.START",
         }
     }
 
@@ -7585,7 +10242,7 @@ impl BlockComment_Label {
     }
 
     fn __eq__(&self, py: Python<'_>, other: &Bound<'_, PyAny>) -> PyResult<PyObject> {
-        if let Ok(other_kind) = other.extract::<BlockComment_Label>() {
+        if let Ok(other_kind) = other.extract::<BlockCommentLabel>() {
             return Ok((self == &other_kind).into_pyobject(py)?.to_owned().unbind().into_any());
         }
         if let Ok(cn) = other.getattr(pyo3::intern!(py, "_fltk_canonical_name")) {
@@ -7603,9 +10260,11 @@ impl BlockComment_Label {
     }
 }
 
-// BlockCommentChild — child value enum for BlockComment
-// Node-typed variants hold Shared<T> (Arc<RwLock<T>>); Clone is shallow.
-#[derive(Clone)]
+/// Child value enum for `BlockComment` nodes.
+///
+/// Node-typed variants hold `Shared<T>` (`Arc<RwLock<T>>`); `Clone` is shallow
+/// (increments the reference count, does not copy the node).
+#[derive(Clone, Debug)]
 pub enum BlockCommentChild {
     Span(Span),
 }
@@ -7648,14 +10307,13 @@ impl BlockCommentChild {
 // BlockComment
 // ───────────────────────────────────────────────────────────────────────────
 
-/// CST data struct for `BlockComment`. Node-typed children are [`Shared<T>`] —
-/// see [`fltk_cst_core::Shared`] for clone/equality/reference semantics.
-#[derive(Clone)]
+/// CST data struct for `BlockComment`. See [`fltk_cst_core::Shared`] for clone/equality/reference semantics.
+#[derive(Clone, Debug)]
 pub struct BlockComment {
     // Not pub: use span() / children() / push_child() — the stable accessor API.
     // Direct field access bypasses any future validation logic on setters.
     span: Span,
-    children: Vec<(Option<BlockComment_Label>, BlockCommentChild)>,
+    children: Vec<(Option<BlockCommentLabel>, BlockCommentChild)>,
 }
 
 impl PartialEq for BlockComment {
@@ -7665,8 +10323,7 @@ impl PartialEq for BlockComment {
 }
 
 impl BlockComment {
-    /// Construct a node with the given span and no children.
-    /// GIL-free.
+    /// Construct a node with the given span and no children. GIL-free.
     pub fn new(span: Span) -> Self {
         BlockComment {
             span,
@@ -7674,14 +10331,14 @@ impl BlockComment {
         }
     }
 
-    /// Return a reference to the stored `Span`.
-    pub fn span(&self) -> &Span {
-        &self.span
+    /// Return the [`NodeKind`] discriminant for this node type.
+    pub fn kind(&self) -> NodeKind {
+        NodeKind::BlockComment
     }
 
-    /// Return a slice of the children.
-    pub fn children(&self) -> &[(Option<BlockComment_Label>, BlockCommentChild)] {
-        self.children.as_slice()
+    /// Return a reference to the stored [`Span`].
+    pub fn span(&self) -> &Span {
+        &self.span
     }
 
     /// Replace the node's span.
@@ -7689,9 +10346,239 @@ impl BlockComment {
         self.span = span;
     }
 
+    /// Return a slice of all children (unfiltered).
+    ///
+    /// Each entry is `(label, child)`. Use the per-label accessors
+    /// (`children_<lbl>`, `child_<lbl>`, `maybe_<lbl>`) for type-safe access.
+    pub fn children(&self) -> &[(Option<BlockCommentLabel>, BlockCommentChild)] {
+        self.children.as_slice()
+    }
+
     /// Push a child onto the children `Vec`.
-    pub fn push_child(&mut self, label: Option<BlockComment_Label>, child: BlockCommentChild) {
+    ///
+    /// No type-checking is performed: any child variant may be stored under
+    /// any label. Per-label typed mutators (`append_<lbl>`, `extend_<lbl>`)
+    /// provide type-constrained alternatives.
+    pub fn push_child(&mut self, label: Option<BlockCommentLabel>, child: BlockCommentChild) {
         self.children.push((label, child));
+    }
+
+    /// Return the single child (any label), or `Err` if there is not exactly one.
+    ///
+    /// Mirrors the Python `child()` method: count violation → `CstError::ChildCount`.
+    pub fn child(&self) -> Result<&(Option<BlockCommentLabel>, BlockCommentChild), CstError> {
+        match self.children.as_slice() {
+            [single] => Ok(single),
+            slice => Err(CstError::ChildCount {
+                label: "<any>",
+                expected: "1",
+                found: slice.len(),
+            }),
+        }
+    }
+
+    /// Copy all children from `other` into `self`, sharing the `Shared<T>` arcs.
+    ///
+    /// Children are appended (Arc reference-count bumps, not deep copies),
+    /// matching the Python backend's reference-copy behavior. Labels are preserved.
+    ///
+    /// The borrow checker prevents `self.extend_children(self)` at the data-struct
+    /// level (`&mut` + `&` of the same value don't coexist). For self-extend from
+    /// Python, the handle pymethod handles it via snapshotting.
+    pub fn extend_children(&mut self, other: &Self) {
+        self.children.extend(other.children.iter().cloned());
+    }
+
+    /// Return an iterator over `Span` children labelled `content`.
+    ///
+    /// Off-type variants stored under the `content` label are silently skipped.
+    /// Use `children()` (the untyped slice) for a lossless view.
+    pub fn children_content(&self) -> impl Iterator<Item = &Span> + '_ {
+        self.children.iter()
+            .filter(|(lbl, _)| *lbl == Some(BlockCommentLabel::Content))
+            .map(|(_, child)| match child { BlockCommentChild::Span(s) => s })
+    }
+
+    /// Return the single child labelled `content`, or `Err` if not exactly one.
+    ///
+    /// Count is checked by label match first (`CstError::ChildCount`); if the
+    /// count is valid and the surviving child has the wrong variant type,
+    /// `CstError::UnexpectedChildType` is returned (single-typed labels only).
+    pub fn child_content(&self) -> Result<&Span, CstError> {
+        let mut it = self.children.iter()
+            .filter(|(lbl, _)| *lbl == Some(BlockCommentLabel::Content));
+        match (it.next(), it.next()) {
+            (Some((_, child)), None) => match child {
+                BlockCommentChild::Span(s) => Ok(s),
+            },
+            _ => Err(CstError::ChildCount {
+                label: "content",
+                expected: "1",
+                found: self.children.iter()
+                    .filter(|(lbl, _)| *lbl == Some(BlockCommentLabel::Content))
+                    .count(),
+            }),
+        }
+    }
+
+    /// Return the optional child labelled `content`, or `Err` if more than one.
+    ///
+    /// Returns `Ok(None)` for zero, `Ok(Some(...))` for one,
+    /// `Err(CstError::ChildCount)` for two or more.
+    pub fn maybe_content(&self) -> Result<Option<&Span>, CstError> {
+        let mut it = self.children.iter()
+            .filter(|(lbl, _)| *lbl == Some(BlockCommentLabel::Content));
+        match (it.next(), it.next()) {
+            (None, _) => Ok(None),
+            (Some((_, child)), None) => match child {
+                BlockCommentChild::Span(s) => Ok(Some(s)),
+            },
+            _ => Err(CstError::ChildCount {
+                label: "content",
+                expected: "0 or 1",
+                found: self.children.iter()
+                    .filter(|(lbl, _)| *lbl == Some(BlockCommentLabel::Content))
+                    .count(),
+            }),
+        }
+    }
+
+    /// Append a `Span` child with label `content`.
+    pub fn append_content(&mut self, span: Span) {
+        self.children.push((Some(BlockCommentLabel::Content), BlockCommentChild::Span(span)));
+    }
+
+    /// Append multiple `Span` children with label `content`.
+    pub fn extend_content(&mut self, spans: impl IntoIterator<Item = Span>) {
+        self.children.extend(spans.into_iter().map(|s| (Some(BlockCommentLabel::Content), BlockCommentChild::Span(s))));
+    }
+
+    /// Return an iterator over `Span` children labelled `end`.
+    ///
+    /// Off-type variants stored under the `end` label are silently skipped.
+    /// Use `children()` (the untyped slice) for a lossless view.
+    pub fn children_end(&self) -> impl Iterator<Item = &Span> + '_ {
+        self.children.iter()
+            .filter(|(lbl, _)| *lbl == Some(BlockCommentLabel::End))
+            .map(|(_, child)| match child { BlockCommentChild::Span(s) => s })
+    }
+
+    /// Return the single child labelled `end`, or `Err` if not exactly one.
+    ///
+    /// Count is checked by label match first (`CstError::ChildCount`); if the
+    /// count is valid and the surviving child has the wrong variant type,
+    /// `CstError::UnexpectedChildType` is returned (single-typed labels only).
+    pub fn child_end(&self) -> Result<&Span, CstError> {
+        let mut it = self.children.iter()
+            .filter(|(lbl, _)| *lbl == Some(BlockCommentLabel::End));
+        match (it.next(), it.next()) {
+            (Some((_, child)), None) => match child {
+                BlockCommentChild::Span(s) => Ok(s),
+            },
+            _ => Err(CstError::ChildCount {
+                label: "end",
+                expected: "1",
+                found: self.children.iter()
+                    .filter(|(lbl, _)| *lbl == Some(BlockCommentLabel::End))
+                    .count(),
+            }),
+        }
+    }
+
+    /// Return the optional child labelled `end`, or `Err` if more than one.
+    ///
+    /// Returns `Ok(None)` for zero, `Ok(Some(...))` for one,
+    /// `Err(CstError::ChildCount)` for two or more.
+    pub fn maybe_end(&self) -> Result<Option<&Span>, CstError> {
+        let mut it = self.children.iter()
+            .filter(|(lbl, _)| *lbl == Some(BlockCommentLabel::End));
+        match (it.next(), it.next()) {
+            (None, _) => Ok(None),
+            (Some((_, child)), None) => match child {
+                BlockCommentChild::Span(s) => Ok(Some(s)),
+            },
+            _ => Err(CstError::ChildCount {
+                label: "end",
+                expected: "0 or 1",
+                found: self.children.iter()
+                    .filter(|(lbl, _)| *lbl == Some(BlockCommentLabel::End))
+                    .count(),
+            }),
+        }
+    }
+
+    /// Append a `Span` child with label `end`.
+    pub fn append_end(&mut self, span: Span) {
+        self.children.push((Some(BlockCommentLabel::End), BlockCommentChild::Span(span)));
+    }
+
+    /// Append multiple `Span` children with label `end`.
+    pub fn extend_end(&mut self, spans: impl IntoIterator<Item = Span>) {
+        self.children.extend(spans.into_iter().map(|s| (Some(BlockCommentLabel::End), BlockCommentChild::Span(s))));
+    }
+
+    /// Return an iterator over `Span` children labelled `start`.
+    ///
+    /// Off-type variants stored under the `start` label are silently skipped.
+    /// Use `children()` (the untyped slice) for a lossless view.
+    pub fn children_start(&self) -> impl Iterator<Item = &Span> + '_ {
+        self.children.iter()
+            .filter(|(lbl, _)| *lbl == Some(BlockCommentLabel::Start))
+            .map(|(_, child)| match child { BlockCommentChild::Span(s) => s })
+    }
+
+    /// Return the single child labelled `start`, or `Err` if not exactly one.
+    ///
+    /// Count is checked by label match first (`CstError::ChildCount`); if the
+    /// count is valid and the surviving child has the wrong variant type,
+    /// `CstError::UnexpectedChildType` is returned (single-typed labels only).
+    pub fn child_start(&self) -> Result<&Span, CstError> {
+        let mut it = self.children.iter()
+            .filter(|(lbl, _)| *lbl == Some(BlockCommentLabel::Start));
+        match (it.next(), it.next()) {
+            (Some((_, child)), None) => match child {
+                BlockCommentChild::Span(s) => Ok(s),
+            },
+            _ => Err(CstError::ChildCount {
+                label: "start",
+                expected: "1",
+                found: self.children.iter()
+                    .filter(|(lbl, _)| *lbl == Some(BlockCommentLabel::Start))
+                    .count(),
+            }),
+        }
+    }
+
+    /// Return the optional child labelled `start`, or `Err` if more than one.
+    ///
+    /// Returns `Ok(None)` for zero, `Ok(Some(...))` for one,
+    /// `Err(CstError::ChildCount)` for two or more.
+    pub fn maybe_start(&self) -> Result<Option<&Span>, CstError> {
+        let mut it = self.children.iter()
+            .filter(|(lbl, _)| *lbl == Some(BlockCommentLabel::Start));
+        match (it.next(), it.next()) {
+            (None, _) => Ok(None),
+            (Some((_, child)), None) => match child {
+                BlockCommentChild::Span(s) => Ok(Some(s)),
+            },
+            _ => Err(CstError::ChildCount {
+                label: "start",
+                expected: "0 or 1",
+                found: self.children.iter()
+                    .filter(|(lbl, _)| *lbl == Some(BlockCommentLabel::Start))
+                    .count(),
+            }),
+        }
+    }
+
+    /// Append a `Span` child with label `start`.
+    pub fn append_start(&mut self, span: Span) {
+        self.children.push((Some(BlockCommentLabel::Start), BlockCommentChild::Span(span)));
+    }
+
+    /// Append multiple `Span` children with label `start`.
+    pub fn extend_start(&mut self, spans: impl IntoIterator<Item = Span>) {
+        self.children.extend(spans.into_iter().map(|s| (Some(BlockCommentLabel::Start), BlockCommentChild::Span(s))));
     }
 }
 
@@ -7770,7 +10657,7 @@ impl PyBlockComment {
     #[classattr]
     #[allow(non_snake_case)]
     fn Label(py: Python<'_>) -> PyResult<PyObject> {
-        Ok(BlockComment_Label::type_object(py).into_any().unbind())
+        Ok(BlockCommentLabel::type_object(py).into_any().unbind())
     }
 
     #[getter]
@@ -7801,7 +10688,7 @@ impl PyBlockComment {
         let native_label = match label {
             None => None,
             Some(lbl) => {
-                if let Ok(native_lbl) = lbl.bind(py).extract::<BlockComment_Label>() {
+                if let Ok(native_lbl) = lbl.bind(py).extract::<BlockCommentLabel>() {
                     Some(native_lbl)
                 } else {
                     return Err(PyTypeError::new_err(format!(
@@ -7826,7 +10713,7 @@ impl PyBlockComment {
         let native_label = match label {
             None => None,
             Some(lbl) => {
-                if let Ok(native_lbl) = lbl.bind(py).extract::<BlockComment_Label>() {
+                if let Ok(native_lbl) = lbl.bind(py).extract::<BlockCommentLabel>() {
                     Some(native_lbl)
                 } else {
                     return Err(PyTypeError::new_err(format!(
@@ -7864,6 +10751,9 @@ impl PyBlockComment {
     }
 
     fn child(&self, py: Python<'_>) -> PyResult<PyObject> {
+        // TODO(rust-cst-accessor-clone-efficiency): clones the full children Vec
+        // before checking len. Could check len under the read guard and only clone
+        // the single needed entry, avoiding O(total-children) allocation on the error path.
         let snapshot: Vec<_> = {
             let guard = self.inner.read();
             guard.children.clone()
@@ -7886,7 +10776,7 @@ impl PyBlockComment {
     fn append_content(&self, py: Python<'_>, child: &Bound<'_, PyAny>) -> PyResult<()> {
         let span_type = get_span_type(py)?;
         let native_child = BlockCommentChild::extract_from_pyobject(py, child, &span_type)?;
-        self.inner.write().children.push((Some(BlockComment_Label::Content), native_child));
+        self.inner.write().children.push((Some(BlockCommentLabel::Content), native_child));
         Ok(())
     }
 
@@ -7896,20 +10786,23 @@ impl PyBlockComment {
         for child_result in iter {
             let child = child_result?;
             let native_child = BlockCommentChild::extract_from_pyobject(py, &child, &span_type)?;
-            let entry = (Some(BlockComment_Label::Content), native_child);
+            let entry = (Some(BlockCommentLabel::Content), native_child);
             self.inner.write().children.push(entry);
         }
         Ok(())
     }
 
     fn children_content(&self, py: Python<'_>) -> PyResult<Py<PyList>> {
+        // TODO(rust-cst-accessor-clone-efficiency): clones full Vec then filters outside the guard.
+        // Could filter inside the read guard (clone only matching entries) to avoid
+        // O(total-children) Arc clones for accessors that match a small subset.
         let snapshot: Vec<_> = {
             let guard = self.inner.read();
             guard.children.clone()
         };
         let result = PyList::empty(py);
         for (lbl, child) in &snapshot {
-            if *lbl == Some(BlockComment_Label::Content) {
+            if *lbl == Some(BlockCommentLabel::Content) {
                 result.append(child.to_pyobject(py)?)?;
             }
         }
@@ -7917,6 +10810,7 @@ impl PyBlockComment {
     }
 
     fn child_content(&self, py: Python<'_>) -> PyResult<PyObject> {
+        // TODO(rust-cst-accessor-clone-efficiency): see children_content above.
         let snapshot: Vec<_> = {
             let guard = self.inner.read();
             guard.children.clone()
@@ -7924,7 +10818,7 @@ impl PyBlockComment {
         let mut found: Option<PyObject> = None;
         let mut count = 0usize;
         for (lbl, child) in &snapshot {
-            if *lbl == Some(BlockComment_Label::Content) {
+            if *lbl == Some(BlockCommentLabel::Content) {
                 count += 1;
                 if count == 1 {
                     found = Some(child.to_pyobject(py)?);
@@ -7940,6 +10834,7 @@ impl PyBlockComment {
     }
 
     fn maybe_content(&self, py: Python<'_>) -> PyResult<Option<PyObject>> {
+        // TODO(rust-cst-accessor-clone-efficiency): see children_content above.
         let snapshot: Vec<_> = {
             let guard = self.inner.read();
             guard.children.clone()
@@ -7947,7 +10842,7 @@ impl PyBlockComment {
         let mut found: Option<PyObject> = None;
         let mut count = 0usize;
         for (lbl, child) in &snapshot {
-            if *lbl == Some(BlockComment_Label::Content) {
+            if *lbl == Some(BlockCommentLabel::Content) {
                 count += 1;
                 if count == 1 {
                     found = Some(child.to_pyobject(py)?);
@@ -7965,7 +10860,7 @@ impl PyBlockComment {
     fn append_end(&self, py: Python<'_>, child: &Bound<'_, PyAny>) -> PyResult<()> {
         let span_type = get_span_type(py)?;
         let native_child = BlockCommentChild::extract_from_pyobject(py, child, &span_type)?;
-        self.inner.write().children.push((Some(BlockComment_Label::End), native_child));
+        self.inner.write().children.push((Some(BlockCommentLabel::End), native_child));
         Ok(())
     }
 
@@ -7975,20 +10870,23 @@ impl PyBlockComment {
         for child_result in iter {
             let child = child_result?;
             let native_child = BlockCommentChild::extract_from_pyobject(py, &child, &span_type)?;
-            let entry = (Some(BlockComment_Label::End), native_child);
+            let entry = (Some(BlockCommentLabel::End), native_child);
             self.inner.write().children.push(entry);
         }
         Ok(())
     }
 
     fn children_end(&self, py: Python<'_>) -> PyResult<Py<PyList>> {
+        // TODO(rust-cst-accessor-clone-efficiency): clones full Vec then filters outside the guard.
+        // Could filter inside the read guard (clone only matching entries) to avoid
+        // O(total-children) Arc clones for accessors that match a small subset.
         let snapshot: Vec<_> = {
             let guard = self.inner.read();
             guard.children.clone()
         };
         let result = PyList::empty(py);
         for (lbl, child) in &snapshot {
-            if *lbl == Some(BlockComment_Label::End) {
+            if *lbl == Some(BlockCommentLabel::End) {
                 result.append(child.to_pyobject(py)?)?;
             }
         }
@@ -7996,6 +10894,7 @@ impl PyBlockComment {
     }
 
     fn child_end(&self, py: Python<'_>) -> PyResult<PyObject> {
+        // TODO(rust-cst-accessor-clone-efficiency): see children_end above.
         let snapshot: Vec<_> = {
             let guard = self.inner.read();
             guard.children.clone()
@@ -8003,7 +10902,7 @@ impl PyBlockComment {
         let mut found: Option<PyObject> = None;
         let mut count = 0usize;
         for (lbl, child) in &snapshot {
-            if *lbl == Some(BlockComment_Label::End) {
+            if *lbl == Some(BlockCommentLabel::End) {
                 count += 1;
                 if count == 1 {
                     found = Some(child.to_pyobject(py)?);
@@ -8019,6 +10918,7 @@ impl PyBlockComment {
     }
 
     fn maybe_end(&self, py: Python<'_>) -> PyResult<Option<PyObject>> {
+        // TODO(rust-cst-accessor-clone-efficiency): see children_end above.
         let snapshot: Vec<_> = {
             let guard = self.inner.read();
             guard.children.clone()
@@ -8026,7 +10926,7 @@ impl PyBlockComment {
         let mut found: Option<PyObject> = None;
         let mut count = 0usize;
         for (lbl, child) in &snapshot {
-            if *lbl == Some(BlockComment_Label::End) {
+            if *lbl == Some(BlockCommentLabel::End) {
                 count += 1;
                 if count == 1 {
                     found = Some(child.to_pyobject(py)?);
@@ -8044,7 +10944,7 @@ impl PyBlockComment {
     fn append_start(&self, py: Python<'_>, child: &Bound<'_, PyAny>) -> PyResult<()> {
         let span_type = get_span_type(py)?;
         let native_child = BlockCommentChild::extract_from_pyobject(py, child, &span_type)?;
-        self.inner.write().children.push((Some(BlockComment_Label::Start), native_child));
+        self.inner.write().children.push((Some(BlockCommentLabel::Start), native_child));
         Ok(())
     }
 
@@ -8054,20 +10954,23 @@ impl PyBlockComment {
         for child_result in iter {
             let child = child_result?;
             let native_child = BlockCommentChild::extract_from_pyobject(py, &child, &span_type)?;
-            let entry = (Some(BlockComment_Label::Start), native_child);
+            let entry = (Some(BlockCommentLabel::Start), native_child);
             self.inner.write().children.push(entry);
         }
         Ok(())
     }
 
     fn children_start(&self, py: Python<'_>) -> PyResult<Py<PyList>> {
+        // TODO(rust-cst-accessor-clone-efficiency): clones full Vec then filters outside the guard.
+        // Could filter inside the read guard (clone only matching entries) to avoid
+        // O(total-children) Arc clones for accessors that match a small subset.
         let snapshot: Vec<_> = {
             let guard = self.inner.read();
             guard.children.clone()
         };
         let result = PyList::empty(py);
         for (lbl, child) in &snapshot {
-            if *lbl == Some(BlockComment_Label::Start) {
+            if *lbl == Some(BlockCommentLabel::Start) {
                 result.append(child.to_pyobject(py)?)?;
             }
         }
@@ -8075,6 +10978,7 @@ impl PyBlockComment {
     }
 
     fn child_start(&self, py: Python<'_>) -> PyResult<PyObject> {
+        // TODO(rust-cst-accessor-clone-efficiency): see children_start above.
         let snapshot: Vec<_> = {
             let guard = self.inner.read();
             guard.children.clone()
@@ -8082,7 +10986,7 @@ impl PyBlockComment {
         let mut found: Option<PyObject> = None;
         let mut count = 0usize;
         for (lbl, child) in &snapshot {
-            if *lbl == Some(BlockComment_Label::Start) {
+            if *lbl == Some(BlockCommentLabel::Start) {
                 count += 1;
                 if count == 1 {
                     found = Some(child.to_pyobject(py)?);
@@ -8098,6 +11002,7 @@ impl PyBlockComment {
     }
 
     fn maybe_start(&self, py: Python<'_>) -> PyResult<Option<PyObject>> {
+        // TODO(rust-cst-accessor-clone-efficiency): see children_start above.
         let snapshot: Vec<_> = {
             let guard = self.inner.read();
             guard.children.clone()
@@ -8105,7 +11010,7 @@ impl PyBlockComment {
         let mut found: Option<PyObject> = None;
         let mut count = 0usize;
         for (lbl, child) in &snapshot {
-            if *lbl == Some(BlockComment_Label::Start) {
+            if *lbl == Some(BlockCommentLabel::Start) {
                 count += 1;
                 if count == 1 {
                     found = Some(child.to_pyobject(py)?);
@@ -8149,33 +11054,33 @@ impl PyBlockComment {
 #[cfg(feature = "python")]
 pub fn register_classes(module: &Bound<'_, PyModule>) -> PyResult<()> {
     module.add_class::<NodeKind>()?;
-    module.add_class::<Grammar_Label>()?;
+    module.add_class::<GrammarLabel>()?;
     module.add_class::<PyGrammar>()?;
-    module.add_class::<Rule_Label>()?;
+    module.add_class::<RuleLabel>()?;
     module.add_class::<PyRule>()?;
-    module.add_class::<Alternatives_Label>()?;
+    module.add_class::<AlternativesLabel>()?;
     module.add_class::<PyAlternatives>()?;
-    module.add_class::<Items_Label>()?;
+    module.add_class::<ItemsLabel>()?;
     module.add_class::<PyItems>()?;
-    module.add_class::<Item_Label>()?;
+    module.add_class::<ItemLabel>()?;
     module.add_class::<PyItem>()?;
-    module.add_class::<Term_Label>()?;
+    module.add_class::<TermLabel>()?;
     module.add_class::<PyTerm>()?;
-    module.add_class::<Disposition_Label>()?;
+    module.add_class::<DispositionLabel>()?;
     module.add_class::<PyDisposition>()?;
-    module.add_class::<Quantifier_Label>()?;
+    module.add_class::<QuantifierLabel>()?;
     module.add_class::<PyQuantifier>()?;
-    module.add_class::<Identifier_Label>()?;
+    module.add_class::<IdentifierLabel>()?;
     module.add_class::<PyIdentifier>()?;
-    module.add_class::<RawString_Label>()?;
+    module.add_class::<RawStringLabel>()?;
     module.add_class::<PyRawString>()?;
-    module.add_class::<Literal_Label>()?;
+    module.add_class::<LiteralLabel>()?;
     module.add_class::<PyLiteral>()?;
-    module.add_class::<Trivia_Label>()?;
+    module.add_class::<TriviaLabel>()?;
     module.add_class::<PyTrivia>()?;
-    module.add_class::<LineComment_Label>()?;
+    module.add_class::<LineCommentLabel>()?;
     module.add_class::<PyLineComment>()?;
-    module.add_class::<BlockComment_Label>()?;
+    module.add_class::<BlockCommentLabel>()?;
     module.add_class::<PyBlockComment>()?;
     Ok(())
 }

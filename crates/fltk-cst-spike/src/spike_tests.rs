@@ -5,11 +5,14 @@
 ///
 /// Phase 1 API: suffixless names (`new`, `span`, `children`, `push_child`),
 /// `Shared<T>` child ownership (Arc-based reference semantics).
-use fltk_cst_core::{Shared, SourceText, Span, SpanError};
+///
+/// Phase 2 API: label enum rename (`Identifier_Label` → `IdentifierLabel`, etc.),
+/// `Debug` on all generated types, `kind()`, per-label native accessors, `CstError`.
+use fltk_cst_core::{CstError, Shared, SourceText, Span, SpanError};
 
 use crate::cst::{
-    Identifier, IdentifierChild, Identifier_Label, Items, ItemsChild, Items_Label, Trivia,
-    TriviaChild, Trivia_Label,
+    Identifier, IdentifierChild, IdentifierLabel, Items, ItemsChild, ItemsLabel, NodeKind, Trivia,
+    TriviaChild, TriviaLabel,
 };
 
 // ── helpers ──────────────────────────────────────────────────────────────────
@@ -46,10 +49,10 @@ fn identifier_push_child_labeled() {
     let src = make_source();
     let name_span = span(0, 5, &src);
     let mut node = Identifier::new(span(0, 5, &src));
-    node.push_child(Some(Identifier_Label::Name), IdentifierChild::Span(name_span.clone()));
+    node.push_child(Some(IdentifierLabel::Name), IdentifierChild::Span(name_span.clone()));
     let children = node.children();
     assert_eq!(children.len(), 1);
-    assert!(children[0].0 == Some(Identifier_Label::Name));
+    assert!(children[0].0 == Some(IdentifierLabel::Name));
     match &children[0].1 {
         IdentifierChild::Span(s) => assert!(s == &name_span),
     }
@@ -62,16 +65,16 @@ fn items_push_multiple_children_with_labels() {
     let id_span = span(6, 11, &src);
 
     let mut id_node = Identifier::new(id_span.clone());
-    id_node.push_child(Some(Identifier_Label::Name), IdentifierChild::Span(id_span.clone()));
+    id_node.push_child(Some(IdentifierLabel::Name), IdentifierChild::Span(id_span.clone()));
 
     let mut items = Items::new(span(0, 11, &src));
-    items.push_child(Some(Items_Label::NoWs), ItemsChild::Span(no_ws_span.clone()));
-    items.push_child(Some(Items_Label::Item), ItemsChild::Identifier(Shared::new(id_node)));
+    items.push_child(Some(ItemsLabel::NoWs), ItemsChild::Span(no_ws_span.clone()));
+    items.push_child(Some(ItemsLabel::Item), ItemsChild::Identifier(Shared::new(id_node)));
 
     let children = items.children();
     assert_eq!(children.len(), 2);
-    assert!(children[0].0 == Some(Items_Label::NoWs));
-    assert!(children[1].0 == Some(Items_Label::Item));
+    assert!(children[0].0 == Some(ItemsLabel::NoWs));
+    assert!(children[1].0 == Some(ItemsLabel::Item));
 }
 
 // ── traversal ────────────────────────────────────────────────────────────────
@@ -83,11 +86,11 @@ fn traverse_items_children_down_to_leaf_spans() {
     let id_span = span(6, 11, &src);
 
     let mut id_node = Identifier::new(id_span.clone());
-    id_node.push_child(Some(Identifier_Label::Name), IdentifierChild::Span(id_span.clone()));
+    id_node.push_child(Some(IdentifierLabel::Name), IdentifierChild::Span(id_span.clone()));
 
     let mut items = Items::new(span(0, 11, &src));
-    items.push_child(Some(Items_Label::NoWs), ItemsChild::Span(sep_span.clone()));
-    items.push_child(Some(Items_Label::Item), ItemsChild::Identifier(Shared::new(id_node)));
+    items.push_child(Some(ItemsLabel::NoWs), ItemsChild::Span(sep_span.clone()));
+    items.push_child(Some(ItemsLabel::Item), ItemsChild::Identifier(Shared::new(id_node)));
 
     let mut leaf_texts: Vec<String> = Vec::new();
     for (_label, child) in items.children() {
@@ -226,7 +229,7 @@ fn equal_trees_compare_equal() {
     let src = make_source();
     let make_node = || {
         let mut node = Identifier::new(span(0, 5, &src));
-        node.push_child(Some(Identifier_Label::Name), IdentifierChild::Span(span(0, 5, &src)));
+        node.push_child(Some(IdentifierLabel::Name), IdentifierChild::Span(span(0, 5, &src)));
         node
     };
     assert!(make_node() == make_node());
@@ -236,10 +239,10 @@ fn equal_trees_compare_equal() {
 fn unequal_trees_compare_unequal() {
     let src = make_source();
     let mut a = Identifier::new(span(0, 5, &src));
-    a.push_child(Some(Identifier_Label::Name), IdentifierChild::Span(span(0, 5, &src)));
+    a.push_child(Some(IdentifierLabel::Name), IdentifierChild::Span(span(0, 5, &src)));
     let mut b = Identifier::new(span(0, 5, &src));
     b.push_child(
-        Some(Identifier_Label::Name),
+        Some(IdentifierLabel::Name),
         IdentifierChild::Span(span(0, 3, &src)), // different span end
     );
     assert!(a != b);
@@ -250,7 +253,7 @@ fn different_label_makes_unequal() {
     // Unlabeled vs labeled children should differ
     let src = make_source();
     let mut a = Items::new(span(0, 5, &src));
-    a.push_child(Some(Items_Label::NoWs), ItemsChild::Span(span(0, 1, &src)));
+    a.push_child(Some(ItemsLabel::NoWs), ItemsChild::Span(span(0, 1, &src)));
     let mut b = Items::new(span(0, 5, &src));
     b.push_child(None, ItemsChild::Span(span(0, 1, &src)));
     assert!(a != b);
@@ -263,10 +266,10 @@ fn trivia_construction_and_traversal() {
     let src = make_source();
     let content_span = span(11, 15, &src);
     let mut trivia = Trivia::new(span(11, 15, &src));
-    trivia.push_child(Some(Trivia_Label::Content), TriviaChild::Span(content_span.clone()));
+    trivia.push_child(Some(TriviaLabel::Content), TriviaChild::Span(content_span.clone()));
     let children = trivia.children();
     assert_eq!(children.len(), 1);
-    assert!(children[0].0 == Some(Trivia_Label::Content));
+    assert!(children[0].0 == Some(TriviaLabel::Content));
     match &children[0].1 {
         TriviaChild::Span(s) => assert_eq!(s.text().as_deref(), Some(" foo")),
     }
@@ -302,11 +305,11 @@ fn mutation_propagates_through_parent() {
     let src = make_source();
 
     let mut id_node = Identifier::new(span(0, 5, &src));
-    id_node.push_child(Some(Identifier_Label::Name), IdentifierChild::Span(span(0, 5, &src)));
+    id_node.push_child(Some(IdentifierLabel::Name), IdentifierChild::Span(span(0, 5, &src)));
     let id_shared = Shared::new(id_node);
 
     let mut items = Items::new(span(0, 11, &src));
-    items.push_child(Some(Items_Label::Item), ItemsChild::Identifier(id_shared.clone()));
+    items.push_child(Some(ItemsLabel::Item), ItemsChild::Identifier(id_shared.clone()));
 
     // Mutate via the shared ref.
     id_shared.write().set_span(span(99, 199, &src));
@@ -328,10 +331,10 @@ fn shared_children_share_identity_after_push_child() {
 
     // Push the same Shared<Identifier> into two Items nodes.
     let mut items_a = Items::new(span(0, 5, &src));
-    items_a.push_child(Some(Items_Label::Item), ItemsChild::Identifier(id_shared.clone()));
+    items_a.push_child(Some(ItemsLabel::Item), ItemsChild::Identifier(id_shared.clone()));
 
     let mut items_b = Items::new(span(0, 5, &src));
-    items_b.push_child(Some(Items_Label::Item), ItemsChild::Identifier(id_shared.clone()));
+    items_b.push_child(Some(ItemsLabel::Item), ItemsChild::Identifier(id_shared.clone()));
 
     match (&items_a.children()[0].1, &items_b.children()[0].1) {
         (ItemsChild::Identifier(a), ItemsChild::Identifier(b)) => {
@@ -339,4 +342,266 @@ fn shared_children_share_identity_after_push_child() {
         }
         _ => panic!("expected Identifier children"),
     }
+}
+
+// ── Phase 2: Debug smoke test ─────────────────────────────────────────────────
+
+#[test]
+fn debug_node_kind_and_label_enums() {
+    let kind = NodeKind::Identifier;
+    let _ = format!("{kind:?}");
+
+    let lbl = IdentifierLabel::Name;
+    let _ = format!("{lbl:?}");
+
+    let items_lbl = ItemsLabel::Item;
+    let _ = format!("{items_lbl:?}");
+
+    let trivia_lbl = TriviaLabel::Content;
+    let _ = format!("{trivia_lbl:?}");
+}
+
+#[test]
+fn debug_child_enums_and_node_structs() {
+    let src = make_source();
+    let span_child = IdentifierChild::Span(span(0, 5, &src));
+    let _ = format!("{span_child:?}");
+
+    let items_child = ItemsChild::Identifier(Shared::new(Identifier::new(span(0, 5, &src))));
+    let _ = format!("{items_child:?}");
+
+    let node = Identifier::new(span(0, 5, &src));
+    let _ = format!("{node:?}");
+
+    let shared_node = Shared::new(Identifier::new(span(0, 5, &src)));
+    let _ = format!("{shared_node:?}");
+}
+
+#[test]
+fn span_debug_format() {
+    let src = make_source();
+    let s = span(0, 5, &src);
+    let dbg = format!("{s:?}");
+    assert!(dbg.contains("start"), "Span Debug must contain 'start': {dbg}");
+    assert!(dbg.contains("end"), "Span Debug must contain 'end': {dbg}");
+    assert!(dbg.contains("has_source"), "Span Debug must contain 'has_source': {dbg}");
+    assert!(dbg.contains("true"), "source-bearing span → has_source: true");
+}
+
+// ── Phase 2: kind() accessor ──────────────────────────────────────────────────
+
+#[test]
+fn kind_returns_correct_discriminant() {
+    let src = make_source();
+    assert_eq!(Identifier::new(span(0, 5, &src)).kind(), NodeKind::Identifier);
+    assert_eq!(Items::new(span(0, 5, &src)).kind(), NodeKind::Items);
+    assert_eq!(Trivia::new(span(0, 5, &src)).kind(), NodeKind::Trivia);
+}
+
+// ── Phase 2: per-label native read accessors ──────────────────────────────────
+
+#[test]
+fn children_lbl_span_returns_all() {
+    let src = make_source();
+    let mut id = Identifier::new(span(0, 5, &src));
+    let s1 = span(0, 3, &src);
+    let s2 = span(3, 5, &src);
+    id.push_child(Some(IdentifierLabel::Name), IdentifierChild::Span(s1.clone()));
+    id.push_child(Some(IdentifierLabel::Name), IdentifierChild::Span(s2.clone()));
+    let got: Vec<_> = id.children_name().collect();
+    assert_eq!(got.len(), 2);
+    assert_eq!(*got[0], s1);
+    assert_eq!(*got[1], s2);
+}
+
+#[test]
+fn child_lbl_exactly_one_ok() {
+    let src = make_source();
+    let mut id = Identifier::new(span(0, 5, &src));
+    let s = span(0, 5, &src);
+    id.push_child(Some(IdentifierLabel::Name), IdentifierChild::Span(s.clone()));
+    assert_eq!(*id.child_name().unwrap(), s);
+}
+
+#[test]
+fn child_lbl_zero_is_child_count_error() {
+    let src = make_source();
+    let id = Identifier::new(span(0, 5, &src));
+    match id.child_name() {
+        Err(CstError::ChildCount { found: 0, .. }) => {}
+        other => panic!("expected ChildCount(0), got {other:?}"),
+    }
+}
+
+#[test]
+fn maybe_lbl_none_is_ok_none() {
+    let src = make_source();
+    let id = Identifier::new(span(0, 5, &src));
+    assert_eq!(id.maybe_name().unwrap(), None);
+}
+
+#[test]
+fn maybe_lbl_one_is_ok_some() {
+    let src = make_source();
+    let mut id = Identifier::new(span(0, 5, &src));
+    let s = span(0, 5, &src);
+    id.push_child(Some(IdentifierLabel::Name), IdentifierChild::Span(s.clone()));
+    assert_eq!(*id.maybe_name().unwrap().unwrap(), s);
+}
+
+// ── Phase 2: per-label write accessors ───────────────────────────────────────
+
+#[test]
+fn append_lbl_span_adds_labeled_child() {
+    let src = make_source();
+    let mut id = Identifier::new(span(0, 5, &src));
+    let s = span(0, 5, &src);
+    id.append_name(s.clone());
+    assert_eq!(id.children().len(), 1);
+    assert_eq!(id.children()[0].0, Some(IdentifierLabel::Name));
+    match &id.children()[0].1 {
+        IdentifierChild::Span(got) => assert_eq!(*got, s),
+    }
+}
+
+#[test]
+fn append_lbl_node_adds_labeled_child() {
+    let src = make_source();
+    let id_node = Identifier::new(span(0, 5, &src));
+    let id_shared = Shared::new(id_node);
+    let mut items = Items::new(span(0, 5, &src));
+    items.append_item(id_shared.clone());
+    assert_eq!(items.children().len(), 1);
+    assert_eq!(items.children()[0].0, Some(ItemsLabel::Item));
+    match &items.children()[0].1 {
+        ItemsChild::Identifier(got) => assert!(got.ptr_eq(&id_shared)),
+        _ => panic!("expected Identifier"),
+    }
+}
+
+#[test]
+fn extend_lbl_adds_multiple() {
+    let src = make_source();
+    let mut id = Identifier::new(span(0, 5, &src));
+    let spans = [span(0, 3, &src), span(3, 5, &src)];
+    id.extend_name(spans);
+    assert_eq!(id.children().len(), 2);
+}
+
+// ── Phase 2: native extend_children ──────────────────────────────────────────
+
+#[test]
+fn native_extend_children_appends_arc_clones() {
+    let src = make_source();
+    let id_shared = Shared::new(Identifier::new(span(0, 5, &src)));
+    let mut src_items = Items::new(span(0, 5, &src));
+    src_items.push_child(Some(ItemsLabel::Item), ItemsChild::Identifier(id_shared.clone()));
+
+    let mut dst_items = Items::new(span(0, 5, &src));
+    dst_items.extend_children(&src_items);
+
+    assert_eq!(dst_items.children().len(), 1);
+    match &dst_items.children()[0].1 {
+        ItemsChild::Identifier(got) => assert!(got.ptr_eq(&id_shared), "must be Arc clone"),
+        _ => panic!("expected Identifier"),
+    }
+}
+
+// ── Phase 2: node-typed label accessors (Items.item) ─────────────────────────
+
+#[test]
+fn child_item_exactly_one_ok() {
+    // test-15: spike tests for child_item on the node-typed label.
+    let src = make_source();
+    let id_shared = Shared::new(Identifier::new(span(0, 5, &src)));
+    let mut items = Items::new(span(0, 5, &src));
+    items.push_child(Some(ItemsLabel::Item), ItemsChild::Identifier(id_shared.clone()));
+    match items.child_item() {
+        Ok(got) => assert!(got.ptr_eq(&id_shared)),
+        other => panic!("expected Ok, got {other:?}"),
+    }
+}
+
+#[test]
+fn child_item_zero_returns_child_count_error() {
+    // test-15: zero children → ChildCount error.
+    let src = make_source();
+    let items = Items::new(span(0, 5, &src));
+    match items.child_item() {
+        Err(CstError::ChildCount { found: 0, .. }) => {}
+        other => panic!("expected ChildCount(0), got {other:?}"),
+    }
+}
+
+#[test]
+fn child_item_unexpected_child_type() {
+    // test-13: push a Span variant under the node-typed `item` label; child_item returns
+    // UnexpectedChildType (count is 1, type check fails).
+    let src = make_source();
+    let mut items = Items::new(span(0, 5, &src));
+    items.push_child(Some(ItemsLabel::Item), ItemsChild::Span(span(0, 5, &src)));
+    match items.child_item() {
+        Err(CstError::UnexpectedChildType { label: "item" }) => {}
+        other => panic!("expected UnexpectedChildType(item), got {other:?}"),
+    }
+}
+
+#[test]
+fn child_item_count_error_beats_type_error() {
+    // test-13 / design §4.3 item 2: two children with the right label, wrong type →
+    // ChildCount wins over UnexpectedChildType.
+    let src = make_source();
+    let mut items = Items::new(span(0, 5, &src));
+    items.push_child(Some(ItemsLabel::Item), ItemsChild::Span(span(0, 3, &src)));
+    items.push_child(Some(ItemsLabel::Item), ItemsChild::Span(span(3, 5, &src)));
+    match items.child_item() {
+        Err(CstError::ChildCount { found: 2, .. }) => {}
+        other => panic!("expected ChildCount(2), got {other:?}"),
+    }
+}
+
+#[test]
+fn maybe_item_two_returns_child_count_error() {
+    // test-16: two children → ChildCount("0 or 1") error.
+    let src = make_source();
+    let id1 = Shared::new(Identifier::new(span(0, 5, &src)));
+    let id2 = Shared::new(Identifier::new(span(5, 10, &src)));
+    let mut items = Items::new(span(0, 10, &src));
+    items.push_child(Some(ItemsLabel::Item), ItemsChild::Identifier(id1));
+    items.push_child(Some(ItemsLabel::Item), ItemsChild::Identifier(id2));
+    match items.maybe_item() {
+        Err(CstError::ChildCount { label: "item", expected: "0 or 1", found: 2 }) => {}
+        other => panic!("expected ChildCount(2), got {other:?}"),
+    }
+}
+
+#[test]
+fn children_item_skips_off_type_variant() {
+    // test-14: children_<lbl> skips off-type variants; children() provides the lossless view.
+    let src = make_source();
+    let id_shared = Shared::new(Identifier::new(span(0, 5, &src)));
+    let mut items = Items::new(span(0, 10, &src));
+    items.push_child(Some(ItemsLabel::Item), ItemsChild::Identifier(id_shared.clone()));
+    items.push_child(Some(ItemsLabel::Item), ItemsChild::Span(span(5, 10, &src)));
+    // children_item() skips the Span variant
+    let typed: Vec<_> = items.children_item().collect();
+    assert_eq!(typed.len(), 1, "off-type Span variant should be skipped");
+    assert!(typed[0].ptr_eq(&id_shared));
+    // children() shows both
+    assert_eq!(items.children().len(), 2, "untyped view must be lossless");
+}
+
+// ── Phase 2: CstError Display ─────────────────────────────────────────────────
+
+#[test]
+fn cst_error_display() {
+    let e = CstError::ChildCount {
+        label: "name",
+        expected: "1",
+        found: 0,
+    };
+    assert!(e.to_string().contains("name"));
+
+    let e2 = CstError::UnexpectedChildType { label: "item" };
+    assert!(e2.to_string().contains("item"));
 }

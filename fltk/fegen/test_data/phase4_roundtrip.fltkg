@@ -8,9 +8,12 @@
 //   operator   := assign:"=" | append:"+=" | remove:"-="
 //   identifier := name:/[_a-z][_a-z0-9]*/
 //   literal    := ( str_val:/"[^"]*"/ | int_val:/[0-9]+/ )
+//   value_node := operand:identifier | operand:literal
+//                 (union-labeled rule: same label captures two node types)
 
 config := entry* ;
 entry := key:identifier , op:operator , value:literal , ";" , ;
 operator := assign:"=" | append:"+=" | remove:"-=" ;
 identifier := name:/[_a-z][_a-z0-9]*/ ;
 literal := str_val:/"[^"]*"/ | int_val:/[0-9]+/ ;
+value_node := operand:identifier | operand:literal ;

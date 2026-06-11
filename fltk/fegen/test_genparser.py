@@ -60,8 +60,10 @@ def test_gen_rust_cst_command_emits_source(simple_grammar_file: pathlib.Path, tm
     # Must NOT contain the crate::UNKNOWN_SPAN linkage (standalone artifact requirement).
     assert "use crate::UNKNOWN_SPAN;" not in src
 
-    # Sanity: it's valid-ish Rust (starts with use declarations — unconditional Span import).
-    assert src.startswith("use fltk_cst_core::Span;\n")
+    # Sanity: it's valid-ish Rust (starts with use declarations).
+    # Phase 2: CstError is imported first in the preamble; Span follows.
+    assert src.startswith("use fltk_cst_core::CstError;\n")
+    assert "use fltk_cst_core::Span;\n" in src
 
 
 # ---------------------------------------------------------------------------

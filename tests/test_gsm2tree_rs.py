@@ -191,7 +191,9 @@ class TestPreamble:
         assert "use fltk_cst_core::{extract_span, get_span_type, span_to_pyobject, Span};" not in poc_source
 
     def test_preamble_at_start(self, poc_source: str) -> None:
-        assert poc_source.startswith("use fltk_cst_core::Span;\n")
+        # Phase 2: CstError is the first unconditional import (before Span and Shared).
+        assert poc_source.startswith("use fltk_cst_core::CstError;\n")
+        assert "use fltk_cst_core::Span;\n" in poc_source
 
     def test_helpers_not_emitted(self, poc_source: str) -> None:
         """Helpers now live in fltk-cst-core; none of the five items are emitted in generated source."""
@@ -226,20 +228,21 @@ class TestPreamble:
 
 class TestPocGrammarLabels:
     def test_identifier_label_enum_present(self, poc_source: str) -> None:
-        # Two enum definitions: one gated python-on with pyclass/pyo3 attrs, one python-off plain.
-        assert "pub enum Identifier_Label {" in poc_source
+        # Phase 2: Rust name is IdentifierLabel (CamelCase); Python-visible name preserved via pyclass(name=...).
+        assert "pub enum IdentifierLabel {" in poc_source
         # Python-on block has pyo3(name) directly on variants
         assert '#[pyo3(name = "NAME")]' in poc_source
         assert "    Name," in poc_source
 
     def test_identifier_label_pyclass_name(self, poc_source: str) -> None:
-        # Dual-cfg: python-on block uses direct #[pyclass]; python-off block has no pyclass.
+        # Dual-cfg: python-on block uses direct #[pyclass] with name = "Identifier_Label" for compatibility.
         assert '#[pyclass(frozen, name = "Identifier_Label")]' in poc_source
         # The python-on enum block is wrapped in #[cfg(feature = "python")]
         assert '#[cfg(feature = "python")]\n#[pyclass(frozen, name = "Identifier_Label")]' in poc_source
 
     def test_items_label_enum_present(self, poc_source: str) -> None:
-        assert "pub enum Items_Label {" in poc_source
+        # Phase 2: Rust name is ItemsLabel (CamelCase).
+        assert "pub enum ItemsLabel {" in poc_source
         assert '#[pyo3(name = "ITEM")]' in poc_source
         assert "    Item," in poc_source
         assert '#[pyo3(name = "NO_WS")]' in poc_source
@@ -281,12 +284,17 @@ class TestPocGrammarLabels:
         assert '"_fltk_canonical_name"' in poc_source
 
     def test_allow_non_camel_case_types(self, poc_source: str) -> None:
-        # PoC grammar has 3 label-bearing rules: Identifier, Items, Trivia
-        assert poc_source.count("#[allow(non_camel_case_types)]") >= 3  # one per label enum
+        # Phase 2: label enums are now CamelCase (IdentifierLabel, etc.) — #[allow(non_camel_case_types)]
+        # is no longer needed on label enums.  This attribute may still appear on other generated items
+        # or be zero — we only assert it does NOT appear in excess (not a hard requirement).
+        # The old check (>= 3) is now obsolete; the new check verifies the Rust names are idiomatic.
+        assert "pub enum IdentifierLabel {" in poc_source
+        assert "pub enum ItemsLabel {" in poc_source
 
     def test_derive_clone_partialeq_eq_hash(self, poc_source: str) -> None:
+        # Phase 2: label enums now also derive Debug.
         # PoC grammar has 3 label-bearing rules: Identifier, Items, Trivia
-        assert poc_source.count("#[derive(Clone, PartialEq, Eq, Hash)]") >= 3
+        assert poc_source.count("#[derive(Clone, Debug, PartialEq, Eq, Hash)]") >= 3
 
 
 # ---------------------------------------------------------------------------
@@ -322,8 +330,8 @@ class TestNodeStructure:
 
     def test_children_field_native_vec(self, poc_source: str) -> None:
         """§2.3: children field is a native Vec, not Py<PyList>."""
-        # IdentifierChild is the per-node child enum for Identifier
-        assert "children: Vec<(Option<Identifier_Label>, IdentifierChild)>," in poc_source
+        # Phase 2: label enum is IdentifierLabel (CamelCase Rust name).
+        assert "children: Vec<(Option<IdentifierLabel>, IdentifierChild)>," in poc_source
         assert "children: Py<PyList>," not in poc_source
         assert "#[pyo3(get)]\n    children:" not in poc_source
 
@@ -380,14 +388,16 @@ class TestRegisterClasses:
         )
 
     def test_register_classes_adds_identifier_label(self, poc_source: str) -> None:
-        assert "module.add_class::<Identifier_Label>()?;" in poc_source
+        # Phase 2: Rust name is IdentifierLabel; Python class name "Identifier_Label" preserved via pyclass(name=...).
+        assert "module.add_class::<IdentifierLabel>()?;" in poc_source
 
     def test_register_classes_adds_identifier(self, poc_source: str) -> None:
         # Phase 1: registers the handle pyclass PyIdentifier (Python name stays "Identifier")
         assert "module.add_class::<PyIdentifier>()?;" in poc_source
 
     def test_register_classes_adds_items_label(self, poc_source: str) -> None:
-        assert "module.add_class::<Items_Label>()?;" in poc_source
+        # Phase 2: Rust name is ItemsLabel.
+        assert "module.add_class::<ItemsLabel>()?;" in poc_source
 
     def test_register_classes_adds_items(self, poc_source: str) -> None:
         # Phase 1: registers the handle pyclass PyItems (Python name stays "Items")
@@ -395,7 +405,8 @@ class TestRegisterClasses:
 
     def test_register_classes_label_before_struct(self, poc_source: str) -> None:
         """Label enum must be registered before the node struct — PyO3 requires referenced types registered first."""
-        idx_label = poc_source.index("module.add_class::<Identifier_Label>()?;")
+        # Phase 2: Rust name is IdentifierLabel.
+        idx_label = poc_source.index("module.add_class::<IdentifierLabel>()?;")
         # Phase 1: handle is PyIdentifier
         idx_struct = poc_source.index("module.add_class::<PyIdentifier>()?;")
         assert idx_label < idx_struct
@@ -434,11 +445,12 @@ class TestCfgFeatureGate:
                 )
 
     def test_node_struct_pyclass_gated(self, poc_source: str) -> None:
-        """Phase 1: data struct uses #[derive(Clone)] (no pyclass); handle uses
+        """Phase 1: data struct uses #[derive(Clone, Debug)] (no pyclass); handle uses
         #[cfg(feature = "python")] + #[pyclass(frozen, weakref, name = "...")] .
+        Phase 2: data struct now also derives Debug.
         """
-        # Data struct still derives Clone (and PartialEq)
-        assert "#[derive(Clone)]" in poc_source
+        # Data struct derives Clone and Debug (Phase 2)
+        assert "#[derive(Clone, Debug)]" in poc_source
         # Handle pyclass gate
         assert '#[cfg(feature = "python")]' in poc_source
         # No raw bare #[pyclass] without attributes
@@ -473,23 +485,28 @@ class TestCfgFeatureGate:
     def test_enum_python_on_block_gated(self, poc_source: str) -> None:
         """Enum definitions with pyclass/pyo3 attrs are inside #[cfg(feature = \"python\")] blocks."""
         assert '#[cfg(feature = "python")]\n#[pyclass(frozen, name = "NodeKind")]' in poc_source
+        # Phase 2: Rust name is IdentifierLabel; Python name "Identifier_Label" preserved via pyclass(name=...).
         assert '#[cfg(feature = "python")]\n#[pyclass(frozen, name = "Identifier_Label")]' in poc_source
 
     def test_enum_python_off_block_present(self, poc_source: str) -> None:
-        """Enum definitions without pyo3 attrs present for python-off mode."""
+        """Enum definitions without pyo3 attrs present for python-off mode.
+        Phase 2: derives now include Debug; Rust names are CamelCase (IdentifierLabel etc.).
+        """
         assert (
-            '#[cfg(not(feature = "python"))]\n#[derive(Clone, PartialEq, Eq, Hash)]\npub enum NodeKind {' in poc_source
+            '#[cfg(not(feature = "python"))]\n#[derive(Clone, Debug, PartialEq, Eq, Hash)]\npub enum NodeKind {'
+            in poc_source
         )
+        # Phase 2: Rust enum names are CamelCase.
         assert (
-            '#[cfg(not(feature = "python"))]\n#[derive(Clone, PartialEq, Eq, Hash)]\npub enum Identifier_Label {'
+            '#[cfg(not(feature = "python"))]\n#[derive(Clone, Debug, PartialEq, Eq, Hash)]\npub enum IdentifierLabel {'
             in poc_source
         )
         assert (
-            '#[cfg(not(feature = "python"))]\n#[derive(Clone, PartialEq, Eq, Hash)]\npub enum Items_Label {'
+            '#[cfg(not(feature = "python"))]\n#[derive(Clone, Debug, PartialEq, Eq, Hash)]\npub enum ItemsLabel {'
             in poc_source
         )
         assert (
-            '#[cfg(not(feature = "python"))]\n#[derive(Clone, PartialEq, Eq, Hash)]\npub enum Trivia_Label {'
+            '#[cfg(not(feature = "python"))]\n#[derive(Clone, Debug, PartialEq, Eq, Hash)]\npub enum TriviaLabel {'
             in poc_source
         )
 
@@ -606,7 +623,8 @@ class TestMinimalGrammar:
         assert "pub struct Numbers {" in minimal_source
 
     def test_minimal_grammar_produces_numbers_label(self, minimal_source: str) -> None:
-        assert "pub enum Numbers_Label {" in minimal_source
+        # Phase 2: Rust name is NumbersLabel (CamelCase); Python class name is "Numbers_Label".
+        assert "pub enum NumbersLabel {" in minimal_source
         # Dual-cfg: python-on block has direct pyo3(name)
         assert '#[pyo3(name = "DIGITS")]' in minimal_source
         assert "    Digits," in minimal_source
@@ -775,9 +793,11 @@ class TestNodeKindEnum:
         assert idx_node_kind < idx_identifier
 
     def test_node_kind_before_label_enums(self, poc_source: str) -> None:
-        """NodeKind enum block appears before the first Label enum block in the source."""
+        """NodeKind enum block appears before the first Label enum block in the source.
+        Phase 2: Rust label enum name is IdentifierLabel (CamelCase).
+        """
         idx_node_kind_enum = poc_source.index("pub enum NodeKind {")
-        idx_first_label_enum = poc_source.index("pub enum Identifier_Label {")
+        idx_first_label_enum = poc_source.index("pub enum IdentifierLabel {")
         assert idx_node_kind_enum < idx_first_label_enum
 
     def test_fegen_grammar_node_kind_has_all_14(self, fegen_source: str) -> None:
@@ -812,25 +832,30 @@ class TestKindGetter:
         assert "NodeKind::Items" in poc_source
 
     def test_kind_getter_is_getter_attr(self, poc_source: str) -> None:
-        """The kind getter is annotated with #[getter] immediately before its fn declaration."""
-        # Verify that "#[getter]" appears as the immediately preceding non-blank, non-comment line
-        # before "fn kind(&self) -> NodeKind {" — this ensures the attribute is actually on the
-        # kind function, not just that #[getter] appears somewhere in the file.
+        """The handle pymethod kind getter is annotated with #[getter].
+
+        Phase 2: there are now TWO `kind` declarations per node type:
+        1. `pub fn kind(&self) -> NodeKind` on the data struct (native API, no #[getter]).
+        2. `fn kind(&self) -> NodeKind` on the handle pymethods block (has #[getter]).
+        This test checks that at least one occurrence of the signature has #[getter] before it.
+        """
         lines = poc_source.splitlines()
+        # The pymethods version is not `pub fn`, so filter to those lines only.
+        # We require that at least one kind fn has #[getter] immediately before it.
+        found_getter = False
         kind_fn_sig = "fn kind(&self) -> NodeKind {"
         for i, line in enumerate(lines):
             if kind_fn_sig in line:
-                # Walk backward over blank lines to find the preceding non-blank line
+                # Walk backward over blank/doc-comment lines to find the preceding attribute line.
                 j = i - 1
-                while j >= 0 and lines[j].strip() == "":
+                while j >= 0 and (lines[j].strip() == "" or lines[j].strip().startswith("///")):
                     j -= 1
-                assert j >= 0, "No non-blank line found before fn kind"
-                assert "#[getter]" in lines[j], (
-                    f"Expected '#[getter]' immediately before 'fn kind', found: {lines[j]!r}"
-                )
-                break
-        else:
-            pytest.fail("'fn kind(&self) -> NodeKind {' not found in poc_source")
+                if j >= 0 and "#[getter]" in lines[j]:
+                    found_getter = True
+                    break
+        assert found_getter, (
+            "Expected at least one 'fn kind(&self) -> NodeKind {' with '#[getter]' immediately before it"
+        )
 
     def test_fegen_grammar_all_node_kinds_present(self, fegen_source: str) -> None:
         """All 14 node class names appear as NodeKind variants in fegen source."""
@@ -1215,6 +1240,155 @@ class TestReservedLabelRejection:
         grammar = self._make_reserved_label_grammar("name")
         gen = RustCstGenerator(grammar)
         assert gen is not None
+
+
+# ---------------------------------------------------------------------------
+# Union-label native accessor generation (quality-2 fix)
+# ---------------------------------------------------------------------------
+
+
+def _make_union_label_grammar() -> gsm.Grammar:
+    """Grammar with a union-labeled rule: value_node := operand:identifier | operand:literal.
+
+    The label `operand` maps to {identifier, literal}, triggering the union branch in
+    _native_per_label_methods.  The `identifier` rule has a regex child and `literal`
+    also has a regex child so neither needs trivia rules.
+    """
+    identifier_rule = gsm.Rule(
+        name="identifier",
+        alternatives=[
+            gsm.Items(
+                items=[
+                    gsm.Item(
+                        label="name",
+                        disposition=gsm.Disposition.INCLUDE,
+                        term=gsm.Regex(r"[_a-z][_a-z0-9]*"),
+                        quantifier=gsm.REQUIRED,
+                    ),
+                ],
+                sep_after=[gsm.Separator.NO_WS],
+            ),
+        ],
+    )
+    literal_rule = gsm.Rule(
+        name="literal",
+        alternatives=[
+            gsm.Items(
+                items=[
+                    gsm.Item(
+                        label="val",
+                        disposition=gsm.Disposition.INCLUDE,
+                        term=gsm.Regex(r"[0-9]+"),
+                        quantifier=gsm.REQUIRED,
+                    ),
+                ],
+                sep_after=[gsm.Separator.NO_WS],
+            ),
+        ],
+    )
+    # value_node has two alternatives sharing the label `operand` with different types.
+    value_node_rule = gsm.Rule(
+        name="value_node",
+        alternatives=[
+            gsm.Items(
+                items=[
+                    gsm.Item(
+                        label="operand",
+                        disposition=gsm.Disposition.INCLUDE,
+                        term=gsm.Identifier("identifier"),
+                        quantifier=gsm.REQUIRED,
+                    ),
+                ],
+                sep_after=[gsm.Separator.NO_WS],
+            ),
+            gsm.Items(
+                items=[
+                    gsm.Item(
+                        label="operand",
+                        disposition=gsm.Disposition.INCLUDE,
+                        term=gsm.Identifier("literal"),
+                        quantifier=gsm.REQUIRED,
+                    ),
+                ],
+                sep_after=[gsm.Separator.NO_WS],
+            ),
+        ],
+    )
+    return gsm.Grammar(
+        rules=(identifier_rule, literal_rule, value_node_rule),
+        identifiers={
+            "identifier": identifier_rule,
+            "literal": literal_rule,
+            "value_node": value_node_rule,
+        },
+    )
+
+
+@pytest.fixture(scope="module")
+def union_label_source() -> str:
+    """Generated Rust source for the union-label grammar."""
+    gen = RustCstGenerator(_make_union_label_grammar())
+    return gen.generate()
+
+
+class TestUnionLabelNativeAccessors:
+    """Generator-level checks for the union-label branch of _native_per_label_methods.
+
+    quality-2 fix: exercises child_<lbl>, maybe_<lbl>, children_<lbl>,
+    append_<lbl>, and extend_<lbl> when the label maps to multiple node types
+    (i.e. ref_type == "&{ClassName}Child", single_node_cls is None).
+    """
+
+    def test_child_union_lbl_returns_child_enum_ref(self, union_label_source: str) -> None:
+        """child_operand returns &ValueNodeChild (the whole child enum), not a typed Shared<T>."""
+        assert "pub fn child_operand(&self) -> Result<&ValueNodeChild, CstError>" in union_label_source
+
+    def test_child_union_lbl_no_unexpected_child_type_arm(self, union_label_source: str) -> None:
+        """Union branch has no UnexpectedChildType arm — no type check is needed."""
+        # The child_operand body must not contain UnexpectedChildType.
+        # We look for the function body between child_operand and the next pub fn.
+        import re  # noqa: PLC0415
+
+        match = re.search(
+            r"pub fn child_operand\(&self\).*?(?=\n    pub fn )",
+            union_label_source,
+            re.DOTALL,
+        )
+        assert match is not None, "child_operand function not found"
+        body = match.group(0)
+        assert "UnexpectedChildType" not in body, "union branch must not emit UnexpectedChildType"
+
+    def test_maybe_union_lbl_signature(self, union_label_source: str) -> None:
+        """maybe_operand returns Result<Option<&ValueNodeChild>, CstError>."""
+        assert "pub fn maybe_operand(&self) -> Result<Option<&ValueNodeChild>, CstError>" in union_label_source
+
+    def test_children_union_lbl_signature(self, union_label_source: str) -> None:
+        """children_operand yields &ValueNodeChild items (no type filter on union label)."""
+        assert "pub fn children_operand(&self) -> impl Iterator<Item = &ValueNodeChild>" in union_label_source
+
+    def test_children_union_lbl_uses_map_not_filter_map(self, union_label_source: str) -> None:
+        """children_operand uses .map() directly — no filter_map because no type guard needed."""
+        import re  # noqa: PLC0415
+
+        match = re.search(
+            r"pub fn children_operand\(&self\).*?(?=\n    pub fn )",
+            union_label_source,
+            re.DOTALL,
+        )
+        assert match is not None, "children_operand function not found"
+        body = match.group(0)
+        assert ".map(" in body, "should use .map() for lossless iteration"
+        assert "filter_map" not in body, "union children should not filter_map"
+
+    def test_append_union_lbl_accepts_child_enum(self, union_label_source: str) -> None:
+        """append_operand accepts a ValueNodeChild value (not impl Into<Shared<T>>)."""
+        assert "pub fn append_operand(&mut self, child: ValueNodeChild)" in union_label_source
+
+    def test_extend_union_lbl_accepts_child_enum_iter(self, union_label_source: str) -> None:
+        """extend_operand accepts impl IntoIterator<Item = ValueNodeChild>."""
+        assert (
+            "pub fn extend_operand(&mut self, children: impl IntoIterator<Item = ValueNodeChild>)" in union_label_source
+        )
 
 
 # ---------------------------------------------------------------------------

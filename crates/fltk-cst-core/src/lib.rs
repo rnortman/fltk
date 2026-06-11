@@ -1,5 +1,6 @@
 #[cfg(feature = "python")]
 mod cross_cdylib;
+mod error;
 #[cfg(feature = "python")]
 pub mod registry;
 mod shared;
@@ -7,6 +8,7 @@ mod span;
 
 #[cfg(feature = "python")]
 pub use cross_cdylib::{extract_source_text, extract_span, get_source_text_type, get_span_type, span_to_pyobject};
+pub use error::CstError;
 pub use shared::Shared;
 pub use span::{SourceText, Span, SpanError};
 

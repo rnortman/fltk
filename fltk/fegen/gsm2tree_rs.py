@@ -260,6 +260,7 @@ class RustCstGenerator:
 
     def _preamble(self) -> str:
         return (
+            "use fltk_cst_core::CstError;\n"
             "use fltk_cst_core::Span;\n"
             "use fltk_cst_core::Shared;\n"
             '#[cfg(feature = "python")]\n'
@@ -346,9 +347,13 @@ class RustCstGenerator:
         variant_names = [
             (self._node_kind_variant_name(cn), self._node_kind_python_name(rn)) for cn, _l, rn in rule_info
         ]
+        lines.append("/// Discriminant enum identifying the concrete node type of a CST node.")
+        lines.append("///")
+        lines.append("/// One variant per grammar rule. Returned by `kind()` on every data struct")
+        lines.append("/// and handle. Python-visible name is the same ALL_CAPS form as the protocol.")
         lines.append('#[cfg(feature = "python")]')
         lines.append('#[pyclass(frozen, name = "NodeKind")]')
-        lines.append("#[derive(Clone, PartialEq, Eq, Hash)]")
+        lines.append("#[derive(Clone, Debug, PartialEq, Eq, Hash)]")
         lines.append("pub enum NodeKind {")
         for variant, python_name in variant_names:
             lines.append(f'    #[pyo3(name = "{python_name}")]')
@@ -356,7 +361,7 @@ class RustCstGenerator:
         lines.append("}")
         lines.append("")
         lines.append('#[cfg(not(feature = "python"))]')
-        lines.append("#[derive(Clone, PartialEq, Eq, Hash)]")
+        lines.append("#[derive(Clone, Debug, PartialEq, Eq, Hash)]")
         lines.append("pub enum NodeKind {")
         for variant, _python_name in variant_names:
             lines.append(f"    {variant},")
@@ -391,16 +396,36 @@ class RustCstGenerator:
     # Label enum
     # ------------------------------------------------------------------
 
+    @staticmethod
+    def _label_enum_rust_name(class_name: str) -> str:
+        """Return the Rust-side label enum name (Phase 2: CamelCase, no underscore).
+
+        The Python-visible name is preserved via `#[pyclass(name = "ClassName_Label")]`.
+        Rust consumers use `ClassNameLabel`; Python consumers see `ClassName_Label` unchanged.
+        """
+        return f"{class_name}Label"
+
+    @staticmethod
+    def _label_enum_python_name(class_name: str) -> str:
+        """Return the Python-visible label enum name (unchanged from Phase 1 for compatibility)."""
+        return f"{class_name}_Label"
+
     def _label_enum_block(self, class_name: str, labels: list[str]) -> str:
         """Emit the label enum definition and its #[pymethods] block.
 
         For rules with no labels, emits nothing (Rust enums cannot have zero variants).
         Cross-backend eq/hash is emitted via _emit_rust_cross_backend_eq_hash (shared with NodeKind).
+
+        Phase 2: Rust enum name is `ClassNameLabel` (CamelCase, no underscore).
+        Python class name is preserved via `#[pyclass(name = "ClassName_Label")]`.
         """
         if not labels:
             return ""
 
-        enum_name = f"{class_name}_Label"
+        # Rust name: ClassNameLabel (idiomatic CamelCase — Phase 2 rename).
+        # Python name: ClassName_Label (preserved for out-of-tree compatibility).
+        enum_name = self._label_enum_rust_name(class_name)
+        python_enum_name = self._label_enum_python_name(class_name)
         lines: list[str] = []
 
         lines.append(f"// {'─' * 75}")
@@ -411,19 +436,21 @@ class RustCstGenerator:
         # Dual-cfg blocks (same rationale as NodeKind above).
         # Variant names extracted once and reused in both blocks to prevent drift.
         label_variants = [(_rust_variant_name(lbl), _python_label_name(lbl)) for lbl in labels]
-        lines.append("#[allow(non_camel_case_types)]")
+        lines.append("/// Label discriminant enum for children of this node type.")
+        lines.append("///")
+        lines.append(f"/// Python-visible name is `{python_enum_name}` (preserved for compatibility).")
+        lines.append(f"/// Rust consumers use the CamelCase `{enum_name}` name.")
         lines.append('#[cfg(feature = "python")]')
-        lines.append(f'#[pyclass(frozen, name = "{enum_name}")]')
-        lines.append("#[derive(Clone, PartialEq, Eq, Hash)]")
+        lines.append(f'#[pyclass(frozen, name = "{python_enum_name}")]')
+        lines.append("#[derive(Clone, Debug, PartialEq, Eq, Hash)]")
         lines.append(f"pub enum {enum_name} {{")
         for rust_variant, python_name in label_variants:
             lines.append(f'    #[pyo3(name = "{python_name}")]')
             lines.append(f"    {rust_variant},")
         lines.append("}")
         lines.append("")
-        lines.append("#[allow(non_camel_case_types)]")
         lines.append('#[cfg(not(feature = "python"))]')
-        lines.append("#[derive(Clone, PartialEq, Eq, Hash)]")
+        lines.append("#[derive(Clone, Debug, PartialEq, Eq, Hash)]")
         lines.append(f"pub enum {enum_name} {{")
         for rust_variant, _python_name in label_variants:
             lines.append(f"    {rust_variant},")
@@ -470,9 +497,11 @@ class RustCstGenerator:
         enum_name = f"{class_name}Child"
         lines: list[str] = []
 
-        lines.append(f"// {enum_name} — child value enum for {class_name}")
-        lines.append("// Node-typed variants hold Shared<T> (Arc<RwLock<T>>); Clone is shallow.")
-        lines.append("#[derive(Clone)]")
+        lines.append(f"/// Child value enum for `{class_name}` nodes.")
+        lines.append("///")
+        lines.append("/// Node-typed variants hold `Shared<T>` (`Arc<RwLock<T>>`); `Clone` is shallow")
+        lines.append("/// (increments the reference count, does not copy the node).")
+        lines.append("#[derive(Clone, Debug)]")
         lines.append(f"pub enum {enum_name} {{")
         if has_span:
             lines.append("    Span(Span),")
@@ -590,7 +619,8 @@ class RustCstGenerator:
         """
         child_classes, has_span = self._child_variants_for_rule(rule_name)
         enum_name = f"{class_name}Child"
-        label_type = f"Option<{class_name}_Label>" if labels else "Option<()>"
+        label_enum_name = self._label_enum_rust_name(class_name) if labels else ""
+        label_type = f"Option<{label_enum_name}>" if labels else "Option<()>"
         py_handle = f"Py{class_name}"
         lines: list[str] = []
 
@@ -601,9 +631,13 @@ class RustCstGenerator:
 
         # ── Data struct (always compiled) ──────────────────────────────────────
         # Clone is shallow (Arc clones for node children); called out in comment.
-        lines.append(f"/// CST data struct for `{class_name}`. Node-typed children are [`Shared<T>`] —")
-        lines.append("/// see [`fltk_cst_core::Shared`] for clone/equality/reference semantics.")
-        lines.append("#[derive(Clone)]")
+        lines.append(
+            f"/// CST data struct for `{class_name}`."
+            " See [`fltk_cst_core::Shared`] for clone/equality/reference semantics."
+        )
+        # TODO(rust-cst-debug-depth): derived Debug recurses without depth bound; DoS risk for
+        # downstream parsers over untrusted input (tree depth is attacker-controlled).
+        lines.append("#[derive(Clone, Debug)]")
         lines.append(f"pub struct {class_name} {{")
         lines.append("    // Not pub: use span() / children() / push_child() — the stable accessor API.")
         lines.append("    // Direct field access bypasses any future validation logic on setters.")
@@ -625,9 +659,9 @@ class RustCstGenerator:
 
         # Plain impl: suffixless Rust-native API (no _native suffix).
         # These are the stable public Rust surface that generated parsers build against.
+        variant = self._node_kind_variant_name(class_name)
         lines.append(f"impl {class_name} {{")
-        lines.append("    /// Construct a node with the given span and no children.")
-        lines.append("    /// GIL-free.")
+        lines.append("    /// Construct a node with the given span and no children. GIL-free.")
         lines.append("    pub fn new(span: Span) -> Self {")
         lines.append(f"        {class_name} {{")
         lines.append("            span,")
@@ -635,14 +669,14 @@ class RustCstGenerator:
         lines.append("        }")
         lines.append("    }")
         lines.append("")
-        lines.append("    /// Return a reference to the stored `Span`.")
-        lines.append("    pub fn span(&self) -> &Span {")
-        lines.append("        &self.span")
+        lines.append("    /// Return the [`NodeKind`] discriminant for this node type.")
+        lines.append("    pub fn kind(&self) -> NodeKind {")
+        lines.append(f"        NodeKind::{variant}")
         lines.append("    }")
         lines.append("")
-        lines.append("    /// Return a slice of the children.")
-        lines.append(f"    pub fn children(&self) -> &[({label_type}, {enum_name})] {{")
-        lines.append("        self.children.as_slice()")
+        lines.append("    /// Return a reference to the stored [`Span`].")
+        lines.append("    pub fn span(&self) -> &Span {")
+        lines.append("        &self.span")
         lines.append("    }")
         lines.append("")
         lines.append("    /// Replace the node's span.")
@@ -650,10 +684,50 @@ class RustCstGenerator:
         lines.append("        self.span = span;")
         lines.append("    }")
         lines.append("")
+        lines.append("    /// Return a slice of all children (unfiltered).")
+        lines.append("    ///")
+        lines.append("    /// Each entry is `(label, child)`. Use the per-label accessors")
+        lines.append("    /// (`children_<lbl>`, `child_<lbl>`, `maybe_<lbl>`) for type-safe access.")
+        lines.append(f"    pub fn children(&self) -> &[({label_type}, {enum_name})] {{")
+        lines.append("        self.children.as_slice()")
+        lines.append("    }")
+        lines.append("")
         lines.append("    /// Push a child onto the children `Vec`.")
+        lines.append("    ///")
+        lines.append("    /// No type-checking is performed: any child variant may be stored under")
+        lines.append("    /// any label. Per-label typed mutators (`append_<lbl>`, `extend_<lbl>`)")
+        lines.append("    /// provide type-constrained alternatives.")
         lines.append(f"    pub fn push_child(&mut self, label: {label_type}, child: {enum_name}) {{")
         lines.append("        self.children.push((label, child));")
         lines.append("    }")
+        lines.append("")
+        lines.append("    /// Return the single child (any label), or `Err` if there is not exactly one.")
+        lines.append("    ///")
+        lines.append("    /// Mirrors the Python `child()` method: count violation → `CstError::ChildCount`.")
+        lines.append(f"    pub fn child(&self) -> Result<&({label_type}, {enum_name}), CstError> {{")
+        lines.append("        match self.children.as_slice() {")
+        lines.append("            [single] => Ok(single),")
+        lines.append("            slice => Err(CstError::ChildCount {")
+        lines.append('                label: "<any>",')
+        lines.append('                expected: "1",')
+        lines.append("                found: slice.len(),")
+        lines.append("            }),")
+        lines.append("        }")
+        lines.append("    }")
+        lines.append("")
+        lines.append("    /// Copy all children from `other` into `self`, sharing the `Shared<T>` arcs.")
+        lines.append("    ///")
+        lines.append("    /// Children are appended (Arc reference-count bumps, not deep copies),")
+        lines.append("    /// matching the Python backend's reference-copy behavior. Labels are preserved.")
+        lines.append("    ///")
+        lines.append("    /// The borrow checker prevents `self.extend_children(self)` at the data-struct")
+        lines.append("    /// level (`&mut` + `&` of the same value don't coexist). For self-extend from")
+        lines.append("    /// Python, the handle pymethod handles it via snapshotting.")
+        lines.append("    pub fn extend_children(&mut self, other: &Self) {")
+        lines.append("        self.children.extend(other.children.iter().cloned());")
+        lines.append("    }")
+        # Per-label native accessors (read side)
+        lines.extend(self._native_per_label_methods(rule_name, labels, enum_name, label_enum_name))
         lines.append("}")
         lines.append("")
 
@@ -788,7 +862,7 @@ class RustCstGenerator:
         ]
 
     def _label_classattr(self, class_name: str) -> list[str]:
-        enum_name = f"{class_name}_Label"
+        enum_name = self._label_enum_rust_name(class_name)
         return [
             "    #[classattr]",
             "    #[allow(non_snake_case)]",
@@ -862,15 +936,17 @@ class RustCstGenerator:
                 "                )));",
                 "            }",
             ]
-        enum_name = f"{class_name}_Label"
+        rust_enum_name = self._label_enum_rust_name(class_name)
+        python_enum_name = self._label_enum_python_name(class_name)
         lines = [
             "            None => None,",
             "            Some(lbl) => {",
-            f"                if let Ok(native_lbl) = lbl.bind(py).extract::<{enum_name}>() {{",
+            f"                if let Ok(native_lbl) = lbl.bind(py).extract::<{rust_enum_name}>() {{",
             "                    Some(native_lbl)",
             "                } else {",
             "                    return Err(PyTypeError::new_err(format!(",
-            f'                        "{class_name}.{method_name}: label argument is not a {enum_name}; got {{}}",',
+            f'                        "{class_name}.{method_name}: label argument is not a '
+            f'{python_enum_name}; got {{}}",',
             "                        lbl.bind(py).get_type().name()?",
             "                    )));",
             "                }",
@@ -959,8 +1035,317 @@ class RustCstGenerator:
             "",
         ]
 
+    def _label_type_info(self, rule_name: str, label: str) -> tuple[str, str | None, int]:
+        """Return (return_ref_type, single_node_class_name_or_None, total_enum_variants).
+
+        return_ref_type: the `&T` type for `children_<lbl>` iterator items and read accessors.
+          - Span-only label: `"&Span"`
+          - Single-node-typed label: `"&Shared<ClassName>"`
+          - Union label (multi-type): `"&{ClassName}Child"` (the whole child enum)
+
+        single_node_class_name_or_None: the class name if the label is single-node-typed,
+        else None. Used by write-side accessors to pick the `impl Into<Shared<T>>` signature.
+
+        total_enum_variants: total number of variants in the ChildEnum for this rule.
+        Used to decide whether a `_ => None` wildcard arm in match expressions is needed
+        (omit it when there is only one variant and it matches the expected type, to avoid
+        an "unreachable pattern" compiler warning).
+        """
+        model = self._py_gen.rule_models[rule_name]
+        label_types = model.labels[label]
+        child_class_names, has_span = self._child_variants_for_rule(rule_name)
+        total_enum_variants = len(child_class_names) + (1 if has_span else 0)
+        enum_name = f"{self._py_gen.class_name_for_rule_node(rule_name)}Child"
+
+        if len(label_types) == 1:
+            (only_type,) = label_types
+            if isinstance(only_type, str):
+                child_cls = self._py_gen.class_name_for_rule_node(only_type)
+                return f"&Shared<{child_cls}>", child_cls, total_enum_variants
+            else:
+                # Single TypeKey → span
+                return "&Span", None, total_enum_variants
+        # Union: multiple types → return child enum reference
+        return f"&{enum_name}", None, total_enum_variants
+
+    def _native_per_label_methods(
+        self, rule_name: str, labels: list[str], enum_name: str, label_enum_name: str
+    ) -> list[str]:
+        """Emit native (GIL-free) per-label accessor/mutator methods on the data struct.
+
+        These are Phase 2 additions inside the plain `impl ClassNameBlock` block.
+        For each label:
+          - children_<lbl>: iterator over matching children (typed)
+          - child_<lbl>: single matching child or CstError
+          - maybe_<lbl>: optional matching child or CstError
+          - append_<lbl>: push one typed child with this label (write side)
+          - extend_<lbl>: push multiple typed children with this label (write side)
+        """
+        if not labels:
+            return []
+
+        lines: list[str] = []
+
+        for label in labels:
+            rust_variant = _rust_variant_name(label)
+            ref_type, single_node_cls, total_variants = self._label_type_info(rule_name, label)
+
+            # children_<lbl>: iterator over typed children with this label.
+            # Skips off-type variants stored under the label (documented — use children() for lossless).
+            # When total_variants == 1 the match arm is exhaustive: use .map() instead of .filter_map()
+            # to satisfy clippy::unnecessary_filter_map (no `_ => None` arm means filter_map == map).
+            lines.append("")
+            if single_node_cls:
+                need_wildcard = total_variants > 1
+                lines.append(
+                    f"    /// Return an iterator over `Shared<{single_node_cls}>` children labelled `{label}`."
+                )
+                lines.append("    ///")
+                lines.append(f"    /// Off-type variants stored under the `{label}` label are silently skipped.")
+                lines.append("    /// Use `children()` (the untyped slice) for a lossless view.")
+                lines.append(f"    pub fn children_{label}(&self) -> impl Iterator<Item = {ref_type}> + '_ {{")
+                lines.append("        self.children.iter()")
+                lines.append(f"            .filter(|(lbl, _)| *lbl == Some({label_enum_name}::{rust_variant}))")
+                if need_wildcard:
+                    lines.append("            .filter_map(|(_, child)| match child {")
+                    lines.append(f"                {enum_name}::{single_node_cls}(s) => Some(s),")
+                    lines.append("                _ => None,")
+                    lines.append("            })")
+                else:
+                    # Exhaustive single-variant match: use .map() to avoid clippy::unnecessary_filter_map
+                    lines.append(
+                        f"            .map(|(_, child)| match child {{ {enum_name}::{single_node_cls}(s) => s }})"
+                    )
+                lines.append("    }")
+            elif ref_type == "&Span":
+                # Span-only child enum: total_variants == 1 means only Span exists → no wildcard
+                need_wildcard = total_variants > 1
+                lines.append(f"    /// Return an iterator over `Span` children labelled `{label}`.")
+                lines.append("    ///")
+                lines.append(f"    /// Off-type variants stored under the `{label}` label are silently skipped.")
+                lines.append("    /// Use `children()` (the untyped slice) for a lossless view.")
+                lines.append(f"    pub fn children_{label}(&self) -> impl Iterator<Item = {ref_type}> + '_ {{")
+                lines.append("        self.children.iter()")
+                lines.append(f"            .filter(|(lbl, _)| *lbl == Some({label_enum_name}::{rust_variant}))")
+                if need_wildcard:
+                    lines.append("            .filter_map(|(_, child)| match child {")
+                    lines.append(f"                {enum_name}::Span(s) => Some(s),")
+                    lines.append("                _ => None,")
+                    lines.append("            })")
+                else:
+                    # Exhaustive single-variant match: use .map() to avoid clippy::unnecessary_filter_map
+                    lines.append(f"            .map(|(_, child)| match child {{ {enum_name}::Span(s) => s }})")
+                lines.append("    }")
+            else:
+                # Union label: return the whole child enum ref (no type filtering)
+                lines.append(f"    /// Return an iterator over children labelled `{label}`.")
+                lines.append(f"    pub fn children_{label}(&self) -> impl Iterator<Item = {ref_type}> + '_ {{")
+                lines.append("        self.children.iter()")
+                lines.append(f"            .filter(|(lbl, _)| *lbl == Some({label_enum_name}::{rust_variant}))")
+                lines.append("            .map(|(_, child)| child)")
+                lines.append("    }")
+
+            # child_<lbl>: exactly one matching child, counted by label first.
+            lines.append("")
+            lines.append(f"    /// Return the single child labelled `{label}`, or `Err` if not exactly one.")
+            lines.append("    ///")
+            lines.append("    /// Count is checked by label match first (`CstError::ChildCount`); if the")
+            lines.append("    /// count is valid and the surviving child has the wrong variant type,")
+            lines.append("    /// `CstError::UnexpectedChildType` is returned (single-typed labels only).")
+            if single_node_cls:
+                # When total_variants == 1, the single-typed match arm is exhaustive; no wildcard needed.
+                need_unexpected_arm = total_variants > 1
+                lines.append(f"    pub fn child_{label}(&self) -> Result<{ref_type}, CstError> {{")
+                # Zero-alloc: use (next, next) iterator match; recount only on the error path.
+                lines.append("        let mut it = self.children.iter()")
+                lines.append(f"            .filter(|(lbl, _)| *lbl == Some({label_enum_name}::{rust_variant}));")
+                lines.append("        match (it.next(), it.next()) {")
+                lines.append("            (Some((_, child)), None) => match child {")
+                lines.append(f"                {enum_name}::{single_node_cls}(s) => Ok(s),")
+                if need_unexpected_arm:
+                    lines.append(f'                _ => Err(CstError::UnexpectedChildType {{ label: "{label}" }}),')
+                lines.append("            },")
+                lines.append("            _ => Err(CstError::ChildCount {")
+                lines.append(f'                label: "{label}",')
+                lines.append('                expected: "1",')
+                lines.append("                found: self.children.iter()")
+                lines.append(f"                    .filter(|(lbl, _)| *lbl == Some({label_enum_name}::{rust_variant}))")
+                lines.append("                    .count(),")
+                lines.append("            }),")
+                lines.append("        }")
+                lines.append("    }")
+            elif ref_type == "&Span":
+                need_unexpected_arm = total_variants > 1
+                lines.append(f"    pub fn child_{label}(&self) -> Result<{ref_type}, CstError> {{")
+                # Zero-alloc: use (next, next) iterator match; recount only on the error path.
+                lines.append("        let mut it = self.children.iter()")
+                lines.append(f"            .filter(|(lbl, _)| *lbl == Some({label_enum_name}::{rust_variant}));")
+                lines.append("        match (it.next(), it.next()) {")
+                lines.append("            (Some((_, child)), None) => match child {")
+                lines.append(f"                {enum_name}::Span(s) => Ok(s),")
+                if need_unexpected_arm:
+                    lines.append(f'                _ => Err(CstError::UnexpectedChildType {{ label: "{label}" }}),')
+                lines.append("            },")
+                lines.append("            _ => Err(CstError::ChildCount {")
+                lines.append(f'                label: "{label}",')
+                lines.append('                expected: "1",')
+                lines.append("                found: self.children.iter()")
+                lines.append(f"                    .filter(|(lbl, _)| *lbl == Some({label_enum_name}::{rust_variant}))")
+                lines.append("                    .count(),")
+                lines.append("            }),")
+                lines.append("        }")
+                lines.append("    }")
+            else:
+                # Union: no type check needed.
+                lines.append(f"    pub fn child_{label}(&self) -> Result<{ref_type}, CstError> {{")
+                lines.append("        let mut matching = self.children.iter()")
+                lines.append(f"            .filter(|(lbl, _)| *lbl == Some({label_enum_name}::{rust_variant}));")
+                lines.append("        match (matching.next(), matching.next()) {")
+                lines.append("            (Some((_, child)), None) => Ok(child),")
+                lines.append("            _ => {")
+                lines.append("                let count = self.children.iter()")
+                lines.append(f"                    .filter(|(lbl, _)| *lbl == Some({label_enum_name}::{rust_variant}))")
+                lines.append("                    .count();")
+                lines.append("                Err(CstError::ChildCount {")
+                lines.append(f'                    label: "{label}",')
+                lines.append('                    expected: "1",')
+                lines.append("                    found: count,")
+                lines.append("                })")
+                lines.append("            }")
+                lines.append("        }")
+                lines.append("    }")
+
+            # maybe_<lbl>: zero or one matching child.
+            lines.append("")
+            lines.append(f"    /// Return the optional child labelled `{label}`, or `Err` if more than one.")
+            lines.append("    ///")
+            lines.append("    /// Returns `Ok(None)` for zero, `Ok(Some(...))` for one,")
+            lines.append("    /// `Err(CstError::ChildCount)` for two or more.")
+            if single_node_cls:
+                need_unexpected_arm = total_variants > 1
+                lines.append(f"    pub fn maybe_{label}(&self) -> Result<Option<{ref_type}>, CstError> {{")
+                # Zero-alloc: use (next, next) iterator match; recount only on the error path.
+                lines.append("        let mut it = self.children.iter()")
+                lines.append(f"            .filter(|(lbl, _)| *lbl == Some({label_enum_name}::{rust_variant}));")
+                lines.append("        match (it.next(), it.next()) {")
+                lines.append("            (None, _) => Ok(None),")
+                lines.append("            (Some((_, child)), None) => match child {")
+                lines.append(f"                {enum_name}::{single_node_cls}(s) => Ok(Some(s)),")
+                if need_unexpected_arm:
+                    lines.append(f'                _ => Err(CstError::UnexpectedChildType {{ label: "{label}" }}),')
+                lines.append("            },")
+                lines.append("            _ => Err(CstError::ChildCount {")
+                lines.append(f'                label: "{label}",')
+                lines.append('                expected: "0 or 1",')
+                lines.append("                found: self.children.iter()")
+                lines.append(f"                    .filter(|(lbl, _)| *lbl == Some({label_enum_name}::{rust_variant}))")
+                lines.append("                    .count(),")
+                lines.append("            }),")
+                lines.append("        }")
+                lines.append("    }")
+            elif ref_type == "&Span":
+                need_unexpected_arm = total_variants > 1
+                lines.append(f"    pub fn maybe_{label}(&self) -> Result<Option<{ref_type}>, CstError> {{")
+                # Zero-alloc: use (next, next) iterator match; recount only on the error path.
+                lines.append("        let mut it = self.children.iter()")
+                lines.append(f"            .filter(|(lbl, _)| *lbl == Some({label_enum_name}::{rust_variant}));")
+                lines.append("        match (it.next(), it.next()) {")
+                lines.append("            (None, _) => Ok(None),")
+                lines.append("            (Some((_, child)), None) => match child {")
+                lines.append(f"                {enum_name}::Span(s) => Ok(Some(s)),")
+                if need_unexpected_arm:
+                    lines.append(f'                _ => Err(CstError::UnexpectedChildType {{ label: "{label}" }}),')
+                lines.append("            },")
+                lines.append("            _ => Err(CstError::ChildCount {")
+                lines.append(f'                label: "{label}",')
+                lines.append('                expected: "0 or 1",')
+                lines.append("                found: self.children.iter()")
+                lines.append(f"                    .filter(|(lbl, _)| *lbl == Some({label_enum_name}::{rust_variant}))")
+                lines.append("                    .count(),")
+                lines.append("            }),")
+                lines.append("        }")
+                lines.append("    }")
+            else:
+                # Union: no type check.
+                lines.append(f"    pub fn maybe_{label}(&self) -> Result<Option<{ref_type}>, CstError> {{")
+                lines.append("        let mut matching = self.children.iter()")
+                lines.append(f"            .filter(|(lbl, _)| *lbl == Some({label_enum_name}::{rust_variant}));")
+                lines.append("        match (matching.next(), matching.next()) {")
+                lines.append("            (None, _) => Ok(None),")
+                lines.append("            (Some((_, child)), None) => Ok(Some(child)),")
+                lines.append("            _ => {")
+                lines.append("                let count = self.children.iter()")
+                lines.append(f"                    .filter(|(lbl, _)| *lbl == Some({label_enum_name}::{rust_variant}))")
+                lines.append("                    .count();")
+                lines.append("                Err(CstError::ChildCount {")
+                lines.append(f'                    label: "{label}",')
+                lines.append('                    expected: "0 or 1",')
+                lines.append("                    found: count,")
+                lines.append("                })")
+                lines.append("            }")
+                lines.append("        }")
+                lines.append("    }")
+
+            # Write side: append_<lbl> and extend_<lbl>
+            lines.append("")
+            if single_node_cls:
+                lines.append(
+                    f"    /// Append a child with label `{label}`,"
+                    f" accepting `{single_node_cls}` or `Shared<{single_node_cls}>`."
+                )
+                lines.append(f"    pub fn append_{label}(&mut self, child: impl Into<Shared<{single_node_cls}>>) {{")
+                lines.append(
+                    f"        self.children.push((Some({label_enum_name}::{rust_variant}),"
+                    f" {enum_name}::{single_node_cls}(child.into())));"
+                )
+                lines.append("    }")
+                lines.append("")
+                lines.append(f"    /// Append multiple children with label `{label}`.")
+                lines.append(
+                    f"    pub fn extend_{label}(&mut self,"
+                    f" children: impl IntoIterator<Item = impl Into<Shared<{single_node_cls}>>>) {{"
+                )
+                lines.append(
+                    f"        self.children.extend(children.into_iter()"
+                    f".map(|c| (Some({label_enum_name}::{rust_variant}), {enum_name}::{single_node_cls}(c.into()))));"
+                )
+                lines.append("    }")
+            elif ref_type == "&Span":
+                lines.append(f"    /// Append a `Span` child with label `{label}`.")
+                lines.append(f"    pub fn append_{label}(&mut self, span: Span) {{")
+                lines.append(
+                    f"        self.children.push((Some({label_enum_name}::{rust_variant}), {enum_name}::Span(span)));"
+                )
+                lines.append("    }")
+                lines.append("")
+                lines.append(f"    /// Append multiple `Span` children with label `{label}`.")
+                lines.append(f"    pub fn extend_{label}(&mut self, spans: impl IntoIterator<Item = Span>) {{")
+                lines.append(
+                    f"        self.children.extend(spans.into_iter()"
+                    f".map(|s| (Some({label_enum_name}::{rust_variant}), {enum_name}::Span(s))));"
+                )
+                lines.append("    }")
+            else:
+                # Union label: accept the child enum variant directly
+                lines.append(f"    /// Append a child with label `{label}` (any child enum variant).")
+                lines.append(f"    pub fn append_{label}(&mut self, child: {enum_name}) {{")
+                lines.append(f"        self.children.push((Some({label_enum_name}::{rust_variant}), child));")
+                lines.append("    }")
+                lines.append("")
+                lines.append(f"    /// Append multiple children with label `{label}`.")
+                lines.append(
+                    f"    pub fn extend_{label}(&mut self, children: impl IntoIterator<Item = {enum_name}>) {{"
+                )
+                lines.append(
+                    f"        self.children.extend(children.into_iter()"
+                    f".map(|c| (Some({label_enum_name}::{rust_variant}), c)));"
+                )
+                lines.append("    }")
+
+        return lines
+
     def _per_label_methods(self, class_name: str, label: str, child_enum_name: str) -> list[str]:
-        label_enum_name = f"{class_name}_Label"
+        label_enum_name = self._label_enum_rust_name(class_name)
         rust_variant = _rust_variant_name(label)
 
         lines: list[str] = []
@@ -1023,7 +1408,7 @@ class RustCstGenerator:
         lines.extend(
             [
                 f"    fn child_{label}(&self, py: Python<'_>) -> PyResult<PyObject> {{",
-                "        // TODO(rust-cst-accessor-clone-efficiency): see children_{label} above.",
+                f"        // TODO(rust-cst-accessor-clone-efficiency): see children_{label} above.",
                 "        let snapshot: Vec<_> = {",
                 "            let guard = self.inner.read();",
                 "            guard.children.clone()",
@@ -1053,7 +1438,7 @@ class RustCstGenerator:
         lines.extend(
             [
                 f"    fn maybe_{label}(&self, py: Python<'_>) -> PyResult<Option<PyObject>> {{",
-                "        // TODO(rust-cst-accessor-clone-efficiency): see children_{label} above.",
+                f"        // TODO(rust-cst-accessor-clone-efficiency): see children_{label} above.",
                 "        let snapshot: Vec<_> = {",
                 "            let guard = self.inner.read();",
                 "            guard.children.clone()",
@@ -1137,7 +1522,7 @@ class RustCstGenerator:
         lines.append("    module.add_class::<NodeKind>()?;")
         for class_name, labels, _rule_name in self._rule_info():
             if labels:
-                enum_name = f"{class_name}_Label"
+                enum_name = self._label_enum_rust_name(class_name)
                 lines.append(f"    module.add_class::<{enum_name}>()?;")
             py_handle = f"Py{class_name}"
             lines.append(f"    module.add_class::<{py_handle}>()?;")
