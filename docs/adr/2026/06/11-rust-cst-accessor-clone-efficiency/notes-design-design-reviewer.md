@@ -1,0 +1,15 @@
+# Design review notes: rust-cst-accessor-clone-efficiency
+
+Style: concise, precise, complete, unambiguous. No padding. Audience: smart LLM/human.
+
+Verification performed against base 7ddec4a: all four emitter locations and TODO comments confirmed (`fltk/fegen/gsm2tree_rs.py:1011-1036`, `1387-1404`, `1410-1435`, `1437-1465`); error-message texts confirmed identical to design (`gsm2tree_rs.py:1024`, `1428`, `1458`); test pins confirmed (`tests/test_rust_cst_poc.py:109` exact-count, `:129` at-least-2, `:173/:181` generic child counts; `tests/test_fegen_rust_cst.py:280`); all six generated `.rs` files carry the TODO comments (grep); `make gencode` regenerates all six including the `cp` to `crates/fltk-cst-spike/src/cst.rs` (`Makefile:148-185`); TODO.md entry at line 27-29; lock-discipline precedent comments exist at the cited sites (`gsm2tree_rs.py:836-851`, `887-909`, `988-1009`); per-label emitters are only invoked for labeled rules and `_generic_child` for every rule (`gsm2tree_rs.py:790-793`); native accessors untouched and already zero-alloc (`gsm2tree_rs.py:1071-1345`); `items` rule in `poc_grammar.fltkg` has four labels, so the proposed regression test is writable in `tests/test_rust_cst_poc.py`. The error-path conversion-side-effect removal is implied by the request's own prescribed fix shape (request.md §Fix shape: clone-only-matching / count-no-clone on error paths), so it is not a requirements deviation; the design's unobservability argument matches the weak-registry comment at `gsm2tree_rs.py:1001-1004`. Requirements coverage is complete; no internal contradictions; scope matches the request.
+
+## design-1
+
+- Section: "Edge cases / failure modes" → "**Clippy gate.** Generated code must pass `cargo clippy -- -D warnings` (Makefile gates all fixture crates)."
+- What's wrong: "all fixture crates" is inaccurate. `tests/rust_cst_fixture` is not in any clippy target: `Makefile` `cargo-clippy` (lines 51-54) covers the workspace (`Cargo.toml:2` members: root, fltk-cst-core, fltk-cst-spike, fltk-parser-core), `tests/rust_cst_fegen`, and `tests/rust_parser_fixture`; `cargo-clippy-no-python` (65-71) adds no others. `tests/rust_cst_fixture` is only built via `maturin develop` (`Makefile:106`).
+- Why: source-backed above; the design asserts a gate that does not exist for one of the six regenerated outputs.
+- Consequence: negligible in practice — the changed pymethod templates are label-agnostic and identical across grammars, so any lint would fire in the five clippy-gated outputs. But an implementer relying on this sentence would wrongly believe a clippy pass proves `tests/rust_cst_fixture/src/cst.rs` is lint-clean; a warning unique to that crate (e.g. from the phase4_roundtrip grammar's shape) would go undetected by `make check`.
+- Suggested fix: reword to "Makefile clippy targets gate the workspace plus the rust_cst_fegen and rust_parser_fixture crates; rust_cst_fixture is compile-checked only via maturin/pytest" — or drop the parenthetical.
+
+No other findings.
