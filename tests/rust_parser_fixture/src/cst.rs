@@ -63,6 +63,10 @@ pub enum NodeKind {
     Grouped,
     #[pyo3(name = "RECVIASUB")]
     RecViaSub,
+    #[pyo3(name = "NEST")]
+    Nest,
+    #[pyo3(name = "NESTSUM")]
+    NestSum,
     #[pyo3(name = "TRIVIA")]
     Trivia,
 }
@@ -88,6 +92,8 @@ pub enum NodeKind {
     LeadingWs,
     Grouped,
     RecViaSub,
+    Nest,
+    NestSum,
     Trivia,
 }
 
@@ -114,6 +120,8 @@ impl NodeKind {
             NodeKind::LeadingWs => "NodeKind.LEADINGWS",
             NodeKind::Grouped => "NodeKind.GROUPED",
             NodeKind::RecViaSub => "NodeKind.RECVIASUB",
+            NodeKind::Nest => "NodeKind.NEST",
+            NodeKind::NestSum => "NodeKind.NESTSUM",
             NodeKind::Trivia => "NodeKind.TRIVIA",
         }
     }
@@ -11613,6 +11621,1655 @@ impl PyRecViaSub {
 }
 
 // ───────────────────────────────────────────────────────────────────────────
+// NestLabel
+// ───────────────────────────────────────────────────────────────────────────
+
+/// Label discriminant enum for children of this node type.
+///
+/// Python-visible name is `Nest_Label` (preserved for compatibility).
+/// Rust consumers use the CamelCase `NestLabel` name.
+#[cfg(feature = "python")]
+#[pyclass(frozen, name = "Nest_Label")]
+#[derive(Clone, Debug, PartialEq, Eq, Hash)]
+pub enum NestLabel {
+    #[pyo3(name = "INNER")]
+    Inner,
+    #[pyo3(name = "LEAF")]
+    Leaf,
+}
+
+#[cfg(not(feature = "python"))]
+#[derive(Clone, Debug, PartialEq, Eq, Hash)]
+pub enum NestLabel {
+    Inner,
+    Leaf,
+}
+
+#[cfg(feature = "python")]
+#[pymethods]
+impl NestLabel {
+    fn __repr__(&self) -> &'static str {
+        match self {
+            NestLabel::Inner => "Nest.Label.INNER",
+            NestLabel::Leaf => "Nest.Label.LEAF",
+        }
+    }
+
+    #[getter]
+    fn _fltk_canonical_name(&self) -> &'static str {
+        self.__repr__()
+    }
+
+    fn __eq__(&self, py: Python<'_>, other: &Bound<'_, PyAny>) -> PyResult<PyObject> {
+        if let Ok(other_kind) = other.extract::<NestLabel>() {
+            return Ok((self == &other_kind).into_pyobject(py)?.to_owned().unbind().into_any());
+        }
+        if let Ok(cn) = other.getattr(pyo3::intern!(py, "_fltk_canonical_name")) {
+            if let Ok(cn_str) = cn.extract::<&str>() {
+                return Ok((self.__repr__() == cn_str).into_pyobject(py)?.to_owned().unbind().into_any());
+            }
+        }
+        Ok(py.NotImplemented())
+    }
+
+    fn __hash__(&self, py: Python<'_>) -> PyResult<isize> {
+        pyo3::types::PyAnyMethods::hash(
+            pyo3::types::PyString::new(py, self.__repr__()).as_any()
+        )
+    }
+}
+
+/// Child value enum for `Nest` nodes.
+///
+/// Node-typed variants hold `Shared<T>` (`Arc<RwLock<T>>`); `Clone` is shallow
+/// (increments the reference count, does not copy the node).
+#[derive(Clone, Debug)]
+pub enum NestChild {
+    Nest(Shared<Nest>),
+    Num(Shared<Num>),
+}
+
+impl PartialEq for NestChild {
+    fn eq(&self, other: &Self) -> bool {
+        match (self, other) {
+            (NestChild::Nest(a), NestChild::Nest(b)) => a == b,
+            (NestChild::Num(a), NestChild::Num(b)) => a == b,
+            _ => false,
+        }
+    }
+}
+
+#[cfg(feature = "python")]
+impl NestChild {
+    fn to_pyobject(&self, py: Python<'_>) -> PyResult<PyObject> {
+        match self {
+            Self::Nest(shared) => {
+                let addr = shared.arc_ptr();
+                registry::get_or_insert_with(py, addr, || {
+                    let handle = PyNest { inner: shared.clone() };
+                    Py::new(py, handle).map(|p| p.into_any())
+                })
+            }
+            Self::Num(shared) => {
+                let addr = shared.arc_ptr();
+                registry::get_or_insert_with(py, addr, || {
+                    let handle = PyNum { inner: shared.clone() };
+                    Py::new(py, handle).map(|p| p.into_any())
+                })
+            }
+        }
+    }
+
+    fn extract_from_pyobject(
+        py: Python<'_>,
+        obj: &Bound<'_, PyAny>,
+        _span_type: &Bound<'_, PyType>,
+    ) -> PyResult<Self> {
+        if obj.is_instance_of::<PyNest>() {
+            let handle: PyRef<PyNest> = obj.extract()?;
+            let shared = handle.inner.clone();
+            let addr = shared.arc_ptr();
+            // Hand-in: register this Python handle as canonical for its Shared.
+            drop(handle); // release the PyRef before calling Python
+            // Propagate registry errors: a swallowed Err here would leave the
+            // handle unregistered, causing the next wrap-out to mint a different
+            // object and silently break is-stability.
+            registry::register_if_absent(py, addr, obj)?;
+            return Ok(Self::Nest(shared));
+        }
+        if obj.is_instance_of::<PyNum>() {
+            let handle: PyRef<PyNum> = obj.extract()?;
+            let shared = handle.inner.clone();
+            let addr = shared.arc_ptr();
+            // Hand-in: register this Python handle as canonical for its Shared.
+            drop(handle); // release the PyRef before calling Python
+            // Propagate registry errors: a swallowed Err here would leave the
+            // handle unregistered, causing the next wrap-out to mint a different
+            // object and silently break is-stability.
+            registry::register_if_absent(py, addr, obj)?;
+            return Ok(Self::Num(shared));
+        }
+        Err(pyo3::exceptions::PyTypeError::new_err(format!(
+            "Nest: unsupported child type {}",
+            obj.get_type().name()?
+        )))
+    }
+}
+
+// ───────────────────────────────────────────────────────────────────────────
+// Nest
+// ───────────────────────────────────────────────────────────────────────────
+
+/// CST data struct for `Nest`. See [`fltk_cst_core::Shared`] for clone/equality/reference semantics.
+#[derive(Clone, Debug)]
+pub struct Nest {
+    // Not pub: use span() / children() / push_child() — the stable accessor API.
+    // Direct field access bypasses any future validation logic on setters.
+    span: Span,
+    children: Vec<(Option<NestLabel>, NestChild)>,
+}
+
+impl PartialEq for Nest {
+    fn eq(&self, other: &Self) -> bool {
+        self.span == other.span && self.children == other.children
+    }
+}
+
+impl Nest {
+    /// Construct a node with the given span and no children. GIL-free.
+    pub fn new(span: Span) -> Self {
+        Nest {
+            span,
+            children: Vec::new(),
+        }
+    }
+
+    /// Return the [`NodeKind`] discriminant for this node type.
+    pub fn kind(&self) -> NodeKind {
+        NodeKind::Nest
+    }
+
+    /// Return a reference to the stored [`Span`].
+    pub fn span(&self) -> &Span {
+        &self.span
+    }
+
+    /// Replace the node's span.
+    pub fn set_span(&mut self, span: Span) {
+        self.span = span;
+    }
+
+    /// Return a slice of all children (unfiltered).
+    ///
+    /// Each entry is `(label, child)`. Use the per-label accessors
+    /// (`children_<lbl>`, `child_<lbl>`, `maybe_<lbl>`) for type-safe access.
+    pub fn children(&self) -> &[(Option<NestLabel>, NestChild)] {
+        self.children.as_slice()
+    }
+
+    /// Push a child onto the children `Vec`.
+    ///
+    /// No type-checking is performed: any child variant may be stored under
+    /// any label. Per-label typed mutators (`append_<lbl>`, `extend_<lbl>`)
+    /// provide type-constrained alternatives.
+    pub fn push_child(&mut self, label: Option<NestLabel>, child: NestChild) {
+        self.children.push((label, child));
+    }
+
+    /// Return the single child (any label), or `Err` if there is not exactly one.
+    ///
+    /// Mirrors the Python `child()` method: count violation → `CstError::ChildCount`.
+    pub fn child(&self) -> Result<&(Option<NestLabel>, NestChild), CstError> {
+        match self.children.as_slice() {
+            [single] => Ok(single),
+            slice => Err(CstError::ChildCount {
+                label: "<any>",
+                expected: "1",
+                found: slice.len(),
+            }),
+        }
+    }
+
+    /// Copy all children from `other` into `self`, sharing the `Shared<T>` arcs.
+    ///
+    /// Children are appended (Arc reference-count bumps, not deep copies),
+    /// matching the Python backend's reference-copy behavior. Labels are preserved.
+    ///
+    /// The borrow checker prevents `self.extend_children(self)` at the data-struct
+    /// level (`&mut` + `&` of the same value don't coexist). For self-extend from
+    /// Python, the handle pymethod handles it via snapshotting.
+    pub fn extend_children(&mut self, other: &Self) {
+        self.children.extend(other.children.iter().cloned());
+    }
+
+    /// Return an iterator over `Shared<Nest>` children labelled `inner`.
+    ///
+    /// Off-type variants stored under the `inner` label are silently skipped.
+    /// Use `children()` (the untyped slice) for a lossless view.
+    pub fn children_inner(&self) -> impl Iterator<Item = &Shared<Nest>> + '_ {
+        self.children.iter()
+            .filter(|(lbl, _)| *lbl == Some(NestLabel::Inner))
+            .filter_map(|(_, child)| match child {
+                NestChild::Nest(s) => Some(s),
+                _ => None,
+            })
+    }
+
+    /// Return the single child labelled `inner`, or `Err` if not exactly one.
+    ///
+    /// Count is checked by label match first (`CstError::ChildCount`); if the
+    /// count is valid and the surviving child has the wrong variant type,
+    /// `CstError::UnexpectedChildType` is returned (single-typed labels only).
+    pub fn child_inner(&self) -> Result<&Shared<Nest>, CstError> {
+        let mut it = self.children.iter()
+            .filter(|(lbl, _)| *lbl == Some(NestLabel::Inner));
+        match (it.next(), it.next()) {
+            (Some((_, child)), None) => match child {
+                NestChild::Nest(s) => Ok(s),
+                _ => Err(CstError::UnexpectedChildType { label: "inner" }),
+            },
+            _ => Err(CstError::ChildCount {
+                label: "inner",
+                expected: "1",
+                found: self.children.iter()
+                    .filter(|(lbl, _)| *lbl == Some(NestLabel::Inner))
+                    .count(),
+            }),
+        }
+    }
+
+    /// Return the optional child labelled `inner`, or `Err` if more than one.
+    ///
+    /// Returns `Ok(None)` for zero, `Ok(Some(...))` for one,
+    /// `Err(CstError::ChildCount)` for two or more.
+    pub fn maybe_inner(&self) -> Result<Option<&Shared<Nest>>, CstError> {
+        let mut it = self.children.iter()
+            .filter(|(lbl, _)| *lbl == Some(NestLabel::Inner));
+        match (it.next(), it.next()) {
+            (None, _) => Ok(None),
+            (Some((_, child)), None) => match child {
+                NestChild::Nest(s) => Ok(Some(s)),
+                _ => Err(CstError::UnexpectedChildType { label: "inner" }),
+            },
+            _ => Err(CstError::ChildCount {
+                label: "inner",
+                expected: "0 or 1",
+                found: self.children.iter()
+                    .filter(|(lbl, _)| *lbl == Some(NestLabel::Inner))
+                    .count(),
+            }),
+        }
+    }
+
+    /// Append a child with label `inner`, accepting `Nest` or `Shared<Nest>`.
+    pub fn append_inner(&mut self, child: impl Into<Shared<Nest>>) {
+        self.children.push((Some(NestLabel::Inner), NestChild::Nest(child.into())));
+    }
+
+    /// Append multiple children with label `inner`.
+    pub fn extend_inner(&mut self, children: impl IntoIterator<Item = impl Into<Shared<Nest>>>) {
+        self.children.extend(children.into_iter().map(|c| (Some(NestLabel::Inner), NestChild::Nest(c.into()))));
+    }
+
+    /// Return an iterator over `Shared<Num>` children labelled `leaf`.
+    ///
+    /// Off-type variants stored under the `leaf` label are silently skipped.
+    /// Use `children()` (the untyped slice) for a lossless view.
+    pub fn children_leaf(&self) -> impl Iterator<Item = &Shared<Num>> + '_ {
+        self.children.iter()
+            .filter(|(lbl, _)| *lbl == Some(NestLabel::Leaf))
+            .filter_map(|(_, child)| match child {
+                NestChild::Num(s) => Some(s),
+                _ => None,
+            })
+    }
+
+    /// Return the single child labelled `leaf`, or `Err` if not exactly one.
+    ///
+    /// Count is checked by label match first (`CstError::ChildCount`); if the
+    /// count is valid and the surviving child has the wrong variant type,
+    /// `CstError::UnexpectedChildType` is returned (single-typed labels only).
+    pub fn child_leaf(&self) -> Result<&Shared<Num>, CstError> {
+        let mut it = self.children.iter()
+            .filter(|(lbl, _)| *lbl == Some(NestLabel::Leaf));
+        match (it.next(), it.next()) {
+            (Some((_, child)), None) => match child {
+                NestChild::Num(s) => Ok(s),
+                _ => Err(CstError::UnexpectedChildType { label: "leaf" }),
+            },
+            _ => Err(CstError::ChildCount {
+                label: "leaf",
+                expected: "1",
+                found: self.children.iter()
+                    .filter(|(lbl, _)| *lbl == Some(NestLabel::Leaf))
+                    .count(),
+            }),
+        }
+    }
+
+    /// Return the optional child labelled `leaf`, or `Err` if more than one.
+    ///
+    /// Returns `Ok(None)` for zero, `Ok(Some(...))` for one,
+    /// `Err(CstError::ChildCount)` for two or more.
+    pub fn maybe_leaf(&self) -> Result<Option<&Shared<Num>>, CstError> {
+        let mut it = self.children.iter()
+            .filter(|(lbl, _)| *lbl == Some(NestLabel::Leaf));
+        match (it.next(), it.next()) {
+            (None, _) => Ok(None),
+            (Some((_, child)), None) => match child {
+                NestChild::Num(s) => Ok(Some(s)),
+                _ => Err(CstError::UnexpectedChildType { label: "leaf" }),
+            },
+            _ => Err(CstError::ChildCount {
+                label: "leaf",
+                expected: "0 or 1",
+                found: self.children.iter()
+                    .filter(|(lbl, _)| *lbl == Some(NestLabel::Leaf))
+                    .count(),
+            }),
+        }
+    }
+
+    /// Append a child with label `leaf`, accepting `Num` or `Shared<Num>`.
+    pub fn append_leaf(&mut self, child: impl Into<Shared<Num>>) {
+        self.children.push((Some(NestLabel::Leaf), NestChild::Num(child.into())));
+    }
+
+    /// Append multiple children with label `leaf`.
+    pub fn extend_leaf(&mut self, children: impl IntoIterator<Item = impl Into<Shared<Num>>>) {
+        self.children.extend(children.into_iter().map(|c| (Some(NestLabel::Leaf), NestChild::Num(c.into()))));
+    }
+}
+
+#[cfg(feature = "python")]
+#[pyclass(frozen, weakref, name = "Nest")]
+pub struct PyNest {
+    // Not pub: all external access goes through shared() or to_py_canonical().
+    // A pub field would let mixed-app Rust code construct an unregistered handle
+    // (Py::new(py, PyFoo { inner: s.clone() })), silently breaking is-stability.
+    inner: Shared<Nest>,
+}
+
+#[cfg(feature = "python")]
+impl PyNest {
+    /// Return a reference to the inner `Shared<Nest>`.
+    pub fn shared(&self) -> &Shared<Nest> {
+        &self.inner
+    }
+
+    /// Wrap a `Shared<Nest>` into a canonical Python handle,
+    /// looking up the registry first so the same handle is returned
+    /// for the same `Shared` allocation.
+    pub fn to_py_canonical(py: Python<'_>, s: &Shared<Nest>) -> PyResult<Py<PyNest>> {
+        let addr = s.arc_ptr();
+        let obj = registry::get_or_insert_with(py, addr, || {
+            let handle = PyNest { inner: s.clone() };
+            Py::new(py, handle).map(|p| p.into_any())
+        })?;
+        obj.bind(py).downcast::<PyNest>().map(|b| b.clone().unbind()).map_err(|e| e.into())
+    }
+}
+
+#[cfg(feature = "python")]
+#[pymethods]
+impl PyNest {
+    #[new]
+    #[pyo3(signature = (*, span = None))]
+    fn new(py: Python<'_>, span: Option<&Bound<'_, PyAny>>) -> PyResult<Py<PyNest>> {
+        let native_span = match span {
+            Some(s) => extract_span(py, s)?,
+            None => Span::unknown(),
+        };
+        let data = Nest {
+            span: native_span,
+            children: Vec::new(),
+        };
+        let shared = Shared::new(data);
+        let addr = shared.arc_ptr();
+        let handle = PyNest { inner: shared };
+        let py_obj = Py::new(py, handle)?;
+        // Register as canonical — fresh Shared, no alias can exist yet.
+        registry::force_register(py, addr, py_obj.bind(py))?;
+        Ok(py_obj)
+    }
+
+    #[getter]
+    fn span(&self, py: Python<'_>) -> PyResult<PyObject> {
+        // Snapshot the span under the read lock, then drop the guard before
+        // calling span_to_pyobject — which performs Python work (Py::new or
+        // Python method calls) that must not happen while a node lock is held.
+        let span = self.inner.read().span.clone();
+        span_to_pyobject(py, &span)
+    }
+
+    #[setter]
+    fn set_span(&self, py: Python<'_>, value: &Bound<'_, PyAny>) -> PyResult<()> {
+        self.inner.write().span = extract_span(py, value)?;
+        Ok(())
+    }
+
+    #[getter]
+    fn kind(&self) -> NodeKind {
+        NodeKind::Nest
+    }
+
+    #[classattr]
+    #[allow(non_snake_case)]
+    fn Label(py: Python<'_>) -> PyResult<PyObject> {
+        Ok(NestLabel::type_object(py).into_any().unbind())
+    }
+
+    #[getter]
+    fn children(&self, py: Python<'_>) -> PyResult<Py<PyList>> {
+        // Snapshot the children vec (Arc clones for node children — O(n) refcount bumps).
+        // Lock scope: acquire read, snapshot, release before touching Python.
+        let snapshot: Vec<_> = {
+            let guard = self.inner.read();
+            guard.children.clone()
+        };
+        let result = PyList::empty(py);
+        for (label, child) in &snapshot {
+            let label_obj: PyObject = match label {
+                None => py.None(),
+                Some(lbl) => lbl.clone().into_pyobject(py)?.into_any().unbind(),
+            };
+            let child_obj = child.to_pyobject(py)?;
+            let tup = PyTuple::new(py, [label_obj, child_obj])?;
+            result.append(tup)?;
+        }
+        Ok(result.unbind())
+    }
+
+    #[pyo3(signature = (child, label = None))]
+    fn append(&self, py: Python<'_>, child: &Bound<'_, PyAny>, label: Option<PyObject>) -> PyResult<()> {
+        let span_type = get_span_type(py)?;
+        let native_child = NestChild::extract_from_pyobject(py, child, &span_type)?;
+        let native_label = match label {
+            None => None,
+            Some(lbl) => {
+                if let Ok(native_lbl) = lbl.bind(py).extract::<NestLabel>() {
+                    Some(native_lbl)
+                } else {
+                    return Err(PyTypeError::new_err(format!(
+                        "Nest.append: label argument is not a Nest_Label; got {}",
+                        lbl.bind(py).get_type().name()?
+                    )));
+                }
+            }
+        };
+        self.inner.write().children.push((native_label, native_child));
+        Ok(())
+    }
+
+    #[pyo3(signature = (children, label = None))]
+    fn extend(
+        &self,
+        py: Python<'_>,
+        children: &Bound<'_, PyAny>,
+        label: Option<PyObject>,
+    ) -> PyResult<()> {
+        let span_type = get_span_type(py)?;
+        let native_label = match label {
+            None => None,
+            Some(lbl) => {
+                if let Ok(native_lbl) = lbl.bind(py).extract::<NestLabel>() {
+                    Some(native_lbl)
+                } else {
+                    return Err(PyTypeError::new_err(format!(
+                        "Nest.extend: label argument is not a Nest_Label; got {}",
+                        lbl.bind(py).get_type().name()?
+                    )));
+                }
+            }
+        };
+        let iter = children.try_iter()?;
+        for child_result in iter {
+            let child = child_result?;
+            let native_child = NestChild::extract_from_pyobject(py, &child, &span_type)?;
+            self.inner.write().children.push((native_label.clone(), native_child));
+        }
+        Ok(())
+    }
+
+    fn extend_children(&self, _py: Python<'_>, other: &PyNest) -> PyResult<()> {
+        // Snapshot other's children first: the read guard is dropped at the end of
+        // this block, so the write lock below is safe even when self and other are
+        // the same node (self-extend). No ptr_eq call is needed here — the snapshot
+        // approach handles self-extend structurally.
+        // Lock scope: hold read only long enough to clone the Arc-based children vec.
+        let snapshot: Vec<_> = {
+            let guard = other.inner.read();
+            guard.children.clone()
+        };
+        // Node-typed children are pushed directly as Shared<T> values.  Registry
+        // consistency is maintained lazily: wrap-out registers on first Python read
+        // via get_or_insert_with (registry.rs).  Eagerly registering here would be
+        // a no-op — the WeakValueDictionary would evict handles held by nothing.
+        self.inner.write().children.extend(snapshot);
+        Ok(())
+    }
+
+    fn child(&self, py: Python<'_>) -> PyResult<PyObject> {
+        // TODO(rust-cst-accessor-clone-efficiency): clones the full children Vec
+        // before checking len. Could check len under the read guard and only clone
+        // the single needed entry, avoiding O(total-children) allocation on the error path.
+        let snapshot: Vec<_> = {
+            let guard = self.inner.read();
+            guard.children.clone()
+        };
+        let n = snapshot.len();
+        if n != 1 {
+            return Err(PyValueError::new_err(format!(
+                "Expected one child but have {n}"
+            )));
+        }
+        let (label, child) = &snapshot[0];
+        let label_obj: PyObject = match label {
+            None => py.None(),
+            Some(lbl) => lbl.clone().into_pyobject(py)?.into_any().unbind(),
+        };
+        let child_obj = child.to_pyobject(py)?;
+        Ok(PyTuple::new(py, [label_obj, child_obj])?.into_any().unbind())
+    }
+
+    fn append_inner(&self, py: Python<'_>, child: &Bound<'_, PyAny>) -> PyResult<()> {
+        let span_type = get_span_type(py)?;
+        let native_child = NestChild::extract_from_pyobject(py, child, &span_type)?;
+        self.inner.write().children.push((Some(NestLabel::Inner), native_child));
+        Ok(())
+    }
+
+    fn extend_inner(&self, py: Python<'_>, children: &Bound<'_, PyAny>) -> PyResult<()> {
+        let span_type = get_span_type(py)?;
+        let iter = children.try_iter()?;
+        for child_result in iter {
+            let child = child_result?;
+            let native_child = NestChild::extract_from_pyobject(py, &child, &span_type)?;
+            let entry = (Some(NestLabel::Inner), native_child);
+            self.inner.write().children.push(entry);
+        }
+        Ok(())
+    }
+
+    fn children_inner(&self, py: Python<'_>) -> PyResult<Py<PyList>> {
+        // TODO(rust-cst-accessor-clone-efficiency): clones full Vec then filters outside the guard.
+        // Could filter inside the read guard (clone only matching entries) to avoid
+        // O(total-children) Arc clones for accessors that match a small subset.
+        let snapshot: Vec<_> = {
+            let guard = self.inner.read();
+            guard.children.clone()
+        };
+        let result = PyList::empty(py);
+        for (lbl, child) in &snapshot {
+            if *lbl == Some(NestLabel::Inner) {
+                result.append(child.to_pyobject(py)?)?;
+            }
+        }
+        Ok(result.unbind())
+    }
+
+    fn child_inner(&self, py: Python<'_>) -> PyResult<PyObject> {
+        // TODO(rust-cst-accessor-clone-efficiency): see children_inner above.
+        let snapshot: Vec<_> = {
+            let guard = self.inner.read();
+            guard.children.clone()
+        };
+        let mut found: Option<PyObject> = None;
+        let mut count = 0usize;
+        for (lbl, child) in &snapshot {
+            if *lbl == Some(NestLabel::Inner) {
+                count += 1;
+                if count == 1 {
+                    found = Some(child.to_pyobject(py)?);
+                }
+            }
+        }
+        if count != 1 {
+            return Err(PyValueError::new_err(format!(
+                "Expected one inner child but have {count}"
+            )));
+        }
+        Ok(found.expect("invariant: Nest.child_inner: count==1 but found==None; logic error"))
+    }
+
+    fn maybe_inner(&self, py: Python<'_>) -> PyResult<Option<PyObject>> {
+        // TODO(rust-cst-accessor-clone-efficiency): see children_inner above.
+        let snapshot: Vec<_> = {
+            let guard = self.inner.read();
+            guard.children.clone()
+        };
+        let mut found: Option<PyObject> = None;
+        let mut count = 0usize;
+        for (lbl, child) in &snapshot {
+            if *lbl == Some(NestLabel::Inner) {
+                count += 1;
+                if count == 1 {
+                    found = Some(child.to_pyobject(py)?);
+                }
+            }
+        }
+        if count > 1 {
+            return Err(PyValueError::new_err(
+                "Expected at most one inner child but have at least 2",
+            ));
+        }
+        Ok(found)
+    }
+
+    fn append_leaf(&self, py: Python<'_>, child: &Bound<'_, PyAny>) -> PyResult<()> {
+        let span_type = get_span_type(py)?;
+        let native_child = NestChild::extract_from_pyobject(py, child, &span_type)?;
+        self.inner.write().children.push((Some(NestLabel::Leaf), native_child));
+        Ok(())
+    }
+
+    fn extend_leaf(&self, py: Python<'_>, children: &Bound<'_, PyAny>) -> PyResult<()> {
+        let span_type = get_span_type(py)?;
+        let iter = children.try_iter()?;
+        for child_result in iter {
+            let child = child_result?;
+            let native_child = NestChild::extract_from_pyobject(py, &child, &span_type)?;
+            let entry = (Some(NestLabel::Leaf), native_child);
+            self.inner.write().children.push(entry);
+        }
+        Ok(())
+    }
+
+    fn children_leaf(&self, py: Python<'_>) -> PyResult<Py<PyList>> {
+        // TODO(rust-cst-accessor-clone-efficiency): clones full Vec then filters outside the guard.
+        // Could filter inside the read guard (clone only matching entries) to avoid
+        // O(total-children) Arc clones for accessors that match a small subset.
+        let snapshot: Vec<_> = {
+            let guard = self.inner.read();
+            guard.children.clone()
+        };
+        let result = PyList::empty(py);
+        for (lbl, child) in &snapshot {
+            if *lbl == Some(NestLabel::Leaf) {
+                result.append(child.to_pyobject(py)?)?;
+            }
+        }
+        Ok(result.unbind())
+    }
+
+    fn child_leaf(&self, py: Python<'_>) -> PyResult<PyObject> {
+        // TODO(rust-cst-accessor-clone-efficiency): see children_leaf above.
+        let snapshot: Vec<_> = {
+            let guard = self.inner.read();
+            guard.children.clone()
+        };
+        let mut found: Option<PyObject> = None;
+        let mut count = 0usize;
+        for (lbl, child) in &snapshot {
+            if *lbl == Some(NestLabel::Leaf) {
+                count += 1;
+                if count == 1 {
+                    found = Some(child.to_pyobject(py)?);
+                }
+            }
+        }
+        if count != 1 {
+            return Err(PyValueError::new_err(format!(
+                "Expected one leaf child but have {count}"
+            )));
+        }
+        Ok(found.expect("invariant: Nest.child_leaf: count==1 but found==None; logic error"))
+    }
+
+    fn maybe_leaf(&self, py: Python<'_>) -> PyResult<Option<PyObject>> {
+        // TODO(rust-cst-accessor-clone-efficiency): see children_leaf above.
+        let snapshot: Vec<_> = {
+            let guard = self.inner.read();
+            guard.children.clone()
+        };
+        let mut found: Option<PyObject> = None;
+        let mut count = 0usize;
+        for (lbl, child) in &snapshot {
+            if *lbl == Some(NestLabel::Leaf) {
+                count += 1;
+                if count == 1 {
+                    found = Some(child.to_pyobject(py)?);
+                }
+            }
+        }
+        if count > 1 {
+            return Err(PyValueError::new_err(
+                "Expected at most one leaf child but have at least 2",
+            ));
+        }
+        Ok(found)
+    }
+
+    fn __eq__(&self, py: Python<'_>, other: &Bound<'_, PyAny>) -> PyResult<PyObject> {
+        if !other.is_instance_of::<PyNest>() {
+            return Ok(py.NotImplemented());
+        }
+        let other_handle: PyRef<PyNest> = other.extract()?;
+        // Delegate to Shared<T>::PartialEq which applies the ptr_eq short-circuit
+        // (avoids same-lock re-entry on `x == x`) then deep structural comparison.
+        let eq = self.inner == other_handle.inner;
+        Ok(eq.into_pyobject(py)?.to_owned().unbind().into_any())
+    }
+
+    fn __hash__(&self) -> PyResult<isize> {
+        Err(PyTypeError::new_err("unhashable type: 'Nest'"))
+    }
+
+    fn __repr__(&self, _py: Python<'_>) -> String {
+        let guard = self.inner.read();
+        let span_repr = format!("Span(start={}, end={})", guard.span.start(), guard.span.end());
+        let children_len = guard.children.len();
+        format!(
+            "Nest(span={span_repr}, children=[<{children_len} child(ren)>])"
+        )
+    }
+
+}
+
+// ───────────────────────────────────────────────────────────────────────────
+// NestSumLabel
+// ───────────────────────────────────────────────────────────────────────────
+
+/// Label discriminant enum for children of this node type.
+///
+/// Python-visible name is `NestSum_Label` (preserved for compatibility).
+/// Rust consumers use the CamelCase `NestSumLabel` name.
+#[cfg(feature = "python")]
+#[pyclass(frozen, name = "NestSum_Label")]
+#[derive(Clone, Debug, PartialEq, Eq, Hash)]
+pub enum NestSumLabel {
+    #[pyo3(name = "FIRST")]
+    First,
+    #[pyo3(name = "LHS")]
+    Lhs,
+    #[pyo3(name = "RHS")]
+    Rhs,
+}
+
+#[cfg(not(feature = "python"))]
+#[derive(Clone, Debug, PartialEq, Eq, Hash)]
+pub enum NestSumLabel {
+    First,
+    Lhs,
+    Rhs,
+}
+
+#[cfg(feature = "python")]
+#[pymethods]
+impl NestSumLabel {
+    fn __repr__(&self) -> &'static str {
+        match self {
+            NestSumLabel::First => "NestSum.Label.FIRST",
+            NestSumLabel::Lhs => "NestSum.Label.LHS",
+            NestSumLabel::Rhs => "NestSum.Label.RHS",
+        }
+    }
+
+    #[getter]
+    fn _fltk_canonical_name(&self) -> &'static str {
+        self.__repr__()
+    }
+
+    fn __eq__(&self, py: Python<'_>, other: &Bound<'_, PyAny>) -> PyResult<PyObject> {
+        if let Ok(other_kind) = other.extract::<NestSumLabel>() {
+            return Ok((self == &other_kind).into_pyobject(py)?.to_owned().unbind().into_any());
+        }
+        if let Ok(cn) = other.getattr(pyo3::intern!(py, "_fltk_canonical_name")) {
+            if let Ok(cn_str) = cn.extract::<&str>() {
+                return Ok((self.__repr__() == cn_str).into_pyobject(py)?.to_owned().unbind().into_any());
+            }
+        }
+        Ok(py.NotImplemented())
+    }
+
+    fn __hash__(&self, py: Python<'_>) -> PyResult<isize> {
+        pyo3::types::PyAnyMethods::hash(
+            pyo3::types::PyString::new(py, self.__repr__()).as_any()
+        )
+    }
+}
+
+/// Child value enum for `NestSum` nodes.
+///
+/// Node-typed variants hold `Shared<T>` (`Arc<RwLock<T>>`); `Clone` is shallow
+/// (increments the reference count, does not copy the node).
+#[derive(Clone, Debug)]
+pub enum NestSumChild {
+    Nest(Shared<Nest>),
+    NestSum(Shared<NestSum>),
+}
+
+impl PartialEq for NestSumChild {
+    fn eq(&self, other: &Self) -> bool {
+        match (self, other) {
+            (NestSumChild::Nest(a), NestSumChild::Nest(b)) => a == b,
+            (NestSumChild::NestSum(a), NestSumChild::NestSum(b)) => a == b,
+            _ => false,
+        }
+    }
+}
+
+#[cfg(feature = "python")]
+impl NestSumChild {
+    fn to_pyobject(&self, py: Python<'_>) -> PyResult<PyObject> {
+        match self {
+            Self::Nest(shared) => {
+                let addr = shared.arc_ptr();
+                registry::get_or_insert_with(py, addr, || {
+                    let handle = PyNest { inner: shared.clone() };
+                    Py::new(py, handle).map(|p| p.into_any())
+                })
+            }
+            Self::NestSum(shared) => {
+                let addr = shared.arc_ptr();
+                registry::get_or_insert_with(py, addr, || {
+                    let handle = PyNestSum { inner: shared.clone() };
+                    Py::new(py, handle).map(|p| p.into_any())
+                })
+            }
+        }
+    }
+
+    fn extract_from_pyobject(
+        py: Python<'_>,
+        obj: &Bound<'_, PyAny>,
+        _span_type: &Bound<'_, PyType>,
+    ) -> PyResult<Self> {
+        if obj.is_instance_of::<PyNest>() {
+            let handle: PyRef<PyNest> = obj.extract()?;
+            let shared = handle.inner.clone();
+            let addr = shared.arc_ptr();
+            // Hand-in: register this Python handle as canonical for its Shared.
+            drop(handle); // release the PyRef before calling Python
+            // Propagate registry errors: a swallowed Err here would leave the
+            // handle unregistered, causing the next wrap-out to mint a different
+            // object and silently break is-stability.
+            registry::register_if_absent(py, addr, obj)?;
+            return Ok(Self::Nest(shared));
+        }
+        if obj.is_instance_of::<PyNestSum>() {
+            let handle: PyRef<PyNestSum> = obj.extract()?;
+            let shared = handle.inner.clone();
+            let addr = shared.arc_ptr();
+            // Hand-in: register this Python handle as canonical for its Shared.
+            drop(handle); // release the PyRef before calling Python
+            // Propagate registry errors: a swallowed Err here would leave the
+            // handle unregistered, causing the next wrap-out to mint a different
+            // object and silently break is-stability.
+            registry::register_if_absent(py, addr, obj)?;
+            return Ok(Self::NestSum(shared));
+        }
+        Err(pyo3::exceptions::PyTypeError::new_err(format!(
+            "NestSum: unsupported child type {}",
+            obj.get_type().name()?
+        )))
+    }
+}
+
+// ───────────────────────────────────────────────────────────────────────────
+// NestSum
+// ───────────────────────────────────────────────────────────────────────────
+
+/// CST data struct for `NestSum`. See [`fltk_cst_core::Shared`] for clone/equality/reference semantics.
+#[derive(Clone, Debug)]
+pub struct NestSum {
+    // Not pub: use span() / children() / push_child() — the stable accessor API.
+    // Direct field access bypasses any future validation logic on setters.
+    span: Span,
+    children: Vec<(Option<NestSumLabel>, NestSumChild)>,
+}
+
+impl PartialEq for NestSum {
+    fn eq(&self, other: &Self) -> bool {
+        self.span == other.span && self.children == other.children
+    }
+}
+
+impl NestSum {
+    /// Construct a node with the given span and no children. GIL-free.
+    pub fn new(span: Span) -> Self {
+        NestSum {
+            span,
+            children: Vec::new(),
+        }
+    }
+
+    /// Return the [`NodeKind`] discriminant for this node type.
+    pub fn kind(&self) -> NodeKind {
+        NodeKind::NestSum
+    }
+
+    /// Return a reference to the stored [`Span`].
+    pub fn span(&self) -> &Span {
+        &self.span
+    }
+
+    /// Replace the node's span.
+    pub fn set_span(&mut self, span: Span) {
+        self.span = span;
+    }
+
+    /// Return a slice of all children (unfiltered).
+    ///
+    /// Each entry is `(label, child)`. Use the per-label accessors
+    /// (`children_<lbl>`, `child_<lbl>`, `maybe_<lbl>`) for type-safe access.
+    pub fn children(&self) -> &[(Option<NestSumLabel>, NestSumChild)] {
+        self.children.as_slice()
+    }
+
+    /// Push a child onto the children `Vec`.
+    ///
+    /// No type-checking is performed: any child variant may be stored under
+    /// any label. Per-label typed mutators (`append_<lbl>`, `extend_<lbl>`)
+    /// provide type-constrained alternatives.
+    pub fn push_child(&mut self, label: Option<NestSumLabel>, child: NestSumChild) {
+        self.children.push((label, child));
+    }
+
+    /// Return the single child (any label), or `Err` if there is not exactly one.
+    ///
+    /// Mirrors the Python `child()` method: count violation → `CstError::ChildCount`.
+    pub fn child(&self) -> Result<&(Option<NestSumLabel>, NestSumChild), CstError> {
+        match self.children.as_slice() {
+            [single] => Ok(single),
+            slice => Err(CstError::ChildCount {
+                label: "<any>",
+                expected: "1",
+                found: slice.len(),
+            }),
+        }
+    }
+
+    /// Copy all children from `other` into `self`, sharing the `Shared<T>` arcs.
+    ///
+    /// Children are appended (Arc reference-count bumps, not deep copies),
+    /// matching the Python backend's reference-copy behavior. Labels are preserved.
+    ///
+    /// The borrow checker prevents `self.extend_children(self)` at the data-struct
+    /// level (`&mut` + `&` of the same value don't coexist). For self-extend from
+    /// Python, the handle pymethod handles it via snapshotting.
+    pub fn extend_children(&mut self, other: &Self) {
+        self.children.extend(other.children.iter().cloned());
+    }
+
+    /// Return an iterator over `Shared<Nest>` children labelled `first`.
+    ///
+    /// Off-type variants stored under the `first` label are silently skipped.
+    /// Use `children()` (the untyped slice) for a lossless view.
+    pub fn children_first(&self) -> impl Iterator<Item = &Shared<Nest>> + '_ {
+        self.children.iter()
+            .filter(|(lbl, _)| *lbl == Some(NestSumLabel::First))
+            .filter_map(|(_, child)| match child {
+                NestSumChild::Nest(s) => Some(s),
+                _ => None,
+            })
+    }
+
+    /// Return the single child labelled `first`, or `Err` if not exactly one.
+    ///
+    /// Count is checked by label match first (`CstError::ChildCount`); if the
+    /// count is valid and the surviving child has the wrong variant type,
+    /// `CstError::UnexpectedChildType` is returned (single-typed labels only).
+    pub fn child_first(&self) -> Result<&Shared<Nest>, CstError> {
+        let mut it = self.children.iter()
+            .filter(|(lbl, _)| *lbl == Some(NestSumLabel::First));
+        match (it.next(), it.next()) {
+            (Some((_, child)), None) => match child {
+                NestSumChild::Nest(s) => Ok(s),
+                _ => Err(CstError::UnexpectedChildType { label: "first" }),
+            },
+            _ => Err(CstError::ChildCount {
+                label: "first",
+                expected: "1",
+                found: self.children.iter()
+                    .filter(|(lbl, _)| *lbl == Some(NestSumLabel::First))
+                    .count(),
+            }),
+        }
+    }
+
+    /// Return the optional child labelled `first`, or `Err` if more than one.
+    ///
+    /// Returns `Ok(None)` for zero, `Ok(Some(...))` for one,
+    /// `Err(CstError::ChildCount)` for two or more.
+    pub fn maybe_first(&self) -> Result<Option<&Shared<Nest>>, CstError> {
+        let mut it = self.children.iter()
+            .filter(|(lbl, _)| *lbl == Some(NestSumLabel::First));
+        match (it.next(), it.next()) {
+            (None, _) => Ok(None),
+            (Some((_, child)), None) => match child {
+                NestSumChild::Nest(s) => Ok(Some(s)),
+                _ => Err(CstError::UnexpectedChildType { label: "first" }),
+            },
+            _ => Err(CstError::ChildCount {
+                label: "first",
+                expected: "0 or 1",
+                found: self.children.iter()
+                    .filter(|(lbl, _)| *lbl == Some(NestSumLabel::First))
+                    .count(),
+            }),
+        }
+    }
+
+    /// Append a child with label `first`, accepting `Nest` or `Shared<Nest>`.
+    pub fn append_first(&mut self, child: impl Into<Shared<Nest>>) {
+        self.children.push((Some(NestSumLabel::First), NestSumChild::Nest(child.into())));
+    }
+
+    /// Append multiple children with label `first`.
+    pub fn extend_first(&mut self, children: impl IntoIterator<Item = impl Into<Shared<Nest>>>) {
+        self.children.extend(children.into_iter().map(|c| (Some(NestSumLabel::First), NestSumChild::Nest(c.into()))));
+    }
+
+    /// Return an iterator over `Shared<NestSum>` children labelled `lhs`.
+    ///
+    /// Off-type variants stored under the `lhs` label are silently skipped.
+    /// Use `children()` (the untyped slice) for a lossless view.
+    pub fn children_lhs(&self) -> impl Iterator<Item = &Shared<NestSum>> + '_ {
+        self.children.iter()
+            .filter(|(lbl, _)| *lbl == Some(NestSumLabel::Lhs))
+            .filter_map(|(_, child)| match child {
+                NestSumChild::NestSum(s) => Some(s),
+                _ => None,
+            })
+    }
+
+    /// Return the single child labelled `lhs`, or `Err` if not exactly one.
+    ///
+    /// Count is checked by label match first (`CstError::ChildCount`); if the
+    /// count is valid and the surviving child has the wrong variant type,
+    /// `CstError::UnexpectedChildType` is returned (single-typed labels only).
+    pub fn child_lhs(&self) -> Result<&Shared<NestSum>, CstError> {
+        let mut it = self.children.iter()
+            .filter(|(lbl, _)| *lbl == Some(NestSumLabel::Lhs));
+        match (it.next(), it.next()) {
+            (Some((_, child)), None) => match child {
+                NestSumChild::NestSum(s) => Ok(s),
+                _ => Err(CstError::UnexpectedChildType { label: "lhs" }),
+            },
+            _ => Err(CstError::ChildCount {
+                label: "lhs",
+                expected: "1",
+                found: self.children.iter()
+                    .filter(|(lbl, _)| *lbl == Some(NestSumLabel::Lhs))
+                    .count(),
+            }),
+        }
+    }
+
+    /// Return the optional child labelled `lhs`, or `Err` if more than one.
+    ///
+    /// Returns `Ok(None)` for zero, `Ok(Some(...))` for one,
+    /// `Err(CstError::ChildCount)` for two or more.
+    pub fn maybe_lhs(&self) -> Result<Option<&Shared<NestSum>>, CstError> {
+        let mut it = self.children.iter()
+            .filter(|(lbl, _)| *lbl == Some(NestSumLabel::Lhs));
+        match (it.next(), it.next()) {
+            (None, _) => Ok(None),
+            (Some((_, child)), None) => match child {
+                NestSumChild::NestSum(s) => Ok(Some(s)),
+                _ => Err(CstError::UnexpectedChildType { label: "lhs" }),
+            },
+            _ => Err(CstError::ChildCount {
+                label: "lhs",
+                expected: "0 or 1",
+                found: self.children.iter()
+                    .filter(|(lbl, _)| *lbl == Some(NestSumLabel::Lhs))
+                    .count(),
+            }),
+        }
+    }
+
+    /// Append a child with label `lhs`, accepting `NestSum` or `Shared<NestSum>`.
+    pub fn append_lhs(&mut self, child: impl Into<Shared<NestSum>>) {
+        self.children.push((Some(NestSumLabel::Lhs), NestSumChild::NestSum(child.into())));
+    }
+
+    /// Append multiple children with label `lhs`.
+    pub fn extend_lhs(&mut self, children: impl IntoIterator<Item = impl Into<Shared<NestSum>>>) {
+        self.children.extend(children.into_iter().map(|c| (Some(NestSumLabel::Lhs), NestSumChild::NestSum(c.into()))));
+    }
+
+    /// Return an iterator over `Shared<Nest>` children labelled `rhs`.
+    ///
+    /// Off-type variants stored under the `rhs` label are silently skipped.
+    /// Use `children()` (the untyped slice) for a lossless view.
+    pub fn children_rhs(&self) -> impl Iterator<Item = &Shared<Nest>> + '_ {
+        self.children.iter()
+            .filter(|(lbl, _)| *lbl == Some(NestSumLabel::Rhs))
+            .filter_map(|(_, child)| match child {
+                NestSumChild::Nest(s) => Some(s),
+                _ => None,
+            })
+    }
+
+    /// Return the single child labelled `rhs`, or `Err` if not exactly one.
+    ///
+    /// Count is checked by label match first (`CstError::ChildCount`); if the
+    /// count is valid and the surviving child has the wrong variant type,
+    /// `CstError::UnexpectedChildType` is returned (single-typed labels only).
+    pub fn child_rhs(&self) -> Result<&Shared<Nest>, CstError> {
+        let mut it = self.children.iter()
+            .filter(|(lbl, _)| *lbl == Some(NestSumLabel::Rhs));
+        match (it.next(), it.next()) {
+            (Some((_, child)), None) => match child {
+                NestSumChild::Nest(s) => Ok(s),
+                _ => Err(CstError::UnexpectedChildType { label: "rhs" }),
+            },
+            _ => Err(CstError::ChildCount {
+                label: "rhs",
+                expected: "1",
+                found: self.children.iter()
+                    .filter(|(lbl, _)| *lbl == Some(NestSumLabel::Rhs))
+                    .count(),
+            }),
+        }
+    }
+
+    /// Return the optional child labelled `rhs`, or `Err` if more than one.
+    ///
+    /// Returns `Ok(None)` for zero, `Ok(Some(...))` for one,
+    /// `Err(CstError::ChildCount)` for two or more.
+    pub fn maybe_rhs(&self) -> Result<Option<&Shared<Nest>>, CstError> {
+        let mut it = self.children.iter()
+            .filter(|(lbl, _)| *lbl == Some(NestSumLabel::Rhs));
+        match (it.next(), it.next()) {
+            (None, _) => Ok(None),
+            (Some((_, child)), None) => match child {
+                NestSumChild::Nest(s) => Ok(Some(s)),
+                _ => Err(CstError::UnexpectedChildType { label: "rhs" }),
+            },
+            _ => Err(CstError::ChildCount {
+                label: "rhs",
+                expected: "0 or 1",
+                found: self.children.iter()
+                    .filter(|(lbl, _)| *lbl == Some(NestSumLabel::Rhs))
+                    .count(),
+            }),
+        }
+    }
+
+    /// Append a child with label `rhs`, accepting `Nest` or `Shared<Nest>`.
+    pub fn append_rhs(&mut self, child: impl Into<Shared<Nest>>) {
+        self.children.push((Some(NestSumLabel::Rhs), NestSumChild::Nest(child.into())));
+    }
+
+    /// Append multiple children with label `rhs`.
+    pub fn extend_rhs(&mut self, children: impl IntoIterator<Item = impl Into<Shared<Nest>>>) {
+        self.children.extend(children.into_iter().map(|c| (Some(NestSumLabel::Rhs), NestSumChild::Nest(c.into()))));
+    }
+}
+
+#[cfg(feature = "python")]
+#[pyclass(frozen, weakref, name = "NestSum")]
+pub struct PyNestSum {
+    // Not pub: all external access goes through shared() or to_py_canonical().
+    // A pub field would let mixed-app Rust code construct an unregistered handle
+    // (Py::new(py, PyFoo { inner: s.clone() })), silently breaking is-stability.
+    inner: Shared<NestSum>,
+}
+
+#[cfg(feature = "python")]
+impl PyNestSum {
+    /// Return a reference to the inner `Shared<NestSum>`.
+    pub fn shared(&self) -> &Shared<NestSum> {
+        &self.inner
+    }
+
+    /// Wrap a `Shared<NestSum>` into a canonical Python handle,
+    /// looking up the registry first so the same handle is returned
+    /// for the same `Shared` allocation.
+    pub fn to_py_canonical(py: Python<'_>, s: &Shared<NestSum>) -> PyResult<Py<PyNestSum>> {
+        let addr = s.arc_ptr();
+        let obj = registry::get_or_insert_with(py, addr, || {
+            let handle = PyNestSum { inner: s.clone() };
+            Py::new(py, handle).map(|p| p.into_any())
+        })?;
+        obj.bind(py).downcast::<PyNestSum>().map(|b| b.clone().unbind()).map_err(|e| e.into())
+    }
+}
+
+#[cfg(feature = "python")]
+#[pymethods]
+impl PyNestSum {
+    #[new]
+    #[pyo3(signature = (*, span = None))]
+    fn new(py: Python<'_>, span: Option<&Bound<'_, PyAny>>) -> PyResult<Py<PyNestSum>> {
+        let native_span = match span {
+            Some(s) => extract_span(py, s)?,
+            None => Span::unknown(),
+        };
+        let data = NestSum {
+            span: native_span,
+            children: Vec::new(),
+        };
+        let shared = Shared::new(data);
+        let addr = shared.arc_ptr();
+        let handle = PyNestSum { inner: shared };
+        let py_obj = Py::new(py, handle)?;
+        // Register as canonical — fresh Shared, no alias can exist yet.
+        registry::force_register(py, addr, py_obj.bind(py))?;
+        Ok(py_obj)
+    }
+
+    #[getter]
+    fn span(&self, py: Python<'_>) -> PyResult<PyObject> {
+        // Snapshot the span under the read lock, then drop the guard before
+        // calling span_to_pyobject — which performs Python work (Py::new or
+        // Python method calls) that must not happen while a node lock is held.
+        let span = self.inner.read().span.clone();
+        span_to_pyobject(py, &span)
+    }
+
+    #[setter]
+    fn set_span(&self, py: Python<'_>, value: &Bound<'_, PyAny>) -> PyResult<()> {
+        self.inner.write().span = extract_span(py, value)?;
+        Ok(())
+    }
+
+    #[getter]
+    fn kind(&self) -> NodeKind {
+        NodeKind::NestSum
+    }
+
+    #[classattr]
+    #[allow(non_snake_case)]
+    fn Label(py: Python<'_>) -> PyResult<PyObject> {
+        Ok(NestSumLabel::type_object(py).into_any().unbind())
+    }
+
+    #[getter]
+    fn children(&self, py: Python<'_>) -> PyResult<Py<PyList>> {
+        // Snapshot the children vec (Arc clones for node children — O(n) refcount bumps).
+        // Lock scope: acquire read, snapshot, release before touching Python.
+        let snapshot: Vec<_> = {
+            let guard = self.inner.read();
+            guard.children.clone()
+        };
+        let result = PyList::empty(py);
+        for (label, child) in &snapshot {
+            let label_obj: PyObject = match label {
+                None => py.None(),
+                Some(lbl) => lbl.clone().into_pyobject(py)?.into_any().unbind(),
+            };
+            let child_obj = child.to_pyobject(py)?;
+            let tup = PyTuple::new(py, [label_obj, child_obj])?;
+            result.append(tup)?;
+        }
+        Ok(result.unbind())
+    }
+
+    #[pyo3(signature = (child, label = None))]
+    fn append(&self, py: Python<'_>, child: &Bound<'_, PyAny>, label: Option<PyObject>) -> PyResult<()> {
+        let span_type = get_span_type(py)?;
+        let native_child = NestSumChild::extract_from_pyobject(py, child, &span_type)?;
+        let native_label = match label {
+            None => None,
+            Some(lbl) => {
+                if let Ok(native_lbl) = lbl.bind(py).extract::<NestSumLabel>() {
+                    Some(native_lbl)
+                } else {
+                    return Err(PyTypeError::new_err(format!(
+                        "NestSum.append: label argument is not a NestSum_Label; got {}",
+                        lbl.bind(py).get_type().name()?
+                    )));
+                }
+            }
+        };
+        self.inner.write().children.push((native_label, native_child));
+        Ok(())
+    }
+
+    #[pyo3(signature = (children, label = None))]
+    fn extend(
+        &self,
+        py: Python<'_>,
+        children: &Bound<'_, PyAny>,
+        label: Option<PyObject>,
+    ) -> PyResult<()> {
+        let span_type = get_span_type(py)?;
+        let native_label = match label {
+            None => None,
+            Some(lbl) => {
+                if let Ok(native_lbl) = lbl.bind(py).extract::<NestSumLabel>() {
+                    Some(native_lbl)
+                } else {
+                    return Err(PyTypeError::new_err(format!(
+                        "NestSum.extend: label argument is not a NestSum_Label; got {}",
+                        lbl.bind(py).get_type().name()?
+                    )));
+                }
+            }
+        };
+        let iter = children.try_iter()?;
+        for child_result in iter {
+            let child = child_result?;
+            let native_child = NestSumChild::extract_from_pyobject(py, &child, &span_type)?;
+            self.inner.write().children.push((native_label.clone(), native_child));
+        }
+        Ok(())
+    }
+
+    fn extend_children(&self, _py: Python<'_>, other: &PyNestSum) -> PyResult<()> {
+        // Snapshot other's children first: the read guard is dropped at the end of
+        // this block, so the write lock below is safe even when self and other are
+        // the same node (self-extend). No ptr_eq call is needed here — the snapshot
+        // approach handles self-extend structurally.
+        // Lock scope: hold read only long enough to clone the Arc-based children vec.
+        let snapshot: Vec<_> = {
+            let guard = other.inner.read();
+            guard.children.clone()
+        };
+        // Node-typed children are pushed directly as Shared<T> values.  Registry
+        // consistency is maintained lazily: wrap-out registers on first Python read
+        // via get_or_insert_with (registry.rs).  Eagerly registering here would be
+        // a no-op — the WeakValueDictionary would evict handles held by nothing.
+        self.inner.write().children.extend(snapshot);
+        Ok(())
+    }
+
+    fn child(&self, py: Python<'_>) -> PyResult<PyObject> {
+        // TODO(rust-cst-accessor-clone-efficiency): clones the full children Vec
+        // before checking len. Could check len under the read guard and only clone
+        // the single needed entry, avoiding O(total-children) allocation on the error path.
+        let snapshot: Vec<_> = {
+            let guard = self.inner.read();
+            guard.children.clone()
+        };
+        let n = snapshot.len();
+        if n != 1 {
+            return Err(PyValueError::new_err(format!(
+                "Expected one child but have {n}"
+            )));
+        }
+        let (label, child) = &snapshot[0];
+        let label_obj: PyObject = match label {
+            None => py.None(),
+            Some(lbl) => lbl.clone().into_pyobject(py)?.into_any().unbind(),
+        };
+        let child_obj = child.to_pyobject(py)?;
+        Ok(PyTuple::new(py, [label_obj, child_obj])?.into_any().unbind())
+    }
+
+    fn append_first(&self, py: Python<'_>, child: &Bound<'_, PyAny>) -> PyResult<()> {
+        let span_type = get_span_type(py)?;
+        let native_child = NestSumChild::extract_from_pyobject(py, child, &span_type)?;
+        self.inner.write().children.push((Some(NestSumLabel::First), native_child));
+        Ok(())
+    }
+
+    fn extend_first(&self, py: Python<'_>, children: &Bound<'_, PyAny>) -> PyResult<()> {
+        let span_type = get_span_type(py)?;
+        let iter = children.try_iter()?;
+        for child_result in iter {
+            let child = child_result?;
+            let native_child = NestSumChild::extract_from_pyobject(py, &child, &span_type)?;
+            let entry = (Some(NestSumLabel::First), native_child);
+            self.inner.write().children.push(entry);
+        }
+        Ok(())
+    }
+
+    fn children_first(&self, py: Python<'_>) -> PyResult<Py<PyList>> {
+        // TODO(rust-cst-accessor-clone-efficiency): clones full Vec then filters outside the guard.
+        // Could filter inside the read guard (clone only matching entries) to avoid
+        // O(total-children) Arc clones for accessors that match a small subset.
+        let snapshot: Vec<_> = {
+            let guard = self.inner.read();
+            guard.children.clone()
+        };
+        let result = PyList::empty(py);
+        for (lbl, child) in &snapshot {
+            if *lbl == Some(NestSumLabel::First) {
+                result.append(child.to_pyobject(py)?)?;
+            }
+        }
+        Ok(result.unbind())
+    }
+
+    fn child_first(&self, py: Python<'_>) -> PyResult<PyObject> {
+        // TODO(rust-cst-accessor-clone-efficiency): see children_first above.
+        let snapshot: Vec<_> = {
+            let guard = self.inner.read();
+            guard.children.clone()
+        };
+        let mut found: Option<PyObject> = None;
+        let mut count = 0usize;
+        for (lbl, child) in &snapshot {
+            if *lbl == Some(NestSumLabel::First) {
+                count += 1;
+                if count == 1 {
+                    found = Some(child.to_pyobject(py)?);
+                }
+            }
+        }
+        if count != 1 {
+            return Err(PyValueError::new_err(format!(
+                "Expected one first child but have {count}"
+            )));
+        }
+        Ok(found.expect("invariant: NestSum.child_first: count==1 but found==None; logic error"))
+    }
+
+    fn maybe_first(&self, py: Python<'_>) -> PyResult<Option<PyObject>> {
+        // TODO(rust-cst-accessor-clone-efficiency): see children_first above.
+        let snapshot: Vec<_> = {
+            let guard = self.inner.read();
+            guard.children.clone()
+        };
+        let mut found: Option<PyObject> = None;
+        let mut count = 0usize;
+        for (lbl, child) in &snapshot {
+            if *lbl == Some(NestSumLabel::First) {
+                count += 1;
+                if count == 1 {
+                    found = Some(child.to_pyobject(py)?);
+                }
+            }
+        }
+        if count > 1 {
+            return Err(PyValueError::new_err(
+                "Expected at most one first child but have at least 2",
+            ));
+        }
+        Ok(found)
+    }
+
+    fn append_lhs(&self, py: Python<'_>, child: &Bound<'_, PyAny>) -> PyResult<()> {
+        let span_type = get_span_type(py)?;
+        let native_child = NestSumChild::extract_from_pyobject(py, child, &span_type)?;
+        self.inner.write().children.push((Some(NestSumLabel::Lhs), native_child));
+        Ok(())
+    }
+
+    fn extend_lhs(&self, py: Python<'_>, children: &Bound<'_, PyAny>) -> PyResult<()> {
+        let span_type = get_span_type(py)?;
+        let iter = children.try_iter()?;
+        for child_result in iter {
+            let child = child_result?;
+            let native_child = NestSumChild::extract_from_pyobject(py, &child, &span_type)?;
+            let entry = (Some(NestSumLabel::Lhs), native_child);
+            self.inner.write().children.push(entry);
+        }
+        Ok(())
+    }
+
+    fn children_lhs(&self, py: Python<'_>) -> PyResult<Py<PyList>> {
+        // TODO(rust-cst-accessor-clone-efficiency): clones full Vec then filters outside the guard.
+        // Could filter inside the read guard (clone only matching entries) to avoid
+        // O(total-children) Arc clones for accessors that match a small subset.
+        let snapshot: Vec<_> = {
+            let guard = self.inner.read();
+            guard.children.clone()
+        };
+        let result = PyList::empty(py);
+        for (lbl, child) in &snapshot {
+            if *lbl == Some(NestSumLabel::Lhs) {
+                result.append(child.to_pyobject(py)?)?;
+            }
+        }
+        Ok(result.unbind())
+    }
+
+    fn child_lhs(&self, py: Python<'_>) -> PyResult<PyObject> {
+        // TODO(rust-cst-accessor-clone-efficiency): see children_lhs above.
+        let snapshot: Vec<_> = {
+            let guard = self.inner.read();
+            guard.children.clone()
+        };
+        let mut found: Option<PyObject> = None;
+        let mut count = 0usize;
+        for (lbl, child) in &snapshot {
+            if *lbl == Some(NestSumLabel::Lhs) {
+                count += 1;
+                if count == 1 {
+                    found = Some(child.to_pyobject(py)?);
+                }
+            }
+        }
+        if count != 1 {
+            return Err(PyValueError::new_err(format!(
+                "Expected one lhs child but have {count}"
+            )));
+        }
+        Ok(found.expect("invariant: NestSum.child_lhs: count==1 but found==None; logic error"))
+    }
+
+    fn maybe_lhs(&self, py: Python<'_>) -> PyResult<Option<PyObject>> {
+        // TODO(rust-cst-accessor-clone-efficiency): see children_lhs above.
+        let snapshot: Vec<_> = {
+            let guard = self.inner.read();
+            guard.children.clone()
+        };
+        let mut found: Option<PyObject> = None;
+        let mut count = 0usize;
+        for (lbl, child) in &snapshot {
+            if *lbl == Some(NestSumLabel::Lhs) {
+                count += 1;
+                if count == 1 {
+                    found = Some(child.to_pyobject(py)?);
+                }
+            }
+        }
+        if count > 1 {
+            return Err(PyValueError::new_err(
+                "Expected at most one lhs child but have at least 2",
+            ));
+        }
+        Ok(found)
+    }
+
+    fn append_rhs(&self, py: Python<'_>, child: &Bound<'_, PyAny>) -> PyResult<()> {
+        let span_type = get_span_type(py)?;
+        let native_child = NestSumChild::extract_from_pyobject(py, child, &span_type)?;
+        self.inner.write().children.push((Some(NestSumLabel::Rhs), native_child));
+        Ok(())
+    }
+
+    fn extend_rhs(&self, py: Python<'_>, children: &Bound<'_, PyAny>) -> PyResult<()> {
+        let span_type = get_span_type(py)?;
+        let iter = children.try_iter()?;
+        for child_result in iter {
+            let child = child_result?;
+            let native_child = NestSumChild::extract_from_pyobject(py, &child, &span_type)?;
+            let entry = (Some(NestSumLabel::Rhs), native_child);
+            self.inner.write().children.push(entry);
+        }
+        Ok(())
+    }
+
+    fn children_rhs(&self, py: Python<'_>) -> PyResult<Py<PyList>> {
+        // TODO(rust-cst-accessor-clone-efficiency): clones full Vec then filters outside the guard.
+        // Could filter inside the read guard (clone only matching entries) to avoid
+        // O(total-children) Arc clones for accessors that match a small subset.
+        let snapshot: Vec<_> = {
+            let guard = self.inner.read();
+            guard.children.clone()
+        };
+        let result = PyList::empty(py);
+        for (lbl, child) in &snapshot {
+            if *lbl == Some(NestSumLabel::Rhs) {
+                result.append(child.to_pyobject(py)?)?;
+            }
+        }
+        Ok(result.unbind())
+    }
+
+    fn child_rhs(&self, py: Python<'_>) -> PyResult<PyObject> {
+        // TODO(rust-cst-accessor-clone-efficiency): see children_rhs above.
+        let snapshot: Vec<_> = {
+            let guard = self.inner.read();
+            guard.children.clone()
+        };
+        let mut found: Option<PyObject> = None;
+        let mut count = 0usize;
+        for (lbl, child) in &snapshot {
+            if *lbl == Some(NestSumLabel::Rhs) {
+                count += 1;
+                if count == 1 {
+                    found = Some(child.to_pyobject(py)?);
+                }
+            }
+        }
+        if count != 1 {
+            return Err(PyValueError::new_err(format!(
+                "Expected one rhs child but have {count}"
+            )));
+        }
+        Ok(found.expect("invariant: NestSum.child_rhs: count==1 but found==None; logic error"))
+    }
+
+    fn maybe_rhs(&self, py: Python<'_>) -> PyResult<Option<PyObject>> {
+        // TODO(rust-cst-accessor-clone-efficiency): see children_rhs above.
+        let snapshot: Vec<_> = {
+            let guard = self.inner.read();
+            guard.children.clone()
+        };
+        let mut found: Option<PyObject> = None;
+        let mut count = 0usize;
+        for (lbl, child) in &snapshot {
+            if *lbl == Some(NestSumLabel::Rhs) {
+                count += 1;
+                if count == 1 {
+                    found = Some(child.to_pyobject(py)?);
+                }
+            }
+        }
+        if count > 1 {
+            return Err(PyValueError::new_err(
+                "Expected at most one rhs child but have at least 2",
+            ));
+        }
+        Ok(found)
+    }
+
+    fn __eq__(&self, py: Python<'_>, other: &Bound<'_, PyAny>) -> PyResult<PyObject> {
+        if !other.is_instance_of::<PyNestSum>() {
+            return Ok(py.NotImplemented());
+        }
+        let other_handle: PyRef<PyNestSum> = other.extract()?;
+        // Delegate to Shared<T>::PartialEq which applies the ptr_eq short-circuit
+        // (avoids same-lock re-entry on `x == x`) then deep structural comparison.
+        let eq = self.inner == other_handle.inner;
+        Ok(eq.into_pyobject(py)?.to_owned().unbind().into_any())
+    }
+
+    fn __hash__(&self) -> PyResult<isize> {
+        Err(PyTypeError::new_err("unhashable type: 'NestSum'"))
+    }
+
+    fn __repr__(&self, _py: Python<'_>) -> String {
+        let guard = self.inner.read();
+        let span_repr = format!("Span(start={}, end={})", guard.span.start(), guard.span.end());
+        let children_len = guard.children.len();
+        format!(
+            "NestSum(span={span_repr}, children=[<{children_len} child(ren)>])"
+        )
+    }
+
+}
+
+// ───────────────────────────────────────────────────────────────────────────
 // TriviaLabel
 // ───────────────────────────────────────────────────────────────────────────
 
@@ -12201,6 +13858,10 @@ pub fn register_classes(module: &Bound<'_, PyModule>) -> PyResult<()> {
     module.add_class::<PyGrouped>()?;
     module.add_class::<RecViaSubLabel>()?;
     module.add_class::<PyRecViaSub>()?;
+    module.add_class::<NestLabel>()?;
+    module.add_class::<PyNest>()?;
+    module.add_class::<NestSumLabel>()?;
+    module.add_class::<PyNestSum>()?;
     module.add_class::<TriviaLabel>()?;
     module.add_class::<PyTrivia>()?;
     Ok(())

@@ -95,6 +95,17 @@ _CORPUS = [
     ("rec_via_sub", "1x", SUCCESS),
     # "1x+y" → sub-expr: inner:rec_via_sub("1x") . "+", suffix:name("y")
     ("rec_via_sub", "1x+y", SUCCESS),
+    # nest: right-recursive nesting (depth-limit rules, §5)
+    ("nest", "42", SUCCESS),
+    ("nest", "(42)", SUCCESS),
+    ("nest", "((42))", SUCCESS),
+    # nest_sum: left-recursive sum of nests (depth-limit rules, §5)
+    ("nest_sum", "42", SUCCESS),
+    ("nest_sum", "42+99", SUCCESS),
+    ("nest_sum", "1+(2)", SUCCESS),
+    # nest/nest_sum failures: unclosed paren / no leading operand
+    ("nest", "(42", FAIL),
+    ("nest_sum", "+42", FAIL),
     # Failures
     ("num", "abc", FAIL),
     ("name", "123", FAIL),

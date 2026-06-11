@@ -64,3 +64,10 @@ grouped := %"(" , (left:num | left:name) , %")" ;
 // parent node type (inline_to_parent=True path).
 // Tests the extend_children path through recursive sub-expression inlining.
 rec_via_sub := (inner:rec_via_sub . "+" | inner:atom) . suffix:name ;
+
+// Right-recursive nesting: apply depth proportional to input nesting (depth-limit tests).
+nest := %"(" . inner:nest . %")" | leaf:num ;
+
+// Left recursion whose growth step descends into nesting: a depth-rejected growth
+// iteration stalls grow_seed, which returns the seed — the Some-with-flag shape (§2).
+nest_sum := lhs:nest_sum . "+" . rhs:nest | first:nest ;

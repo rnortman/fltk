@@ -61,33 +61,107 @@ pub struct MemoEntry<T> {
 /// Per-rule memo cache type alias.
 pub type Cache<T> = HashMap<i64, MemoEntry<T>>;
 
+/// Default rule-application depth limit. Configurable via `PackratState::set_max_depth`.
+///
+/// Depth counts concurrent `apply` entries (cache hits included; they add ~2 transient
+/// frames and return immediately). 1000 levels × ~5-7 native frames/level ≈ 5 000-7 000
+/// frames — well within an 8 MiB main-thread stack. **This default is sized for an ~8 MiB
+/// stack and ~5-7 native frames per rule application.** Callers on smaller thread stacks
+/// (Rust's default spawned threads use 2 MiB; async-runtime worker threads vary) or with
+/// grammars that have deep per-rule call structure must lower `max_depth` proportionally
+/// or size the stack accordingly. Cargo-test threads have 2 MiB; do not test the default
+/// limit from `cargo test` — use pytest (see design §6).
+pub const DEFAULT_MAX_DEPTH: u32 = 1000;
+
 /// Mutable state for the packrat memoizer, held by the generated `Parser`.
 ///
-/// `recursions` is private: `Default` is the only external construction path,
-/// ensuring callers cannot partially-initialise the state with a struct literal.
-#[derive(Debug, Default)]
+/// `invocation_stack` is `pub` for direct access; all other fields are private.
+/// `Default` (manual, so `max_depth` defaults to `DEFAULT_MAX_DEPTH` rather than `0`)
+/// is the primary construction path; `with_max_depth` is a convenience constructor.
+/// Struct-literal construction is impossible, so adding private fields never breaks
+/// existing callers.
+///
+/// # Panic and `PanicException` safety
+///
+/// Memo-invariant panics inside `apply_inner` skip the `depth` decrement (they abort the
+/// parse state). In the Python binding layer, pyo3 converts Rust panics to
+/// `PanicException` *before* returning control to Python — a distinct exception type from
+/// `RecursionError`. If a Python caller catches `PanicException` and continues to use the
+/// same `PyParser`, the depth counter will be stale. Treat any `PanicException` from a
+/// parser call as "instance is spent" — construct a fresh parser.
+#[derive(Debug)]
 pub struct PackratState {
     /// Active rule invocation stack (rule IDs, innermost last).
     pub invocation_stack: Vec<u32>,
     /// Active growth cycles keyed by start position.
     recursions: HashMap<i64, RecursionInfo>,
+    /// Maximum concurrent memoized rule applications allowed.
+    /// Set this before parsing via `set_max_depth`. Default: `DEFAULT_MAX_DEPTH`.
+    max_depth: u32,
+    /// Current concurrent `apply` entry count (private; managed by `apply` guard).
+    depth: u32,
+    /// Sticky flag: once set, every subsequent `apply` returns `None` immediately.
+    /// Read via `depth_exceeded()`. Never cleared — a parser instance with this flag
+    /// set is spent; construct a fresh one.
+    depth_exceeded: bool,
 }
 
-/// Apply a memoized parser rule with left-recursion support.
+impl Default for PackratState {
+    fn default() -> Self {
+        Self {
+            invocation_stack: Vec::new(),
+            recursions: HashMap::new(),
+            max_depth: DEFAULT_MAX_DEPTH,
+            depth: 0,
+            depth_exceeded: false,
+        }
+    }
+}
+
+impl PackratState {
+    /// Create a `PackratState` with a specific maximum depth.
+    ///
+    /// Equivalent to `Default::default()` followed by `set_max_depth(max_depth)`.
+    pub fn with_max_depth(max_depth: u32) -> Self {
+        Self { max_depth, ..Self::default() }
+    }
+
+    /// Set the maximum concurrent rule-application depth. Call before parsing.
+    pub fn set_max_depth(&mut self, max_depth: u32) {
+        self.max_depth = max_depth;
+    }
+
+    /// Return the current maximum rule-application depth limit.
+    pub fn max_depth(&self) -> u32 {
+        self.max_depth
+    }
+
+    /// Returns `true` if a depth limit was exceeded during parsing.
+    ///
+    /// Sticky: once set, every `apply` on this instance returns `None` immediately.
+    /// Check this after every parse; discard the result if set (§2 contract — a result
+    /// produced with the flag set is not the parse the grammar defines; see design).
+    pub fn depth_exceeded(&self) -> bool {
+        self.depth_exceeded
+    }
+}
+
+/// Apply a memoized parser rule with left-recursion support and depth-limit guard.
 ///
 /// Generic free function (not a method on the parser) to avoid the triple-`&mut self`
 /// borrow that makes the Python call shape (`self.packrat.apply(self.parse_X, ...)`)
 /// uncompilable in Rust. Every access to `state`/`cache` re-borrows through `parser`,
 /// so `rule` can recurse into `apply` freely.
 ///
-/// # Stack-depth / DoS note
+/// # Stack-depth limit
 ///
-/// `apply` → `rule` → `apply` recursion depth is proportional to grammar-nesting depth
-/// of the input, with no limit. Python hits `sys.setrecursionlimit` and raises a catchable
-/// `RecursionError`; Rust overflows the stack (abort/SIGSEGV) — a hard DoS, not a
-/// recoverable error, in contrast to the Python backend.
-/// TODO(apply-depth-limit): add a depth counter to `PackratState`, increment/decrement in
-/// `apply`, and convert exceeding a configurable limit into a parse failure.
+/// `apply` → `rule` → `apply` recursion depth is bounded by `PackratState::max_depth`
+/// (default `DEFAULT_MAX_DEPTH`). Exceeding the limit sets the sticky
+/// `PackratState::depth_exceeded` flag and returns `None`. **Callers must check
+/// `depth_exceeded()` after parsing and discard the result if set** — a result produced
+/// with the flag set is not the parse the grammar defines (e.g. a left-recursive rule's
+/// seed can surface as `Some` even when growth iterations were depth-rejected). See the
+/// design doc for the full contract.
 ///
 /// Parameters:
 /// - `parser`: the generated `Parser` struct (or toy parser in tests).
@@ -99,7 +173,34 @@ pub struct PackratState {
 ///
 /// `T: Clone` because cache hits clone the stored result — for generated code
 /// `T = Shared<NodeT>`, so a hit is an Arc clone, reproducing Python's object-sharing.
+///
+/// # Lockstep-regeneration note
+///
+/// Generated parsers must be regenerated when crossing a `fltk-parser-core` version
+/// boundary. A pre-limit generated parser compiled against this core version enforces
+/// `DEFAULT_MAX_DEPTH` with no way for the caller to observe or configure it.
 pub fn apply<P, T: Clone>(
+    parser: &mut P,
+    rule_id: u32,
+    pos: i64,
+    state: fn(&mut P) -> &mut PackratState,
+    cache: fn(&mut P) -> &mut Cache<T>,
+    rule: fn(&mut P, i64) -> Option<ApplyResult<T>>,
+) -> Option<ApplyResult<T>> {
+    {
+        let st = state(parser);
+        if st.depth_exceeded || st.depth >= st.max_depth {
+            st.depth_exceeded = true;
+            return None;
+        }
+        st.depth += 1;
+    }
+    let result = apply_inner(parser, rule_id, pos, state, cache, rule);
+    state(parser).depth -= 1;
+    result
+}
+
+fn apply_inner<P, T: Clone>(
     parser: &mut P,
     rule_id: u32,
     pos: i64,

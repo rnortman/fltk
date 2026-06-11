@@ -22,5 +22,5 @@ pub mod terminalsrc;
 pub use regex;
 
 pub use errors::{format_error_message, ErrorTracker, ParseContext, TokenType};
-pub use memo::{apply, ApplyResult, Cache, MemoEntry, MemoResult, PackratState, RecursionInfo};
+pub use memo::{apply, ApplyResult, Cache, DEFAULT_MAX_DEPTH, MemoEntry, MemoResult, PackratState, RecursionInfo};
 pub use terminalsrc::{LineColPos, TerminalSource};

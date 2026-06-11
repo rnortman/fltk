@@ -219,6 +219,9 @@ _EXPECTED_NON_APPLY_PUB_FNS = {
     "error_message",
     "error_position",
     "register_classes",
+    "set_max_depth",
+    "max_depth",
+    "depth_exceeded",
 }
 
 
@@ -1026,6 +1029,63 @@ def test_python_bindings_emitted_for_zero_regex_grammar() -> None:
     gen = RustParserGenerator(grammar)
     src = gen.generate()
     assert "mod python_bindings {" in src, "python_bindings must be emitted for zero-regex grammars"
+
+
+def test_python_bindings_has_recursion_error_import() -> None:
+    """Generated bindings must import PyRecursionError."""
+    grammar = _make_simple_grammar()
+    gen = RustParserGenerator(grammar)
+    src = gen.generate()
+    bindings_block = src.split("mod python_bindings {", 1)[1].split("\n}", 1)[0]
+    assert "PyRecursionError" in bindings_block, "bindings must import PyRecursionError"
+
+
+def test_python_bindings_has_depth_exceeded_guard() -> None:
+    """Each per-rule apply method must check depth_exceeded() after the call."""
+    grammar = _make_two_rule_grammar()
+    gen = RustParserGenerator(grammar)
+    src = gen.generate()
+    bindings_block = src.split("mod python_bindings {", 1)[1].split("\n}", 1)[0]
+    assert "self.inner.depth_exceeded()" in bindings_block, (
+        "bindings block must check depth_exceeded() after each apply call"
+    )
+    assert "PyRecursionError::new_err" in bindings_block, (
+        "bindings block must raise PyRecursionError when depth exceeded"
+    )
+
+
+def test_python_bindings_has_max_depth_getter() -> None:
+    """Generated PyParser must have max_depth and depth_exceeded getters."""
+    grammar = _make_simple_grammar()
+    gen = RustParserGenerator(grammar)
+    src = gen.generate()
+    bindings_block = src.split("mod python_bindings {", 1)[1].split("\n}", 1)[0]
+    assert "fn max_depth(&self) -> u32" in bindings_block, "bindings must have max_depth getter"
+    assert "fn depth_exceeded(&self) -> bool" in bindings_block, "bindings must have depth_exceeded getter"
+
+
+def test_python_bindings_constructor_has_max_depth_param() -> None:
+    """Generated PyParser::new must accept optional max_depth keyword argument."""
+    grammar = _make_simple_grammar()
+    gen = RustParserGenerator(grammar)
+    src = gen.generate()
+    bindings_block = src.split("mod python_bindings {", 1)[1].split("\n}", 1)[0]
+    assert "max_depth = None" in bindings_block, "bindings constructor signature must include 'max_depth = None'"
+    assert "max_depth: Option<u32>" in bindings_block, (
+        "bindings constructor must have 'max_depth: Option<u32>' parameter"
+    )
+
+
+def test_python_bindings_error_message_depth_check() -> None:
+    """Generated Parser::error_message must return a depth-limit message when depth_exceeded."""
+    grammar = _make_simple_grammar()
+    gen = RustParserGenerator(grammar)
+    src = gen.generate()
+    # Check the non-python-bindings section (the generated Parser::error_message)
+    # It should check depth_exceeded before delegating to format_error_message.
+    assert "parse aborted: depth limit exceeded" in src, (
+        "error_message must return a distinct string when depth_exceeded is set"
+    )
 
 
 def test_dangling_identifier_in_subexpression_raises() -> None:

@@ -42,15 +42,6 @@ Fix: switch to `regex_automata::meta::Regex` with `Input::new(text).anchored(Anc
 .span(byte_pos..text.len())` to get truly anchored rejection without losing look-behind
 context. Location: `crates/fltk-parser-core/src/terminalsrc.rs` (`consume_regex`).
 
-## `apply-depth-limit`
-
-`apply` recurses (`apply → rule → apply`) with depth proportional to grammar-nesting depth
-of the input, with no limit. Python raises a catchable `RecursionError`; Rust overflows the
-stack and aborts the process (a hard, unrecoverable DoS — stricter regression vs. Python).
-Fix: add a depth counter to `PackratState`, increment/decrement in `apply`, and convert
-exceeding a configurable limit into a parse failure (or a dedicated error channel in Phase 3).
-Location: `crates/fltk-parser-core/src/memo.rs` (`apply`, `PackratState`).
-
 ## `error-msg-escape`
 
 `format_error_message` embeds the raw failing line from untrusted input unescaped in the
@@ -72,10 +63,6 @@ The `XChild` and `XLabel` naming conventions for generated Rust enums are encode
 ## `nullable-loop`
 
 `_gen_item_multiple` emits a `while let` loop with no per-iteration progress guard. For a grammar where the repeated term can match empty at a fixed position (e.g. an inner alternative whose items are all optional), the loop never advances and runs forever (100% CPU). This deliberately mirrors the Python backend (`gsm2parser.py`) for cross-backend parity (design §3), but both backends should add `if one_result.pos == pos { break; }` in lockstep. Location: `fltk/fegen/gsm2parser_rs.py` (`_gen_item_multiple`), `fltk/fegen/gsm2parser.py` (corresponding Python loop).
-
-## `parser-depth-limit`
-
-Generated parsers are recursive-descent with no depth limit. Deeply nested input exhausts the thread stack and aborts the process (cannot be caught with `catch_unwind`). Python raises a catchable `RecursionError`; the Rust backend is strictly worse for untrusted input. Fix: emit a depth counter in the generated `Parser` struct, increment/decrement in `apply__*` wrappers, and return a parse failure (with a distinguishable error) when a configurable limit is exceeded. Closely related to `apply-depth-limit` (Phase 1 runtime TODO) — the generated parser and the runtime counter should be wired together. Location: `fltk/fegen/gsm2parser_rs.py` (`_gen_apply_wrapper`, `_gen_parser_struct`).
 
 ## `extend-children-owned`
 
