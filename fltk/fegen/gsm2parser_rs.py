@@ -4,10 +4,11 @@ Generates a standalone .rs file implementing a packrat parser that
 produces CST nodes from the generated cst.rs module.
 
 Regex subset restriction: grammar regexes must use the common subset of Python ``re``
-and the Rust ``regex`` crate.  Lookahead, lookbehind, and backreferences are not
-supported; the Rust ``regex`` crate rejects them at compile time.  The generated
-``#[test] fn all_regex_patterns_compile`` (emitted into every generated parser) enforces
-this by attempting ``Regex::new(pattern)`` for each pattern at ``cargo test`` time,
+and ``regex-syntax`` (shared by the ``regex`` and ``regex-automata`` crates).  Lookahead,
+lookbehind, and backreferences are not supported; ``regex_automata::meta::Regex`` rejects
+them at compile time.  The generated ``#[test] fn all_regex_patterns_compile`` (emitted
+into every generated parser) enforces this by attempting
+``regex_automata::meta::Regex::new(pattern)`` for each pattern at ``cargo test`` time,
 naming any unsupported pattern in the failure message.  See ADR
 ``docs/adr/2026/06/10-rust-parser-codegen/README.md`` §Regex subset for the full
 constraint and the rationale for keeping it as the permanent default.
@@ -272,7 +273,7 @@ class RustParserGenerator:
         # OnceLock + Regex only if regex table is non-empty (populated during body gen)
         if self._regex_patterns:
             lines.append("use std::sync::OnceLock;")
-            lines.append("use fltk_parser_core::regex::Regex;")
+            lines.append("use fltk_parser_core::regex_automata::meta::Regex;")
             lines.append("")
 
         lines.append("use fltk_cst_core::{Shared, SourceText, Span};")
@@ -985,8 +986,10 @@ pub use python_bindings::register_classes;"""
         lines.append("    #[test]")
         lines.append("    fn all_regex_patterns_compile() {")
         lines.append("        for pat in super::REGEX_PATTERNS.iter() {")
-        lines.append("            if let Err(e) = fltk_parser_core::regex::Regex::new(pat) {")
-        lines.append('                panic!("grammar regex {pat:?} is not supported by the regex crate: {e}");')
+        lines.append("            if let Err(e) = fltk_parser_core::regex_automata::meta::Regex::new(pat) {")
+        lines.append(
+            '                panic!("grammar regex {pat:?} is not supported by regex_automata::meta::Regex: {e}");'
+        )
         lines.append("            }")
         lines.append("        }")
         lines.append("    }")

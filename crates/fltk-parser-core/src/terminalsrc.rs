@@ -5,7 +5,8 @@
 //! are codepoint indices (`i64`), matching Python's string-indexing semantics.
 
 use fltk_cst_core::{Span, SourceText};
-use regex::Regex;
+use regex_automata::meta::Regex;
+use regex_automata::{Anchored, Input};
 use std::sync::OnceLock;
 
 /// Line-and-column position within a source text.
@@ -128,34 +129,30 @@ impl TerminalSource {
     ///
     /// Port of the `consume_regex` design (controlling design §3.1).
     ///
-    /// Searches the full haystack from the byte offset corresponding to `pos`
-    /// (not a slice from `pos`) so that look-behind context (`\b`/`\B`) is preserved,
-    /// exactly reproducing Python's `re.match(pattern, string, pos=byte_pos)` semantics.
-    /// The match is accepted only if it starts exactly at `byte_pos` (`find_at` can scan
-    /// forward; a later match is rejected).
+    /// Performs an anchored search over the full haystack with the search span starting at
+    /// the byte offset corresponding to `pos`. The full haystack is passed (not a slice
+    /// from `pos`) so that `\b`/`\B` assertions resolve against the character before
+    /// `byte_pos`, exactly reproducing Python's `re.match(pattern, string, pos=byte_pos)`
+    /// semantics. `Anchored::Yes` guarantees any returned match begins at `byte_pos`;
+    /// non-matches fail immediately without scanning the rest of the haystack.
     ///
     /// `pos == len` is valid — a pattern like `a*` matches empty at end-of-input.
     /// `pos < 0` or `pos > len` returns `None`.
-    ///
-    /// # Complexity note
-    ///
-    /// `find_at` is not anchored: on a non-match at `byte_pos` it scans the remaining
-    /// haystack before concluding no match. Python's `re.match(pos=...)` anchors and
-    /// fails without scanning. Worst case: O(rules × n²) scan work over the whole parse.
-    /// TODO(consume-regex-anchor): switch to `regex_automata::meta::Regex` with
-    /// `Input::new(text).anchored(Anchored::Yes).span(byte_pos..text.len())` to get
-    /// truly anchored O(1)-reject without losing look-behind context.
     pub fn consume_regex(&self, pos: i64, regex: &Regex) -> Option<Span> {
         if pos < 0 || pos > self.len() {
             return None;
         }
         let byte_pos = self.cp_to_byte[pos as usize];
         let text = self.text();
-        let m = regex.find_at(text, byte_pos)?;
-        if m.start() != byte_pos {
-            // find_at found a match later in the string — not anchored at pos.
-            return None;
-        }
+        let input = Input::new(text)
+            .anchored(Anchored::Yes)
+            .span(byte_pos..text.len());
+        let m = regex.search(&input)?;
+        debug_assert_eq!(
+            m.start(),
+            byte_pos,
+            "anchored search must start at the search span start"
+        );
         // Convert the match end byte offset back to a codepoint index via binary search.
         // Regex match boundaries are always UTF-8 char boundaries, so the search hits an
         // exact entry in cp_to_byte.
@@ -325,7 +322,7 @@ mod tests {
     #[test]
     fn consume_regex_simple_match() {
         let ts = TerminalSource::new("hello world");
-        let re = regex::Regex::new(r"\w+").unwrap();
+        let re = Regex::new(r"\w+").unwrap();
         let span = ts.consume_regex(0, &re).unwrap();
         assert_eq!(span.start(), 0);
         assert_eq!(span.end(), 5);
@@ -335,7 +332,7 @@ mod tests {
     fn consume_regex_anchor_rejection() {
         // Pattern matches at pos+2 but not at pos → None.
         let ts = TerminalSource::new("  hello");
-        let re = regex::Regex::new(r"\w+").unwrap();
+        let re = Regex::new(r"\w+").unwrap();
         assert!(ts.consume_regex(0, &re).is_none());
     }
 
@@ -343,7 +340,7 @@ mod tests {
     fn consume_regex_word_boundary_accept() {
         // \b at the start of "hello" should match.
         let ts = TerminalSource::new("hello world");
-        let re = regex::Regex::new(r"\bhello\b").unwrap();
+        let re = Regex::new(r"\bhello\b").unwrap();
         let span = ts.consume_regex(0, &re).unwrap();
         assert_eq!(span.start(), 0);
         assert_eq!(span.end(), 5);
@@ -353,7 +350,7 @@ mod tests {
     fn consume_regex_word_boundary_reject_mid_word() {
         // Anchored to position 3 inside "hello" — \b should not match there.
         let ts = TerminalSource::new("hello world");
-        let re = regex::Regex::new(r"\bhello\b").unwrap();
+        let re = Regex::new(r"\bhello\b").unwrap();
         // Position 3 is mid-word ("lo"); \b pattern won't match starting here.
         assert!(ts.consume_regex(3, &re).is_none());
     }
@@ -362,17 +359,40 @@ mod tests {
     fn consume_regex_empty_match_at_end() {
         // `a*` matches empty string at end-of-input.
         let ts = TerminalSource::new("x");
-        let re = regex::Regex::new(r"a*").unwrap();
+        let re = Regex::new(r"a*").unwrap();
         let span = ts.consume_regex(1, &re).unwrap();
         assert_eq!(span.start(), 1);
         assert_eq!(span.end(), 1);
     }
 
     #[test]
+    fn consume_regex_context_before_pos() {
+        // \B at position 1 inside "hello" requires seeing the 'h' before pos=1.
+        // A slice-the-haystack implementation would lose that context and fail.
+        // Input::span with full haystack preserves it.
+        let ts = TerminalSource::new("hello");
+        let re = Regex::new(r"\Bello").unwrap();
+        let span = ts.consume_regex(1, &re).unwrap();
+        assert_eq!(span.start(), 1);
+        assert_eq!(span.end(), 5);
+    }
+
+    #[test]
+    fn consume_regex_word_boundary_reject_mid_word_via_context() {
+        // \b at pos=1 inside "hello" requires seeing a non-word char before pos=1.
+        // The 'h' at pos=0 is a word char, so \b fails and the match returns None.
+        // A sliced-haystack implementation would place \b at start-of-string and
+        // incorrectly match "ello" — this test catches that regression.
+        let ts = TerminalSource::new("hello");
+        let re = Regex::new(r"\bello").unwrap();
+        assert!(ts.consume_regex(1, &re).is_none());
+    }
+
+    #[test]
     fn consume_regex_no_match_at_end() {
         // pos == len with a pattern that requires at least one char → None (not a bounds error).
         let ts = TerminalSource::new("x");
-        let re = regex::Regex::new(r"\w+").unwrap();
+        let re = Regex::new(r"\w+").unwrap();
         // pos=1 is valid (len=1) but \w+ can't match at end-of-input.
         assert!(ts.consume_regex(1, &re).is_none());
     }
@@ -380,14 +400,14 @@ mod tests {
     #[test]
     fn consume_regex_out_of_range() {
         let ts = TerminalSource::new("abc");
-        let re = regex::Regex::new(r"a*").unwrap();
+        let re = Regex::new(r"a*").unwrap();
         assert!(ts.consume_regex(10, &re).is_none());
     }
 
     #[test]
     fn consume_regex_negative_pos() {
         let ts = TerminalSource::new("abc");
-        let re = regex::Regex::new(r"a").unwrap();
+        let re = Regex::new(r"a").unwrap();
         assert!(ts.consume_regex(-1, &re).is_none());
     }
 
@@ -395,7 +415,7 @@ mod tests {
     fn consume_regex_multibyte_end_offset() {
         // Match ends after a multibyte sequence; byte→codepoint binary search must be exact.
         let ts = TerminalSource::new("café");
-        let re = regex::Regex::new(r"café").unwrap();
+        let re = Regex::new(r"café").unwrap();
         let span = ts.consume_regex(0, &re).unwrap();
         assert_eq!(span.start(), 0);
         assert_eq!(span.end(), 4);

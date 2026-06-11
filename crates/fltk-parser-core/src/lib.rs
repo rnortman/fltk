@@ -7,19 +7,20 @@
 //!
 //! # Re-exports
 //!
-//! `pub use regex` is intentional: generated parser code references
-//! `fltk_parser_core::regex::Regex` exclusively, so consumer crates need no direct
-//! `regex` dependency. This structural re-export guarantees version coherence between
-//! runtime and generated code — if both referenced `regex` independently, a consumer
-//! running `cargo update` could end up with mismatched versions.
+//! `pub use regex_automata` is intentional: generated parser code references
+//! `fltk_parser_core::regex_automata::meta::Regex` exclusively, so consumer crates need
+//! no direct `regex-automata` dependency. This structural re-export guarantees version
+//! coherence between runtime and generated code — if both referenced `regex-automata`
+//! independently, a consumer running `cargo update` could end up with mismatched versions.
 
 pub mod errors;
 pub mod memo;
 pub mod terminalsrc;
 
-// Re-export regex so generated code can use `fltk_parser_core::regex::Regex` without
-// consumers declaring a separate `regex` dependency (version coherence guarantee).
-pub use regex;
+// Re-export regex_automata so generated code can use
+// `fltk_parser_core::regex_automata::meta::Regex` without consumers declaring a separate
+// `regex-automata` dependency (version coherence guarantee).
+pub use regex_automata;
 
 pub use errors::{format_error_message, ErrorTracker, ParseContext, TokenType};
 pub use memo::{apply, ApplyResult, Cache, DEFAULT_MAX_DEPTH, MemoEntry, MemoResult, PackratState, RecursionInfo};

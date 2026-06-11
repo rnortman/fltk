@@ -32,16 +32,6 @@ Per-label child accessors (`children_<label>`, `child_<label>`, `maybe_<label>`)
 
 `crates/fltk-cst-core/src/registry.rs` has no Rust unit tests. The four public functions (`lookup`, `register_if_absent`, `force_register`, `get_or_insert_with`) are tested only indirectly through Python integration tests. Direct unit tests are blocked by the build setup: `cargo test` on an rlib with `pyo3` (feature="python") cannot link `libpython` in the default test binary. Options: (a) build a dedicated test cdylib that exports test entry points, (b) test via the Python test harness using `ctypes`/`cffi`, or (c) add a `cargo test --target` integration test crate that links as a cdylib. Deferred; Python identity/mutation tests provide adequate coverage today. Location: `crates/fltk-cst-core/src/registry.rs`.
 
-## `consume-regex-anchor`
-
-`consume_regex` uses `regex::Regex::find_at` which is not anchored: on a non-match at the
-target byte position it scans the remaining haystack before concluding no match. Python's
-`re.match(pos=...)` anchors and fails without scanning. Worst case: O(rules × n²) CPU for
-inputs that cause many terminal failures — a complexity DoS when parsing untrusted input.
-Fix: switch to `regex_automata::meta::Regex` with `Input::new(text).anchored(Anchored::Yes)
-.span(byte_pos..text.len())` to get truly anchored rejection without losing look-behind
-context. Location: `crates/fltk-parser-core/src/terminalsrc.rs` (`consume_regex`).
-
 ## `error-msg-escape`
 
 `format_error_message` embeds the raw failing line from untrusted input unescaped in the
@@ -71,6 +61,10 @@ The `XChild` and `XLabel` naming conventions for generated Rust enums are encode
 ## `rust-cst-debug-depth`
 
 `derive(Debug)` on generated node structs recurses through `Shared<T>` children with no depth bound and no cycle detection. For downstream apps that parse untrusted input (the design's primary use case via R4), tree depth is attacker-controlled; debug-logging a deeply-nested tree causes stack exhaustion → uncatchable process abort. The cycle case is design-accepted (§5); this TODO tracks the unbounded-depth DoS on acyclic attacker-controlled input, which is new exposure introduced by Phase 2's `derive(Debug)`. Fix: emit a manual depth-capped `Debug` (elide children past depth N or print child count beyond a cutoff — the existing non-recursive `__repr__` in gsm2tree_rs.py is the model) instead of `derive(Debug)`. Alternatively, extend Phase-3 docs to explicitly warn authors of parsers over untrusted input not to `{:?}` unbounded trees. Location: `fltk/fegen/gsm2tree_rs.py` (the `#[derive(Clone, Debug)]` emit on node data structs, ~line 638).
+
+## `regex-automata-features`
+
+`fltk-parser-core/Cargo.toml` uses `regex-automata = "0.4"` with default features, which include `dfa-build`/`dfa-search` (full DFA determinizer). The `regex = "1"` crate (the prior dependency) did not enable those features, so this change adds compile time and binary size for `fltk-parser-core` and every downstream consumer crate. The DFA-build path is a search-speed win for small patterns (and is tightly size-capped), so the default was kept deliberately, but the cost was not formally weighed at the time of the change. Consider pinning to the feature subset actually used by `regex=1` if compile time or binary size becomes a concern. Location: `crates/fltk-parser-core/Cargo.toml`.
 
 ## `parser-bindings-name-collision`
 

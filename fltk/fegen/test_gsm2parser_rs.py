@@ -295,6 +295,10 @@ def test_regex_table_emitted() -> None:
     assert "regex_at" in src
     # The pattern from the grammar
     assert "[a-z]+" in src
+    # Regex type must be imported from regex_automata (not legacy regex crate re-export)
+    assert "use fltk_parser_core::regex_automata::meta::Regex;" in src
+    # The generated all_regex_patterns_compile test must also use the new path
+    assert "fltk_parser_core::regex_automata::meta::Regex::new(" in src
 
 
 def test_regex_table_dedup() -> None:

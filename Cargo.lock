@@ -201,7 +201,7 @@ name = "fltk-parser-core"
 version = "0.2.0"
 dependencies = [
  "fltk-cst-core",
- "regex",
+ "regex-automata",
 ]
 
 [[package]]

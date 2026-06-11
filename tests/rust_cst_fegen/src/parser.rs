@@ -13,7 +13,7 @@
 #![allow(non_snake_case)]
 
 use std::sync::OnceLock;
-use fltk_parser_core::regex::Regex;
+use fltk_parser_core::regex_automata::meta::Regex;
 
 use fltk_cst_core::{Shared, SourceText, Span};
 use fltk_parser_core::{apply, ApplyResult, Cache, ErrorTracker, PackratState, TerminalSource};
@@ -1339,8 +1339,8 @@ mod generated_regex_tests {
     #[test]
     fn all_regex_patterns_compile() {
         for pat in super::REGEX_PATTERNS.iter() {
-            if let Err(e) = fltk_parser_core::regex::Regex::new(pat) {
-                panic!("grammar regex {pat:?} is not supported by the regex crate: {e}");
+            if let Err(e) = fltk_parser_core::regex_automata::meta::Regex::new(pat) {
+                panic!("grammar regex {pat:?} is not supported by regex_automata::meta::Regex: {e}");
             }
         }
     }
