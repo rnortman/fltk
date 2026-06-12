@@ -318,11 +318,11 @@ class TestItemsMethods:
 
         node2 = self._make_node()
         assert node2.maybe_item() is None
-        with pytest.raises(ValueError):
+        with pytest.raises(ValueError, match="Expected one item child but have 0"):
             node2.child_item()
 
         node.append_item(_span(1, 2))
-        with pytest.raises(ValueError):
+        with pytest.raises(ValueError, match="Expected at most one item child but have at least 2"):
             node.maybe_item()
 
         node3 = self._make_node()
@@ -339,11 +339,11 @@ class TestItemsMethods:
 
         node2 = self._make_node()
         assert node2.maybe_no_ws() is None
-        with pytest.raises(ValueError):
+        with pytest.raises(ValueError, match="Expected one no_ws child but have 0"):
             node2.child_no_ws()
 
         node.append_no_ws(_span(1, 2))
-        with pytest.raises(ValueError):
+        with pytest.raises(ValueError, match="Expected at most one no_ws child but have at least 2"):
             node.maybe_no_ws()
 
         node3 = self._make_node()
@@ -360,11 +360,11 @@ class TestItemsMethods:
 
         node2 = self._make_node()
         assert node2.maybe_ws_allowed() is None
-        with pytest.raises(ValueError):
+        with pytest.raises(ValueError, match="Expected one ws_allowed child but have 0"):
             node2.child_ws_allowed()
 
         node.append_ws_allowed(_span(1, 2))
-        with pytest.raises(ValueError):
+        with pytest.raises(ValueError, match="Expected at most one ws_allowed child but have at least 2"):
             node.maybe_ws_allowed()
 
         node3 = self._make_node()
@@ -381,11 +381,11 @@ class TestItemsMethods:
 
         node2 = self._make_node()
         assert node2.maybe_ws_required() is None
-        with pytest.raises(ValueError):
+        with pytest.raises(ValueError, match="Expected one ws_required child but have 0"):
             node2.child_ws_required()
 
         node.append_ws_required(_span(1, 2))
-        with pytest.raises(ValueError):
+        with pytest.raises(ValueError, match="Expected at most one ws_required child but have at least 2"):
             node.maybe_ws_required()
 
         node3 = self._make_node()
@@ -517,3 +517,113 @@ class TestNoneLabelFiltering:
         node2 = Identifier()
         node2.extend((s for s in [s1, s2]), label=Identifier.Label.NAME)
         assert list(node2.children_name()) == [s1, s2]
+
+
+class TestFilterUnderGuardRegression:
+    """Regression pin for rust-cst-accessor-clone-efficiency fix.
+
+    Verifies that per-label accessors correctly filter by label when the children Vec
+    contains many children spread across multiple labels (the old full-Vec-clone approach
+    would have returned correct results but cloned all; the new approach must not
+    accidentally include wrong-label children in the result).
+    """
+
+    def _make_items_with_mixed_labels(self) -> tuple["Items", list, list]:
+        """Return an Items node with many item-labeled and no_ws-labeled children interleaved."""
+        node = Items()
+        item_spans = [_span(i * 2, i * 2 + 1) for i in range(5)]
+        no_ws_spans = [_span(i * 2 + 1, i * 2 + 2) for i in range(5)]
+        # Interleave: item, no_ws, item, no_ws, ...
+        for i in range(5):
+            node.append_item(item_spans[i])
+            node.append_no_ws(no_ws_spans[i])
+        return node, item_spans, no_ws_spans
+
+    def test_children_label_filters_correctly(self):
+        """children_item() returns only ITEM-labeled children; children_no_ws() the rest."""
+        node, item_spans, no_ws_spans = self._make_items_with_mixed_labels()
+        assert list(node.children_item()) == item_spans
+        assert list(node.children_no_ws()) == no_ws_spans
+        # Labels not used — must return empty list, not a subset of others
+        assert list(node.children_ws_allowed()) == []
+        assert list(node.children_ws_required()) == []
+
+    def test_child_label_raises_with_exact_count(self):
+        """child_<label> with multiple matching children reports the exact count."""
+        node, item_spans, _ = self._make_items_with_mixed_labels()
+        # 5 item children → count == 5
+        with pytest.raises(ValueError, match="Expected one item child but have 5"):
+            node.child_item()
+
+    def test_maybe_label_raises_when_multiple(self):
+        """maybe_<label> with >1 matching children raises the standard error."""
+        node, _, _ = self._make_items_with_mixed_labels()
+        with pytest.raises(ValueError, match="Expected at most one item child but have at least 2"):
+            node.maybe_item()
+
+    def test_generic_child_raises_with_exact_count(self):
+        """child() with N children (N != 1) reports N in error message."""
+        node, _, _ = self._make_items_with_mixed_labels()
+        # 10 total children (5 item + 5 no_ws)
+        with pytest.raises(ValueError, match="Expected one child but have 10"):
+            node.child()
+
+    def test_child_label_returns_unique_match(self):
+        """child_<label> succeeds when exactly one child matches, ignoring non-matching entries."""
+        node = Items()
+        non_target = _span(0, 1)
+        target = _span(1, 2)
+        another_non_target = _span(2, 3)
+        node.append_no_ws(non_target)
+        node.append_item(target)
+        node.append_no_ws(another_non_target)
+        result = node.child_item()
+        assert result == target
+
+    def test_maybe_label_returns_unique_match(self):
+        """maybe_<label> returns the sole match when exactly one child has that label."""
+        node = Items()
+        node.append_no_ws(_span(0, 1))
+        target = _span(1, 2)
+        node.append_item(target)
+        node.append_no_ws(_span(2, 3))
+        result = node.maybe_item()
+        assert result == target
+
+    def test_child_label_raises_when_zero_among_non_matching(self):
+        """child_<label> raises with count==0 when node has only non-matching children."""
+        node = Items()
+        # Node has only no_ws children; zero item children
+        node.append_no_ws(_span(0, 1))
+        node.append_no_ws(_span(1, 2))
+        with pytest.raises(ValueError, match="Expected one item child but have 0"):
+            node.child_item()
+
+    def test_maybe_label_returns_none_when_zero_among_non_matching(self):
+        """maybe_<label> returns None when node has only non-matching children."""
+        node = Items()
+        # Node has only no_ws children; zero item children
+        node.append_no_ws(_span(0, 1))
+        node.append_no_ws(_span(1, 2))
+        result = node.maybe_item()
+        assert result is None
+
+    def test_accessor_identity_registry_pin(self):
+        """Reading the same node child twice via child_item() returns the same Python handle (registry pin).
+
+        Node-typed children go through the WeakValueDictionary registry; the canonical handle
+        should be returned on every read as long as at least one reference keeps it alive.
+        The node-typed child is surrounded by non-matching Span children to exercise
+        the filter-under-guard path in a mixed-Vec scenario.
+        """
+        node = Items()
+        child_node = Identifier()
+        # Surround the item child with non-matching no_ws children
+        node.append_no_ws(_span(0, 1))
+        node.append_item(child_node)
+        node.append_no_ws(_span(2, 3))
+        r1 = node.child_item()
+        r2 = node.child_item()
+        # Both must be equal and the same object (WeakValueDictionary canonical handle)
+        assert r1 == r2
+        assert r1 is r2

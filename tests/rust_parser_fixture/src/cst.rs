@@ -568,23 +568,22 @@ impl PyNum {
     }
 
     fn child(&self, py: Python<'_>) -> PyResult<PyObject> {
-        // TODO(rust-cst-accessor-clone-efficiency): clones the full children Vec
-        // before checking len. Could check len under the read guard and only clone
-        // the single needed entry, avoiding O(total-children) allocation on the error path.
-        let snapshot: Vec<_> = {
+        // Lock scope: read len and clone at most the single entry under the guard;
+        // drop the guard before any Python work (object conversion, exception raise).
+        let (n, entry) = {
             let guard = self.inner.read();
-            guard.children.clone()
+            let n = guard.children.len();
+            let entry = if n == 1 { Some(guard.children[0].clone()) } else { None };
+            (n, entry)
         };
-        let n = snapshot.len();
-        if n != 1 {
+        let Some((label, child)) = entry else {
             return Err(PyValueError::new_err(format!(
                 "Expected one child but have {n}"
             )));
-        }
-        let (label, child) = &snapshot[0];
+        };
         let label_obj: PyObject = match label {
             None => py.None(),
-            Some(lbl) => lbl.clone().into_pyobject(py)?.into_any().unbind(),
+            Some(lbl) => lbl.into_pyobject(py)?.into_any().unbind(),
         };
         let child_obj = child.to_pyobject(py)?;
         Ok(PyTuple::new(py, [label_obj, child_obj])?.into_any().unbind())
@@ -610,68 +609,75 @@ impl PyNum {
     }
 
     fn children_value(&self, py: Python<'_>) -> PyResult<Py<PyList>> {
-        // TODO(rust-cst-accessor-clone-efficiency): clones full Vec then filters outside the guard.
-        // Could filter inside the read guard (clone only matching entries) to avoid
-        // O(total-children) Arc clones for accessors that match a small subset.
-        let snapshot: Vec<_> = {
+        // Lock scope: filter by label under the read guard, cloning only matching
+        // children (Arc bump or Span copy each); drop the guard before to_pyobject,
+        // which performs Python work that must not happen while a node lock is held.
+        let matching: Vec<_> = {
             let guard = self.inner.read();
-            guard.children.clone()
+            guard.children.iter()
+                .filter(|(lbl, _)| *lbl == Some(NumLabel::Value))
+                .map(|(_, child)| child.clone())
+                .collect()
         };
         let result = PyList::empty(py);
-        for (lbl, child) in &snapshot {
-            if *lbl == Some(NumLabel::Value) {
-                result.append(child.to_pyobject(py)?)?;
-            }
+        for child in &matching {
+            result.append(child.to_pyobject(py)?)?;
         }
         Ok(result.unbind())
     }
 
     fn child_value(&self, py: Python<'_>) -> PyResult<PyObject> {
-        // TODO(rust-cst-accessor-clone-efficiency): see children_value above.
-        let snapshot: Vec<_> = {
+        // Lock scope: count label matches and clone only the first under the guard;
+        // drop the guard before to_pyobject / exception raise (Python work).
+        let (count, first) = {
             let guard = self.inner.read();
-            guard.children.clone()
-        };
-        let mut found: Option<PyObject> = None;
-        let mut count = 0usize;
-        for (lbl, child) in &snapshot {
-            if *lbl == Some(NumLabel::Value) {
-                count += 1;
-                if count == 1 {
-                    found = Some(child.to_pyobject(py)?);
+            let mut count = 0usize;
+            let mut first = None;
+            for (lbl, child) in &guard.children {
+                if *lbl == Some(NumLabel::Value) {
+                    count += 1;
+                    if count == 1 {
+                        first = Some(child.clone());
+                    }
                 }
             }
-        }
+            (count, first)
+        };
         if count != 1 {
             return Err(PyValueError::new_err(format!(
                 "Expected one value child but have {count}"
             )));
         }
-        Ok(found.expect("invariant: Num.child_value: count==1 but found==None; logic error"))
+        first.expect("invariant: Num.child_value: count==1 but first==None; logic error")
+            .to_pyobject(py)
     }
 
     fn maybe_value(&self, py: Python<'_>) -> PyResult<Option<PyObject>> {
-        // TODO(rust-cst-accessor-clone-efficiency): see children_value above.
-        let snapshot: Vec<_> = {
+        // Lock scope: count label matches and clone only the first under the guard;
+        // drop the guard before to_pyobject / exception raise (Python work).
+        let (count, first) = {
             let guard = self.inner.read();
-            guard.children.clone()
-        };
-        let mut found: Option<PyObject> = None;
-        let mut count = 0usize;
-        for (lbl, child) in &snapshot {
-            if *lbl == Some(NumLabel::Value) {
-                count += 1;
-                if count == 1 {
-                    found = Some(child.to_pyobject(py)?);
+            let mut count = 0usize;
+            let mut first = None;
+            for (lbl, child) in &guard.children {
+                if *lbl == Some(NumLabel::Value) {
+                    count += 1;
+                    if count == 1 {
+                        first = Some(child.clone());
+                    }
                 }
             }
-        }
+            (count, first)
+        };
         if count > 1 {
             return Err(PyValueError::new_err(
                 "Expected at most one value child but have at least 2",
             ));
         }
-        Ok(found)
+        match first {
+            None => Ok(None),
+            Some(child) => Ok(Some(child.to_pyobject(py)?)),
+        }
     }
 
     fn __eq__(&self, py: Python<'_>, other: &Bound<'_, PyAny>) -> PyResult<PyObject> {
@@ -1118,23 +1124,22 @@ impl PyName {
     }
 
     fn child(&self, py: Python<'_>) -> PyResult<PyObject> {
-        // TODO(rust-cst-accessor-clone-efficiency): clones the full children Vec
-        // before checking len. Could check len under the read guard and only clone
-        // the single needed entry, avoiding O(total-children) allocation on the error path.
-        let snapshot: Vec<_> = {
+        // Lock scope: read len and clone at most the single entry under the guard;
+        // drop the guard before any Python work (object conversion, exception raise).
+        let (n, entry) = {
             let guard = self.inner.read();
-            guard.children.clone()
+            let n = guard.children.len();
+            let entry = if n == 1 { Some(guard.children[0].clone()) } else { None };
+            (n, entry)
         };
-        let n = snapshot.len();
-        if n != 1 {
+        let Some((label, child)) = entry else {
             return Err(PyValueError::new_err(format!(
                 "Expected one child but have {n}"
             )));
-        }
-        let (label, child) = &snapshot[0];
+        };
         let label_obj: PyObject = match label {
             None => py.None(),
-            Some(lbl) => lbl.clone().into_pyobject(py)?.into_any().unbind(),
+            Some(lbl) => lbl.into_pyobject(py)?.into_any().unbind(),
         };
         let child_obj = child.to_pyobject(py)?;
         Ok(PyTuple::new(py, [label_obj, child_obj])?.into_any().unbind())
@@ -1160,68 +1165,75 @@ impl PyName {
     }
 
     fn children_value(&self, py: Python<'_>) -> PyResult<Py<PyList>> {
-        // TODO(rust-cst-accessor-clone-efficiency): clones full Vec then filters outside the guard.
-        // Could filter inside the read guard (clone only matching entries) to avoid
-        // O(total-children) Arc clones for accessors that match a small subset.
-        let snapshot: Vec<_> = {
+        // Lock scope: filter by label under the read guard, cloning only matching
+        // children (Arc bump or Span copy each); drop the guard before to_pyobject,
+        // which performs Python work that must not happen while a node lock is held.
+        let matching: Vec<_> = {
             let guard = self.inner.read();
-            guard.children.clone()
+            guard.children.iter()
+                .filter(|(lbl, _)| *lbl == Some(NameLabel::Value))
+                .map(|(_, child)| child.clone())
+                .collect()
         };
         let result = PyList::empty(py);
-        for (lbl, child) in &snapshot {
-            if *lbl == Some(NameLabel::Value) {
-                result.append(child.to_pyobject(py)?)?;
-            }
+        for child in &matching {
+            result.append(child.to_pyobject(py)?)?;
         }
         Ok(result.unbind())
     }
 
     fn child_value(&self, py: Python<'_>) -> PyResult<PyObject> {
-        // TODO(rust-cst-accessor-clone-efficiency): see children_value above.
-        let snapshot: Vec<_> = {
+        // Lock scope: count label matches and clone only the first under the guard;
+        // drop the guard before to_pyobject / exception raise (Python work).
+        let (count, first) = {
             let guard = self.inner.read();
-            guard.children.clone()
-        };
-        let mut found: Option<PyObject> = None;
-        let mut count = 0usize;
-        for (lbl, child) in &snapshot {
-            if *lbl == Some(NameLabel::Value) {
-                count += 1;
-                if count == 1 {
-                    found = Some(child.to_pyobject(py)?);
+            let mut count = 0usize;
+            let mut first = None;
+            for (lbl, child) in &guard.children {
+                if *lbl == Some(NameLabel::Value) {
+                    count += 1;
+                    if count == 1 {
+                        first = Some(child.clone());
+                    }
                 }
             }
-        }
+            (count, first)
+        };
         if count != 1 {
             return Err(PyValueError::new_err(format!(
                 "Expected one value child but have {count}"
             )));
         }
-        Ok(found.expect("invariant: Name.child_value: count==1 but found==None; logic error"))
+        first.expect("invariant: Name.child_value: count==1 but first==None; logic error")
+            .to_pyobject(py)
     }
 
     fn maybe_value(&self, py: Python<'_>) -> PyResult<Option<PyObject>> {
-        // TODO(rust-cst-accessor-clone-efficiency): see children_value above.
-        let snapshot: Vec<_> = {
+        // Lock scope: count label matches and clone only the first under the guard;
+        // drop the guard before to_pyobject / exception raise (Python work).
+        let (count, first) = {
             let guard = self.inner.read();
-            guard.children.clone()
-        };
-        let mut found: Option<PyObject> = None;
-        let mut count = 0usize;
-        for (lbl, child) in &snapshot {
-            if *lbl == Some(NameLabel::Value) {
-                count += 1;
-                if count == 1 {
-                    found = Some(child.to_pyobject(py)?);
+            let mut count = 0usize;
+            let mut first = None;
+            for (lbl, child) in &guard.children {
+                if *lbl == Some(NameLabel::Value) {
+                    count += 1;
+                    if count == 1 {
+                        first = Some(child.clone());
+                    }
                 }
             }
-        }
+            (count, first)
+        };
         if count > 1 {
             return Err(PyValueError::new_err(
                 "Expected at most one value child but have at least 2",
             ));
         }
-        Ok(found)
+        match first {
+            None => Ok(None),
+            Some(child) => Ok(Some(child.to_pyobject(py)?)),
+        }
     }
 
     fn __eq__(&self, py: Python<'_>, other: &Bound<'_, PyAny>) -> PyResult<PyObject> {
@@ -1780,23 +1792,22 @@ impl PyAtom {
     }
 
     fn child(&self, py: Python<'_>) -> PyResult<PyObject> {
-        // TODO(rust-cst-accessor-clone-efficiency): clones the full children Vec
-        // before checking len. Could check len under the read guard and only clone
-        // the single needed entry, avoiding O(total-children) allocation on the error path.
-        let snapshot: Vec<_> = {
+        // Lock scope: read len and clone at most the single entry under the guard;
+        // drop the guard before any Python work (object conversion, exception raise).
+        let (n, entry) = {
             let guard = self.inner.read();
-            guard.children.clone()
+            let n = guard.children.len();
+            let entry = if n == 1 { Some(guard.children[0].clone()) } else { None };
+            (n, entry)
         };
-        let n = snapshot.len();
-        if n != 1 {
+        let Some((label, child)) = entry else {
             return Err(PyValueError::new_err(format!(
                 "Expected one child but have {n}"
             )));
-        }
-        let (label, child) = &snapshot[0];
+        };
         let label_obj: PyObject = match label {
             None => py.None(),
-            Some(lbl) => lbl.clone().into_pyobject(py)?.into_any().unbind(),
+            Some(lbl) => lbl.into_pyobject(py)?.into_any().unbind(),
         };
         let child_obj = child.to_pyobject(py)?;
         Ok(PyTuple::new(py, [label_obj, child_obj])?.into_any().unbind())
@@ -1822,68 +1833,75 @@ impl PyAtom {
     }
 
     fn children_name(&self, py: Python<'_>) -> PyResult<Py<PyList>> {
-        // TODO(rust-cst-accessor-clone-efficiency): clones full Vec then filters outside the guard.
-        // Could filter inside the read guard (clone only matching entries) to avoid
-        // O(total-children) Arc clones for accessors that match a small subset.
-        let snapshot: Vec<_> = {
+        // Lock scope: filter by label under the read guard, cloning only matching
+        // children (Arc bump or Span copy each); drop the guard before to_pyobject,
+        // which performs Python work that must not happen while a node lock is held.
+        let matching: Vec<_> = {
             let guard = self.inner.read();
-            guard.children.clone()
+            guard.children.iter()
+                .filter(|(lbl, _)| *lbl == Some(AtomLabel::Name))
+                .map(|(_, child)| child.clone())
+                .collect()
         };
         let result = PyList::empty(py);
-        for (lbl, child) in &snapshot {
-            if *lbl == Some(AtomLabel::Name) {
-                result.append(child.to_pyobject(py)?)?;
-            }
+        for child in &matching {
+            result.append(child.to_pyobject(py)?)?;
         }
         Ok(result.unbind())
     }
 
     fn child_name(&self, py: Python<'_>) -> PyResult<PyObject> {
-        // TODO(rust-cst-accessor-clone-efficiency): see children_name above.
-        let snapshot: Vec<_> = {
+        // Lock scope: count label matches and clone only the first under the guard;
+        // drop the guard before to_pyobject / exception raise (Python work).
+        let (count, first) = {
             let guard = self.inner.read();
-            guard.children.clone()
-        };
-        let mut found: Option<PyObject> = None;
-        let mut count = 0usize;
-        for (lbl, child) in &snapshot {
-            if *lbl == Some(AtomLabel::Name) {
-                count += 1;
-                if count == 1 {
-                    found = Some(child.to_pyobject(py)?);
+            let mut count = 0usize;
+            let mut first = None;
+            for (lbl, child) in &guard.children {
+                if *lbl == Some(AtomLabel::Name) {
+                    count += 1;
+                    if count == 1 {
+                        first = Some(child.clone());
+                    }
                 }
             }
-        }
+            (count, first)
+        };
         if count != 1 {
             return Err(PyValueError::new_err(format!(
                 "Expected one name child but have {count}"
             )));
         }
-        Ok(found.expect("invariant: Atom.child_name: count==1 but found==None; logic error"))
+        first.expect("invariant: Atom.child_name: count==1 but first==None; logic error")
+            .to_pyobject(py)
     }
 
     fn maybe_name(&self, py: Python<'_>) -> PyResult<Option<PyObject>> {
-        // TODO(rust-cst-accessor-clone-efficiency): see children_name above.
-        let snapshot: Vec<_> = {
+        // Lock scope: count label matches and clone only the first under the guard;
+        // drop the guard before to_pyobject / exception raise (Python work).
+        let (count, first) = {
             let guard = self.inner.read();
-            guard.children.clone()
-        };
-        let mut found: Option<PyObject> = None;
-        let mut count = 0usize;
-        for (lbl, child) in &snapshot {
-            if *lbl == Some(AtomLabel::Name) {
-                count += 1;
-                if count == 1 {
-                    found = Some(child.to_pyobject(py)?);
+            let mut count = 0usize;
+            let mut first = None;
+            for (lbl, child) in &guard.children {
+                if *lbl == Some(AtomLabel::Name) {
+                    count += 1;
+                    if count == 1 {
+                        first = Some(child.clone());
+                    }
                 }
             }
-        }
+            (count, first)
+        };
         if count > 1 {
             return Err(PyValueError::new_err(
                 "Expected at most one name child but have at least 2",
             ));
         }
-        Ok(found)
+        match first {
+            None => Ok(None),
+            Some(child) => Ok(Some(child.to_pyobject(py)?)),
+        }
     }
 
     fn append_num(&self, py: Python<'_>, child: &Bound<'_, PyAny>) -> PyResult<()> {
@@ -1906,68 +1924,75 @@ impl PyAtom {
     }
 
     fn children_num(&self, py: Python<'_>) -> PyResult<Py<PyList>> {
-        // TODO(rust-cst-accessor-clone-efficiency): clones full Vec then filters outside the guard.
-        // Could filter inside the read guard (clone only matching entries) to avoid
-        // O(total-children) Arc clones for accessors that match a small subset.
-        let snapshot: Vec<_> = {
+        // Lock scope: filter by label under the read guard, cloning only matching
+        // children (Arc bump or Span copy each); drop the guard before to_pyobject,
+        // which performs Python work that must not happen while a node lock is held.
+        let matching: Vec<_> = {
             let guard = self.inner.read();
-            guard.children.clone()
+            guard.children.iter()
+                .filter(|(lbl, _)| *lbl == Some(AtomLabel::Num))
+                .map(|(_, child)| child.clone())
+                .collect()
         };
         let result = PyList::empty(py);
-        for (lbl, child) in &snapshot {
-            if *lbl == Some(AtomLabel::Num) {
-                result.append(child.to_pyobject(py)?)?;
-            }
+        for child in &matching {
+            result.append(child.to_pyobject(py)?)?;
         }
         Ok(result.unbind())
     }
 
     fn child_num(&self, py: Python<'_>) -> PyResult<PyObject> {
-        // TODO(rust-cst-accessor-clone-efficiency): see children_num above.
-        let snapshot: Vec<_> = {
+        // Lock scope: count label matches and clone only the first under the guard;
+        // drop the guard before to_pyobject / exception raise (Python work).
+        let (count, first) = {
             let guard = self.inner.read();
-            guard.children.clone()
-        };
-        let mut found: Option<PyObject> = None;
-        let mut count = 0usize;
-        for (lbl, child) in &snapshot {
-            if *lbl == Some(AtomLabel::Num) {
-                count += 1;
-                if count == 1 {
-                    found = Some(child.to_pyobject(py)?);
+            let mut count = 0usize;
+            let mut first = None;
+            for (lbl, child) in &guard.children {
+                if *lbl == Some(AtomLabel::Num) {
+                    count += 1;
+                    if count == 1 {
+                        first = Some(child.clone());
+                    }
                 }
             }
-        }
+            (count, first)
+        };
         if count != 1 {
             return Err(PyValueError::new_err(format!(
                 "Expected one num child but have {count}"
             )));
         }
-        Ok(found.expect("invariant: Atom.child_num: count==1 but found==None; logic error"))
+        first.expect("invariant: Atom.child_num: count==1 but first==None; logic error")
+            .to_pyobject(py)
     }
 
     fn maybe_num(&self, py: Python<'_>) -> PyResult<Option<PyObject>> {
-        // TODO(rust-cst-accessor-clone-efficiency): see children_num above.
-        let snapshot: Vec<_> = {
+        // Lock scope: count label matches and clone only the first under the guard;
+        // drop the guard before to_pyobject / exception raise (Python work).
+        let (count, first) = {
             let guard = self.inner.read();
-            guard.children.clone()
-        };
-        let mut found: Option<PyObject> = None;
-        let mut count = 0usize;
-        for (lbl, child) in &snapshot {
-            if *lbl == Some(AtomLabel::Num) {
-                count += 1;
-                if count == 1 {
-                    found = Some(child.to_pyobject(py)?);
+            let mut count = 0usize;
+            let mut first = None;
+            for (lbl, child) in &guard.children {
+                if *lbl == Some(AtomLabel::Num) {
+                    count += 1;
+                    if count == 1 {
+                        first = Some(child.clone());
+                    }
                 }
             }
-        }
+            (count, first)
+        };
         if count > 1 {
             return Err(PyValueError::new_err(
                 "Expected at most one num child but have at least 2",
             ));
         }
-        Ok(found)
+        match first {
+            None => Ok(None),
+            Some(child) => Ok(Some(child.to_pyobject(py)?)),
+        }
     }
 
     fn __eq__(&self, py: Python<'_>, other: &Bound<'_, PyAny>) -> PyResult<PyObject> {
@@ -2453,23 +2478,22 @@ impl PyParenExpr {
     }
 
     fn child(&self, py: Python<'_>) -> PyResult<PyObject> {
-        // TODO(rust-cst-accessor-clone-efficiency): clones the full children Vec
-        // before checking len. Could check len under the read guard and only clone
-        // the single needed entry, avoiding O(total-children) allocation on the error path.
-        let snapshot: Vec<_> = {
+        // Lock scope: read len and clone at most the single entry under the guard;
+        // drop the guard before any Python work (object conversion, exception raise).
+        let (n, entry) = {
             let guard = self.inner.read();
-            guard.children.clone()
+            let n = guard.children.len();
+            let entry = if n == 1 { Some(guard.children[0].clone()) } else { None };
+            (n, entry)
         };
-        let n = snapshot.len();
-        if n != 1 {
+        let Some((label, child)) = entry else {
             return Err(PyValueError::new_err(format!(
                 "Expected one child but have {n}"
             )));
-        }
-        let (label, child) = &snapshot[0];
+        };
         let label_obj: PyObject = match label {
             None => py.None(),
-            Some(lbl) => lbl.clone().into_pyobject(py)?.into_any().unbind(),
+            Some(lbl) => lbl.into_pyobject(py)?.into_any().unbind(),
         };
         let child_obj = child.to_pyobject(py)?;
         Ok(PyTuple::new(py, [label_obj, child_obj])?.into_any().unbind())
@@ -2495,68 +2519,75 @@ impl PyParenExpr {
     }
 
     fn children_inner(&self, py: Python<'_>) -> PyResult<Py<PyList>> {
-        // TODO(rust-cst-accessor-clone-efficiency): clones full Vec then filters outside the guard.
-        // Could filter inside the read guard (clone only matching entries) to avoid
-        // O(total-children) Arc clones for accessors that match a small subset.
-        let snapshot: Vec<_> = {
+        // Lock scope: filter by label under the read guard, cloning only matching
+        // children (Arc bump or Span copy each); drop the guard before to_pyobject,
+        // which performs Python work that must not happen while a node lock is held.
+        let matching: Vec<_> = {
             let guard = self.inner.read();
-            guard.children.clone()
+            guard.children.iter()
+                .filter(|(lbl, _)| *lbl == Some(ParenExprLabel::Inner))
+                .map(|(_, child)| child.clone())
+                .collect()
         };
         let result = PyList::empty(py);
-        for (lbl, child) in &snapshot {
-            if *lbl == Some(ParenExprLabel::Inner) {
-                result.append(child.to_pyobject(py)?)?;
-            }
+        for child in &matching {
+            result.append(child.to_pyobject(py)?)?;
         }
         Ok(result.unbind())
     }
 
     fn child_inner(&self, py: Python<'_>) -> PyResult<PyObject> {
-        // TODO(rust-cst-accessor-clone-efficiency): see children_inner above.
-        let snapshot: Vec<_> = {
+        // Lock scope: count label matches and clone only the first under the guard;
+        // drop the guard before to_pyobject / exception raise (Python work).
+        let (count, first) = {
             let guard = self.inner.read();
-            guard.children.clone()
-        };
-        let mut found: Option<PyObject> = None;
-        let mut count = 0usize;
-        for (lbl, child) in &snapshot {
-            if *lbl == Some(ParenExprLabel::Inner) {
-                count += 1;
-                if count == 1 {
-                    found = Some(child.to_pyobject(py)?);
+            let mut count = 0usize;
+            let mut first = None;
+            for (lbl, child) in &guard.children {
+                if *lbl == Some(ParenExprLabel::Inner) {
+                    count += 1;
+                    if count == 1 {
+                        first = Some(child.clone());
+                    }
                 }
             }
-        }
+            (count, first)
+        };
         if count != 1 {
             return Err(PyValueError::new_err(format!(
                 "Expected one inner child but have {count}"
             )));
         }
-        Ok(found.expect("invariant: ParenExpr.child_inner: count==1 but found==None; logic error"))
+        first.expect("invariant: ParenExpr.child_inner: count==1 but first==None; logic error")
+            .to_pyobject(py)
     }
 
     fn maybe_inner(&self, py: Python<'_>) -> PyResult<Option<PyObject>> {
-        // TODO(rust-cst-accessor-clone-efficiency): see children_inner above.
-        let snapshot: Vec<_> = {
+        // Lock scope: count label matches and clone only the first under the guard;
+        // drop the guard before to_pyobject / exception raise (Python work).
+        let (count, first) = {
             let guard = self.inner.read();
-            guard.children.clone()
-        };
-        let mut found: Option<PyObject> = None;
-        let mut count = 0usize;
-        for (lbl, child) in &snapshot {
-            if *lbl == Some(ParenExprLabel::Inner) {
-                count += 1;
-                if count == 1 {
-                    found = Some(child.to_pyobject(py)?);
+            let mut count = 0usize;
+            let mut first = None;
+            for (lbl, child) in &guard.children {
+                if *lbl == Some(ParenExprLabel::Inner) {
+                    count += 1;
+                    if count == 1 {
+                        first = Some(child.clone());
+                    }
                 }
             }
-        }
+            (count, first)
+        };
         if count > 1 {
             return Err(PyValueError::new_err(
                 "Expected at most one inner child but have at least 2",
             ));
         }
-        Ok(found)
+        match first {
+            None => Ok(None),
+            Some(child) => Ok(Some(child.to_pyobject(py)?)),
+        }
     }
 
     fn __eq__(&self, py: Python<'_>, other: &Bound<'_, PyAny>) -> PyResult<PyObject> {
@@ -3115,23 +3146,22 @@ impl PyStmt {
     }
 
     fn child(&self, py: Python<'_>) -> PyResult<PyObject> {
-        // TODO(rust-cst-accessor-clone-efficiency): clones the full children Vec
-        // before checking len. Could check len under the read guard and only clone
-        // the single needed entry, avoiding O(total-children) allocation on the error path.
-        let snapshot: Vec<_> = {
+        // Lock scope: read len and clone at most the single entry under the guard;
+        // drop the guard before any Python work (object conversion, exception raise).
+        let (n, entry) = {
             let guard = self.inner.read();
-            guard.children.clone()
+            let n = guard.children.len();
+            let entry = if n == 1 { Some(guard.children[0].clone()) } else { None };
+            (n, entry)
         };
-        let n = snapshot.len();
-        if n != 1 {
+        let Some((label, child)) = entry else {
             return Err(PyValueError::new_err(format!(
                 "Expected one child but have {n}"
             )));
-        }
-        let (label, child) = &snapshot[0];
+        };
         let label_obj: PyObject = match label {
             None => py.None(),
-            Some(lbl) => lbl.clone().into_pyobject(py)?.into_any().unbind(),
+            Some(lbl) => lbl.into_pyobject(py)?.into_any().unbind(),
         };
         let child_obj = child.to_pyobject(py)?;
         Ok(PyTuple::new(py, [label_obj, child_obj])?.into_any().unbind())
@@ -3157,68 +3187,75 @@ impl PyStmt {
     }
 
     fn children_lhs(&self, py: Python<'_>) -> PyResult<Py<PyList>> {
-        // TODO(rust-cst-accessor-clone-efficiency): clones full Vec then filters outside the guard.
-        // Could filter inside the read guard (clone only matching entries) to avoid
-        // O(total-children) Arc clones for accessors that match a small subset.
-        let snapshot: Vec<_> = {
+        // Lock scope: filter by label under the read guard, cloning only matching
+        // children (Arc bump or Span copy each); drop the guard before to_pyobject,
+        // which performs Python work that must not happen while a node lock is held.
+        let matching: Vec<_> = {
             let guard = self.inner.read();
-            guard.children.clone()
+            guard.children.iter()
+                .filter(|(lbl, _)| *lbl == Some(StmtLabel::Lhs))
+                .map(|(_, child)| child.clone())
+                .collect()
         };
         let result = PyList::empty(py);
-        for (lbl, child) in &snapshot {
-            if *lbl == Some(StmtLabel::Lhs) {
-                result.append(child.to_pyobject(py)?)?;
-            }
+        for child in &matching {
+            result.append(child.to_pyobject(py)?)?;
         }
         Ok(result.unbind())
     }
 
     fn child_lhs(&self, py: Python<'_>) -> PyResult<PyObject> {
-        // TODO(rust-cst-accessor-clone-efficiency): see children_lhs above.
-        let snapshot: Vec<_> = {
+        // Lock scope: count label matches and clone only the first under the guard;
+        // drop the guard before to_pyobject / exception raise (Python work).
+        let (count, first) = {
             let guard = self.inner.read();
-            guard.children.clone()
-        };
-        let mut found: Option<PyObject> = None;
-        let mut count = 0usize;
-        for (lbl, child) in &snapshot {
-            if *lbl == Some(StmtLabel::Lhs) {
-                count += 1;
-                if count == 1 {
-                    found = Some(child.to_pyobject(py)?);
+            let mut count = 0usize;
+            let mut first = None;
+            for (lbl, child) in &guard.children {
+                if *lbl == Some(StmtLabel::Lhs) {
+                    count += 1;
+                    if count == 1 {
+                        first = Some(child.clone());
+                    }
                 }
             }
-        }
+            (count, first)
+        };
         if count != 1 {
             return Err(PyValueError::new_err(format!(
                 "Expected one lhs child but have {count}"
             )));
         }
-        Ok(found.expect("invariant: Stmt.child_lhs: count==1 but found==None; logic error"))
+        first.expect("invariant: Stmt.child_lhs: count==1 but first==None; logic error")
+            .to_pyobject(py)
     }
 
     fn maybe_lhs(&self, py: Python<'_>) -> PyResult<Option<PyObject>> {
-        // TODO(rust-cst-accessor-clone-efficiency): see children_lhs above.
-        let snapshot: Vec<_> = {
+        // Lock scope: count label matches and clone only the first under the guard;
+        // drop the guard before to_pyobject / exception raise (Python work).
+        let (count, first) = {
             let guard = self.inner.read();
-            guard.children.clone()
-        };
-        let mut found: Option<PyObject> = None;
-        let mut count = 0usize;
-        for (lbl, child) in &snapshot {
-            if *lbl == Some(StmtLabel::Lhs) {
-                count += 1;
-                if count == 1 {
-                    found = Some(child.to_pyobject(py)?);
+            let mut count = 0usize;
+            let mut first = None;
+            for (lbl, child) in &guard.children {
+                if *lbl == Some(StmtLabel::Lhs) {
+                    count += 1;
+                    if count == 1 {
+                        first = Some(child.clone());
+                    }
                 }
             }
-        }
+            (count, first)
+        };
         if count > 1 {
             return Err(PyValueError::new_err(
                 "Expected at most one lhs child but have at least 2",
             ));
         }
-        Ok(found)
+        match first {
+            None => Ok(None),
+            Some(child) => Ok(Some(child.to_pyobject(py)?)),
+        }
     }
 
     fn append_rhs(&self, py: Python<'_>, child: &Bound<'_, PyAny>) -> PyResult<()> {
@@ -3241,68 +3278,75 @@ impl PyStmt {
     }
 
     fn children_rhs(&self, py: Python<'_>) -> PyResult<Py<PyList>> {
-        // TODO(rust-cst-accessor-clone-efficiency): clones full Vec then filters outside the guard.
-        // Could filter inside the read guard (clone only matching entries) to avoid
-        // O(total-children) Arc clones for accessors that match a small subset.
-        let snapshot: Vec<_> = {
+        // Lock scope: filter by label under the read guard, cloning only matching
+        // children (Arc bump or Span copy each); drop the guard before to_pyobject,
+        // which performs Python work that must not happen while a node lock is held.
+        let matching: Vec<_> = {
             let guard = self.inner.read();
-            guard.children.clone()
+            guard.children.iter()
+                .filter(|(lbl, _)| *lbl == Some(StmtLabel::Rhs))
+                .map(|(_, child)| child.clone())
+                .collect()
         };
         let result = PyList::empty(py);
-        for (lbl, child) in &snapshot {
-            if *lbl == Some(StmtLabel::Rhs) {
-                result.append(child.to_pyobject(py)?)?;
-            }
+        for child in &matching {
+            result.append(child.to_pyobject(py)?)?;
         }
         Ok(result.unbind())
     }
 
     fn child_rhs(&self, py: Python<'_>) -> PyResult<PyObject> {
-        // TODO(rust-cst-accessor-clone-efficiency): see children_rhs above.
-        let snapshot: Vec<_> = {
+        // Lock scope: count label matches and clone only the first under the guard;
+        // drop the guard before to_pyobject / exception raise (Python work).
+        let (count, first) = {
             let guard = self.inner.read();
-            guard.children.clone()
-        };
-        let mut found: Option<PyObject> = None;
-        let mut count = 0usize;
-        for (lbl, child) in &snapshot {
-            if *lbl == Some(StmtLabel::Rhs) {
-                count += 1;
-                if count == 1 {
-                    found = Some(child.to_pyobject(py)?);
+            let mut count = 0usize;
+            let mut first = None;
+            for (lbl, child) in &guard.children {
+                if *lbl == Some(StmtLabel::Rhs) {
+                    count += 1;
+                    if count == 1 {
+                        first = Some(child.clone());
+                    }
                 }
             }
-        }
+            (count, first)
+        };
         if count != 1 {
             return Err(PyValueError::new_err(format!(
                 "Expected one rhs child but have {count}"
             )));
         }
-        Ok(found.expect("invariant: Stmt.child_rhs: count==1 but found==None; logic error"))
+        first.expect("invariant: Stmt.child_rhs: count==1 but first==None; logic error")
+            .to_pyobject(py)
     }
 
     fn maybe_rhs(&self, py: Python<'_>) -> PyResult<Option<PyObject>> {
-        // TODO(rust-cst-accessor-clone-efficiency): see children_rhs above.
-        let snapshot: Vec<_> = {
+        // Lock scope: count label matches and clone only the first under the guard;
+        // drop the guard before to_pyobject / exception raise (Python work).
+        let (count, first) = {
             let guard = self.inner.read();
-            guard.children.clone()
-        };
-        let mut found: Option<PyObject> = None;
-        let mut count = 0usize;
-        for (lbl, child) in &snapshot {
-            if *lbl == Some(StmtLabel::Rhs) {
-                count += 1;
-                if count == 1 {
-                    found = Some(child.to_pyobject(py)?);
+            let mut count = 0usize;
+            let mut first = None;
+            for (lbl, child) in &guard.children {
+                if *lbl == Some(StmtLabel::Rhs) {
+                    count += 1;
+                    if count == 1 {
+                        first = Some(child.clone());
+                    }
                 }
             }
-        }
+            (count, first)
+        };
         if count > 1 {
             return Err(PyValueError::new_err(
                 "Expected at most one rhs child but have at least 2",
             ));
         }
-        Ok(found)
+        match first {
+            None => Ok(None),
+            Some(child) => Ok(Some(child.to_pyobject(py)?)),
+        }
     }
 
     fn __eq__(&self, py: Python<'_>, other: &Bound<'_, PyAny>) -> PyResult<PyObject> {
@@ -3761,23 +3805,22 @@ impl PyItems {
     }
 
     fn child(&self, py: Python<'_>) -> PyResult<PyObject> {
-        // TODO(rust-cst-accessor-clone-efficiency): clones the full children Vec
-        // before checking len. Could check len under the read guard and only clone
-        // the single needed entry, avoiding O(total-children) allocation on the error path.
-        let snapshot: Vec<_> = {
+        // Lock scope: read len and clone at most the single entry under the guard;
+        // drop the guard before any Python work (object conversion, exception raise).
+        let (n, entry) = {
             let guard = self.inner.read();
-            guard.children.clone()
+            let n = guard.children.len();
+            let entry = if n == 1 { Some(guard.children[0].clone()) } else { None };
+            (n, entry)
         };
-        let n = snapshot.len();
-        if n != 1 {
+        let Some((label, child)) = entry else {
             return Err(PyValueError::new_err(format!(
                 "Expected one child but have {n}"
             )));
-        }
-        let (label, child) = &snapshot[0];
+        };
         let label_obj: PyObject = match label {
             None => py.None(),
-            Some(lbl) => lbl.clone().into_pyobject(py)?.into_any().unbind(),
+            Some(lbl) => lbl.into_pyobject(py)?.into_any().unbind(),
         };
         let child_obj = child.to_pyobject(py)?;
         Ok(PyTuple::new(py, [label_obj, child_obj])?.into_any().unbind())
@@ -3803,68 +3846,75 @@ impl PyItems {
     }
 
     fn children_item(&self, py: Python<'_>) -> PyResult<Py<PyList>> {
-        // TODO(rust-cst-accessor-clone-efficiency): clones full Vec then filters outside the guard.
-        // Could filter inside the read guard (clone only matching entries) to avoid
-        // O(total-children) Arc clones for accessors that match a small subset.
-        let snapshot: Vec<_> = {
+        // Lock scope: filter by label under the read guard, cloning only matching
+        // children (Arc bump or Span copy each); drop the guard before to_pyobject,
+        // which performs Python work that must not happen while a node lock is held.
+        let matching: Vec<_> = {
             let guard = self.inner.read();
-            guard.children.clone()
+            guard.children.iter()
+                .filter(|(lbl, _)| *lbl == Some(ItemsLabel::Item))
+                .map(|(_, child)| child.clone())
+                .collect()
         };
         let result = PyList::empty(py);
-        for (lbl, child) in &snapshot {
-            if *lbl == Some(ItemsLabel::Item) {
-                result.append(child.to_pyobject(py)?)?;
-            }
+        for child in &matching {
+            result.append(child.to_pyobject(py)?)?;
         }
         Ok(result.unbind())
     }
 
     fn child_item(&self, py: Python<'_>) -> PyResult<PyObject> {
-        // TODO(rust-cst-accessor-clone-efficiency): see children_item above.
-        let snapshot: Vec<_> = {
+        // Lock scope: count label matches and clone only the first under the guard;
+        // drop the guard before to_pyobject / exception raise (Python work).
+        let (count, first) = {
             let guard = self.inner.read();
-            guard.children.clone()
-        };
-        let mut found: Option<PyObject> = None;
-        let mut count = 0usize;
-        for (lbl, child) in &snapshot {
-            if *lbl == Some(ItemsLabel::Item) {
-                count += 1;
-                if count == 1 {
-                    found = Some(child.to_pyobject(py)?);
+            let mut count = 0usize;
+            let mut first = None;
+            for (lbl, child) in &guard.children {
+                if *lbl == Some(ItemsLabel::Item) {
+                    count += 1;
+                    if count == 1 {
+                        first = Some(child.clone());
+                    }
                 }
             }
-        }
+            (count, first)
+        };
         if count != 1 {
             return Err(PyValueError::new_err(format!(
                 "Expected one item child but have {count}"
             )));
         }
-        Ok(found.expect("invariant: Items.child_item: count==1 but found==None; logic error"))
+        first.expect("invariant: Items.child_item: count==1 but first==None; logic error")
+            .to_pyobject(py)
     }
 
     fn maybe_item(&self, py: Python<'_>) -> PyResult<Option<PyObject>> {
-        // TODO(rust-cst-accessor-clone-efficiency): see children_item above.
-        let snapshot: Vec<_> = {
+        // Lock scope: count label matches and clone only the first under the guard;
+        // drop the guard before to_pyobject / exception raise (Python work).
+        let (count, first) = {
             let guard = self.inner.read();
-            guard.children.clone()
-        };
-        let mut found: Option<PyObject> = None;
-        let mut count = 0usize;
-        for (lbl, child) in &snapshot {
-            if *lbl == Some(ItemsLabel::Item) {
-                count += 1;
-                if count == 1 {
-                    found = Some(child.to_pyobject(py)?);
+            let mut count = 0usize;
+            let mut first = None;
+            for (lbl, child) in &guard.children {
+                if *lbl == Some(ItemsLabel::Item) {
+                    count += 1;
+                    if count == 1 {
+                        first = Some(child.clone());
+                    }
                 }
             }
-        }
+            (count, first)
+        };
         if count > 1 {
             return Err(PyValueError::new_err(
                 "Expected at most one item child but have at least 2",
             ));
         }
-        Ok(found)
+        match first {
+            None => Ok(None),
+            Some(child) => Ok(Some(child.to_pyobject(py)?)),
+        }
     }
 
     fn __eq__(&self, py: Python<'_>, other: &Bound<'_, PyAny>) -> PyResult<PyObject> {
@@ -4323,23 +4373,22 @@ impl PyOptItem {
     }
 
     fn child(&self, py: Python<'_>) -> PyResult<PyObject> {
-        // TODO(rust-cst-accessor-clone-efficiency): clones the full children Vec
-        // before checking len. Could check len under the read guard and only clone
-        // the single needed entry, avoiding O(total-children) allocation on the error path.
-        let snapshot: Vec<_> = {
+        // Lock scope: read len and clone at most the single entry under the guard;
+        // drop the guard before any Python work (object conversion, exception raise).
+        let (n, entry) = {
             let guard = self.inner.read();
-            guard.children.clone()
+            let n = guard.children.len();
+            let entry = if n == 1 { Some(guard.children[0].clone()) } else { None };
+            (n, entry)
         };
-        let n = snapshot.len();
-        if n != 1 {
+        let Some((label, child)) = entry else {
             return Err(PyValueError::new_err(format!(
                 "Expected one child but have {n}"
             )));
-        }
-        let (label, child) = &snapshot[0];
+        };
         let label_obj: PyObject = match label {
             None => py.None(),
-            Some(lbl) => lbl.clone().into_pyobject(py)?.into_any().unbind(),
+            Some(lbl) => lbl.into_pyobject(py)?.into_any().unbind(),
         };
         let child_obj = child.to_pyobject(py)?;
         Ok(PyTuple::new(py, [label_obj, child_obj])?.into_any().unbind())
@@ -4365,68 +4414,75 @@ impl PyOptItem {
     }
 
     fn children_item(&self, py: Python<'_>) -> PyResult<Py<PyList>> {
-        // TODO(rust-cst-accessor-clone-efficiency): clones full Vec then filters outside the guard.
-        // Could filter inside the read guard (clone only matching entries) to avoid
-        // O(total-children) Arc clones for accessors that match a small subset.
-        let snapshot: Vec<_> = {
+        // Lock scope: filter by label under the read guard, cloning only matching
+        // children (Arc bump or Span copy each); drop the guard before to_pyobject,
+        // which performs Python work that must not happen while a node lock is held.
+        let matching: Vec<_> = {
             let guard = self.inner.read();
-            guard.children.clone()
+            guard.children.iter()
+                .filter(|(lbl, _)| *lbl == Some(OptItemLabel::Item))
+                .map(|(_, child)| child.clone())
+                .collect()
         };
         let result = PyList::empty(py);
-        for (lbl, child) in &snapshot {
-            if *lbl == Some(OptItemLabel::Item) {
-                result.append(child.to_pyobject(py)?)?;
-            }
+        for child in &matching {
+            result.append(child.to_pyobject(py)?)?;
         }
         Ok(result.unbind())
     }
 
     fn child_item(&self, py: Python<'_>) -> PyResult<PyObject> {
-        // TODO(rust-cst-accessor-clone-efficiency): see children_item above.
-        let snapshot: Vec<_> = {
+        // Lock scope: count label matches and clone only the first under the guard;
+        // drop the guard before to_pyobject / exception raise (Python work).
+        let (count, first) = {
             let guard = self.inner.read();
-            guard.children.clone()
-        };
-        let mut found: Option<PyObject> = None;
-        let mut count = 0usize;
-        for (lbl, child) in &snapshot {
-            if *lbl == Some(OptItemLabel::Item) {
-                count += 1;
-                if count == 1 {
-                    found = Some(child.to_pyobject(py)?);
+            let mut count = 0usize;
+            let mut first = None;
+            for (lbl, child) in &guard.children {
+                if *lbl == Some(OptItemLabel::Item) {
+                    count += 1;
+                    if count == 1 {
+                        first = Some(child.clone());
+                    }
                 }
             }
-        }
+            (count, first)
+        };
         if count != 1 {
             return Err(PyValueError::new_err(format!(
                 "Expected one item child but have {count}"
             )));
         }
-        Ok(found.expect("invariant: OptItem.child_item: count==1 but found==None; logic error"))
+        first.expect("invariant: OptItem.child_item: count==1 but first==None; logic error")
+            .to_pyobject(py)
     }
 
     fn maybe_item(&self, py: Python<'_>) -> PyResult<Option<PyObject>> {
-        // TODO(rust-cst-accessor-clone-efficiency): see children_item above.
-        let snapshot: Vec<_> = {
+        // Lock scope: count label matches and clone only the first under the guard;
+        // drop the guard before to_pyobject / exception raise (Python work).
+        let (count, first) = {
             let guard = self.inner.read();
-            guard.children.clone()
-        };
-        let mut found: Option<PyObject> = None;
-        let mut count = 0usize;
-        for (lbl, child) in &snapshot {
-            if *lbl == Some(OptItemLabel::Item) {
-                count += 1;
-                if count == 1 {
-                    found = Some(child.to_pyobject(py)?);
+            let mut count = 0usize;
+            let mut first = None;
+            for (lbl, child) in &guard.children {
+                if *lbl == Some(OptItemLabel::Item) {
+                    count += 1;
+                    if count == 1 {
+                        first = Some(child.clone());
+                    }
                 }
             }
-        }
+            (count, first)
+        };
         if count > 1 {
             return Err(PyValueError::new_err(
                 "Expected at most one item child but have at least 2",
             ));
         }
-        Ok(found)
+        match first {
+            None => Ok(None),
+            Some(child) => Ok(Some(child.to_pyobject(py)?)),
+        }
     }
 
     fn __eq__(&self, py: Python<'_>, other: &Bound<'_, PyAny>) -> PyResult<PyObject> {
@@ -4885,23 +4941,22 @@ impl PyZeroItems {
     }
 
     fn child(&self, py: Python<'_>) -> PyResult<PyObject> {
-        // TODO(rust-cst-accessor-clone-efficiency): clones the full children Vec
-        // before checking len. Could check len under the read guard and only clone
-        // the single needed entry, avoiding O(total-children) allocation on the error path.
-        let snapshot: Vec<_> = {
+        // Lock scope: read len and clone at most the single entry under the guard;
+        // drop the guard before any Python work (object conversion, exception raise).
+        let (n, entry) = {
             let guard = self.inner.read();
-            guard.children.clone()
+            let n = guard.children.len();
+            let entry = if n == 1 { Some(guard.children[0].clone()) } else { None };
+            (n, entry)
         };
-        let n = snapshot.len();
-        if n != 1 {
+        let Some((label, child)) = entry else {
             return Err(PyValueError::new_err(format!(
                 "Expected one child but have {n}"
             )));
-        }
-        let (label, child) = &snapshot[0];
+        };
         let label_obj: PyObject = match label {
             None => py.None(),
-            Some(lbl) => lbl.clone().into_pyobject(py)?.into_any().unbind(),
+            Some(lbl) => lbl.into_pyobject(py)?.into_any().unbind(),
         };
         let child_obj = child.to_pyobject(py)?;
         Ok(PyTuple::new(py, [label_obj, child_obj])?.into_any().unbind())
@@ -4927,68 +4982,75 @@ impl PyZeroItems {
     }
 
     fn children_item(&self, py: Python<'_>) -> PyResult<Py<PyList>> {
-        // TODO(rust-cst-accessor-clone-efficiency): clones full Vec then filters outside the guard.
-        // Could filter inside the read guard (clone only matching entries) to avoid
-        // O(total-children) Arc clones for accessors that match a small subset.
-        let snapshot: Vec<_> = {
+        // Lock scope: filter by label under the read guard, cloning only matching
+        // children (Arc bump or Span copy each); drop the guard before to_pyobject,
+        // which performs Python work that must not happen while a node lock is held.
+        let matching: Vec<_> = {
             let guard = self.inner.read();
-            guard.children.clone()
+            guard.children.iter()
+                .filter(|(lbl, _)| *lbl == Some(ZeroItemsLabel::Item))
+                .map(|(_, child)| child.clone())
+                .collect()
         };
         let result = PyList::empty(py);
-        for (lbl, child) in &snapshot {
-            if *lbl == Some(ZeroItemsLabel::Item) {
-                result.append(child.to_pyobject(py)?)?;
-            }
+        for child in &matching {
+            result.append(child.to_pyobject(py)?)?;
         }
         Ok(result.unbind())
     }
 
     fn child_item(&self, py: Python<'_>) -> PyResult<PyObject> {
-        // TODO(rust-cst-accessor-clone-efficiency): see children_item above.
-        let snapshot: Vec<_> = {
+        // Lock scope: count label matches and clone only the first under the guard;
+        // drop the guard before to_pyobject / exception raise (Python work).
+        let (count, first) = {
             let guard = self.inner.read();
-            guard.children.clone()
-        };
-        let mut found: Option<PyObject> = None;
-        let mut count = 0usize;
-        for (lbl, child) in &snapshot {
-            if *lbl == Some(ZeroItemsLabel::Item) {
-                count += 1;
-                if count == 1 {
-                    found = Some(child.to_pyobject(py)?);
+            let mut count = 0usize;
+            let mut first = None;
+            for (lbl, child) in &guard.children {
+                if *lbl == Some(ZeroItemsLabel::Item) {
+                    count += 1;
+                    if count == 1 {
+                        first = Some(child.clone());
+                    }
                 }
             }
-        }
+            (count, first)
+        };
         if count != 1 {
             return Err(PyValueError::new_err(format!(
                 "Expected one item child but have {count}"
             )));
         }
-        Ok(found.expect("invariant: ZeroItems.child_item: count==1 but found==None; logic error"))
+        first.expect("invariant: ZeroItems.child_item: count==1 but first==None; logic error")
+            .to_pyobject(py)
     }
 
     fn maybe_item(&self, py: Python<'_>) -> PyResult<Option<PyObject>> {
-        // TODO(rust-cst-accessor-clone-efficiency): see children_item above.
-        let snapshot: Vec<_> = {
+        // Lock scope: count label matches and clone only the first under the guard;
+        // drop the guard before to_pyobject / exception raise (Python work).
+        let (count, first) = {
             let guard = self.inner.read();
-            guard.children.clone()
-        };
-        let mut found: Option<PyObject> = None;
-        let mut count = 0usize;
-        for (lbl, child) in &snapshot {
-            if *lbl == Some(ZeroItemsLabel::Item) {
-                count += 1;
-                if count == 1 {
-                    found = Some(child.to_pyobject(py)?);
+            let mut count = 0usize;
+            let mut first = None;
+            for (lbl, child) in &guard.children {
+                if *lbl == Some(ZeroItemsLabel::Item) {
+                    count += 1;
+                    if count == 1 {
+                        first = Some(child.clone());
+                    }
                 }
             }
-        }
+            (count, first)
+        };
         if count > 1 {
             return Err(PyValueError::new_err(
                 "Expected at most one item child but have at least 2",
             ));
         }
-        Ok(found)
+        match first {
+            None => Ok(None),
+            Some(child) => Ok(Some(child.to_pyobject(py)?)),
+        }
     }
 
     fn __eq__(&self, py: Python<'_>, other: &Bound<'_, PyAny>) -> PyResult<PyObject> {
@@ -5620,23 +5682,22 @@ impl PyExpr {
     }
 
     fn child(&self, py: Python<'_>) -> PyResult<PyObject> {
-        // TODO(rust-cst-accessor-clone-efficiency): clones the full children Vec
-        // before checking len. Could check len under the read guard and only clone
-        // the single needed entry, avoiding O(total-children) allocation on the error path.
-        let snapshot: Vec<_> = {
+        // Lock scope: read len and clone at most the single entry under the guard;
+        // drop the guard before any Python work (object conversion, exception raise).
+        let (n, entry) = {
             let guard = self.inner.read();
-            guard.children.clone()
+            let n = guard.children.len();
+            let entry = if n == 1 { Some(guard.children[0].clone()) } else { None };
+            (n, entry)
         };
-        let n = snapshot.len();
-        if n != 1 {
+        let Some((label, child)) = entry else {
             return Err(PyValueError::new_err(format!(
                 "Expected one child but have {n}"
             )));
-        }
-        let (label, child) = &snapshot[0];
+        };
         let label_obj: PyObject = match label {
             None => py.None(),
-            Some(lbl) => lbl.clone().into_pyobject(py)?.into_any().unbind(),
+            Some(lbl) => lbl.into_pyobject(py)?.into_any().unbind(),
         };
         let child_obj = child.to_pyobject(py)?;
         Ok(PyTuple::new(py, [label_obj, child_obj])?.into_any().unbind())
@@ -5662,68 +5723,75 @@ impl PyExpr {
     }
 
     fn children_atom(&self, py: Python<'_>) -> PyResult<Py<PyList>> {
-        // TODO(rust-cst-accessor-clone-efficiency): clones full Vec then filters outside the guard.
-        // Could filter inside the read guard (clone only matching entries) to avoid
-        // O(total-children) Arc clones for accessors that match a small subset.
-        let snapshot: Vec<_> = {
+        // Lock scope: filter by label under the read guard, cloning only matching
+        // children (Arc bump or Span copy each); drop the guard before to_pyobject,
+        // which performs Python work that must not happen while a node lock is held.
+        let matching: Vec<_> = {
             let guard = self.inner.read();
-            guard.children.clone()
+            guard.children.iter()
+                .filter(|(lbl, _)| *lbl == Some(ExprLabel::Atom))
+                .map(|(_, child)| child.clone())
+                .collect()
         };
         let result = PyList::empty(py);
-        for (lbl, child) in &snapshot {
-            if *lbl == Some(ExprLabel::Atom) {
-                result.append(child.to_pyobject(py)?)?;
-            }
+        for child in &matching {
+            result.append(child.to_pyobject(py)?)?;
         }
         Ok(result.unbind())
     }
 
     fn child_atom(&self, py: Python<'_>) -> PyResult<PyObject> {
-        // TODO(rust-cst-accessor-clone-efficiency): see children_atom above.
-        let snapshot: Vec<_> = {
+        // Lock scope: count label matches and clone only the first under the guard;
+        // drop the guard before to_pyobject / exception raise (Python work).
+        let (count, first) = {
             let guard = self.inner.read();
-            guard.children.clone()
-        };
-        let mut found: Option<PyObject> = None;
-        let mut count = 0usize;
-        for (lbl, child) in &snapshot {
-            if *lbl == Some(ExprLabel::Atom) {
-                count += 1;
-                if count == 1 {
-                    found = Some(child.to_pyobject(py)?);
+            let mut count = 0usize;
+            let mut first = None;
+            for (lbl, child) in &guard.children {
+                if *lbl == Some(ExprLabel::Atom) {
+                    count += 1;
+                    if count == 1 {
+                        first = Some(child.clone());
+                    }
                 }
             }
-        }
+            (count, first)
+        };
         if count != 1 {
             return Err(PyValueError::new_err(format!(
                 "Expected one atom child but have {count}"
             )));
         }
-        Ok(found.expect("invariant: Expr.child_atom: count==1 but found==None; logic error"))
+        first.expect("invariant: Expr.child_atom: count==1 but first==None; logic error")
+            .to_pyobject(py)
     }
 
     fn maybe_atom(&self, py: Python<'_>) -> PyResult<Option<PyObject>> {
-        // TODO(rust-cst-accessor-clone-efficiency): see children_atom above.
-        let snapshot: Vec<_> = {
+        // Lock scope: count label matches and clone only the first under the guard;
+        // drop the guard before to_pyobject / exception raise (Python work).
+        let (count, first) = {
             let guard = self.inner.read();
-            guard.children.clone()
-        };
-        let mut found: Option<PyObject> = None;
-        let mut count = 0usize;
-        for (lbl, child) in &snapshot {
-            if *lbl == Some(ExprLabel::Atom) {
-                count += 1;
-                if count == 1 {
-                    found = Some(child.to_pyobject(py)?);
+            let mut count = 0usize;
+            let mut first = None;
+            for (lbl, child) in &guard.children {
+                if *lbl == Some(ExprLabel::Atom) {
+                    count += 1;
+                    if count == 1 {
+                        first = Some(child.clone());
+                    }
                 }
             }
-        }
+            (count, first)
+        };
         if count > 1 {
             return Err(PyValueError::new_err(
                 "Expected at most one atom child but have at least 2",
             ));
         }
-        Ok(found)
+        match first {
+            None => Ok(None),
+            Some(child) => Ok(Some(child.to_pyobject(py)?)),
+        }
     }
 
     fn append_lhs(&self, py: Python<'_>, child: &Bound<'_, PyAny>) -> PyResult<()> {
@@ -5746,68 +5814,75 @@ impl PyExpr {
     }
 
     fn children_lhs(&self, py: Python<'_>) -> PyResult<Py<PyList>> {
-        // TODO(rust-cst-accessor-clone-efficiency): clones full Vec then filters outside the guard.
-        // Could filter inside the read guard (clone only matching entries) to avoid
-        // O(total-children) Arc clones for accessors that match a small subset.
-        let snapshot: Vec<_> = {
+        // Lock scope: filter by label under the read guard, cloning only matching
+        // children (Arc bump or Span copy each); drop the guard before to_pyobject,
+        // which performs Python work that must not happen while a node lock is held.
+        let matching: Vec<_> = {
             let guard = self.inner.read();
-            guard.children.clone()
+            guard.children.iter()
+                .filter(|(lbl, _)| *lbl == Some(ExprLabel::Lhs))
+                .map(|(_, child)| child.clone())
+                .collect()
         };
         let result = PyList::empty(py);
-        for (lbl, child) in &snapshot {
-            if *lbl == Some(ExprLabel::Lhs) {
-                result.append(child.to_pyobject(py)?)?;
-            }
+        for child in &matching {
+            result.append(child.to_pyobject(py)?)?;
         }
         Ok(result.unbind())
     }
 
     fn child_lhs(&self, py: Python<'_>) -> PyResult<PyObject> {
-        // TODO(rust-cst-accessor-clone-efficiency): see children_lhs above.
-        let snapshot: Vec<_> = {
+        // Lock scope: count label matches and clone only the first under the guard;
+        // drop the guard before to_pyobject / exception raise (Python work).
+        let (count, first) = {
             let guard = self.inner.read();
-            guard.children.clone()
-        };
-        let mut found: Option<PyObject> = None;
-        let mut count = 0usize;
-        for (lbl, child) in &snapshot {
-            if *lbl == Some(ExprLabel::Lhs) {
-                count += 1;
-                if count == 1 {
-                    found = Some(child.to_pyobject(py)?);
+            let mut count = 0usize;
+            let mut first = None;
+            for (lbl, child) in &guard.children {
+                if *lbl == Some(ExprLabel::Lhs) {
+                    count += 1;
+                    if count == 1 {
+                        first = Some(child.clone());
+                    }
                 }
             }
-        }
+            (count, first)
+        };
         if count != 1 {
             return Err(PyValueError::new_err(format!(
                 "Expected one lhs child but have {count}"
             )));
         }
-        Ok(found.expect("invariant: Expr.child_lhs: count==1 but found==None; logic error"))
+        first.expect("invariant: Expr.child_lhs: count==1 but first==None; logic error")
+            .to_pyobject(py)
     }
 
     fn maybe_lhs(&self, py: Python<'_>) -> PyResult<Option<PyObject>> {
-        // TODO(rust-cst-accessor-clone-efficiency): see children_lhs above.
-        let snapshot: Vec<_> = {
+        // Lock scope: count label matches and clone only the first under the guard;
+        // drop the guard before to_pyobject / exception raise (Python work).
+        let (count, first) = {
             let guard = self.inner.read();
-            guard.children.clone()
-        };
-        let mut found: Option<PyObject> = None;
-        let mut count = 0usize;
-        for (lbl, child) in &snapshot {
-            if *lbl == Some(ExprLabel::Lhs) {
-                count += 1;
-                if count == 1 {
-                    found = Some(child.to_pyobject(py)?);
+            let mut count = 0usize;
+            let mut first = None;
+            for (lbl, child) in &guard.children {
+                if *lbl == Some(ExprLabel::Lhs) {
+                    count += 1;
+                    if count == 1 {
+                        first = Some(child.clone());
+                    }
                 }
             }
-        }
+            (count, first)
+        };
         if count > 1 {
             return Err(PyValueError::new_err(
                 "Expected at most one lhs child but have at least 2",
             ));
         }
-        Ok(found)
+        match first {
+            None => Ok(None),
+            Some(child) => Ok(Some(child.to_pyobject(py)?)),
+        }
     }
 
     fn append_rhs(&self, py: Python<'_>, child: &Bound<'_, PyAny>) -> PyResult<()> {
@@ -5830,68 +5905,75 @@ impl PyExpr {
     }
 
     fn children_rhs(&self, py: Python<'_>) -> PyResult<Py<PyList>> {
-        // TODO(rust-cst-accessor-clone-efficiency): clones full Vec then filters outside the guard.
-        // Could filter inside the read guard (clone only matching entries) to avoid
-        // O(total-children) Arc clones for accessors that match a small subset.
-        let snapshot: Vec<_> = {
+        // Lock scope: filter by label under the read guard, cloning only matching
+        // children (Arc bump or Span copy each); drop the guard before to_pyobject,
+        // which performs Python work that must not happen while a node lock is held.
+        let matching: Vec<_> = {
             let guard = self.inner.read();
-            guard.children.clone()
+            guard.children.iter()
+                .filter(|(lbl, _)| *lbl == Some(ExprLabel::Rhs))
+                .map(|(_, child)| child.clone())
+                .collect()
         };
         let result = PyList::empty(py);
-        for (lbl, child) in &snapshot {
-            if *lbl == Some(ExprLabel::Rhs) {
-                result.append(child.to_pyobject(py)?)?;
-            }
+        for child in &matching {
+            result.append(child.to_pyobject(py)?)?;
         }
         Ok(result.unbind())
     }
 
     fn child_rhs(&self, py: Python<'_>) -> PyResult<PyObject> {
-        // TODO(rust-cst-accessor-clone-efficiency): see children_rhs above.
-        let snapshot: Vec<_> = {
+        // Lock scope: count label matches and clone only the first under the guard;
+        // drop the guard before to_pyobject / exception raise (Python work).
+        let (count, first) = {
             let guard = self.inner.read();
-            guard.children.clone()
-        };
-        let mut found: Option<PyObject> = None;
-        let mut count = 0usize;
-        for (lbl, child) in &snapshot {
-            if *lbl == Some(ExprLabel::Rhs) {
-                count += 1;
-                if count == 1 {
-                    found = Some(child.to_pyobject(py)?);
+            let mut count = 0usize;
+            let mut first = None;
+            for (lbl, child) in &guard.children {
+                if *lbl == Some(ExprLabel::Rhs) {
+                    count += 1;
+                    if count == 1 {
+                        first = Some(child.clone());
+                    }
                 }
             }
-        }
+            (count, first)
+        };
         if count != 1 {
             return Err(PyValueError::new_err(format!(
                 "Expected one rhs child but have {count}"
             )));
         }
-        Ok(found.expect("invariant: Expr.child_rhs: count==1 but found==None; logic error"))
+        first.expect("invariant: Expr.child_rhs: count==1 but first==None; logic error")
+            .to_pyobject(py)
     }
 
     fn maybe_rhs(&self, py: Python<'_>) -> PyResult<Option<PyObject>> {
-        // TODO(rust-cst-accessor-clone-efficiency): see children_rhs above.
-        let snapshot: Vec<_> = {
+        // Lock scope: count label matches and clone only the first under the guard;
+        // drop the guard before to_pyobject / exception raise (Python work).
+        let (count, first) = {
             let guard = self.inner.read();
-            guard.children.clone()
-        };
-        let mut found: Option<PyObject> = None;
-        let mut count = 0usize;
-        for (lbl, child) in &snapshot {
-            if *lbl == Some(ExprLabel::Rhs) {
-                count += 1;
-                if count == 1 {
-                    found = Some(child.to_pyobject(py)?);
+            let mut count = 0usize;
+            let mut first = None;
+            for (lbl, child) in &guard.children {
+                if *lbl == Some(ExprLabel::Rhs) {
+                    count += 1;
+                    if count == 1 {
+                        first = Some(child.clone());
+                    }
                 }
             }
-        }
+            (count, first)
+        };
         if count > 1 {
             return Err(PyValueError::new_err(
                 "Expected at most one rhs child but have at least 2",
             ));
         }
-        Ok(found)
+        match first {
+            None => Ok(None),
+            Some(child) => Ok(Some(child.to_pyobject(py)?)),
+        }
     }
 
     fn __eq__(&self, py: Python<'_>, other: &Bound<'_, PyAny>) -> PyResult<PyObject> {
@@ -6450,23 +6532,22 @@ impl PyLval {
     }
 
     fn child(&self, py: Python<'_>) -> PyResult<PyObject> {
-        // TODO(rust-cst-accessor-clone-efficiency): clones the full children Vec
-        // before checking len. Could check len under the read guard and only clone
-        // the single needed entry, avoiding O(total-children) allocation on the error path.
-        let snapshot: Vec<_> = {
+        // Lock scope: read len and clone at most the single entry under the guard;
+        // drop the guard before any Python work (object conversion, exception raise).
+        let (n, entry) = {
             let guard = self.inner.read();
-            guard.children.clone()
+            let n = guard.children.len();
+            let entry = if n == 1 { Some(guard.children[0].clone()) } else { None };
+            (n, entry)
         };
-        let n = snapshot.len();
-        if n != 1 {
+        let Some((label, child)) = entry else {
             return Err(PyValueError::new_err(format!(
                 "Expected one child but have {n}"
             )));
-        }
-        let (label, child) = &snapshot[0];
+        };
         let label_obj: PyObject = match label {
             None => py.None(),
-            Some(lbl) => lbl.clone().into_pyobject(py)?.into_any().unbind(),
+            Some(lbl) => lbl.into_pyobject(py)?.into_any().unbind(),
         };
         let child_obj = child.to_pyobject(py)?;
         Ok(PyTuple::new(py, [label_obj, child_obj])?.into_any().unbind())
@@ -6492,68 +6573,75 @@ impl PyLval {
     }
 
     fn children_base(&self, py: Python<'_>) -> PyResult<Py<PyList>> {
-        // TODO(rust-cst-accessor-clone-efficiency): clones full Vec then filters outside the guard.
-        // Could filter inside the read guard (clone only matching entries) to avoid
-        // O(total-children) Arc clones for accessors that match a small subset.
-        let snapshot: Vec<_> = {
+        // Lock scope: filter by label under the read guard, cloning only matching
+        // children (Arc bump or Span copy each); drop the guard before to_pyobject,
+        // which performs Python work that must not happen while a node lock is held.
+        let matching: Vec<_> = {
             let guard = self.inner.read();
-            guard.children.clone()
+            guard.children.iter()
+                .filter(|(lbl, _)| *lbl == Some(LvalLabel::Base))
+                .map(|(_, child)| child.clone())
+                .collect()
         };
         let result = PyList::empty(py);
-        for (lbl, child) in &snapshot {
-            if *lbl == Some(LvalLabel::Base) {
-                result.append(child.to_pyobject(py)?)?;
-            }
+        for child in &matching {
+            result.append(child.to_pyobject(py)?)?;
         }
         Ok(result.unbind())
     }
 
     fn child_base(&self, py: Python<'_>) -> PyResult<PyObject> {
-        // TODO(rust-cst-accessor-clone-efficiency): see children_base above.
-        let snapshot: Vec<_> = {
+        // Lock scope: count label matches and clone only the first under the guard;
+        // drop the guard before to_pyobject / exception raise (Python work).
+        let (count, first) = {
             let guard = self.inner.read();
-            guard.children.clone()
-        };
-        let mut found: Option<PyObject> = None;
-        let mut count = 0usize;
-        for (lbl, child) in &snapshot {
-            if *lbl == Some(LvalLabel::Base) {
-                count += 1;
-                if count == 1 {
-                    found = Some(child.to_pyobject(py)?);
+            let mut count = 0usize;
+            let mut first = None;
+            for (lbl, child) in &guard.children {
+                if *lbl == Some(LvalLabel::Base) {
+                    count += 1;
+                    if count == 1 {
+                        first = Some(child.clone());
+                    }
                 }
             }
-        }
+            (count, first)
+        };
         if count != 1 {
             return Err(PyValueError::new_err(format!(
                 "Expected one base child but have {count}"
             )));
         }
-        Ok(found.expect("invariant: Lval.child_base: count==1 but found==None; logic error"))
+        first.expect("invariant: Lval.child_base: count==1 but first==None; logic error")
+            .to_pyobject(py)
     }
 
     fn maybe_base(&self, py: Python<'_>) -> PyResult<Option<PyObject>> {
-        // TODO(rust-cst-accessor-clone-efficiency): see children_base above.
-        let snapshot: Vec<_> = {
+        // Lock scope: count label matches and clone only the first under the guard;
+        // drop the guard before to_pyobject / exception raise (Python work).
+        let (count, first) = {
             let guard = self.inner.read();
-            guard.children.clone()
-        };
-        let mut found: Option<PyObject> = None;
-        let mut count = 0usize;
-        for (lbl, child) in &snapshot {
-            if *lbl == Some(LvalLabel::Base) {
-                count += 1;
-                if count == 1 {
-                    found = Some(child.to_pyobject(py)?);
+            let mut count = 0usize;
+            let mut first = None;
+            for (lbl, child) in &guard.children {
+                if *lbl == Some(LvalLabel::Base) {
+                    count += 1;
+                    if count == 1 {
+                        first = Some(child.clone());
+                    }
                 }
             }
-        }
+            (count, first)
+        };
         if count > 1 {
             return Err(PyValueError::new_err(
                 "Expected at most one base child but have at least 2",
             ));
         }
-        Ok(found)
+        match first {
+            None => Ok(None),
+            Some(child) => Ok(Some(child.to_pyobject(py)?)),
+        }
     }
 
     fn append_inner(&self, py: Python<'_>, child: &Bound<'_, PyAny>) -> PyResult<()> {
@@ -6576,68 +6664,75 @@ impl PyLval {
     }
 
     fn children_inner(&self, py: Python<'_>) -> PyResult<Py<PyList>> {
-        // TODO(rust-cst-accessor-clone-efficiency): clones full Vec then filters outside the guard.
-        // Could filter inside the read guard (clone only matching entries) to avoid
-        // O(total-children) Arc clones for accessors that match a small subset.
-        let snapshot: Vec<_> = {
+        // Lock scope: filter by label under the read guard, cloning only matching
+        // children (Arc bump or Span copy each); drop the guard before to_pyobject,
+        // which performs Python work that must not happen while a node lock is held.
+        let matching: Vec<_> = {
             let guard = self.inner.read();
-            guard.children.clone()
+            guard.children.iter()
+                .filter(|(lbl, _)| *lbl == Some(LvalLabel::Inner))
+                .map(|(_, child)| child.clone())
+                .collect()
         };
         let result = PyList::empty(py);
-        for (lbl, child) in &snapshot {
-            if *lbl == Some(LvalLabel::Inner) {
-                result.append(child.to_pyobject(py)?)?;
-            }
+        for child in &matching {
+            result.append(child.to_pyobject(py)?)?;
         }
         Ok(result.unbind())
     }
 
     fn child_inner(&self, py: Python<'_>) -> PyResult<PyObject> {
-        // TODO(rust-cst-accessor-clone-efficiency): see children_inner above.
-        let snapshot: Vec<_> = {
+        // Lock scope: count label matches and clone only the first under the guard;
+        // drop the guard before to_pyobject / exception raise (Python work).
+        let (count, first) = {
             let guard = self.inner.read();
-            guard.children.clone()
-        };
-        let mut found: Option<PyObject> = None;
-        let mut count = 0usize;
-        for (lbl, child) in &snapshot {
-            if *lbl == Some(LvalLabel::Inner) {
-                count += 1;
-                if count == 1 {
-                    found = Some(child.to_pyobject(py)?);
+            let mut count = 0usize;
+            let mut first = None;
+            for (lbl, child) in &guard.children {
+                if *lbl == Some(LvalLabel::Inner) {
+                    count += 1;
+                    if count == 1 {
+                        first = Some(child.clone());
+                    }
                 }
             }
-        }
+            (count, first)
+        };
         if count != 1 {
             return Err(PyValueError::new_err(format!(
                 "Expected one inner child but have {count}"
             )));
         }
-        Ok(found.expect("invariant: Lval.child_inner: count==1 but found==None; logic error"))
+        first.expect("invariant: Lval.child_inner: count==1 but first==None; logic error")
+            .to_pyobject(py)
     }
 
     fn maybe_inner(&self, py: Python<'_>) -> PyResult<Option<PyObject>> {
-        // TODO(rust-cst-accessor-clone-efficiency): see children_inner above.
-        let snapshot: Vec<_> = {
+        // Lock scope: count label matches and clone only the first under the guard;
+        // drop the guard before to_pyobject / exception raise (Python work).
+        let (count, first) = {
             let guard = self.inner.read();
-            guard.children.clone()
-        };
-        let mut found: Option<PyObject> = None;
-        let mut count = 0usize;
-        for (lbl, child) in &snapshot {
-            if *lbl == Some(LvalLabel::Inner) {
-                count += 1;
-                if count == 1 {
-                    found = Some(child.to_pyobject(py)?);
+            let mut count = 0usize;
+            let mut first = None;
+            for (lbl, child) in &guard.children {
+                if *lbl == Some(LvalLabel::Inner) {
+                    count += 1;
+                    if count == 1 {
+                        first = Some(child.clone());
+                    }
                 }
             }
-        }
+            (count, first)
+        };
         if count > 1 {
             return Err(PyValueError::new_err(
                 "Expected at most one inner child but have at least 2",
             ));
         }
-        Ok(found)
+        match first {
+            None => Ok(None),
+            Some(child) => Ok(Some(child.to_pyobject(py)?)),
+        }
     }
 
     fn __eq__(&self, py: Python<'_>, other: &Bound<'_, PyAny>) -> PyResult<PyObject> {
@@ -7196,23 +7291,22 @@ impl PyRval {
     }
 
     fn child(&self, py: Python<'_>) -> PyResult<PyObject> {
-        // TODO(rust-cst-accessor-clone-efficiency): clones the full children Vec
-        // before checking len. Could check len under the read guard and only clone
-        // the single needed entry, avoiding O(total-children) allocation on the error path.
-        let snapshot: Vec<_> = {
+        // Lock scope: read len and clone at most the single entry under the guard;
+        // drop the guard before any Python work (object conversion, exception raise).
+        let (n, entry) = {
             let guard = self.inner.read();
-            guard.children.clone()
+            let n = guard.children.len();
+            let entry = if n == 1 { Some(guard.children[0].clone()) } else { None };
+            (n, entry)
         };
-        let n = snapshot.len();
-        if n != 1 {
+        let Some((label, child)) = entry else {
             return Err(PyValueError::new_err(format!(
                 "Expected one child but have {n}"
             )));
-        }
-        let (label, child) = &snapshot[0];
+        };
         let label_obj: PyObject = match label {
             None => py.None(),
-            Some(lbl) => lbl.clone().into_pyobject(py)?.into_any().unbind(),
+            Some(lbl) => lbl.into_pyobject(py)?.into_any().unbind(),
         };
         let child_obj = child.to_pyobject(py)?;
         Ok(PyTuple::new(py, [label_obj, child_obj])?.into_any().unbind())
@@ -7238,68 +7332,75 @@ impl PyRval {
     }
 
     fn children_base(&self, py: Python<'_>) -> PyResult<Py<PyList>> {
-        // TODO(rust-cst-accessor-clone-efficiency): clones full Vec then filters outside the guard.
-        // Could filter inside the read guard (clone only matching entries) to avoid
-        // O(total-children) Arc clones for accessors that match a small subset.
-        let snapshot: Vec<_> = {
+        // Lock scope: filter by label under the read guard, cloning only matching
+        // children (Arc bump or Span copy each); drop the guard before to_pyobject,
+        // which performs Python work that must not happen while a node lock is held.
+        let matching: Vec<_> = {
             let guard = self.inner.read();
-            guard.children.clone()
+            guard.children.iter()
+                .filter(|(lbl, _)| *lbl == Some(RvalLabel::Base))
+                .map(|(_, child)| child.clone())
+                .collect()
         };
         let result = PyList::empty(py);
-        for (lbl, child) in &snapshot {
-            if *lbl == Some(RvalLabel::Base) {
-                result.append(child.to_pyobject(py)?)?;
-            }
+        for child in &matching {
+            result.append(child.to_pyobject(py)?)?;
         }
         Ok(result.unbind())
     }
 
     fn child_base(&self, py: Python<'_>) -> PyResult<PyObject> {
-        // TODO(rust-cst-accessor-clone-efficiency): see children_base above.
-        let snapshot: Vec<_> = {
+        // Lock scope: count label matches and clone only the first under the guard;
+        // drop the guard before to_pyobject / exception raise (Python work).
+        let (count, first) = {
             let guard = self.inner.read();
-            guard.children.clone()
-        };
-        let mut found: Option<PyObject> = None;
-        let mut count = 0usize;
-        for (lbl, child) in &snapshot {
-            if *lbl == Some(RvalLabel::Base) {
-                count += 1;
-                if count == 1 {
-                    found = Some(child.to_pyobject(py)?);
+            let mut count = 0usize;
+            let mut first = None;
+            for (lbl, child) in &guard.children {
+                if *lbl == Some(RvalLabel::Base) {
+                    count += 1;
+                    if count == 1 {
+                        first = Some(child.clone());
+                    }
                 }
             }
-        }
+            (count, first)
+        };
         if count != 1 {
             return Err(PyValueError::new_err(format!(
                 "Expected one base child but have {count}"
             )));
         }
-        Ok(found.expect("invariant: Rval.child_base: count==1 but found==None; logic error"))
+        first.expect("invariant: Rval.child_base: count==1 but first==None; logic error")
+            .to_pyobject(py)
     }
 
     fn maybe_base(&self, py: Python<'_>) -> PyResult<Option<PyObject>> {
-        // TODO(rust-cst-accessor-clone-efficiency): see children_base above.
-        let snapshot: Vec<_> = {
+        // Lock scope: count label matches and clone only the first under the guard;
+        // drop the guard before to_pyobject / exception raise (Python work).
+        let (count, first) = {
             let guard = self.inner.read();
-            guard.children.clone()
-        };
-        let mut found: Option<PyObject> = None;
-        let mut count = 0usize;
-        for (lbl, child) in &snapshot {
-            if *lbl == Some(RvalLabel::Base) {
-                count += 1;
-                if count == 1 {
-                    found = Some(child.to_pyobject(py)?);
+            let mut count = 0usize;
+            let mut first = None;
+            for (lbl, child) in &guard.children {
+                if *lbl == Some(RvalLabel::Base) {
+                    count += 1;
+                    if count == 1 {
+                        first = Some(child.clone());
+                    }
                 }
             }
-        }
+            (count, first)
+        };
         if count > 1 {
             return Err(PyValueError::new_err(
                 "Expected at most one base child but have at least 2",
             ));
         }
-        Ok(found)
+        match first {
+            None => Ok(None),
+            Some(child) => Ok(Some(child.to_pyobject(py)?)),
+        }
     }
 
     fn append_inner(&self, py: Python<'_>, child: &Bound<'_, PyAny>) -> PyResult<()> {
@@ -7322,68 +7423,75 @@ impl PyRval {
     }
 
     fn children_inner(&self, py: Python<'_>) -> PyResult<Py<PyList>> {
-        // TODO(rust-cst-accessor-clone-efficiency): clones full Vec then filters outside the guard.
-        // Could filter inside the read guard (clone only matching entries) to avoid
-        // O(total-children) Arc clones for accessors that match a small subset.
-        let snapshot: Vec<_> = {
+        // Lock scope: filter by label under the read guard, cloning only matching
+        // children (Arc bump or Span copy each); drop the guard before to_pyobject,
+        // which performs Python work that must not happen while a node lock is held.
+        let matching: Vec<_> = {
             let guard = self.inner.read();
-            guard.children.clone()
+            guard.children.iter()
+                .filter(|(lbl, _)| *lbl == Some(RvalLabel::Inner))
+                .map(|(_, child)| child.clone())
+                .collect()
         };
         let result = PyList::empty(py);
-        for (lbl, child) in &snapshot {
-            if *lbl == Some(RvalLabel::Inner) {
-                result.append(child.to_pyobject(py)?)?;
-            }
+        for child in &matching {
+            result.append(child.to_pyobject(py)?)?;
         }
         Ok(result.unbind())
     }
 
     fn child_inner(&self, py: Python<'_>) -> PyResult<PyObject> {
-        // TODO(rust-cst-accessor-clone-efficiency): see children_inner above.
-        let snapshot: Vec<_> = {
+        // Lock scope: count label matches and clone only the first under the guard;
+        // drop the guard before to_pyobject / exception raise (Python work).
+        let (count, first) = {
             let guard = self.inner.read();
-            guard.children.clone()
-        };
-        let mut found: Option<PyObject> = None;
-        let mut count = 0usize;
-        for (lbl, child) in &snapshot {
-            if *lbl == Some(RvalLabel::Inner) {
-                count += 1;
-                if count == 1 {
-                    found = Some(child.to_pyobject(py)?);
+            let mut count = 0usize;
+            let mut first = None;
+            for (lbl, child) in &guard.children {
+                if *lbl == Some(RvalLabel::Inner) {
+                    count += 1;
+                    if count == 1 {
+                        first = Some(child.clone());
+                    }
                 }
             }
-        }
+            (count, first)
+        };
         if count != 1 {
             return Err(PyValueError::new_err(format!(
                 "Expected one inner child but have {count}"
             )));
         }
-        Ok(found.expect("invariant: Rval.child_inner: count==1 but found==None; logic error"))
+        first.expect("invariant: Rval.child_inner: count==1 but first==None; logic error")
+            .to_pyobject(py)
     }
 
     fn maybe_inner(&self, py: Python<'_>) -> PyResult<Option<PyObject>> {
-        // TODO(rust-cst-accessor-clone-efficiency): see children_inner above.
-        let snapshot: Vec<_> = {
+        // Lock scope: count label matches and clone only the first under the guard;
+        // drop the guard before to_pyobject / exception raise (Python work).
+        let (count, first) = {
             let guard = self.inner.read();
-            guard.children.clone()
-        };
-        let mut found: Option<PyObject> = None;
-        let mut count = 0usize;
-        for (lbl, child) in &snapshot {
-            if *lbl == Some(RvalLabel::Inner) {
-                count += 1;
-                if count == 1 {
-                    found = Some(child.to_pyobject(py)?);
+            let mut count = 0usize;
+            let mut first = None;
+            for (lbl, child) in &guard.children {
+                if *lbl == Some(RvalLabel::Inner) {
+                    count += 1;
+                    if count == 1 {
+                        first = Some(child.clone());
+                    }
                 }
             }
-        }
+            (count, first)
+        };
         if count > 1 {
             return Err(PyValueError::new_err(
                 "Expected at most one inner child but have at least 2",
             ));
         }
-        Ok(found)
+        match first {
+            None => Ok(None),
+            Some(child) => Ok(Some(child.to_pyobject(py)?)),
+        }
     }
 
     fn __eq__(&self, py: Python<'_>, other: &Bound<'_, PyAny>) -> PyResult<PyObject> {
@@ -7842,23 +7950,22 @@ impl PyArrow {
     }
 
     fn child(&self, py: Python<'_>) -> PyResult<PyObject> {
-        // TODO(rust-cst-accessor-clone-efficiency): clones the full children Vec
-        // before checking len. Could check len under the read guard and only clone
-        // the single needed entry, avoiding O(total-children) allocation on the error path.
-        let snapshot: Vec<_> = {
+        // Lock scope: read len and clone at most the single entry under the guard;
+        // drop the guard before any Python work (object conversion, exception raise).
+        let (n, entry) = {
             let guard = self.inner.read();
-            guard.children.clone()
+            let n = guard.children.len();
+            let entry = if n == 1 { Some(guard.children[0].clone()) } else { None };
+            (n, entry)
         };
-        let n = snapshot.len();
-        if n != 1 {
+        let Some((label, child)) = entry else {
             return Err(PyValueError::new_err(format!(
                 "Expected one child but have {n}"
             )));
-        }
-        let (label, child) = &snapshot[0];
+        };
         let label_obj: PyObject = match label {
             None => py.None(),
-            Some(lbl) => lbl.clone().into_pyobject(py)?.into_any().unbind(),
+            Some(lbl) => lbl.into_pyobject(py)?.into_any().unbind(),
         };
         let child_obj = child.to_pyobject(py)?;
         Ok(PyTuple::new(py, [label_obj, child_obj])?.into_any().unbind())
@@ -7884,68 +7991,75 @@ impl PyArrow {
     }
 
     fn children_target(&self, py: Python<'_>) -> PyResult<Py<PyList>> {
-        // TODO(rust-cst-accessor-clone-efficiency): clones full Vec then filters outside the guard.
-        // Could filter inside the read guard (clone only matching entries) to avoid
-        // O(total-children) Arc clones for accessors that match a small subset.
-        let snapshot: Vec<_> = {
+        // Lock scope: filter by label under the read guard, cloning only matching
+        // children (Arc bump or Span copy each); drop the guard before to_pyobject,
+        // which performs Python work that must not happen while a node lock is held.
+        let matching: Vec<_> = {
             let guard = self.inner.read();
-            guard.children.clone()
+            guard.children.iter()
+                .filter(|(lbl, _)| *lbl == Some(ArrowLabel::Target))
+                .map(|(_, child)| child.clone())
+                .collect()
         };
         let result = PyList::empty(py);
-        for (lbl, child) in &snapshot {
-            if *lbl == Some(ArrowLabel::Target) {
-                result.append(child.to_pyobject(py)?)?;
-            }
+        for child in &matching {
+            result.append(child.to_pyobject(py)?)?;
         }
         Ok(result.unbind())
     }
 
     fn child_target(&self, py: Python<'_>) -> PyResult<PyObject> {
-        // TODO(rust-cst-accessor-clone-efficiency): see children_target above.
-        let snapshot: Vec<_> = {
+        // Lock scope: count label matches and clone only the first under the guard;
+        // drop the guard before to_pyobject / exception raise (Python work).
+        let (count, first) = {
             let guard = self.inner.read();
-            guard.children.clone()
-        };
-        let mut found: Option<PyObject> = None;
-        let mut count = 0usize;
-        for (lbl, child) in &snapshot {
-            if *lbl == Some(ArrowLabel::Target) {
-                count += 1;
-                if count == 1 {
-                    found = Some(child.to_pyobject(py)?);
+            let mut count = 0usize;
+            let mut first = None;
+            for (lbl, child) in &guard.children {
+                if *lbl == Some(ArrowLabel::Target) {
+                    count += 1;
+                    if count == 1 {
+                        first = Some(child.clone());
+                    }
                 }
             }
-        }
+            (count, first)
+        };
         if count != 1 {
             return Err(PyValueError::new_err(format!(
                 "Expected one target child but have {count}"
             )));
         }
-        Ok(found.expect("invariant: Arrow.child_target: count==1 but found==None; logic error"))
+        first.expect("invariant: Arrow.child_target: count==1 but first==None; logic error")
+            .to_pyobject(py)
     }
 
     fn maybe_target(&self, py: Python<'_>) -> PyResult<Option<PyObject>> {
-        // TODO(rust-cst-accessor-clone-efficiency): see children_target above.
-        let snapshot: Vec<_> = {
+        // Lock scope: count label matches and clone only the first under the guard;
+        // drop the guard before to_pyobject / exception raise (Python work).
+        let (count, first) = {
             let guard = self.inner.read();
-            guard.children.clone()
-        };
-        let mut found: Option<PyObject> = None;
-        let mut count = 0usize;
-        for (lbl, child) in &snapshot {
-            if *lbl == Some(ArrowLabel::Target) {
-                count += 1;
-                if count == 1 {
-                    found = Some(child.to_pyobject(py)?);
+            let mut count = 0usize;
+            let mut first = None;
+            for (lbl, child) in &guard.children {
+                if *lbl == Some(ArrowLabel::Target) {
+                    count += 1;
+                    if count == 1 {
+                        first = Some(child.clone());
+                    }
                 }
             }
-        }
+            (count, first)
+        };
         if count > 1 {
             return Err(PyValueError::new_err(
                 "Expected at most one target child but have at least 2",
             ));
         }
-        Ok(found)
+        match first {
+            None => Ok(None),
+            Some(child) => Ok(Some(child.to_pyobject(py)?)),
+        }
     }
 
     fn __eq__(&self, py: Python<'_>, other: &Bound<'_, PyAny>) -> PyResult<PyObject> {
@@ -8392,23 +8506,22 @@ impl PyLatinWord {
     }
 
     fn child(&self, py: Python<'_>) -> PyResult<PyObject> {
-        // TODO(rust-cst-accessor-clone-efficiency): clones the full children Vec
-        // before checking len. Could check len under the read guard and only clone
-        // the single needed entry, avoiding O(total-children) allocation on the error path.
-        let snapshot: Vec<_> = {
+        // Lock scope: read len and clone at most the single entry under the guard;
+        // drop the guard before any Python work (object conversion, exception raise).
+        let (n, entry) = {
             let guard = self.inner.read();
-            guard.children.clone()
+            let n = guard.children.len();
+            let entry = if n == 1 { Some(guard.children[0].clone()) } else { None };
+            (n, entry)
         };
-        let n = snapshot.len();
-        if n != 1 {
+        let Some((label, child)) = entry else {
             return Err(PyValueError::new_err(format!(
                 "Expected one child but have {n}"
             )));
-        }
-        let (label, child) = &snapshot[0];
+        };
         let label_obj: PyObject = match label {
             None => py.None(),
-            Some(lbl) => lbl.clone().into_pyobject(py)?.into_any().unbind(),
+            Some(lbl) => lbl.into_pyobject(py)?.into_any().unbind(),
         };
         let child_obj = child.to_pyobject(py)?;
         Ok(PyTuple::new(py, [label_obj, child_obj])?.into_any().unbind())
@@ -8434,68 +8547,75 @@ impl PyLatinWord {
     }
 
     fn children_value(&self, py: Python<'_>) -> PyResult<Py<PyList>> {
-        // TODO(rust-cst-accessor-clone-efficiency): clones full Vec then filters outside the guard.
-        // Could filter inside the read guard (clone only matching entries) to avoid
-        // O(total-children) Arc clones for accessors that match a small subset.
-        let snapshot: Vec<_> = {
+        // Lock scope: filter by label under the read guard, cloning only matching
+        // children (Arc bump or Span copy each); drop the guard before to_pyobject,
+        // which performs Python work that must not happen while a node lock is held.
+        let matching: Vec<_> = {
             let guard = self.inner.read();
-            guard.children.clone()
+            guard.children.iter()
+                .filter(|(lbl, _)| *lbl == Some(LatinWordLabel::Value))
+                .map(|(_, child)| child.clone())
+                .collect()
         };
         let result = PyList::empty(py);
-        for (lbl, child) in &snapshot {
-            if *lbl == Some(LatinWordLabel::Value) {
-                result.append(child.to_pyobject(py)?)?;
-            }
+        for child in &matching {
+            result.append(child.to_pyobject(py)?)?;
         }
         Ok(result.unbind())
     }
 
     fn child_value(&self, py: Python<'_>) -> PyResult<PyObject> {
-        // TODO(rust-cst-accessor-clone-efficiency): see children_value above.
-        let snapshot: Vec<_> = {
+        // Lock scope: count label matches and clone only the first under the guard;
+        // drop the guard before to_pyobject / exception raise (Python work).
+        let (count, first) = {
             let guard = self.inner.read();
-            guard.children.clone()
-        };
-        let mut found: Option<PyObject> = None;
-        let mut count = 0usize;
-        for (lbl, child) in &snapshot {
-            if *lbl == Some(LatinWordLabel::Value) {
-                count += 1;
-                if count == 1 {
-                    found = Some(child.to_pyobject(py)?);
+            let mut count = 0usize;
+            let mut first = None;
+            for (lbl, child) in &guard.children {
+                if *lbl == Some(LatinWordLabel::Value) {
+                    count += 1;
+                    if count == 1 {
+                        first = Some(child.clone());
+                    }
                 }
             }
-        }
+            (count, first)
+        };
         if count != 1 {
             return Err(PyValueError::new_err(format!(
                 "Expected one value child but have {count}"
             )));
         }
-        Ok(found.expect("invariant: LatinWord.child_value: count==1 but found==None; logic error"))
+        first.expect("invariant: LatinWord.child_value: count==1 but first==None; logic error")
+            .to_pyobject(py)
     }
 
     fn maybe_value(&self, py: Python<'_>) -> PyResult<Option<PyObject>> {
-        // TODO(rust-cst-accessor-clone-efficiency): see children_value above.
-        let snapshot: Vec<_> = {
+        // Lock scope: count label matches and clone only the first under the guard;
+        // drop the guard before to_pyobject / exception raise (Python work).
+        let (count, first) = {
             let guard = self.inner.read();
-            guard.children.clone()
-        };
-        let mut found: Option<PyObject> = None;
-        let mut count = 0usize;
-        for (lbl, child) in &snapshot {
-            if *lbl == Some(LatinWordLabel::Value) {
-                count += 1;
-                if count == 1 {
-                    found = Some(child.to_pyobject(py)?);
+            let mut count = 0usize;
+            let mut first = None;
+            for (lbl, child) in &guard.children {
+                if *lbl == Some(LatinWordLabel::Value) {
+                    count += 1;
+                    if count == 1 {
+                        first = Some(child.clone());
+                    }
                 }
             }
-        }
+            (count, first)
+        };
         if count > 1 {
             return Err(PyValueError::new_err(
                 "Expected at most one value child but have at least 2",
             ));
         }
-        Ok(found)
+        match first {
+            None => Ok(None),
+            Some(child) => Ok(Some(child.to_pyobject(py)?)),
+        }
     }
 
     fn __eq__(&self, py: Python<'_>, other: &Bound<'_, PyAny>) -> PyResult<PyObject> {
@@ -8942,23 +9062,22 @@ impl PyTagged {
     }
 
     fn child(&self, py: Python<'_>) -> PyResult<PyObject> {
-        // TODO(rust-cst-accessor-clone-efficiency): clones the full children Vec
-        // before checking len. Could check len under the read guard and only clone
-        // the single needed entry, avoiding O(total-children) allocation on the error path.
-        let snapshot: Vec<_> = {
+        // Lock scope: read len and clone at most the single entry under the guard;
+        // drop the guard before any Python work (object conversion, exception raise).
+        let (n, entry) = {
             let guard = self.inner.read();
-            guard.children.clone()
+            let n = guard.children.len();
+            let entry = if n == 1 { Some(guard.children[0].clone()) } else { None };
+            (n, entry)
         };
-        let n = snapshot.len();
-        if n != 1 {
+        let Some((label, child)) = entry else {
             return Err(PyValueError::new_err(format!(
                 "Expected one child but have {n}"
             )));
-        }
-        let (label, child) = &snapshot[0];
+        };
         let label_obj: PyObject = match label {
             None => py.None(),
-            Some(lbl) => lbl.clone().into_pyobject(py)?.into_any().unbind(),
+            Some(lbl) => lbl.into_pyobject(py)?.into_any().unbind(),
         };
         let child_obj = child.to_pyobject(py)?;
         Ok(PyTuple::new(py, [label_obj, child_obj])?.into_any().unbind())
@@ -8984,68 +9103,75 @@ impl PyTagged {
     }
 
     fn children_value(&self, py: Python<'_>) -> PyResult<Py<PyList>> {
-        // TODO(rust-cst-accessor-clone-efficiency): clones full Vec then filters outside the guard.
-        // Could filter inside the read guard (clone only matching entries) to avoid
-        // O(total-children) Arc clones for accessors that match a small subset.
-        let snapshot: Vec<_> = {
+        // Lock scope: filter by label under the read guard, cloning only matching
+        // children (Arc bump or Span copy each); drop the guard before to_pyobject,
+        // which performs Python work that must not happen while a node lock is held.
+        let matching: Vec<_> = {
             let guard = self.inner.read();
-            guard.children.clone()
+            guard.children.iter()
+                .filter(|(lbl, _)| *lbl == Some(TaggedLabel::Value))
+                .map(|(_, child)| child.clone())
+                .collect()
         };
         let result = PyList::empty(py);
-        for (lbl, child) in &snapshot {
-            if *lbl == Some(TaggedLabel::Value) {
-                result.append(child.to_pyobject(py)?)?;
-            }
+        for child in &matching {
+            result.append(child.to_pyobject(py)?)?;
         }
         Ok(result.unbind())
     }
 
     fn child_value(&self, py: Python<'_>) -> PyResult<PyObject> {
-        // TODO(rust-cst-accessor-clone-efficiency): see children_value above.
-        let snapshot: Vec<_> = {
+        // Lock scope: count label matches and clone only the first under the guard;
+        // drop the guard before to_pyobject / exception raise (Python work).
+        let (count, first) = {
             let guard = self.inner.read();
-            guard.children.clone()
-        };
-        let mut found: Option<PyObject> = None;
-        let mut count = 0usize;
-        for (lbl, child) in &snapshot {
-            if *lbl == Some(TaggedLabel::Value) {
-                count += 1;
-                if count == 1 {
-                    found = Some(child.to_pyobject(py)?);
+            let mut count = 0usize;
+            let mut first = None;
+            for (lbl, child) in &guard.children {
+                if *lbl == Some(TaggedLabel::Value) {
+                    count += 1;
+                    if count == 1 {
+                        first = Some(child.clone());
+                    }
                 }
             }
-        }
+            (count, first)
+        };
         if count != 1 {
             return Err(PyValueError::new_err(format!(
                 "Expected one value child but have {count}"
             )));
         }
-        Ok(found.expect("invariant: Tagged.child_value: count==1 but found==None; logic error"))
+        first.expect("invariant: Tagged.child_value: count==1 but first==None; logic error")
+            .to_pyobject(py)
     }
 
     fn maybe_value(&self, py: Python<'_>) -> PyResult<Option<PyObject>> {
-        // TODO(rust-cst-accessor-clone-efficiency): see children_value above.
-        let snapshot: Vec<_> = {
+        // Lock scope: count label matches and clone only the first under the guard;
+        // drop the guard before to_pyobject / exception raise (Python work).
+        let (count, first) = {
             let guard = self.inner.read();
-            guard.children.clone()
-        };
-        let mut found: Option<PyObject> = None;
-        let mut count = 0usize;
-        for (lbl, child) in &snapshot {
-            if *lbl == Some(TaggedLabel::Value) {
-                count += 1;
-                if count == 1 {
-                    found = Some(child.to_pyobject(py)?);
+            let mut count = 0usize;
+            let mut first = None;
+            for (lbl, child) in &guard.children {
+                if *lbl == Some(TaggedLabel::Value) {
+                    count += 1;
+                    if count == 1 {
+                        first = Some(child.clone());
+                    }
                 }
             }
-        }
+            (count, first)
+        };
         if count > 1 {
             return Err(PyValueError::new_err(
                 "Expected at most one value child but have at least 2",
             ));
         }
-        Ok(found)
+        match first {
+            None => Ok(None),
+            Some(child) => Ok(Some(child.to_pyobject(py)?)),
+        }
     }
 
     fn __eq__(&self, py: Python<'_>, other: &Bound<'_, PyAny>) -> PyResult<PyObject> {
@@ -9534,23 +9660,22 @@ impl PyVal {
     }
 
     fn child(&self, py: Python<'_>) -> PyResult<PyObject> {
-        // TODO(rust-cst-accessor-clone-efficiency): clones the full children Vec
-        // before checking len. Could check len under the read guard and only clone
-        // the single needed entry, avoiding O(total-children) allocation on the error path.
-        let snapshot: Vec<_> = {
+        // Lock scope: read len and clone at most the single entry under the guard;
+        // drop the guard before any Python work (object conversion, exception raise).
+        let (n, entry) = {
             let guard = self.inner.read();
-            guard.children.clone()
+            let n = guard.children.len();
+            let entry = if n == 1 { Some(guard.children[0].clone()) } else { None };
+            (n, entry)
         };
-        let n = snapshot.len();
-        if n != 1 {
+        let Some((label, child)) = entry else {
             return Err(PyValueError::new_err(format!(
                 "Expected one child but have {n}"
             )));
-        }
-        let (label, child) = &snapshot[0];
+        };
         let label_obj: PyObject = match label {
             None => py.None(),
-            Some(lbl) => lbl.clone().into_pyobject(py)?.into_any().unbind(),
+            Some(lbl) => lbl.into_pyobject(py)?.into_any().unbind(),
         };
         let child_obj = child.to_pyobject(py)?;
         Ok(PyTuple::new(py, [label_obj, child_obj])?.into_any().unbind())
@@ -9576,68 +9701,75 @@ impl PyVal {
     }
 
     fn children_item(&self, py: Python<'_>) -> PyResult<Py<PyList>> {
-        // TODO(rust-cst-accessor-clone-efficiency): clones full Vec then filters outside the guard.
-        // Could filter inside the read guard (clone only matching entries) to avoid
-        // O(total-children) Arc clones for accessors that match a small subset.
-        let snapshot: Vec<_> = {
+        // Lock scope: filter by label under the read guard, cloning only matching
+        // children (Arc bump or Span copy each); drop the guard before to_pyobject,
+        // which performs Python work that must not happen while a node lock is held.
+        let matching: Vec<_> = {
             let guard = self.inner.read();
-            guard.children.clone()
+            guard.children.iter()
+                .filter(|(lbl, _)| *lbl == Some(ValLabel::Item))
+                .map(|(_, child)| child.clone())
+                .collect()
         };
         let result = PyList::empty(py);
-        for (lbl, child) in &snapshot {
-            if *lbl == Some(ValLabel::Item) {
-                result.append(child.to_pyobject(py)?)?;
-            }
+        for child in &matching {
+            result.append(child.to_pyobject(py)?)?;
         }
         Ok(result.unbind())
     }
 
     fn child_item(&self, py: Python<'_>) -> PyResult<PyObject> {
-        // TODO(rust-cst-accessor-clone-efficiency): see children_item above.
-        let snapshot: Vec<_> = {
+        // Lock scope: count label matches and clone only the first under the guard;
+        // drop the guard before to_pyobject / exception raise (Python work).
+        let (count, first) = {
             let guard = self.inner.read();
-            guard.children.clone()
-        };
-        let mut found: Option<PyObject> = None;
-        let mut count = 0usize;
-        for (lbl, child) in &snapshot {
-            if *lbl == Some(ValLabel::Item) {
-                count += 1;
-                if count == 1 {
-                    found = Some(child.to_pyobject(py)?);
+            let mut count = 0usize;
+            let mut first = None;
+            for (lbl, child) in &guard.children {
+                if *lbl == Some(ValLabel::Item) {
+                    count += 1;
+                    if count == 1 {
+                        first = Some(child.clone());
+                    }
                 }
             }
-        }
+            (count, first)
+        };
         if count != 1 {
             return Err(PyValueError::new_err(format!(
                 "Expected one item child but have {count}"
             )));
         }
-        Ok(found.expect("invariant: Val.child_item: count==1 but found==None; logic error"))
+        first.expect("invariant: Val.child_item: count==1 but first==None; logic error")
+            .to_pyobject(py)
     }
 
     fn maybe_item(&self, py: Python<'_>) -> PyResult<Option<PyObject>> {
-        // TODO(rust-cst-accessor-clone-efficiency): see children_item above.
-        let snapshot: Vec<_> = {
+        // Lock scope: count label matches and clone only the first under the guard;
+        // drop the guard before to_pyobject / exception raise (Python work).
+        let (count, first) = {
             let guard = self.inner.read();
-            guard.children.clone()
-        };
-        let mut found: Option<PyObject> = None;
-        let mut count = 0usize;
-        for (lbl, child) in &snapshot {
-            if *lbl == Some(ValLabel::Item) {
-                count += 1;
-                if count == 1 {
-                    found = Some(child.to_pyobject(py)?);
+            let mut count = 0usize;
+            let mut first = None;
+            for (lbl, child) in &guard.children {
+                if *lbl == Some(ValLabel::Item) {
+                    count += 1;
+                    if count == 1 {
+                        first = Some(child.clone());
+                    }
                 }
             }
-        }
+            (count, first)
+        };
         if count > 1 {
             return Err(PyValueError::new_err(
                 "Expected at most one item child but have at least 2",
             ));
         }
-        Ok(found)
+        match first {
+            None => Ok(None),
+            Some(child) => Ok(Some(child.to_pyobject(py)?)),
+        }
     }
 
     fn __eq__(&self, py: Python<'_>, other: &Bound<'_, PyAny>) -> PyResult<PyObject> {
@@ -10123,23 +10255,22 @@ impl PyLeadingWs {
     }
 
     fn child(&self, py: Python<'_>) -> PyResult<PyObject> {
-        // TODO(rust-cst-accessor-clone-efficiency): clones the full children Vec
-        // before checking len. Could check len under the read guard and only clone
-        // the single needed entry, avoiding O(total-children) allocation on the error path.
-        let snapshot: Vec<_> = {
+        // Lock scope: read len and clone at most the single entry under the guard;
+        // drop the guard before any Python work (object conversion, exception raise).
+        let (n, entry) = {
             let guard = self.inner.read();
-            guard.children.clone()
+            let n = guard.children.len();
+            let entry = if n == 1 { Some(guard.children[0].clone()) } else { None };
+            (n, entry)
         };
-        let n = snapshot.len();
-        if n != 1 {
+        let Some((label, child)) = entry else {
             return Err(PyValueError::new_err(format!(
                 "Expected one child but have {n}"
             )));
-        }
-        let (label, child) = &snapshot[0];
+        };
         let label_obj: PyObject = match label {
             None => py.None(),
-            Some(lbl) => lbl.clone().into_pyobject(py)?.into_any().unbind(),
+            Some(lbl) => lbl.into_pyobject(py)?.into_any().unbind(),
         };
         let child_obj = child.to_pyobject(py)?;
         Ok(PyTuple::new(py, [label_obj, child_obj])?.into_any().unbind())
@@ -10165,68 +10296,75 @@ impl PyLeadingWs {
     }
 
     fn children_num(&self, py: Python<'_>) -> PyResult<Py<PyList>> {
-        // TODO(rust-cst-accessor-clone-efficiency): clones full Vec then filters outside the guard.
-        // Could filter inside the read guard (clone only matching entries) to avoid
-        // O(total-children) Arc clones for accessors that match a small subset.
-        let snapshot: Vec<_> = {
+        // Lock scope: filter by label under the read guard, cloning only matching
+        // children (Arc bump or Span copy each); drop the guard before to_pyobject,
+        // which performs Python work that must not happen while a node lock is held.
+        let matching: Vec<_> = {
             let guard = self.inner.read();
-            guard.children.clone()
+            guard.children.iter()
+                .filter(|(lbl, _)| *lbl == Some(LeadingWsLabel::Num))
+                .map(|(_, child)| child.clone())
+                .collect()
         };
         let result = PyList::empty(py);
-        for (lbl, child) in &snapshot {
-            if *lbl == Some(LeadingWsLabel::Num) {
-                result.append(child.to_pyobject(py)?)?;
-            }
+        for child in &matching {
+            result.append(child.to_pyobject(py)?)?;
         }
         Ok(result.unbind())
     }
 
     fn child_num(&self, py: Python<'_>) -> PyResult<PyObject> {
-        // TODO(rust-cst-accessor-clone-efficiency): see children_num above.
-        let snapshot: Vec<_> = {
+        // Lock scope: count label matches and clone only the first under the guard;
+        // drop the guard before to_pyobject / exception raise (Python work).
+        let (count, first) = {
             let guard = self.inner.read();
-            guard.children.clone()
-        };
-        let mut found: Option<PyObject> = None;
-        let mut count = 0usize;
-        for (lbl, child) in &snapshot {
-            if *lbl == Some(LeadingWsLabel::Num) {
-                count += 1;
-                if count == 1 {
-                    found = Some(child.to_pyobject(py)?);
+            let mut count = 0usize;
+            let mut first = None;
+            for (lbl, child) in &guard.children {
+                if *lbl == Some(LeadingWsLabel::Num) {
+                    count += 1;
+                    if count == 1 {
+                        first = Some(child.clone());
+                    }
                 }
             }
-        }
+            (count, first)
+        };
         if count != 1 {
             return Err(PyValueError::new_err(format!(
                 "Expected one num child but have {count}"
             )));
         }
-        Ok(found.expect("invariant: LeadingWs.child_num: count==1 but found==None; logic error"))
+        first.expect("invariant: LeadingWs.child_num: count==1 but first==None; logic error")
+            .to_pyobject(py)
     }
 
     fn maybe_num(&self, py: Python<'_>) -> PyResult<Option<PyObject>> {
-        // TODO(rust-cst-accessor-clone-efficiency): see children_num above.
-        let snapshot: Vec<_> = {
+        // Lock scope: count label matches and clone only the first under the guard;
+        // drop the guard before to_pyobject / exception raise (Python work).
+        let (count, first) = {
             let guard = self.inner.read();
-            guard.children.clone()
-        };
-        let mut found: Option<PyObject> = None;
-        let mut count = 0usize;
-        for (lbl, child) in &snapshot {
-            if *lbl == Some(LeadingWsLabel::Num) {
-                count += 1;
-                if count == 1 {
-                    found = Some(child.to_pyobject(py)?);
+            let mut count = 0usize;
+            let mut first = None;
+            for (lbl, child) in &guard.children {
+                if *lbl == Some(LeadingWsLabel::Num) {
+                    count += 1;
+                    if count == 1 {
+                        first = Some(child.clone());
+                    }
                 }
             }
-        }
+            (count, first)
+        };
         if count > 1 {
             return Err(PyValueError::new_err(
                 "Expected at most one num child but have at least 2",
             ));
         }
-        Ok(found)
+        match first {
+            None => Ok(None),
+            Some(child) => Ok(Some(child.to_pyobject(py)?)),
+        }
     }
 
     fn __eq__(&self, py: Python<'_>, other: &Bound<'_, PyAny>) -> PyResult<PyObject> {
@@ -10727,23 +10865,22 @@ impl PyGrouped {
     }
 
     fn child(&self, py: Python<'_>) -> PyResult<PyObject> {
-        // TODO(rust-cst-accessor-clone-efficiency): clones the full children Vec
-        // before checking len. Could check len under the read guard and only clone
-        // the single needed entry, avoiding O(total-children) allocation on the error path.
-        let snapshot: Vec<_> = {
+        // Lock scope: read len and clone at most the single entry under the guard;
+        // drop the guard before any Python work (object conversion, exception raise).
+        let (n, entry) = {
             let guard = self.inner.read();
-            guard.children.clone()
+            let n = guard.children.len();
+            let entry = if n == 1 { Some(guard.children[0].clone()) } else { None };
+            (n, entry)
         };
-        let n = snapshot.len();
-        if n != 1 {
+        let Some((label, child)) = entry else {
             return Err(PyValueError::new_err(format!(
                 "Expected one child but have {n}"
             )));
-        }
-        let (label, child) = &snapshot[0];
+        };
         let label_obj: PyObject = match label {
             None => py.None(),
-            Some(lbl) => lbl.clone().into_pyobject(py)?.into_any().unbind(),
+            Some(lbl) => lbl.into_pyobject(py)?.into_any().unbind(),
         };
         let child_obj = child.to_pyobject(py)?;
         Ok(PyTuple::new(py, [label_obj, child_obj])?.into_any().unbind())
@@ -10769,68 +10906,75 @@ impl PyGrouped {
     }
 
     fn children_left(&self, py: Python<'_>) -> PyResult<Py<PyList>> {
-        // TODO(rust-cst-accessor-clone-efficiency): clones full Vec then filters outside the guard.
-        // Could filter inside the read guard (clone only matching entries) to avoid
-        // O(total-children) Arc clones for accessors that match a small subset.
-        let snapshot: Vec<_> = {
+        // Lock scope: filter by label under the read guard, cloning only matching
+        // children (Arc bump or Span copy each); drop the guard before to_pyobject,
+        // which performs Python work that must not happen while a node lock is held.
+        let matching: Vec<_> = {
             let guard = self.inner.read();
-            guard.children.clone()
+            guard.children.iter()
+                .filter(|(lbl, _)| *lbl == Some(GroupedLabel::Left))
+                .map(|(_, child)| child.clone())
+                .collect()
         };
         let result = PyList::empty(py);
-        for (lbl, child) in &snapshot {
-            if *lbl == Some(GroupedLabel::Left) {
-                result.append(child.to_pyobject(py)?)?;
-            }
+        for child in &matching {
+            result.append(child.to_pyobject(py)?)?;
         }
         Ok(result.unbind())
     }
 
     fn child_left(&self, py: Python<'_>) -> PyResult<PyObject> {
-        // TODO(rust-cst-accessor-clone-efficiency): see children_left above.
-        let snapshot: Vec<_> = {
+        // Lock scope: count label matches and clone only the first under the guard;
+        // drop the guard before to_pyobject / exception raise (Python work).
+        let (count, first) = {
             let guard = self.inner.read();
-            guard.children.clone()
-        };
-        let mut found: Option<PyObject> = None;
-        let mut count = 0usize;
-        for (lbl, child) in &snapshot {
-            if *lbl == Some(GroupedLabel::Left) {
-                count += 1;
-                if count == 1 {
-                    found = Some(child.to_pyobject(py)?);
+            let mut count = 0usize;
+            let mut first = None;
+            for (lbl, child) in &guard.children {
+                if *lbl == Some(GroupedLabel::Left) {
+                    count += 1;
+                    if count == 1 {
+                        first = Some(child.clone());
+                    }
                 }
             }
-        }
+            (count, first)
+        };
         if count != 1 {
             return Err(PyValueError::new_err(format!(
                 "Expected one left child but have {count}"
             )));
         }
-        Ok(found.expect("invariant: Grouped.child_left: count==1 but found==None; logic error"))
+        first.expect("invariant: Grouped.child_left: count==1 but first==None; logic error")
+            .to_pyobject(py)
     }
 
     fn maybe_left(&self, py: Python<'_>) -> PyResult<Option<PyObject>> {
-        // TODO(rust-cst-accessor-clone-efficiency): see children_left above.
-        let snapshot: Vec<_> = {
+        // Lock scope: count label matches and clone only the first under the guard;
+        // drop the guard before to_pyobject / exception raise (Python work).
+        let (count, first) = {
             let guard = self.inner.read();
-            guard.children.clone()
-        };
-        let mut found: Option<PyObject> = None;
-        let mut count = 0usize;
-        for (lbl, child) in &snapshot {
-            if *lbl == Some(GroupedLabel::Left) {
-                count += 1;
-                if count == 1 {
-                    found = Some(child.to_pyobject(py)?);
+            let mut count = 0usize;
+            let mut first = None;
+            for (lbl, child) in &guard.children {
+                if *lbl == Some(GroupedLabel::Left) {
+                    count += 1;
+                    if count == 1 {
+                        first = Some(child.clone());
+                    }
                 }
             }
-        }
+            (count, first)
+        };
         if count > 1 {
             return Err(PyValueError::new_err(
                 "Expected at most one left child but have at least 2",
             ));
         }
-        Ok(found)
+        match first {
+            None => Ok(None),
+            Some(child) => Ok(Some(child.to_pyobject(py)?)),
+        }
     }
 
     fn __eq__(&self, py: Python<'_>, other: &Bound<'_, PyAny>) -> PyResult<PyObject> {
@@ -11404,23 +11548,22 @@ impl PyRecViaSub {
     }
 
     fn child(&self, py: Python<'_>) -> PyResult<PyObject> {
-        // TODO(rust-cst-accessor-clone-efficiency): clones the full children Vec
-        // before checking len. Could check len under the read guard and only clone
-        // the single needed entry, avoiding O(total-children) allocation on the error path.
-        let snapshot: Vec<_> = {
+        // Lock scope: read len and clone at most the single entry under the guard;
+        // drop the guard before any Python work (object conversion, exception raise).
+        let (n, entry) = {
             let guard = self.inner.read();
-            guard.children.clone()
+            let n = guard.children.len();
+            let entry = if n == 1 { Some(guard.children[0].clone()) } else { None };
+            (n, entry)
         };
-        let n = snapshot.len();
-        if n != 1 {
+        let Some((label, child)) = entry else {
             return Err(PyValueError::new_err(format!(
                 "Expected one child but have {n}"
             )));
-        }
-        let (label, child) = &snapshot[0];
+        };
         let label_obj: PyObject = match label {
             None => py.None(),
-            Some(lbl) => lbl.clone().into_pyobject(py)?.into_any().unbind(),
+            Some(lbl) => lbl.into_pyobject(py)?.into_any().unbind(),
         };
         let child_obj = child.to_pyobject(py)?;
         Ok(PyTuple::new(py, [label_obj, child_obj])?.into_any().unbind())
@@ -11446,68 +11589,75 @@ impl PyRecViaSub {
     }
 
     fn children_inner(&self, py: Python<'_>) -> PyResult<Py<PyList>> {
-        // TODO(rust-cst-accessor-clone-efficiency): clones full Vec then filters outside the guard.
-        // Could filter inside the read guard (clone only matching entries) to avoid
-        // O(total-children) Arc clones for accessors that match a small subset.
-        let snapshot: Vec<_> = {
+        // Lock scope: filter by label under the read guard, cloning only matching
+        // children (Arc bump or Span copy each); drop the guard before to_pyobject,
+        // which performs Python work that must not happen while a node lock is held.
+        let matching: Vec<_> = {
             let guard = self.inner.read();
-            guard.children.clone()
+            guard.children.iter()
+                .filter(|(lbl, _)| *lbl == Some(RecViaSubLabel::Inner))
+                .map(|(_, child)| child.clone())
+                .collect()
         };
         let result = PyList::empty(py);
-        for (lbl, child) in &snapshot {
-            if *lbl == Some(RecViaSubLabel::Inner) {
-                result.append(child.to_pyobject(py)?)?;
-            }
+        for child in &matching {
+            result.append(child.to_pyobject(py)?)?;
         }
         Ok(result.unbind())
     }
 
     fn child_inner(&self, py: Python<'_>) -> PyResult<PyObject> {
-        // TODO(rust-cst-accessor-clone-efficiency): see children_inner above.
-        let snapshot: Vec<_> = {
+        // Lock scope: count label matches and clone only the first under the guard;
+        // drop the guard before to_pyobject / exception raise (Python work).
+        let (count, first) = {
             let guard = self.inner.read();
-            guard.children.clone()
-        };
-        let mut found: Option<PyObject> = None;
-        let mut count = 0usize;
-        for (lbl, child) in &snapshot {
-            if *lbl == Some(RecViaSubLabel::Inner) {
-                count += 1;
-                if count == 1 {
-                    found = Some(child.to_pyobject(py)?);
+            let mut count = 0usize;
+            let mut first = None;
+            for (lbl, child) in &guard.children {
+                if *lbl == Some(RecViaSubLabel::Inner) {
+                    count += 1;
+                    if count == 1 {
+                        first = Some(child.clone());
+                    }
                 }
             }
-        }
+            (count, first)
+        };
         if count != 1 {
             return Err(PyValueError::new_err(format!(
                 "Expected one inner child but have {count}"
             )));
         }
-        Ok(found.expect("invariant: RecViaSub.child_inner: count==1 but found==None; logic error"))
+        first.expect("invariant: RecViaSub.child_inner: count==1 but first==None; logic error")
+            .to_pyobject(py)
     }
 
     fn maybe_inner(&self, py: Python<'_>) -> PyResult<Option<PyObject>> {
-        // TODO(rust-cst-accessor-clone-efficiency): see children_inner above.
-        let snapshot: Vec<_> = {
+        // Lock scope: count label matches and clone only the first under the guard;
+        // drop the guard before to_pyobject / exception raise (Python work).
+        let (count, first) = {
             let guard = self.inner.read();
-            guard.children.clone()
-        };
-        let mut found: Option<PyObject> = None;
-        let mut count = 0usize;
-        for (lbl, child) in &snapshot {
-            if *lbl == Some(RecViaSubLabel::Inner) {
-                count += 1;
-                if count == 1 {
-                    found = Some(child.to_pyobject(py)?);
+            let mut count = 0usize;
+            let mut first = None;
+            for (lbl, child) in &guard.children {
+                if *lbl == Some(RecViaSubLabel::Inner) {
+                    count += 1;
+                    if count == 1 {
+                        first = Some(child.clone());
+                    }
                 }
             }
-        }
+            (count, first)
+        };
         if count > 1 {
             return Err(PyValueError::new_err(
                 "Expected at most one inner child but have at least 2",
             ));
         }
-        Ok(found)
+        match first {
+            None => Ok(None),
+            Some(child) => Ok(Some(child.to_pyobject(py)?)),
+        }
     }
 
     fn append_suffix(&self, py: Python<'_>, child: &Bound<'_, PyAny>) -> PyResult<()> {
@@ -11530,68 +11680,75 @@ impl PyRecViaSub {
     }
 
     fn children_suffix(&self, py: Python<'_>) -> PyResult<Py<PyList>> {
-        // TODO(rust-cst-accessor-clone-efficiency): clones full Vec then filters outside the guard.
-        // Could filter inside the read guard (clone only matching entries) to avoid
-        // O(total-children) Arc clones for accessors that match a small subset.
-        let snapshot: Vec<_> = {
+        // Lock scope: filter by label under the read guard, cloning only matching
+        // children (Arc bump or Span copy each); drop the guard before to_pyobject,
+        // which performs Python work that must not happen while a node lock is held.
+        let matching: Vec<_> = {
             let guard = self.inner.read();
-            guard.children.clone()
+            guard.children.iter()
+                .filter(|(lbl, _)| *lbl == Some(RecViaSubLabel::Suffix))
+                .map(|(_, child)| child.clone())
+                .collect()
         };
         let result = PyList::empty(py);
-        for (lbl, child) in &snapshot {
-            if *lbl == Some(RecViaSubLabel::Suffix) {
-                result.append(child.to_pyobject(py)?)?;
-            }
+        for child in &matching {
+            result.append(child.to_pyobject(py)?)?;
         }
         Ok(result.unbind())
     }
 
     fn child_suffix(&self, py: Python<'_>) -> PyResult<PyObject> {
-        // TODO(rust-cst-accessor-clone-efficiency): see children_suffix above.
-        let snapshot: Vec<_> = {
+        // Lock scope: count label matches and clone only the first under the guard;
+        // drop the guard before to_pyobject / exception raise (Python work).
+        let (count, first) = {
             let guard = self.inner.read();
-            guard.children.clone()
-        };
-        let mut found: Option<PyObject> = None;
-        let mut count = 0usize;
-        for (lbl, child) in &snapshot {
-            if *lbl == Some(RecViaSubLabel::Suffix) {
-                count += 1;
-                if count == 1 {
-                    found = Some(child.to_pyobject(py)?);
+            let mut count = 0usize;
+            let mut first = None;
+            for (lbl, child) in &guard.children {
+                if *lbl == Some(RecViaSubLabel::Suffix) {
+                    count += 1;
+                    if count == 1 {
+                        first = Some(child.clone());
+                    }
                 }
             }
-        }
+            (count, first)
+        };
         if count != 1 {
             return Err(PyValueError::new_err(format!(
                 "Expected one suffix child but have {count}"
             )));
         }
-        Ok(found.expect("invariant: RecViaSub.child_suffix: count==1 but found==None; logic error"))
+        first.expect("invariant: RecViaSub.child_suffix: count==1 but first==None; logic error")
+            .to_pyobject(py)
     }
 
     fn maybe_suffix(&self, py: Python<'_>) -> PyResult<Option<PyObject>> {
-        // TODO(rust-cst-accessor-clone-efficiency): see children_suffix above.
-        let snapshot: Vec<_> = {
+        // Lock scope: count label matches and clone only the first under the guard;
+        // drop the guard before to_pyobject / exception raise (Python work).
+        let (count, first) = {
             let guard = self.inner.read();
-            guard.children.clone()
-        };
-        let mut found: Option<PyObject> = None;
-        let mut count = 0usize;
-        for (lbl, child) in &snapshot {
-            if *lbl == Some(RecViaSubLabel::Suffix) {
-                count += 1;
-                if count == 1 {
-                    found = Some(child.to_pyobject(py)?);
+            let mut count = 0usize;
+            let mut first = None;
+            for (lbl, child) in &guard.children {
+                if *lbl == Some(RecViaSubLabel::Suffix) {
+                    count += 1;
+                    if count == 1 {
+                        first = Some(child.clone());
+                    }
                 }
             }
-        }
+            (count, first)
+        };
         if count > 1 {
             return Err(PyValueError::new_err(
                 "Expected at most one suffix child but have at least 2",
             ));
         }
-        Ok(found)
+        match first {
+            None => Ok(None),
+            Some(child) => Ok(Some(child.to_pyobject(py)?)),
+        }
     }
 
     fn __eq__(&self, py: Python<'_>, other: &Bound<'_, PyAny>) -> PyResult<PyObject> {
@@ -12150,23 +12307,22 @@ impl PyNest {
     }
 
     fn child(&self, py: Python<'_>) -> PyResult<PyObject> {
-        // TODO(rust-cst-accessor-clone-efficiency): clones the full children Vec
-        // before checking len. Could check len under the read guard and only clone
-        // the single needed entry, avoiding O(total-children) allocation on the error path.
-        let snapshot: Vec<_> = {
+        // Lock scope: read len and clone at most the single entry under the guard;
+        // drop the guard before any Python work (object conversion, exception raise).
+        let (n, entry) = {
             let guard = self.inner.read();
-            guard.children.clone()
+            let n = guard.children.len();
+            let entry = if n == 1 { Some(guard.children[0].clone()) } else { None };
+            (n, entry)
         };
-        let n = snapshot.len();
-        if n != 1 {
+        let Some((label, child)) = entry else {
             return Err(PyValueError::new_err(format!(
                 "Expected one child but have {n}"
             )));
-        }
-        let (label, child) = &snapshot[0];
+        };
         let label_obj: PyObject = match label {
             None => py.None(),
-            Some(lbl) => lbl.clone().into_pyobject(py)?.into_any().unbind(),
+            Some(lbl) => lbl.into_pyobject(py)?.into_any().unbind(),
         };
         let child_obj = child.to_pyobject(py)?;
         Ok(PyTuple::new(py, [label_obj, child_obj])?.into_any().unbind())
@@ -12192,68 +12348,75 @@ impl PyNest {
     }
 
     fn children_inner(&self, py: Python<'_>) -> PyResult<Py<PyList>> {
-        // TODO(rust-cst-accessor-clone-efficiency): clones full Vec then filters outside the guard.
-        // Could filter inside the read guard (clone only matching entries) to avoid
-        // O(total-children) Arc clones for accessors that match a small subset.
-        let snapshot: Vec<_> = {
+        // Lock scope: filter by label under the read guard, cloning only matching
+        // children (Arc bump or Span copy each); drop the guard before to_pyobject,
+        // which performs Python work that must not happen while a node lock is held.
+        let matching: Vec<_> = {
             let guard = self.inner.read();
-            guard.children.clone()
+            guard.children.iter()
+                .filter(|(lbl, _)| *lbl == Some(NestLabel::Inner))
+                .map(|(_, child)| child.clone())
+                .collect()
         };
         let result = PyList::empty(py);
-        for (lbl, child) in &snapshot {
-            if *lbl == Some(NestLabel::Inner) {
-                result.append(child.to_pyobject(py)?)?;
-            }
+        for child in &matching {
+            result.append(child.to_pyobject(py)?)?;
         }
         Ok(result.unbind())
     }
 
     fn child_inner(&self, py: Python<'_>) -> PyResult<PyObject> {
-        // TODO(rust-cst-accessor-clone-efficiency): see children_inner above.
-        let snapshot: Vec<_> = {
+        // Lock scope: count label matches and clone only the first under the guard;
+        // drop the guard before to_pyobject / exception raise (Python work).
+        let (count, first) = {
             let guard = self.inner.read();
-            guard.children.clone()
-        };
-        let mut found: Option<PyObject> = None;
-        let mut count = 0usize;
-        for (lbl, child) in &snapshot {
-            if *lbl == Some(NestLabel::Inner) {
-                count += 1;
-                if count == 1 {
-                    found = Some(child.to_pyobject(py)?);
+            let mut count = 0usize;
+            let mut first = None;
+            for (lbl, child) in &guard.children {
+                if *lbl == Some(NestLabel::Inner) {
+                    count += 1;
+                    if count == 1 {
+                        first = Some(child.clone());
+                    }
                 }
             }
-        }
+            (count, first)
+        };
         if count != 1 {
             return Err(PyValueError::new_err(format!(
                 "Expected one inner child but have {count}"
             )));
         }
-        Ok(found.expect("invariant: Nest.child_inner: count==1 but found==None; logic error"))
+        first.expect("invariant: Nest.child_inner: count==1 but first==None; logic error")
+            .to_pyobject(py)
     }
 
     fn maybe_inner(&self, py: Python<'_>) -> PyResult<Option<PyObject>> {
-        // TODO(rust-cst-accessor-clone-efficiency): see children_inner above.
-        let snapshot: Vec<_> = {
+        // Lock scope: count label matches and clone only the first under the guard;
+        // drop the guard before to_pyobject / exception raise (Python work).
+        let (count, first) = {
             let guard = self.inner.read();
-            guard.children.clone()
-        };
-        let mut found: Option<PyObject> = None;
-        let mut count = 0usize;
-        for (lbl, child) in &snapshot {
-            if *lbl == Some(NestLabel::Inner) {
-                count += 1;
-                if count == 1 {
-                    found = Some(child.to_pyobject(py)?);
+            let mut count = 0usize;
+            let mut first = None;
+            for (lbl, child) in &guard.children {
+                if *lbl == Some(NestLabel::Inner) {
+                    count += 1;
+                    if count == 1 {
+                        first = Some(child.clone());
+                    }
                 }
             }
-        }
+            (count, first)
+        };
         if count > 1 {
             return Err(PyValueError::new_err(
                 "Expected at most one inner child but have at least 2",
             ));
         }
-        Ok(found)
+        match first {
+            None => Ok(None),
+            Some(child) => Ok(Some(child.to_pyobject(py)?)),
+        }
     }
 
     fn append_leaf(&self, py: Python<'_>, child: &Bound<'_, PyAny>) -> PyResult<()> {
@@ -12276,68 +12439,75 @@ impl PyNest {
     }
 
     fn children_leaf(&self, py: Python<'_>) -> PyResult<Py<PyList>> {
-        // TODO(rust-cst-accessor-clone-efficiency): clones full Vec then filters outside the guard.
-        // Could filter inside the read guard (clone only matching entries) to avoid
-        // O(total-children) Arc clones for accessors that match a small subset.
-        let snapshot: Vec<_> = {
+        // Lock scope: filter by label under the read guard, cloning only matching
+        // children (Arc bump or Span copy each); drop the guard before to_pyobject,
+        // which performs Python work that must not happen while a node lock is held.
+        let matching: Vec<_> = {
             let guard = self.inner.read();
-            guard.children.clone()
+            guard.children.iter()
+                .filter(|(lbl, _)| *lbl == Some(NestLabel::Leaf))
+                .map(|(_, child)| child.clone())
+                .collect()
         };
         let result = PyList::empty(py);
-        for (lbl, child) in &snapshot {
-            if *lbl == Some(NestLabel::Leaf) {
-                result.append(child.to_pyobject(py)?)?;
-            }
+        for child in &matching {
+            result.append(child.to_pyobject(py)?)?;
         }
         Ok(result.unbind())
     }
 
     fn child_leaf(&self, py: Python<'_>) -> PyResult<PyObject> {
-        // TODO(rust-cst-accessor-clone-efficiency): see children_leaf above.
-        let snapshot: Vec<_> = {
+        // Lock scope: count label matches and clone only the first under the guard;
+        // drop the guard before to_pyobject / exception raise (Python work).
+        let (count, first) = {
             let guard = self.inner.read();
-            guard.children.clone()
-        };
-        let mut found: Option<PyObject> = None;
-        let mut count = 0usize;
-        for (lbl, child) in &snapshot {
-            if *lbl == Some(NestLabel::Leaf) {
-                count += 1;
-                if count == 1 {
-                    found = Some(child.to_pyobject(py)?);
+            let mut count = 0usize;
+            let mut first = None;
+            for (lbl, child) in &guard.children {
+                if *lbl == Some(NestLabel::Leaf) {
+                    count += 1;
+                    if count == 1 {
+                        first = Some(child.clone());
+                    }
                 }
             }
-        }
+            (count, first)
+        };
         if count != 1 {
             return Err(PyValueError::new_err(format!(
                 "Expected one leaf child but have {count}"
             )));
         }
-        Ok(found.expect("invariant: Nest.child_leaf: count==1 but found==None; logic error"))
+        first.expect("invariant: Nest.child_leaf: count==1 but first==None; logic error")
+            .to_pyobject(py)
     }
 
     fn maybe_leaf(&self, py: Python<'_>) -> PyResult<Option<PyObject>> {
-        // TODO(rust-cst-accessor-clone-efficiency): see children_leaf above.
-        let snapshot: Vec<_> = {
+        // Lock scope: count label matches and clone only the first under the guard;
+        // drop the guard before to_pyobject / exception raise (Python work).
+        let (count, first) = {
             let guard = self.inner.read();
-            guard.children.clone()
-        };
-        let mut found: Option<PyObject> = None;
-        let mut count = 0usize;
-        for (lbl, child) in &snapshot {
-            if *lbl == Some(NestLabel::Leaf) {
-                count += 1;
-                if count == 1 {
-                    found = Some(child.to_pyobject(py)?);
+            let mut count = 0usize;
+            let mut first = None;
+            for (lbl, child) in &guard.children {
+                if *lbl == Some(NestLabel::Leaf) {
+                    count += 1;
+                    if count == 1 {
+                        first = Some(child.clone());
+                    }
                 }
             }
-        }
+            (count, first)
+        };
         if count > 1 {
             return Err(PyValueError::new_err(
                 "Expected at most one leaf child but have at least 2",
             ));
         }
-        Ok(found)
+        match first {
+            None => Ok(None),
+            Some(child) => Ok(Some(child.to_pyobject(py)?)),
+        }
     }
 
     fn __eq__(&self, py: Python<'_>, other: &Bound<'_, PyAny>) -> PyResult<PyObject> {
@@ -12969,23 +13139,22 @@ impl PyNestSum {
     }
 
     fn child(&self, py: Python<'_>) -> PyResult<PyObject> {
-        // TODO(rust-cst-accessor-clone-efficiency): clones the full children Vec
-        // before checking len. Could check len under the read guard and only clone
-        // the single needed entry, avoiding O(total-children) allocation on the error path.
-        let snapshot: Vec<_> = {
+        // Lock scope: read len and clone at most the single entry under the guard;
+        // drop the guard before any Python work (object conversion, exception raise).
+        let (n, entry) = {
             let guard = self.inner.read();
-            guard.children.clone()
+            let n = guard.children.len();
+            let entry = if n == 1 { Some(guard.children[0].clone()) } else { None };
+            (n, entry)
         };
-        let n = snapshot.len();
-        if n != 1 {
+        let Some((label, child)) = entry else {
             return Err(PyValueError::new_err(format!(
                 "Expected one child but have {n}"
             )));
-        }
-        let (label, child) = &snapshot[0];
+        };
         let label_obj: PyObject = match label {
             None => py.None(),
-            Some(lbl) => lbl.clone().into_pyobject(py)?.into_any().unbind(),
+            Some(lbl) => lbl.into_pyobject(py)?.into_any().unbind(),
         };
         let child_obj = child.to_pyobject(py)?;
         Ok(PyTuple::new(py, [label_obj, child_obj])?.into_any().unbind())
@@ -13011,68 +13180,75 @@ impl PyNestSum {
     }
 
     fn children_first(&self, py: Python<'_>) -> PyResult<Py<PyList>> {
-        // TODO(rust-cst-accessor-clone-efficiency): clones full Vec then filters outside the guard.
-        // Could filter inside the read guard (clone only matching entries) to avoid
-        // O(total-children) Arc clones for accessors that match a small subset.
-        let snapshot: Vec<_> = {
+        // Lock scope: filter by label under the read guard, cloning only matching
+        // children (Arc bump or Span copy each); drop the guard before to_pyobject,
+        // which performs Python work that must not happen while a node lock is held.
+        let matching: Vec<_> = {
             let guard = self.inner.read();
-            guard.children.clone()
+            guard.children.iter()
+                .filter(|(lbl, _)| *lbl == Some(NestSumLabel::First))
+                .map(|(_, child)| child.clone())
+                .collect()
         };
         let result = PyList::empty(py);
-        for (lbl, child) in &snapshot {
-            if *lbl == Some(NestSumLabel::First) {
-                result.append(child.to_pyobject(py)?)?;
-            }
+        for child in &matching {
+            result.append(child.to_pyobject(py)?)?;
         }
         Ok(result.unbind())
     }
 
     fn child_first(&self, py: Python<'_>) -> PyResult<PyObject> {
-        // TODO(rust-cst-accessor-clone-efficiency): see children_first above.
-        let snapshot: Vec<_> = {
+        // Lock scope: count label matches and clone only the first under the guard;
+        // drop the guard before to_pyobject / exception raise (Python work).
+        let (count, first) = {
             let guard = self.inner.read();
-            guard.children.clone()
-        };
-        let mut found: Option<PyObject> = None;
-        let mut count = 0usize;
-        for (lbl, child) in &snapshot {
-            if *lbl == Some(NestSumLabel::First) {
-                count += 1;
-                if count == 1 {
-                    found = Some(child.to_pyobject(py)?);
+            let mut count = 0usize;
+            let mut first = None;
+            for (lbl, child) in &guard.children {
+                if *lbl == Some(NestSumLabel::First) {
+                    count += 1;
+                    if count == 1 {
+                        first = Some(child.clone());
+                    }
                 }
             }
-        }
+            (count, first)
+        };
         if count != 1 {
             return Err(PyValueError::new_err(format!(
                 "Expected one first child but have {count}"
             )));
         }
-        Ok(found.expect("invariant: NestSum.child_first: count==1 but found==None; logic error"))
+        first.expect("invariant: NestSum.child_first: count==1 but first==None; logic error")
+            .to_pyobject(py)
     }
 
     fn maybe_first(&self, py: Python<'_>) -> PyResult<Option<PyObject>> {
-        // TODO(rust-cst-accessor-clone-efficiency): see children_first above.
-        let snapshot: Vec<_> = {
+        // Lock scope: count label matches and clone only the first under the guard;
+        // drop the guard before to_pyobject / exception raise (Python work).
+        let (count, first) = {
             let guard = self.inner.read();
-            guard.children.clone()
-        };
-        let mut found: Option<PyObject> = None;
-        let mut count = 0usize;
-        for (lbl, child) in &snapshot {
-            if *lbl == Some(NestSumLabel::First) {
-                count += 1;
-                if count == 1 {
-                    found = Some(child.to_pyobject(py)?);
+            let mut count = 0usize;
+            let mut first = None;
+            for (lbl, child) in &guard.children {
+                if *lbl == Some(NestSumLabel::First) {
+                    count += 1;
+                    if count == 1 {
+                        first = Some(child.clone());
+                    }
                 }
             }
-        }
+            (count, first)
+        };
         if count > 1 {
             return Err(PyValueError::new_err(
                 "Expected at most one first child but have at least 2",
             ));
         }
-        Ok(found)
+        match first {
+            None => Ok(None),
+            Some(child) => Ok(Some(child.to_pyobject(py)?)),
+        }
     }
 
     fn append_lhs(&self, py: Python<'_>, child: &Bound<'_, PyAny>) -> PyResult<()> {
@@ -13095,68 +13271,75 @@ impl PyNestSum {
     }
 
     fn children_lhs(&self, py: Python<'_>) -> PyResult<Py<PyList>> {
-        // TODO(rust-cst-accessor-clone-efficiency): clones full Vec then filters outside the guard.
-        // Could filter inside the read guard (clone only matching entries) to avoid
-        // O(total-children) Arc clones for accessors that match a small subset.
-        let snapshot: Vec<_> = {
+        // Lock scope: filter by label under the read guard, cloning only matching
+        // children (Arc bump or Span copy each); drop the guard before to_pyobject,
+        // which performs Python work that must not happen while a node lock is held.
+        let matching: Vec<_> = {
             let guard = self.inner.read();
-            guard.children.clone()
+            guard.children.iter()
+                .filter(|(lbl, _)| *lbl == Some(NestSumLabel::Lhs))
+                .map(|(_, child)| child.clone())
+                .collect()
         };
         let result = PyList::empty(py);
-        for (lbl, child) in &snapshot {
-            if *lbl == Some(NestSumLabel::Lhs) {
-                result.append(child.to_pyobject(py)?)?;
-            }
+        for child in &matching {
+            result.append(child.to_pyobject(py)?)?;
         }
         Ok(result.unbind())
     }
 
     fn child_lhs(&self, py: Python<'_>) -> PyResult<PyObject> {
-        // TODO(rust-cst-accessor-clone-efficiency): see children_lhs above.
-        let snapshot: Vec<_> = {
+        // Lock scope: count label matches and clone only the first under the guard;
+        // drop the guard before to_pyobject / exception raise (Python work).
+        let (count, first) = {
             let guard = self.inner.read();
-            guard.children.clone()
-        };
-        let mut found: Option<PyObject> = None;
-        let mut count = 0usize;
-        for (lbl, child) in &snapshot {
-            if *lbl == Some(NestSumLabel::Lhs) {
-                count += 1;
-                if count == 1 {
-                    found = Some(child.to_pyobject(py)?);
+            let mut count = 0usize;
+            let mut first = None;
+            for (lbl, child) in &guard.children {
+                if *lbl == Some(NestSumLabel::Lhs) {
+                    count += 1;
+                    if count == 1 {
+                        first = Some(child.clone());
+                    }
                 }
             }
-        }
+            (count, first)
+        };
         if count != 1 {
             return Err(PyValueError::new_err(format!(
                 "Expected one lhs child but have {count}"
             )));
         }
-        Ok(found.expect("invariant: NestSum.child_lhs: count==1 but found==None; logic error"))
+        first.expect("invariant: NestSum.child_lhs: count==1 but first==None; logic error")
+            .to_pyobject(py)
     }
 
     fn maybe_lhs(&self, py: Python<'_>) -> PyResult<Option<PyObject>> {
-        // TODO(rust-cst-accessor-clone-efficiency): see children_lhs above.
-        let snapshot: Vec<_> = {
+        // Lock scope: count label matches and clone only the first under the guard;
+        // drop the guard before to_pyobject / exception raise (Python work).
+        let (count, first) = {
             let guard = self.inner.read();
-            guard.children.clone()
-        };
-        let mut found: Option<PyObject> = None;
-        let mut count = 0usize;
-        for (lbl, child) in &snapshot {
-            if *lbl == Some(NestSumLabel::Lhs) {
-                count += 1;
-                if count == 1 {
-                    found = Some(child.to_pyobject(py)?);
+            let mut count = 0usize;
+            let mut first = None;
+            for (lbl, child) in &guard.children {
+                if *lbl == Some(NestSumLabel::Lhs) {
+                    count += 1;
+                    if count == 1 {
+                        first = Some(child.clone());
+                    }
                 }
             }
-        }
+            (count, first)
+        };
         if count > 1 {
             return Err(PyValueError::new_err(
                 "Expected at most one lhs child but have at least 2",
             ));
         }
-        Ok(found)
+        match first {
+            None => Ok(None),
+            Some(child) => Ok(Some(child.to_pyobject(py)?)),
+        }
     }
 
     fn append_rhs(&self, py: Python<'_>, child: &Bound<'_, PyAny>) -> PyResult<()> {
@@ -13179,68 +13362,75 @@ impl PyNestSum {
     }
 
     fn children_rhs(&self, py: Python<'_>) -> PyResult<Py<PyList>> {
-        // TODO(rust-cst-accessor-clone-efficiency): clones full Vec then filters outside the guard.
-        // Could filter inside the read guard (clone only matching entries) to avoid
-        // O(total-children) Arc clones for accessors that match a small subset.
-        let snapshot: Vec<_> = {
+        // Lock scope: filter by label under the read guard, cloning only matching
+        // children (Arc bump or Span copy each); drop the guard before to_pyobject,
+        // which performs Python work that must not happen while a node lock is held.
+        let matching: Vec<_> = {
             let guard = self.inner.read();
-            guard.children.clone()
+            guard.children.iter()
+                .filter(|(lbl, _)| *lbl == Some(NestSumLabel::Rhs))
+                .map(|(_, child)| child.clone())
+                .collect()
         };
         let result = PyList::empty(py);
-        for (lbl, child) in &snapshot {
-            if *lbl == Some(NestSumLabel::Rhs) {
-                result.append(child.to_pyobject(py)?)?;
-            }
+        for child in &matching {
+            result.append(child.to_pyobject(py)?)?;
         }
         Ok(result.unbind())
     }
 
     fn child_rhs(&self, py: Python<'_>) -> PyResult<PyObject> {
-        // TODO(rust-cst-accessor-clone-efficiency): see children_rhs above.
-        let snapshot: Vec<_> = {
+        // Lock scope: count label matches and clone only the first under the guard;
+        // drop the guard before to_pyobject / exception raise (Python work).
+        let (count, first) = {
             let guard = self.inner.read();
-            guard.children.clone()
-        };
-        let mut found: Option<PyObject> = None;
-        let mut count = 0usize;
-        for (lbl, child) in &snapshot {
-            if *lbl == Some(NestSumLabel::Rhs) {
-                count += 1;
-                if count == 1 {
-                    found = Some(child.to_pyobject(py)?);
+            let mut count = 0usize;
+            let mut first = None;
+            for (lbl, child) in &guard.children {
+                if *lbl == Some(NestSumLabel::Rhs) {
+                    count += 1;
+                    if count == 1 {
+                        first = Some(child.clone());
+                    }
                 }
             }
-        }
+            (count, first)
+        };
         if count != 1 {
             return Err(PyValueError::new_err(format!(
                 "Expected one rhs child but have {count}"
             )));
         }
-        Ok(found.expect("invariant: NestSum.child_rhs: count==1 but found==None; logic error"))
+        first.expect("invariant: NestSum.child_rhs: count==1 but first==None; logic error")
+            .to_pyobject(py)
     }
 
     fn maybe_rhs(&self, py: Python<'_>) -> PyResult<Option<PyObject>> {
-        // TODO(rust-cst-accessor-clone-efficiency): see children_rhs above.
-        let snapshot: Vec<_> = {
+        // Lock scope: count label matches and clone only the first under the guard;
+        // drop the guard before to_pyobject / exception raise (Python work).
+        let (count, first) = {
             let guard = self.inner.read();
-            guard.children.clone()
-        };
-        let mut found: Option<PyObject> = None;
-        let mut count = 0usize;
-        for (lbl, child) in &snapshot {
-            if *lbl == Some(NestSumLabel::Rhs) {
-                count += 1;
-                if count == 1 {
-                    found = Some(child.to_pyobject(py)?);
+            let mut count = 0usize;
+            let mut first = None;
+            for (lbl, child) in &guard.children {
+                if *lbl == Some(NestSumLabel::Rhs) {
+                    count += 1;
+                    if count == 1 {
+                        first = Some(child.clone());
+                    }
                 }
             }
-        }
+            (count, first)
+        };
         if count > 1 {
             return Err(PyValueError::new_err(
                 "Expected at most one rhs child but have at least 2",
             ));
         }
-        Ok(found)
+        match first {
+            None => Ok(None),
+            Some(child) => Ok(Some(child.to_pyobject(py)?)),
+        }
     }
 
     fn __eq__(&self, py: Python<'_>, other: &Bound<'_, PyAny>) -> PyResult<PyObject> {
@@ -13687,23 +13877,22 @@ impl PyTrivia {
     }
 
     fn child(&self, py: Python<'_>) -> PyResult<PyObject> {
-        // TODO(rust-cst-accessor-clone-efficiency): clones the full children Vec
-        // before checking len. Could check len under the read guard and only clone
-        // the single needed entry, avoiding O(total-children) allocation on the error path.
-        let snapshot: Vec<_> = {
+        // Lock scope: read len and clone at most the single entry under the guard;
+        // drop the guard before any Python work (object conversion, exception raise).
+        let (n, entry) = {
             let guard = self.inner.read();
-            guard.children.clone()
+            let n = guard.children.len();
+            let entry = if n == 1 { Some(guard.children[0].clone()) } else { None };
+            (n, entry)
         };
-        let n = snapshot.len();
-        if n != 1 {
+        let Some((label, child)) = entry else {
             return Err(PyValueError::new_err(format!(
                 "Expected one child but have {n}"
             )));
-        }
-        let (label, child) = &snapshot[0];
+        };
         let label_obj: PyObject = match label {
             None => py.None(),
-            Some(lbl) => lbl.clone().into_pyobject(py)?.into_any().unbind(),
+            Some(lbl) => lbl.into_pyobject(py)?.into_any().unbind(),
         };
         let child_obj = child.to_pyobject(py)?;
         Ok(PyTuple::new(py, [label_obj, child_obj])?.into_any().unbind())
@@ -13729,68 +13918,75 @@ impl PyTrivia {
     }
 
     fn children_content(&self, py: Python<'_>) -> PyResult<Py<PyList>> {
-        // TODO(rust-cst-accessor-clone-efficiency): clones full Vec then filters outside the guard.
-        // Could filter inside the read guard (clone only matching entries) to avoid
-        // O(total-children) Arc clones for accessors that match a small subset.
-        let snapshot: Vec<_> = {
+        // Lock scope: filter by label under the read guard, cloning only matching
+        // children (Arc bump or Span copy each); drop the guard before to_pyobject,
+        // which performs Python work that must not happen while a node lock is held.
+        let matching: Vec<_> = {
             let guard = self.inner.read();
-            guard.children.clone()
+            guard.children.iter()
+                .filter(|(lbl, _)| *lbl == Some(TriviaLabel::Content))
+                .map(|(_, child)| child.clone())
+                .collect()
         };
         let result = PyList::empty(py);
-        for (lbl, child) in &snapshot {
-            if *lbl == Some(TriviaLabel::Content) {
-                result.append(child.to_pyobject(py)?)?;
-            }
+        for child in &matching {
+            result.append(child.to_pyobject(py)?)?;
         }
         Ok(result.unbind())
     }
 
     fn child_content(&self, py: Python<'_>) -> PyResult<PyObject> {
-        // TODO(rust-cst-accessor-clone-efficiency): see children_content above.
-        let snapshot: Vec<_> = {
+        // Lock scope: count label matches and clone only the first under the guard;
+        // drop the guard before to_pyobject / exception raise (Python work).
+        let (count, first) = {
             let guard = self.inner.read();
-            guard.children.clone()
-        };
-        let mut found: Option<PyObject> = None;
-        let mut count = 0usize;
-        for (lbl, child) in &snapshot {
-            if *lbl == Some(TriviaLabel::Content) {
-                count += 1;
-                if count == 1 {
-                    found = Some(child.to_pyobject(py)?);
+            let mut count = 0usize;
+            let mut first = None;
+            for (lbl, child) in &guard.children {
+                if *lbl == Some(TriviaLabel::Content) {
+                    count += 1;
+                    if count == 1 {
+                        first = Some(child.clone());
+                    }
                 }
             }
-        }
+            (count, first)
+        };
         if count != 1 {
             return Err(PyValueError::new_err(format!(
                 "Expected one content child but have {count}"
             )));
         }
-        Ok(found.expect("invariant: Trivia.child_content: count==1 but found==None; logic error"))
+        first.expect("invariant: Trivia.child_content: count==1 but first==None; logic error")
+            .to_pyobject(py)
     }
 
     fn maybe_content(&self, py: Python<'_>) -> PyResult<Option<PyObject>> {
-        // TODO(rust-cst-accessor-clone-efficiency): see children_content above.
-        let snapshot: Vec<_> = {
+        // Lock scope: count label matches and clone only the first under the guard;
+        // drop the guard before to_pyobject / exception raise (Python work).
+        let (count, first) = {
             let guard = self.inner.read();
-            guard.children.clone()
-        };
-        let mut found: Option<PyObject> = None;
-        let mut count = 0usize;
-        for (lbl, child) in &snapshot {
-            if *lbl == Some(TriviaLabel::Content) {
-                count += 1;
-                if count == 1 {
-                    found = Some(child.to_pyobject(py)?);
+            let mut count = 0usize;
+            let mut first = None;
+            for (lbl, child) in &guard.children {
+                if *lbl == Some(TriviaLabel::Content) {
+                    count += 1;
+                    if count == 1 {
+                        first = Some(child.clone());
+                    }
                 }
             }
-        }
+            (count, first)
+        };
         if count > 1 {
             return Err(PyValueError::new_err(
                 "Expected at most one content child but have at least 2",
             ));
         }
-        Ok(found)
+        match first {
+            None => Ok(None),
+            Some(child) => Ok(Some(child.to_pyobject(py)?)),
+        }
     }
 
     fn __eq__(&self, py: Python<'_>, other: &Bound<'_, PyAny>) -> PyResult<PyObject> {

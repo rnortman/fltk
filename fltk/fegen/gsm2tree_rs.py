@@ -1040,23 +1040,22 @@ class RustCstGenerator:
     def _generic_child(self, _class_name: str, _enum_name: str, _label_type: str, _labels: list[str]) -> list[str]:
         return [
             "    fn child(&self, py: Python<'_>) -> PyResult<PyObject> {",
-            "        // TODO(rust-cst-accessor-clone-efficiency): clones the full children Vec",
-            "        // before checking len. Could check len under the read guard and only clone",
-            "        // the single needed entry, avoiding O(total-children) allocation on the error path.",
-            "        let snapshot: Vec<_> = {",
+            "        // Lock scope: read len and clone at most the single entry under the guard;",
+            "        // drop the guard before any Python work (object conversion, exception raise).",
+            "        let (n, entry) = {",
             "            let guard = self.inner.read();",
-            "            guard.children.clone()",
+            "            let n = guard.children.len();",
+            "            let entry = if n == 1 { Some(guard.children[0].clone()) } else { None };",
+            "            (n, entry)",
             "        };",
-            "        let n = snapshot.len();",
-            "        if n != 1 {",
+            "        let Some((label, child)) = entry else {",
             "            return Err(PyValueError::new_err(format!(",
             '                "Expected one child but have {n}"',
             "            )));",
-            "        }",
-            "        let (label, child) = &snapshot[0];",
+            "        };",
             "        let label_obj: PyObject = match label {",
             "            None => py.None(),",
-            "            Some(lbl) => lbl.clone().into_pyobject(py)?.into_any().unbind(),",
+            "            Some(lbl) => lbl.into_pyobject(py)?.into_any().unbind(),",
             "        };",
             "        let child_obj = child.to_pyobject(py)?;",
             "        Ok(PyTuple::new(py, [label_obj, child_obj])?.into_any().unbind())",
@@ -1373,6 +1372,31 @@ class RustCstGenerator:
 
         return lines
 
+    def _emit_count_first_scan_block(self, label_enum_name: str, rust_variant: str) -> list[str]:
+        """Emit the (count, first) lock-scope scan block shared by child_<label> and maybe_<label>.
+
+        Returns the lines for the block that reads the lock, counts label matches, and clones only
+        the first match. Both callers diverge only after the closing `};` (error condition differs).
+        """
+        return [
+            "        // Lock scope: count label matches and clone only the first under the guard;",
+            "        // drop the guard before to_pyobject / exception raise (Python work).",
+            "        let (count, first) = {",
+            "            let guard = self.inner.read();",
+            "            let mut count = 0usize;",
+            "            let mut first = None;",
+            "            for (lbl, child) in &guard.children {",
+            f"                if *lbl == Some({label_enum_name}::{rust_variant}) {{",
+            "                    count += 1;",
+            "                    if count == 1 {",
+            "                        first = Some(child.clone());",
+            "                    }",
+            "                }",
+            "            }",
+            "            (count, first)",
+            "        };",
+        ]
+
     def _per_label_methods(self, class_name: str, label: str, child_enum_name: str) -> list[str]:
         label_enum_name = self._label_enum_rust_name(class_name)
         rust_variant = _rust_variant_name(label)
@@ -1414,18 +1438,19 @@ class RustCstGenerator:
         lines.extend(
             [
                 f"    fn children_{label}(&self, py: Python<'_>) -> PyResult<Py<PyList>> {{",
-                "        // TODO(rust-cst-accessor-clone-efficiency): clones full Vec then filters outside the guard.",
-                "        // Could filter inside the read guard (clone only matching entries) to avoid",
-                "        // O(total-children) Arc clones for accessors that match a small subset.",
-                "        let snapshot: Vec<_> = {",
+                "        // Lock scope: filter by label under the read guard, cloning only matching",
+                "        // children (Arc bump or Span copy each); drop the guard before to_pyobject,",
+                "        // which performs Python work that must not happen while a node lock is held.",
+                "        let matching: Vec<_> = {",
                 "            let guard = self.inner.read();",
-                "            guard.children.clone()",
+                "            guard.children.iter()",
+                f"                .filter(|(lbl, _)| *lbl == Some({label_enum_name}::{rust_variant}))",
+                "                .map(|(_, child)| child.clone())",
+                "                .collect()",
                 "        };",
                 "        let result = PyList::empty(py);",
-                "        for (lbl, child) in &snapshot {",
-                f"            if *lbl == Some({label_enum_name}::{rust_variant}) {{",
-                "                result.append(child.to_pyobject(py)?)?;",
-                "            }",
+                "        for child in &matching {",
+                "            result.append(child.to_pyobject(py)?)?;",
                 "        }",
                 "        Ok(result.unbind())",
                 "    }",
@@ -1434,60 +1459,36 @@ class RustCstGenerator:
         )
 
         # child_<label>: return the single child with matching label; error if not exactly one
+        lines.append(f"    fn child_{label}(&self, py: Python<'_>) -> PyResult<PyObject> {{")
+        lines.extend(self._emit_count_first_scan_block(label_enum_name, rust_variant))
         lines.extend(
             [
-                f"    fn child_{label}(&self, py: Python<'_>) -> PyResult<PyObject> {{",
-                f"        // TODO(rust-cst-accessor-clone-efficiency): see children_{label} above.",
-                "        let snapshot: Vec<_> = {",
-                "            let guard = self.inner.read();",
-                "            guard.children.clone()",
-                "        };",
-                "        let mut found: Option<PyObject> = None;",
-                "        let mut count = 0usize;",
-                "        for (lbl, child) in &snapshot {",
-                f"            if *lbl == Some({label_enum_name}::{rust_variant}) {{",
-                "                count += 1;",
-                "                if count == 1 {",
-                "                    found = Some(child.to_pyobject(py)?);",
-                "                }",
-                "            }",
-                "        }",
                 "        if count != 1 {",
                 "            return Err(PyValueError::new_err(format!(",
                 f'                "Expected one {label} child but have {{count}}"',
                 "            )));",
                 "        }",
-                f'        Ok(found.expect("invariant: {class_name}.child_{label}: count==1 but found==None; logic error"))',  # noqa: E501
+                f'        first.expect("invariant: {class_name}.child_{label}: count==1 but first==None; logic error")',
+                "            .to_pyobject(py)",
                 "    }",
                 "",
             ]
         )
 
         # maybe_<label>: return optional single child with matching label; error if more than one
+        lines.append(f"    fn maybe_{label}(&self, py: Python<'_>) -> PyResult<Option<PyObject>> {{")
+        lines.extend(self._emit_count_first_scan_block(label_enum_name, rust_variant))
         lines.extend(
             [
-                f"    fn maybe_{label}(&self, py: Python<'_>) -> PyResult<Option<PyObject>> {{",
-                f"        // TODO(rust-cst-accessor-clone-efficiency): see children_{label} above.",
-                "        let snapshot: Vec<_> = {",
-                "            let guard = self.inner.read();",
-                "            guard.children.clone()",
-                "        };",
-                "        let mut found: Option<PyObject> = None;",
-                "        let mut count = 0usize;",
-                "        for (lbl, child) in &snapshot {",
-                f"            if *lbl == Some({label_enum_name}::{rust_variant}) {{",
-                "                count += 1;",
-                "                if count == 1 {",
-                "                    found = Some(child.to_pyobject(py)?);",
-                "                }",
-                "            }",
-                "        }",
                 "        if count > 1 {",
                 "            return Err(PyValueError::new_err(",
                 f'                "Expected at most one {label} child but have at least 2",',
                 "            ));",
                 "        }",
-                "        Ok(found)",
+                "        match first {",
+                "            None => Ok(None),",
+                "            Some(child) => Ok(Some(child.to_pyobject(py)?)),",
+                "        }",
                 "    }",
                 "",
             ]
