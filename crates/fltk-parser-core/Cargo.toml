@@ -13,10 +13,14 @@ crate-type = ["rlib"]
 
 [dependencies]
 fltk-cst-core = { path = "../fltk-cst-core", default-features = false }
-# TODO(regex-automata-features): default features include dfa-build/dfa-search (full DFA
-# determinizer), which regex=1 does not enable.  This adds compile time and binary size for
-# every downstream consumer.  Consider pinning to the feature subset actually used by regex=1:
-# default-features = false, features = ["std","syntax","perf","unicode","meta","nfa-backtrack",
-# "nfa-pikevm","hybrid","dfa-onepass"].  Current default-features choice is intentional (DFA
-# build is a search-time win for small patterns) but the cost was not formally weighed.
-regex-automata = "0.4"
+regex-automata = { version = "0.4", default-features = false, features = [
+    "std",
+    "syntax",
+    "perf",
+    "unicode",
+    "meta",
+    "nfa-backtrack",
+    "nfa-pikevm",
+    "hybrid",
+    "dfa-onepass",
+] }

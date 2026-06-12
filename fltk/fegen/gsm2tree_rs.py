@@ -1230,9 +1230,6 @@ class RustCstGenerator:
         Index follows list.insert semantics: negative indices count from the end,
         out-of-range indices clamp (never raise). `index` is taken as &Bound<PyAny>
         to handle arbitrary-magnitude Python ints without OverflowError divergence.
-
-        TODO(mutator-rs-fast-path-int-index): operator.index is called unconditionally; add fast
-        path via extract::<i64>() for common exact-int inputs to avoid import+getattr+call overhead.
         """
         return [
             "    #[pyo3(signature = (index, child, label = None))]",
@@ -1314,11 +1311,6 @@ class RustCstGenerator:
         """Emit the `remove_at` pymethod: remove and return the (label, child) pair at index.
 
         Negative indices supported; out-of-range raises IndexError with the caller's original value.
-
-        TODO(mutator-remove-at-oob-atomicity): on OOM in to_pyobject after removal, the child is
-        permanently lost from the tree. Fix: attempt to_pyobject before acquiring the write lock.
-        TODO(mutator-rs-fast-path-int-index): call operator.index unconditionally; add fast path
-        via extract::<i64>() for common exact-int inputs to avoid import+getattr+call overhead.
         """
         return [
             "    fn remove_at(&self, py: Python<'_>, index: &Bound<'_, PyAny>) -> PyResult<PyObject> {",

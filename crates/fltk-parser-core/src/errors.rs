@@ -89,8 +89,6 @@ impl ErrorTracker {
 ///
 /// TODO(error-msg-bidi-escape): bidi controls (U+202A–U+202E, U+2066–U+2069) and
 /// U+2028/U+2029 pass through unescaped; accepted risk per design §Open questions A1.
-/// TODO(error-msg-escape-zero-copy): fast path returns `s.to_owned()`; zero-alloc
-/// `Cow<'_, str>` variant deferred (API signature change).
 pub fn escape_control_chars(s: &str) -> String {
     #[inline(always)]
     fn needs_escape(cp: u32) -> bool {

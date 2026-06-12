@@ -65,7 +65,6 @@ def escape_control_chars(text: str) -> str:
 
     TODO(error-msg-bidi-escape): bidi controls (U+202A-U+202E, U+2066-U+2069) and
     U+2028/U+2029 pass through unescaped; accepted risk per design §Open questions A1.
-    TODO(error-msg-escape-zero-copy): Rust zero-alloc Cow variant deferred; see TODO.md.
     """
     if not any(((cp := ord(ch)) <= _C0_END and cp != _TAB) or cp == _DEL or _C1_START <= cp <= _C1_END for ch in text):
         return text
