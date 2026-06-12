@@ -15,6 +15,7 @@ crate-type = ["cdylib"]
 default = ["extension-module"]
 extension-module = ["python", "pyo3/extension-module"]
 python = ["fltk-cst-core/python"]
+test-introspection = ["python", "fltk-cst-core/test-introspection"]
 
 [dependencies]
 pyo3 = { version = "0.23", features = ["abi3-py310"] }

@@ -216,6 +216,14 @@ class RustCstGenerator:
                 child_ret = f"tuple[None, {child_ann}]"
             lines.append(f"    def child(self) -> {child_ret}: ...")
 
+            # Named mutators: insert, remove_at, replace_at, clear
+            lines.append(f"    def insert(self, index: int, child: {child_ann}, label: {label_ann} = ...) -> None: ...")
+            lines.append(f"    def remove_at(self, index: int) -> {child_ret}: ...")
+            lines.append(
+                f"    def replace_at(self, index: int, child: {child_ann}, label: {label_ann} = ...) -> None: ..."
+            )
+            lines.append("    def clear(self) -> None: ...")
+
             # Per-label accessor quintet
             for label in labels:
                 lann = self._pyi_annotation_for_model_types(model.labels[label], class_name=f"{class_name}.{label}")
@@ -308,7 +316,7 @@ class RustCstGenerator:
             '#[cfg(feature = "python")]\n'
             "use fltk_cst_core::registry;\n"
             '#[cfg(feature = "python")]\n'
-            "use pyo3::exceptions::{PyTypeError, PyValueError};\n"
+            "use pyo3::exceptions::{PyIndexError, PyTypeError, PyValueError};\n"
             '#[cfg(feature = "python")]\n'
             "use pyo3::prelude::*;\n"
             '#[cfg(feature = "python")]\n'
@@ -865,6 +873,9 @@ class RustCstGenerator:
         lines.append("    }")
         # Per-label native accessors (read side)
         lines.extend(self._native_per_label_methods(rule_name, labels, enum_name, label_enum_name))
+
+        # Native mutators: insert_child, remove_child, replace_child, clear_children
+        lines.extend(self._native_mutators(label_type, enum_name))
         lines.append("}")
         lines.append("")
 
@@ -925,6 +936,10 @@ class RustCstGenerator:
         lines.extend(self._generic_extend(class_name, enum_name, label_type, labels))
         lines.extend(self._generic_extend_children(class_name, py_handle))
         lines.extend(self._generic_child(class_name, enum_name, label_type, labels))
+        lines.extend(self._generic_insert(class_name, enum_name, labels))
+        lines.extend(self._generic_remove_at(class_name, enum_name, labels))
+        lines.extend(self._generic_replace_at(class_name, enum_name, labels))
+        lines.extend(self._generic_clear())
 
         for label in labels:
             lines.extend(self._per_label_methods(class_name, label, enum_name))
@@ -1015,8 +1030,8 @@ class RustCstGenerator:
         The returned list is a per-call snapshot; in-place mutation of the list is a
         silent no-op on the tree.  The Python backend returns the node's actual internal
         list, so there is a known backend divergence on list-level identity.
-        TODO(rust-cst-children-list-view): closing this would require a live sequence-proxy
-        pyclass; deferred as additive per design ADR 2026/06/10-rust-idiomatic-cst-api §7 Q4.
+        Named mutators (insert/remove_at/replace_at/clear) are the supported mutation path;
+        see ADR docs/adr/2026/06/11-cst-named-mutators/design.md.
 
         Node-typed children are routed through the registry so element identity is stable
         (the same child read twice returns the same Python handle object).
@@ -1167,6 +1182,251 @@ class RustCstGenerator:
             "        };",
             "        let child_obj = child.to_pyobject(py)?;",
             "        Ok(PyTuple::new(py, [label_obj, child_obj])?.into_any().unbind())",
+            "    }",
+            "",
+        ]
+
+    def _native_mutators(self, label_type: str, enum_name: str) -> list[str]:
+        """Emit native (GIL-free) insert_child/remove_child/replace_child/clear_children on the data struct.
+
+        These follow Vec conventions: panics on out-of-bounds (callers must bounds-check).
+        Python-facing index clamping and IndexError live exclusively in the pymethods.
+        """
+        return [
+            "",
+            "    /// Insert a child at `index` (Vec::insert semantics: panics if index > len).",
+            "    ///",
+            "    /// Python-facing clamping is in the `insert` pymethod; native callers must",
+            "    /// bounds-check. Unlike `list.insert`, Vec::insert panics on out-of-bounds.",
+            f"    pub fn insert_child(&mut self, index: usize, label: {label_type}, child: {enum_name}) {{",
+            "        self.children.insert(index, (label, child));",
+            "    }",
+            "",
+            "    /// Remove and return the child at `index` (Vec::remove semantics: panics if out of range).",
+            "    ///",
+            "    /// Panics on out-of-range. Python-facing IndexError is in the `remove_at` pymethod.",
+            f"    pub fn remove_child(&mut self, index: usize) -> ({label_type}, {enum_name}) {{",
+            "        self.children.remove(index)",
+            "    }",
+            "",
+            "    /// Replace the child at `index`, returning the old entry (panics if out of range).",
+            "    ///",
+            "    /// Panics on out-of-range. Python-facing IndexError is in the `replace_at` pymethod.",
+            "    pub fn replace_child(",
+            f"        &mut self, index: usize, label: {label_type}, child: {enum_name},",
+            f"    ) -> ({label_type}, {enum_name}) {{",
+            "        std::mem::replace(&mut self.children[index], (label, child))",
+            "    }",
+            "",
+            "    /// Remove all children.",
+            "    pub fn clear_children(&mut self) {",
+            "        self.children.clear();",
+            "    }",
+        ]
+
+    def _generic_insert(self, class_name: str, enum_name: str, labels: list[str]) -> list[str]:
+        """Emit the `insert` pymethod: insert a (label, child) pair at a given index.
+
+        Index follows list.insert semantics: negative indices count from the end,
+        out-of-range indices clamp (never raise). `index` is taken as &Bound<PyAny>
+        to handle arbitrary-magnitude Python ints without OverflowError divergence.
+
+        TODO(mutator-rs-fast-path-int-index): operator.index is called unconditionally; add fast
+        path via extract::<i64>() for common exact-int inputs to avoid import+getattr+call overhead.
+        """
+        return [
+            "    #[pyo3(signature = (index, child, label = None))]",
+            "    fn insert(",
+            "        &self,",
+            "        py: Python<'_>,",
+            "        index: &Bound<'_, PyAny>,",
+            "        child: &Bound<'_, PyAny>,",
+            "        label: Option<PyObject>,",
+            "    ) -> PyResult<()> {",
+            "        // Validate child and label BEFORE taking the write lock (§2.3 lock discipline).",
+            "        let span_type = get_span_type(py)?;",
+            f"        let native_child = {enum_name}::extract_from_pyobject(py, child, &span_type)?;",
+            "        let native_label = match label {",
+            *self._label_from_pyobject_match(class_name, labels, method_name="insert"),
+            "        };",
+            "        // Index normalization via operator.index (PyNumber_Index semantics).",
+            "        // This raises TypeError (not AttributeError) for non-indexable inputs, matching Python's",
+            "        // operator.index contract. Must be done BEFORE taking any lock (§2.3 lock discipline).",
+            "        // Overflow by sign: positive overflow clamps to len; negative overflow clamps to 0.",
+            "        let raw_idx = py",
+            '            .import(pyo3::intern!(py, "operator"))?',
+            '            .getattr(pyo3::intern!(py, "index"))?',
+            "            .call1((index,))?;",
+            "        // Fast path for the common exact-int case; fall back to sign-based Python call for beyond-i64.",
+            "        let (is_negative_big, raw_i64) = if let Ok(i) = raw_idx.extract::<i64>() {",
+            "            (false, Some(i))",
+            "        } else {",
+            "            // Beyond i64: use Python __lt__ to determine sign.  The lt call is still outside",
+            "            // any lock, so lock discipline is maintained.",
+            "            let neg = raw_idx.lt(0i64)?;",
+            "            (neg, None)",
+            "        };",
+            "        // Now take a single write lock for the entire len-read + clamp + insert sequence.",
+            "        let mut guard = self.inner.write();",
+            "        let n = guard.children.len();",
+            "        let clamped: usize = match raw_i64 {",
+            "            Some(i) if i < 0 => {",
+            "                let normalized = n as i64 + i;",
+            "                if normalized < 0 { 0 } else { normalized as usize }",
+            "            }",
+            "            Some(i) => {",
+            "                let u = i as usize;",
+            "                if u > n { n } else { u }",
+            "            }",
+            "            None => if is_negative_big { 0 } else { n },",
+            "        };",
+            "        guard.children.insert(clamped, (native_label, native_child));",
+            "        Ok(())",
+            "    }",
+            "",
+        ]
+
+    @staticmethod
+    def _emit_resolve_index_stmts() -> list[str]:
+        """Emit the shared resolve-index block used by remove_at and replace_at.
+
+        Reads `maybe_i64` (Option<i64>) and `n` (children len, already acquired inside the
+        write-lock scope) and produces `resolved: Option<usize>`.  Both callers diverge only
+        in the match arm after `resolved` is known (Vec::remove vs mem::replace).
+
+        Centralising this block ensures that a single edit keeps parity-message formatting and
+        normalization semantics identical between the two methods (guarding the pinned-contract
+        tests).
+        """
+        return [
+            "            let resolved: Option<usize> = match maybe_i64 {",
+            "                Some(i) if i < 0 => {",
+            "                    let normalized = n as i64 + i;",
+            "                    if normalized < 0 || normalized as usize >= n { None }",
+            "                    else { Some(normalized as usize) }",
+            "                }",
+            "                Some(i) if (i as usize) < n => Some(i as usize),",
+            "                _ => None,",
+            "            };",
+        ]
+
+    def _generic_remove_at(self, class_name: str, _enum_name: str, _labels: list[str]) -> list[str]:
+        """Emit the `remove_at` pymethod: remove and return the (label, child) pair at index.
+
+        Negative indices supported; out-of-range raises IndexError with the caller's original value.
+
+        TODO(mutator-remove-at-oob-atomicity): on OOM in to_pyobject after removal, the child is
+        permanently lost from the tree. Fix: attempt to_pyobject before acquiring the write lock.
+        TODO(mutator-rs-fast-path-int-index): call operator.index unconditionally; add fast path
+        via extract::<i64>() for common exact-int inputs to avoid import+getattr+call overhead.
+        """
+        return [
+            "    fn remove_at(&self, py: Python<'_>, index: &Bound<'_, PyAny>) -> PyResult<PyObject> {",
+            "        // Capture the caller's original string representation BEFORE normalization,",
+            "        // so error messages show the original value (e.g. `True` not `1`).",
+            "        let orig_str = index.str()?.to_string_lossy().into_owned();",
+            "        // Normalize via operator.index: raises TypeError (not AttributeError) for",
+            "        // non-indexable inputs, matching Python's operator.index contract.",
+            "        // All Python work must happen before any lock (§2.3 lock discipline).",
+            "        let raw_idx = py",
+            '            .import(pyo3::intern!(py, "operator"))?',
+            '            .getattr(pyo3::intern!(py, "index"))?',
+            "            .call1((index,))?;",
+            "        // Fast path: extract i64. Beyond i64 is always OOB for real trees.",
+            "        let maybe_i64: Option<i64> = raw_idx.extract::<i64>().ok();",
+            "        // Single write lock: resolve + bounds-check + Vec::remove atomically (no TOCTOU).",
+            "        // On OOB, capture n and return Err after releasing the guard.",
+            "        let result: Result<_, usize> = {",
+            "            let mut guard = self.inner.write();",
+            "            let n = guard.children.len();",
+            *self._emit_resolve_index_stmts(),
+            "            match resolved {",
+            "                Some(idx) => Ok(guard.children.remove(idx)),",
+            "                None => Err(n),",
+            "            }",
+            "        };",
+            "        let (label, child) = result.map_err(|n| {",
+            "            PyIndexError::new_err(format!(",
+            f'                "{class_name}.remove_at: index {{}} out of range ({{}} children)",',
+            "                orig_str, n",
+            "            ))",
+            "        })?;",
+            "        // Python wrap-out happens after the guard is released (§2.3 lock discipline).",
+            "        let label_obj: PyObject = match label {",
+            "            None => py.None(),",
+            "            Some(lbl) => lbl.into_pyobject(py)?.into_any().unbind(),",
+            "        };",
+            "        let child_obj = child.to_pyobject(py)?;",
+            "        Ok(PyTuple::new(py, [label_obj, child_obj])?.into_any().unbind())",
+            "    }",
+            "",
+        ]
+
+    def _generic_replace_at(self, class_name: str, enum_name: str, labels: list[str]) -> list[str]:
+        """Emit the `replace_at` pymethod: replace the entry at index with (label, child).
+
+        Same index semantics as remove_at (negative ok, out-of-range raises IndexError).
+        label=None means unlabeled — does NOT preserve the old label.
+        """
+        return [
+            "    #[pyo3(signature = (index, child, label = None))]",
+            "    fn replace_at(",
+            "        &self,",
+            "        py: Python<'_>,",
+            "        index: &Bound<'_, PyAny>,",
+            "        child: &Bound<'_, PyAny>,",
+            "        label: Option<PyObject>,",
+            "    ) -> PyResult<()> {",
+            "        // Validate child and label BEFORE taking the write lock (§2.3 lock discipline).",
+            "        let span_type = get_span_type(py)?;",
+            f"        let native_child = {enum_name}::extract_from_pyobject(py, child, &span_type)?;",
+            "        let native_label = match label {",
+            *self._label_from_pyobject_match(class_name, labels, method_name="replace_at"),
+            "        };",
+            "        // Capture the caller's original string representation BEFORE normalization.",
+            "        let orig_str = index.str()?.to_string_lossy().into_owned();",
+            "        // Normalize via operator.index: raises TypeError for non-indexable inputs.",
+            "        // All Python work must happen before any lock (§2.3 lock discipline).",
+            "        let raw_idx = py",
+            '            .import(pyo3::intern!(py, "operator"))?',
+            '            .getattr(pyo3::intern!(py, "index"))?',
+            "            .call1((index,))?;",
+            "        let maybe_i64: Option<i64> = raw_idx.extract::<i64>().ok();",
+            "        // Single write lock: resolve + bounds-check + mem::replace atomically (no TOCTOU).",
+            "        let old = {",
+            "            let mut guard = self.inner.write();",
+            "            let n = guard.children.len();",
+            *self._emit_resolve_index_stmts(),
+            "            let idx = match resolved {",
+            "                Some(i) => i,",
+            "                None => {",
+            "                    return Err(PyIndexError::new_err(format!(",
+            f'                        "{class_name}.replace_at: index {{}} out of range ({{}} children)",',
+            "                        orig_str, n",
+            "                    )));",
+            "                }",
+            "            };",
+            "            std::mem::replace(&mut guard.children[idx], (native_label, native_child))",
+            "        };",
+            "        // Drop old entry outside the lock to avoid recursive lock acquisition",
+            "        // if the child's drop chain re-enters Python.",
+            "        drop(old);",
+            "        Ok(())",
+            "    }",
+            "",
+        ]
+
+    def _generic_clear(self) -> list[str]:
+        """Emit the `clear` pymethod: remove all children."""
+        return [
+            "    fn clear(&self, _py: Python<'_>) -> PyResult<()> {",
+            "        let old = {",
+            "            let mut guard = self.inner.write();",
+            "            std::mem::take(&mut guard.children)",
+            "        };",
+            "        // Drop old entries outside the lock.",
+            "        drop(old);",
+            "        Ok(())",
             "    }",
             "",
         ]
@@ -1717,6 +1977,17 @@ class RustCstGenerator:
 
     def _register_classes_fn(self) -> str:
         lines: list[str] = []
+
+        # _registry_snapshot: test/debug-only pyfunction exposing the registry snapshot
+        # for this cdylib. Underscore-prefixed to signal non-public status.
+        # Gated on `test-introspection` feature (matches registry::snapshot gate).
+        # Deliberately omitted from the .pyi stub (test support only).
+        lines.append('#[cfg(all(feature = "python", feature = "test-introspection"))]')
+        lines.append("#[pyfunction]")
+        lines.append("fn _registry_snapshot(py: Python<'_>) -> PyResult<pyo3::Bound<'_, pyo3::types::PyDict>> {")
+        lines.append("    registry::snapshot(py)")
+        lines.append("}")
+        lines.append("")
         lines.append('#[cfg(feature = "python")]')
         lines.append("pub fn register_classes(module: &Bound<'_, PyModule>) -> PyResult<()> {")
         # NodeKind must be registered before node structs (whose kind getter returns it).
@@ -1727,6 +1998,8 @@ class RustCstGenerator:
                 lines.append(f"    module.add_class::<{enum_name}>()?;")
             py_handle = f"Py{class_name}"
             lines.append(f"    module.add_class::<{py_handle}>()?;")
+        lines.append('    #[cfg(feature = "test-introspection")]')
+        lines.append("    module.add_function(wrap_pyfunction!(_registry_snapshot, module)?)?;")
         lines.append("    Ok(())")
         lines.append("}")
         lines.append("")

@@ -16,10 +16,6 @@ Add `rules_rust` to `MODULE.bazel` so that the PyO3 native extension (`fltk._nat
 
 The `_fltk_cst_core_abi_layout` classattr probe compares `size_of::<PyClassObject<T>>()` across cdylibs. Equal size is consistent with — but does not prove — identical field layout: a pyo3 build that reorders internal fields while preserving total size passes the probe, after which `downcast_unchecked` reinterprets memory at wrong offsets. To close this residual, fold the resolved pyo3 version into `FLTK_CST_CORE_ABI` (via a build script reading the Cargo lock or `DEP_*` env var) so the string itself separates pyo3 resolutions. The size probe remains as defense-in-depth. Location: `crates/fltk-cst-core/src/cross_cdylib.rs` (`FLTK_CST_CORE_ABI` constant and SAFETY comments in `extract_source_text` / `extract_span`).
 
-## `rust-cst-children-list-view`
-
-The Rust-backend `node.children` getter returns a fresh snapshot list per call (a `PyList` rebuilt from `Vec` on each access); in-place mutation of the returned list is a silent no-op on the tree. The Python backend returns the node's actual internal list, so in-place list mutation edits the tree. Closing this divergence would require a live sequence-proxy pyclass. Deferred as additive; the Python-backend behavior is documented in the Phase 3 docs. Location: `fltk/fegen/gsm2tree_rs.py` (`_children_getter`, lines 682–700).
-
 ## `rust-str-lit-shared`
 
 `_rust_str_lit` is only defined in `fltk/fegen/gsm2parser_rs.py`. `gsm2tree_rs.py` embeds Rust string literals in f-strings without going through an escaping helper, meaning any rule name or label containing characters that require escaping (backslash, double-quote, control chars) would produce malformed Rust there. Extract to a shared utility so both generators use the same escaping path. Location: `fltk/fegen/gsm2parser_rs.py` (`_rust_str_lit`, module level).
@@ -44,6 +40,14 @@ The Rust-backend `node.children` getter returns a fresh snapshot list per call (
 
 `PartialEq` on generated node structs recurses through `Shared<T>` children with no depth bound; tree depth is attacker-controlled for parsers over untrusted input, so `assert_eq!` or any equality check on a deep parser-produced tree aborts the process (stack exhaustion, uncatchable). Same root cause as the fixed Debug/Drop paths — `Shared<T>::PartialEq` acquires a read lock and delegates to `T::eq`, which compares `children` recursively. Fix: emit iterative `impl PartialEq` on node structs following the same generator pattern used for `impl Drop`. Locations: `fltk/fegen/gsm2tree_rs.py` (`_node_block`, `_drop_block` pattern), `crates/fltk-cst-core/src/shared.rs` (`PartialEq` impl).
 
+
+## `mutator-remove-at-oob-atomicity`
+
+`remove_at` on the Rust backend removes the child from the `Vec` under the write lock, then calls `to_pyobject` after releasing the guard. On OOM in `Py::new` inside `registry::get_or_insert_with`, the `?` propagates a `PyErr` to the caller, but the child is already removed and its `Arc` dropped if no other reference exists. The semantic contract ("atomic: either returns (label, child) or does nothing") is violated in this case. Fix: clone the Arc (read-lock snapshot) and attempt `to_pyobject` before acquiring the write lock for removal; only remove if wrap-out succeeds. Alternatively: remove, attempt wrap-out, re-insert on failure. OOM is effectively unreachable in practice. Location: `fltk/fegen/gsm2tree_rs.py` (`_generic_remove_at`).
+
+## `mutator-rs-fast-path-int-index`
+
+`_generic_insert`, `_generic_remove_at`, and `_generic_replace_at` call `operator.index` unconditionally via Python import+getattr+call. For the common case of exact `int` inputs, `index.extract::<i64>()` on the original object suffices (PyO3 calls `PyLong_AsLongLong` which invokes `__index__`), avoiding three Python round-trips per mutator call. Add fast-path: `if let Ok(i) = index.extract::<i64>() { use i directly }; else { call operator.index }`. Requires care around `orig_str` capture ordering for `remove_at`/`replace_at`. Location: `fltk/fegen/gsm2tree_rs.py` (`_generic_insert`, `_generic_remove_at`, `_generic_replace_at`).
 
 ## `rust-generated-ident-collisions`
 

@@ -682,4 +682,196 @@ mod tests {
         assert_eq!(n.children_operand().count(), 2);
         assert_eq!(n.children().len(), 2);
     }
+
+    // ── §4.4 Native mutators: insert_child / remove_child / replace_child / clear_children ──
+
+    #[test]
+    fn insert_child_at_head() {
+        let mut entry = Entry::new(Span::unknown());
+        let k1 = make_identifier(0, 3, 0, 3);
+        let k2 = make_identifier(3, 6, 3, 6);
+        entry.push_child(Some(EntryLabel::Key), EntryChild::Identifier(k1));
+        // Insert k2 at index 0 — should become the first child.
+        entry.insert_child(0, Some(EntryLabel::Key), EntryChild::Identifier(k2.clone()));
+        assert_eq!(entry.children().len(), 2);
+        match &entry.children()[0].1 {
+            EntryChild::Identifier(got) => assert!(got.ptr_eq(&k2), "k2 should be first child"),
+            _ => panic!("expected Identifier"),
+        }
+    }
+
+    #[test]
+    fn insert_child_at_tail() {
+        let mut entry = Entry::new(Span::unknown());
+        let k1 = make_identifier(0, 3, 0, 3);
+        let k2 = make_identifier(3, 6, 3, 6);
+        entry.push_child(Some(EntryLabel::Key), EntryChild::Identifier(k1));
+        // Insert at index == len → append.
+        entry.insert_child(1, Some(EntryLabel::Key), EntryChild::Identifier(k2.clone()));
+        assert_eq!(entry.children().len(), 2);
+        match &entry.children()[1].1 {
+            EntryChild::Identifier(got) => assert!(got.ptr_eq(&k2), "k2 should be last child"),
+            _ => panic!("expected Identifier"),
+        }
+    }
+
+    #[test]
+    fn insert_child_at_middle() {
+        let mut entry = Entry::new(Span::unknown());
+        let k1 = make_identifier(0, 1, 0, 1);
+        let k2 = make_identifier(1, 2, 1, 2);
+        let kmid = make_identifier(10, 11, 10, 11);
+        entry.push_child(Some(EntryLabel::Key), EntryChild::Identifier(k1));
+        entry.push_child(Some(EntryLabel::Key), EntryChild::Identifier(k2));
+        // Insert at index 1 — should go between k1 and k2.
+        entry.insert_child(1, Some(EntryLabel::Key), EntryChild::Identifier(kmid.clone()));
+        assert_eq!(entry.children().len(), 3);
+        match &entry.children()[1].1 {
+            EntryChild::Identifier(got) => assert!(got.ptr_eq(&kmid), "kmid should be at index 1"),
+            _ => panic!("expected Identifier"),
+        }
+    }
+
+    #[test]
+    fn insert_child_preserves_label() {
+        let mut ident = Identifier::new(Span::unknown());
+        let s = Span::new_sourceless(0, 5);
+        ident.insert_child(0, Some(IdentifierLabel::Name), IdentifierChild::Span(s.clone()));
+        assert_eq!(ident.children()[0].0, Some(IdentifierLabel::Name));
+    }
+
+    #[test]
+    fn insert_child_none_label() {
+        let mut ident = Identifier::new(Span::unknown());
+        let s = Span::new_sourceless(0, 5);
+        ident.insert_child(0, None, IdentifierChild::Span(s));
+        assert_eq!(ident.children()[0].0, None);
+    }
+
+    #[test]
+    #[should_panic]
+    fn insert_child_out_of_range_panics() {
+        let mut entry = Entry::new(Span::unknown());
+        let k = make_identifier(0, 3, 0, 3);
+        // index 5 on an empty node → Vec::insert panics.
+        entry.insert_child(5, Some(EntryLabel::Key), EntryChild::Identifier(k));
+    }
+
+    #[test]
+    fn remove_child_returns_correct_entry() {
+        let mut entry = Entry::new(Span::unknown());
+        let k1 = make_identifier(0, 3, 0, 3);
+        let k2 = make_identifier(3, 6, 3, 6);
+        entry.push_child(Some(EntryLabel::Key), EntryChild::Identifier(k1));
+        entry.push_child(Some(EntryLabel::Key), EntryChild::Identifier(k2.clone()));
+        // Remove index 1 (k2).
+        let (lbl, child) = entry.remove_child(1);
+        assert_eq!(lbl, Some(EntryLabel::Key));
+        match child {
+            EntryChild::Identifier(got) => assert!(got.ptr_eq(&k2)),
+            _ => panic!("expected Identifier"),
+        }
+        assert_eq!(entry.children().len(), 1);
+    }
+
+    #[test]
+    fn remove_child_head() {
+        let mut entry = Entry::new(Span::unknown());
+        let k1 = make_identifier(0, 3, 0, 3);
+        let k2 = make_identifier(3, 6, 3, 6);
+        entry.push_child(Some(EntryLabel::Key), EntryChild::Identifier(k1.clone()));
+        entry.push_child(Some(EntryLabel::Key), EntryChild::Identifier(k2));
+        let (_, child) = entry.remove_child(0);
+        match child {
+            EntryChild::Identifier(got) => assert!(got.ptr_eq(&k1)),
+            _ => panic!("expected Identifier"),
+        }
+        assert_eq!(entry.children().len(), 1);
+    }
+
+    #[test]
+    #[should_panic]
+    fn remove_child_out_of_range_panics() {
+        let mut entry = Entry::new(Span::unknown());
+        entry.remove_child(0); // empty → panics
+    }
+
+    #[test]
+    fn replace_child_updates_entry() {
+        let mut entry = Entry::new(Span::unknown());
+        let k_old = make_identifier(0, 3, 0, 3);
+        let k_new = make_identifier(5, 8, 5, 8);
+        entry.push_child(Some(EntryLabel::Key), EntryChild::Identifier(k_old.clone()));
+        let (old_lbl, old_child) = entry.replace_child(0, Some(EntryLabel::Key), EntryChild::Identifier(k_new.clone()));
+        // Old entry returned.
+        assert_eq!(old_lbl, Some(EntryLabel::Key));
+        match old_child {
+            EntryChild::Identifier(got) => assert!(got.ptr_eq(&k_old)),
+            _ => panic!("expected old Identifier"),
+        }
+        // New child is now in place.
+        assert_eq!(entry.children().len(), 1);
+        match &entry.children()[0].1 {
+            EntryChild::Identifier(got) => assert!(got.ptr_eq(&k_new)),
+            _ => panic!("expected new Identifier"),
+        }
+    }
+
+    #[test]
+    fn replace_child_preserves_length() {
+        let mut entry = Entry::new(Span::unknown());
+        let k1 = make_identifier(0, 3, 0, 3);
+        let k2 = make_identifier(3, 6, 3, 6);
+        let k3 = make_identifier(6, 9, 6, 9);
+        entry.push_child(Some(EntryLabel::Key), EntryChild::Identifier(k1));
+        entry.push_child(Some(EntryLabel::Key), EntryChild::Identifier(k2));
+        entry.replace_child(0, Some(EntryLabel::Key), EntryChild::Identifier(k3));
+        assert_eq!(entry.children().len(), 2, "replace must preserve length");
+    }
+
+    #[test]
+    fn replace_child_label_none_clears_label() {
+        let mut entry = Entry::new(Span::unknown());
+        let k = make_identifier(0, 3, 0, 3);
+        let k2 = make_identifier(3, 6, 3, 6);
+        entry.push_child(Some(EntryLabel::Key), EntryChild::Identifier(k));
+        entry.replace_child(0, None, EntryChild::Identifier(k2));
+        assert_eq!(entry.children()[0].0, None, "label=None should clear the label");
+    }
+
+    #[test]
+    #[should_panic]
+    fn replace_child_out_of_range_panics() {
+        let mut entry = Entry::new(Span::unknown());
+        let k = make_identifier(0, 3, 0, 3);
+        entry.replace_child(0, Some(EntryLabel::Key), EntryChild::Identifier(k)); // empty → panics
+    }
+
+    #[test]
+    fn clear_children_empties_node() {
+        let mut entry = Entry::new(Span::unknown());
+        let k1 = make_identifier(0, 3, 0, 3);
+        let k2 = make_identifier(3, 6, 3, 6);
+        entry.push_child(Some(EntryLabel::Key), EntryChild::Identifier(k1));
+        entry.push_child(Some(EntryLabel::Key), EntryChild::Identifier(k2));
+        entry.clear_children();
+        assert!(entry.children().is_empty(), "clear_children must empty the node");
+    }
+
+    #[test]
+    fn clear_children_on_empty_is_no_op() {
+        let mut entry = Entry::new(Span::unknown());
+        entry.clear_children(); // should not panic
+        assert!(entry.children().is_empty());
+    }
+
+    #[test]
+    fn clear_children_released_child_still_accessible_via_shared() {
+        let k1 = make_identifier(0, 3, 0, 3);
+        let mut entry = Entry::new(Span::unknown());
+        entry.push_child(Some(EntryLabel::Key), EntryChild::Identifier(k1.clone()));
+        entry.clear_children();
+        // k1 Arc clone still alive; node still readable.
+        assert_eq!(k1.read().span().start(), 0);
+    }
 }

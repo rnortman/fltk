@@ -2,6 +2,8 @@ from __future__ import annotations
 
 import dataclasses
 import enum
+import operator
+import sys
 import typing
 
 import fltk.fegen.pyrt.terminalsrc
@@ -38,6 +40,11 @@ NodeKind.TERM._fltk_canonical_name = "NodeKind.TERM"
 NodeKind.FACTOR._fltk_canonical_name = "NodeKind.FACTOR"
 NodeKind.NUMBER._fltk_canonical_name = "NodeKind.NUMBER"
 NodeKind.TRIVIA._fltk_canonical_name = "NodeKind.TRIVIA"
+
+
+def _get_native_span_type():
+    m = sys.modules.get("fltk._native")
+    return m.Span if m is not None else None
 
 
 @dataclasses.dataclass
@@ -82,6 +89,63 @@ class Expr:
             msg = f"Expected one child but have {n}"
             raise ValueError(msg)
         return self.children[0]
+
+    _MUTATOR_ALLOWED_CHILD_TYPES = None
+
+    def _check_child_type_for_mutators(self, child: Term | Trivia | fltk.fegen.pyrt.span.Span) -> None:
+        _allowed = Expr._MUTATOR_ALLOWED_CHILD_TYPES
+        if _allowed is None:
+            _allowed = (Term, Trivia, fltk.fegen.pyrt.terminalsrc.Span)
+            Expr._MUTATOR_ALLOWED_CHILD_TYPES = _allowed
+        _ns = _get_native_span_type()
+        if _ns is not None and _ns not in _allowed:
+            Expr._MUTATOR_ALLOWED_CHILD_TYPES = (*_allowed, _ns)
+            _allowed = Expr._MUTATOR_ALLOWED_CHILD_TYPES
+        if not isinstance(child, _allowed):
+            msg = f"Expr: unsupported child type {type(child).__name__}"
+            raise TypeError(msg)
+
+    def _check_label_type_for_mutators(self, label: Label | None, method: str) -> None:
+        if label is not None and (not isinstance(label, Expr.Label)):
+            _cn = "Expr"
+            msg = f"{_cn}.{method}: label argument is not a {_cn}_Label; got {type(label).__name__}"
+            raise TypeError(msg)
+
+    def insert(self, index: int, child: Term | Trivia | fltk.fegen.pyrt.span.Span, label: Label | None = None) -> None:
+        self._check_child_type_for_mutators(child)
+        self._check_label_type_for_mutators(label, "insert")
+        idx = operator.index(index)
+        n = len(self.children)
+        if idx < 0:
+            idx = max(n + idx, 0)
+        else:
+            idx = min(idx, n)
+        self.children.insert(idx, (label, child))
+
+    def remove_at(self, index: int) -> tuple[Label | None, Term | Trivia | fltk.fegen.pyrt.span.Span]:
+        idx = operator.index(index)
+        n = len(self.children)
+        norm = idx + n if idx < 0 else idx
+        if norm < 0 or norm >= n:
+            msg = f"Expr.remove_at: index {index} out of range ({n} children)"
+            raise IndexError(msg)
+        return self.children.pop(norm)
+
+    def replace_at(
+        self, index: int, child: Term | Trivia | fltk.fegen.pyrt.span.Span, label: Label | None = None
+    ) -> None:
+        self._check_child_type_for_mutators(child)
+        self._check_label_type_for_mutators(label, "replace_at")
+        idx = operator.index(index)
+        n = len(self.children)
+        norm = idx + n if idx < 0 else idx
+        if norm < 0 or norm >= n:
+            msg = f"Expr.replace_at: index {index} out of range ({n} children)"
+            raise IndexError(msg)
+        self.children[norm] = (label, child)
+
+    def clear(self) -> None:
+        self.children.clear()
 
     def append_plus(self, child: fltk.fegen.pyrt.span.Span) -> None:
         self.children.append((Expr.Label.PLUS, child))
@@ -181,6 +245,65 @@ class Term:
             raise ValueError(msg)
         return self.children[0]
 
+    _MUTATOR_ALLOWED_CHILD_TYPES = None
+
+    def _check_child_type_for_mutators(self, child: Factor | Trivia | fltk.fegen.pyrt.span.Span) -> None:
+        _allowed = Term._MUTATOR_ALLOWED_CHILD_TYPES
+        if _allowed is None:
+            _allowed = (Trivia, fltk.fegen.pyrt.terminalsrc.Span, Factor)
+            Term._MUTATOR_ALLOWED_CHILD_TYPES = _allowed
+        _ns = _get_native_span_type()
+        if _ns is not None and _ns not in _allowed:
+            Term._MUTATOR_ALLOWED_CHILD_TYPES = (*_allowed, _ns)
+            _allowed = Term._MUTATOR_ALLOWED_CHILD_TYPES
+        if not isinstance(child, _allowed):
+            msg = f"Term: unsupported child type {type(child).__name__}"
+            raise TypeError(msg)
+
+    def _check_label_type_for_mutators(self, label: Label | None, method: str) -> None:
+        if label is not None and (not isinstance(label, Term.Label)):
+            _cn = "Term"
+            msg = f"{_cn}.{method}: label argument is not a {_cn}_Label; got {type(label).__name__}"
+            raise TypeError(msg)
+
+    def insert(
+        self, index: int, child: Factor | Trivia | fltk.fegen.pyrt.span.Span, label: Label | None = None
+    ) -> None:
+        self._check_child_type_for_mutators(child)
+        self._check_label_type_for_mutators(label, "insert")
+        idx = operator.index(index)
+        n = len(self.children)
+        if idx < 0:
+            idx = max(n + idx, 0)
+        else:
+            idx = min(idx, n)
+        self.children.insert(idx, (label, child))
+
+    def remove_at(self, index: int) -> tuple[Label | None, Factor | Trivia | fltk.fegen.pyrt.span.Span]:
+        idx = operator.index(index)
+        n = len(self.children)
+        norm = idx + n if idx < 0 else idx
+        if norm < 0 or norm >= n:
+            msg = f"Term.remove_at: index {index} out of range ({n} children)"
+            raise IndexError(msg)
+        return self.children.pop(norm)
+
+    def replace_at(
+        self, index: int, child: Factor | Trivia | fltk.fegen.pyrt.span.Span, label: Label | None = None
+    ) -> None:
+        self._check_child_type_for_mutators(child)
+        self._check_label_type_for_mutators(label, "replace_at")
+        idx = operator.index(index)
+        n = len(self.children)
+        norm = idx + n if idx < 0 else idx
+        if norm < 0 or norm >= n:
+            msg = f"Term.replace_at: index {index} out of range ({n} children)"
+            raise IndexError(msg)
+        self.children[norm] = (label, child)
+
+    def clear(self) -> None:
+        self.children.clear()
+
     def append_factor(self, child: Factor) -> None:
         self.children.append((Term.Label.FACTOR, child))
 
@@ -275,6 +398,51 @@ class Factor:
             raise ValueError(msg)
         return self.children[0]
 
+    def _check_child_type_for_mutators(self, child: Expr | Number | Trivia) -> None:
+        if not isinstance(child, Number | Trivia | Expr):
+            msg = f"Factor: unsupported child type {type(child).__name__}"
+            raise TypeError(msg)
+
+    def _check_label_type_for_mutators(self, label: Label | None, method: str) -> None:
+        if label is not None and (not isinstance(label, Factor.Label)):
+            _cn = "Factor"
+            msg = f"{_cn}.{method}: label argument is not a {_cn}_Label; got {type(label).__name__}"
+            raise TypeError(msg)
+
+    def insert(self, index: int, child: Expr | Number | Trivia, label: Label | None = None) -> None:
+        self._check_child_type_for_mutators(child)
+        self._check_label_type_for_mutators(label, "insert")
+        idx = operator.index(index)
+        n = len(self.children)
+        if idx < 0:
+            idx = max(n + idx, 0)
+        else:
+            idx = min(idx, n)
+        self.children.insert(idx, (label, child))
+
+    def remove_at(self, index: int) -> tuple[Label | None, Expr | Number | Trivia]:
+        idx = operator.index(index)
+        n = len(self.children)
+        norm = idx + n if idx < 0 else idx
+        if norm < 0 or norm >= n:
+            msg = f"Factor.remove_at: index {index} out of range ({n} children)"
+            raise IndexError(msg)
+        return self.children.pop(norm)
+
+    def replace_at(self, index: int, child: Expr | Number | Trivia, label: Label | None = None) -> None:
+        self._check_child_type_for_mutators(child)
+        self._check_label_type_for_mutators(label, "replace_at")
+        idx = operator.index(index)
+        n = len(self.children)
+        norm = idx + n if idx < 0 else idx
+        if norm < 0 or norm >= n:
+            msg = f"Factor.replace_at: index {index} out of range ({n} children)"
+            raise IndexError(msg)
+        self.children[norm] = (label, child)
+
+    def clear(self) -> None:
+        self.children.clear()
+
     def append_expr(self, child: Expr) -> None:
         self.children.append((Factor.Label.EXPR, child))
 
@@ -364,6 +532,61 @@ class Number:
             raise ValueError(msg)
         return self.children[0]
 
+    _MUTATOR_ALLOWED_CHILD_TYPES = None
+
+    def _check_child_type_for_mutators(self, child: fltk.fegen.pyrt.span.Span) -> None:
+        _allowed = Number._MUTATOR_ALLOWED_CHILD_TYPES
+        if _allowed is None:
+            _allowed = (fltk.fegen.pyrt.terminalsrc.Span,)
+            Number._MUTATOR_ALLOWED_CHILD_TYPES = _allowed
+        _ns = _get_native_span_type()
+        if _ns is not None and _ns not in _allowed:
+            Number._MUTATOR_ALLOWED_CHILD_TYPES = (*_allowed, _ns)
+            _allowed = Number._MUTATOR_ALLOWED_CHILD_TYPES
+        if not isinstance(child, _allowed):
+            msg = f"Number: unsupported child type {type(child).__name__}"
+            raise TypeError(msg)
+
+    def _check_label_type_for_mutators(self, label: Label | None, method: str) -> None:
+        if label is not None and (not isinstance(label, Number.Label)):
+            _cn = "Number"
+            msg = f"{_cn}.{method}: label argument is not a {_cn}_Label; got {type(label).__name__}"
+            raise TypeError(msg)
+
+    def insert(self, index: int, child: fltk.fegen.pyrt.span.Span, label: Label | None = None) -> None:
+        self._check_child_type_for_mutators(child)
+        self._check_label_type_for_mutators(label, "insert")
+        idx = operator.index(index)
+        n = len(self.children)
+        if idx < 0:
+            idx = max(n + idx, 0)
+        else:
+            idx = min(idx, n)
+        self.children.insert(idx, (label, child))
+
+    def remove_at(self, index: int) -> tuple[Label | None, fltk.fegen.pyrt.span.Span]:
+        idx = operator.index(index)
+        n = len(self.children)
+        norm = idx + n if idx < 0 else idx
+        if norm < 0 or norm >= n:
+            msg = f"Number.remove_at: index {index} out of range ({n} children)"
+            raise IndexError(msg)
+        return self.children.pop(norm)
+
+    def replace_at(self, index: int, child: fltk.fegen.pyrt.span.Span, label: Label | None = None) -> None:
+        self._check_child_type_for_mutators(child)
+        self._check_label_type_for_mutators(label, "replace_at")
+        idx = operator.index(index)
+        n = len(self.children)
+        norm = idx + n if idx < 0 else idx
+        if norm < 0 or norm >= n:
+            msg = f"Number.replace_at: index {index} out of range ({n} children)"
+            raise IndexError(msg)
+        self.children[norm] = (label, child)
+
+    def clear(self) -> None:
+        self.children.clear()
+
     def append_value(self, child: fltk.fegen.pyrt.span.Span) -> None:
         self.children.append((Number.Label.VALUE, child))
 
@@ -428,6 +651,61 @@ class Trivia:
             msg = f"Expected one child but have {n}"
             raise ValueError(msg)
         return self.children[0]
+
+    _MUTATOR_ALLOWED_CHILD_TYPES = None
+
+    def _check_child_type_for_mutators(self, child: fltk.fegen.pyrt.span.Span) -> None:
+        _allowed = Trivia._MUTATOR_ALLOWED_CHILD_TYPES
+        if _allowed is None:
+            _allowed = (fltk.fegen.pyrt.terminalsrc.Span,)
+            Trivia._MUTATOR_ALLOWED_CHILD_TYPES = _allowed
+        _ns = _get_native_span_type()
+        if _ns is not None and _ns not in _allowed:
+            Trivia._MUTATOR_ALLOWED_CHILD_TYPES = (*_allowed, _ns)
+            _allowed = Trivia._MUTATOR_ALLOWED_CHILD_TYPES
+        if not isinstance(child, _allowed):
+            msg = f"Trivia: unsupported child type {type(child).__name__}"
+            raise TypeError(msg)
+
+    def _check_label_type_for_mutators(self, label: Label | None, method: str) -> None:
+        if label is not None and (not isinstance(label, Trivia.Label)):
+            _cn = "Trivia"
+            msg = f"{_cn}.{method}: label argument is not a {_cn}_Label; got {type(label).__name__}"
+            raise TypeError(msg)
+
+    def insert(self, index: int, child: fltk.fegen.pyrt.span.Span, label: Label | None = None) -> None:
+        self._check_child_type_for_mutators(child)
+        self._check_label_type_for_mutators(label, "insert")
+        idx = operator.index(index)
+        n = len(self.children)
+        if idx < 0:
+            idx = max(n + idx, 0)
+        else:
+            idx = min(idx, n)
+        self.children.insert(idx, (label, child))
+
+    def remove_at(self, index: int) -> tuple[Label | None, fltk.fegen.pyrt.span.Span]:
+        idx = operator.index(index)
+        n = len(self.children)
+        norm = idx + n if idx < 0 else idx
+        if norm < 0 or norm >= n:
+            msg = f"Trivia.remove_at: index {index} out of range ({n} children)"
+            raise IndexError(msg)
+        return self.children.pop(norm)
+
+    def replace_at(self, index: int, child: fltk.fegen.pyrt.span.Span, label: Label | None = None) -> None:
+        self._check_child_type_for_mutators(child)
+        self._check_label_type_for_mutators(label, "replace_at")
+        idx = operator.index(index)
+        n = len(self.children)
+        norm = idx + n if idx < 0 else idx
+        if norm < 0 or norm >= n:
+            msg = f"Trivia.replace_at: index {index} out of range ({n} children)"
+            raise IndexError(msg)
+        self.children[norm] = (label, child)
+
+    def clear(self) -> None:
+        self.children.clear()
 
     def append_content(self, child: fltk.fegen.pyrt.span.Span) -> None:
         self.children.append((Trivia.Label.CONTENT, child))

@@ -172,6 +172,8 @@ class CstGenerator:
         imports = [
             pyreg.Module(("dataclasses",)),
             pyreg.Module(("enum",)),
+            pyreg.Module(("operator",)),
+            pyreg.Module(("sys",)),
             pyreg.Module(("typing",)),
             pyreg.Module(("fltk", "fegen", "pyrt", "terminalsrc")),
         ]
@@ -205,6 +207,19 @@ class CstGenerator:
         # after the class is fully constructed, so __hash__/__eq__ avoid per-call f-string
         # rebuilds (efficiency-1: members are immutable singletons, value is invariant).
         module.body.extend(self._emit_node_kind_canonical_name_assignments())
+
+        # Module-level helper: lazily resolve fltk._native.Span so the generated module never
+        # imports the native extension at load time (preserves pure-Python importability, §2.2).
+        # sys is imported at the top of generated modules to support lazy native-Span resolution.
+        module.body.extend(
+            ast.parse(
+                """\
+def _get_native_span_type():
+    m = sys.modules.get("fltk._native")
+    return m.Span if m is not None else None
+"""
+            ).body
+        )
 
         for rule, model in self.rule_models.items():
             module.body.extend(self.py_class_for_model(self.class_name_for_rule_node(rule), model, rule))
@@ -305,6 +320,11 @@ class CstGenerator:
         )
         klass.body.append(child_fn)
 
+        # Four named mutators: insert / remove_at / replace_at / clear (§2.4)
+        # Validation helpers: emitted inline per-class (they reference class-specific Label enum
+        # and allowed child types).  Lazy native-Span resolution via the module-level helper.
+        klass.body.extend(self._emit_py_mutators(class_name, child_annotation, label_annotation, model))
+
         multi_type = len(model.types) > 1
 
         def concrete_body_for(method: str, label: str) -> list[ast.stmt]:
@@ -362,6 +382,228 @@ class CstGenerator:
         stmts: list[ast.stmt] = [klass]
         stmts.extend(self._emit_label_canonical_name_assignments(class_name, labels))
         return stmts
+
+    def _emit_py_mutators(
+        self,
+        class_name: str,
+        child_annotation: str,
+        label_annotation: str,
+        model: ItemsModel,
+    ) -> list[ast.stmt]:
+        """Emit insert / remove_at / replace_at / clear on the concrete dataclass.
+
+        Validation is strict: child and label are type-checked before mutation, consistent with
+        §2.2 (new API is strict from day one; grandfathered append/extend are unchanged).
+        Lazy native-Span resolution via module-level _get_native_span_type() (§2.2 asymmetry).
+
+        Returns a list of stmts: an optional class-variable assignment followed by FunctionDef
+        nodes.  The class-variable (_MUTATOR_ALLOWED_CHILD_TYPES) is emitted only when the node
+        has Span-typed children (the has_span_types path in _check_child_type_for_mutators).
+        """
+        fns: list[ast.stmt] = []
+
+        # Collect allowed concrete child classes (rule references → class names; Span types).
+        allowed_classes: list[str] = []
+        for mt in model.types:
+            if isinstance(mt, str):
+                # rule reference → class name in this module
+                allowed_classes.append(self.class_name_for_rule_node(mt))
+            else:
+                # Span type key → fltk.fegen.pyrt.terminalsrc.Span
+                # (native Span also accepted, resolved lazily — see _validate_child helper)
+                allowed_classes.append("fltk.fegen.pyrt.terminalsrc.Span")
+
+        # Deduplicate while preserving order for deterministic output.
+        seen: set[str] = set()
+        unique_classes: list[str] = []
+        for c in allowed_classes:
+            if c not in seen:
+                seen.add(c)
+                unique_classes.append(c)
+
+        # Determine if there are Span types among the model types (need native Span check).
+        has_span_types = any(not isinstance(mt, str) for mt in model.types)
+
+        # When Span types are present, emit _MUTATOR_ALLOWED_CHILD_TYPES as a plain None assignment
+        # (not an annotated field) so dataclasses does not treat it as a field.  It is lazily
+        # initialised to the static-type tuple on first call to _check_child_type_for_mutators
+        # and memoised there.  None initial value avoids forward-reference issues at class body
+        # parse time (the static type names are not yet in scope when the class body executes).
+        if has_span_types:
+            fns.extend(ast.parse("_MUTATOR_ALLOWED_CHILD_TYPES = None\n").body)
+
+        # Emit _check_child_type: validates that child is an allowed type.
+        # When Span types are present, native Span must be checked lazily (§2.2 asymmetry).
+        # Static checks use `isinstance(child, A | B)` (UP038 / Python 3.10+ union syntax).
+        # Dynamic check uses a class-level tuple _MUTATOR_ALLOWED_CHILD_TYPES that starts with
+        # the static types and is updated once (in-place, lock-free) when fltk._native is first
+        # seen.  fltk._native never unloads once imported, so positive memoisation is safe.
+        # The tuple is a ClassVar (not an instance field) but declared without a type annotation
+        # in the dataclass body to avoid being treated as a dataclass field.
+        check_child_fn = pygen.function("_check_child_type_for_mutators", f"self, child: {child_annotation}", "None")
+        if has_span_types:
+            # _MUTATOR_ALLOWED_CHILD_TYPES starts as None; lazily initialised to the static-type
+            # tuple on first call, then memoised.  Native Span is appended once when fltk._native
+            # is first seen (it never unloads, so positive memoisation is safe).
+            static_allowed_tuple = "(" + ", ".join(unique_classes) + ",)"
+            check_child_fn.body.extend(
+                ast.parse(
+                    f"""\
+_allowed = {class_name}._MUTATOR_ALLOWED_CHILD_TYPES
+if _allowed is None:
+    _allowed = {static_allowed_tuple}
+    {class_name}._MUTATOR_ALLOWED_CHILD_TYPES = _allowed
+_ns = _get_native_span_type()
+if _ns is not None and _ns not in _allowed:
+    {class_name}._MUTATOR_ALLOWED_CHILD_TYPES = (*_allowed, _ns)
+    _allowed = {class_name}._MUTATOR_ALLOWED_CHILD_TYPES
+if not isinstance(child, _allowed):
+    msg = f"{class_name}: unsupported child type {{type(child).__name__}}"
+    raise TypeError(msg)
+"""
+                ).body
+            )
+        elif len(unique_classes) == 1:
+            # Single type: simple isinstance — no tuple needed
+            check_child_fn.body.extend(
+                ast.parse(
+                    f"""\
+if not isinstance(child, {unique_classes[0]}):
+    msg = f"{class_name}: unsupported child type {{type(child).__name__}}"
+    raise TypeError(msg)
+"""
+                ).body
+            )
+        else:
+            # Multiple non-span types: use union syntax (UP038)
+            union_expr = " | ".join(unique_classes)
+            check_child_fn.body.extend(
+                ast.parse(
+                    f"""\
+if not isinstance(child, {union_expr}):
+    msg = f"{class_name}: unsupported child type {{type(child).__name__}}"
+    raise TypeError(msg)
+"""
+                ).body
+            )
+        fns.append(check_child_fn)
+
+        # Emit _check_label_type: validates that label is None or an instance of Label.
+        if model.labels:
+            # Node has labels: label must be None or Label enum.
+            # Use the static class name (not type(self).__name__) to match Rust's pinned message text.
+            # Assign it to a local _cn so the f-string line stays within the 120-char ruff limit for
+            # nodes with long class names.
+            check_label_fn = pygen.function(
+                "_check_label_type_for_mutators", f"self, label: {label_annotation}, method: str", "None"
+            )
+            check_label_fn.body.extend(
+                ast.parse(
+                    f"""\
+if label is not None and not isinstance(label, {class_name}.Label):
+    _cn = "{class_name}"
+    msg = f"{{_cn}}.{{method}}: label argument is not a {{_cn}}_Label; got {{type(label).__name__}}"
+    raise TypeError(msg)
+"""
+                ).body
+            )
+            fns.append(check_label_fn)
+        else:
+            # Label-free node: any non-None label is an error
+            check_label_fn = pygen.function(
+                "_check_label_type_for_mutators", f"self, label: {label_annotation}, method: str", "None"
+            )
+            check_label_fn.body.extend(
+                ast.parse(
+                    f"""\
+if label is not None:
+    msg = f"{class_name}.{{method}}: no labels defined for this node; got {{type(label).__name__}} label"
+    raise TypeError(msg)
+"""
+                ).body
+            )
+            fns.append(check_label_fn)
+
+        # insert(index, child, label=None) — list.insert clamping semantics via explicit clamp.
+        # Validation order: child → label → index, matching the Rust backend (§3).
+        # Explicit clamping is required: CPython's list.insert raises OverflowError for indices
+        # beyond ssize_t (e.g. 10**25), so we clamp after operator.index to match Rust's behaviour
+        # for arbitrarily-large ints (§3, pinned by test_insert_clamp_large_positive).
+        insert_fn = pygen.function(
+            "insert",
+            f"self, index: int, child: {child_annotation}, label: {label_annotation} = None",
+            "None",
+        )
+        insert_fn.body.extend(
+            ast.parse(
+                """\
+self._check_child_type_for_mutators(child)
+self._check_label_type_for_mutators(label, "insert")
+idx = operator.index(index)
+n = len(self.children)
+if idx < 0:
+    idx = max(n + idx, 0)
+else:
+    idx = min(idx, n)
+self.children.insert(idx, (label, child))
+"""
+            ).body
+        )
+        fns.append(insert_fn)
+
+        def _emit_bounds_check_stmts(method_name: str) -> list[ast.stmt]:
+            """Emit the shared normalize+bounds-check block for remove_at and replace_at.
+
+            Produces: operator.index call, len read, negative-index normalisation,
+            and IndexError raise on out-of-range.  Both callers diverge only in the
+            statement that follows the check (pop vs assignment).
+            """
+            return ast.parse(
+                f"""\
+idx = operator.index(index)
+n = len(self.children)
+norm = idx + n if idx < 0 else idx
+if norm < 0 or norm >= n:
+    msg = f"{class_name}.{method_name}: index {{index}} out of range ({{n}} children)"
+    raise IndexError(msg)
+"""
+            ).body
+
+        # remove_at(index) -> tuple[label, child] — strict bounds check + parity message.
+        if model.labels:
+            remove_ret = f"tuple[{label_annotation}, {child_annotation}]"
+        else:
+            remove_ret = f"tuple[None, {child_annotation}]"
+        remove_fn = pygen.function("remove_at", "self, index: int", remove_ret)
+        remove_fn.body.extend(_emit_bounds_check_stmts("remove_at"))
+        remove_fn.body.extend(ast.parse("return self.children.pop(norm)\n").body)
+        fns.append(remove_fn)
+
+        # replace_at(index, child, label=None) -> None — strict bounds check + parity message.
+        # Validation order: child → label → index, matching the Rust backend (§3).
+        replace_fn = pygen.function(
+            "replace_at",
+            f"self, index: int, child: {child_annotation}, label: {label_annotation} = None",
+            "None",
+        )
+        replace_fn.body.extend(
+            ast.parse(
+                """\
+self._check_child_type_for_mutators(child)
+self._check_label_type_for_mutators(label, "replace_at")
+"""
+            ).body
+        )
+        replace_fn.body.extend(_emit_bounds_check_stmts("replace_at"))
+        replace_fn.body.extend(ast.parse("self.children[norm] = (label, child)\n").body)
+        fns.append(replace_fn)
+
+        # clear() -> None
+        clear_fn = pygen.function("clear", "self", "None")
+        clear_fn.body.append(pygen.stmt("self.children.clear()"))
+        fns.append(clear_fn)
+
+        return fns
 
     def model_for_item(self, item: gsm.Item, inline_stack: list[str]) -> ItemsModel:
         if isinstance(item.term, gsm.Identifier):
@@ -685,6 +927,31 @@ class _ProtocolLabelMember:
         child_fn = pygen.function("child", "self", child_ret)
         child_fn.body.append(pygen.stmt("..."))
         klass.body.append(child_fn)
+
+        # Four named mutator stubs (§2.4, matching concrete class order)
+        insert_fn = pygen.function(
+            "insert",
+            f"self, index: int, child: {child_annotation}, label: {label_annotation} = None",
+            "None",
+        )
+        insert_fn.body.append(pygen.stmt("..."))
+        klass.body.append(insert_fn)
+
+        remove_fn = pygen.function("remove_at", "self, index: int", child_ret)
+        remove_fn.body.append(pygen.stmt("..."))
+        klass.body.append(remove_fn)
+
+        replace_fn = pygen.function(
+            "replace_at",
+            f"self, index: int, child: {child_annotation}, label: {label_annotation} = None",
+            "None",
+        )
+        replace_fn.body.append(pygen.stmt("..."))
+        klass.body.append(replace_fn)
+
+        clear_fn = pygen.function("clear", "self", "None")
+        clear_fn.body.append(pygen.stmt("..."))
+        klass.body.append(clear_fn)
 
         def protocol_annotation_for(label: str) -> str:
             return self.protocol_annotation_for_model_types(

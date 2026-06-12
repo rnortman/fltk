@@ -7,7 +7,7 @@ use fltk_cst_core::{extract_span, get_span_type, span_to_pyobject};
 #[cfg(feature = "python")]
 use fltk_cst_core::registry;
 #[cfg(feature = "python")]
-use pyo3::exceptions::{PyTypeError, PyValueError};
+use pyo3::exceptions::{PyIndexError, PyTypeError, PyValueError};
 #[cfg(feature = "python")]
 use pyo3::prelude::*;
 #[cfg(feature = "python")]
@@ -422,6 +422,35 @@ impl Num {
     pub fn extend_value(&mut self, spans: impl IntoIterator<Item = Span>) {
         self.children.extend(spans.into_iter().map(|s| (Some(NumLabel::Value), NumChild::Span(s))));
     }
+
+    /// Insert a child at `index` (Vec::insert semantics: panics if index > len).
+    ///
+    /// Python-facing clamping is in the `insert` pymethod; native callers must
+    /// bounds-check. Unlike `list.insert`, Vec::insert panics on out-of-bounds.
+    pub fn insert_child(&mut self, index: usize, label: Option<NumLabel>, child: NumChild) {
+        self.children.insert(index, (label, child));
+    }
+
+    /// Remove and return the child at `index` (Vec::remove semantics: panics if out of range).
+    ///
+    /// Panics on out-of-range. Python-facing IndexError is in the `remove_at` pymethod.
+    pub fn remove_child(&mut self, index: usize) -> (Option<NumLabel>, NumChild) {
+        self.children.remove(index)
+    }
+
+    /// Replace the child at `index`, returning the old entry (panics if out of range).
+    ///
+    /// Panics on out-of-range. Python-facing IndexError is in the `replace_at` pymethod.
+    pub fn replace_child(
+        &mut self, index: usize, label: Option<NumLabel>, child: NumChild,
+    ) -> (Option<NumLabel>, NumChild) {
+        std::mem::replace(&mut self.children[index], (label, child))
+    }
+
+    /// Remove all children.
+    pub fn clear_children(&mut self) {
+        self.children.clear();
+    }
 }
 
 #[cfg(feature = "python")]
@@ -612,6 +641,185 @@ impl PyNum {
         };
         let child_obj = child.to_pyobject(py)?;
         Ok(PyTuple::new(py, [label_obj, child_obj])?.into_any().unbind())
+    }
+
+    #[pyo3(signature = (index, child, label = None))]
+    fn insert(
+        &self,
+        py: Python<'_>,
+        index: &Bound<'_, PyAny>,
+        child: &Bound<'_, PyAny>,
+        label: Option<PyObject>,
+    ) -> PyResult<()> {
+        // Validate child and label BEFORE taking the write lock (§2.3 lock discipline).
+        let span_type = get_span_type(py)?;
+        let native_child = NumChild::extract_from_pyobject(py, child, &span_type)?;
+        let native_label = match label {
+            None => None,
+            Some(lbl) => {
+                if let Ok(native_lbl) = lbl.bind(py).extract::<NumLabel>() {
+                    Some(native_lbl)
+                } else {
+                    return Err(PyTypeError::new_err(format!(
+                        "Num.insert: label argument is not a Num_Label; got {}",
+                        lbl.bind(py).get_type().name()?
+                    )));
+                }
+            }
+        };
+        // Index normalization via operator.index (PyNumber_Index semantics).
+        // This raises TypeError (not AttributeError) for non-indexable inputs, matching Python's
+        // operator.index contract. Must be done BEFORE taking any lock (§2.3 lock discipline).
+        // Overflow by sign: positive overflow clamps to len; negative overflow clamps to 0.
+        let raw_idx = py
+            .import(pyo3::intern!(py, "operator"))?
+            .getattr(pyo3::intern!(py, "index"))?
+            .call1((index,))?;
+        // Fast path for the common exact-int case; fall back to sign-based Python call for beyond-i64.
+        let (is_negative_big, raw_i64) = if let Ok(i) = raw_idx.extract::<i64>() {
+            (false, Some(i))
+        } else {
+            // Beyond i64: use Python __lt__ to determine sign.  The lt call is still outside
+            // any lock, so lock discipline is maintained.
+            let neg = raw_idx.lt(0i64)?;
+            (neg, None)
+        };
+        // Now take a single write lock for the entire len-read + clamp + insert sequence.
+        let mut guard = self.inner.write();
+        let n = guard.children.len();
+        let clamped: usize = match raw_i64 {
+            Some(i) if i < 0 => {
+                let normalized = n as i64 + i;
+                if normalized < 0 { 0 } else { normalized as usize }
+            }
+            Some(i) => {
+                let u = i as usize;
+                if u > n { n } else { u }
+            }
+            None => if is_negative_big { 0 } else { n },
+        };
+        guard.children.insert(clamped, (native_label, native_child));
+        Ok(())
+    }
+
+    fn remove_at(&self, py: Python<'_>, index: &Bound<'_, PyAny>) -> PyResult<PyObject> {
+        // Capture the caller's original string representation BEFORE normalization,
+        // so error messages show the original value (e.g. `True` not `1`).
+        let orig_str = index.str()?.to_string_lossy().into_owned();
+        // Normalize via operator.index: raises TypeError (not AttributeError) for
+        // non-indexable inputs, matching Python's operator.index contract.
+        // All Python work must happen before any lock (§2.3 lock discipline).
+        let raw_idx = py
+            .import(pyo3::intern!(py, "operator"))?
+            .getattr(pyo3::intern!(py, "index"))?
+            .call1((index,))?;
+        // Fast path: extract i64. Beyond i64 is always OOB for real trees.
+        let maybe_i64: Option<i64> = raw_idx.extract::<i64>().ok();
+        // Single write lock: resolve + bounds-check + Vec::remove atomically (no TOCTOU).
+        // On OOB, capture n and return Err after releasing the guard.
+        let result: Result<_, usize> = {
+            let mut guard = self.inner.write();
+            let n = guard.children.len();
+            let resolved: Option<usize> = match maybe_i64 {
+                Some(i) if i < 0 => {
+                    let normalized = n as i64 + i;
+                    if normalized < 0 || normalized as usize >= n { None }
+                    else { Some(normalized as usize) }
+                }
+                Some(i) if (i as usize) < n => Some(i as usize),
+                _ => None,
+            };
+            match resolved {
+                Some(idx) => Ok(guard.children.remove(idx)),
+                None => Err(n),
+            }
+        };
+        let (label, child) = result.map_err(|n| {
+            PyIndexError::new_err(format!(
+                "Num.remove_at: index {} out of range ({} children)",
+                orig_str, n
+            ))
+        })?;
+        // Python wrap-out happens after the guard is released (§2.3 lock discipline).
+        let label_obj: PyObject = match label {
+            None => py.None(),
+            Some(lbl) => lbl.into_pyobject(py)?.into_any().unbind(),
+        };
+        let child_obj = child.to_pyobject(py)?;
+        Ok(PyTuple::new(py, [label_obj, child_obj])?.into_any().unbind())
+    }
+
+    #[pyo3(signature = (index, child, label = None))]
+    fn replace_at(
+        &self,
+        py: Python<'_>,
+        index: &Bound<'_, PyAny>,
+        child: &Bound<'_, PyAny>,
+        label: Option<PyObject>,
+    ) -> PyResult<()> {
+        // Validate child and label BEFORE taking the write lock (§2.3 lock discipline).
+        let span_type = get_span_type(py)?;
+        let native_child = NumChild::extract_from_pyobject(py, child, &span_type)?;
+        let native_label = match label {
+            None => None,
+            Some(lbl) => {
+                if let Ok(native_lbl) = lbl.bind(py).extract::<NumLabel>() {
+                    Some(native_lbl)
+                } else {
+                    return Err(PyTypeError::new_err(format!(
+                        "Num.replace_at: label argument is not a Num_Label; got {}",
+                        lbl.bind(py).get_type().name()?
+                    )));
+                }
+            }
+        };
+        // Capture the caller's original string representation BEFORE normalization.
+        let orig_str = index.str()?.to_string_lossy().into_owned();
+        // Normalize via operator.index: raises TypeError for non-indexable inputs.
+        // All Python work must happen before any lock (§2.3 lock discipline).
+        let raw_idx = py
+            .import(pyo3::intern!(py, "operator"))?
+            .getattr(pyo3::intern!(py, "index"))?
+            .call1((index,))?;
+        let maybe_i64: Option<i64> = raw_idx.extract::<i64>().ok();
+        // Single write lock: resolve + bounds-check + mem::replace atomically (no TOCTOU).
+        let old = {
+            let mut guard = self.inner.write();
+            let n = guard.children.len();
+            let resolved: Option<usize> = match maybe_i64 {
+                Some(i) if i < 0 => {
+                    let normalized = n as i64 + i;
+                    if normalized < 0 || normalized as usize >= n { None }
+                    else { Some(normalized as usize) }
+                }
+                Some(i) if (i as usize) < n => Some(i as usize),
+                _ => None,
+            };
+            let idx = match resolved {
+                Some(i) => i,
+                None => {
+                    return Err(PyIndexError::new_err(format!(
+                        "Num.replace_at: index {} out of range ({} children)",
+                        orig_str, n
+                    )));
+                }
+            };
+            std::mem::replace(&mut guard.children[idx], (native_label, native_child))
+        };
+        // Drop old entry outside the lock to avoid recursive lock acquisition
+        // if the child's drop chain re-enters Python.
+        drop(old);
+        Ok(())
+    }
+
+    fn clear(&self, _py: Python<'_>) -> PyResult<()> {
+        let old = {
+            let mut guard = self.inner.write();
+            std::mem::take(&mut guard.children)
+        };
+        // Drop old entries outside the lock.
+        drop(old);
+        Ok(())
     }
 
     fn append_value(&self, py: Python<'_>, child: &Bound<'_, PyAny>) -> PyResult<()> {
@@ -1002,6 +1210,35 @@ impl Name {
     pub fn extend_value(&mut self, spans: impl IntoIterator<Item = Span>) {
         self.children.extend(spans.into_iter().map(|s| (Some(NameLabel::Value), NameChild::Span(s))));
     }
+
+    /// Insert a child at `index` (Vec::insert semantics: panics if index > len).
+    ///
+    /// Python-facing clamping is in the `insert` pymethod; native callers must
+    /// bounds-check. Unlike `list.insert`, Vec::insert panics on out-of-bounds.
+    pub fn insert_child(&mut self, index: usize, label: Option<NameLabel>, child: NameChild) {
+        self.children.insert(index, (label, child));
+    }
+
+    /// Remove and return the child at `index` (Vec::remove semantics: panics if out of range).
+    ///
+    /// Panics on out-of-range. Python-facing IndexError is in the `remove_at` pymethod.
+    pub fn remove_child(&mut self, index: usize) -> (Option<NameLabel>, NameChild) {
+        self.children.remove(index)
+    }
+
+    /// Replace the child at `index`, returning the old entry (panics if out of range).
+    ///
+    /// Panics on out-of-range. Python-facing IndexError is in the `replace_at` pymethod.
+    pub fn replace_child(
+        &mut self, index: usize, label: Option<NameLabel>, child: NameChild,
+    ) -> (Option<NameLabel>, NameChild) {
+        std::mem::replace(&mut self.children[index], (label, child))
+    }
+
+    /// Remove all children.
+    pub fn clear_children(&mut self) {
+        self.children.clear();
+    }
 }
 
 #[cfg(feature = "python")]
@@ -1192,6 +1429,185 @@ impl PyName {
         };
         let child_obj = child.to_pyobject(py)?;
         Ok(PyTuple::new(py, [label_obj, child_obj])?.into_any().unbind())
+    }
+
+    #[pyo3(signature = (index, child, label = None))]
+    fn insert(
+        &self,
+        py: Python<'_>,
+        index: &Bound<'_, PyAny>,
+        child: &Bound<'_, PyAny>,
+        label: Option<PyObject>,
+    ) -> PyResult<()> {
+        // Validate child and label BEFORE taking the write lock (§2.3 lock discipline).
+        let span_type = get_span_type(py)?;
+        let native_child = NameChild::extract_from_pyobject(py, child, &span_type)?;
+        let native_label = match label {
+            None => None,
+            Some(lbl) => {
+                if let Ok(native_lbl) = lbl.bind(py).extract::<NameLabel>() {
+                    Some(native_lbl)
+                } else {
+                    return Err(PyTypeError::new_err(format!(
+                        "Name.insert: label argument is not a Name_Label; got {}",
+                        lbl.bind(py).get_type().name()?
+                    )));
+                }
+            }
+        };
+        // Index normalization via operator.index (PyNumber_Index semantics).
+        // This raises TypeError (not AttributeError) for non-indexable inputs, matching Python's
+        // operator.index contract. Must be done BEFORE taking any lock (§2.3 lock discipline).
+        // Overflow by sign: positive overflow clamps to len; negative overflow clamps to 0.
+        let raw_idx = py
+            .import(pyo3::intern!(py, "operator"))?
+            .getattr(pyo3::intern!(py, "index"))?
+            .call1((index,))?;
+        // Fast path for the common exact-int case; fall back to sign-based Python call for beyond-i64.
+        let (is_negative_big, raw_i64) = if let Ok(i) = raw_idx.extract::<i64>() {
+            (false, Some(i))
+        } else {
+            // Beyond i64: use Python __lt__ to determine sign.  The lt call is still outside
+            // any lock, so lock discipline is maintained.
+            let neg = raw_idx.lt(0i64)?;
+            (neg, None)
+        };
+        // Now take a single write lock for the entire len-read + clamp + insert sequence.
+        let mut guard = self.inner.write();
+        let n = guard.children.len();
+        let clamped: usize = match raw_i64 {
+            Some(i) if i < 0 => {
+                let normalized = n as i64 + i;
+                if normalized < 0 { 0 } else { normalized as usize }
+            }
+            Some(i) => {
+                let u = i as usize;
+                if u > n { n } else { u }
+            }
+            None => if is_negative_big { 0 } else { n },
+        };
+        guard.children.insert(clamped, (native_label, native_child));
+        Ok(())
+    }
+
+    fn remove_at(&self, py: Python<'_>, index: &Bound<'_, PyAny>) -> PyResult<PyObject> {
+        // Capture the caller's original string representation BEFORE normalization,
+        // so error messages show the original value (e.g. `True` not `1`).
+        let orig_str = index.str()?.to_string_lossy().into_owned();
+        // Normalize via operator.index: raises TypeError (not AttributeError) for
+        // non-indexable inputs, matching Python's operator.index contract.
+        // All Python work must happen before any lock (§2.3 lock discipline).
+        let raw_idx = py
+            .import(pyo3::intern!(py, "operator"))?
+            .getattr(pyo3::intern!(py, "index"))?
+            .call1((index,))?;
+        // Fast path: extract i64. Beyond i64 is always OOB for real trees.
+        let maybe_i64: Option<i64> = raw_idx.extract::<i64>().ok();
+        // Single write lock: resolve + bounds-check + Vec::remove atomically (no TOCTOU).
+        // On OOB, capture n and return Err after releasing the guard.
+        let result: Result<_, usize> = {
+            let mut guard = self.inner.write();
+            let n = guard.children.len();
+            let resolved: Option<usize> = match maybe_i64 {
+                Some(i) if i < 0 => {
+                    let normalized = n as i64 + i;
+                    if normalized < 0 || normalized as usize >= n { None }
+                    else { Some(normalized as usize) }
+                }
+                Some(i) if (i as usize) < n => Some(i as usize),
+                _ => None,
+            };
+            match resolved {
+                Some(idx) => Ok(guard.children.remove(idx)),
+                None => Err(n),
+            }
+        };
+        let (label, child) = result.map_err(|n| {
+            PyIndexError::new_err(format!(
+                "Name.remove_at: index {} out of range ({} children)",
+                orig_str, n
+            ))
+        })?;
+        // Python wrap-out happens after the guard is released (§2.3 lock discipline).
+        let label_obj: PyObject = match label {
+            None => py.None(),
+            Some(lbl) => lbl.into_pyobject(py)?.into_any().unbind(),
+        };
+        let child_obj = child.to_pyobject(py)?;
+        Ok(PyTuple::new(py, [label_obj, child_obj])?.into_any().unbind())
+    }
+
+    #[pyo3(signature = (index, child, label = None))]
+    fn replace_at(
+        &self,
+        py: Python<'_>,
+        index: &Bound<'_, PyAny>,
+        child: &Bound<'_, PyAny>,
+        label: Option<PyObject>,
+    ) -> PyResult<()> {
+        // Validate child and label BEFORE taking the write lock (§2.3 lock discipline).
+        let span_type = get_span_type(py)?;
+        let native_child = NameChild::extract_from_pyobject(py, child, &span_type)?;
+        let native_label = match label {
+            None => None,
+            Some(lbl) => {
+                if let Ok(native_lbl) = lbl.bind(py).extract::<NameLabel>() {
+                    Some(native_lbl)
+                } else {
+                    return Err(PyTypeError::new_err(format!(
+                        "Name.replace_at: label argument is not a Name_Label; got {}",
+                        lbl.bind(py).get_type().name()?
+                    )));
+                }
+            }
+        };
+        // Capture the caller's original string representation BEFORE normalization.
+        let orig_str = index.str()?.to_string_lossy().into_owned();
+        // Normalize via operator.index: raises TypeError for non-indexable inputs.
+        // All Python work must happen before any lock (§2.3 lock discipline).
+        let raw_idx = py
+            .import(pyo3::intern!(py, "operator"))?
+            .getattr(pyo3::intern!(py, "index"))?
+            .call1((index,))?;
+        let maybe_i64: Option<i64> = raw_idx.extract::<i64>().ok();
+        // Single write lock: resolve + bounds-check + mem::replace atomically (no TOCTOU).
+        let old = {
+            let mut guard = self.inner.write();
+            let n = guard.children.len();
+            let resolved: Option<usize> = match maybe_i64 {
+                Some(i) if i < 0 => {
+                    let normalized = n as i64 + i;
+                    if normalized < 0 || normalized as usize >= n { None }
+                    else { Some(normalized as usize) }
+                }
+                Some(i) if (i as usize) < n => Some(i as usize),
+                _ => None,
+            };
+            let idx = match resolved {
+                Some(i) => i,
+                None => {
+                    return Err(PyIndexError::new_err(format!(
+                        "Name.replace_at: index {} out of range ({} children)",
+                        orig_str, n
+                    )));
+                }
+            };
+            std::mem::replace(&mut guard.children[idx], (native_label, native_child))
+        };
+        // Drop old entry outside the lock to avoid recursive lock acquisition
+        // if the child's drop chain re-enters Python.
+        drop(old);
+        Ok(())
+    }
+
+    fn clear(&self, _py: Python<'_>) -> PyResult<()> {
+        let old = {
+            let mut guard = self.inner.write();
+            std::mem::take(&mut guard.children)
+        };
+        // Drop old entries outside the lock.
+        drop(old);
+        Ok(())
     }
 
     fn append_value(&self, py: Python<'_>, child: &Bound<'_, PyAny>) -> PyResult<()> {
@@ -1720,6 +2136,35 @@ impl Atom {
     pub fn extend_num(&mut self, children: impl IntoIterator<Item = impl Into<Shared<Num>>>) {
         self.children.extend(children.into_iter().map(|c| (Some(AtomLabel::Num), AtomChild::Num(c.into()))));
     }
+
+    /// Insert a child at `index` (Vec::insert semantics: panics if index > len).
+    ///
+    /// Python-facing clamping is in the `insert` pymethod; native callers must
+    /// bounds-check. Unlike `list.insert`, Vec::insert panics on out-of-bounds.
+    pub fn insert_child(&mut self, index: usize, label: Option<AtomLabel>, child: AtomChild) {
+        self.children.insert(index, (label, child));
+    }
+
+    /// Remove and return the child at `index` (Vec::remove semantics: panics if out of range).
+    ///
+    /// Panics on out-of-range. Python-facing IndexError is in the `remove_at` pymethod.
+    pub fn remove_child(&mut self, index: usize) -> (Option<AtomLabel>, AtomChild) {
+        self.children.remove(index)
+    }
+
+    /// Replace the child at `index`, returning the old entry (panics if out of range).
+    ///
+    /// Panics on out-of-range. Python-facing IndexError is in the `replace_at` pymethod.
+    pub fn replace_child(
+        &mut self, index: usize, label: Option<AtomLabel>, child: AtomChild,
+    ) -> (Option<AtomLabel>, AtomChild) {
+        std::mem::replace(&mut self.children[index], (label, child))
+    }
+
+    /// Remove all children.
+    pub fn clear_children(&mut self) {
+        self.children.clear();
+    }
 }
 
 #[cfg(feature = "python")]
@@ -1910,6 +2355,185 @@ impl PyAtom {
         };
         let child_obj = child.to_pyobject(py)?;
         Ok(PyTuple::new(py, [label_obj, child_obj])?.into_any().unbind())
+    }
+
+    #[pyo3(signature = (index, child, label = None))]
+    fn insert(
+        &self,
+        py: Python<'_>,
+        index: &Bound<'_, PyAny>,
+        child: &Bound<'_, PyAny>,
+        label: Option<PyObject>,
+    ) -> PyResult<()> {
+        // Validate child and label BEFORE taking the write lock (§2.3 lock discipline).
+        let span_type = get_span_type(py)?;
+        let native_child = AtomChild::extract_from_pyobject(py, child, &span_type)?;
+        let native_label = match label {
+            None => None,
+            Some(lbl) => {
+                if let Ok(native_lbl) = lbl.bind(py).extract::<AtomLabel>() {
+                    Some(native_lbl)
+                } else {
+                    return Err(PyTypeError::new_err(format!(
+                        "Atom.insert: label argument is not a Atom_Label; got {}",
+                        lbl.bind(py).get_type().name()?
+                    )));
+                }
+            }
+        };
+        // Index normalization via operator.index (PyNumber_Index semantics).
+        // This raises TypeError (not AttributeError) for non-indexable inputs, matching Python's
+        // operator.index contract. Must be done BEFORE taking any lock (§2.3 lock discipline).
+        // Overflow by sign: positive overflow clamps to len; negative overflow clamps to 0.
+        let raw_idx = py
+            .import(pyo3::intern!(py, "operator"))?
+            .getattr(pyo3::intern!(py, "index"))?
+            .call1((index,))?;
+        // Fast path for the common exact-int case; fall back to sign-based Python call for beyond-i64.
+        let (is_negative_big, raw_i64) = if let Ok(i) = raw_idx.extract::<i64>() {
+            (false, Some(i))
+        } else {
+            // Beyond i64: use Python __lt__ to determine sign.  The lt call is still outside
+            // any lock, so lock discipline is maintained.
+            let neg = raw_idx.lt(0i64)?;
+            (neg, None)
+        };
+        // Now take a single write lock for the entire len-read + clamp + insert sequence.
+        let mut guard = self.inner.write();
+        let n = guard.children.len();
+        let clamped: usize = match raw_i64 {
+            Some(i) if i < 0 => {
+                let normalized = n as i64 + i;
+                if normalized < 0 { 0 } else { normalized as usize }
+            }
+            Some(i) => {
+                let u = i as usize;
+                if u > n { n } else { u }
+            }
+            None => if is_negative_big { 0 } else { n },
+        };
+        guard.children.insert(clamped, (native_label, native_child));
+        Ok(())
+    }
+
+    fn remove_at(&self, py: Python<'_>, index: &Bound<'_, PyAny>) -> PyResult<PyObject> {
+        // Capture the caller's original string representation BEFORE normalization,
+        // so error messages show the original value (e.g. `True` not `1`).
+        let orig_str = index.str()?.to_string_lossy().into_owned();
+        // Normalize via operator.index: raises TypeError (not AttributeError) for
+        // non-indexable inputs, matching Python's operator.index contract.
+        // All Python work must happen before any lock (§2.3 lock discipline).
+        let raw_idx = py
+            .import(pyo3::intern!(py, "operator"))?
+            .getattr(pyo3::intern!(py, "index"))?
+            .call1((index,))?;
+        // Fast path: extract i64. Beyond i64 is always OOB for real trees.
+        let maybe_i64: Option<i64> = raw_idx.extract::<i64>().ok();
+        // Single write lock: resolve + bounds-check + Vec::remove atomically (no TOCTOU).
+        // On OOB, capture n and return Err after releasing the guard.
+        let result: Result<_, usize> = {
+            let mut guard = self.inner.write();
+            let n = guard.children.len();
+            let resolved: Option<usize> = match maybe_i64 {
+                Some(i) if i < 0 => {
+                    let normalized = n as i64 + i;
+                    if normalized < 0 || normalized as usize >= n { None }
+                    else { Some(normalized as usize) }
+                }
+                Some(i) if (i as usize) < n => Some(i as usize),
+                _ => None,
+            };
+            match resolved {
+                Some(idx) => Ok(guard.children.remove(idx)),
+                None => Err(n),
+            }
+        };
+        let (label, child) = result.map_err(|n| {
+            PyIndexError::new_err(format!(
+                "Atom.remove_at: index {} out of range ({} children)",
+                orig_str, n
+            ))
+        })?;
+        // Python wrap-out happens after the guard is released (§2.3 lock discipline).
+        let label_obj: PyObject = match label {
+            None => py.None(),
+            Some(lbl) => lbl.into_pyobject(py)?.into_any().unbind(),
+        };
+        let child_obj = child.to_pyobject(py)?;
+        Ok(PyTuple::new(py, [label_obj, child_obj])?.into_any().unbind())
+    }
+
+    #[pyo3(signature = (index, child, label = None))]
+    fn replace_at(
+        &self,
+        py: Python<'_>,
+        index: &Bound<'_, PyAny>,
+        child: &Bound<'_, PyAny>,
+        label: Option<PyObject>,
+    ) -> PyResult<()> {
+        // Validate child and label BEFORE taking the write lock (§2.3 lock discipline).
+        let span_type = get_span_type(py)?;
+        let native_child = AtomChild::extract_from_pyobject(py, child, &span_type)?;
+        let native_label = match label {
+            None => None,
+            Some(lbl) => {
+                if let Ok(native_lbl) = lbl.bind(py).extract::<AtomLabel>() {
+                    Some(native_lbl)
+                } else {
+                    return Err(PyTypeError::new_err(format!(
+                        "Atom.replace_at: label argument is not a Atom_Label; got {}",
+                        lbl.bind(py).get_type().name()?
+                    )));
+                }
+            }
+        };
+        // Capture the caller's original string representation BEFORE normalization.
+        let orig_str = index.str()?.to_string_lossy().into_owned();
+        // Normalize via operator.index: raises TypeError for non-indexable inputs.
+        // All Python work must happen before any lock (§2.3 lock discipline).
+        let raw_idx = py
+            .import(pyo3::intern!(py, "operator"))?
+            .getattr(pyo3::intern!(py, "index"))?
+            .call1((index,))?;
+        let maybe_i64: Option<i64> = raw_idx.extract::<i64>().ok();
+        // Single write lock: resolve + bounds-check + mem::replace atomically (no TOCTOU).
+        let old = {
+            let mut guard = self.inner.write();
+            let n = guard.children.len();
+            let resolved: Option<usize> = match maybe_i64 {
+                Some(i) if i < 0 => {
+                    let normalized = n as i64 + i;
+                    if normalized < 0 || normalized as usize >= n { None }
+                    else { Some(normalized as usize) }
+                }
+                Some(i) if (i as usize) < n => Some(i as usize),
+                _ => None,
+            };
+            let idx = match resolved {
+                Some(i) => i,
+                None => {
+                    return Err(PyIndexError::new_err(format!(
+                        "Atom.replace_at: index {} out of range ({} children)",
+                        orig_str, n
+                    )));
+                }
+            };
+            std::mem::replace(&mut guard.children[idx], (native_label, native_child))
+        };
+        // Drop old entry outside the lock to avoid recursive lock acquisition
+        // if the child's drop chain re-enters Python.
+        drop(old);
+        Ok(())
+    }
+
+    fn clear(&self, _py: Python<'_>) -> PyResult<()> {
+        let old = {
+            let mut guard = self.inner.write();
+            std::mem::take(&mut guard.children)
+        };
+        // Drop old entries outside the lock.
+        drop(old);
+        Ok(())
     }
 
     fn append_name(&self, py: Python<'_>, child: &Bound<'_, PyAny>) -> PyResult<()> {
@@ -2456,6 +3080,35 @@ impl ParenExpr {
     pub fn extend_inner(&mut self, children: impl IntoIterator<Item = impl Into<Shared<Atom>>>) {
         self.children.extend(children.into_iter().map(|c| (Some(ParenExprLabel::Inner), ParenExprChild::Atom(c.into()))));
     }
+
+    /// Insert a child at `index` (Vec::insert semantics: panics if index > len).
+    ///
+    /// Python-facing clamping is in the `insert` pymethod; native callers must
+    /// bounds-check. Unlike `list.insert`, Vec::insert panics on out-of-bounds.
+    pub fn insert_child(&mut self, index: usize, label: Option<ParenExprLabel>, child: ParenExprChild) {
+        self.children.insert(index, (label, child));
+    }
+
+    /// Remove and return the child at `index` (Vec::remove semantics: panics if out of range).
+    ///
+    /// Panics on out-of-range. Python-facing IndexError is in the `remove_at` pymethod.
+    pub fn remove_child(&mut self, index: usize) -> (Option<ParenExprLabel>, ParenExprChild) {
+        self.children.remove(index)
+    }
+
+    /// Replace the child at `index`, returning the old entry (panics if out of range).
+    ///
+    /// Panics on out-of-range. Python-facing IndexError is in the `replace_at` pymethod.
+    pub fn replace_child(
+        &mut self, index: usize, label: Option<ParenExprLabel>, child: ParenExprChild,
+    ) -> (Option<ParenExprLabel>, ParenExprChild) {
+        std::mem::replace(&mut self.children[index], (label, child))
+    }
+
+    /// Remove all children.
+    pub fn clear_children(&mut self) {
+        self.children.clear();
+    }
 }
 
 #[cfg(feature = "python")]
@@ -2646,6 +3299,185 @@ impl PyParenExpr {
         };
         let child_obj = child.to_pyobject(py)?;
         Ok(PyTuple::new(py, [label_obj, child_obj])?.into_any().unbind())
+    }
+
+    #[pyo3(signature = (index, child, label = None))]
+    fn insert(
+        &self,
+        py: Python<'_>,
+        index: &Bound<'_, PyAny>,
+        child: &Bound<'_, PyAny>,
+        label: Option<PyObject>,
+    ) -> PyResult<()> {
+        // Validate child and label BEFORE taking the write lock (§2.3 lock discipline).
+        let span_type = get_span_type(py)?;
+        let native_child = ParenExprChild::extract_from_pyobject(py, child, &span_type)?;
+        let native_label = match label {
+            None => None,
+            Some(lbl) => {
+                if let Ok(native_lbl) = lbl.bind(py).extract::<ParenExprLabel>() {
+                    Some(native_lbl)
+                } else {
+                    return Err(PyTypeError::new_err(format!(
+                        "ParenExpr.insert: label argument is not a ParenExpr_Label; got {}",
+                        lbl.bind(py).get_type().name()?
+                    )));
+                }
+            }
+        };
+        // Index normalization via operator.index (PyNumber_Index semantics).
+        // This raises TypeError (not AttributeError) for non-indexable inputs, matching Python's
+        // operator.index contract. Must be done BEFORE taking any lock (§2.3 lock discipline).
+        // Overflow by sign: positive overflow clamps to len; negative overflow clamps to 0.
+        let raw_idx = py
+            .import(pyo3::intern!(py, "operator"))?
+            .getattr(pyo3::intern!(py, "index"))?
+            .call1((index,))?;
+        // Fast path for the common exact-int case; fall back to sign-based Python call for beyond-i64.
+        let (is_negative_big, raw_i64) = if let Ok(i) = raw_idx.extract::<i64>() {
+            (false, Some(i))
+        } else {
+            // Beyond i64: use Python __lt__ to determine sign.  The lt call is still outside
+            // any lock, so lock discipline is maintained.
+            let neg = raw_idx.lt(0i64)?;
+            (neg, None)
+        };
+        // Now take a single write lock for the entire len-read + clamp + insert sequence.
+        let mut guard = self.inner.write();
+        let n = guard.children.len();
+        let clamped: usize = match raw_i64 {
+            Some(i) if i < 0 => {
+                let normalized = n as i64 + i;
+                if normalized < 0 { 0 } else { normalized as usize }
+            }
+            Some(i) => {
+                let u = i as usize;
+                if u > n { n } else { u }
+            }
+            None => if is_negative_big { 0 } else { n },
+        };
+        guard.children.insert(clamped, (native_label, native_child));
+        Ok(())
+    }
+
+    fn remove_at(&self, py: Python<'_>, index: &Bound<'_, PyAny>) -> PyResult<PyObject> {
+        // Capture the caller's original string representation BEFORE normalization,
+        // so error messages show the original value (e.g. `True` not `1`).
+        let orig_str = index.str()?.to_string_lossy().into_owned();
+        // Normalize via operator.index: raises TypeError (not AttributeError) for
+        // non-indexable inputs, matching Python's operator.index contract.
+        // All Python work must happen before any lock (§2.3 lock discipline).
+        let raw_idx = py
+            .import(pyo3::intern!(py, "operator"))?
+            .getattr(pyo3::intern!(py, "index"))?
+            .call1((index,))?;
+        // Fast path: extract i64. Beyond i64 is always OOB for real trees.
+        let maybe_i64: Option<i64> = raw_idx.extract::<i64>().ok();
+        // Single write lock: resolve + bounds-check + Vec::remove atomically (no TOCTOU).
+        // On OOB, capture n and return Err after releasing the guard.
+        let result: Result<_, usize> = {
+            let mut guard = self.inner.write();
+            let n = guard.children.len();
+            let resolved: Option<usize> = match maybe_i64 {
+                Some(i) if i < 0 => {
+                    let normalized = n as i64 + i;
+                    if normalized < 0 || normalized as usize >= n { None }
+                    else { Some(normalized as usize) }
+                }
+                Some(i) if (i as usize) < n => Some(i as usize),
+                _ => None,
+            };
+            match resolved {
+                Some(idx) => Ok(guard.children.remove(idx)),
+                None => Err(n),
+            }
+        };
+        let (label, child) = result.map_err(|n| {
+            PyIndexError::new_err(format!(
+                "ParenExpr.remove_at: index {} out of range ({} children)",
+                orig_str, n
+            ))
+        })?;
+        // Python wrap-out happens after the guard is released (§2.3 lock discipline).
+        let label_obj: PyObject = match label {
+            None => py.None(),
+            Some(lbl) => lbl.into_pyobject(py)?.into_any().unbind(),
+        };
+        let child_obj = child.to_pyobject(py)?;
+        Ok(PyTuple::new(py, [label_obj, child_obj])?.into_any().unbind())
+    }
+
+    #[pyo3(signature = (index, child, label = None))]
+    fn replace_at(
+        &self,
+        py: Python<'_>,
+        index: &Bound<'_, PyAny>,
+        child: &Bound<'_, PyAny>,
+        label: Option<PyObject>,
+    ) -> PyResult<()> {
+        // Validate child and label BEFORE taking the write lock (§2.3 lock discipline).
+        let span_type = get_span_type(py)?;
+        let native_child = ParenExprChild::extract_from_pyobject(py, child, &span_type)?;
+        let native_label = match label {
+            None => None,
+            Some(lbl) => {
+                if let Ok(native_lbl) = lbl.bind(py).extract::<ParenExprLabel>() {
+                    Some(native_lbl)
+                } else {
+                    return Err(PyTypeError::new_err(format!(
+                        "ParenExpr.replace_at: label argument is not a ParenExpr_Label; got {}",
+                        lbl.bind(py).get_type().name()?
+                    )));
+                }
+            }
+        };
+        // Capture the caller's original string representation BEFORE normalization.
+        let orig_str = index.str()?.to_string_lossy().into_owned();
+        // Normalize via operator.index: raises TypeError for non-indexable inputs.
+        // All Python work must happen before any lock (§2.3 lock discipline).
+        let raw_idx = py
+            .import(pyo3::intern!(py, "operator"))?
+            .getattr(pyo3::intern!(py, "index"))?
+            .call1((index,))?;
+        let maybe_i64: Option<i64> = raw_idx.extract::<i64>().ok();
+        // Single write lock: resolve + bounds-check + mem::replace atomically (no TOCTOU).
+        let old = {
+            let mut guard = self.inner.write();
+            let n = guard.children.len();
+            let resolved: Option<usize> = match maybe_i64 {
+                Some(i) if i < 0 => {
+                    let normalized = n as i64 + i;
+                    if normalized < 0 || normalized as usize >= n { None }
+                    else { Some(normalized as usize) }
+                }
+                Some(i) if (i as usize) < n => Some(i as usize),
+                _ => None,
+            };
+            let idx = match resolved {
+                Some(i) => i,
+                None => {
+                    return Err(PyIndexError::new_err(format!(
+                        "ParenExpr.replace_at: index {} out of range ({} children)",
+                        orig_str, n
+                    )));
+                }
+            };
+            std::mem::replace(&mut guard.children[idx], (native_label, native_child))
+        };
+        // Drop old entry outside the lock to avoid recursive lock acquisition
+        // if the child's drop chain re-enters Python.
+        drop(old);
+        Ok(())
+    }
+
+    fn clear(&self, _py: Python<'_>) -> PyResult<()> {
+        let old = {
+            let mut guard = self.inner.write();
+            std::mem::take(&mut guard.children)
+        };
+        // Drop old entries outside the lock.
+        drop(old);
+        Ok(())
     }
 
     fn append_inner(&self, py: Python<'_>, child: &Bound<'_, PyAny>) -> PyResult<()> {
@@ -3174,6 +4006,35 @@ impl Stmt {
     pub fn extend_rhs(&mut self, children: impl IntoIterator<Item = impl Into<Shared<Atom>>>) {
         self.children.extend(children.into_iter().map(|c| (Some(StmtLabel::Rhs), StmtChild::Atom(c.into()))));
     }
+
+    /// Insert a child at `index` (Vec::insert semantics: panics if index > len).
+    ///
+    /// Python-facing clamping is in the `insert` pymethod; native callers must
+    /// bounds-check. Unlike `list.insert`, Vec::insert panics on out-of-bounds.
+    pub fn insert_child(&mut self, index: usize, label: Option<StmtLabel>, child: StmtChild) {
+        self.children.insert(index, (label, child));
+    }
+
+    /// Remove and return the child at `index` (Vec::remove semantics: panics if out of range).
+    ///
+    /// Panics on out-of-range. Python-facing IndexError is in the `remove_at` pymethod.
+    pub fn remove_child(&mut self, index: usize) -> (Option<StmtLabel>, StmtChild) {
+        self.children.remove(index)
+    }
+
+    /// Replace the child at `index`, returning the old entry (panics if out of range).
+    ///
+    /// Panics on out-of-range. Python-facing IndexError is in the `replace_at` pymethod.
+    pub fn replace_child(
+        &mut self, index: usize, label: Option<StmtLabel>, child: StmtChild,
+    ) -> (Option<StmtLabel>, StmtChild) {
+        std::mem::replace(&mut self.children[index], (label, child))
+    }
+
+    /// Remove all children.
+    pub fn clear_children(&mut self) {
+        self.children.clear();
+    }
 }
 
 #[cfg(feature = "python")]
@@ -3364,6 +4225,185 @@ impl PyStmt {
         };
         let child_obj = child.to_pyobject(py)?;
         Ok(PyTuple::new(py, [label_obj, child_obj])?.into_any().unbind())
+    }
+
+    #[pyo3(signature = (index, child, label = None))]
+    fn insert(
+        &self,
+        py: Python<'_>,
+        index: &Bound<'_, PyAny>,
+        child: &Bound<'_, PyAny>,
+        label: Option<PyObject>,
+    ) -> PyResult<()> {
+        // Validate child and label BEFORE taking the write lock (§2.3 lock discipline).
+        let span_type = get_span_type(py)?;
+        let native_child = StmtChild::extract_from_pyobject(py, child, &span_type)?;
+        let native_label = match label {
+            None => None,
+            Some(lbl) => {
+                if let Ok(native_lbl) = lbl.bind(py).extract::<StmtLabel>() {
+                    Some(native_lbl)
+                } else {
+                    return Err(PyTypeError::new_err(format!(
+                        "Stmt.insert: label argument is not a Stmt_Label; got {}",
+                        lbl.bind(py).get_type().name()?
+                    )));
+                }
+            }
+        };
+        // Index normalization via operator.index (PyNumber_Index semantics).
+        // This raises TypeError (not AttributeError) for non-indexable inputs, matching Python's
+        // operator.index contract. Must be done BEFORE taking any lock (§2.3 lock discipline).
+        // Overflow by sign: positive overflow clamps to len; negative overflow clamps to 0.
+        let raw_idx = py
+            .import(pyo3::intern!(py, "operator"))?
+            .getattr(pyo3::intern!(py, "index"))?
+            .call1((index,))?;
+        // Fast path for the common exact-int case; fall back to sign-based Python call for beyond-i64.
+        let (is_negative_big, raw_i64) = if let Ok(i) = raw_idx.extract::<i64>() {
+            (false, Some(i))
+        } else {
+            // Beyond i64: use Python __lt__ to determine sign.  The lt call is still outside
+            // any lock, so lock discipline is maintained.
+            let neg = raw_idx.lt(0i64)?;
+            (neg, None)
+        };
+        // Now take a single write lock for the entire len-read + clamp + insert sequence.
+        let mut guard = self.inner.write();
+        let n = guard.children.len();
+        let clamped: usize = match raw_i64 {
+            Some(i) if i < 0 => {
+                let normalized = n as i64 + i;
+                if normalized < 0 { 0 } else { normalized as usize }
+            }
+            Some(i) => {
+                let u = i as usize;
+                if u > n { n } else { u }
+            }
+            None => if is_negative_big { 0 } else { n },
+        };
+        guard.children.insert(clamped, (native_label, native_child));
+        Ok(())
+    }
+
+    fn remove_at(&self, py: Python<'_>, index: &Bound<'_, PyAny>) -> PyResult<PyObject> {
+        // Capture the caller's original string representation BEFORE normalization,
+        // so error messages show the original value (e.g. `True` not `1`).
+        let orig_str = index.str()?.to_string_lossy().into_owned();
+        // Normalize via operator.index: raises TypeError (not AttributeError) for
+        // non-indexable inputs, matching Python's operator.index contract.
+        // All Python work must happen before any lock (§2.3 lock discipline).
+        let raw_idx = py
+            .import(pyo3::intern!(py, "operator"))?
+            .getattr(pyo3::intern!(py, "index"))?
+            .call1((index,))?;
+        // Fast path: extract i64. Beyond i64 is always OOB for real trees.
+        let maybe_i64: Option<i64> = raw_idx.extract::<i64>().ok();
+        // Single write lock: resolve + bounds-check + Vec::remove atomically (no TOCTOU).
+        // On OOB, capture n and return Err after releasing the guard.
+        let result: Result<_, usize> = {
+            let mut guard = self.inner.write();
+            let n = guard.children.len();
+            let resolved: Option<usize> = match maybe_i64 {
+                Some(i) if i < 0 => {
+                    let normalized = n as i64 + i;
+                    if normalized < 0 || normalized as usize >= n { None }
+                    else { Some(normalized as usize) }
+                }
+                Some(i) if (i as usize) < n => Some(i as usize),
+                _ => None,
+            };
+            match resolved {
+                Some(idx) => Ok(guard.children.remove(idx)),
+                None => Err(n),
+            }
+        };
+        let (label, child) = result.map_err(|n| {
+            PyIndexError::new_err(format!(
+                "Stmt.remove_at: index {} out of range ({} children)",
+                orig_str, n
+            ))
+        })?;
+        // Python wrap-out happens after the guard is released (§2.3 lock discipline).
+        let label_obj: PyObject = match label {
+            None => py.None(),
+            Some(lbl) => lbl.into_pyobject(py)?.into_any().unbind(),
+        };
+        let child_obj = child.to_pyobject(py)?;
+        Ok(PyTuple::new(py, [label_obj, child_obj])?.into_any().unbind())
+    }
+
+    #[pyo3(signature = (index, child, label = None))]
+    fn replace_at(
+        &self,
+        py: Python<'_>,
+        index: &Bound<'_, PyAny>,
+        child: &Bound<'_, PyAny>,
+        label: Option<PyObject>,
+    ) -> PyResult<()> {
+        // Validate child and label BEFORE taking the write lock (§2.3 lock discipline).
+        let span_type = get_span_type(py)?;
+        let native_child = StmtChild::extract_from_pyobject(py, child, &span_type)?;
+        let native_label = match label {
+            None => None,
+            Some(lbl) => {
+                if let Ok(native_lbl) = lbl.bind(py).extract::<StmtLabel>() {
+                    Some(native_lbl)
+                } else {
+                    return Err(PyTypeError::new_err(format!(
+                        "Stmt.replace_at: label argument is not a Stmt_Label; got {}",
+                        lbl.bind(py).get_type().name()?
+                    )));
+                }
+            }
+        };
+        // Capture the caller's original string representation BEFORE normalization.
+        let orig_str = index.str()?.to_string_lossy().into_owned();
+        // Normalize via operator.index: raises TypeError for non-indexable inputs.
+        // All Python work must happen before any lock (§2.3 lock discipline).
+        let raw_idx = py
+            .import(pyo3::intern!(py, "operator"))?
+            .getattr(pyo3::intern!(py, "index"))?
+            .call1((index,))?;
+        let maybe_i64: Option<i64> = raw_idx.extract::<i64>().ok();
+        // Single write lock: resolve + bounds-check + mem::replace atomically (no TOCTOU).
+        let old = {
+            let mut guard = self.inner.write();
+            let n = guard.children.len();
+            let resolved: Option<usize> = match maybe_i64 {
+                Some(i) if i < 0 => {
+                    let normalized = n as i64 + i;
+                    if normalized < 0 || normalized as usize >= n { None }
+                    else { Some(normalized as usize) }
+                }
+                Some(i) if (i as usize) < n => Some(i as usize),
+                _ => None,
+            };
+            let idx = match resolved {
+                Some(i) => i,
+                None => {
+                    return Err(PyIndexError::new_err(format!(
+                        "Stmt.replace_at: index {} out of range ({} children)",
+                        orig_str, n
+                    )));
+                }
+            };
+            std::mem::replace(&mut guard.children[idx], (native_label, native_child))
+        };
+        // Drop old entry outside the lock to avoid recursive lock acquisition
+        // if the child's drop chain re-enters Python.
+        drop(old);
+        Ok(())
+    }
+
+    fn clear(&self, _py: Python<'_>) -> PyResult<()> {
+        let old = {
+            let mut guard = self.inner.write();
+            std::mem::take(&mut guard.children)
+        };
+        // Drop old entries outside the lock.
+        drop(old);
+        Ok(())
     }
 
     fn append_lhs(&self, py: Python<'_>, child: &Bound<'_, PyAny>) -> PyResult<()> {
@@ -3882,6 +4922,35 @@ impl Items {
     pub fn extend_item(&mut self, children: impl IntoIterator<Item = impl Into<Shared<Atom>>>) {
         self.children.extend(children.into_iter().map(|c| (Some(ItemsLabel::Item), ItemsChild::Atom(c.into()))));
     }
+
+    /// Insert a child at `index` (Vec::insert semantics: panics if index > len).
+    ///
+    /// Python-facing clamping is in the `insert` pymethod; native callers must
+    /// bounds-check. Unlike `list.insert`, Vec::insert panics on out-of-bounds.
+    pub fn insert_child(&mut self, index: usize, label: Option<ItemsLabel>, child: ItemsChild) {
+        self.children.insert(index, (label, child));
+    }
+
+    /// Remove and return the child at `index` (Vec::remove semantics: panics if out of range).
+    ///
+    /// Panics on out-of-range. Python-facing IndexError is in the `remove_at` pymethod.
+    pub fn remove_child(&mut self, index: usize) -> (Option<ItemsLabel>, ItemsChild) {
+        self.children.remove(index)
+    }
+
+    /// Replace the child at `index`, returning the old entry (panics if out of range).
+    ///
+    /// Panics on out-of-range. Python-facing IndexError is in the `replace_at` pymethod.
+    pub fn replace_child(
+        &mut self, index: usize, label: Option<ItemsLabel>, child: ItemsChild,
+    ) -> (Option<ItemsLabel>, ItemsChild) {
+        std::mem::replace(&mut self.children[index], (label, child))
+    }
+
+    /// Remove all children.
+    pub fn clear_children(&mut self) {
+        self.children.clear();
+    }
 }
 
 #[cfg(feature = "python")]
@@ -4072,6 +5141,185 @@ impl PyItems {
         };
         let child_obj = child.to_pyobject(py)?;
         Ok(PyTuple::new(py, [label_obj, child_obj])?.into_any().unbind())
+    }
+
+    #[pyo3(signature = (index, child, label = None))]
+    fn insert(
+        &self,
+        py: Python<'_>,
+        index: &Bound<'_, PyAny>,
+        child: &Bound<'_, PyAny>,
+        label: Option<PyObject>,
+    ) -> PyResult<()> {
+        // Validate child and label BEFORE taking the write lock (§2.3 lock discipline).
+        let span_type = get_span_type(py)?;
+        let native_child = ItemsChild::extract_from_pyobject(py, child, &span_type)?;
+        let native_label = match label {
+            None => None,
+            Some(lbl) => {
+                if let Ok(native_lbl) = lbl.bind(py).extract::<ItemsLabel>() {
+                    Some(native_lbl)
+                } else {
+                    return Err(PyTypeError::new_err(format!(
+                        "Items.insert: label argument is not a Items_Label; got {}",
+                        lbl.bind(py).get_type().name()?
+                    )));
+                }
+            }
+        };
+        // Index normalization via operator.index (PyNumber_Index semantics).
+        // This raises TypeError (not AttributeError) for non-indexable inputs, matching Python's
+        // operator.index contract. Must be done BEFORE taking any lock (§2.3 lock discipline).
+        // Overflow by sign: positive overflow clamps to len; negative overflow clamps to 0.
+        let raw_idx = py
+            .import(pyo3::intern!(py, "operator"))?
+            .getattr(pyo3::intern!(py, "index"))?
+            .call1((index,))?;
+        // Fast path for the common exact-int case; fall back to sign-based Python call for beyond-i64.
+        let (is_negative_big, raw_i64) = if let Ok(i) = raw_idx.extract::<i64>() {
+            (false, Some(i))
+        } else {
+            // Beyond i64: use Python __lt__ to determine sign.  The lt call is still outside
+            // any lock, so lock discipline is maintained.
+            let neg = raw_idx.lt(0i64)?;
+            (neg, None)
+        };
+        // Now take a single write lock for the entire len-read + clamp + insert sequence.
+        let mut guard = self.inner.write();
+        let n = guard.children.len();
+        let clamped: usize = match raw_i64 {
+            Some(i) if i < 0 => {
+                let normalized = n as i64 + i;
+                if normalized < 0 { 0 } else { normalized as usize }
+            }
+            Some(i) => {
+                let u = i as usize;
+                if u > n { n } else { u }
+            }
+            None => if is_negative_big { 0 } else { n },
+        };
+        guard.children.insert(clamped, (native_label, native_child));
+        Ok(())
+    }
+
+    fn remove_at(&self, py: Python<'_>, index: &Bound<'_, PyAny>) -> PyResult<PyObject> {
+        // Capture the caller's original string representation BEFORE normalization,
+        // so error messages show the original value (e.g. `True` not `1`).
+        let orig_str = index.str()?.to_string_lossy().into_owned();
+        // Normalize via operator.index: raises TypeError (not AttributeError) for
+        // non-indexable inputs, matching Python's operator.index contract.
+        // All Python work must happen before any lock (§2.3 lock discipline).
+        let raw_idx = py
+            .import(pyo3::intern!(py, "operator"))?
+            .getattr(pyo3::intern!(py, "index"))?
+            .call1((index,))?;
+        // Fast path: extract i64. Beyond i64 is always OOB for real trees.
+        let maybe_i64: Option<i64> = raw_idx.extract::<i64>().ok();
+        // Single write lock: resolve + bounds-check + Vec::remove atomically (no TOCTOU).
+        // On OOB, capture n and return Err after releasing the guard.
+        let result: Result<_, usize> = {
+            let mut guard = self.inner.write();
+            let n = guard.children.len();
+            let resolved: Option<usize> = match maybe_i64 {
+                Some(i) if i < 0 => {
+                    let normalized = n as i64 + i;
+                    if normalized < 0 || normalized as usize >= n { None }
+                    else { Some(normalized as usize) }
+                }
+                Some(i) if (i as usize) < n => Some(i as usize),
+                _ => None,
+            };
+            match resolved {
+                Some(idx) => Ok(guard.children.remove(idx)),
+                None => Err(n),
+            }
+        };
+        let (label, child) = result.map_err(|n| {
+            PyIndexError::new_err(format!(
+                "Items.remove_at: index {} out of range ({} children)",
+                orig_str, n
+            ))
+        })?;
+        // Python wrap-out happens after the guard is released (§2.3 lock discipline).
+        let label_obj: PyObject = match label {
+            None => py.None(),
+            Some(lbl) => lbl.into_pyobject(py)?.into_any().unbind(),
+        };
+        let child_obj = child.to_pyobject(py)?;
+        Ok(PyTuple::new(py, [label_obj, child_obj])?.into_any().unbind())
+    }
+
+    #[pyo3(signature = (index, child, label = None))]
+    fn replace_at(
+        &self,
+        py: Python<'_>,
+        index: &Bound<'_, PyAny>,
+        child: &Bound<'_, PyAny>,
+        label: Option<PyObject>,
+    ) -> PyResult<()> {
+        // Validate child and label BEFORE taking the write lock (§2.3 lock discipline).
+        let span_type = get_span_type(py)?;
+        let native_child = ItemsChild::extract_from_pyobject(py, child, &span_type)?;
+        let native_label = match label {
+            None => None,
+            Some(lbl) => {
+                if let Ok(native_lbl) = lbl.bind(py).extract::<ItemsLabel>() {
+                    Some(native_lbl)
+                } else {
+                    return Err(PyTypeError::new_err(format!(
+                        "Items.replace_at: label argument is not a Items_Label; got {}",
+                        lbl.bind(py).get_type().name()?
+                    )));
+                }
+            }
+        };
+        // Capture the caller's original string representation BEFORE normalization.
+        let orig_str = index.str()?.to_string_lossy().into_owned();
+        // Normalize via operator.index: raises TypeError for non-indexable inputs.
+        // All Python work must happen before any lock (§2.3 lock discipline).
+        let raw_idx = py
+            .import(pyo3::intern!(py, "operator"))?
+            .getattr(pyo3::intern!(py, "index"))?
+            .call1((index,))?;
+        let maybe_i64: Option<i64> = raw_idx.extract::<i64>().ok();
+        // Single write lock: resolve + bounds-check + mem::replace atomically (no TOCTOU).
+        let old = {
+            let mut guard = self.inner.write();
+            let n = guard.children.len();
+            let resolved: Option<usize> = match maybe_i64 {
+                Some(i) if i < 0 => {
+                    let normalized = n as i64 + i;
+                    if normalized < 0 || normalized as usize >= n { None }
+                    else { Some(normalized as usize) }
+                }
+                Some(i) if (i as usize) < n => Some(i as usize),
+                _ => None,
+            };
+            let idx = match resolved {
+                Some(i) => i,
+                None => {
+                    return Err(PyIndexError::new_err(format!(
+                        "Items.replace_at: index {} out of range ({} children)",
+                        orig_str, n
+                    )));
+                }
+            };
+            std::mem::replace(&mut guard.children[idx], (native_label, native_child))
+        };
+        // Drop old entry outside the lock to avoid recursive lock acquisition
+        // if the child's drop chain re-enters Python.
+        drop(old);
+        Ok(())
+    }
+
+    fn clear(&self, _py: Python<'_>) -> PyResult<()> {
+        let old = {
+            let mut guard = self.inner.write();
+            std::mem::take(&mut guard.children)
+        };
+        // Drop old entries outside the lock.
+        drop(old);
+        Ok(())
     }
 
     fn append_item(&self, py: Python<'_>, child: &Bound<'_, PyAny>) -> PyResult<()> {
@@ -4499,6 +5747,35 @@ impl OptItem {
     pub fn extend_item(&mut self, children: impl IntoIterator<Item = impl Into<Shared<Atom>>>) {
         self.children.extend(children.into_iter().map(|c| (Some(OptItemLabel::Item), OptItemChild::Atom(c.into()))));
     }
+
+    /// Insert a child at `index` (Vec::insert semantics: panics if index > len).
+    ///
+    /// Python-facing clamping is in the `insert` pymethod; native callers must
+    /// bounds-check. Unlike `list.insert`, Vec::insert panics on out-of-bounds.
+    pub fn insert_child(&mut self, index: usize, label: Option<OptItemLabel>, child: OptItemChild) {
+        self.children.insert(index, (label, child));
+    }
+
+    /// Remove and return the child at `index` (Vec::remove semantics: panics if out of range).
+    ///
+    /// Panics on out-of-range. Python-facing IndexError is in the `remove_at` pymethod.
+    pub fn remove_child(&mut self, index: usize) -> (Option<OptItemLabel>, OptItemChild) {
+        self.children.remove(index)
+    }
+
+    /// Replace the child at `index`, returning the old entry (panics if out of range).
+    ///
+    /// Panics on out-of-range. Python-facing IndexError is in the `replace_at` pymethod.
+    pub fn replace_child(
+        &mut self, index: usize, label: Option<OptItemLabel>, child: OptItemChild,
+    ) -> (Option<OptItemLabel>, OptItemChild) {
+        std::mem::replace(&mut self.children[index], (label, child))
+    }
+
+    /// Remove all children.
+    pub fn clear_children(&mut self) {
+        self.children.clear();
+    }
 }
 
 #[cfg(feature = "python")]
@@ -4689,6 +5966,185 @@ impl PyOptItem {
         };
         let child_obj = child.to_pyobject(py)?;
         Ok(PyTuple::new(py, [label_obj, child_obj])?.into_any().unbind())
+    }
+
+    #[pyo3(signature = (index, child, label = None))]
+    fn insert(
+        &self,
+        py: Python<'_>,
+        index: &Bound<'_, PyAny>,
+        child: &Bound<'_, PyAny>,
+        label: Option<PyObject>,
+    ) -> PyResult<()> {
+        // Validate child and label BEFORE taking the write lock (§2.3 lock discipline).
+        let span_type = get_span_type(py)?;
+        let native_child = OptItemChild::extract_from_pyobject(py, child, &span_type)?;
+        let native_label = match label {
+            None => None,
+            Some(lbl) => {
+                if let Ok(native_lbl) = lbl.bind(py).extract::<OptItemLabel>() {
+                    Some(native_lbl)
+                } else {
+                    return Err(PyTypeError::new_err(format!(
+                        "OptItem.insert: label argument is not a OptItem_Label; got {}",
+                        lbl.bind(py).get_type().name()?
+                    )));
+                }
+            }
+        };
+        // Index normalization via operator.index (PyNumber_Index semantics).
+        // This raises TypeError (not AttributeError) for non-indexable inputs, matching Python's
+        // operator.index contract. Must be done BEFORE taking any lock (§2.3 lock discipline).
+        // Overflow by sign: positive overflow clamps to len; negative overflow clamps to 0.
+        let raw_idx = py
+            .import(pyo3::intern!(py, "operator"))?
+            .getattr(pyo3::intern!(py, "index"))?
+            .call1((index,))?;
+        // Fast path for the common exact-int case; fall back to sign-based Python call for beyond-i64.
+        let (is_negative_big, raw_i64) = if let Ok(i) = raw_idx.extract::<i64>() {
+            (false, Some(i))
+        } else {
+            // Beyond i64: use Python __lt__ to determine sign.  The lt call is still outside
+            // any lock, so lock discipline is maintained.
+            let neg = raw_idx.lt(0i64)?;
+            (neg, None)
+        };
+        // Now take a single write lock for the entire len-read + clamp + insert sequence.
+        let mut guard = self.inner.write();
+        let n = guard.children.len();
+        let clamped: usize = match raw_i64 {
+            Some(i) if i < 0 => {
+                let normalized = n as i64 + i;
+                if normalized < 0 { 0 } else { normalized as usize }
+            }
+            Some(i) => {
+                let u = i as usize;
+                if u > n { n } else { u }
+            }
+            None => if is_negative_big { 0 } else { n },
+        };
+        guard.children.insert(clamped, (native_label, native_child));
+        Ok(())
+    }
+
+    fn remove_at(&self, py: Python<'_>, index: &Bound<'_, PyAny>) -> PyResult<PyObject> {
+        // Capture the caller's original string representation BEFORE normalization,
+        // so error messages show the original value (e.g. `True` not `1`).
+        let orig_str = index.str()?.to_string_lossy().into_owned();
+        // Normalize via operator.index: raises TypeError (not AttributeError) for
+        // non-indexable inputs, matching Python's operator.index contract.
+        // All Python work must happen before any lock (§2.3 lock discipline).
+        let raw_idx = py
+            .import(pyo3::intern!(py, "operator"))?
+            .getattr(pyo3::intern!(py, "index"))?
+            .call1((index,))?;
+        // Fast path: extract i64. Beyond i64 is always OOB for real trees.
+        let maybe_i64: Option<i64> = raw_idx.extract::<i64>().ok();
+        // Single write lock: resolve + bounds-check + Vec::remove atomically (no TOCTOU).
+        // On OOB, capture n and return Err after releasing the guard.
+        let result: Result<_, usize> = {
+            let mut guard = self.inner.write();
+            let n = guard.children.len();
+            let resolved: Option<usize> = match maybe_i64 {
+                Some(i) if i < 0 => {
+                    let normalized = n as i64 + i;
+                    if normalized < 0 || normalized as usize >= n { None }
+                    else { Some(normalized as usize) }
+                }
+                Some(i) if (i as usize) < n => Some(i as usize),
+                _ => None,
+            };
+            match resolved {
+                Some(idx) => Ok(guard.children.remove(idx)),
+                None => Err(n),
+            }
+        };
+        let (label, child) = result.map_err(|n| {
+            PyIndexError::new_err(format!(
+                "OptItem.remove_at: index {} out of range ({} children)",
+                orig_str, n
+            ))
+        })?;
+        // Python wrap-out happens after the guard is released (§2.3 lock discipline).
+        let label_obj: PyObject = match label {
+            None => py.None(),
+            Some(lbl) => lbl.into_pyobject(py)?.into_any().unbind(),
+        };
+        let child_obj = child.to_pyobject(py)?;
+        Ok(PyTuple::new(py, [label_obj, child_obj])?.into_any().unbind())
+    }
+
+    #[pyo3(signature = (index, child, label = None))]
+    fn replace_at(
+        &self,
+        py: Python<'_>,
+        index: &Bound<'_, PyAny>,
+        child: &Bound<'_, PyAny>,
+        label: Option<PyObject>,
+    ) -> PyResult<()> {
+        // Validate child and label BEFORE taking the write lock (§2.3 lock discipline).
+        let span_type = get_span_type(py)?;
+        let native_child = OptItemChild::extract_from_pyobject(py, child, &span_type)?;
+        let native_label = match label {
+            None => None,
+            Some(lbl) => {
+                if let Ok(native_lbl) = lbl.bind(py).extract::<OptItemLabel>() {
+                    Some(native_lbl)
+                } else {
+                    return Err(PyTypeError::new_err(format!(
+                        "OptItem.replace_at: label argument is not a OptItem_Label; got {}",
+                        lbl.bind(py).get_type().name()?
+                    )));
+                }
+            }
+        };
+        // Capture the caller's original string representation BEFORE normalization.
+        let orig_str = index.str()?.to_string_lossy().into_owned();
+        // Normalize via operator.index: raises TypeError for non-indexable inputs.
+        // All Python work must happen before any lock (§2.3 lock discipline).
+        let raw_idx = py
+            .import(pyo3::intern!(py, "operator"))?
+            .getattr(pyo3::intern!(py, "index"))?
+            .call1((index,))?;
+        let maybe_i64: Option<i64> = raw_idx.extract::<i64>().ok();
+        // Single write lock: resolve + bounds-check + mem::replace atomically (no TOCTOU).
+        let old = {
+            let mut guard = self.inner.write();
+            let n = guard.children.len();
+            let resolved: Option<usize> = match maybe_i64 {
+                Some(i) if i < 0 => {
+                    let normalized = n as i64 + i;
+                    if normalized < 0 || normalized as usize >= n { None }
+                    else { Some(normalized as usize) }
+                }
+                Some(i) if (i as usize) < n => Some(i as usize),
+                _ => None,
+            };
+            let idx = match resolved {
+                Some(i) => i,
+                None => {
+                    return Err(PyIndexError::new_err(format!(
+                        "OptItem.replace_at: index {} out of range ({} children)",
+                        orig_str, n
+                    )));
+                }
+            };
+            std::mem::replace(&mut guard.children[idx], (native_label, native_child))
+        };
+        // Drop old entry outside the lock to avoid recursive lock acquisition
+        // if the child's drop chain re-enters Python.
+        drop(old);
+        Ok(())
+    }
+
+    fn clear(&self, _py: Python<'_>) -> PyResult<()> {
+        let old = {
+            let mut guard = self.inner.write();
+            std::mem::take(&mut guard.children)
+        };
+        // Drop old entries outside the lock.
+        drop(old);
+        Ok(())
     }
 
     fn append_item(&self, py: Python<'_>, child: &Bound<'_, PyAny>) -> PyResult<()> {
@@ -5116,6 +6572,35 @@ impl ZeroItems {
     pub fn extend_item(&mut self, children: impl IntoIterator<Item = impl Into<Shared<Atom>>>) {
         self.children.extend(children.into_iter().map(|c| (Some(ZeroItemsLabel::Item), ZeroItemsChild::Atom(c.into()))));
     }
+
+    /// Insert a child at `index` (Vec::insert semantics: panics if index > len).
+    ///
+    /// Python-facing clamping is in the `insert` pymethod; native callers must
+    /// bounds-check. Unlike `list.insert`, Vec::insert panics on out-of-bounds.
+    pub fn insert_child(&mut self, index: usize, label: Option<ZeroItemsLabel>, child: ZeroItemsChild) {
+        self.children.insert(index, (label, child));
+    }
+
+    /// Remove and return the child at `index` (Vec::remove semantics: panics if out of range).
+    ///
+    /// Panics on out-of-range. Python-facing IndexError is in the `remove_at` pymethod.
+    pub fn remove_child(&mut self, index: usize) -> (Option<ZeroItemsLabel>, ZeroItemsChild) {
+        self.children.remove(index)
+    }
+
+    /// Replace the child at `index`, returning the old entry (panics if out of range).
+    ///
+    /// Panics on out-of-range. Python-facing IndexError is in the `replace_at` pymethod.
+    pub fn replace_child(
+        &mut self, index: usize, label: Option<ZeroItemsLabel>, child: ZeroItemsChild,
+    ) -> (Option<ZeroItemsLabel>, ZeroItemsChild) {
+        std::mem::replace(&mut self.children[index], (label, child))
+    }
+
+    /// Remove all children.
+    pub fn clear_children(&mut self) {
+        self.children.clear();
+    }
 }
 
 #[cfg(feature = "python")]
@@ -5306,6 +6791,185 @@ impl PyZeroItems {
         };
         let child_obj = child.to_pyobject(py)?;
         Ok(PyTuple::new(py, [label_obj, child_obj])?.into_any().unbind())
+    }
+
+    #[pyo3(signature = (index, child, label = None))]
+    fn insert(
+        &self,
+        py: Python<'_>,
+        index: &Bound<'_, PyAny>,
+        child: &Bound<'_, PyAny>,
+        label: Option<PyObject>,
+    ) -> PyResult<()> {
+        // Validate child and label BEFORE taking the write lock (§2.3 lock discipline).
+        let span_type = get_span_type(py)?;
+        let native_child = ZeroItemsChild::extract_from_pyobject(py, child, &span_type)?;
+        let native_label = match label {
+            None => None,
+            Some(lbl) => {
+                if let Ok(native_lbl) = lbl.bind(py).extract::<ZeroItemsLabel>() {
+                    Some(native_lbl)
+                } else {
+                    return Err(PyTypeError::new_err(format!(
+                        "ZeroItems.insert: label argument is not a ZeroItems_Label; got {}",
+                        lbl.bind(py).get_type().name()?
+                    )));
+                }
+            }
+        };
+        // Index normalization via operator.index (PyNumber_Index semantics).
+        // This raises TypeError (not AttributeError) for non-indexable inputs, matching Python's
+        // operator.index contract. Must be done BEFORE taking any lock (§2.3 lock discipline).
+        // Overflow by sign: positive overflow clamps to len; negative overflow clamps to 0.
+        let raw_idx = py
+            .import(pyo3::intern!(py, "operator"))?
+            .getattr(pyo3::intern!(py, "index"))?
+            .call1((index,))?;
+        // Fast path for the common exact-int case; fall back to sign-based Python call for beyond-i64.
+        let (is_negative_big, raw_i64) = if let Ok(i) = raw_idx.extract::<i64>() {
+            (false, Some(i))
+        } else {
+            // Beyond i64: use Python __lt__ to determine sign.  The lt call is still outside
+            // any lock, so lock discipline is maintained.
+            let neg = raw_idx.lt(0i64)?;
+            (neg, None)
+        };
+        // Now take a single write lock for the entire len-read + clamp + insert sequence.
+        let mut guard = self.inner.write();
+        let n = guard.children.len();
+        let clamped: usize = match raw_i64 {
+            Some(i) if i < 0 => {
+                let normalized = n as i64 + i;
+                if normalized < 0 { 0 } else { normalized as usize }
+            }
+            Some(i) => {
+                let u = i as usize;
+                if u > n { n } else { u }
+            }
+            None => if is_negative_big { 0 } else { n },
+        };
+        guard.children.insert(clamped, (native_label, native_child));
+        Ok(())
+    }
+
+    fn remove_at(&self, py: Python<'_>, index: &Bound<'_, PyAny>) -> PyResult<PyObject> {
+        // Capture the caller's original string representation BEFORE normalization,
+        // so error messages show the original value (e.g. `True` not `1`).
+        let orig_str = index.str()?.to_string_lossy().into_owned();
+        // Normalize via operator.index: raises TypeError (not AttributeError) for
+        // non-indexable inputs, matching Python's operator.index contract.
+        // All Python work must happen before any lock (§2.3 lock discipline).
+        let raw_idx = py
+            .import(pyo3::intern!(py, "operator"))?
+            .getattr(pyo3::intern!(py, "index"))?
+            .call1((index,))?;
+        // Fast path: extract i64. Beyond i64 is always OOB for real trees.
+        let maybe_i64: Option<i64> = raw_idx.extract::<i64>().ok();
+        // Single write lock: resolve + bounds-check + Vec::remove atomically (no TOCTOU).
+        // On OOB, capture n and return Err after releasing the guard.
+        let result: Result<_, usize> = {
+            let mut guard = self.inner.write();
+            let n = guard.children.len();
+            let resolved: Option<usize> = match maybe_i64 {
+                Some(i) if i < 0 => {
+                    let normalized = n as i64 + i;
+                    if normalized < 0 || normalized as usize >= n { None }
+                    else { Some(normalized as usize) }
+                }
+                Some(i) if (i as usize) < n => Some(i as usize),
+                _ => None,
+            };
+            match resolved {
+                Some(idx) => Ok(guard.children.remove(idx)),
+                None => Err(n),
+            }
+        };
+        let (label, child) = result.map_err(|n| {
+            PyIndexError::new_err(format!(
+                "ZeroItems.remove_at: index {} out of range ({} children)",
+                orig_str, n
+            ))
+        })?;
+        // Python wrap-out happens after the guard is released (§2.3 lock discipline).
+        let label_obj: PyObject = match label {
+            None => py.None(),
+            Some(lbl) => lbl.into_pyobject(py)?.into_any().unbind(),
+        };
+        let child_obj = child.to_pyobject(py)?;
+        Ok(PyTuple::new(py, [label_obj, child_obj])?.into_any().unbind())
+    }
+
+    #[pyo3(signature = (index, child, label = None))]
+    fn replace_at(
+        &self,
+        py: Python<'_>,
+        index: &Bound<'_, PyAny>,
+        child: &Bound<'_, PyAny>,
+        label: Option<PyObject>,
+    ) -> PyResult<()> {
+        // Validate child and label BEFORE taking the write lock (§2.3 lock discipline).
+        let span_type = get_span_type(py)?;
+        let native_child = ZeroItemsChild::extract_from_pyobject(py, child, &span_type)?;
+        let native_label = match label {
+            None => None,
+            Some(lbl) => {
+                if let Ok(native_lbl) = lbl.bind(py).extract::<ZeroItemsLabel>() {
+                    Some(native_lbl)
+                } else {
+                    return Err(PyTypeError::new_err(format!(
+                        "ZeroItems.replace_at: label argument is not a ZeroItems_Label; got {}",
+                        lbl.bind(py).get_type().name()?
+                    )));
+                }
+            }
+        };
+        // Capture the caller's original string representation BEFORE normalization.
+        let orig_str = index.str()?.to_string_lossy().into_owned();
+        // Normalize via operator.index: raises TypeError for non-indexable inputs.
+        // All Python work must happen before any lock (§2.3 lock discipline).
+        let raw_idx = py
+            .import(pyo3::intern!(py, "operator"))?
+            .getattr(pyo3::intern!(py, "index"))?
+            .call1((index,))?;
+        let maybe_i64: Option<i64> = raw_idx.extract::<i64>().ok();
+        // Single write lock: resolve + bounds-check + mem::replace atomically (no TOCTOU).
+        let old = {
+            let mut guard = self.inner.write();
+            let n = guard.children.len();
+            let resolved: Option<usize> = match maybe_i64 {
+                Some(i) if i < 0 => {
+                    let normalized = n as i64 + i;
+                    if normalized < 0 || normalized as usize >= n { None }
+                    else { Some(normalized as usize) }
+                }
+                Some(i) if (i as usize) < n => Some(i as usize),
+                _ => None,
+            };
+            let idx = match resolved {
+                Some(i) => i,
+                None => {
+                    return Err(PyIndexError::new_err(format!(
+                        "ZeroItems.replace_at: index {} out of range ({} children)",
+                        orig_str, n
+                    )));
+                }
+            };
+            std::mem::replace(&mut guard.children[idx], (native_label, native_child))
+        };
+        // Drop old entry outside the lock to avoid recursive lock acquisition
+        // if the child's drop chain re-enters Python.
+        drop(old);
+        Ok(())
+    }
+
+    fn clear(&self, _py: Python<'_>) -> PyResult<()> {
+        let old = {
+            let mut guard = self.inner.write();
+            std::mem::take(&mut guard.children)
+        };
+        // Drop old entries outside the lock.
+        drop(old);
+        Ok(())
     }
 
     fn append_item(&self, py: Python<'_>, child: &Bound<'_, PyAny>) -> PyResult<()> {
@@ -5907,6 +7571,35 @@ impl Expr {
     pub fn extend_rhs(&mut self, children: impl IntoIterator<Item = impl Into<Shared<Atom>>>) {
         self.children.extend(children.into_iter().map(|c| (Some(ExprLabel::Rhs), ExprChild::Atom(c.into()))));
     }
+
+    /// Insert a child at `index` (Vec::insert semantics: panics if index > len).
+    ///
+    /// Python-facing clamping is in the `insert` pymethod; native callers must
+    /// bounds-check. Unlike `list.insert`, Vec::insert panics on out-of-bounds.
+    pub fn insert_child(&mut self, index: usize, label: Option<ExprLabel>, child: ExprChild) {
+        self.children.insert(index, (label, child));
+    }
+
+    /// Remove and return the child at `index` (Vec::remove semantics: panics if out of range).
+    ///
+    /// Panics on out-of-range. Python-facing IndexError is in the `remove_at` pymethod.
+    pub fn remove_child(&mut self, index: usize) -> (Option<ExprLabel>, ExprChild) {
+        self.children.remove(index)
+    }
+
+    /// Replace the child at `index`, returning the old entry (panics if out of range).
+    ///
+    /// Panics on out-of-range. Python-facing IndexError is in the `replace_at` pymethod.
+    pub fn replace_child(
+        &mut self, index: usize, label: Option<ExprLabel>, child: ExprChild,
+    ) -> (Option<ExprLabel>, ExprChild) {
+        std::mem::replace(&mut self.children[index], (label, child))
+    }
+
+    /// Remove all children.
+    pub fn clear_children(&mut self) {
+        self.children.clear();
+    }
 }
 
 #[cfg(feature = "python")]
@@ -6097,6 +7790,185 @@ impl PyExpr {
         };
         let child_obj = child.to_pyobject(py)?;
         Ok(PyTuple::new(py, [label_obj, child_obj])?.into_any().unbind())
+    }
+
+    #[pyo3(signature = (index, child, label = None))]
+    fn insert(
+        &self,
+        py: Python<'_>,
+        index: &Bound<'_, PyAny>,
+        child: &Bound<'_, PyAny>,
+        label: Option<PyObject>,
+    ) -> PyResult<()> {
+        // Validate child and label BEFORE taking the write lock (§2.3 lock discipline).
+        let span_type = get_span_type(py)?;
+        let native_child = ExprChild::extract_from_pyobject(py, child, &span_type)?;
+        let native_label = match label {
+            None => None,
+            Some(lbl) => {
+                if let Ok(native_lbl) = lbl.bind(py).extract::<ExprLabel>() {
+                    Some(native_lbl)
+                } else {
+                    return Err(PyTypeError::new_err(format!(
+                        "Expr.insert: label argument is not a Expr_Label; got {}",
+                        lbl.bind(py).get_type().name()?
+                    )));
+                }
+            }
+        };
+        // Index normalization via operator.index (PyNumber_Index semantics).
+        // This raises TypeError (not AttributeError) for non-indexable inputs, matching Python's
+        // operator.index contract. Must be done BEFORE taking any lock (§2.3 lock discipline).
+        // Overflow by sign: positive overflow clamps to len; negative overflow clamps to 0.
+        let raw_idx = py
+            .import(pyo3::intern!(py, "operator"))?
+            .getattr(pyo3::intern!(py, "index"))?
+            .call1((index,))?;
+        // Fast path for the common exact-int case; fall back to sign-based Python call for beyond-i64.
+        let (is_negative_big, raw_i64) = if let Ok(i) = raw_idx.extract::<i64>() {
+            (false, Some(i))
+        } else {
+            // Beyond i64: use Python __lt__ to determine sign.  The lt call is still outside
+            // any lock, so lock discipline is maintained.
+            let neg = raw_idx.lt(0i64)?;
+            (neg, None)
+        };
+        // Now take a single write lock for the entire len-read + clamp + insert sequence.
+        let mut guard = self.inner.write();
+        let n = guard.children.len();
+        let clamped: usize = match raw_i64 {
+            Some(i) if i < 0 => {
+                let normalized = n as i64 + i;
+                if normalized < 0 { 0 } else { normalized as usize }
+            }
+            Some(i) => {
+                let u = i as usize;
+                if u > n { n } else { u }
+            }
+            None => if is_negative_big { 0 } else { n },
+        };
+        guard.children.insert(clamped, (native_label, native_child));
+        Ok(())
+    }
+
+    fn remove_at(&self, py: Python<'_>, index: &Bound<'_, PyAny>) -> PyResult<PyObject> {
+        // Capture the caller's original string representation BEFORE normalization,
+        // so error messages show the original value (e.g. `True` not `1`).
+        let orig_str = index.str()?.to_string_lossy().into_owned();
+        // Normalize via operator.index: raises TypeError (not AttributeError) for
+        // non-indexable inputs, matching Python's operator.index contract.
+        // All Python work must happen before any lock (§2.3 lock discipline).
+        let raw_idx = py
+            .import(pyo3::intern!(py, "operator"))?
+            .getattr(pyo3::intern!(py, "index"))?
+            .call1((index,))?;
+        // Fast path: extract i64. Beyond i64 is always OOB for real trees.
+        let maybe_i64: Option<i64> = raw_idx.extract::<i64>().ok();
+        // Single write lock: resolve + bounds-check + Vec::remove atomically (no TOCTOU).
+        // On OOB, capture n and return Err after releasing the guard.
+        let result: Result<_, usize> = {
+            let mut guard = self.inner.write();
+            let n = guard.children.len();
+            let resolved: Option<usize> = match maybe_i64 {
+                Some(i) if i < 0 => {
+                    let normalized = n as i64 + i;
+                    if normalized < 0 || normalized as usize >= n { None }
+                    else { Some(normalized as usize) }
+                }
+                Some(i) if (i as usize) < n => Some(i as usize),
+                _ => None,
+            };
+            match resolved {
+                Some(idx) => Ok(guard.children.remove(idx)),
+                None => Err(n),
+            }
+        };
+        let (label, child) = result.map_err(|n| {
+            PyIndexError::new_err(format!(
+                "Expr.remove_at: index {} out of range ({} children)",
+                orig_str, n
+            ))
+        })?;
+        // Python wrap-out happens after the guard is released (§2.3 lock discipline).
+        let label_obj: PyObject = match label {
+            None => py.None(),
+            Some(lbl) => lbl.into_pyobject(py)?.into_any().unbind(),
+        };
+        let child_obj = child.to_pyobject(py)?;
+        Ok(PyTuple::new(py, [label_obj, child_obj])?.into_any().unbind())
+    }
+
+    #[pyo3(signature = (index, child, label = None))]
+    fn replace_at(
+        &self,
+        py: Python<'_>,
+        index: &Bound<'_, PyAny>,
+        child: &Bound<'_, PyAny>,
+        label: Option<PyObject>,
+    ) -> PyResult<()> {
+        // Validate child and label BEFORE taking the write lock (§2.3 lock discipline).
+        let span_type = get_span_type(py)?;
+        let native_child = ExprChild::extract_from_pyobject(py, child, &span_type)?;
+        let native_label = match label {
+            None => None,
+            Some(lbl) => {
+                if let Ok(native_lbl) = lbl.bind(py).extract::<ExprLabel>() {
+                    Some(native_lbl)
+                } else {
+                    return Err(PyTypeError::new_err(format!(
+                        "Expr.replace_at: label argument is not a Expr_Label; got {}",
+                        lbl.bind(py).get_type().name()?
+                    )));
+                }
+            }
+        };
+        // Capture the caller's original string representation BEFORE normalization.
+        let orig_str = index.str()?.to_string_lossy().into_owned();
+        // Normalize via operator.index: raises TypeError for non-indexable inputs.
+        // All Python work must happen before any lock (§2.3 lock discipline).
+        let raw_idx = py
+            .import(pyo3::intern!(py, "operator"))?
+            .getattr(pyo3::intern!(py, "index"))?
+            .call1((index,))?;
+        let maybe_i64: Option<i64> = raw_idx.extract::<i64>().ok();
+        // Single write lock: resolve + bounds-check + mem::replace atomically (no TOCTOU).
+        let old = {
+            let mut guard = self.inner.write();
+            let n = guard.children.len();
+            let resolved: Option<usize> = match maybe_i64 {
+                Some(i) if i < 0 => {
+                    let normalized = n as i64 + i;
+                    if normalized < 0 || normalized as usize >= n { None }
+                    else { Some(normalized as usize) }
+                }
+                Some(i) if (i as usize) < n => Some(i as usize),
+                _ => None,
+            };
+            let idx = match resolved {
+                Some(i) => i,
+                None => {
+                    return Err(PyIndexError::new_err(format!(
+                        "Expr.replace_at: index {} out of range ({} children)",
+                        orig_str, n
+                    )));
+                }
+            };
+            std::mem::replace(&mut guard.children[idx], (native_label, native_child))
+        };
+        // Drop old entry outside the lock to avoid recursive lock acquisition
+        // if the child's drop chain re-enters Python.
+        drop(old);
+        Ok(())
+    }
+
+    fn clear(&self, _py: Python<'_>) -> PyResult<()> {
+        let old = {
+            let mut guard = self.inner.write();
+            std::mem::take(&mut guard.children)
+        };
+        // Drop old entries outside the lock.
+        drop(old);
+        Ok(())
     }
 
     fn append_atom(&self, py: Python<'_>, child: &Bound<'_, PyAny>) -> PyResult<()> {
@@ -6807,6 +8679,35 @@ impl Lval {
     pub fn extend_inner(&mut self, children: impl IntoIterator<Item = impl Into<Shared<Rval>>>) {
         self.children.extend(children.into_iter().map(|c| (Some(LvalLabel::Inner), LvalChild::Rval(c.into()))));
     }
+
+    /// Insert a child at `index` (Vec::insert semantics: panics if index > len).
+    ///
+    /// Python-facing clamping is in the `insert` pymethod; native callers must
+    /// bounds-check. Unlike `list.insert`, Vec::insert panics on out-of-bounds.
+    pub fn insert_child(&mut self, index: usize, label: Option<LvalLabel>, child: LvalChild) {
+        self.children.insert(index, (label, child));
+    }
+
+    /// Remove and return the child at `index` (Vec::remove semantics: panics if out of range).
+    ///
+    /// Panics on out-of-range. Python-facing IndexError is in the `remove_at` pymethod.
+    pub fn remove_child(&mut self, index: usize) -> (Option<LvalLabel>, LvalChild) {
+        self.children.remove(index)
+    }
+
+    /// Replace the child at `index`, returning the old entry (panics if out of range).
+    ///
+    /// Panics on out-of-range. Python-facing IndexError is in the `replace_at` pymethod.
+    pub fn replace_child(
+        &mut self, index: usize, label: Option<LvalLabel>, child: LvalChild,
+    ) -> (Option<LvalLabel>, LvalChild) {
+        std::mem::replace(&mut self.children[index], (label, child))
+    }
+
+    /// Remove all children.
+    pub fn clear_children(&mut self) {
+        self.children.clear();
+    }
 }
 
 #[cfg(feature = "python")]
@@ -6997,6 +8898,185 @@ impl PyLval {
         };
         let child_obj = child.to_pyobject(py)?;
         Ok(PyTuple::new(py, [label_obj, child_obj])?.into_any().unbind())
+    }
+
+    #[pyo3(signature = (index, child, label = None))]
+    fn insert(
+        &self,
+        py: Python<'_>,
+        index: &Bound<'_, PyAny>,
+        child: &Bound<'_, PyAny>,
+        label: Option<PyObject>,
+    ) -> PyResult<()> {
+        // Validate child and label BEFORE taking the write lock (§2.3 lock discipline).
+        let span_type = get_span_type(py)?;
+        let native_child = LvalChild::extract_from_pyobject(py, child, &span_type)?;
+        let native_label = match label {
+            None => None,
+            Some(lbl) => {
+                if let Ok(native_lbl) = lbl.bind(py).extract::<LvalLabel>() {
+                    Some(native_lbl)
+                } else {
+                    return Err(PyTypeError::new_err(format!(
+                        "Lval.insert: label argument is not a Lval_Label; got {}",
+                        lbl.bind(py).get_type().name()?
+                    )));
+                }
+            }
+        };
+        // Index normalization via operator.index (PyNumber_Index semantics).
+        // This raises TypeError (not AttributeError) for non-indexable inputs, matching Python's
+        // operator.index contract. Must be done BEFORE taking any lock (§2.3 lock discipline).
+        // Overflow by sign: positive overflow clamps to len; negative overflow clamps to 0.
+        let raw_idx = py
+            .import(pyo3::intern!(py, "operator"))?
+            .getattr(pyo3::intern!(py, "index"))?
+            .call1((index,))?;
+        // Fast path for the common exact-int case; fall back to sign-based Python call for beyond-i64.
+        let (is_negative_big, raw_i64) = if let Ok(i) = raw_idx.extract::<i64>() {
+            (false, Some(i))
+        } else {
+            // Beyond i64: use Python __lt__ to determine sign.  The lt call is still outside
+            // any lock, so lock discipline is maintained.
+            let neg = raw_idx.lt(0i64)?;
+            (neg, None)
+        };
+        // Now take a single write lock for the entire len-read + clamp + insert sequence.
+        let mut guard = self.inner.write();
+        let n = guard.children.len();
+        let clamped: usize = match raw_i64 {
+            Some(i) if i < 0 => {
+                let normalized = n as i64 + i;
+                if normalized < 0 { 0 } else { normalized as usize }
+            }
+            Some(i) => {
+                let u = i as usize;
+                if u > n { n } else { u }
+            }
+            None => if is_negative_big { 0 } else { n },
+        };
+        guard.children.insert(clamped, (native_label, native_child));
+        Ok(())
+    }
+
+    fn remove_at(&self, py: Python<'_>, index: &Bound<'_, PyAny>) -> PyResult<PyObject> {
+        // Capture the caller's original string representation BEFORE normalization,
+        // so error messages show the original value (e.g. `True` not `1`).
+        let orig_str = index.str()?.to_string_lossy().into_owned();
+        // Normalize via operator.index: raises TypeError (not AttributeError) for
+        // non-indexable inputs, matching Python's operator.index contract.
+        // All Python work must happen before any lock (§2.3 lock discipline).
+        let raw_idx = py
+            .import(pyo3::intern!(py, "operator"))?
+            .getattr(pyo3::intern!(py, "index"))?
+            .call1((index,))?;
+        // Fast path: extract i64. Beyond i64 is always OOB for real trees.
+        let maybe_i64: Option<i64> = raw_idx.extract::<i64>().ok();
+        // Single write lock: resolve + bounds-check + Vec::remove atomically (no TOCTOU).
+        // On OOB, capture n and return Err after releasing the guard.
+        let result: Result<_, usize> = {
+            let mut guard = self.inner.write();
+            let n = guard.children.len();
+            let resolved: Option<usize> = match maybe_i64 {
+                Some(i) if i < 0 => {
+                    let normalized = n as i64 + i;
+                    if normalized < 0 || normalized as usize >= n { None }
+                    else { Some(normalized as usize) }
+                }
+                Some(i) if (i as usize) < n => Some(i as usize),
+                _ => None,
+            };
+            match resolved {
+                Some(idx) => Ok(guard.children.remove(idx)),
+                None => Err(n),
+            }
+        };
+        let (label, child) = result.map_err(|n| {
+            PyIndexError::new_err(format!(
+                "Lval.remove_at: index {} out of range ({} children)",
+                orig_str, n
+            ))
+        })?;
+        // Python wrap-out happens after the guard is released (§2.3 lock discipline).
+        let label_obj: PyObject = match label {
+            None => py.None(),
+            Some(lbl) => lbl.into_pyobject(py)?.into_any().unbind(),
+        };
+        let child_obj = child.to_pyobject(py)?;
+        Ok(PyTuple::new(py, [label_obj, child_obj])?.into_any().unbind())
+    }
+
+    #[pyo3(signature = (index, child, label = None))]
+    fn replace_at(
+        &self,
+        py: Python<'_>,
+        index: &Bound<'_, PyAny>,
+        child: &Bound<'_, PyAny>,
+        label: Option<PyObject>,
+    ) -> PyResult<()> {
+        // Validate child and label BEFORE taking the write lock (§2.3 lock discipline).
+        let span_type = get_span_type(py)?;
+        let native_child = LvalChild::extract_from_pyobject(py, child, &span_type)?;
+        let native_label = match label {
+            None => None,
+            Some(lbl) => {
+                if let Ok(native_lbl) = lbl.bind(py).extract::<LvalLabel>() {
+                    Some(native_lbl)
+                } else {
+                    return Err(PyTypeError::new_err(format!(
+                        "Lval.replace_at: label argument is not a Lval_Label; got {}",
+                        lbl.bind(py).get_type().name()?
+                    )));
+                }
+            }
+        };
+        // Capture the caller's original string representation BEFORE normalization.
+        let orig_str = index.str()?.to_string_lossy().into_owned();
+        // Normalize via operator.index: raises TypeError for non-indexable inputs.
+        // All Python work must happen before any lock (§2.3 lock discipline).
+        let raw_idx = py
+            .import(pyo3::intern!(py, "operator"))?
+            .getattr(pyo3::intern!(py, "index"))?
+            .call1((index,))?;
+        let maybe_i64: Option<i64> = raw_idx.extract::<i64>().ok();
+        // Single write lock: resolve + bounds-check + mem::replace atomically (no TOCTOU).
+        let old = {
+            let mut guard = self.inner.write();
+            let n = guard.children.len();
+            let resolved: Option<usize> = match maybe_i64 {
+                Some(i) if i < 0 => {
+                    let normalized = n as i64 + i;
+                    if normalized < 0 || normalized as usize >= n { None }
+                    else { Some(normalized as usize) }
+                }
+                Some(i) if (i as usize) < n => Some(i as usize),
+                _ => None,
+            };
+            let idx = match resolved {
+                Some(i) => i,
+                None => {
+                    return Err(PyIndexError::new_err(format!(
+                        "Lval.replace_at: index {} out of range ({} children)",
+                        orig_str, n
+                    )));
+                }
+            };
+            std::mem::replace(&mut guard.children[idx], (native_label, native_child))
+        };
+        // Drop old entry outside the lock to avoid recursive lock acquisition
+        // if the child's drop chain re-enters Python.
+        drop(old);
+        Ok(())
+    }
+
+    fn clear(&self, _py: Python<'_>) -> PyResult<()> {
+        let old = {
+            let mut guard = self.inner.write();
+            std::mem::take(&mut guard.children)
+        };
+        // Drop old entries outside the lock.
+        drop(old);
+        Ok(())
     }
 
     fn append_base(&self, py: Python<'_>, child: &Bound<'_, PyAny>) -> PyResult<()> {
@@ -7616,6 +9696,35 @@ impl Rval {
     pub fn extend_inner(&mut self, children: impl IntoIterator<Item = impl Into<Shared<Lval>>>) {
         self.children.extend(children.into_iter().map(|c| (Some(RvalLabel::Inner), RvalChild::Lval(c.into()))));
     }
+
+    /// Insert a child at `index` (Vec::insert semantics: panics if index > len).
+    ///
+    /// Python-facing clamping is in the `insert` pymethod; native callers must
+    /// bounds-check. Unlike `list.insert`, Vec::insert panics on out-of-bounds.
+    pub fn insert_child(&mut self, index: usize, label: Option<RvalLabel>, child: RvalChild) {
+        self.children.insert(index, (label, child));
+    }
+
+    /// Remove and return the child at `index` (Vec::remove semantics: panics if out of range).
+    ///
+    /// Panics on out-of-range. Python-facing IndexError is in the `remove_at` pymethod.
+    pub fn remove_child(&mut self, index: usize) -> (Option<RvalLabel>, RvalChild) {
+        self.children.remove(index)
+    }
+
+    /// Replace the child at `index`, returning the old entry (panics if out of range).
+    ///
+    /// Panics on out-of-range. Python-facing IndexError is in the `replace_at` pymethod.
+    pub fn replace_child(
+        &mut self, index: usize, label: Option<RvalLabel>, child: RvalChild,
+    ) -> (Option<RvalLabel>, RvalChild) {
+        std::mem::replace(&mut self.children[index], (label, child))
+    }
+
+    /// Remove all children.
+    pub fn clear_children(&mut self) {
+        self.children.clear();
+    }
 }
 
 #[cfg(feature = "python")]
@@ -7806,6 +9915,185 @@ impl PyRval {
         };
         let child_obj = child.to_pyobject(py)?;
         Ok(PyTuple::new(py, [label_obj, child_obj])?.into_any().unbind())
+    }
+
+    #[pyo3(signature = (index, child, label = None))]
+    fn insert(
+        &self,
+        py: Python<'_>,
+        index: &Bound<'_, PyAny>,
+        child: &Bound<'_, PyAny>,
+        label: Option<PyObject>,
+    ) -> PyResult<()> {
+        // Validate child and label BEFORE taking the write lock (§2.3 lock discipline).
+        let span_type = get_span_type(py)?;
+        let native_child = RvalChild::extract_from_pyobject(py, child, &span_type)?;
+        let native_label = match label {
+            None => None,
+            Some(lbl) => {
+                if let Ok(native_lbl) = lbl.bind(py).extract::<RvalLabel>() {
+                    Some(native_lbl)
+                } else {
+                    return Err(PyTypeError::new_err(format!(
+                        "Rval.insert: label argument is not a Rval_Label; got {}",
+                        lbl.bind(py).get_type().name()?
+                    )));
+                }
+            }
+        };
+        // Index normalization via operator.index (PyNumber_Index semantics).
+        // This raises TypeError (not AttributeError) for non-indexable inputs, matching Python's
+        // operator.index contract. Must be done BEFORE taking any lock (§2.3 lock discipline).
+        // Overflow by sign: positive overflow clamps to len; negative overflow clamps to 0.
+        let raw_idx = py
+            .import(pyo3::intern!(py, "operator"))?
+            .getattr(pyo3::intern!(py, "index"))?
+            .call1((index,))?;
+        // Fast path for the common exact-int case; fall back to sign-based Python call for beyond-i64.
+        let (is_negative_big, raw_i64) = if let Ok(i) = raw_idx.extract::<i64>() {
+            (false, Some(i))
+        } else {
+            // Beyond i64: use Python __lt__ to determine sign.  The lt call is still outside
+            // any lock, so lock discipline is maintained.
+            let neg = raw_idx.lt(0i64)?;
+            (neg, None)
+        };
+        // Now take a single write lock for the entire len-read + clamp + insert sequence.
+        let mut guard = self.inner.write();
+        let n = guard.children.len();
+        let clamped: usize = match raw_i64 {
+            Some(i) if i < 0 => {
+                let normalized = n as i64 + i;
+                if normalized < 0 { 0 } else { normalized as usize }
+            }
+            Some(i) => {
+                let u = i as usize;
+                if u > n { n } else { u }
+            }
+            None => if is_negative_big { 0 } else { n },
+        };
+        guard.children.insert(clamped, (native_label, native_child));
+        Ok(())
+    }
+
+    fn remove_at(&self, py: Python<'_>, index: &Bound<'_, PyAny>) -> PyResult<PyObject> {
+        // Capture the caller's original string representation BEFORE normalization,
+        // so error messages show the original value (e.g. `True` not `1`).
+        let orig_str = index.str()?.to_string_lossy().into_owned();
+        // Normalize via operator.index: raises TypeError (not AttributeError) for
+        // non-indexable inputs, matching Python's operator.index contract.
+        // All Python work must happen before any lock (§2.3 lock discipline).
+        let raw_idx = py
+            .import(pyo3::intern!(py, "operator"))?
+            .getattr(pyo3::intern!(py, "index"))?
+            .call1((index,))?;
+        // Fast path: extract i64. Beyond i64 is always OOB for real trees.
+        let maybe_i64: Option<i64> = raw_idx.extract::<i64>().ok();
+        // Single write lock: resolve + bounds-check + Vec::remove atomically (no TOCTOU).
+        // On OOB, capture n and return Err after releasing the guard.
+        let result: Result<_, usize> = {
+            let mut guard = self.inner.write();
+            let n = guard.children.len();
+            let resolved: Option<usize> = match maybe_i64 {
+                Some(i) if i < 0 => {
+                    let normalized = n as i64 + i;
+                    if normalized < 0 || normalized as usize >= n { None }
+                    else { Some(normalized as usize) }
+                }
+                Some(i) if (i as usize) < n => Some(i as usize),
+                _ => None,
+            };
+            match resolved {
+                Some(idx) => Ok(guard.children.remove(idx)),
+                None => Err(n),
+            }
+        };
+        let (label, child) = result.map_err(|n| {
+            PyIndexError::new_err(format!(
+                "Rval.remove_at: index {} out of range ({} children)",
+                orig_str, n
+            ))
+        })?;
+        // Python wrap-out happens after the guard is released (§2.3 lock discipline).
+        let label_obj: PyObject = match label {
+            None => py.None(),
+            Some(lbl) => lbl.into_pyobject(py)?.into_any().unbind(),
+        };
+        let child_obj = child.to_pyobject(py)?;
+        Ok(PyTuple::new(py, [label_obj, child_obj])?.into_any().unbind())
+    }
+
+    #[pyo3(signature = (index, child, label = None))]
+    fn replace_at(
+        &self,
+        py: Python<'_>,
+        index: &Bound<'_, PyAny>,
+        child: &Bound<'_, PyAny>,
+        label: Option<PyObject>,
+    ) -> PyResult<()> {
+        // Validate child and label BEFORE taking the write lock (§2.3 lock discipline).
+        let span_type = get_span_type(py)?;
+        let native_child = RvalChild::extract_from_pyobject(py, child, &span_type)?;
+        let native_label = match label {
+            None => None,
+            Some(lbl) => {
+                if let Ok(native_lbl) = lbl.bind(py).extract::<RvalLabel>() {
+                    Some(native_lbl)
+                } else {
+                    return Err(PyTypeError::new_err(format!(
+                        "Rval.replace_at: label argument is not a Rval_Label; got {}",
+                        lbl.bind(py).get_type().name()?
+                    )));
+                }
+            }
+        };
+        // Capture the caller's original string representation BEFORE normalization.
+        let orig_str = index.str()?.to_string_lossy().into_owned();
+        // Normalize via operator.index: raises TypeError for non-indexable inputs.
+        // All Python work must happen before any lock (§2.3 lock discipline).
+        let raw_idx = py
+            .import(pyo3::intern!(py, "operator"))?
+            .getattr(pyo3::intern!(py, "index"))?
+            .call1((index,))?;
+        let maybe_i64: Option<i64> = raw_idx.extract::<i64>().ok();
+        // Single write lock: resolve + bounds-check + mem::replace atomically (no TOCTOU).
+        let old = {
+            let mut guard = self.inner.write();
+            let n = guard.children.len();
+            let resolved: Option<usize> = match maybe_i64 {
+                Some(i) if i < 0 => {
+                    let normalized = n as i64 + i;
+                    if normalized < 0 || normalized as usize >= n { None }
+                    else { Some(normalized as usize) }
+                }
+                Some(i) if (i as usize) < n => Some(i as usize),
+                _ => None,
+            };
+            let idx = match resolved {
+                Some(i) => i,
+                None => {
+                    return Err(PyIndexError::new_err(format!(
+                        "Rval.replace_at: index {} out of range ({} children)",
+                        orig_str, n
+                    )));
+                }
+            };
+            std::mem::replace(&mut guard.children[idx], (native_label, native_child))
+        };
+        // Drop old entry outside the lock to avoid recursive lock acquisition
+        // if the child's drop chain re-enters Python.
+        drop(old);
+        Ok(())
+    }
+
+    fn clear(&self, _py: Python<'_>) -> PyResult<()> {
+        let old = {
+            let mut guard = self.inner.write();
+            std::mem::take(&mut guard.children)
+        };
+        // Drop old entries outside the lock.
+        drop(old);
+        Ok(())
     }
 
     fn append_base(&self, py: Python<'_>, child: &Bound<'_, PyAny>) -> PyResult<()> {
@@ -8324,6 +10612,35 @@ impl Arrow {
     pub fn extend_target(&mut self, children: impl IntoIterator<Item = impl Into<Shared<Name>>>) {
         self.children.extend(children.into_iter().map(|c| (Some(ArrowLabel::Target), ArrowChild::Name(c.into()))));
     }
+
+    /// Insert a child at `index` (Vec::insert semantics: panics if index > len).
+    ///
+    /// Python-facing clamping is in the `insert` pymethod; native callers must
+    /// bounds-check. Unlike `list.insert`, Vec::insert panics on out-of-bounds.
+    pub fn insert_child(&mut self, index: usize, label: Option<ArrowLabel>, child: ArrowChild) {
+        self.children.insert(index, (label, child));
+    }
+
+    /// Remove and return the child at `index` (Vec::remove semantics: panics if out of range).
+    ///
+    /// Panics on out-of-range. Python-facing IndexError is in the `remove_at` pymethod.
+    pub fn remove_child(&mut self, index: usize) -> (Option<ArrowLabel>, ArrowChild) {
+        self.children.remove(index)
+    }
+
+    /// Replace the child at `index`, returning the old entry (panics if out of range).
+    ///
+    /// Panics on out-of-range. Python-facing IndexError is in the `replace_at` pymethod.
+    pub fn replace_child(
+        &mut self, index: usize, label: Option<ArrowLabel>, child: ArrowChild,
+    ) -> (Option<ArrowLabel>, ArrowChild) {
+        std::mem::replace(&mut self.children[index], (label, child))
+    }
+
+    /// Remove all children.
+    pub fn clear_children(&mut self) {
+        self.children.clear();
+    }
 }
 
 #[cfg(feature = "python")]
@@ -8514,6 +10831,185 @@ impl PyArrow {
         };
         let child_obj = child.to_pyobject(py)?;
         Ok(PyTuple::new(py, [label_obj, child_obj])?.into_any().unbind())
+    }
+
+    #[pyo3(signature = (index, child, label = None))]
+    fn insert(
+        &self,
+        py: Python<'_>,
+        index: &Bound<'_, PyAny>,
+        child: &Bound<'_, PyAny>,
+        label: Option<PyObject>,
+    ) -> PyResult<()> {
+        // Validate child and label BEFORE taking the write lock (§2.3 lock discipline).
+        let span_type = get_span_type(py)?;
+        let native_child = ArrowChild::extract_from_pyobject(py, child, &span_type)?;
+        let native_label = match label {
+            None => None,
+            Some(lbl) => {
+                if let Ok(native_lbl) = lbl.bind(py).extract::<ArrowLabel>() {
+                    Some(native_lbl)
+                } else {
+                    return Err(PyTypeError::new_err(format!(
+                        "Arrow.insert: label argument is not a Arrow_Label; got {}",
+                        lbl.bind(py).get_type().name()?
+                    )));
+                }
+            }
+        };
+        // Index normalization via operator.index (PyNumber_Index semantics).
+        // This raises TypeError (not AttributeError) for non-indexable inputs, matching Python's
+        // operator.index contract. Must be done BEFORE taking any lock (§2.3 lock discipline).
+        // Overflow by sign: positive overflow clamps to len; negative overflow clamps to 0.
+        let raw_idx = py
+            .import(pyo3::intern!(py, "operator"))?
+            .getattr(pyo3::intern!(py, "index"))?
+            .call1((index,))?;
+        // Fast path for the common exact-int case; fall back to sign-based Python call for beyond-i64.
+        let (is_negative_big, raw_i64) = if let Ok(i) = raw_idx.extract::<i64>() {
+            (false, Some(i))
+        } else {
+            // Beyond i64: use Python __lt__ to determine sign.  The lt call is still outside
+            // any lock, so lock discipline is maintained.
+            let neg = raw_idx.lt(0i64)?;
+            (neg, None)
+        };
+        // Now take a single write lock for the entire len-read + clamp + insert sequence.
+        let mut guard = self.inner.write();
+        let n = guard.children.len();
+        let clamped: usize = match raw_i64 {
+            Some(i) if i < 0 => {
+                let normalized = n as i64 + i;
+                if normalized < 0 { 0 } else { normalized as usize }
+            }
+            Some(i) => {
+                let u = i as usize;
+                if u > n { n } else { u }
+            }
+            None => if is_negative_big { 0 } else { n },
+        };
+        guard.children.insert(clamped, (native_label, native_child));
+        Ok(())
+    }
+
+    fn remove_at(&self, py: Python<'_>, index: &Bound<'_, PyAny>) -> PyResult<PyObject> {
+        // Capture the caller's original string representation BEFORE normalization,
+        // so error messages show the original value (e.g. `True` not `1`).
+        let orig_str = index.str()?.to_string_lossy().into_owned();
+        // Normalize via operator.index: raises TypeError (not AttributeError) for
+        // non-indexable inputs, matching Python's operator.index contract.
+        // All Python work must happen before any lock (§2.3 lock discipline).
+        let raw_idx = py
+            .import(pyo3::intern!(py, "operator"))?
+            .getattr(pyo3::intern!(py, "index"))?
+            .call1((index,))?;
+        // Fast path: extract i64. Beyond i64 is always OOB for real trees.
+        let maybe_i64: Option<i64> = raw_idx.extract::<i64>().ok();
+        // Single write lock: resolve + bounds-check + Vec::remove atomically (no TOCTOU).
+        // On OOB, capture n and return Err after releasing the guard.
+        let result: Result<_, usize> = {
+            let mut guard = self.inner.write();
+            let n = guard.children.len();
+            let resolved: Option<usize> = match maybe_i64 {
+                Some(i) if i < 0 => {
+                    let normalized = n as i64 + i;
+                    if normalized < 0 || normalized as usize >= n { None }
+                    else { Some(normalized as usize) }
+                }
+                Some(i) if (i as usize) < n => Some(i as usize),
+                _ => None,
+            };
+            match resolved {
+                Some(idx) => Ok(guard.children.remove(idx)),
+                None => Err(n),
+            }
+        };
+        let (label, child) = result.map_err(|n| {
+            PyIndexError::new_err(format!(
+                "Arrow.remove_at: index {} out of range ({} children)",
+                orig_str, n
+            ))
+        })?;
+        // Python wrap-out happens after the guard is released (§2.3 lock discipline).
+        let label_obj: PyObject = match label {
+            None => py.None(),
+            Some(lbl) => lbl.into_pyobject(py)?.into_any().unbind(),
+        };
+        let child_obj = child.to_pyobject(py)?;
+        Ok(PyTuple::new(py, [label_obj, child_obj])?.into_any().unbind())
+    }
+
+    #[pyo3(signature = (index, child, label = None))]
+    fn replace_at(
+        &self,
+        py: Python<'_>,
+        index: &Bound<'_, PyAny>,
+        child: &Bound<'_, PyAny>,
+        label: Option<PyObject>,
+    ) -> PyResult<()> {
+        // Validate child and label BEFORE taking the write lock (§2.3 lock discipline).
+        let span_type = get_span_type(py)?;
+        let native_child = ArrowChild::extract_from_pyobject(py, child, &span_type)?;
+        let native_label = match label {
+            None => None,
+            Some(lbl) => {
+                if let Ok(native_lbl) = lbl.bind(py).extract::<ArrowLabel>() {
+                    Some(native_lbl)
+                } else {
+                    return Err(PyTypeError::new_err(format!(
+                        "Arrow.replace_at: label argument is not a Arrow_Label; got {}",
+                        lbl.bind(py).get_type().name()?
+                    )));
+                }
+            }
+        };
+        // Capture the caller's original string representation BEFORE normalization.
+        let orig_str = index.str()?.to_string_lossy().into_owned();
+        // Normalize via operator.index: raises TypeError for non-indexable inputs.
+        // All Python work must happen before any lock (§2.3 lock discipline).
+        let raw_idx = py
+            .import(pyo3::intern!(py, "operator"))?
+            .getattr(pyo3::intern!(py, "index"))?
+            .call1((index,))?;
+        let maybe_i64: Option<i64> = raw_idx.extract::<i64>().ok();
+        // Single write lock: resolve + bounds-check + mem::replace atomically (no TOCTOU).
+        let old = {
+            let mut guard = self.inner.write();
+            let n = guard.children.len();
+            let resolved: Option<usize> = match maybe_i64 {
+                Some(i) if i < 0 => {
+                    let normalized = n as i64 + i;
+                    if normalized < 0 || normalized as usize >= n { None }
+                    else { Some(normalized as usize) }
+                }
+                Some(i) if (i as usize) < n => Some(i as usize),
+                _ => None,
+            };
+            let idx = match resolved {
+                Some(i) => i,
+                None => {
+                    return Err(PyIndexError::new_err(format!(
+                        "Arrow.replace_at: index {} out of range ({} children)",
+                        orig_str, n
+                    )));
+                }
+            };
+            std::mem::replace(&mut guard.children[idx], (native_label, native_child))
+        };
+        // Drop old entry outside the lock to avoid recursive lock acquisition
+        // if the child's drop chain re-enters Python.
+        drop(old);
+        Ok(())
+    }
+
+    fn clear(&self, _py: Python<'_>) -> PyResult<()> {
+        let old = {
+            let mut guard = self.inner.write();
+            std::mem::take(&mut guard.children)
+        };
+        // Drop old entries outside the lock.
+        drop(old);
+        Ok(())
     }
 
     fn append_target(&self, py: Python<'_>, child: &Bound<'_, PyAny>) -> PyResult<()> {
@@ -8896,6 +11392,35 @@ impl LatinWord {
     pub fn extend_value(&mut self, spans: impl IntoIterator<Item = Span>) {
         self.children.extend(spans.into_iter().map(|s| (Some(LatinWordLabel::Value), LatinWordChild::Span(s))));
     }
+
+    /// Insert a child at `index` (Vec::insert semantics: panics if index > len).
+    ///
+    /// Python-facing clamping is in the `insert` pymethod; native callers must
+    /// bounds-check. Unlike `list.insert`, Vec::insert panics on out-of-bounds.
+    pub fn insert_child(&mut self, index: usize, label: Option<LatinWordLabel>, child: LatinWordChild) {
+        self.children.insert(index, (label, child));
+    }
+
+    /// Remove and return the child at `index` (Vec::remove semantics: panics if out of range).
+    ///
+    /// Panics on out-of-range. Python-facing IndexError is in the `remove_at` pymethod.
+    pub fn remove_child(&mut self, index: usize) -> (Option<LatinWordLabel>, LatinWordChild) {
+        self.children.remove(index)
+    }
+
+    /// Replace the child at `index`, returning the old entry (panics if out of range).
+    ///
+    /// Panics on out-of-range. Python-facing IndexError is in the `replace_at` pymethod.
+    pub fn replace_child(
+        &mut self, index: usize, label: Option<LatinWordLabel>, child: LatinWordChild,
+    ) -> (Option<LatinWordLabel>, LatinWordChild) {
+        std::mem::replace(&mut self.children[index], (label, child))
+    }
+
+    /// Remove all children.
+    pub fn clear_children(&mut self) {
+        self.children.clear();
+    }
 }
 
 #[cfg(feature = "python")]
@@ -9086,6 +11611,185 @@ impl PyLatinWord {
         };
         let child_obj = child.to_pyobject(py)?;
         Ok(PyTuple::new(py, [label_obj, child_obj])?.into_any().unbind())
+    }
+
+    #[pyo3(signature = (index, child, label = None))]
+    fn insert(
+        &self,
+        py: Python<'_>,
+        index: &Bound<'_, PyAny>,
+        child: &Bound<'_, PyAny>,
+        label: Option<PyObject>,
+    ) -> PyResult<()> {
+        // Validate child and label BEFORE taking the write lock (§2.3 lock discipline).
+        let span_type = get_span_type(py)?;
+        let native_child = LatinWordChild::extract_from_pyobject(py, child, &span_type)?;
+        let native_label = match label {
+            None => None,
+            Some(lbl) => {
+                if let Ok(native_lbl) = lbl.bind(py).extract::<LatinWordLabel>() {
+                    Some(native_lbl)
+                } else {
+                    return Err(PyTypeError::new_err(format!(
+                        "LatinWord.insert: label argument is not a LatinWord_Label; got {}",
+                        lbl.bind(py).get_type().name()?
+                    )));
+                }
+            }
+        };
+        // Index normalization via operator.index (PyNumber_Index semantics).
+        // This raises TypeError (not AttributeError) for non-indexable inputs, matching Python's
+        // operator.index contract. Must be done BEFORE taking any lock (§2.3 lock discipline).
+        // Overflow by sign: positive overflow clamps to len; negative overflow clamps to 0.
+        let raw_idx = py
+            .import(pyo3::intern!(py, "operator"))?
+            .getattr(pyo3::intern!(py, "index"))?
+            .call1((index,))?;
+        // Fast path for the common exact-int case; fall back to sign-based Python call for beyond-i64.
+        let (is_negative_big, raw_i64) = if let Ok(i) = raw_idx.extract::<i64>() {
+            (false, Some(i))
+        } else {
+            // Beyond i64: use Python __lt__ to determine sign.  The lt call is still outside
+            // any lock, so lock discipline is maintained.
+            let neg = raw_idx.lt(0i64)?;
+            (neg, None)
+        };
+        // Now take a single write lock for the entire len-read + clamp + insert sequence.
+        let mut guard = self.inner.write();
+        let n = guard.children.len();
+        let clamped: usize = match raw_i64 {
+            Some(i) if i < 0 => {
+                let normalized = n as i64 + i;
+                if normalized < 0 { 0 } else { normalized as usize }
+            }
+            Some(i) => {
+                let u = i as usize;
+                if u > n { n } else { u }
+            }
+            None => if is_negative_big { 0 } else { n },
+        };
+        guard.children.insert(clamped, (native_label, native_child));
+        Ok(())
+    }
+
+    fn remove_at(&self, py: Python<'_>, index: &Bound<'_, PyAny>) -> PyResult<PyObject> {
+        // Capture the caller's original string representation BEFORE normalization,
+        // so error messages show the original value (e.g. `True` not `1`).
+        let orig_str = index.str()?.to_string_lossy().into_owned();
+        // Normalize via operator.index: raises TypeError (not AttributeError) for
+        // non-indexable inputs, matching Python's operator.index contract.
+        // All Python work must happen before any lock (§2.3 lock discipline).
+        let raw_idx = py
+            .import(pyo3::intern!(py, "operator"))?
+            .getattr(pyo3::intern!(py, "index"))?
+            .call1((index,))?;
+        // Fast path: extract i64. Beyond i64 is always OOB for real trees.
+        let maybe_i64: Option<i64> = raw_idx.extract::<i64>().ok();
+        // Single write lock: resolve + bounds-check + Vec::remove atomically (no TOCTOU).
+        // On OOB, capture n and return Err after releasing the guard.
+        let result: Result<_, usize> = {
+            let mut guard = self.inner.write();
+            let n = guard.children.len();
+            let resolved: Option<usize> = match maybe_i64 {
+                Some(i) if i < 0 => {
+                    let normalized = n as i64 + i;
+                    if normalized < 0 || normalized as usize >= n { None }
+                    else { Some(normalized as usize) }
+                }
+                Some(i) if (i as usize) < n => Some(i as usize),
+                _ => None,
+            };
+            match resolved {
+                Some(idx) => Ok(guard.children.remove(idx)),
+                None => Err(n),
+            }
+        };
+        let (label, child) = result.map_err(|n| {
+            PyIndexError::new_err(format!(
+                "LatinWord.remove_at: index {} out of range ({} children)",
+                orig_str, n
+            ))
+        })?;
+        // Python wrap-out happens after the guard is released (§2.3 lock discipline).
+        let label_obj: PyObject = match label {
+            None => py.None(),
+            Some(lbl) => lbl.into_pyobject(py)?.into_any().unbind(),
+        };
+        let child_obj = child.to_pyobject(py)?;
+        Ok(PyTuple::new(py, [label_obj, child_obj])?.into_any().unbind())
+    }
+
+    #[pyo3(signature = (index, child, label = None))]
+    fn replace_at(
+        &self,
+        py: Python<'_>,
+        index: &Bound<'_, PyAny>,
+        child: &Bound<'_, PyAny>,
+        label: Option<PyObject>,
+    ) -> PyResult<()> {
+        // Validate child and label BEFORE taking the write lock (§2.3 lock discipline).
+        let span_type = get_span_type(py)?;
+        let native_child = LatinWordChild::extract_from_pyobject(py, child, &span_type)?;
+        let native_label = match label {
+            None => None,
+            Some(lbl) => {
+                if let Ok(native_lbl) = lbl.bind(py).extract::<LatinWordLabel>() {
+                    Some(native_lbl)
+                } else {
+                    return Err(PyTypeError::new_err(format!(
+                        "LatinWord.replace_at: label argument is not a LatinWord_Label; got {}",
+                        lbl.bind(py).get_type().name()?
+                    )));
+                }
+            }
+        };
+        // Capture the caller's original string representation BEFORE normalization.
+        let orig_str = index.str()?.to_string_lossy().into_owned();
+        // Normalize via operator.index: raises TypeError for non-indexable inputs.
+        // All Python work must happen before any lock (§2.3 lock discipline).
+        let raw_idx = py
+            .import(pyo3::intern!(py, "operator"))?
+            .getattr(pyo3::intern!(py, "index"))?
+            .call1((index,))?;
+        let maybe_i64: Option<i64> = raw_idx.extract::<i64>().ok();
+        // Single write lock: resolve + bounds-check + mem::replace atomically (no TOCTOU).
+        let old = {
+            let mut guard = self.inner.write();
+            let n = guard.children.len();
+            let resolved: Option<usize> = match maybe_i64 {
+                Some(i) if i < 0 => {
+                    let normalized = n as i64 + i;
+                    if normalized < 0 || normalized as usize >= n { None }
+                    else { Some(normalized as usize) }
+                }
+                Some(i) if (i as usize) < n => Some(i as usize),
+                _ => None,
+            };
+            let idx = match resolved {
+                Some(i) => i,
+                None => {
+                    return Err(PyIndexError::new_err(format!(
+                        "LatinWord.replace_at: index {} out of range ({} children)",
+                        orig_str, n
+                    )));
+                }
+            };
+            std::mem::replace(&mut guard.children[idx], (native_label, native_child))
+        };
+        // Drop old entry outside the lock to avoid recursive lock acquisition
+        // if the child's drop chain re-enters Python.
+        drop(old);
+        Ok(())
+    }
+
+    fn clear(&self, _py: Python<'_>) -> PyResult<()> {
+        let old = {
+            let mut guard = self.inner.write();
+            std::mem::take(&mut guard.children)
+        };
+        // Drop old entries outside the lock.
+        drop(old);
+        Ok(())
     }
 
     fn append_value(&self, py: Python<'_>, child: &Bound<'_, PyAny>) -> PyResult<()> {
@@ -9468,6 +12172,35 @@ impl Tagged {
     pub fn extend_value(&mut self, spans: impl IntoIterator<Item = Span>) {
         self.children.extend(spans.into_iter().map(|s| (Some(TaggedLabel::Value), TaggedChild::Span(s))));
     }
+
+    /// Insert a child at `index` (Vec::insert semantics: panics if index > len).
+    ///
+    /// Python-facing clamping is in the `insert` pymethod; native callers must
+    /// bounds-check. Unlike `list.insert`, Vec::insert panics on out-of-bounds.
+    pub fn insert_child(&mut self, index: usize, label: Option<TaggedLabel>, child: TaggedChild) {
+        self.children.insert(index, (label, child));
+    }
+
+    /// Remove and return the child at `index` (Vec::remove semantics: panics if out of range).
+    ///
+    /// Panics on out-of-range. Python-facing IndexError is in the `remove_at` pymethod.
+    pub fn remove_child(&mut self, index: usize) -> (Option<TaggedLabel>, TaggedChild) {
+        self.children.remove(index)
+    }
+
+    /// Replace the child at `index`, returning the old entry (panics if out of range).
+    ///
+    /// Panics on out-of-range. Python-facing IndexError is in the `replace_at` pymethod.
+    pub fn replace_child(
+        &mut self, index: usize, label: Option<TaggedLabel>, child: TaggedChild,
+    ) -> (Option<TaggedLabel>, TaggedChild) {
+        std::mem::replace(&mut self.children[index], (label, child))
+    }
+
+    /// Remove all children.
+    pub fn clear_children(&mut self) {
+        self.children.clear();
+    }
 }
 
 #[cfg(feature = "python")]
@@ -9658,6 +12391,185 @@ impl PyTagged {
         };
         let child_obj = child.to_pyobject(py)?;
         Ok(PyTuple::new(py, [label_obj, child_obj])?.into_any().unbind())
+    }
+
+    #[pyo3(signature = (index, child, label = None))]
+    fn insert(
+        &self,
+        py: Python<'_>,
+        index: &Bound<'_, PyAny>,
+        child: &Bound<'_, PyAny>,
+        label: Option<PyObject>,
+    ) -> PyResult<()> {
+        // Validate child and label BEFORE taking the write lock (§2.3 lock discipline).
+        let span_type = get_span_type(py)?;
+        let native_child = TaggedChild::extract_from_pyobject(py, child, &span_type)?;
+        let native_label = match label {
+            None => None,
+            Some(lbl) => {
+                if let Ok(native_lbl) = lbl.bind(py).extract::<TaggedLabel>() {
+                    Some(native_lbl)
+                } else {
+                    return Err(PyTypeError::new_err(format!(
+                        "Tagged.insert: label argument is not a Tagged_Label; got {}",
+                        lbl.bind(py).get_type().name()?
+                    )));
+                }
+            }
+        };
+        // Index normalization via operator.index (PyNumber_Index semantics).
+        // This raises TypeError (not AttributeError) for non-indexable inputs, matching Python's
+        // operator.index contract. Must be done BEFORE taking any lock (§2.3 lock discipline).
+        // Overflow by sign: positive overflow clamps to len; negative overflow clamps to 0.
+        let raw_idx = py
+            .import(pyo3::intern!(py, "operator"))?
+            .getattr(pyo3::intern!(py, "index"))?
+            .call1((index,))?;
+        // Fast path for the common exact-int case; fall back to sign-based Python call for beyond-i64.
+        let (is_negative_big, raw_i64) = if let Ok(i) = raw_idx.extract::<i64>() {
+            (false, Some(i))
+        } else {
+            // Beyond i64: use Python __lt__ to determine sign.  The lt call is still outside
+            // any lock, so lock discipline is maintained.
+            let neg = raw_idx.lt(0i64)?;
+            (neg, None)
+        };
+        // Now take a single write lock for the entire len-read + clamp + insert sequence.
+        let mut guard = self.inner.write();
+        let n = guard.children.len();
+        let clamped: usize = match raw_i64 {
+            Some(i) if i < 0 => {
+                let normalized = n as i64 + i;
+                if normalized < 0 { 0 } else { normalized as usize }
+            }
+            Some(i) => {
+                let u = i as usize;
+                if u > n { n } else { u }
+            }
+            None => if is_negative_big { 0 } else { n },
+        };
+        guard.children.insert(clamped, (native_label, native_child));
+        Ok(())
+    }
+
+    fn remove_at(&self, py: Python<'_>, index: &Bound<'_, PyAny>) -> PyResult<PyObject> {
+        // Capture the caller's original string representation BEFORE normalization,
+        // so error messages show the original value (e.g. `True` not `1`).
+        let orig_str = index.str()?.to_string_lossy().into_owned();
+        // Normalize via operator.index: raises TypeError (not AttributeError) for
+        // non-indexable inputs, matching Python's operator.index contract.
+        // All Python work must happen before any lock (§2.3 lock discipline).
+        let raw_idx = py
+            .import(pyo3::intern!(py, "operator"))?
+            .getattr(pyo3::intern!(py, "index"))?
+            .call1((index,))?;
+        // Fast path: extract i64. Beyond i64 is always OOB for real trees.
+        let maybe_i64: Option<i64> = raw_idx.extract::<i64>().ok();
+        // Single write lock: resolve + bounds-check + Vec::remove atomically (no TOCTOU).
+        // On OOB, capture n and return Err after releasing the guard.
+        let result: Result<_, usize> = {
+            let mut guard = self.inner.write();
+            let n = guard.children.len();
+            let resolved: Option<usize> = match maybe_i64 {
+                Some(i) if i < 0 => {
+                    let normalized = n as i64 + i;
+                    if normalized < 0 || normalized as usize >= n { None }
+                    else { Some(normalized as usize) }
+                }
+                Some(i) if (i as usize) < n => Some(i as usize),
+                _ => None,
+            };
+            match resolved {
+                Some(idx) => Ok(guard.children.remove(idx)),
+                None => Err(n),
+            }
+        };
+        let (label, child) = result.map_err(|n| {
+            PyIndexError::new_err(format!(
+                "Tagged.remove_at: index {} out of range ({} children)",
+                orig_str, n
+            ))
+        })?;
+        // Python wrap-out happens after the guard is released (§2.3 lock discipline).
+        let label_obj: PyObject = match label {
+            None => py.None(),
+            Some(lbl) => lbl.into_pyobject(py)?.into_any().unbind(),
+        };
+        let child_obj = child.to_pyobject(py)?;
+        Ok(PyTuple::new(py, [label_obj, child_obj])?.into_any().unbind())
+    }
+
+    #[pyo3(signature = (index, child, label = None))]
+    fn replace_at(
+        &self,
+        py: Python<'_>,
+        index: &Bound<'_, PyAny>,
+        child: &Bound<'_, PyAny>,
+        label: Option<PyObject>,
+    ) -> PyResult<()> {
+        // Validate child and label BEFORE taking the write lock (§2.3 lock discipline).
+        let span_type = get_span_type(py)?;
+        let native_child = TaggedChild::extract_from_pyobject(py, child, &span_type)?;
+        let native_label = match label {
+            None => None,
+            Some(lbl) => {
+                if let Ok(native_lbl) = lbl.bind(py).extract::<TaggedLabel>() {
+                    Some(native_lbl)
+                } else {
+                    return Err(PyTypeError::new_err(format!(
+                        "Tagged.replace_at: label argument is not a Tagged_Label; got {}",
+                        lbl.bind(py).get_type().name()?
+                    )));
+                }
+            }
+        };
+        // Capture the caller's original string representation BEFORE normalization.
+        let orig_str = index.str()?.to_string_lossy().into_owned();
+        // Normalize via operator.index: raises TypeError for non-indexable inputs.
+        // All Python work must happen before any lock (§2.3 lock discipline).
+        let raw_idx = py
+            .import(pyo3::intern!(py, "operator"))?
+            .getattr(pyo3::intern!(py, "index"))?
+            .call1((index,))?;
+        let maybe_i64: Option<i64> = raw_idx.extract::<i64>().ok();
+        // Single write lock: resolve + bounds-check + mem::replace atomically (no TOCTOU).
+        let old = {
+            let mut guard = self.inner.write();
+            let n = guard.children.len();
+            let resolved: Option<usize> = match maybe_i64 {
+                Some(i) if i < 0 => {
+                    let normalized = n as i64 + i;
+                    if normalized < 0 || normalized as usize >= n { None }
+                    else { Some(normalized as usize) }
+                }
+                Some(i) if (i as usize) < n => Some(i as usize),
+                _ => None,
+            };
+            let idx = match resolved {
+                Some(i) => i,
+                None => {
+                    return Err(PyIndexError::new_err(format!(
+                        "Tagged.replace_at: index {} out of range ({} children)",
+                        orig_str, n
+                    )));
+                }
+            };
+            std::mem::replace(&mut guard.children[idx], (native_label, native_child))
+        };
+        // Drop old entry outside the lock to avoid recursive lock acquisition
+        // if the child's drop chain re-enters Python.
+        drop(old);
+        Ok(())
+    }
+
+    fn clear(&self, _py: Python<'_>) -> PyResult<()> {
+        let old = {
+            let mut guard = self.inner.write();
+            std::mem::take(&mut guard.children)
+        };
+        // Drop old entries outside the lock.
+        drop(old);
+        Ok(())
     }
 
     fn append_value(&self, py: Python<'_>, child: &Bound<'_, PyAny>) -> PyResult<()> {
@@ -10117,6 +13029,35 @@ impl Val {
     pub fn extend_item(&mut self, children: impl IntoIterator<Item = ValChild>) {
         self.children.extend(children.into_iter().map(|c| (Some(ValLabel::Item), c)));
     }
+
+    /// Insert a child at `index` (Vec::insert semantics: panics if index > len).
+    ///
+    /// Python-facing clamping is in the `insert` pymethod; native callers must
+    /// bounds-check. Unlike `list.insert`, Vec::insert panics on out-of-bounds.
+    pub fn insert_child(&mut self, index: usize, label: Option<ValLabel>, child: ValChild) {
+        self.children.insert(index, (label, child));
+    }
+
+    /// Remove and return the child at `index` (Vec::remove semantics: panics if out of range).
+    ///
+    /// Panics on out-of-range. Python-facing IndexError is in the `remove_at` pymethod.
+    pub fn remove_child(&mut self, index: usize) -> (Option<ValLabel>, ValChild) {
+        self.children.remove(index)
+    }
+
+    /// Replace the child at `index`, returning the old entry (panics if out of range).
+    ///
+    /// Panics on out-of-range. Python-facing IndexError is in the `replace_at` pymethod.
+    pub fn replace_child(
+        &mut self, index: usize, label: Option<ValLabel>, child: ValChild,
+    ) -> (Option<ValLabel>, ValChild) {
+        std::mem::replace(&mut self.children[index], (label, child))
+    }
+
+    /// Remove all children.
+    pub fn clear_children(&mut self) {
+        self.children.clear();
+    }
 }
 
 #[cfg(feature = "python")]
@@ -10307,6 +13248,185 @@ impl PyVal {
         };
         let child_obj = child.to_pyobject(py)?;
         Ok(PyTuple::new(py, [label_obj, child_obj])?.into_any().unbind())
+    }
+
+    #[pyo3(signature = (index, child, label = None))]
+    fn insert(
+        &self,
+        py: Python<'_>,
+        index: &Bound<'_, PyAny>,
+        child: &Bound<'_, PyAny>,
+        label: Option<PyObject>,
+    ) -> PyResult<()> {
+        // Validate child and label BEFORE taking the write lock (§2.3 lock discipline).
+        let span_type = get_span_type(py)?;
+        let native_child = ValChild::extract_from_pyobject(py, child, &span_type)?;
+        let native_label = match label {
+            None => None,
+            Some(lbl) => {
+                if let Ok(native_lbl) = lbl.bind(py).extract::<ValLabel>() {
+                    Some(native_lbl)
+                } else {
+                    return Err(PyTypeError::new_err(format!(
+                        "Val.insert: label argument is not a Val_Label; got {}",
+                        lbl.bind(py).get_type().name()?
+                    )));
+                }
+            }
+        };
+        // Index normalization via operator.index (PyNumber_Index semantics).
+        // This raises TypeError (not AttributeError) for non-indexable inputs, matching Python's
+        // operator.index contract. Must be done BEFORE taking any lock (§2.3 lock discipline).
+        // Overflow by sign: positive overflow clamps to len; negative overflow clamps to 0.
+        let raw_idx = py
+            .import(pyo3::intern!(py, "operator"))?
+            .getattr(pyo3::intern!(py, "index"))?
+            .call1((index,))?;
+        // Fast path for the common exact-int case; fall back to sign-based Python call for beyond-i64.
+        let (is_negative_big, raw_i64) = if let Ok(i) = raw_idx.extract::<i64>() {
+            (false, Some(i))
+        } else {
+            // Beyond i64: use Python __lt__ to determine sign.  The lt call is still outside
+            // any lock, so lock discipline is maintained.
+            let neg = raw_idx.lt(0i64)?;
+            (neg, None)
+        };
+        // Now take a single write lock for the entire len-read + clamp + insert sequence.
+        let mut guard = self.inner.write();
+        let n = guard.children.len();
+        let clamped: usize = match raw_i64 {
+            Some(i) if i < 0 => {
+                let normalized = n as i64 + i;
+                if normalized < 0 { 0 } else { normalized as usize }
+            }
+            Some(i) => {
+                let u = i as usize;
+                if u > n { n } else { u }
+            }
+            None => if is_negative_big { 0 } else { n },
+        };
+        guard.children.insert(clamped, (native_label, native_child));
+        Ok(())
+    }
+
+    fn remove_at(&self, py: Python<'_>, index: &Bound<'_, PyAny>) -> PyResult<PyObject> {
+        // Capture the caller's original string representation BEFORE normalization,
+        // so error messages show the original value (e.g. `True` not `1`).
+        let orig_str = index.str()?.to_string_lossy().into_owned();
+        // Normalize via operator.index: raises TypeError (not AttributeError) for
+        // non-indexable inputs, matching Python's operator.index contract.
+        // All Python work must happen before any lock (§2.3 lock discipline).
+        let raw_idx = py
+            .import(pyo3::intern!(py, "operator"))?
+            .getattr(pyo3::intern!(py, "index"))?
+            .call1((index,))?;
+        // Fast path: extract i64. Beyond i64 is always OOB for real trees.
+        let maybe_i64: Option<i64> = raw_idx.extract::<i64>().ok();
+        // Single write lock: resolve + bounds-check + Vec::remove atomically (no TOCTOU).
+        // On OOB, capture n and return Err after releasing the guard.
+        let result: Result<_, usize> = {
+            let mut guard = self.inner.write();
+            let n = guard.children.len();
+            let resolved: Option<usize> = match maybe_i64 {
+                Some(i) if i < 0 => {
+                    let normalized = n as i64 + i;
+                    if normalized < 0 || normalized as usize >= n { None }
+                    else { Some(normalized as usize) }
+                }
+                Some(i) if (i as usize) < n => Some(i as usize),
+                _ => None,
+            };
+            match resolved {
+                Some(idx) => Ok(guard.children.remove(idx)),
+                None => Err(n),
+            }
+        };
+        let (label, child) = result.map_err(|n| {
+            PyIndexError::new_err(format!(
+                "Val.remove_at: index {} out of range ({} children)",
+                orig_str, n
+            ))
+        })?;
+        // Python wrap-out happens after the guard is released (§2.3 lock discipline).
+        let label_obj: PyObject = match label {
+            None => py.None(),
+            Some(lbl) => lbl.into_pyobject(py)?.into_any().unbind(),
+        };
+        let child_obj = child.to_pyobject(py)?;
+        Ok(PyTuple::new(py, [label_obj, child_obj])?.into_any().unbind())
+    }
+
+    #[pyo3(signature = (index, child, label = None))]
+    fn replace_at(
+        &self,
+        py: Python<'_>,
+        index: &Bound<'_, PyAny>,
+        child: &Bound<'_, PyAny>,
+        label: Option<PyObject>,
+    ) -> PyResult<()> {
+        // Validate child and label BEFORE taking the write lock (§2.3 lock discipline).
+        let span_type = get_span_type(py)?;
+        let native_child = ValChild::extract_from_pyobject(py, child, &span_type)?;
+        let native_label = match label {
+            None => None,
+            Some(lbl) => {
+                if let Ok(native_lbl) = lbl.bind(py).extract::<ValLabel>() {
+                    Some(native_lbl)
+                } else {
+                    return Err(PyTypeError::new_err(format!(
+                        "Val.replace_at: label argument is not a Val_Label; got {}",
+                        lbl.bind(py).get_type().name()?
+                    )));
+                }
+            }
+        };
+        // Capture the caller's original string representation BEFORE normalization.
+        let orig_str = index.str()?.to_string_lossy().into_owned();
+        // Normalize via operator.index: raises TypeError for non-indexable inputs.
+        // All Python work must happen before any lock (§2.3 lock discipline).
+        let raw_idx = py
+            .import(pyo3::intern!(py, "operator"))?
+            .getattr(pyo3::intern!(py, "index"))?
+            .call1((index,))?;
+        let maybe_i64: Option<i64> = raw_idx.extract::<i64>().ok();
+        // Single write lock: resolve + bounds-check + mem::replace atomically (no TOCTOU).
+        let old = {
+            let mut guard = self.inner.write();
+            let n = guard.children.len();
+            let resolved: Option<usize> = match maybe_i64 {
+                Some(i) if i < 0 => {
+                    let normalized = n as i64 + i;
+                    if normalized < 0 || normalized as usize >= n { None }
+                    else { Some(normalized as usize) }
+                }
+                Some(i) if (i as usize) < n => Some(i as usize),
+                _ => None,
+            };
+            let idx = match resolved {
+                Some(i) => i,
+                None => {
+                    return Err(PyIndexError::new_err(format!(
+                        "Val.replace_at: index {} out of range ({} children)",
+                        orig_str, n
+                    )));
+                }
+            };
+            std::mem::replace(&mut guard.children[idx], (native_label, native_child))
+        };
+        // Drop old entry outside the lock to avoid recursive lock acquisition
+        // if the child's drop chain re-enters Python.
+        drop(old);
+        Ok(())
+    }
+
+    fn clear(&self, _py: Python<'_>) -> PyResult<()> {
+        let old = {
+            let mut guard = self.inner.write();
+            std::mem::take(&mut guard.children)
+        };
+        // Drop old entries outside the lock.
+        drop(old);
+        Ok(())
     }
 
     fn append_item(&self, py: Python<'_>, child: &Bound<'_, PyAny>) -> PyResult<()> {
@@ -10762,6 +13882,35 @@ impl LeadingWs {
     pub fn extend_num(&mut self, children: impl IntoIterator<Item = impl Into<Shared<Num>>>) {
         self.children.extend(children.into_iter().map(|c| (Some(LeadingWsLabel::Num), LeadingWsChild::Num(c.into()))));
     }
+
+    /// Insert a child at `index` (Vec::insert semantics: panics if index > len).
+    ///
+    /// Python-facing clamping is in the `insert` pymethod; native callers must
+    /// bounds-check. Unlike `list.insert`, Vec::insert panics on out-of-bounds.
+    pub fn insert_child(&mut self, index: usize, label: Option<LeadingWsLabel>, child: LeadingWsChild) {
+        self.children.insert(index, (label, child));
+    }
+
+    /// Remove and return the child at `index` (Vec::remove semantics: panics if out of range).
+    ///
+    /// Panics on out-of-range. Python-facing IndexError is in the `remove_at` pymethod.
+    pub fn remove_child(&mut self, index: usize) -> (Option<LeadingWsLabel>, LeadingWsChild) {
+        self.children.remove(index)
+    }
+
+    /// Replace the child at `index`, returning the old entry (panics if out of range).
+    ///
+    /// Panics on out-of-range. Python-facing IndexError is in the `replace_at` pymethod.
+    pub fn replace_child(
+        &mut self, index: usize, label: Option<LeadingWsLabel>, child: LeadingWsChild,
+    ) -> (Option<LeadingWsLabel>, LeadingWsChild) {
+        std::mem::replace(&mut self.children[index], (label, child))
+    }
+
+    /// Remove all children.
+    pub fn clear_children(&mut self) {
+        self.children.clear();
+    }
 }
 
 #[cfg(feature = "python")]
@@ -10952,6 +14101,185 @@ impl PyLeadingWs {
         };
         let child_obj = child.to_pyobject(py)?;
         Ok(PyTuple::new(py, [label_obj, child_obj])?.into_any().unbind())
+    }
+
+    #[pyo3(signature = (index, child, label = None))]
+    fn insert(
+        &self,
+        py: Python<'_>,
+        index: &Bound<'_, PyAny>,
+        child: &Bound<'_, PyAny>,
+        label: Option<PyObject>,
+    ) -> PyResult<()> {
+        // Validate child and label BEFORE taking the write lock (§2.3 lock discipline).
+        let span_type = get_span_type(py)?;
+        let native_child = LeadingWsChild::extract_from_pyobject(py, child, &span_type)?;
+        let native_label = match label {
+            None => None,
+            Some(lbl) => {
+                if let Ok(native_lbl) = lbl.bind(py).extract::<LeadingWsLabel>() {
+                    Some(native_lbl)
+                } else {
+                    return Err(PyTypeError::new_err(format!(
+                        "LeadingWs.insert: label argument is not a LeadingWs_Label; got {}",
+                        lbl.bind(py).get_type().name()?
+                    )));
+                }
+            }
+        };
+        // Index normalization via operator.index (PyNumber_Index semantics).
+        // This raises TypeError (not AttributeError) for non-indexable inputs, matching Python's
+        // operator.index contract. Must be done BEFORE taking any lock (§2.3 lock discipline).
+        // Overflow by sign: positive overflow clamps to len; negative overflow clamps to 0.
+        let raw_idx = py
+            .import(pyo3::intern!(py, "operator"))?
+            .getattr(pyo3::intern!(py, "index"))?
+            .call1((index,))?;
+        // Fast path for the common exact-int case; fall back to sign-based Python call for beyond-i64.
+        let (is_negative_big, raw_i64) = if let Ok(i) = raw_idx.extract::<i64>() {
+            (false, Some(i))
+        } else {
+            // Beyond i64: use Python __lt__ to determine sign.  The lt call is still outside
+            // any lock, so lock discipline is maintained.
+            let neg = raw_idx.lt(0i64)?;
+            (neg, None)
+        };
+        // Now take a single write lock for the entire len-read + clamp + insert sequence.
+        let mut guard = self.inner.write();
+        let n = guard.children.len();
+        let clamped: usize = match raw_i64 {
+            Some(i) if i < 0 => {
+                let normalized = n as i64 + i;
+                if normalized < 0 { 0 } else { normalized as usize }
+            }
+            Some(i) => {
+                let u = i as usize;
+                if u > n { n } else { u }
+            }
+            None => if is_negative_big { 0 } else { n },
+        };
+        guard.children.insert(clamped, (native_label, native_child));
+        Ok(())
+    }
+
+    fn remove_at(&self, py: Python<'_>, index: &Bound<'_, PyAny>) -> PyResult<PyObject> {
+        // Capture the caller's original string representation BEFORE normalization,
+        // so error messages show the original value (e.g. `True` not `1`).
+        let orig_str = index.str()?.to_string_lossy().into_owned();
+        // Normalize via operator.index: raises TypeError (not AttributeError) for
+        // non-indexable inputs, matching Python's operator.index contract.
+        // All Python work must happen before any lock (§2.3 lock discipline).
+        let raw_idx = py
+            .import(pyo3::intern!(py, "operator"))?
+            .getattr(pyo3::intern!(py, "index"))?
+            .call1((index,))?;
+        // Fast path: extract i64. Beyond i64 is always OOB for real trees.
+        let maybe_i64: Option<i64> = raw_idx.extract::<i64>().ok();
+        // Single write lock: resolve + bounds-check + Vec::remove atomically (no TOCTOU).
+        // On OOB, capture n and return Err after releasing the guard.
+        let result: Result<_, usize> = {
+            let mut guard = self.inner.write();
+            let n = guard.children.len();
+            let resolved: Option<usize> = match maybe_i64 {
+                Some(i) if i < 0 => {
+                    let normalized = n as i64 + i;
+                    if normalized < 0 || normalized as usize >= n { None }
+                    else { Some(normalized as usize) }
+                }
+                Some(i) if (i as usize) < n => Some(i as usize),
+                _ => None,
+            };
+            match resolved {
+                Some(idx) => Ok(guard.children.remove(idx)),
+                None => Err(n),
+            }
+        };
+        let (label, child) = result.map_err(|n| {
+            PyIndexError::new_err(format!(
+                "LeadingWs.remove_at: index {} out of range ({} children)",
+                orig_str, n
+            ))
+        })?;
+        // Python wrap-out happens after the guard is released (§2.3 lock discipline).
+        let label_obj: PyObject = match label {
+            None => py.None(),
+            Some(lbl) => lbl.into_pyobject(py)?.into_any().unbind(),
+        };
+        let child_obj = child.to_pyobject(py)?;
+        Ok(PyTuple::new(py, [label_obj, child_obj])?.into_any().unbind())
+    }
+
+    #[pyo3(signature = (index, child, label = None))]
+    fn replace_at(
+        &self,
+        py: Python<'_>,
+        index: &Bound<'_, PyAny>,
+        child: &Bound<'_, PyAny>,
+        label: Option<PyObject>,
+    ) -> PyResult<()> {
+        // Validate child and label BEFORE taking the write lock (§2.3 lock discipline).
+        let span_type = get_span_type(py)?;
+        let native_child = LeadingWsChild::extract_from_pyobject(py, child, &span_type)?;
+        let native_label = match label {
+            None => None,
+            Some(lbl) => {
+                if let Ok(native_lbl) = lbl.bind(py).extract::<LeadingWsLabel>() {
+                    Some(native_lbl)
+                } else {
+                    return Err(PyTypeError::new_err(format!(
+                        "LeadingWs.replace_at: label argument is not a LeadingWs_Label; got {}",
+                        lbl.bind(py).get_type().name()?
+                    )));
+                }
+            }
+        };
+        // Capture the caller's original string representation BEFORE normalization.
+        let orig_str = index.str()?.to_string_lossy().into_owned();
+        // Normalize via operator.index: raises TypeError for non-indexable inputs.
+        // All Python work must happen before any lock (§2.3 lock discipline).
+        let raw_idx = py
+            .import(pyo3::intern!(py, "operator"))?
+            .getattr(pyo3::intern!(py, "index"))?
+            .call1((index,))?;
+        let maybe_i64: Option<i64> = raw_idx.extract::<i64>().ok();
+        // Single write lock: resolve + bounds-check + mem::replace atomically (no TOCTOU).
+        let old = {
+            let mut guard = self.inner.write();
+            let n = guard.children.len();
+            let resolved: Option<usize> = match maybe_i64 {
+                Some(i) if i < 0 => {
+                    let normalized = n as i64 + i;
+                    if normalized < 0 || normalized as usize >= n { None }
+                    else { Some(normalized as usize) }
+                }
+                Some(i) if (i as usize) < n => Some(i as usize),
+                _ => None,
+            };
+            let idx = match resolved {
+                Some(i) => i,
+                None => {
+                    return Err(PyIndexError::new_err(format!(
+                        "LeadingWs.replace_at: index {} out of range ({} children)",
+                        orig_str, n
+                    )));
+                }
+            };
+            std::mem::replace(&mut guard.children[idx], (native_label, native_child))
+        };
+        // Drop old entry outside the lock to avoid recursive lock acquisition
+        // if the child's drop chain re-enters Python.
+        drop(old);
+        Ok(())
+    }
+
+    fn clear(&self, _py: Python<'_>) -> PyResult<()> {
+        let old = {
+            let mut guard = self.inner.write();
+            std::mem::take(&mut guard.children)
+        };
+        // Drop old entries outside the lock.
+        drop(old);
+        Ok(())
     }
 
     fn append_num(&self, py: Python<'_>, child: &Bound<'_, PyAny>) -> PyResult<()> {
@@ -11423,6 +14751,35 @@ impl Grouped {
     pub fn extend_left(&mut self, children: impl IntoIterator<Item = GroupedChild>) {
         self.children.extend(children.into_iter().map(|c| (Some(GroupedLabel::Left), c)));
     }
+
+    /// Insert a child at `index` (Vec::insert semantics: panics if index > len).
+    ///
+    /// Python-facing clamping is in the `insert` pymethod; native callers must
+    /// bounds-check. Unlike `list.insert`, Vec::insert panics on out-of-bounds.
+    pub fn insert_child(&mut self, index: usize, label: Option<GroupedLabel>, child: GroupedChild) {
+        self.children.insert(index, (label, child));
+    }
+
+    /// Remove and return the child at `index` (Vec::remove semantics: panics if out of range).
+    ///
+    /// Panics on out-of-range. Python-facing IndexError is in the `remove_at` pymethod.
+    pub fn remove_child(&mut self, index: usize) -> (Option<GroupedLabel>, GroupedChild) {
+        self.children.remove(index)
+    }
+
+    /// Replace the child at `index`, returning the old entry (panics if out of range).
+    ///
+    /// Panics on out-of-range. Python-facing IndexError is in the `replace_at` pymethod.
+    pub fn replace_child(
+        &mut self, index: usize, label: Option<GroupedLabel>, child: GroupedChild,
+    ) -> (Option<GroupedLabel>, GroupedChild) {
+        std::mem::replace(&mut self.children[index], (label, child))
+    }
+
+    /// Remove all children.
+    pub fn clear_children(&mut self) {
+        self.children.clear();
+    }
 }
 
 #[cfg(feature = "python")]
@@ -11613,6 +14970,185 @@ impl PyGrouped {
         };
         let child_obj = child.to_pyobject(py)?;
         Ok(PyTuple::new(py, [label_obj, child_obj])?.into_any().unbind())
+    }
+
+    #[pyo3(signature = (index, child, label = None))]
+    fn insert(
+        &self,
+        py: Python<'_>,
+        index: &Bound<'_, PyAny>,
+        child: &Bound<'_, PyAny>,
+        label: Option<PyObject>,
+    ) -> PyResult<()> {
+        // Validate child and label BEFORE taking the write lock (§2.3 lock discipline).
+        let span_type = get_span_type(py)?;
+        let native_child = GroupedChild::extract_from_pyobject(py, child, &span_type)?;
+        let native_label = match label {
+            None => None,
+            Some(lbl) => {
+                if let Ok(native_lbl) = lbl.bind(py).extract::<GroupedLabel>() {
+                    Some(native_lbl)
+                } else {
+                    return Err(PyTypeError::new_err(format!(
+                        "Grouped.insert: label argument is not a Grouped_Label; got {}",
+                        lbl.bind(py).get_type().name()?
+                    )));
+                }
+            }
+        };
+        // Index normalization via operator.index (PyNumber_Index semantics).
+        // This raises TypeError (not AttributeError) for non-indexable inputs, matching Python's
+        // operator.index contract. Must be done BEFORE taking any lock (§2.3 lock discipline).
+        // Overflow by sign: positive overflow clamps to len; negative overflow clamps to 0.
+        let raw_idx = py
+            .import(pyo3::intern!(py, "operator"))?
+            .getattr(pyo3::intern!(py, "index"))?
+            .call1((index,))?;
+        // Fast path for the common exact-int case; fall back to sign-based Python call for beyond-i64.
+        let (is_negative_big, raw_i64) = if let Ok(i) = raw_idx.extract::<i64>() {
+            (false, Some(i))
+        } else {
+            // Beyond i64: use Python __lt__ to determine sign.  The lt call is still outside
+            // any lock, so lock discipline is maintained.
+            let neg = raw_idx.lt(0i64)?;
+            (neg, None)
+        };
+        // Now take a single write lock for the entire len-read + clamp + insert sequence.
+        let mut guard = self.inner.write();
+        let n = guard.children.len();
+        let clamped: usize = match raw_i64 {
+            Some(i) if i < 0 => {
+                let normalized = n as i64 + i;
+                if normalized < 0 { 0 } else { normalized as usize }
+            }
+            Some(i) => {
+                let u = i as usize;
+                if u > n { n } else { u }
+            }
+            None => if is_negative_big { 0 } else { n },
+        };
+        guard.children.insert(clamped, (native_label, native_child));
+        Ok(())
+    }
+
+    fn remove_at(&self, py: Python<'_>, index: &Bound<'_, PyAny>) -> PyResult<PyObject> {
+        // Capture the caller's original string representation BEFORE normalization,
+        // so error messages show the original value (e.g. `True` not `1`).
+        let orig_str = index.str()?.to_string_lossy().into_owned();
+        // Normalize via operator.index: raises TypeError (not AttributeError) for
+        // non-indexable inputs, matching Python's operator.index contract.
+        // All Python work must happen before any lock (§2.3 lock discipline).
+        let raw_idx = py
+            .import(pyo3::intern!(py, "operator"))?
+            .getattr(pyo3::intern!(py, "index"))?
+            .call1((index,))?;
+        // Fast path: extract i64. Beyond i64 is always OOB for real trees.
+        let maybe_i64: Option<i64> = raw_idx.extract::<i64>().ok();
+        // Single write lock: resolve + bounds-check + Vec::remove atomically (no TOCTOU).
+        // On OOB, capture n and return Err after releasing the guard.
+        let result: Result<_, usize> = {
+            let mut guard = self.inner.write();
+            let n = guard.children.len();
+            let resolved: Option<usize> = match maybe_i64 {
+                Some(i) if i < 0 => {
+                    let normalized = n as i64 + i;
+                    if normalized < 0 || normalized as usize >= n { None }
+                    else { Some(normalized as usize) }
+                }
+                Some(i) if (i as usize) < n => Some(i as usize),
+                _ => None,
+            };
+            match resolved {
+                Some(idx) => Ok(guard.children.remove(idx)),
+                None => Err(n),
+            }
+        };
+        let (label, child) = result.map_err(|n| {
+            PyIndexError::new_err(format!(
+                "Grouped.remove_at: index {} out of range ({} children)",
+                orig_str, n
+            ))
+        })?;
+        // Python wrap-out happens after the guard is released (§2.3 lock discipline).
+        let label_obj: PyObject = match label {
+            None => py.None(),
+            Some(lbl) => lbl.into_pyobject(py)?.into_any().unbind(),
+        };
+        let child_obj = child.to_pyobject(py)?;
+        Ok(PyTuple::new(py, [label_obj, child_obj])?.into_any().unbind())
+    }
+
+    #[pyo3(signature = (index, child, label = None))]
+    fn replace_at(
+        &self,
+        py: Python<'_>,
+        index: &Bound<'_, PyAny>,
+        child: &Bound<'_, PyAny>,
+        label: Option<PyObject>,
+    ) -> PyResult<()> {
+        // Validate child and label BEFORE taking the write lock (§2.3 lock discipline).
+        let span_type = get_span_type(py)?;
+        let native_child = GroupedChild::extract_from_pyobject(py, child, &span_type)?;
+        let native_label = match label {
+            None => None,
+            Some(lbl) => {
+                if let Ok(native_lbl) = lbl.bind(py).extract::<GroupedLabel>() {
+                    Some(native_lbl)
+                } else {
+                    return Err(PyTypeError::new_err(format!(
+                        "Grouped.replace_at: label argument is not a Grouped_Label; got {}",
+                        lbl.bind(py).get_type().name()?
+                    )));
+                }
+            }
+        };
+        // Capture the caller's original string representation BEFORE normalization.
+        let orig_str = index.str()?.to_string_lossy().into_owned();
+        // Normalize via operator.index: raises TypeError for non-indexable inputs.
+        // All Python work must happen before any lock (§2.3 lock discipline).
+        let raw_idx = py
+            .import(pyo3::intern!(py, "operator"))?
+            .getattr(pyo3::intern!(py, "index"))?
+            .call1((index,))?;
+        let maybe_i64: Option<i64> = raw_idx.extract::<i64>().ok();
+        // Single write lock: resolve + bounds-check + mem::replace atomically (no TOCTOU).
+        let old = {
+            let mut guard = self.inner.write();
+            let n = guard.children.len();
+            let resolved: Option<usize> = match maybe_i64 {
+                Some(i) if i < 0 => {
+                    let normalized = n as i64 + i;
+                    if normalized < 0 || normalized as usize >= n { None }
+                    else { Some(normalized as usize) }
+                }
+                Some(i) if (i as usize) < n => Some(i as usize),
+                _ => None,
+            };
+            let idx = match resolved {
+                Some(i) => i,
+                None => {
+                    return Err(PyIndexError::new_err(format!(
+                        "Grouped.replace_at: index {} out of range ({} children)",
+                        orig_str, n
+                    )));
+                }
+            };
+            std::mem::replace(&mut guard.children[idx], (native_label, native_child))
+        };
+        // Drop old entry outside the lock to avoid recursive lock acquisition
+        // if the child's drop chain re-enters Python.
+        drop(old);
+        Ok(())
+    }
+
+    fn clear(&self, _py: Python<'_>) -> PyResult<()> {
+        let old = {
+            let mut guard = self.inner.write();
+            std::mem::take(&mut guard.children)
+        };
+        // Drop old entries outside the lock.
+        drop(old);
+        Ok(())
     }
 
     fn append_left(&self, py: Python<'_>, child: &Bound<'_, PyAny>) -> PyResult<()> {
@@ -12157,6 +15693,35 @@ impl RecViaSub {
     pub fn extend_suffix(&mut self, children: impl IntoIterator<Item = impl Into<Shared<Name>>>) {
         self.children.extend(children.into_iter().map(|c| (Some(RecViaSubLabel::Suffix), RecViaSubChild::Name(c.into()))));
     }
+
+    /// Insert a child at `index` (Vec::insert semantics: panics if index > len).
+    ///
+    /// Python-facing clamping is in the `insert` pymethod; native callers must
+    /// bounds-check. Unlike `list.insert`, Vec::insert panics on out-of-bounds.
+    pub fn insert_child(&mut self, index: usize, label: Option<RecViaSubLabel>, child: RecViaSubChild) {
+        self.children.insert(index, (label, child));
+    }
+
+    /// Remove and return the child at `index` (Vec::remove semantics: panics if out of range).
+    ///
+    /// Panics on out-of-range. Python-facing IndexError is in the `remove_at` pymethod.
+    pub fn remove_child(&mut self, index: usize) -> (Option<RecViaSubLabel>, RecViaSubChild) {
+        self.children.remove(index)
+    }
+
+    /// Replace the child at `index`, returning the old entry (panics if out of range).
+    ///
+    /// Panics on out-of-range. Python-facing IndexError is in the `replace_at` pymethod.
+    pub fn replace_child(
+        &mut self, index: usize, label: Option<RecViaSubLabel>, child: RecViaSubChild,
+    ) -> (Option<RecViaSubLabel>, RecViaSubChild) {
+        std::mem::replace(&mut self.children[index], (label, child))
+    }
+
+    /// Remove all children.
+    pub fn clear_children(&mut self) {
+        self.children.clear();
+    }
 }
 
 #[cfg(feature = "python")]
@@ -12347,6 +15912,185 @@ impl PyRecViaSub {
         };
         let child_obj = child.to_pyobject(py)?;
         Ok(PyTuple::new(py, [label_obj, child_obj])?.into_any().unbind())
+    }
+
+    #[pyo3(signature = (index, child, label = None))]
+    fn insert(
+        &self,
+        py: Python<'_>,
+        index: &Bound<'_, PyAny>,
+        child: &Bound<'_, PyAny>,
+        label: Option<PyObject>,
+    ) -> PyResult<()> {
+        // Validate child and label BEFORE taking the write lock (§2.3 lock discipline).
+        let span_type = get_span_type(py)?;
+        let native_child = RecViaSubChild::extract_from_pyobject(py, child, &span_type)?;
+        let native_label = match label {
+            None => None,
+            Some(lbl) => {
+                if let Ok(native_lbl) = lbl.bind(py).extract::<RecViaSubLabel>() {
+                    Some(native_lbl)
+                } else {
+                    return Err(PyTypeError::new_err(format!(
+                        "RecViaSub.insert: label argument is not a RecViaSub_Label; got {}",
+                        lbl.bind(py).get_type().name()?
+                    )));
+                }
+            }
+        };
+        // Index normalization via operator.index (PyNumber_Index semantics).
+        // This raises TypeError (not AttributeError) for non-indexable inputs, matching Python's
+        // operator.index contract. Must be done BEFORE taking any lock (§2.3 lock discipline).
+        // Overflow by sign: positive overflow clamps to len; negative overflow clamps to 0.
+        let raw_idx = py
+            .import(pyo3::intern!(py, "operator"))?
+            .getattr(pyo3::intern!(py, "index"))?
+            .call1((index,))?;
+        // Fast path for the common exact-int case; fall back to sign-based Python call for beyond-i64.
+        let (is_negative_big, raw_i64) = if let Ok(i) = raw_idx.extract::<i64>() {
+            (false, Some(i))
+        } else {
+            // Beyond i64: use Python __lt__ to determine sign.  The lt call is still outside
+            // any lock, so lock discipline is maintained.
+            let neg = raw_idx.lt(0i64)?;
+            (neg, None)
+        };
+        // Now take a single write lock for the entire len-read + clamp + insert sequence.
+        let mut guard = self.inner.write();
+        let n = guard.children.len();
+        let clamped: usize = match raw_i64 {
+            Some(i) if i < 0 => {
+                let normalized = n as i64 + i;
+                if normalized < 0 { 0 } else { normalized as usize }
+            }
+            Some(i) => {
+                let u = i as usize;
+                if u > n { n } else { u }
+            }
+            None => if is_negative_big { 0 } else { n },
+        };
+        guard.children.insert(clamped, (native_label, native_child));
+        Ok(())
+    }
+
+    fn remove_at(&self, py: Python<'_>, index: &Bound<'_, PyAny>) -> PyResult<PyObject> {
+        // Capture the caller's original string representation BEFORE normalization,
+        // so error messages show the original value (e.g. `True` not `1`).
+        let orig_str = index.str()?.to_string_lossy().into_owned();
+        // Normalize via operator.index: raises TypeError (not AttributeError) for
+        // non-indexable inputs, matching Python's operator.index contract.
+        // All Python work must happen before any lock (§2.3 lock discipline).
+        let raw_idx = py
+            .import(pyo3::intern!(py, "operator"))?
+            .getattr(pyo3::intern!(py, "index"))?
+            .call1((index,))?;
+        // Fast path: extract i64. Beyond i64 is always OOB for real trees.
+        let maybe_i64: Option<i64> = raw_idx.extract::<i64>().ok();
+        // Single write lock: resolve + bounds-check + Vec::remove atomically (no TOCTOU).
+        // On OOB, capture n and return Err after releasing the guard.
+        let result: Result<_, usize> = {
+            let mut guard = self.inner.write();
+            let n = guard.children.len();
+            let resolved: Option<usize> = match maybe_i64 {
+                Some(i) if i < 0 => {
+                    let normalized = n as i64 + i;
+                    if normalized < 0 || normalized as usize >= n { None }
+                    else { Some(normalized as usize) }
+                }
+                Some(i) if (i as usize) < n => Some(i as usize),
+                _ => None,
+            };
+            match resolved {
+                Some(idx) => Ok(guard.children.remove(idx)),
+                None => Err(n),
+            }
+        };
+        let (label, child) = result.map_err(|n| {
+            PyIndexError::new_err(format!(
+                "RecViaSub.remove_at: index {} out of range ({} children)",
+                orig_str, n
+            ))
+        })?;
+        // Python wrap-out happens after the guard is released (§2.3 lock discipline).
+        let label_obj: PyObject = match label {
+            None => py.None(),
+            Some(lbl) => lbl.into_pyobject(py)?.into_any().unbind(),
+        };
+        let child_obj = child.to_pyobject(py)?;
+        Ok(PyTuple::new(py, [label_obj, child_obj])?.into_any().unbind())
+    }
+
+    #[pyo3(signature = (index, child, label = None))]
+    fn replace_at(
+        &self,
+        py: Python<'_>,
+        index: &Bound<'_, PyAny>,
+        child: &Bound<'_, PyAny>,
+        label: Option<PyObject>,
+    ) -> PyResult<()> {
+        // Validate child and label BEFORE taking the write lock (§2.3 lock discipline).
+        let span_type = get_span_type(py)?;
+        let native_child = RecViaSubChild::extract_from_pyobject(py, child, &span_type)?;
+        let native_label = match label {
+            None => None,
+            Some(lbl) => {
+                if let Ok(native_lbl) = lbl.bind(py).extract::<RecViaSubLabel>() {
+                    Some(native_lbl)
+                } else {
+                    return Err(PyTypeError::new_err(format!(
+                        "RecViaSub.replace_at: label argument is not a RecViaSub_Label; got {}",
+                        lbl.bind(py).get_type().name()?
+                    )));
+                }
+            }
+        };
+        // Capture the caller's original string representation BEFORE normalization.
+        let orig_str = index.str()?.to_string_lossy().into_owned();
+        // Normalize via operator.index: raises TypeError for non-indexable inputs.
+        // All Python work must happen before any lock (§2.3 lock discipline).
+        let raw_idx = py
+            .import(pyo3::intern!(py, "operator"))?
+            .getattr(pyo3::intern!(py, "index"))?
+            .call1((index,))?;
+        let maybe_i64: Option<i64> = raw_idx.extract::<i64>().ok();
+        // Single write lock: resolve + bounds-check + mem::replace atomically (no TOCTOU).
+        let old = {
+            let mut guard = self.inner.write();
+            let n = guard.children.len();
+            let resolved: Option<usize> = match maybe_i64 {
+                Some(i) if i < 0 => {
+                    let normalized = n as i64 + i;
+                    if normalized < 0 || normalized as usize >= n { None }
+                    else { Some(normalized as usize) }
+                }
+                Some(i) if (i as usize) < n => Some(i as usize),
+                _ => None,
+            };
+            let idx = match resolved {
+                Some(i) => i,
+                None => {
+                    return Err(PyIndexError::new_err(format!(
+                        "RecViaSub.replace_at: index {} out of range ({} children)",
+                        orig_str, n
+                    )));
+                }
+            };
+            std::mem::replace(&mut guard.children[idx], (native_label, native_child))
+        };
+        // Drop old entry outside the lock to avoid recursive lock acquisition
+        // if the child's drop chain re-enters Python.
+        drop(old);
+        Ok(())
+    }
+
+    fn clear(&self, _py: Python<'_>) -> PyResult<()> {
+        let old = {
+            let mut guard = self.inner.write();
+            std::mem::take(&mut guard.children)
+        };
+        // Drop old entries outside the lock.
+        drop(old);
+        Ok(())
     }
 
     fn append_inner(&self, py: Python<'_>, child: &Bound<'_, PyAny>) -> PyResult<()> {
@@ -12966,6 +16710,35 @@ impl Nest {
     pub fn extend_leaf(&mut self, children: impl IntoIterator<Item = impl Into<Shared<Num>>>) {
         self.children.extend(children.into_iter().map(|c| (Some(NestLabel::Leaf), NestChild::Num(c.into()))));
     }
+
+    /// Insert a child at `index` (Vec::insert semantics: panics if index > len).
+    ///
+    /// Python-facing clamping is in the `insert` pymethod; native callers must
+    /// bounds-check. Unlike `list.insert`, Vec::insert panics on out-of-bounds.
+    pub fn insert_child(&mut self, index: usize, label: Option<NestLabel>, child: NestChild) {
+        self.children.insert(index, (label, child));
+    }
+
+    /// Remove and return the child at `index` (Vec::remove semantics: panics if out of range).
+    ///
+    /// Panics on out-of-range. Python-facing IndexError is in the `remove_at` pymethod.
+    pub fn remove_child(&mut self, index: usize) -> (Option<NestLabel>, NestChild) {
+        self.children.remove(index)
+    }
+
+    /// Replace the child at `index`, returning the old entry (panics if out of range).
+    ///
+    /// Panics on out-of-range. Python-facing IndexError is in the `replace_at` pymethod.
+    pub fn replace_child(
+        &mut self, index: usize, label: Option<NestLabel>, child: NestChild,
+    ) -> (Option<NestLabel>, NestChild) {
+        std::mem::replace(&mut self.children[index], (label, child))
+    }
+
+    /// Remove all children.
+    pub fn clear_children(&mut self) {
+        self.children.clear();
+    }
 }
 
 #[cfg(feature = "python")]
@@ -13156,6 +16929,185 @@ impl PyNest {
         };
         let child_obj = child.to_pyobject(py)?;
         Ok(PyTuple::new(py, [label_obj, child_obj])?.into_any().unbind())
+    }
+
+    #[pyo3(signature = (index, child, label = None))]
+    fn insert(
+        &self,
+        py: Python<'_>,
+        index: &Bound<'_, PyAny>,
+        child: &Bound<'_, PyAny>,
+        label: Option<PyObject>,
+    ) -> PyResult<()> {
+        // Validate child and label BEFORE taking the write lock (§2.3 lock discipline).
+        let span_type = get_span_type(py)?;
+        let native_child = NestChild::extract_from_pyobject(py, child, &span_type)?;
+        let native_label = match label {
+            None => None,
+            Some(lbl) => {
+                if let Ok(native_lbl) = lbl.bind(py).extract::<NestLabel>() {
+                    Some(native_lbl)
+                } else {
+                    return Err(PyTypeError::new_err(format!(
+                        "Nest.insert: label argument is not a Nest_Label; got {}",
+                        lbl.bind(py).get_type().name()?
+                    )));
+                }
+            }
+        };
+        // Index normalization via operator.index (PyNumber_Index semantics).
+        // This raises TypeError (not AttributeError) for non-indexable inputs, matching Python's
+        // operator.index contract. Must be done BEFORE taking any lock (§2.3 lock discipline).
+        // Overflow by sign: positive overflow clamps to len; negative overflow clamps to 0.
+        let raw_idx = py
+            .import(pyo3::intern!(py, "operator"))?
+            .getattr(pyo3::intern!(py, "index"))?
+            .call1((index,))?;
+        // Fast path for the common exact-int case; fall back to sign-based Python call for beyond-i64.
+        let (is_negative_big, raw_i64) = if let Ok(i) = raw_idx.extract::<i64>() {
+            (false, Some(i))
+        } else {
+            // Beyond i64: use Python __lt__ to determine sign.  The lt call is still outside
+            // any lock, so lock discipline is maintained.
+            let neg = raw_idx.lt(0i64)?;
+            (neg, None)
+        };
+        // Now take a single write lock for the entire len-read + clamp + insert sequence.
+        let mut guard = self.inner.write();
+        let n = guard.children.len();
+        let clamped: usize = match raw_i64 {
+            Some(i) if i < 0 => {
+                let normalized = n as i64 + i;
+                if normalized < 0 { 0 } else { normalized as usize }
+            }
+            Some(i) => {
+                let u = i as usize;
+                if u > n { n } else { u }
+            }
+            None => if is_negative_big { 0 } else { n },
+        };
+        guard.children.insert(clamped, (native_label, native_child));
+        Ok(())
+    }
+
+    fn remove_at(&self, py: Python<'_>, index: &Bound<'_, PyAny>) -> PyResult<PyObject> {
+        // Capture the caller's original string representation BEFORE normalization,
+        // so error messages show the original value (e.g. `True` not `1`).
+        let orig_str = index.str()?.to_string_lossy().into_owned();
+        // Normalize via operator.index: raises TypeError (not AttributeError) for
+        // non-indexable inputs, matching Python's operator.index contract.
+        // All Python work must happen before any lock (§2.3 lock discipline).
+        let raw_idx = py
+            .import(pyo3::intern!(py, "operator"))?
+            .getattr(pyo3::intern!(py, "index"))?
+            .call1((index,))?;
+        // Fast path: extract i64. Beyond i64 is always OOB for real trees.
+        let maybe_i64: Option<i64> = raw_idx.extract::<i64>().ok();
+        // Single write lock: resolve + bounds-check + Vec::remove atomically (no TOCTOU).
+        // On OOB, capture n and return Err after releasing the guard.
+        let result: Result<_, usize> = {
+            let mut guard = self.inner.write();
+            let n = guard.children.len();
+            let resolved: Option<usize> = match maybe_i64 {
+                Some(i) if i < 0 => {
+                    let normalized = n as i64 + i;
+                    if normalized < 0 || normalized as usize >= n { None }
+                    else { Some(normalized as usize) }
+                }
+                Some(i) if (i as usize) < n => Some(i as usize),
+                _ => None,
+            };
+            match resolved {
+                Some(idx) => Ok(guard.children.remove(idx)),
+                None => Err(n),
+            }
+        };
+        let (label, child) = result.map_err(|n| {
+            PyIndexError::new_err(format!(
+                "Nest.remove_at: index {} out of range ({} children)",
+                orig_str, n
+            ))
+        })?;
+        // Python wrap-out happens after the guard is released (§2.3 lock discipline).
+        let label_obj: PyObject = match label {
+            None => py.None(),
+            Some(lbl) => lbl.into_pyobject(py)?.into_any().unbind(),
+        };
+        let child_obj = child.to_pyobject(py)?;
+        Ok(PyTuple::new(py, [label_obj, child_obj])?.into_any().unbind())
+    }
+
+    #[pyo3(signature = (index, child, label = None))]
+    fn replace_at(
+        &self,
+        py: Python<'_>,
+        index: &Bound<'_, PyAny>,
+        child: &Bound<'_, PyAny>,
+        label: Option<PyObject>,
+    ) -> PyResult<()> {
+        // Validate child and label BEFORE taking the write lock (§2.3 lock discipline).
+        let span_type = get_span_type(py)?;
+        let native_child = NestChild::extract_from_pyobject(py, child, &span_type)?;
+        let native_label = match label {
+            None => None,
+            Some(lbl) => {
+                if let Ok(native_lbl) = lbl.bind(py).extract::<NestLabel>() {
+                    Some(native_lbl)
+                } else {
+                    return Err(PyTypeError::new_err(format!(
+                        "Nest.replace_at: label argument is not a Nest_Label; got {}",
+                        lbl.bind(py).get_type().name()?
+                    )));
+                }
+            }
+        };
+        // Capture the caller's original string representation BEFORE normalization.
+        let orig_str = index.str()?.to_string_lossy().into_owned();
+        // Normalize via operator.index: raises TypeError for non-indexable inputs.
+        // All Python work must happen before any lock (§2.3 lock discipline).
+        let raw_idx = py
+            .import(pyo3::intern!(py, "operator"))?
+            .getattr(pyo3::intern!(py, "index"))?
+            .call1((index,))?;
+        let maybe_i64: Option<i64> = raw_idx.extract::<i64>().ok();
+        // Single write lock: resolve + bounds-check + mem::replace atomically (no TOCTOU).
+        let old = {
+            let mut guard = self.inner.write();
+            let n = guard.children.len();
+            let resolved: Option<usize> = match maybe_i64 {
+                Some(i) if i < 0 => {
+                    let normalized = n as i64 + i;
+                    if normalized < 0 || normalized as usize >= n { None }
+                    else { Some(normalized as usize) }
+                }
+                Some(i) if (i as usize) < n => Some(i as usize),
+                _ => None,
+            };
+            let idx = match resolved {
+                Some(i) => i,
+                None => {
+                    return Err(PyIndexError::new_err(format!(
+                        "Nest.replace_at: index {} out of range ({} children)",
+                        orig_str, n
+                    )));
+                }
+            };
+            std::mem::replace(&mut guard.children[idx], (native_label, native_child))
+        };
+        // Drop old entry outside the lock to avoid recursive lock acquisition
+        // if the child's drop chain re-enters Python.
+        drop(old);
+        Ok(())
+    }
+
+    fn clear(&self, _py: Python<'_>) -> PyResult<()> {
+        let old = {
+            let mut guard = self.inner.write();
+            std::mem::take(&mut guard.children)
+        };
+        // Drop old entries outside the lock.
+        drop(old);
+        Ok(())
     }
 
     fn append_inner(&self, py: Python<'_>, child: &Bound<'_, PyAny>) -> PyResult<()> {
@@ -13848,6 +17800,35 @@ impl NestSum {
     pub fn extend_rhs(&mut self, children: impl IntoIterator<Item = impl Into<Shared<Nest>>>) {
         self.children.extend(children.into_iter().map(|c| (Some(NestSumLabel::Rhs), NestSumChild::Nest(c.into()))));
     }
+
+    /// Insert a child at `index` (Vec::insert semantics: panics if index > len).
+    ///
+    /// Python-facing clamping is in the `insert` pymethod; native callers must
+    /// bounds-check. Unlike `list.insert`, Vec::insert panics on out-of-bounds.
+    pub fn insert_child(&mut self, index: usize, label: Option<NestSumLabel>, child: NestSumChild) {
+        self.children.insert(index, (label, child));
+    }
+
+    /// Remove and return the child at `index` (Vec::remove semantics: panics if out of range).
+    ///
+    /// Panics on out-of-range. Python-facing IndexError is in the `remove_at` pymethod.
+    pub fn remove_child(&mut self, index: usize) -> (Option<NestSumLabel>, NestSumChild) {
+        self.children.remove(index)
+    }
+
+    /// Replace the child at `index`, returning the old entry (panics if out of range).
+    ///
+    /// Panics on out-of-range. Python-facing IndexError is in the `replace_at` pymethod.
+    pub fn replace_child(
+        &mut self, index: usize, label: Option<NestSumLabel>, child: NestSumChild,
+    ) -> (Option<NestSumLabel>, NestSumChild) {
+        std::mem::replace(&mut self.children[index], (label, child))
+    }
+
+    /// Remove all children.
+    pub fn clear_children(&mut self) {
+        self.children.clear();
+    }
 }
 
 #[cfg(feature = "python")]
@@ -14038,6 +18019,185 @@ impl PyNestSum {
         };
         let child_obj = child.to_pyobject(py)?;
         Ok(PyTuple::new(py, [label_obj, child_obj])?.into_any().unbind())
+    }
+
+    #[pyo3(signature = (index, child, label = None))]
+    fn insert(
+        &self,
+        py: Python<'_>,
+        index: &Bound<'_, PyAny>,
+        child: &Bound<'_, PyAny>,
+        label: Option<PyObject>,
+    ) -> PyResult<()> {
+        // Validate child and label BEFORE taking the write lock (§2.3 lock discipline).
+        let span_type = get_span_type(py)?;
+        let native_child = NestSumChild::extract_from_pyobject(py, child, &span_type)?;
+        let native_label = match label {
+            None => None,
+            Some(lbl) => {
+                if let Ok(native_lbl) = lbl.bind(py).extract::<NestSumLabel>() {
+                    Some(native_lbl)
+                } else {
+                    return Err(PyTypeError::new_err(format!(
+                        "NestSum.insert: label argument is not a NestSum_Label; got {}",
+                        lbl.bind(py).get_type().name()?
+                    )));
+                }
+            }
+        };
+        // Index normalization via operator.index (PyNumber_Index semantics).
+        // This raises TypeError (not AttributeError) for non-indexable inputs, matching Python's
+        // operator.index contract. Must be done BEFORE taking any lock (§2.3 lock discipline).
+        // Overflow by sign: positive overflow clamps to len; negative overflow clamps to 0.
+        let raw_idx = py
+            .import(pyo3::intern!(py, "operator"))?
+            .getattr(pyo3::intern!(py, "index"))?
+            .call1((index,))?;
+        // Fast path for the common exact-int case; fall back to sign-based Python call for beyond-i64.
+        let (is_negative_big, raw_i64) = if let Ok(i) = raw_idx.extract::<i64>() {
+            (false, Some(i))
+        } else {
+            // Beyond i64: use Python __lt__ to determine sign.  The lt call is still outside
+            // any lock, so lock discipline is maintained.
+            let neg = raw_idx.lt(0i64)?;
+            (neg, None)
+        };
+        // Now take a single write lock for the entire len-read + clamp + insert sequence.
+        let mut guard = self.inner.write();
+        let n = guard.children.len();
+        let clamped: usize = match raw_i64 {
+            Some(i) if i < 0 => {
+                let normalized = n as i64 + i;
+                if normalized < 0 { 0 } else { normalized as usize }
+            }
+            Some(i) => {
+                let u = i as usize;
+                if u > n { n } else { u }
+            }
+            None => if is_negative_big { 0 } else { n },
+        };
+        guard.children.insert(clamped, (native_label, native_child));
+        Ok(())
+    }
+
+    fn remove_at(&self, py: Python<'_>, index: &Bound<'_, PyAny>) -> PyResult<PyObject> {
+        // Capture the caller's original string representation BEFORE normalization,
+        // so error messages show the original value (e.g. `True` not `1`).
+        let orig_str = index.str()?.to_string_lossy().into_owned();
+        // Normalize via operator.index: raises TypeError (not AttributeError) for
+        // non-indexable inputs, matching Python's operator.index contract.
+        // All Python work must happen before any lock (§2.3 lock discipline).
+        let raw_idx = py
+            .import(pyo3::intern!(py, "operator"))?
+            .getattr(pyo3::intern!(py, "index"))?
+            .call1((index,))?;
+        // Fast path: extract i64. Beyond i64 is always OOB for real trees.
+        let maybe_i64: Option<i64> = raw_idx.extract::<i64>().ok();
+        // Single write lock: resolve + bounds-check + Vec::remove atomically (no TOCTOU).
+        // On OOB, capture n and return Err after releasing the guard.
+        let result: Result<_, usize> = {
+            let mut guard = self.inner.write();
+            let n = guard.children.len();
+            let resolved: Option<usize> = match maybe_i64 {
+                Some(i) if i < 0 => {
+                    let normalized = n as i64 + i;
+                    if normalized < 0 || normalized as usize >= n { None }
+                    else { Some(normalized as usize) }
+                }
+                Some(i) if (i as usize) < n => Some(i as usize),
+                _ => None,
+            };
+            match resolved {
+                Some(idx) => Ok(guard.children.remove(idx)),
+                None => Err(n),
+            }
+        };
+        let (label, child) = result.map_err(|n| {
+            PyIndexError::new_err(format!(
+                "NestSum.remove_at: index {} out of range ({} children)",
+                orig_str, n
+            ))
+        })?;
+        // Python wrap-out happens after the guard is released (§2.3 lock discipline).
+        let label_obj: PyObject = match label {
+            None => py.None(),
+            Some(lbl) => lbl.into_pyobject(py)?.into_any().unbind(),
+        };
+        let child_obj = child.to_pyobject(py)?;
+        Ok(PyTuple::new(py, [label_obj, child_obj])?.into_any().unbind())
+    }
+
+    #[pyo3(signature = (index, child, label = None))]
+    fn replace_at(
+        &self,
+        py: Python<'_>,
+        index: &Bound<'_, PyAny>,
+        child: &Bound<'_, PyAny>,
+        label: Option<PyObject>,
+    ) -> PyResult<()> {
+        // Validate child and label BEFORE taking the write lock (§2.3 lock discipline).
+        let span_type = get_span_type(py)?;
+        let native_child = NestSumChild::extract_from_pyobject(py, child, &span_type)?;
+        let native_label = match label {
+            None => None,
+            Some(lbl) => {
+                if let Ok(native_lbl) = lbl.bind(py).extract::<NestSumLabel>() {
+                    Some(native_lbl)
+                } else {
+                    return Err(PyTypeError::new_err(format!(
+                        "NestSum.replace_at: label argument is not a NestSum_Label; got {}",
+                        lbl.bind(py).get_type().name()?
+                    )));
+                }
+            }
+        };
+        // Capture the caller's original string representation BEFORE normalization.
+        let orig_str = index.str()?.to_string_lossy().into_owned();
+        // Normalize via operator.index: raises TypeError for non-indexable inputs.
+        // All Python work must happen before any lock (§2.3 lock discipline).
+        let raw_idx = py
+            .import(pyo3::intern!(py, "operator"))?
+            .getattr(pyo3::intern!(py, "index"))?
+            .call1((index,))?;
+        let maybe_i64: Option<i64> = raw_idx.extract::<i64>().ok();
+        // Single write lock: resolve + bounds-check + mem::replace atomically (no TOCTOU).
+        let old = {
+            let mut guard = self.inner.write();
+            let n = guard.children.len();
+            let resolved: Option<usize> = match maybe_i64 {
+                Some(i) if i < 0 => {
+                    let normalized = n as i64 + i;
+                    if normalized < 0 || normalized as usize >= n { None }
+                    else { Some(normalized as usize) }
+                }
+                Some(i) if (i as usize) < n => Some(i as usize),
+                _ => None,
+            };
+            let idx = match resolved {
+                Some(i) => i,
+                None => {
+                    return Err(PyIndexError::new_err(format!(
+                        "NestSum.replace_at: index {} out of range ({} children)",
+                        orig_str, n
+                    )));
+                }
+            };
+            std::mem::replace(&mut guard.children[idx], (native_label, native_child))
+        };
+        // Drop old entry outside the lock to avoid recursive lock acquisition
+        // if the child's drop chain re-enters Python.
+        drop(old);
+        Ok(())
+    }
+
+    fn clear(&self, _py: Python<'_>) -> PyResult<()> {
+        let old = {
+            let mut guard = self.inner.write();
+            std::mem::take(&mut guard.children)
+        };
+        // Drop old entries outside the lock.
+        drop(old);
+        Ok(())
     }
 
     fn append_first(&self, py: Python<'_>, child: &Bound<'_, PyAny>) -> PyResult<()> {
@@ -14610,6 +18770,35 @@ impl Trivia {
     pub fn extend_content(&mut self, spans: impl IntoIterator<Item = Span>) {
         self.children.extend(spans.into_iter().map(|s| (Some(TriviaLabel::Content), TriviaChild::Span(s))));
     }
+
+    /// Insert a child at `index` (Vec::insert semantics: panics if index > len).
+    ///
+    /// Python-facing clamping is in the `insert` pymethod; native callers must
+    /// bounds-check. Unlike `list.insert`, Vec::insert panics on out-of-bounds.
+    pub fn insert_child(&mut self, index: usize, label: Option<TriviaLabel>, child: TriviaChild) {
+        self.children.insert(index, (label, child));
+    }
+
+    /// Remove and return the child at `index` (Vec::remove semantics: panics if out of range).
+    ///
+    /// Panics on out-of-range. Python-facing IndexError is in the `remove_at` pymethod.
+    pub fn remove_child(&mut self, index: usize) -> (Option<TriviaLabel>, TriviaChild) {
+        self.children.remove(index)
+    }
+
+    /// Replace the child at `index`, returning the old entry (panics if out of range).
+    ///
+    /// Panics on out-of-range. Python-facing IndexError is in the `replace_at` pymethod.
+    pub fn replace_child(
+        &mut self, index: usize, label: Option<TriviaLabel>, child: TriviaChild,
+    ) -> (Option<TriviaLabel>, TriviaChild) {
+        std::mem::replace(&mut self.children[index], (label, child))
+    }
+
+    /// Remove all children.
+    pub fn clear_children(&mut self) {
+        self.children.clear();
+    }
 }
 
 #[cfg(feature = "python")]
@@ -14800,6 +18989,185 @@ impl PyTrivia {
         };
         let child_obj = child.to_pyobject(py)?;
         Ok(PyTuple::new(py, [label_obj, child_obj])?.into_any().unbind())
+    }
+
+    #[pyo3(signature = (index, child, label = None))]
+    fn insert(
+        &self,
+        py: Python<'_>,
+        index: &Bound<'_, PyAny>,
+        child: &Bound<'_, PyAny>,
+        label: Option<PyObject>,
+    ) -> PyResult<()> {
+        // Validate child and label BEFORE taking the write lock (§2.3 lock discipline).
+        let span_type = get_span_type(py)?;
+        let native_child = TriviaChild::extract_from_pyobject(py, child, &span_type)?;
+        let native_label = match label {
+            None => None,
+            Some(lbl) => {
+                if let Ok(native_lbl) = lbl.bind(py).extract::<TriviaLabel>() {
+                    Some(native_lbl)
+                } else {
+                    return Err(PyTypeError::new_err(format!(
+                        "Trivia.insert: label argument is not a Trivia_Label; got {}",
+                        lbl.bind(py).get_type().name()?
+                    )));
+                }
+            }
+        };
+        // Index normalization via operator.index (PyNumber_Index semantics).
+        // This raises TypeError (not AttributeError) for non-indexable inputs, matching Python's
+        // operator.index contract. Must be done BEFORE taking any lock (§2.3 lock discipline).
+        // Overflow by sign: positive overflow clamps to len; negative overflow clamps to 0.
+        let raw_idx = py
+            .import(pyo3::intern!(py, "operator"))?
+            .getattr(pyo3::intern!(py, "index"))?
+            .call1((index,))?;
+        // Fast path for the common exact-int case; fall back to sign-based Python call for beyond-i64.
+        let (is_negative_big, raw_i64) = if let Ok(i) = raw_idx.extract::<i64>() {
+            (false, Some(i))
+        } else {
+            // Beyond i64: use Python __lt__ to determine sign.  The lt call is still outside
+            // any lock, so lock discipline is maintained.
+            let neg = raw_idx.lt(0i64)?;
+            (neg, None)
+        };
+        // Now take a single write lock for the entire len-read + clamp + insert sequence.
+        let mut guard = self.inner.write();
+        let n = guard.children.len();
+        let clamped: usize = match raw_i64 {
+            Some(i) if i < 0 => {
+                let normalized = n as i64 + i;
+                if normalized < 0 { 0 } else { normalized as usize }
+            }
+            Some(i) => {
+                let u = i as usize;
+                if u > n { n } else { u }
+            }
+            None => if is_negative_big { 0 } else { n },
+        };
+        guard.children.insert(clamped, (native_label, native_child));
+        Ok(())
+    }
+
+    fn remove_at(&self, py: Python<'_>, index: &Bound<'_, PyAny>) -> PyResult<PyObject> {
+        // Capture the caller's original string representation BEFORE normalization,
+        // so error messages show the original value (e.g. `True` not `1`).
+        let orig_str = index.str()?.to_string_lossy().into_owned();
+        // Normalize via operator.index: raises TypeError (not AttributeError) for
+        // non-indexable inputs, matching Python's operator.index contract.
+        // All Python work must happen before any lock (§2.3 lock discipline).
+        let raw_idx = py
+            .import(pyo3::intern!(py, "operator"))?
+            .getattr(pyo3::intern!(py, "index"))?
+            .call1((index,))?;
+        // Fast path: extract i64. Beyond i64 is always OOB for real trees.
+        let maybe_i64: Option<i64> = raw_idx.extract::<i64>().ok();
+        // Single write lock: resolve + bounds-check + Vec::remove atomically (no TOCTOU).
+        // On OOB, capture n and return Err after releasing the guard.
+        let result: Result<_, usize> = {
+            let mut guard = self.inner.write();
+            let n = guard.children.len();
+            let resolved: Option<usize> = match maybe_i64 {
+                Some(i) if i < 0 => {
+                    let normalized = n as i64 + i;
+                    if normalized < 0 || normalized as usize >= n { None }
+                    else { Some(normalized as usize) }
+                }
+                Some(i) if (i as usize) < n => Some(i as usize),
+                _ => None,
+            };
+            match resolved {
+                Some(idx) => Ok(guard.children.remove(idx)),
+                None => Err(n),
+            }
+        };
+        let (label, child) = result.map_err(|n| {
+            PyIndexError::new_err(format!(
+                "Trivia.remove_at: index {} out of range ({} children)",
+                orig_str, n
+            ))
+        })?;
+        // Python wrap-out happens after the guard is released (§2.3 lock discipline).
+        let label_obj: PyObject = match label {
+            None => py.None(),
+            Some(lbl) => lbl.into_pyobject(py)?.into_any().unbind(),
+        };
+        let child_obj = child.to_pyobject(py)?;
+        Ok(PyTuple::new(py, [label_obj, child_obj])?.into_any().unbind())
+    }
+
+    #[pyo3(signature = (index, child, label = None))]
+    fn replace_at(
+        &self,
+        py: Python<'_>,
+        index: &Bound<'_, PyAny>,
+        child: &Bound<'_, PyAny>,
+        label: Option<PyObject>,
+    ) -> PyResult<()> {
+        // Validate child and label BEFORE taking the write lock (§2.3 lock discipline).
+        let span_type = get_span_type(py)?;
+        let native_child = TriviaChild::extract_from_pyobject(py, child, &span_type)?;
+        let native_label = match label {
+            None => None,
+            Some(lbl) => {
+                if let Ok(native_lbl) = lbl.bind(py).extract::<TriviaLabel>() {
+                    Some(native_lbl)
+                } else {
+                    return Err(PyTypeError::new_err(format!(
+                        "Trivia.replace_at: label argument is not a Trivia_Label; got {}",
+                        lbl.bind(py).get_type().name()?
+                    )));
+                }
+            }
+        };
+        // Capture the caller's original string representation BEFORE normalization.
+        let orig_str = index.str()?.to_string_lossy().into_owned();
+        // Normalize via operator.index: raises TypeError for non-indexable inputs.
+        // All Python work must happen before any lock (§2.3 lock discipline).
+        let raw_idx = py
+            .import(pyo3::intern!(py, "operator"))?
+            .getattr(pyo3::intern!(py, "index"))?
+            .call1((index,))?;
+        let maybe_i64: Option<i64> = raw_idx.extract::<i64>().ok();
+        // Single write lock: resolve + bounds-check + mem::replace atomically (no TOCTOU).
+        let old = {
+            let mut guard = self.inner.write();
+            let n = guard.children.len();
+            let resolved: Option<usize> = match maybe_i64 {
+                Some(i) if i < 0 => {
+                    let normalized = n as i64 + i;
+                    if normalized < 0 || normalized as usize >= n { None }
+                    else { Some(normalized as usize) }
+                }
+                Some(i) if (i as usize) < n => Some(i as usize),
+                _ => None,
+            };
+            let idx = match resolved {
+                Some(i) => i,
+                None => {
+                    return Err(PyIndexError::new_err(format!(
+                        "Trivia.replace_at: index {} out of range ({} children)",
+                        orig_str, n
+                    )));
+                }
+            };
+            std::mem::replace(&mut guard.children[idx], (native_label, native_child))
+        };
+        // Drop old entry outside the lock to avoid recursive lock acquisition
+        // if the child's drop chain re-enters Python.
+        drop(old);
+        Ok(())
+    }
+
+    fn clear(&self, _py: Python<'_>) -> PyResult<()> {
+        let old = {
+            let mut guard = self.inner.write();
+            std::mem::take(&mut guard.children)
+        };
+        // Drop old entries outside the lock.
+        drop(old);
+        Ok(())
     }
 
     fn append_content(&self, py: Python<'_>, child: &Bound<'_, PyAny>) -> PyResult<()> {
@@ -15029,6 +19397,12 @@ impl DropWorklistItem {
     }
 }
 
+#[cfg(all(feature = "python", feature = "test-introspection"))]
+#[pyfunction]
+fn _registry_snapshot(py: Python<'_>) -> PyResult<pyo3::Bound<'_, pyo3::types::PyDict>> {
+    registry::snapshot(py)
+}
+
 #[cfg(feature = "python")]
 pub fn register_classes(module: &Bound<'_, PyModule>) -> PyResult<()> {
     module.add_class::<NodeKind>()?;
@@ -15074,5 +19448,7 @@ pub fn register_classes(module: &Bound<'_, PyModule>) -> PyResult<()> {
     module.add_class::<PyNestSum>()?;
     module.add_class::<TriviaLabel>()?;
     module.add_class::<PyTrivia>()?;
+    #[cfg(feature = "test-introspection")]
+    module.add_function(wrap_pyfunction!(_registry_snapshot, module)?)?;
     Ok(())
 }

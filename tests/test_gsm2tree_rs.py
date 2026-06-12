@@ -179,7 +179,9 @@ class TestPreamble:
             '#[cfg(feature = "python")]\nuse fltk_cst_core::{extract_span, get_span_type, span_to_pyobject};'
             in poc_source
         )
-        assert '#[cfg(feature = "python")]\nuse pyo3::exceptions::{PyTypeError, PyValueError};' in poc_source
+        assert (
+            '#[cfg(feature = "python")]\nuse pyo3::exceptions::{PyIndexError, PyTypeError, PyValueError};' in poc_source
+        )
         assert '#[cfg(feature = "python")]\nuse pyo3::prelude::*;' in poc_source
         assert '#[cfg(feature = "python")]\nuse pyo3::types::{PyList, PyTuple, PyType};' in poc_source
         assert '#[cfg(feature = "python")]\nuse pyo3::PyTypeInfo;' in poc_source
@@ -1190,6 +1192,247 @@ class TestGeneratePyiPerLabelAccessors:
             for prefix in ("append_", "extend_", "children_", "child_", "maybe_"):
                 method = f"def {prefix}{label}("
                 assert method in poc_pyi, f"Missing {method!r} in poc_pyi"
+
+
+class TestMutatorsEmittedRsPymethods:
+    """§4.1: Generated Rust source contains all four pymethod mutators with expected signatures."""
+
+    def test_insert_pymethod_present(self, poc_source: str) -> None:
+        """fn insert pymethod is emitted on each node."""
+        assert "fn insert(" in poc_source
+
+    def test_remove_at_pymethod_present(self, poc_source: str) -> None:
+        """fn remove_at pymethod is emitted on each node."""
+        assert "fn remove_at(" in poc_source
+
+    def test_replace_at_pymethod_present(self, poc_source: str) -> None:
+        """fn replace_at pymethod is emitted on each node."""
+        assert "fn replace_at(" in poc_source
+
+    def test_clear_pymethod_present(self, poc_source: str) -> None:
+        """fn clear pymethod is emitted on each node."""
+        assert "fn clear(" in poc_source
+
+    def test_insert_takes_pyany_index(self, poc_source: str) -> None:
+        """insert takes index as &Bound<'_, PyAny> (not i64), for __index__ semantics."""
+        assert "fn insert(\n        &self,\n        py: Python<'_>,\n        index: &Bound<'_, PyAny>," in poc_source
+
+    def test_insert_pyo3_signature(self, poc_source: str) -> None:
+        """insert has #[pyo3(signature = (index, child, label = None))]."""
+        assert "#[pyo3(signature = (index, child, label = None))]\n    fn insert(" in poc_source
+
+    def test_replace_at_pyo3_signature(self, poc_source: str) -> None:
+        """replace_at has #[pyo3(signature = (index, child, label = None))]."""
+        assert "#[pyo3(signature = (index, child, label = None))]\n    fn replace_at(" in poc_source
+
+    def test_remove_at_returns_pyresult_pyobject(self, poc_source: str) -> None:
+        """remove_at returns PyResult<PyObject> (tuple of label + child)."""
+        assert "fn remove_at(&self, py: Python<'_>, index: &Bound<'_, PyAny>) -> PyResult<PyObject>" in poc_source
+
+    def test_clear_returns_pyresult_unit(self, poc_source: str) -> None:
+        """clear returns PyResult<()>."""
+        assert "fn clear(&self, _py: Python<'_>) -> PyResult<()>" in poc_source
+
+    def test_insert_index_normalization_present(self, poc_source: str) -> None:
+        """insert normalizes index via operator.index (TypeError for non-indexable, not AttributeError)."""
+        # operator.index is called via Python's operator module, not __index__ directly.
+        assert 'import(pyo3::intern!(py, "operator"))' in poc_source
+        assert 'getattr(pyo3::intern!(py, "index"))' in poc_source
+
+    def test_insert_clamp_logic_present(self, poc_source: str) -> None:
+        """insert contains clamp logic (both directions): positive clamps to n, negative to 0."""
+        assert "if u > n { n } else { u }" in poc_source
+        assert "if normalized < 0 { 0 } else { normalized as usize }" in poc_source
+
+    def test_remove_at_index_error_message(self, poc_source: str) -> None:
+        """remove_at emits the pinned IndexError message format with positional {} placeholders."""
+        # Format: "{ClassName}.remove_at: index {} out of range ({} children)"
+        # Uses positional {} because orig_str and n are separate variables.
+        assert "out of range ({} children)" in poc_source
+
+    def test_mutators_in_pymethods_block(self, poc_source: str) -> None:
+        """All four mutators appear inside a #[cfg(feature = \"python\")] #[pymethods] block."""
+        # The fn insert/remove_at/replace_at/clear appear inside the pymethods impl blocks.
+        # We verify they are not bare pub fns (which would be native methods, not pymethods).
+        # Native method signatures differ: they use &mut self and usize.
+        assert "fn insert(\n        &self," in poc_source  # pymethod: &self
+        assert "fn remove_at(&self," in poc_source  # pymethod: &self
+        assert "fn clear(&self," in poc_source  # pymethod: &self
+
+    def test_fegen_source_has_all_mutators(self, fegen_source: str) -> None:
+        """Fegen grammar (14 rules) also emits all four mutators."""
+        assert "fn insert(" in fegen_source
+        assert "fn remove_at(" in fegen_source
+        assert "fn replace_at(" in fegen_source
+        assert "fn clear(" in fegen_source
+
+
+class TestNativeMutatorsEmittedRs:
+    """§4.1: Native (non-pymethod) mutators insert_child/remove_child/replace_child/clear_children are emitted."""
+
+    def test_insert_child_native(self, poc_source: str) -> None:
+        """pub fn insert_child is emitted on each node struct."""
+        assert "pub fn insert_child(" in poc_source
+
+    def test_remove_child_native(self, poc_source: str) -> None:
+        """pub fn remove_child is emitted on each node struct."""
+        assert "pub fn remove_child(" in poc_source
+
+    def test_replace_child_native(self, poc_source: str) -> None:
+        """pub fn replace_child is emitted on each node struct."""
+        assert "pub fn replace_child(" in poc_source
+
+    def test_clear_children_native(self, poc_source: str) -> None:
+        """pub fn clear_children is emitted on each node struct."""
+        assert "pub fn clear_children(" in poc_source
+
+    def test_insert_child_signature(self, poc_source: str) -> None:
+        """insert_child takes (index: usize, label: Option<...Label>, child: ...Child)."""
+        assert (
+            "pub fn insert_child(&mut self, index: usize, label: Option<IdentifierLabel>, child: IdentifierChild)"
+            in poc_source
+        )
+
+    def test_remove_child_signature(self, poc_source: str) -> None:
+        """remove_child takes (index: usize) and returns (Option<...Label>, ...Child)."""
+        assert (
+            "pub fn remove_child(&mut self, index: usize) -> (Option<IdentifierLabel>, IdentifierChild)" in poc_source
+        )
+
+    def test_replace_child_signature(self, poc_source: str) -> None:
+        """replace_child takes (index: usize, label, child) and returns (label, child) old entry."""
+        assert "pub fn replace_child(" in poc_source
+        # Verify at minimum the return type is present (replaces and returns old entry)
+        assert "-> (Option<IdentifierLabel>, IdentifierChild)" in poc_source
+
+    def test_clear_children_signature(self, poc_source: str) -> None:
+        """clear_children takes only &mut self."""
+        assert "pub fn clear_children(&mut self)" in poc_source
+
+    def test_native_mutators_use_mut_self(self, poc_source: str) -> None:
+        """Native mutators take &mut self (not &self like pymethods)."""
+        assert "pub fn insert_child(&mut self," in poc_source
+        assert "pub fn remove_child(&mut self," in poc_source
+        assert "pub fn clear_children(&mut self)" in poc_source
+
+    def test_fegen_source_has_native_mutators(self, fegen_source: str) -> None:
+        """Fegen grammar also emits all four native mutators."""
+        assert "pub fn insert_child(" in fegen_source
+        assert "pub fn remove_child(" in fegen_source
+        assert "pub fn replace_child(" in fegen_source
+        assert "pub fn clear_children(" in fegen_source
+
+
+class TestMutatorsEmittedPyi:
+    """§4.1: .pyi stubs contain all four mutator method signatures."""
+
+    def test_insert_present_pyi(self, poc_pyi: str) -> None:
+        """insert stub is present in the .pyi."""
+        assert "def insert(self," in poc_pyi
+
+    def test_remove_at_present_pyi(self, poc_pyi: str) -> None:
+        """remove_at stub is present in the .pyi."""
+        assert "def remove_at(self," in poc_pyi
+
+    def test_replace_at_present_pyi(self, poc_pyi: str) -> None:
+        """replace_at stub is present in the .pyi."""
+        assert "def replace_at(self," in poc_pyi
+
+    def test_clear_present_pyi(self, poc_pyi: str) -> None:
+        """clear stub is present in the .pyi."""
+        assert "def clear(self) -> None: ..." in poc_pyi
+
+    def test_insert_signature_labeled(self, poc_pyi: str) -> None:
+        """insert stub has index: int, child, and label params for a labeled node."""
+        # Extract Identifier class section
+        lines = poc_pyi.splitlines()
+        in_identifier = False
+        identifier_lines: list[str] = []
+        for line in lines:
+            if line.startswith("class Identifier:"):
+                in_identifier = True
+                continue
+            if in_identifier:
+                if line.startswith("class "):
+                    break
+                identifier_lines.append(line)
+        identifier_body = "\n".join(identifier_lines)
+        assert "def insert(self, index: int," in identifier_body, (
+            f"Expected 'def insert(self, index: int,' in Identifier class body; got:\n{identifier_body}"
+        )
+        assert "label:" in identifier_body, "Expected 'label:' in Identifier.insert stub"
+
+    def test_remove_at_returns_tuple_labeled(self, poc_pyi: str) -> None:
+        """remove_at stub returns a tuple for labeled nodes."""
+        assert "def remove_at(self, index: int) -> tuple[" in poc_pyi
+
+    def test_replace_at_returns_none(self, poc_pyi: str) -> None:
+        """replace_at stub returns None."""
+        assert "def replace_at(self, index: int," in poc_pyi
+        # Verify it ends with -> None: ...
+        for line in poc_pyi.splitlines():
+            if "def replace_at" in line and "-> None:" in line:
+                break
+        else:
+            # May span multiple lines; check that replace_at appears with -> None somewhere
+            import re  # noqa: PLC0415
+
+            match = re.search(r"def replace_at\([^)]+\)\s*->\s*None:", poc_pyi, re.DOTALL)
+            assert match is not None, "replace_at must return None in .pyi"
+
+    def test_mutators_after_generic_child(self, poc_pyi: str) -> None:
+        """Mutators appear after def child(self) in the stub (§2.3 ordering)."""
+        idx_child = poc_pyi.find("def child(self)")
+        idx_insert = poc_pyi.find("def insert(self,")
+        assert idx_child != -1, "def child not found in poc_pyi"
+        assert idx_insert != -1, "def insert not found in poc_pyi"
+        assert idx_child < idx_insert, "insert must appear after child in .pyi"
+
+    def test_fegen_pyi_has_all_mutators(self, fegen_pyi: str) -> None:
+        """Fegen grammar .pyi also contains all four mutator stubs."""
+        assert "def insert(self," in fegen_pyi
+        assert "def remove_at(self," in fegen_pyi
+        assert "def replace_at(self," in fegen_pyi
+        assert "def clear(self) -> None: ..." in fegen_pyi
+
+
+class TestRegistrySnapshotEmittedRs:
+    """§4.1 / §2.3: _registry_snapshot pyfunction is emitted per module (test-introspection feature)."""
+
+    def test_registry_snapshot_pyfunction_present(self, poc_source: str) -> None:
+        """_registry_snapshot is emitted as a #[pyfunction] in register_classes."""
+        assert "_registry_snapshot" in poc_source
+
+    def test_registry_snapshot_cfg_gated(self, poc_source: str) -> None:
+        """_registry_snapshot is gated on feature = \"test-introspection\"."""
+        assert 'feature = "test-introspection"' in poc_source
+
+    def test_registry_snapshot_added_in_register_classes(self, poc_source: str) -> None:
+        """register_classes adds _registry_snapshot as a function."""
+        assert "add_function" in poc_source
+
+
+class TestMutatorNoCollisionRs:
+    """§2.1: no per-label generated name can equal any fixed mutator name."""
+
+    def test_fixed_mutator_names_not_reachable_from_per_label_prefixes(self) -> None:
+        """Per-label prefix families (append_/extend_/children_/child_/maybe_) never produce a fixed mutator name."""
+        fixed_names = {"insert", "remove_at", "replace_at", "clear"}
+        per_label_prefixes = ("append_", "extend_", "children_", "child_", "maybe_")
+        for label in fixed_names:
+            for prefix in per_label_prefixes:
+                generated = f"{prefix}{label}"
+                assert generated not in fixed_names, f"Per-label method '{generated}' collides with fixed mutator name"
+
+    def test_no_insert_remove_replace_clear_in_reserved_labels(self) -> None:
+        """_RESERVED_LABELS does not contain insert/remove_at/replace_at/clear (not needed)."""
+        from fltk.fegen.gsm2tree_rs import _RESERVED_LABELS  # noqa: PLC0415
+
+        fixed_names = {"insert", "remove_at", "replace_at", "clear"}
+        for label in fixed_names:
+            assert label not in _RESERVED_LABELS, (
+                f"'{label}' should not be in _RESERVED_LABELS; per-label methods never produce bare fixed mutator names"
+            )
 
 
 class TestGeneratePyiModuleLevelClassAttrs:

@@ -341,6 +341,245 @@ class TestProtocolModuleAll:
 # ---------------------------------------------------------------------------
 
 
+# ---------------------------------------------------------------------------
+# Named mutators (insert / remove_at / replace_at / clear) emission
+# ---------------------------------------------------------------------------
+
+
+class TestMutatorsEmittedPyConcreteClass:
+    """py_class_for_model emits all four named mutators with correct signatures."""
+
+    @pytest.fixture(scope="class")
+    def labeled_stmts(self) -> list[ast.stmt]:
+        gen = _make_generator(_make_labeled_grammar())
+        model = gen.rule_models["bar"]
+        return gen.py_class_for_model("Bar", model, "bar")
+
+    @pytest.fixture(scope="class")
+    def labeled_klass(self, labeled_stmts: list[ast.stmt]) -> ast.ClassDef:
+        return _get_class_def(labeled_stmts, "Bar")
+
+    @pytest.fixture(scope="class")
+    def zero_label_stmts(self) -> list[ast.stmt]:
+        gen = _make_generator(_make_zero_label_grammar())
+        model = gen.rule_models["foo"]
+        return gen.py_class_for_model("Foo", model, "foo")
+
+    @pytest.fixture(scope="class")
+    def zero_label_klass(self, zero_label_stmts: list[ast.stmt]) -> ast.ClassDef:
+        return _get_class_def(zero_label_stmts, "Foo")
+
+    def test_insert_present_labeled(self, labeled_klass: ast.ClassDef) -> None:
+        """insert is emitted on a labeled node."""
+        fn = _find_function(labeled_klass, "insert")
+        assert fn is not None, "insert not found on labeled node"
+
+    def test_remove_at_present_labeled(self, labeled_klass: ast.ClassDef) -> None:
+        """remove_at is emitted on a labeled node."""
+        fn = _find_function(labeled_klass, "remove_at")
+        assert fn is not None, "remove_at not found on labeled node"
+
+    def test_replace_at_present_labeled(self, labeled_klass: ast.ClassDef) -> None:
+        """replace_at is emitted on a labeled node."""
+        fn = _find_function(labeled_klass, "replace_at")
+        assert fn is not None, "replace_at not found on labeled node"
+
+    def test_clear_present_labeled(self, labeled_klass: ast.ClassDef) -> None:
+        """clear is emitted on a labeled node."""
+        fn = _find_function(labeled_klass, "clear")
+        assert fn is not None, "clear not found on labeled node"
+
+    def test_insert_present_zero_label(self, zero_label_klass: ast.ClassDef) -> None:
+        """insert is emitted on a label-free node."""
+        fn = _find_function(zero_label_klass, "insert")
+        assert fn is not None, "insert not found on label-free node"
+
+    def test_remove_at_present_zero_label(self, zero_label_klass: ast.ClassDef) -> None:
+        """remove_at is emitted on a label-free node."""
+        fn = _find_function(zero_label_klass, "remove_at")
+        assert fn is not None, "remove_at not found on label-free node"
+
+    def test_replace_at_present_zero_label(self, zero_label_klass: ast.ClassDef) -> None:
+        """replace_at is emitted on a label-free node."""
+        fn = _find_function(zero_label_klass, "replace_at")
+        assert fn is not None, "replace_at not found on label-free node"
+
+    def test_clear_present_zero_label(self, zero_label_klass: ast.ClassDef) -> None:
+        """clear is emitted on a label-free node."""
+        fn = _find_function(zero_label_klass, "clear")
+        assert fn is not None, "clear not found on label-free node"
+
+    def test_insert_index_param_labeled(self, labeled_klass: ast.ClassDef) -> None:
+        """insert first param (after self) is 'index: int'."""
+        fn = _find_function(labeled_klass, "insert")
+        assert fn is not None
+        fn_src = ast.unparse(fn)
+        assert "index: int" in fn_src, f"Expected 'index: int' in insert; got:\n{fn_src}"
+
+    def test_insert_label_param_optional_labeled(self, labeled_klass: ast.ClassDef) -> None:
+        """insert label param is 'Optional[Label] = None' for labeled nodes."""
+        fn = _find_function(labeled_klass, "insert")
+        assert fn is not None
+        fn_src = ast.unparse(fn)
+        assert "Optional[Label]" in fn_src, f"Expected 'Optional[Label]' in insert; got:\n{fn_src}"
+
+    def test_insert_label_param_none_zero_label(self, zero_label_klass: ast.ClassDef) -> None:
+        """insert label param is 'None = None' for label-free nodes."""
+        fn = _find_function(zero_label_klass, "insert")
+        assert fn is not None
+        fn_src = ast.unparse(fn)
+        assert "label: None" in fn_src, f"Expected 'label: None' in insert; got:\n{fn_src}"
+
+    def test_insert_returns_none(self, labeled_klass: ast.ClassDef) -> None:
+        """insert returns None."""
+        fn = _find_function(labeled_klass, "insert")
+        assert fn is not None
+        assert _annotation_source(fn.returns) == "None", (
+            f"insert must return None; got: {_annotation_source(fn.returns)}"
+        )
+
+    def test_remove_at_returns_tuple_labeled(self, labeled_klass: ast.ClassDef) -> None:
+        """remove_at returns tuple[Optional[Label], <child>] for labeled nodes."""
+        fn = _find_function(labeled_klass, "remove_at")
+        assert fn is not None
+        ret = _annotation_source(fn.returns)
+        assert ret.startswith("tuple["), f"remove_at must return a tuple; got: {ret}"
+        assert "Optional[Label]" in ret, f"remove_at return must include Optional[Label]; got: {ret}"
+
+    def test_remove_at_returns_tuple_zero_label(self, zero_label_klass: ast.ClassDef) -> None:
+        """remove_at returns tuple[None, <child>] for label-free nodes."""
+        fn = _find_function(zero_label_klass, "remove_at")
+        assert fn is not None
+        ret = _annotation_source(fn.returns)
+        assert ret.startswith("tuple[None,"), f"remove_at must return tuple[None, ...] for label-free node; got: {ret}"
+
+    def test_remove_at_has_no_extra_params(self, labeled_klass: ast.ClassDef) -> None:
+        """remove_at takes only (self, index: int) — no child or label param."""
+        fn = _find_function(labeled_klass, "remove_at")
+        assert fn is not None
+        # The only params besides self must be 'index'.
+        param_names = [arg.arg for arg in fn.args.args if arg.arg != "self"]
+        assert param_names == ["index"], f"remove_at must take only 'index'; got: {param_names}"
+
+    def test_replace_at_returns_none(self, labeled_klass: ast.ClassDef) -> None:
+        """replace_at returns None."""
+        fn = _find_function(labeled_klass, "replace_at")
+        assert fn is not None
+        assert _annotation_source(fn.returns) == "None", (
+            f"replace_at must return None; got: {_annotation_source(fn.returns)}"
+        )
+
+    def test_clear_takes_only_self(self, labeled_klass: ast.ClassDef) -> None:
+        """clear takes only self."""
+        fn = _find_function(labeled_klass, "clear")
+        assert fn is not None
+        param_names = [arg.arg for arg in fn.args.args if arg.arg != "self"]
+        assert param_names == [], f"clear must take no arguments besides self; got: {param_names}"
+
+    def test_clear_returns_none(self, labeled_klass: ast.ClassDef) -> None:
+        """clear returns None."""
+        fn = _find_function(labeled_klass, "clear")
+        assert fn is not None
+        assert _annotation_source(fn.returns) == "None", (
+            f"clear must return None; got: {_annotation_source(fn.returns)}"
+        )
+
+
+class TestMutatorsEmittedPyProtocol:
+    """Protocol stubs for all four named mutators are emitted in the protocol class."""
+
+    @pytest.fixture(scope="class")
+    def protocol_klass(self) -> ast.ClassDef:
+        gen = _make_generator(_make_labeled_grammar())
+        model = gen.rule_models["bar"]
+        # _protocol_class_for_model returns the ClassDef directly.
+        return gen._protocol_class_for_model("Bar", model, "bar")
+
+    def test_insert_present_protocol(self, protocol_klass: ast.ClassDef) -> None:
+        fn = _find_function(protocol_klass, "insert")
+        assert fn is not None, "insert not found on protocol class"
+
+    def test_remove_at_present_protocol(self, protocol_klass: ast.ClassDef) -> None:
+        fn = _find_function(protocol_klass, "remove_at")
+        assert fn is not None, "remove_at not found on protocol class"
+
+    def test_replace_at_present_protocol(self, protocol_klass: ast.ClassDef) -> None:
+        fn = _find_function(protocol_klass, "replace_at")
+        assert fn is not None, "replace_at not found on protocol class"
+
+    def test_clear_present_protocol(self, protocol_klass: ast.ClassDef) -> None:
+        fn = _find_function(protocol_klass, "clear")
+        assert fn is not None, "clear not found on protocol class"
+
+    def test_insert_signatures_match_concrete(self, protocol_klass: ast.ClassDef) -> None:
+        """Protocol insert has same signature shape as concrete insert."""
+        fn = _find_function(protocol_klass, "insert")
+        assert fn is not None
+        fn_src = ast.unparse(fn)
+        assert "index: int" in fn_src
+        assert "Optional[Label]" in fn_src
+
+    def test_remove_at_returns_tuple_protocol(self, protocol_klass: ast.ClassDef) -> None:
+        """Protocol remove_at returns a tuple (matches concrete)."""
+        fn = _find_function(protocol_klass, "remove_at")
+        assert fn is not None
+        ret = _annotation_source(fn.returns)
+        assert ret.startswith("tuple["), f"Protocol remove_at must return a tuple; got: {ret}"
+
+    def test_mutators_between_child_and_per_label(self, protocol_klass: ast.ClassDef) -> None:
+        """Protocol mutators appear between child and the per-label quintet (§2.4 ordering)."""
+        klass = protocol_klass
+        method_names = [stmt.name for stmt in klass.body if isinstance(stmt, ast.FunctionDef)]
+        # child, insert, remove_at, replace_at, clear must all precede the per-label methods
+        # per-label methods start with append_name for the labeled fixture grammar
+        assert "child" in method_names
+        assert "insert" in method_names
+        idx_child = method_names.index("child")
+        idx_insert = method_names.index("insert")
+        idx_remove = method_names.index("remove_at")
+        idx_replace = method_names.index("replace_at")
+        idx_clear = method_names.index("clear")
+        idx_append_name = method_names.index("append_name")
+        assert idx_child < idx_insert, "insert must come after child"
+        assert idx_insert < idx_remove, "remove_at must come after insert"
+        assert idx_remove < idx_replace, "replace_at must come after remove_at"
+        assert idx_replace < idx_clear, "clear must come after replace_at"
+        assert idx_clear < idx_append_name, "per-label methods must come after clear"
+
+
+class TestMutatorNoLabelCollision:
+    """Reserved-name regression: no per-label prefix can equal any fixed mutator name."""
+
+    def test_no_per_label_prefix_collides_with_insert(self) -> None:
+        """A label named 'insert' would produce method 'append_insert'; the base name 'insert' is a fixed method."""
+        # Per-label prefixes: append_, extend_, children_, child_, maybe_
+        # None of these produce a bare name that equals insert/remove_at/replace_at/clear.
+        fixed_names = {"insert", "remove_at", "replace_at", "clear"}
+        per_label_prefixes = ("append_", "extend_", "children_", "child_", "maybe_")
+        for label in fixed_names:
+            for prefix in per_label_prefixes:
+                generated = f"{prefix}{label}"
+                assert generated not in fixed_names, (
+                    f"Per-label method '{generated}' (from label '{label}' + prefix '{prefix}') "
+                    f"would collide with fixed mutator name"
+                )
+
+    def test_fixed_mutator_names_not_in_reserved_labels(self) -> None:
+        """The _RESERVED_LABELS dict in gsm2tree_rs contains only 'children'; mutator names are safe."""
+        import fltk.fegen.gsm2tree_rs as gsm2tree_rs_mod  # noqa: PLC0415
+
+        reserved = set(gsm2tree_rs_mod._RESERVED_LABELS.keys())
+        # Per-label methods: for label L, methods are append_L, extend_L, children_L, child_L, maybe_L.
+        # These all have underscores, so bare names "insert", "remove_at", "replace_at", "clear" are never produced.
+        # Confirm none of the fixed mutator names can come from a label:
+        fixed_mutator_names = {"insert", "remove_at", "replace_at", "clear"}
+        per_label_prefixes = ("append_", "extend_", "children_", "child_", "maybe_")
+        for lbl in reserved:
+            for prefix in per_label_prefixes:
+                generated = f"{prefix}{lbl}"
+                assert generated not in fixed_mutator_names
+
+
 def test_emit_label_quintet_unknown_method_raises(monkeypatch: pytest.MonkeyPatch) -> None:
     """concrete_body_for must raise ValueError for unrecognised method names.
 

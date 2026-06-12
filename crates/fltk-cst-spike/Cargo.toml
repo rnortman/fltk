@@ -13,6 +13,7 @@ crate-type = ["rlib"]
 [features]
 default = []
 python = ["dep:pyo3", "fltk-cst-core/python"]
+test-introspection = ["python", "fltk-cst-core/test-introspection"]
 
 [[bench]]
 name = "traverse"
