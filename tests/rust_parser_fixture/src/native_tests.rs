@@ -8,13 +8,12 @@ mod tests {
 
     const DEEP_TREE_DEPTH: usize = 100_000;
 
-    /// Build a `DEEP_TREE_DEPTH`-level Expr chain iteratively (leaf-up).
-    /// Each level is an Expr with one lhs:Expr child pointing to the previous level.
-    /// Only the root Shared is retained; chain construction is non-recursive.
-    fn build_deep_expr_chain() -> Shared<cst::Expr> {
+    /// Build a `DEEP_TREE_DEPTH`-level Expr chain iteratively (leaf-up), with a
+    /// caller-specified span for the leaf Num node.
+    fn build_deep_expr_chain_with_leaf_span(leaf_span: fltk_cst_core::Span) -> Shared<cst::Expr> {
         // Build an atom leaf (Atom wrapping a Num wrapping a Span) at the bottom.
         // Num: span-only.
-        let leaf_num = Shared::new(cst::Num::new(fltk_cst_core::Span::unknown()));
+        let leaf_num = Shared::new(cst::Num::new(leaf_span));
         let mut leaf_atom = cst::Atom::new(fltk_cst_core::Span::unknown());
         leaf_atom.append_num(leaf_num);
         let leaf_atom_shared = Shared::new(leaf_atom);
@@ -31,6 +30,11 @@ mod tests {
             prev = Shared::new(node);
         }
         prev
+    }
+
+    /// Build a `DEEP_TREE_DEPTH`-level Expr chain with `Span::unknown()` at the leaf.
+    fn build_deep_expr_chain() -> Shared<cst::Expr> {
+        build_deep_expr_chain_with_leaf_span(fltk_cst_core::Span::unknown())
     }
 
     /// Test 1: deep-tree Debug completes without stack overflow; output is bounded.
@@ -182,6 +186,161 @@ mod tests {
         // handles; each whose count hits 1 runs an iterative Drop.
         drop(r);
         drop(parser);
+    }
+
+    // ── deep-equality tests (iterative PartialEq) ────────────────────────
+
+    /// EQ-1: two structurally equal 100k chains compare equal without stack overflow.
+    /// Pre-fix failure mode: process abort (stack exhaustion) from recursive PartialEq.
+    #[test]
+    fn test_deep_tree_eq_iterative_equal() {
+        let a = build_deep_expr_chain();
+        let b = build_deep_expr_chain();
+        assert!(a.read().eq(&*b.read()), "two equal deep chains must compare equal");
+    }
+
+    /// EQ-2: two 100k chains differing only at the deepest leaf span compare unequal
+    /// without stack overflow.  Forces full-depth traversal on the false path.
+    #[test]
+    fn test_deep_tree_eq_iterative_unequal() {
+        let a = build_deep_expr_chain_with_leaf_span(fltk_cst_core::Span::unknown());
+        // Use a non-unknown span so the leaf differs.
+        let b = build_deep_expr_chain_with_leaf_span(fltk_cst_core::Span::new_sourceless(0, 1));
+        assert!(!a.read().eq(&*b.read()), "chains differing at leaf must compare unequal");
+    }
+
+    /// EQ-3: two distinct root Expr nodes that both hold the *same* Shared 100k chain as
+    /// their lhs:Expr child compare equal; exercises the per-pair ptr_eq short-circuit
+    /// (the shared chain must not be traversed at all).
+    #[test]
+    fn test_deep_shared_subtree_eq_ptr_eq_short_circuit() {
+        let shared_chain = build_deep_expr_chain();
+
+        let mut root_a = cst::Expr::new(fltk_cst_core::Span::unknown());
+        root_a.append_lhs(shared_chain.clone());
+
+        let mut root_b = cst::Expr::new(fltk_cst_core::Span::unknown());
+        root_b.append_lhs(shared_chain.clone());
+
+        assert!(root_a.eq(&root_b), "two roots sharing the same Shared child must compare equal");
+    }
+
+    /// EQ-4: mirror of test_multi_child_drop_worklist — two equal ~100-level trees where
+    /// each level has two node-typed children (lhs:Expr + rhs:Atom).  Then an unequal
+    /// variant (one rhs differs at a mid-level rhs branch, not on the lhs spine) → unequal.
+    /// Exercises worklists holding multiple pending pairs and verifies that a `false` result
+    /// from a non-final worklist item (a dequeued rhs subtree) is detected correctly.
+    #[test]
+    fn test_multi_child_eq_worklist() {
+        /// Build a 100-level multi-child tree.
+        /// `rhs_diff_level`: if Some(k), the rhs Atom at level k (0-indexed from the bottom)
+        /// gets a non-default Span on its Num child; all other nodes use Span::unknown().
+        fn build_multi_child_tree(rhs_diff_level: Option<usize>) -> Shared<cst::Expr> {
+            let leaf_num = Shared::new(cst::Num::new(fltk_cst_core::Span::unknown()));
+            let mut leaf_atom = cst::Atom::new(fltk_cst_core::Span::unknown());
+            leaf_atom.append_num(leaf_num);
+            let leaf_atom_shared = Shared::new(leaf_atom);
+
+            let mut bottom = cst::Expr::new(fltk_cst_core::Span::unknown());
+            bottom.append_atom(leaf_atom_shared.clone());
+            let mut prev = Shared::new(bottom);
+
+            for level in 0..100 {
+                let mut node = cst::Expr::new(fltk_cst_core::Span::unknown());
+                node.append_lhs(prev);
+                let rhs_num_span = if rhs_diff_level == Some(level) {
+                    fltk_cst_core::Span::new_sourceless(0, 1)
+                } else {
+                    fltk_cst_core::Span::unknown()
+                };
+                let mut rhs_atom = cst::Atom::new(fltk_cst_core::Span::unknown());
+                rhs_atom.append_num(Shared::new(cst::Num::new(rhs_num_span)));
+                node.append_rhs(Shared::new(rhs_atom));
+                prev = Shared::new(node);
+            }
+            prev
+        }
+
+        let a = build_multi_child_tree(None);
+        let b = build_multi_child_tree(None);
+        assert!(a.read().eq(&*b.read()), "two equal multi-child trees must compare equal");
+
+        // Mismatch is in the rhs branch at level 50 (mid-level), not on the lhs spine.
+        // This exercises a `false` result from a non-final worklist item (the dequeued rhs
+        // subtree), not just from the deepest pending path.
+        let c = build_multi_child_tree(Some(50));
+        assert!(!a.read().eq(&*c.read()), "trees differing at a mid-level rhs branch must compare unequal");
+    }
+
+    /// EQ-5: parse "1" + "+1"*100_000 twice with two independent Parser instances;
+    /// the two resulting trees compare equal without stack overflow.
+    #[test]
+    fn test_parser_produced_deep_tree_eq() {
+        let n = DEEP_TREE_DEPTH;
+        let mut src = String::with_capacity(1 + 2 * n);
+        src.push('1');
+        for _ in 0..n {
+            src.push_str("+1");
+        }
+
+        let mut p1 = Parser::new(&src, false);
+        let r1 = p1.apply__parse_expr(0).expect("first parse must succeed");
+
+        let mut p2 = Parser::new(&src, false);
+        let r2 = p2.apply__parse_expr(0).expect("second parse must succeed");
+
+        assert!(
+            r1.result.read().eq(&*r2.result.read()),
+            "two independently-parsed equal trees must compare equal"
+        );
+    }
+
+    /// EQ-6: same-label / different-variant pair reaches the wildcard arm of the child
+    /// equality logic and returns false.  Uses the union-label "item" in Val:
+    /// one Val with item:num vs. one Val with item:name under the same label.
+    #[test]
+    fn test_eq_variant_mismatch_unequal() {
+        let mut val_num = cst::Val::new(fltk_cst_core::Span::unknown());
+        let num = Shared::new(cst::Num::new(fltk_cst_core::Span::unknown()));
+        val_num.append_item(cst::ValChild::Num(num));
+
+        let mut val_name = cst::Val::new(fltk_cst_core::Span::unknown());
+        let name = Shared::new(cst::Name::new(fltk_cst_core::Span::unknown()));
+        val_name.append_item(cst::ValChild::Name(name));
+
+        assert!(!val_num.eq(&val_name), "same label, different variant must compare unequal");
+    }
+
+    /// EQ-7: child label mismatch returns false.
+    /// Two Expr nodes with one child each: same child value but under different labels
+    /// (atom vs. rhs — both accept ExprChild::Atom).
+    /// Exercises the `la != lb` early-exit in the iterative PartialEq driver.
+    #[test]
+    fn test_eq_label_mismatch_unequal() {
+        let atom = Shared::new(cst::Atom::new(fltk_cst_core::Span::unknown()));
+
+        let mut expr_atom_label = cst::Expr::new(fltk_cst_core::Span::unknown());
+        expr_atom_label.push_child(Some(cst::ExprLabel::Atom), cst::ExprChild::Atom(atom.clone()));
+
+        let mut expr_rhs_label = cst::Expr::new(fltk_cst_core::Span::unknown());
+        expr_rhs_label.push_child(Some(cst::ExprLabel::Rhs), cst::ExprChild::Atom(atom.clone()));
+
+        assert!(!expr_atom_label.eq(&expr_rhs_label), "same child variant under different labels must compare unequal");
+    }
+
+    /// EQ-8: child count mismatch returns false.
+    /// Two Expr nodes with the same span but different numbers of children.
+    /// Exercises the `children.len() != other.children.len()` early-exit in the driver.
+    #[test]
+    fn test_eq_child_count_mismatch_unequal() {
+        let atom = Shared::new(cst::Atom::new(fltk_cst_core::Span::unknown()));
+
+        let expr_zero = cst::Expr::new(fltk_cst_core::Span::unknown());
+
+        let mut expr_one = cst::Expr::new(fltk_cst_core::Span::unknown());
+        expr_one.append_atom(atom);
+
+        assert!(!expr_zero.eq(&expr_one), "nodes with different child counts must compare unequal");
     }
 
     // ── num rule ──────────────────────────────────────────────────────────

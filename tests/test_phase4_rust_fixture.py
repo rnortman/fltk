@@ -460,6 +460,21 @@ class TestPhase1IdentityAndMutation:
         same = node  # alias to satisfy ruff PLR0124 (name compared with itself)
         assert node == same, "x == x must be True (ptr_eq short-circuit, no deadlock)"
 
+    def test_node_eq_distinct_allocation_deep_tree(self):
+        """Python == on two distinct-allocation parsed trees exercises the full pymethod delegation.
+
+        Parses the same multi-statement input twice through independent Rust parsers and asserts
+        result1 == result2 via Python __eq__.  This pins the pymethod → Shared<T>::eq →
+        iterative T::eq delegation chain, which test_node_eq_self_no_deadlock does not cover
+        (that test short-circuits at ptr_eq).
+        """
+        src = "a = 1; b = 2; c = 3;"
+        r1 = parse_text(_rust_pr, src, "config")
+        r2 = parse_text(_rust_pr, src, "config")
+        assert r1.success, r1.error_message
+        assert r2.success, r2.error_message
+        assert r1.cst == r2.cst, "two independently-parsed identical inputs must compare equal via Python =="
+
     def test_identity_stable_across_different_accessors(self):
         """children[0][1] and child_key() return the same handle (registry hit)."""
         Entry = _rust_pr.cst_module.Entry

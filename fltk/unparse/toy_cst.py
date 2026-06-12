@@ -250,7 +250,7 @@ class Term:
     def _check_child_type_for_mutators(self, child: Factor | Trivia | fltk.fegen.pyrt.span.Span) -> None:
         _allowed = Term._MUTATOR_ALLOWED_CHILD_TYPES
         if _allowed is None:
-            _allowed = (Trivia, fltk.fegen.pyrt.terminalsrc.Span, Factor)
+            _allowed = (Factor, Trivia, fltk.fegen.pyrt.terminalsrc.Span)
             Term._MUTATOR_ALLOWED_CHILD_TYPES = _allowed
         _ns = _get_native_span_type()
         if _ns is not None and _ns not in _allowed:
@@ -399,7 +399,7 @@ class Factor:
         return self.children[0]
 
     def _check_child_type_for_mutators(self, child: Expr | Number | Trivia) -> None:
-        if not isinstance(child, Number | Trivia | Expr):
+        if not isinstance(child, Expr | Number | Trivia):
             msg = f"Factor: unsupported child type {type(child).__name__}"
             raise TypeError(msg)
 

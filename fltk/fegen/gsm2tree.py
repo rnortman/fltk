@@ -413,10 +413,14 @@ def _get_native_span_type():
                 # (native Span also accepted, resolved lazily — see _validate_child helper)
                 allowed_classes.append("fltk.fegen.pyrt.terminalsrc.Span")
 
-        # Deduplicate while preserving order for deterministic output.
+        # Deduplicate and sort for deterministic output.
+        # Sort is required because model.types is a set (hash order varies per PYTHONHASHSEED);
+        # without sorting, each make gencode run can produce differently-ordered isinstance unions
+        # and _MUTATOR_ALLOWED_CHILD_TYPES tuples with no semantic difference — pure churn.
+        # The sorted-annotation precedent is py_annotation_for_model_types (gsm2tree.py:88).
         seen: set[str] = set()
         unique_classes: list[str] = []
-        for c in allowed_classes:
+        for c in sorted(allowed_classes):
             if c not in seen:
                 seen.add(c)
                 unique_classes.append(c)

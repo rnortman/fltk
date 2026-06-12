@@ -20,10 +20,6 @@ Add `rules_rust` to `MODULE.bazel` so that the PyO3 native extension (`fltk._nat
 
 `escape_control_chars` (both backends) stops at U+009F. Unicode bidi override characters (U+202A–U+202E, U+2066–U+2069), line/paragraph separators (U+2028, U+2029), and zero-width chars pass through unescaped into the quoted failing line. An attacker controlling parse input can use RLO/bidi embedding to visually reorder the rendered error line in bidi-aware terminals/UIs, or use U+2028/U+2029 to split log lines in viewers that treat them as line terminators. Lower impact than the closed ESC vector (no command execution), but the log-forging variant is the same asset class. Extending the escape set beyond C0+DEL+C1 requires a new representation spec (two-digit `\xHH` is insufficient) and cross-backend repinning. Accepted risk for the current scope; address as a follow-up if consumers surface bidi-aware display paths. Locations: `crates/fltk-parser-core/src/errors.rs` (`escape_control_chars`), `fltk/fegen/pyrt/errors.py` (`escape_control_chars`).
 
-## `rust-cst-eq-depth`
-
-`PartialEq` on generated node structs recurses through `Shared<T>` children with no depth bound; tree depth is attacker-controlled for parsers over untrusted input, so `assert_eq!` or any equality check on a deep parser-produced tree aborts the process (stack exhaustion, uncatchable). Same root cause as the fixed Debug/Drop paths — `Shared<T>::PartialEq` acquires a read lock and delegates to `T::eq`, which compares `children` recursively. Fix: emit iterative `impl PartialEq` on node structs following the same generator pattern used for `impl Drop`. Locations: `fltk/fegen/gsm2tree_rs.py` (`_node_block`, `_drop_block` pattern), `crates/fltk-cst-core/src/shared.rs` (`PartialEq` impl).
-
 
 ## `rust-generated-ident-collisions`
 

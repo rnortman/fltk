@@ -138,7 +138,7 @@ class Formatter:
         return self.children[0]
 
     def _check_child_type_for_mutators(self, child: Statement | Trivia) -> None:
-        if not isinstance(child, Trivia | Statement):
+        if not isinstance(child, Statement | Trivia):
             msg = f"Formatter: unsupported child type {type(child).__name__}"
             raise TypeError(msg)
 
@@ -325,17 +325,17 @@ class Statement:
     ) -> None:
         if not isinstance(
             child,
-            Before
-            | Nest
+            After
+            | Before
             | Default
-            | TriviaPreserve
-            | RuleConfig
-            | Render
-            | Join
             | Group
+            | Join
+            | Nest
             | Omit
             | PreserveBlanks
-            | After,
+            | Render
+            | RuleConfig
+            | TriviaPreserve,
         ):
             msg = f"Statement: unsupported child type {type(child).__name__}"
             raise TypeError(msg)
@@ -741,7 +741,7 @@ class Default:
     def _check_child_type_for_mutators(self, child: Spacing | Trivia | fltk.fegen.pyrt.span.Span) -> None:
         _allowed = Default._MUTATOR_ALLOWED_CHILD_TYPES
         if _allowed is None:
-            _allowed = (Trivia, Spacing, fltk.fegen.pyrt.terminalsrc.Span)
+            _allowed = (Spacing, Trivia, fltk.fegen.pyrt.terminalsrc.Span)
             Default._MUTATOR_ALLOWED_CHILD_TYPES = _allowed
         _ns = _get_native_span_type()
         if _ns is not None and _ns not in _allowed:
@@ -920,7 +920,7 @@ class RuleConfig:
         return self.children[0]
 
     def _check_child_type_for_mutators(self, child: Identifier | RuleStatement | Trivia) -> None:
-        if not isinstance(child, Identifier | Trivia | RuleStatement):
+        if not isinstance(child, Identifier | RuleStatement | Trivia):
             msg = f"RuleConfig: unsupported child type {type(child).__name__}"
             raise TypeError(msg)
 
@@ -1082,7 +1082,7 @@ class RuleStatement:
     def _check_child_type_for_mutators(
         self, child: After | Before | Default | Group | Join | Nest | Omit | PreserveBlanks | Render
     ) -> None:
-        if not isinstance(child, Before | Nest | Default | Render | Join | Group | Omit | PreserveBlanks | After):
+        if not isinstance(child, After | Before | Default | Group | Join | Nest | Omit | PreserveBlanks | Render):
             msg = f"RuleStatement: unsupported child type {type(child).__name__}"
             raise TypeError(msg)
 
@@ -1403,7 +1403,7 @@ class Group:
         return self.children[0]
 
     def _check_child_type_for_mutators(self, child: FromSpec | ToSpec | Trivia) -> None:
-        if not isinstance(child, Trivia | ToSpec | FromSpec):
+        if not isinstance(child, FromSpec | ToSpec | Trivia):
             msg = f"Group: unsupported child type {type(child).__name__}"
             raise TypeError(msg)
 
@@ -1541,7 +1541,7 @@ class Nest:
         return self.children[0]
 
     def _check_child_type_for_mutators(self, child: FromSpec | Integer | ToSpec | Trivia) -> None:
-        if not isinstance(child, Trivia | Integer | FromSpec | ToSpec):
+        if not isinstance(child, FromSpec | Integer | ToSpec | Trivia):
             msg = f"Nest: unsupported child type {type(child).__name__}"
             raise TypeError(msg)
 
@@ -1705,7 +1705,7 @@ class Join:
         return self.children[0]
 
     def _check_child_type_for_mutators(self, child: DocLiteral | FromSpec | ToSpec | Trivia) -> None:
-        if not isinstance(child, Trivia | DocLiteral | ToSpec | FromSpec):
+        if not isinstance(child, DocLiteral | FromSpec | ToSpec | Trivia):
             msg = f"Join: unsupported child type {type(child).__name__}"
             raise TypeError(msg)
 
@@ -1874,7 +1874,7 @@ class FromSpec:
     def _check_child_type_for_mutators(self, child: Anchor | Trivia | fltk.fegen.pyrt.span.Span) -> None:
         _allowed = FromSpec._MUTATOR_ALLOWED_CHILD_TYPES
         if _allowed is None:
-            _allowed = (Trivia, Anchor, fltk.fegen.pyrt.terminalsrc.Span)
+            _allowed = (Anchor, Trivia, fltk.fegen.pyrt.terminalsrc.Span)
             FromSpec._MUTATOR_ALLOWED_CHILD_TYPES = _allowed
         _ns = _get_native_span_type()
         if _ns is not None and _ns not in _allowed:
@@ -2031,7 +2031,7 @@ class ToSpec:
     def _check_child_type_for_mutators(self, child: Anchor | Trivia | fltk.fegen.pyrt.span.Span) -> None:
         _allowed = ToSpec._MUTATOR_ALLOWED_CHILD_TYPES
         if _allowed is None:
-            _allowed = (Trivia, Anchor, fltk.fegen.pyrt.terminalsrc.Span)
+            _allowed = (Anchor, Trivia, fltk.fegen.pyrt.terminalsrc.Span)
             ToSpec._MUTATOR_ALLOWED_CHILD_TYPES = _allowed
         _ns = _get_native_span_type()
         if _ns is not None and _ns not in _allowed:
@@ -2319,7 +2319,7 @@ class After:
         return self.children[0]
 
     def _check_child_type_for_mutators(self, child: Anchor | PositionSpecStatement | Trivia) -> None:
-        if not isinstance(child, PositionSpecStatement | Trivia | Anchor):
+        if not isinstance(child, Anchor | PositionSpecStatement | Trivia):
             msg = f"After: unsupported child type {type(child).__name__}"
             raise TypeError(msg)
 
@@ -2464,7 +2464,7 @@ class Before:
         return self.children[0]
 
     def _check_child_type_for_mutators(self, child: Anchor | PositionSpecStatement | Trivia) -> None:
-        if not isinstance(child, PositionSpecStatement | Trivia | Anchor):
+        if not isinstance(child, Anchor | PositionSpecStatement | Trivia):
             msg = f"Before: unsupported child type {type(child).__name__}"
             raise TypeError(msg)
 
@@ -2604,7 +2604,7 @@ class Omit:
         return self.children[0]
 
     def _check_child_type_for_mutators(self, child: Anchor | Trivia) -> None:
-        if not isinstance(child, Trivia | Anchor):
+        if not isinstance(child, Anchor | Trivia):
             msg = f"Omit: unsupported child type {type(child).__name__}"
             raise TypeError(msg)
 
@@ -2715,7 +2715,7 @@ class Render:
         return self.children[0]
 
     def _check_child_type_for_mutators(self, child: Anchor | Spacing | Trivia) -> None:
-        if not isinstance(child, Trivia | Anchor | Spacing):
+        if not isinstance(child, Anchor | Spacing | Trivia):
             msg = f"Render: unsupported child type {type(child).__name__}"
             raise TypeError(msg)
 
@@ -2850,7 +2850,7 @@ class PositionSpecStatement:
         return self.children[0]
 
     def _check_child_type_for_mutators(self, child: PreserveBlanks | Spacing | Trivia) -> None:
-        if not isinstance(child, Trivia | PreserveBlanks | Spacing):
+        if not isinstance(child, PreserveBlanks | Spacing | Trivia):
             msg = f"PositionSpecStatement: unsupported child type {type(child).__name__}"
             raise TypeError(msg)
 
@@ -3006,7 +3006,7 @@ class Spacing:
     def _check_child_type_for_mutators(self, child: Integer | Trivia | fltk.fegen.pyrt.span.Span) -> None:
         _allowed = Spacing._MUTATOR_ALLOWED_CHILD_TYPES
         if _allowed is None:
-            _allowed = (Trivia, Integer, fltk.fegen.pyrt.terminalsrc.Span)
+            _allowed = (Integer, Trivia, fltk.fegen.pyrt.terminalsrc.Span)
             Spacing._MUTATOR_ALLOWED_CHILD_TYPES = _allowed
         _ns = _get_native_span_type()
         if _ns is not None and _ns not in _allowed:
@@ -3308,7 +3308,7 @@ class DocLiteral:
     def _check_child_type_for_mutators(
         self, child: CompoundLiteral | ConcatLiteral | JoinLiteral | Spacing | TextLiteral
     ) -> None:
-        if not isinstance(child, TextLiteral | JoinLiteral | ConcatLiteral | CompoundLiteral | Spacing):
+        if not isinstance(child, CompoundLiteral | ConcatLiteral | JoinLiteral | Spacing | TextLiteral):
             msg = f"DocLiteral: unsupported child type {type(child).__name__}"
             raise TypeError(msg)
 
@@ -4441,7 +4441,7 @@ class PreserveBlanks:
         return self.children[0]
 
     def _check_child_type_for_mutators(self, child: Integer | Trivia) -> None:
-        if not isinstance(child, Trivia | Integer):
+        if not isinstance(child, Integer | Trivia):
             msg = f"PreserveBlanks: unsupported child type {type(child).__name__}"
             raise TypeError(msg)
 

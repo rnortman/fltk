@@ -215,7 +215,7 @@ class Rule:
         return self.children[0]
 
     def _check_child_type_for_mutators(self, child: Alternatives | Identifier | Trivia) -> None:
-        if not isinstance(child, Identifier | Alternatives | Trivia):
+        if not isinstance(child, Alternatives | Identifier | Trivia):
             msg = f"Rule: unsupported child type {type(child).__name__}"
             raise TypeError(msg)
 
@@ -472,7 +472,7 @@ class Items:
     def _check_child_type_for_mutators(self, child: Item | Trivia | fltk.fegen.pyrt.span.Span) -> None:
         _allowed = Items._MUTATOR_ALLOWED_CHILD_TYPES
         if _allowed is None:
-            _allowed = (Item, fltk.fegen.pyrt.terminalsrc.Span, Trivia)
+            _allowed = (Item, Trivia, fltk.fegen.pyrt.terminalsrc.Span)
             Items._MUTATOR_ALLOWED_CHILD_TYPES = _allowed
         _ns = _get_native_span_type()
         if _ns is not None and _ns not in _allowed:
@@ -683,7 +683,7 @@ class Item:
         return self.children[0]
 
     def _check_child_type_for_mutators(self, child: Disposition | Identifier | Quantifier | Term | Trivia) -> None:
-        if not isinstance(child, Quantifier | Disposition | Trivia | Term | Identifier):
+        if not isinstance(child, Disposition | Identifier | Quantifier | Term | Trivia):
             msg = f"Item: unsupported child type {type(child).__name__}"
             raise TypeError(msg)
 
@@ -882,7 +882,7 @@ class Term:
         return self.children[0]
 
     def _check_child_type_for_mutators(self, child: Alternatives | Identifier | Literal | RawString | Trivia) -> None:
-        if not isinstance(child, Alternatives | Trivia | Literal | RawString | Identifier):
+        if not isinstance(child, Alternatives | Identifier | Literal | RawString | Trivia):
             msg = f"Term: unsupported child type {type(child).__name__}"
             raise TypeError(msg)
 
@@ -1781,7 +1781,7 @@ class Trivia:
     def _check_child_type_for_mutators(self, child: BlockComment | LineComment | fltk.fegen.pyrt.span.Span) -> None:
         _allowed = Trivia._MUTATOR_ALLOWED_CHILD_TYPES
         if _allowed is None:
-            _allowed = (LineComment, fltk.fegen.pyrt.terminalsrc.Span, BlockComment)
+            _allowed = (BlockComment, LineComment, fltk.fegen.pyrt.terminalsrc.Span)
             Trivia._MUTATOR_ALLOWED_CHILD_TYPES = _allowed
         _ns = _get_native_span_type()
         if _ns is not None and _ns not in _allowed:

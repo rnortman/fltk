@@ -229,6 +229,15 @@ impl NumChild {
             Self::Span(_) => None,
         }
     }
+
+    /// Shallow structural equality for one child pair.
+    /// Span pair: compare directly. Node pair: ptr_eq short-circuit (skip enqueue)
+    /// or enqueue for the worklist. Variant mismatch: return false.
+    fn eq_shallow_enqueue(&self, other: &Self, _worklist: &mut Vec<EqWorklistItem>) -> bool {
+        match (self, other) {
+            (Self::Span(a), Self::Span(b)) => a == b,
+        }
+    }
 }
 
 #[cfg(feature = "python")]
@@ -286,6 +295,7 @@ impl fmt::Debug for Num {
     }
 }
 
+// Span-only PartialEq: no node-typed children, so this cannot recurse — depth-safe.
 impl PartialEq for Num {
     fn eq(&self, other: &Self) -> bool {
         self.span == other.span && self.children == other.children
@@ -1017,6 +1027,15 @@ impl NameChild {
             Self::Span(_) => None,
         }
     }
+
+    /// Shallow structural equality for one child pair.
+    /// Span pair: compare directly. Node pair: ptr_eq short-circuit (skip enqueue)
+    /// or enqueue for the worklist. Variant mismatch: return false.
+    fn eq_shallow_enqueue(&self, other: &Self, _worklist: &mut Vec<EqWorklistItem>) -> bool {
+        match (self, other) {
+            (Self::Span(a), Self::Span(b)) => a == b,
+        }
+    }
 }
 
 #[cfg(feature = "python")]
@@ -1074,6 +1093,7 @@ impl fmt::Debug for Name {
     }
 }
 
+// Span-only PartialEq: no node-typed children, so this cannot recurse — depth-safe.
 impl PartialEq for Name {
     fn eq(&self, other: &Self) -> bool {
         self.span == other.span && self.children == other.children
@@ -1813,6 +1833,27 @@ impl AtomChild {
             Self::Num(s) => Some(DropWorklistItem::Num(s)),
         }
     }
+
+    /// Shallow structural equality for one child pair.
+    /// Span pair: compare directly. Node pair: ptr_eq short-circuit (skip enqueue)
+    /// or enqueue for the worklist. Variant mismatch: return false.
+    fn eq_shallow_enqueue(&self, other: &Self, worklist: &mut Vec<EqWorklistItem>) -> bool {
+        match (self, other) {
+            (Self::Name(a), Self::Name(b)) => {
+                if !a.ptr_eq(b) {
+                    worklist.push(EqWorklistItem::Name(a.clone(), b.clone()));
+                }
+                true
+            }
+            (Self::Num(a), Self::Num(b)) => {
+                if !a.ptr_eq(b) {
+                    worklist.push(EqWorklistItem::Num(a.clone(), b.clone()));
+                }
+                true
+            }
+            _ => false,
+        }
+    }
 }
 
 #[cfg(feature = "python")]
@@ -1880,6 +1921,7 @@ impl AtomChild {
 ///
 /// `Debug` output is non-recursive: prints span + child count only. Traverse via `children()` to inspect subtrees.
 /// Teardown is iterative: bounded stack at any depth.
+/// Equality is iterative: bounded stack at any depth.
 #[derive(Clone)]
 pub struct Atom {
     // Not pub: use span() / children() / push_child() — the stable accessor API.
@@ -1926,9 +1968,28 @@ impl Drop for Atom {
     }
 }
 
+// Iterative PartialEq: the recursive version would recurse through Shared children
+// one frame set per tree level (attacker-controlled depth → stack
+// exhaustion, uncatchable abort). Uses an explicit worklist of node pairs.
 impl PartialEq for Atom {
     fn eq(&self, other: &Self) -> bool {
-        self.span == other.span && self.children == other.children
+        if self.span != other.span || self.children.len() != other.children.len() {
+            return false;
+        }
+        // Worklist allocated lazily (Vec::new does not heap-allocate until
+        // first push); shallow trees and all-ptr_eq children never allocate.
+        let mut worklist: Vec<EqWorklistItem> = Vec::new();
+        for ((la, ca), (lb, cb)) in self.children.iter().zip(other.children.iter()) {
+            if la != lb || !ca.eq_shallow_enqueue(cb, &mut worklist) {
+                return false;
+            }
+        }
+        while let Some(item) = worklist.pop() {
+            if !item.compare(&mut worklist) {
+                return false;
+            }
+        }
+        true
     }
 }
 
@@ -2826,6 +2887,27 @@ impl ParenExprChild {
             Self::Trivia(s) => Some(DropWorklistItem::Trivia(s)),
         }
     }
+
+    /// Shallow structural equality for one child pair.
+    /// Span pair: compare directly. Node pair: ptr_eq short-circuit (skip enqueue)
+    /// or enqueue for the worklist. Variant mismatch: return false.
+    fn eq_shallow_enqueue(&self, other: &Self, worklist: &mut Vec<EqWorklistItem>) -> bool {
+        match (self, other) {
+            (Self::Atom(a), Self::Atom(b)) => {
+                if !a.ptr_eq(b) {
+                    worklist.push(EqWorklistItem::Atom(a.clone(), b.clone()));
+                }
+                true
+            }
+            (Self::Trivia(a), Self::Trivia(b)) => {
+                if !a.ptr_eq(b) {
+                    worklist.push(EqWorklistItem::Trivia(a.clone(), b.clone()));
+                }
+                true
+            }
+            _ => false,
+        }
+    }
 }
 
 #[cfg(feature = "python")]
@@ -2893,6 +2975,7 @@ impl ParenExprChild {
 ///
 /// `Debug` output is non-recursive: prints span + child count only. Traverse via `children()` to inspect subtrees.
 /// Teardown is iterative: bounded stack at any depth.
+/// Equality is iterative: bounded stack at any depth.
 #[derive(Clone)]
 pub struct ParenExpr {
     // Not pub: use span() / children() / push_child() — the stable accessor API.
@@ -2939,9 +3022,28 @@ impl Drop for ParenExpr {
     }
 }
 
+// Iterative PartialEq: the recursive version would recurse through Shared children
+// one frame set per tree level (attacker-controlled depth → stack
+// exhaustion, uncatchable abort). Uses an explicit worklist of node pairs.
 impl PartialEq for ParenExpr {
     fn eq(&self, other: &Self) -> bool {
-        self.span == other.span && self.children == other.children
+        if self.span != other.span || self.children.len() != other.children.len() {
+            return false;
+        }
+        // Worklist allocated lazily (Vec::new does not heap-allocate until
+        // first push); shallow trees and all-ptr_eq children never allocate.
+        let mut worklist: Vec<EqWorklistItem> = Vec::new();
+        for ((la, ca), (lb, cb)) in self.children.iter().zip(other.children.iter()) {
+            if la != lb || !ca.eq_shallow_enqueue(cb, &mut worklist) {
+                return false;
+            }
+        }
+        while let Some(item) = worklist.pop() {
+            if !item.compare(&mut worklist) {
+                return false;
+            }
+        }
+        true
     }
 }
 
@@ -3683,6 +3785,27 @@ impl StmtChild {
             Self::Trivia(s) => Some(DropWorklistItem::Trivia(s)),
         }
     }
+
+    /// Shallow structural equality for one child pair.
+    /// Span pair: compare directly. Node pair: ptr_eq short-circuit (skip enqueue)
+    /// or enqueue for the worklist. Variant mismatch: return false.
+    fn eq_shallow_enqueue(&self, other: &Self, worklist: &mut Vec<EqWorklistItem>) -> bool {
+        match (self, other) {
+            (Self::Atom(a), Self::Atom(b)) => {
+                if !a.ptr_eq(b) {
+                    worklist.push(EqWorklistItem::Atom(a.clone(), b.clone()));
+                }
+                true
+            }
+            (Self::Trivia(a), Self::Trivia(b)) => {
+                if !a.ptr_eq(b) {
+                    worklist.push(EqWorklistItem::Trivia(a.clone(), b.clone()));
+                }
+                true
+            }
+            _ => false,
+        }
+    }
 }
 
 #[cfg(feature = "python")]
@@ -3750,6 +3873,7 @@ impl StmtChild {
 ///
 /// `Debug` output is non-recursive: prints span + child count only. Traverse via `children()` to inspect subtrees.
 /// Teardown is iterative: bounded stack at any depth.
+/// Equality is iterative: bounded stack at any depth.
 #[derive(Clone)]
 pub struct Stmt {
     // Not pub: use span() / children() / push_child() — the stable accessor API.
@@ -3796,9 +3920,28 @@ impl Drop for Stmt {
     }
 }
 
+// Iterative PartialEq: the recursive version would recurse through Shared children
+// one frame set per tree level (attacker-controlled depth → stack
+// exhaustion, uncatchable abort). Uses an explicit worklist of node pairs.
 impl PartialEq for Stmt {
     fn eq(&self, other: &Self) -> bool {
-        self.span == other.span && self.children == other.children
+        if self.span != other.span || self.children.len() != other.children.len() {
+            return false;
+        }
+        // Worklist allocated lazily (Vec::new does not heap-allocate until
+        // first push); shallow trees and all-ptr_eq children never allocate.
+        let mut worklist: Vec<EqWorklistItem> = Vec::new();
+        for ((la, ca), (lb, cb)) in self.children.iter().zip(other.children.iter()) {
+            if la != lb || !ca.eq_shallow_enqueue(cb, &mut worklist) {
+                return false;
+            }
+        }
+        while let Some(item) = worklist.pop() {
+            if !item.compare(&mut worklist) {
+                return false;
+            }
+        }
+        true
     }
 }
 
@@ -4692,6 +4835,20 @@ impl ItemsChild {
             Self::Atom(s) => Some(DropWorklistItem::Atom(s)),
         }
     }
+
+    /// Shallow structural equality for one child pair.
+    /// Span pair: compare directly. Node pair: ptr_eq short-circuit (skip enqueue)
+    /// or enqueue for the worklist. Variant mismatch: return false.
+    fn eq_shallow_enqueue(&self, other: &Self, worklist: &mut Vec<EqWorklistItem>) -> bool {
+        match (self, other) {
+            (Self::Atom(a), Self::Atom(b)) => {
+                if !a.ptr_eq(b) {
+                    worklist.push(EqWorklistItem::Atom(a.clone(), b.clone()));
+                }
+                true
+            }
+        }
+    }
 }
 
 #[cfg(feature = "python")]
@@ -4740,6 +4897,7 @@ impl ItemsChild {
 ///
 /// `Debug` output is non-recursive: prints span + child count only. Traverse via `children()` to inspect subtrees.
 /// Teardown is iterative: bounded stack at any depth.
+/// Equality is iterative: bounded stack at any depth.
 #[derive(Clone)]
 pub struct Items {
     // Not pub: use span() / children() / push_child() — the stable accessor API.
@@ -4786,9 +4944,28 @@ impl Drop for Items {
     }
 }
 
+// Iterative PartialEq: the recursive version would recurse through Shared children
+// one frame set per tree level (attacker-controlled depth → stack
+// exhaustion, uncatchable abort). Uses an explicit worklist of node pairs.
 impl PartialEq for Items {
     fn eq(&self, other: &Self) -> bool {
-        self.span == other.span && self.children == other.children
+        if self.span != other.span || self.children.len() != other.children.len() {
+            return false;
+        }
+        // Worklist allocated lazily (Vec::new does not heap-allocate until
+        // first push); shallow trees and all-ptr_eq children never allocate.
+        let mut worklist: Vec<EqWorklistItem> = Vec::new();
+        for ((la, ca), (lb, cb)) in self.children.iter().zip(other.children.iter()) {
+            if la != lb || !ca.eq_shallow_enqueue(cb, &mut worklist) {
+                return false;
+            }
+        }
+        while let Some(item) = worklist.pop() {
+            if !item.compare(&mut worklist) {
+                return false;
+            }
+        }
+        true
     }
 }
 
@@ -5517,6 +5694,20 @@ impl OptItemChild {
             Self::Atom(s) => Some(DropWorklistItem::Atom(s)),
         }
     }
+
+    /// Shallow structural equality for one child pair.
+    /// Span pair: compare directly. Node pair: ptr_eq short-circuit (skip enqueue)
+    /// or enqueue for the worklist. Variant mismatch: return false.
+    fn eq_shallow_enqueue(&self, other: &Self, worklist: &mut Vec<EqWorklistItem>) -> bool {
+        match (self, other) {
+            (Self::Atom(a), Self::Atom(b)) => {
+                if !a.ptr_eq(b) {
+                    worklist.push(EqWorklistItem::Atom(a.clone(), b.clone()));
+                }
+                true
+            }
+        }
+    }
 }
 
 #[cfg(feature = "python")]
@@ -5565,6 +5756,7 @@ impl OptItemChild {
 ///
 /// `Debug` output is non-recursive: prints span + child count only. Traverse via `children()` to inspect subtrees.
 /// Teardown is iterative: bounded stack at any depth.
+/// Equality is iterative: bounded stack at any depth.
 #[derive(Clone)]
 pub struct OptItem {
     // Not pub: use span() / children() / push_child() — the stable accessor API.
@@ -5611,9 +5803,28 @@ impl Drop for OptItem {
     }
 }
 
+// Iterative PartialEq: the recursive version would recurse through Shared children
+// one frame set per tree level (attacker-controlled depth → stack
+// exhaustion, uncatchable abort). Uses an explicit worklist of node pairs.
 impl PartialEq for OptItem {
     fn eq(&self, other: &Self) -> bool {
-        self.span == other.span && self.children == other.children
+        if self.span != other.span || self.children.len() != other.children.len() {
+            return false;
+        }
+        // Worklist allocated lazily (Vec::new does not heap-allocate until
+        // first push); shallow trees and all-ptr_eq children never allocate.
+        let mut worklist: Vec<EqWorklistItem> = Vec::new();
+        for ((la, ca), (lb, cb)) in self.children.iter().zip(other.children.iter()) {
+            if la != lb || !ca.eq_shallow_enqueue(cb, &mut worklist) {
+                return false;
+            }
+        }
+        while let Some(item) = worklist.pop() {
+            if !item.compare(&mut worklist) {
+                return false;
+            }
+        }
+        true
     }
 }
 
@@ -6342,6 +6553,20 @@ impl ZeroItemsChild {
             Self::Atom(s) => Some(DropWorklistItem::Atom(s)),
         }
     }
+
+    /// Shallow structural equality for one child pair.
+    /// Span pair: compare directly. Node pair: ptr_eq short-circuit (skip enqueue)
+    /// or enqueue for the worklist. Variant mismatch: return false.
+    fn eq_shallow_enqueue(&self, other: &Self, worklist: &mut Vec<EqWorklistItem>) -> bool {
+        match (self, other) {
+            (Self::Atom(a), Self::Atom(b)) => {
+                if !a.ptr_eq(b) {
+                    worklist.push(EqWorklistItem::Atom(a.clone(), b.clone()));
+                }
+                true
+            }
+        }
+    }
 }
 
 #[cfg(feature = "python")]
@@ -6390,6 +6615,7 @@ impl ZeroItemsChild {
 ///
 /// `Debug` output is non-recursive: prints span + child count only. Traverse via `children()` to inspect subtrees.
 /// Teardown is iterative: bounded stack at any depth.
+/// Equality is iterative: bounded stack at any depth.
 #[derive(Clone)]
 pub struct ZeroItems {
     // Not pub: use span() / children() / push_child() — the stable accessor API.
@@ -6436,9 +6662,28 @@ impl Drop for ZeroItems {
     }
 }
 
+// Iterative PartialEq: the recursive version would recurse through Shared children
+// one frame set per tree level (attacker-controlled depth → stack
+// exhaustion, uncatchable abort). Uses an explicit worklist of node pairs.
 impl PartialEq for ZeroItems {
     fn eq(&self, other: &Self) -> bool {
-        self.span == other.span && self.children == other.children
+        if self.span != other.span || self.children.len() != other.children.len() {
+            return false;
+        }
+        // Worklist allocated lazily (Vec::new does not heap-allocate until
+        // first push); shallow trees and all-ptr_eq children never allocate.
+        let mut worklist: Vec<EqWorklistItem> = Vec::new();
+        for ((la, ca), (lb, cb)) in self.children.iter().zip(other.children.iter()) {
+            if la != lb || !ca.eq_shallow_enqueue(cb, &mut worklist) {
+                return false;
+            }
+        }
+        while let Some(item) = worklist.pop() {
+            if !item.compare(&mut worklist) {
+                return false;
+            }
+        }
+        true
     }
 }
 
@@ -7179,6 +7424,27 @@ impl ExprChild {
             Self::Expr(s) => Some(DropWorklistItem::Expr(s)),
         }
     }
+
+    /// Shallow structural equality for one child pair.
+    /// Span pair: compare directly. Node pair: ptr_eq short-circuit (skip enqueue)
+    /// or enqueue for the worklist. Variant mismatch: return false.
+    fn eq_shallow_enqueue(&self, other: &Self, worklist: &mut Vec<EqWorklistItem>) -> bool {
+        match (self, other) {
+            (Self::Atom(a), Self::Atom(b)) => {
+                if !a.ptr_eq(b) {
+                    worklist.push(EqWorklistItem::Atom(a.clone(), b.clone()));
+                }
+                true
+            }
+            (Self::Expr(a), Self::Expr(b)) => {
+                if !a.ptr_eq(b) {
+                    worklist.push(EqWorklistItem::Expr(a.clone(), b.clone()));
+                }
+                true
+            }
+            _ => false,
+        }
+    }
 }
 
 #[cfg(feature = "python")]
@@ -7246,6 +7512,7 @@ impl ExprChild {
 ///
 /// `Debug` output is non-recursive: prints span + child count only. Traverse via `children()` to inspect subtrees.
 /// Teardown is iterative: bounded stack at any depth.
+/// Equality is iterative: bounded stack at any depth.
 #[derive(Clone)]
 pub struct Expr {
     // Not pub: use span() / children() / push_child() — the stable accessor API.
@@ -7292,9 +7559,28 @@ impl Drop for Expr {
     }
 }
 
+// Iterative PartialEq: the recursive version would recurse through Shared children
+// one frame set per tree level (attacker-controlled depth → stack
+// exhaustion, uncatchable abort). Uses an explicit worklist of node pairs.
 impl PartialEq for Expr {
     fn eq(&self, other: &Self) -> bool {
-        self.span == other.span && self.children == other.children
+        if self.span != other.span || self.children.len() != other.children.len() {
+            return false;
+        }
+        // Worklist allocated lazily (Vec::new does not heap-allocate until
+        // first push); shallow trees and all-ptr_eq children never allocate.
+        let mut worklist: Vec<EqWorklistItem> = Vec::new();
+        for ((la, ca), (lb, cb)) in self.children.iter().zip(other.children.iter()) {
+            if la != lb || !ca.eq_shallow_enqueue(cb, &mut worklist) {
+                return false;
+            }
+        }
+        while let Some(item) = worklist.pop() {
+            if !item.compare(&mut worklist) {
+                return false;
+            }
+        }
+        true
     }
 }
 
@@ -8356,6 +8642,27 @@ impl LvalChild {
             Self::Rval(s) => Some(DropWorklistItem::Rval(s)),
         }
     }
+
+    /// Shallow structural equality for one child pair.
+    /// Span pair: compare directly. Node pair: ptr_eq short-circuit (skip enqueue)
+    /// or enqueue for the worklist. Variant mismatch: return false.
+    fn eq_shallow_enqueue(&self, other: &Self, worklist: &mut Vec<EqWorklistItem>) -> bool {
+        match (self, other) {
+            (Self::Name(a), Self::Name(b)) => {
+                if !a.ptr_eq(b) {
+                    worklist.push(EqWorklistItem::Name(a.clone(), b.clone()));
+                }
+                true
+            }
+            (Self::Rval(a), Self::Rval(b)) => {
+                if !a.ptr_eq(b) {
+                    worklist.push(EqWorklistItem::Rval(a.clone(), b.clone()));
+                }
+                true
+            }
+            _ => false,
+        }
+    }
 }
 
 #[cfg(feature = "python")]
@@ -8423,6 +8730,7 @@ impl LvalChild {
 ///
 /// `Debug` output is non-recursive: prints span + child count only. Traverse via `children()` to inspect subtrees.
 /// Teardown is iterative: bounded stack at any depth.
+/// Equality is iterative: bounded stack at any depth.
 #[derive(Clone)]
 pub struct Lval {
     // Not pub: use span() / children() / push_child() — the stable accessor API.
@@ -8469,9 +8777,28 @@ impl Drop for Lval {
     }
 }
 
+// Iterative PartialEq: the recursive version would recurse through Shared children
+// one frame set per tree level (attacker-controlled depth → stack
+// exhaustion, uncatchable abort). Uses an explicit worklist of node pairs.
 impl PartialEq for Lval {
     fn eq(&self, other: &Self) -> bool {
-        self.span == other.span && self.children == other.children
+        if self.span != other.span || self.children.len() != other.children.len() {
+            return false;
+        }
+        // Worklist allocated lazily (Vec::new does not heap-allocate until
+        // first push); shallow trees and all-ptr_eq children never allocate.
+        let mut worklist: Vec<EqWorklistItem> = Vec::new();
+        for ((la, ca), (lb, cb)) in self.children.iter().zip(other.children.iter()) {
+            if la != lb || !ca.eq_shallow_enqueue(cb, &mut worklist) {
+                return false;
+            }
+        }
+        while let Some(item) = worklist.pop() {
+            if !item.compare(&mut worklist) {
+                return false;
+            }
+        }
+        true
     }
 }
 
@@ -9373,6 +9700,27 @@ impl RvalChild {
             Self::Num(s) => Some(DropWorklistItem::Num(s)),
         }
     }
+
+    /// Shallow structural equality for one child pair.
+    /// Span pair: compare directly. Node pair: ptr_eq short-circuit (skip enqueue)
+    /// or enqueue for the worklist. Variant mismatch: return false.
+    fn eq_shallow_enqueue(&self, other: &Self, worklist: &mut Vec<EqWorklistItem>) -> bool {
+        match (self, other) {
+            (Self::Lval(a), Self::Lval(b)) => {
+                if !a.ptr_eq(b) {
+                    worklist.push(EqWorklistItem::Lval(a.clone(), b.clone()));
+                }
+                true
+            }
+            (Self::Num(a), Self::Num(b)) => {
+                if !a.ptr_eq(b) {
+                    worklist.push(EqWorklistItem::Num(a.clone(), b.clone()));
+                }
+                true
+            }
+            _ => false,
+        }
+    }
 }
 
 #[cfg(feature = "python")]
@@ -9440,6 +9788,7 @@ impl RvalChild {
 ///
 /// `Debug` output is non-recursive: prints span + child count only. Traverse via `children()` to inspect subtrees.
 /// Teardown is iterative: bounded stack at any depth.
+/// Equality is iterative: bounded stack at any depth.
 #[derive(Clone)]
 pub struct Rval {
     // Not pub: use span() / children() / push_child() — the stable accessor API.
@@ -9486,9 +9835,28 @@ impl Drop for Rval {
     }
 }
 
+// Iterative PartialEq: the recursive version would recurse through Shared children
+// one frame set per tree level (attacker-controlled depth → stack
+// exhaustion, uncatchable abort). Uses an explicit worklist of node pairs.
 impl PartialEq for Rval {
     fn eq(&self, other: &Self) -> bool {
-        self.span == other.span && self.children == other.children
+        if self.span != other.span || self.children.len() != other.children.len() {
+            return false;
+        }
+        // Worklist allocated lazily (Vec::new does not heap-allocate until
+        // first push); shallow trees and all-ptr_eq children never allocate.
+        let mut worklist: Vec<EqWorklistItem> = Vec::new();
+        for ((la, ca), (lb, cb)) in self.children.iter().zip(other.children.iter()) {
+            if la != lb || !ca.eq_shallow_enqueue(cb, &mut worklist) {
+                return false;
+            }
+        }
+        while let Some(item) = worklist.pop() {
+            if !item.compare(&mut worklist) {
+                return false;
+            }
+        }
+        true
     }
 }
 
@@ -10382,6 +10750,20 @@ impl ArrowChild {
             Self::Name(s) => Some(DropWorklistItem::Name(s)),
         }
     }
+
+    /// Shallow structural equality for one child pair.
+    /// Span pair: compare directly. Node pair: ptr_eq short-circuit (skip enqueue)
+    /// or enqueue for the worklist. Variant mismatch: return false.
+    fn eq_shallow_enqueue(&self, other: &Self, worklist: &mut Vec<EqWorklistItem>) -> bool {
+        match (self, other) {
+            (Self::Name(a), Self::Name(b)) => {
+                if !a.ptr_eq(b) {
+                    worklist.push(EqWorklistItem::Name(a.clone(), b.clone()));
+                }
+                true
+            }
+        }
+    }
 }
 
 #[cfg(feature = "python")]
@@ -10430,6 +10812,7 @@ impl ArrowChild {
 ///
 /// `Debug` output is non-recursive: prints span + child count only. Traverse via `children()` to inspect subtrees.
 /// Teardown is iterative: bounded stack at any depth.
+/// Equality is iterative: bounded stack at any depth.
 #[derive(Clone)]
 pub struct Arrow {
     // Not pub: use span() / children() / push_child() — the stable accessor API.
@@ -10476,9 +10859,28 @@ impl Drop for Arrow {
     }
 }
 
+// Iterative PartialEq: the recursive version would recurse through Shared children
+// one frame set per tree level (attacker-controlled depth → stack
+// exhaustion, uncatchable abort). Uses an explicit worklist of node pairs.
 impl PartialEq for Arrow {
     fn eq(&self, other: &Self) -> bool {
-        self.span == other.span && self.children == other.children
+        if self.span != other.span || self.children.len() != other.children.len() {
+            return false;
+        }
+        // Worklist allocated lazily (Vec::new does not heap-allocate until
+        // first push); shallow trees and all-ptr_eq children never allocate.
+        let mut worklist: Vec<EqWorklistItem> = Vec::new();
+        for ((la, ca), (lb, cb)) in self.children.iter().zip(other.children.iter()) {
+            if la != lb || !ca.eq_shallow_enqueue(cb, &mut worklist) {
+                return false;
+            }
+        }
+        while let Some(item) = worklist.pop() {
+            if !item.compare(&mut worklist) {
+                return false;
+            }
+        }
+        true
     }
 }
 
@@ -11256,6 +11658,7 @@ impl fmt::Debug for LatinWord {
     }
 }
 
+// Span-only PartialEq: no node-typed children, so this cannot recurse — depth-safe.
 impl PartialEq for LatinWord {
     fn eq(&self, other: &Self) -> bool {
         self.span == other.span && self.children == other.children
@@ -12036,6 +12439,7 @@ impl fmt::Debug for Tagged {
     }
 }
 
+// Span-only PartialEq: no node-typed children, so this cannot recurse — depth-safe.
 impl PartialEq for Tagged {
     fn eq(&self, other: &Self) -> bool {
         self.span == other.span && self.children == other.children
@@ -12774,6 +13178,28 @@ impl ValChild {
             Self::Num(s) => Some(DropWorklistItem::Num(s)),
         }
     }
+
+    /// Shallow structural equality for one child pair.
+    /// Span pair: compare directly. Node pair: ptr_eq short-circuit (skip enqueue)
+    /// or enqueue for the worklist. Variant mismatch: return false.
+    fn eq_shallow_enqueue(&self, other: &Self, worklist: &mut Vec<EqWorklistItem>) -> bool {
+        match (self, other) {
+            (Self::Span(a), Self::Span(b)) => a == b,
+            (Self::Name(a), Self::Name(b)) => {
+                if !a.ptr_eq(b) {
+                    worklist.push(EqWorklistItem::Name(a.clone(), b.clone()));
+                }
+                true
+            }
+            (Self::Num(a), Self::Num(b)) => {
+                if !a.ptr_eq(b) {
+                    worklist.push(EqWorklistItem::Num(a.clone(), b.clone()));
+                }
+                true
+            }
+            _ => false,
+        }
+    }
 }
 
 #[cfg(feature = "python")]
@@ -12848,6 +13274,7 @@ impl ValChild {
 ///
 /// `Debug` output is non-recursive: prints span + child count only. Traverse via `children()` to inspect subtrees.
 /// Teardown is iterative: bounded stack at any depth.
+/// Equality is iterative: bounded stack at any depth.
 #[derive(Clone)]
 pub struct Val {
     // Not pub: use span() / children() / push_child() — the stable accessor API.
@@ -12894,9 +13321,28 @@ impl Drop for Val {
     }
 }
 
+// Iterative PartialEq: the recursive version would recurse through Shared children
+// one frame set per tree level (attacker-controlled depth → stack
+// exhaustion, uncatchable abort). Uses an explicit worklist of node pairs.
 impl PartialEq for Val {
     fn eq(&self, other: &Self) -> bool {
-        self.span == other.span && self.children == other.children
+        if self.span != other.span || self.children.len() != other.children.len() {
+            return false;
+        }
+        // Worklist allocated lazily (Vec::new does not heap-allocate until
+        // first push); shallow trees and all-ptr_eq children never allocate.
+        let mut worklist: Vec<EqWorklistItem> = Vec::new();
+        for ((la, ca), (lb, cb)) in self.children.iter().zip(other.children.iter()) {
+            if la != lb || !ca.eq_shallow_enqueue(cb, &mut worklist) {
+                return false;
+            }
+        }
+        while let Some(item) = worklist.pop() {
+            if !item.compare(&mut worklist) {
+                return false;
+            }
+        }
+        true
     }
 }
 
@@ -13628,6 +14074,27 @@ impl LeadingWsChild {
             Self::Trivia(s) => Some(DropWorklistItem::Trivia(s)),
         }
     }
+
+    /// Shallow structural equality for one child pair.
+    /// Span pair: compare directly. Node pair: ptr_eq short-circuit (skip enqueue)
+    /// or enqueue for the worklist. Variant mismatch: return false.
+    fn eq_shallow_enqueue(&self, other: &Self, worklist: &mut Vec<EqWorklistItem>) -> bool {
+        match (self, other) {
+            (Self::Num(a), Self::Num(b)) => {
+                if !a.ptr_eq(b) {
+                    worklist.push(EqWorklistItem::Num(a.clone(), b.clone()));
+                }
+                true
+            }
+            (Self::Trivia(a), Self::Trivia(b)) => {
+                if !a.ptr_eq(b) {
+                    worklist.push(EqWorklistItem::Trivia(a.clone(), b.clone()));
+                }
+                true
+            }
+            _ => false,
+        }
+    }
 }
 
 #[cfg(feature = "python")]
@@ -13695,6 +14162,7 @@ impl LeadingWsChild {
 ///
 /// `Debug` output is non-recursive: prints span + child count only. Traverse via `children()` to inspect subtrees.
 /// Teardown is iterative: bounded stack at any depth.
+/// Equality is iterative: bounded stack at any depth.
 #[derive(Clone)]
 pub struct LeadingWs {
     // Not pub: use span() / children() / push_child() — the stable accessor API.
@@ -13741,9 +14209,28 @@ impl Drop for LeadingWs {
     }
 }
 
+// Iterative PartialEq: the recursive version would recurse through Shared children
+// one frame set per tree level (attacker-controlled depth → stack
+// exhaustion, uncatchable abort). Uses an explicit worklist of node pairs.
 impl PartialEq for LeadingWs {
     fn eq(&self, other: &Self) -> bool {
-        self.span == other.span && self.children == other.children
+        if self.span != other.span || self.children.len() != other.children.len() {
+            return false;
+        }
+        // Worklist allocated lazily (Vec::new does not heap-allocate until
+        // first push); shallow trees and all-ptr_eq children never allocate.
+        let mut worklist: Vec<EqWorklistItem> = Vec::new();
+        for ((la, ca), (lb, cb)) in self.children.iter().zip(other.children.iter()) {
+            if la != lb || !ca.eq_shallow_enqueue(cb, &mut worklist) {
+                return false;
+            }
+        }
+        while let Some(item) = worklist.pop() {
+            if !item.compare(&mut worklist) {
+                return false;
+            }
+        }
+        true
     }
 }
 
@@ -14484,6 +14971,33 @@ impl GroupedChild {
             Self::Trivia(s) => Some(DropWorklistItem::Trivia(s)),
         }
     }
+
+    /// Shallow structural equality for one child pair.
+    /// Span pair: compare directly. Node pair: ptr_eq short-circuit (skip enqueue)
+    /// or enqueue for the worklist. Variant mismatch: return false.
+    fn eq_shallow_enqueue(&self, other: &Self, worklist: &mut Vec<EqWorklistItem>) -> bool {
+        match (self, other) {
+            (Self::Name(a), Self::Name(b)) => {
+                if !a.ptr_eq(b) {
+                    worklist.push(EqWorklistItem::Name(a.clone(), b.clone()));
+                }
+                true
+            }
+            (Self::Num(a), Self::Num(b)) => {
+                if !a.ptr_eq(b) {
+                    worklist.push(EqWorklistItem::Num(a.clone(), b.clone()));
+                }
+                true
+            }
+            (Self::Trivia(a), Self::Trivia(b)) => {
+                if !a.ptr_eq(b) {
+                    worklist.push(EqWorklistItem::Trivia(a.clone(), b.clone()));
+                }
+                true
+            }
+            _ => false,
+        }
+    }
 }
 
 #[cfg(feature = "python")]
@@ -14570,6 +15084,7 @@ impl GroupedChild {
 ///
 /// `Debug` output is non-recursive: prints span + child count only. Traverse via `children()` to inspect subtrees.
 /// Teardown is iterative: bounded stack at any depth.
+/// Equality is iterative: bounded stack at any depth.
 #[derive(Clone)]
 pub struct Grouped {
     // Not pub: use span() / children() / push_child() — the stable accessor API.
@@ -14616,9 +15131,28 @@ impl Drop for Grouped {
     }
 }
 
+// Iterative PartialEq: the recursive version would recurse through Shared children
+// one frame set per tree level (attacker-controlled depth → stack
+// exhaustion, uncatchable abort). Uses an explicit worklist of node pairs.
 impl PartialEq for Grouped {
     fn eq(&self, other: &Self) -> bool {
-        self.span == other.span && self.children == other.children
+        if self.span != other.span || self.children.len() != other.children.len() {
+            return false;
+        }
+        // Worklist allocated lazily (Vec::new does not heap-allocate until
+        // first push); shallow trees and all-ptr_eq children never allocate.
+        let mut worklist: Vec<EqWorklistItem> = Vec::new();
+        for ((la, ca), (lb, cb)) in self.children.iter().zip(other.children.iter()) {
+            if la != lb || !ca.eq_shallow_enqueue(cb, &mut worklist) {
+                return false;
+            }
+        }
+        while let Some(item) = worklist.pop() {
+            if !item.compare(&mut worklist) {
+                return false;
+            }
+        }
+        true
     }
 }
 
@@ -15357,6 +15891,33 @@ impl RecViaSubChild {
             Self::RecViaSub(s) => Some(DropWorklistItem::RecViaSub(s)),
         }
     }
+
+    /// Shallow structural equality for one child pair.
+    /// Span pair: compare directly. Node pair: ptr_eq short-circuit (skip enqueue)
+    /// or enqueue for the worklist. Variant mismatch: return false.
+    fn eq_shallow_enqueue(&self, other: &Self, worklist: &mut Vec<EqWorklistItem>) -> bool {
+        match (self, other) {
+            (Self::Atom(a), Self::Atom(b)) => {
+                if !a.ptr_eq(b) {
+                    worklist.push(EqWorklistItem::Atom(a.clone(), b.clone()));
+                }
+                true
+            }
+            (Self::Name(a), Self::Name(b)) => {
+                if !a.ptr_eq(b) {
+                    worklist.push(EqWorklistItem::Name(a.clone(), b.clone()));
+                }
+                true
+            }
+            (Self::RecViaSub(a), Self::RecViaSub(b)) => {
+                if !a.ptr_eq(b) {
+                    worklist.push(EqWorklistItem::RecViaSub(a.clone(), b.clone()));
+                }
+                true
+            }
+            _ => false,
+        }
+    }
 }
 
 #[cfg(feature = "python")]
@@ -15443,6 +16004,7 @@ impl RecViaSubChild {
 ///
 /// `Debug` output is non-recursive: prints span + child count only. Traverse via `children()` to inspect subtrees.
 /// Teardown is iterative: bounded stack at any depth.
+/// Equality is iterative: bounded stack at any depth.
 #[derive(Clone)]
 pub struct RecViaSub {
     // Not pub: use span() / children() / push_child() — the stable accessor API.
@@ -15489,9 +16051,28 @@ impl Drop for RecViaSub {
     }
 }
 
+// Iterative PartialEq: the recursive version would recurse through Shared children
+// one frame set per tree level (attacker-controlled depth → stack
+// exhaustion, uncatchable abort). Uses an explicit worklist of node pairs.
 impl PartialEq for RecViaSub {
     fn eq(&self, other: &Self) -> bool {
-        self.span == other.span && self.children == other.children
+        if self.span != other.span || self.children.len() != other.children.len() {
+            return false;
+        }
+        // Worklist allocated lazily (Vec::new does not heap-allocate until
+        // first push); shallow trees and all-ptr_eq children never allocate.
+        let mut worklist: Vec<EqWorklistItem> = Vec::new();
+        for ((la, ca), (lb, cb)) in self.children.iter().zip(other.children.iter()) {
+            if la != lb || !ca.eq_shallow_enqueue(cb, &mut worklist) {
+                return false;
+            }
+        }
+        while let Some(item) = worklist.pop() {
+            if !item.compare(&mut worklist) {
+                return false;
+            }
+        }
+        true
     }
 }
 
@@ -16387,6 +16968,27 @@ impl NestChild {
             Self::Num(s) => Some(DropWorklistItem::Num(s)),
         }
     }
+
+    /// Shallow structural equality for one child pair.
+    /// Span pair: compare directly. Node pair: ptr_eq short-circuit (skip enqueue)
+    /// or enqueue for the worklist. Variant mismatch: return false.
+    fn eq_shallow_enqueue(&self, other: &Self, worklist: &mut Vec<EqWorklistItem>) -> bool {
+        match (self, other) {
+            (Self::Nest(a), Self::Nest(b)) => {
+                if !a.ptr_eq(b) {
+                    worklist.push(EqWorklistItem::Nest(a.clone(), b.clone()));
+                }
+                true
+            }
+            (Self::Num(a), Self::Num(b)) => {
+                if !a.ptr_eq(b) {
+                    worklist.push(EqWorklistItem::Num(a.clone(), b.clone()));
+                }
+                true
+            }
+            _ => false,
+        }
+    }
 }
 
 #[cfg(feature = "python")]
@@ -16454,6 +17056,7 @@ impl NestChild {
 ///
 /// `Debug` output is non-recursive: prints span + child count only. Traverse via `children()` to inspect subtrees.
 /// Teardown is iterative: bounded stack at any depth.
+/// Equality is iterative: bounded stack at any depth.
 #[derive(Clone)]
 pub struct Nest {
     // Not pub: use span() / children() / push_child() — the stable accessor API.
@@ -16500,9 +17103,28 @@ impl Drop for Nest {
     }
 }
 
+// Iterative PartialEq: the recursive version would recurse through Shared children
+// one frame set per tree level (attacker-controlled depth → stack
+// exhaustion, uncatchable abort). Uses an explicit worklist of node pairs.
 impl PartialEq for Nest {
     fn eq(&self, other: &Self) -> bool {
-        self.span == other.span && self.children == other.children
+        if self.span != other.span || self.children.len() != other.children.len() {
+            return false;
+        }
+        // Worklist allocated lazily (Vec::new does not heap-allocate until
+        // first push); shallow trees and all-ptr_eq children never allocate.
+        let mut worklist: Vec<EqWorklistItem> = Vec::new();
+        for ((la, ca), (lb, cb)) in self.children.iter().zip(other.children.iter()) {
+            if la != lb || !ca.eq_shallow_enqueue(cb, &mut worklist) {
+                return false;
+            }
+        }
+        while let Some(item) = worklist.pop() {
+            if !item.compare(&mut worklist) {
+                return false;
+            }
+        }
+        true
     }
 }
 
@@ -17408,6 +18030,27 @@ impl NestSumChild {
             Self::NestSum(s) => Some(DropWorklistItem::NestSum(s)),
         }
     }
+
+    /// Shallow structural equality for one child pair.
+    /// Span pair: compare directly. Node pair: ptr_eq short-circuit (skip enqueue)
+    /// or enqueue for the worklist. Variant mismatch: return false.
+    fn eq_shallow_enqueue(&self, other: &Self, worklist: &mut Vec<EqWorklistItem>) -> bool {
+        match (self, other) {
+            (Self::Nest(a), Self::Nest(b)) => {
+                if !a.ptr_eq(b) {
+                    worklist.push(EqWorklistItem::Nest(a.clone(), b.clone()));
+                }
+                true
+            }
+            (Self::NestSum(a), Self::NestSum(b)) => {
+                if !a.ptr_eq(b) {
+                    worklist.push(EqWorklistItem::NestSum(a.clone(), b.clone()));
+                }
+                true
+            }
+            _ => false,
+        }
+    }
 }
 
 #[cfg(feature = "python")]
@@ -17475,6 +18118,7 @@ impl NestSumChild {
 ///
 /// `Debug` output is non-recursive: prints span + child count only. Traverse via `children()` to inspect subtrees.
 /// Teardown is iterative: bounded stack at any depth.
+/// Equality is iterative: bounded stack at any depth.
 #[derive(Clone)]
 pub struct NestSum {
     // Not pub: use span() / children() / push_child() — the stable accessor API.
@@ -17521,9 +18165,28 @@ impl Drop for NestSum {
     }
 }
 
+// Iterative PartialEq: the recursive version would recurse through Shared children
+// one frame set per tree level (attacker-controlled depth → stack
+// exhaustion, uncatchable abort). Uses an explicit worklist of node pairs.
 impl PartialEq for NestSum {
     fn eq(&self, other: &Self) -> bool {
-        self.span == other.span && self.children == other.children
+        if self.span != other.span || self.children.len() != other.children.len() {
+            return false;
+        }
+        // Worklist allocated lazily (Vec::new does not heap-allocate until
+        // first push); shallow trees and all-ptr_eq children never allocate.
+        let mut worklist: Vec<EqWorklistItem> = Vec::new();
+        for ((la, ca), (lb, cb)) in self.children.iter().zip(other.children.iter()) {
+            if la != lb || !ca.eq_shallow_enqueue(cb, &mut worklist) {
+                return false;
+            }
+        }
+        while let Some(item) = worklist.pop() {
+            if !item.compare(&mut worklist) {
+                return false;
+            }
+        }
+        true
     }
 }
 
@@ -18577,6 +19240,15 @@ impl TriviaChild {
             Self::Span(_) => None,
         }
     }
+
+    /// Shallow structural equality for one child pair.
+    /// Span pair: compare directly. Node pair: ptr_eq short-circuit (skip enqueue)
+    /// or enqueue for the worklist. Variant mismatch: return false.
+    fn eq_shallow_enqueue(&self, other: &Self, _worklist: &mut Vec<EqWorklistItem>) -> bool {
+        match (self, other) {
+            (Self::Span(a), Self::Span(b)) => a == b,
+        }
+    }
 }
 
 #[cfg(feature = "python")]
@@ -18634,6 +19306,7 @@ impl fmt::Debug for Trivia {
     }
 }
 
+// Span-only PartialEq: no node-typed children, so this cannot recurse — depth-safe.
 impl PartialEq for Trivia {
     fn eq(&self, other: &Self) -> bool {
         self.span == other.span && self.children == other.children
@@ -19392,6 +20065,169 @@ impl DropWorklistItem {
                     let children = std::mem::take(&mut shared.write().children);
                     worklist.extend(children.into_iter().filter_map(|(_, c)| c.into_drop_item()));
                 }
+            }
+        }
+    }
+}
+
+// ───────────────────────────────────────────────────────────────────────────
+// EqWorklistItem
+// ───────────────────────────────────────────────────────────────────────────
+
+// Worklist item for iterative node equality. See the per-node `impl PartialEq`.
+// Module-private: only used by impl PartialEq and eq_shallow_enqueue in this file.
+// Each variant holds a *pair* of Shared handles (unlike DropWorklistItem which holds one).
+enum EqWorklistItem {
+    Atom(Shared<Atom>, Shared<Atom>),
+    Expr(Shared<Expr>, Shared<Expr>),
+    Lval(Shared<Lval>, Shared<Lval>),
+    Name(Shared<Name>, Shared<Name>),
+    Nest(Shared<Nest>, Shared<Nest>),
+    NestSum(Shared<NestSum>, Shared<NestSum>),
+    Num(Shared<Num>, Shared<Num>),
+    RecViaSub(Shared<RecViaSub>, Shared<RecViaSub>),
+    Rval(Shared<Rval>, Shared<Rval>),
+    Trivia(Shared<Trivia>, Shared<Trivia>),
+}
+
+impl EqWorklistItem {
+    /// Compare one node pair shallowly; enqueue node-typed child pairs for deferred comparison.
+    /// Returns false on the first mismatch (span, child count, label, or child variant/value).
+    fn compare(self, worklist: &mut Vec<EqWorklistItem>) -> bool {
+        // Each arm: read-lock the pair, check span + child-count, then walk children
+        // via eq_shallow_enqueue (Span: compare directly; node: ptr_eq short-circuit or enqueue).
+        // Guards are held across the child iteration; pushes to the worklist are
+        // Arc::clone + Vec::push (no lock acquisition).
+        match self {
+            EqWorklistItem::Atom(a, b) => {
+                let ga = a.read();
+                let gb = b.read();
+                if ga.span != gb.span || ga.children.len() != gb.children.len() {
+                    return false;
+                }
+                for ((la, ca), (lb, cb)) in ga.children.iter().zip(gb.children.iter()) {
+                    if la != lb || !ca.eq_shallow_enqueue(cb, worklist) {
+                        return false;
+                    }
+                }
+                true
+            }
+            EqWorklistItem::Expr(a, b) => {
+                let ga = a.read();
+                let gb = b.read();
+                if ga.span != gb.span || ga.children.len() != gb.children.len() {
+                    return false;
+                }
+                for ((la, ca), (lb, cb)) in ga.children.iter().zip(gb.children.iter()) {
+                    if la != lb || !ca.eq_shallow_enqueue(cb, worklist) {
+                        return false;
+                    }
+                }
+                true
+            }
+            EqWorklistItem::Lval(a, b) => {
+                let ga = a.read();
+                let gb = b.read();
+                if ga.span != gb.span || ga.children.len() != gb.children.len() {
+                    return false;
+                }
+                for ((la, ca), (lb, cb)) in ga.children.iter().zip(gb.children.iter()) {
+                    if la != lb || !ca.eq_shallow_enqueue(cb, worklist) {
+                        return false;
+                    }
+                }
+                true
+            }
+            EqWorklistItem::Name(a, b) => {
+                let ga = a.read();
+                let gb = b.read();
+                if ga.span != gb.span || ga.children.len() != gb.children.len() {
+                    return false;
+                }
+                for ((la, ca), (lb, cb)) in ga.children.iter().zip(gb.children.iter()) {
+                    if la != lb || !ca.eq_shallow_enqueue(cb, worklist) {
+                        return false;
+                    }
+                }
+                true
+            }
+            EqWorklistItem::Nest(a, b) => {
+                let ga = a.read();
+                let gb = b.read();
+                if ga.span != gb.span || ga.children.len() != gb.children.len() {
+                    return false;
+                }
+                for ((la, ca), (lb, cb)) in ga.children.iter().zip(gb.children.iter()) {
+                    if la != lb || !ca.eq_shallow_enqueue(cb, worklist) {
+                        return false;
+                    }
+                }
+                true
+            }
+            EqWorklistItem::NestSum(a, b) => {
+                let ga = a.read();
+                let gb = b.read();
+                if ga.span != gb.span || ga.children.len() != gb.children.len() {
+                    return false;
+                }
+                for ((la, ca), (lb, cb)) in ga.children.iter().zip(gb.children.iter()) {
+                    if la != lb || !ca.eq_shallow_enqueue(cb, worklist) {
+                        return false;
+                    }
+                }
+                true
+            }
+            EqWorklistItem::Num(a, b) => {
+                let ga = a.read();
+                let gb = b.read();
+                if ga.span != gb.span || ga.children.len() != gb.children.len() {
+                    return false;
+                }
+                for ((la, ca), (lb, cb)) in ga.children.iter().zip(gb.children.iter()) {
+                    if la != lb || !ca.eq_shallow_enqueue(cb, worklist) {
+                        return false;
+                    }
+                }
+                true
+            }
+            EqWorklistItem::RecViaSub(a, b) => {
+                let ga = a.read();
+                let gb = b.read();
+                if ga.span != gb.span || ga.children.len() != gb.children.len() {
+                    return false;
+                }
+                for ((la, ca), (lb, cb)) in ga.children.iter().zip(gb.children.iter()) {
+                    if la != lb || !ca.eq_shallow_enqueue(cb, worklist) {
+                        return false;
+                    }
+                }
+                true
+            }
+            EqWorklistItem::Rval(a, b) => {
+                let ga = a.read();
+                let gb = b.read();
+                if ga.span != gb.span || ga.children.len() != gb.children.len() {
+                    return false;
+                }
+                for ((la, ca), (lb, cb)) in ga.children.iter().zip(gb.children.iter()) {
+                    if la != lb || !ca.eq_shallow_enqueue(cb, worklist) {
+                        return false;
+                    }
+                }
+                true
+            }
+            EqWorklistItem::Trivia(a, b) => {
+                let ga = a.read();
+                let gb = b.read();
+                if ga.span != gb.span || ga.children.len() != gb.children.len() {
+                    return false;
+                }
+                for ((la, ca), (lb, cb)) in ga.children.iter().zip(gb.children.iter()) {
+                    if la != lb || !ca.eq_shallow_enqueue(cb, worklist) {
+                        return false;
+                    }
+                }
+                true
             }
         }
     }

@@ -297,6 +297,10 @@ class RustCstGenerator:
         if drop_block:
             parts.append(drop_block)
 
+        eq_block = self._eq_block(child_union)
+        if eq_block:
+            parts.append(eq_block)
+
         parts.append(self._register_classes_fn())
 
         return "\n".join(parts)
@@ -599,7 +603,15 @@ class RustCstGenerator:
         # Omitted only when the class is neither a child-union member nor has a Drop impl:
         # such an enum's into_drop_item would be uncalled → dead_code → -D warnings failure.
         needs_drop_item = child_classes or (child_union is not None and class_name in child_union)
+        # eq_shallow_enqueue: shallow equality helper for iterative PartialEq.
+        # Emit under the same condition as into_drop_item (needs_drop_item), so that
+        # EqWorklistItem::compare arms (which call this) and the node-struct iterative
+        # PartialEq driver (which seeds the worklist) are always coherent.
+        # For span-only union members the worklist parameter is unused → emit as _worklist
+        # to suppress the unused_variables lint under -D warnings (same convention as
+        # py_param/_py and extract_span_type_param/_span_type above).
         if needs_drop_item:
+            worklist_param = "_worklist" if not child_classes else "worklist"
             lines.append(f"impl {enum_name} {{")
             lines.append("    fn into_drop_item(self) -> Option<DropWorklistItem> {")
             lines.append("        match self {")
@@ -607,6 +619,27 @@ class RustCstGenerator:
                 lines.append("            Self::Span(_) => None,")
             for child_cls in child_classes:
                 lines.append(f"            Self::{child_cls}(s) => Some(DropWorklistItem::{child_cls}(s)),")
+            lines.append("        }")
+            lines.append("    }")
+            lines.append("")
+            lines.append("    /// Shallow structural equality for one child pair.")
+            lines.append("    /// Span pair: compare directly. Node pair: ptr_eq short-circuit (skip enqueue)")
+            lines.append("    /// or enqueue for the worklist. Variant mismatch: return false.")
+            lines.append(
+                f"    fn eq_shallow_enqueue(&self, other: &Self, {worklist_param}: &mut Vec<EqWorklistItem>) -> bool {{"
+            )
+            lines.append("        match (self, other) {")
+            if has_span:
+                lines.append("            (Self::Span(a), Self::Span(b)) => a == b,")
+            for child_cls in child_classes:
+                lines.append(f"            (Self::{child_cls}(a), Self::{child_cls}(b)) => {{")
+                lines.append("                if !a.ptr_eq(b) {")
+                lines.append(f"                    worklist.push(EqWorklistItem::{child_cls}(a.clone(), b.clone()));")
+                lines.append("                }")
+                lines.append("                true")
+                lines.append("            }")
+            if num_variants > 1:
+                lines.append("            _ => false,")
             lines.append("        }")
             lines.append("    }")
             lines.append("}")
@@ -727,6 +760,7 @@ class RustCstGenerator:
         )
         if child_classes:
             lines.append("/// Teardown is iterative: bounded stack at any depth.")
+            lines.append("/// Equality is iterative: bounded stack at any depth.")
         lines.append("#[derive(Clone)]")
         lines.append(f"pub struct {class_name} {{")
         lines.append("    // Not pub: use span() / children() / push_child() — the stable accessor API.")
@@ -787,20 +821,46 @@ class RustCstGenerator:
             lines.append("}")
             lines.append("")
 
-        # TODO(rust-cst-eq-depth): this derived PartialEq recurses through Shared<T> children
-        # with no depth bound; tree depth is attacker-controlled, so assert_eq! on a deep
-        # parser-produced tree aborts (stack exhaustion, uncatchable). Fix: emit iterative
-        # impl PartialEq following the same _drop_block worklist pattern.
-        # Native PartialEq: compares span + children recursively.  For node-typed children,
-        # Shared::PartialEq applies a ptr_eq short-circuit which eliminates same-lock re-entry
-        # on `x == x`.  DAG comparisons (position-shifted sharing) still hold both guards
-        # simultaneously; deadlock-free only absent concurrent writers — see Shared<T> docs.
-        lines.append(f"impl PartialEq for {class_name} {{")
-        lines.append("    fn eq(&self, other: &Self) -> bool {")
-        lines.append("        self.span == other.span && self.children == other.children")
-        lines.append("    }")
-        lines.append("}")
-        lines.append("")
+        if child_classes:
+            # Iterative PartialEq: the recursive version would recurse through Shared children
+            # one frame set per tree level (attacker-controlled depth → stack exhaustion,
+            # uncatchable abort). Uses an explicit worklist of node pairs instead.
+            # Equality is iterative: bounded stack at any depth.
+            lines.append("// Iterative PartialEq: the recursive version would recurse through Shared children")
+            lines.append("// one frame set per tree level (attacker-controlled depth → stack")
+            lines.append("// exhaustion, uncatchable abort). Uses an explicit worklist of node pairs.")
+            lines.append(f"impl PartialEq for {class_name} {{")
+            lines.append("    fn eq(&self, other: &Self) -> bool {")
+            lines.append("        if self.span != other.span || self.children.len() != other.children.len() {")
+            lines.append("            return false;")
+            lines.append("        }")
+            lines.append("        // Worklist allocated lazily (Vec::new does not heap-allocate until")
+            lines.append("        // first push); shallow trees and all-ptr_eq children never allocate.")
+            lines.append("        let mut worklist: Vec<EqWorklistItem> = Vec::new();")
+            lines.append("        for ((la, ca), (lb, cb)) in self.children.iter().zip(other.children.iter()) {")
+            lines.append("            if la != lb || !ca.eq_shallow_enqueue(cb, &mut worklist) {")
+            lines.append("                return false;")
+            lines.append("            }")
+            lines.append("        }")
+            lines.append("        while let Some(item) = worklist.pop() {")
+            lines.append("            if !item.compare(&mut worklist) {")
+            lines.append("                return false;")
+            lines.append("            }")
+            lines.append("        }")
+            lines.append("        true")
+            lines.append("    }")
+            lines.append("}")
+            lines.append("")
+        else:
+            # Span-only class: no node-typed children, so PartialEq cannot recurse — depth-safe.
+            # Mirrors the Drop precedent: span-only nodes get no impl Drop for the same reason.
+            lines.append("// Span-only PartialEq: no node-typed children, so this cannot recurse — depth-safe.")
+            lines.append(f"impl PartialEq for {class_name} {{")
+            lines.append("    fn eq(&self, other: &Self) -> bool {")
+            lines.append("        self.span == other.span && self.children == other.children")
+            lines.append("    }")
+            lines.append("}")
+            lines.append("")
 
         # Plain impl: suffixless Rust-native API (no _native suffix).
         # These are the stable public Rust surface that generated parsers build against.
@@ -1957,6 +2017,78 @@ class RustCstGenerator:
         lines.append("        match self {")
         for cls in child_union:
             self._emit_drain_arm(lines, cls)
+        lines.append("        }")
+        lines.append("    }")
+        lines.append("}")
+        lines.append("")
+        return "\n".join(lines)
+
+    # ------------------------------------------------------------------
+    # Eq worklist block (emitted once per file, after per-rule loop)
+    # ------------------------------------------------------------------
+
+    @staticmethod
+    def _emit_eq_arm(lines: list[str], cls: str) -> None:
+        """Append one match arm body for `EqWorklistItem::compare`.
+
+        All arms are structurally identical (only the variant name differs), so this helper
+        makes uniformity explicit and keeps the change surface for future edits to the compare
+        logic at one site rather than N copies in the loop below.
+        """
+        lines.append(f"            EqWorklistItem::{cls}(a, b) => {{")
+        lines.append("                let ga = a.read();")
+        lines.append("                let gb = b.read();")
+        lines.append("                if ga.span != gb.span || ga.children.len() != gb.children.len() {")
+        lines.append("                    return false;")
+        lines.append("                }")
+        lines.append("                for ((la, ca), (lb, cb)) in ga.children.iter().zip(gb.children.iter()) {")
+        lines.append("                    if la != lb || !ca.eq_shallow_enqueue(cb, worklist) {")
+        lines.append("                        return false;")
+        lines.append("                    }")
+        lines.append("                }")
+        lines.append("                true")
+        lines.append("            }")
+
+    def _eq_block(self, child_union: list[str]) -> str:
+        """Emit the EqWorklistItem enum + compare impl (one variant per child-class-union member).
+
+        Skipped (returns empty string) when the union is empty (flat grammar, no node-typed children).
+        Module-private (no pub) — only called by the per-node impl PartialEq and eq_shallow_enqueue.
+
+        The variant set is the child-class union: classes that appear as node-typed children in any
+        child enum.  Never-child root classes are excluded (their own PartialEq seeds the worklist
+        directly; they never appear as a variant and an unused variant would trip dead_code under
+        -D warnings — same rationale as DropWorklistItem).
+        """
+        if not child_union:
+            return ""
+
+        lines: list[str] = []
+        lines.append(f"// {'─' * 75}")
+        lines.append("// EqWorklistItem")
+        lines.append(f"// {'─' * 75}")
+        lines.append("")
+        lines.append("// Worklist item for iterative node equality. See the per-node `impl PartialEq`.")
+        lines.append("// Module-private: only used by impl PartialEq and eq_shallow_enqueue in this file.")
+        lines.append("// Each variant holds a *pair* of Shared handles (unlike DropWorklistItem which holds one).")
+        lines.append("enum EqWorklistItem {")
+        for cls in child_union:
+            lines.append(f"    {cls}(Shared<{cls}>, Shared<{cls}>),")
+        lines.append("}")
+        lines.append("")
+        lines.append("impl EqWorklistItem {")
+        lines.append("    /// Compare one node pair shallowly; enqueue node-typed child pairs for deferred comparison.")
+        lines.append("    /// Returns false on the first mismatch (span, child count, label, or child variant/value).")
+        lines.append("    fn compare(self, worklist: &mut Vec<EqWorklistItem>) -> bool {")
+        lines.append("        // Each arm: read-lock the pair, check span + child-count, then walk children")
+        lines.append(
+            "        // via eq_shallow_enqueue (Span: compare directly; node: ptr_eq short-circuit or enqueue)."
+        )
+        lines.append("        // Guards are held across the child iteration; pushes to the worklist are")
+        lines.append("        // Arc::clone + Vec::push (no lock acquisition).")
+        lines.append("        match self {")
+        for cls in child_union:
+            self._emit_eq_arm(lines, cls)
         lines.append("        }")
         lines.append("    }")
         lines.append("}")

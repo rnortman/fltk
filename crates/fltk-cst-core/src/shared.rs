@@ -18,12 +18,18 @@
 /// `std::sync::RwLock` twice on one thread, which `std` documents may deadlock when a
 /// writer is queued.
 ///
-/// **Important limitation**: the short-circuit fires only when *the same `Shared` object
-/// sits at the same position on both sides* of the comparison (i.e. `ptr_eq` returns true).
-/// It does NOT prevent re-entry when a shared node appears anywhere inside the compared
-/// trees at a *different* position (position-shifted sharing in a DAG) — e.g. comparing
-/// `B` (whose child is `A`) against `C` (whose child is also `A`) will read-lock `A` while
-/// the outer guard on `B` or `C` is still held.  `std::sync::RwLock` same-thread
+/// Generated node-struct `T::eq` is iterative: it uses an explicit worklist of node pairs
+/// rather than recursing through Shared children.  As a result, at most two read-guard
+/// *pairs* are held simultaneously at any point (the root pair inside `Shared::eq` + the
+/// current worklist item's pair), rather than one pair per tree level.  Stack depth is
+/// therefore bounded regardless of tree depth.
+///
+/// **Important limitation**: the ptr_eq short-circuit fires only when *the same `Shared`
+/// object sits at the same position on both sides* of the comparison (i.e. `ptr_eq` returns
+/// true).  It does NOT prevent re-entry when a shared node appears anywhere inside the
+/// compared trees at a *different* position (position-shifted sharing in a DAG) — e.g.
+/// comparing `B` (whose child is `A`) against `C` (whose child is also `A`) will read-lock
+/// `A` while the outer guard on `B` or `C` is still held.  `std::sync::RwLock` same-thread
 /// read-re-entry may deadlock when a concurrent writer is queued.  Deep `PartialEq` on a
 /// DAG is therefore only deadlock-free in the absence of concurrent writers.  Callers in
 /// multithreaded contexts must ensure no writer holds a guard on any node in the compared
@@ -34,10 +40,11 @@
 /// poison via `PoisonError::into_inner` so one panic cannot permanently brick a node tree.
 ///
 /// # Reference cycles
-/// Shared ownership makes user-created reference cycles possible.  `PartialEq`, `Debug`,
-/// and other recursive operations will loop infinitely on a cycle — the same contract as
-/// the Python backend.  Cycles also leak memory (Arc does not break cycles).  Do not create
-/// cycles.
+/// Shared ownership makes user-created reference cycles possible.  `PartialEq` on a cycle
+/// will loop indefinitely via unbounded worklist growth rather than stack overflow — same
+/// nontermination outcome, different mechanism.  `Debug` and other recursive operations
+/// also loop infinitely on a cycle — the same contract as the Python backend.  Cycles also
+/// leak memory (Arc does not break cycles).  Do not create cycles.
 use std::fmt;
 use std::sync::{Arc, RwLock, RwLockReadGuard, RwLockWriteGuard};
 
@@ -90,11 +97,9 @@ impl<T> Clone for Shared<T> {
     }
 }
 
-// TODO(rust-cst-eq-depth): this PartialEq delegates to T::eq, which for generated node
-// structs recurses through Shared<T> children with no depth bound; tree depth is
-// attacker-controlled, so assert_eq! on a deep parser-produced tree aborts (stack
-// exhaustion, uncatchable). Fix: emit iterative impl PartialEq on node structs, same
-// pattern as the iterative impl Drop in gsm2tree_rs.py.
+// PartialEq delegates to T::eq.  For generated node structs T::eq is iterative (worklist-based),
+// so the comparison is bounded-stack at any depth.  The ptr_eq short-circuit is the only logic
+// here: same allocation → equal without locking.
 impl<T: PartialEq> PartialEq for Shared<T> {
     fn eq(&self, other: &Self) -> bool {
         // Short-circuit: same pointer → equal without locking.

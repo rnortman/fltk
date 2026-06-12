@@ -217,7 +217,7 @@ class Rule:
         return self.children[0]
 
     def _check_child_type_for_mutators(self, child: Alternatives | Identifier | Trivia) -> None:
-        if not isinstance(child, Alternatives | Trivia | Identifier):
+        if not isinstance(child, Alternatives | Identifier | Trivia):
             msg = f"Rule: unsupported child type {type(child).__name__}"
             raise TypeError(msg)
 
@@ -473,7 +473,7 @@ class Items:
     def _check_child_type_for_mutators(self, child: Item | Trivia | fltk.fegen.pyrt.span.Span) -> None:
         _allowed = Items._MUTATOR_ALLOWED_CHILD_TYPES
         if _allowed is None:
-            _allowed = (Trivia, fltk.fegen.pyrt.terminalsrc.Span, Item)
+            _allowed = (Item, Trivia, fltk.fegen.pyrt.terminalsrc.Span)
             Items._MUTATOR_ALLOWED_CHILD_TYPES = _allowed
         _ns = _get_native_span_type()
         if _ns is not None and _ns not in _allowed:
@@ -656,7 +656,7 @@ class Item:
         return self.children[0]
 
     def _check_child_type_for_mutators(self, child: Disposition | Identifier | Quantifier | Term | Trivia) -> None:
-        if not isinstance(child, Disposition | Term | Quantifier | Trivia | Identifier):
+        if not isinstance(child, Disposition | Identifier | Quantifier | Term | Trivia):
             msg = f"Item: unsupported child type {type(child).__name__}"
             raise TypeError(msg)
 
@@ -855,7 +855,7 @@ class Term:
         return self.children[0]
 
     def _check_child_type_for_mutators(self, child: Alternatives | Identifier | Literal | RawString | Trivia) -> None:
-        if not isinstance(child, Literal | Alternatives | Trivia | RawString | Identifier):
+        if not isinstance(child, Alternatives | Identifier | Literal | RawString | Trivia):
             msg = f"Term: unsupported child type {type(child).__name__}"
             raise TypeError(msg)
 
@@ -1749,7 +1749,7 @@ class Trivia:
         return self.children[0]
 
     def _check_child_type_for_mutators(self, child: BlockComment | LineComment | Whitespace) -> None:
-        if not isinstance(child, Whitespace | BlockComment | LineComment):
+        if not isinstance(child, BlockComment | LineComment | Whitespace):
             msg = f"Trivia: unsupported child type {type(child).__name__}"
             raise TypeError(msg)
 
