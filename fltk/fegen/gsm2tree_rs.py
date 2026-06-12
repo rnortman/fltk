@@ -15,6 +15,10 @@ from fltk.iir.context import create_default_context
 from fltk.iir.py import reg as pyreg
 
 # Valid identifier pattern (matches fegen.fltkg:16 grammar rule for identifiers)
+# TODO(empty-cn-underscore-rule): underscore-only names (_, __, ...) pass this regex but
+# snake_to_upper_camel collapses them to CN="" — producing `pub struct  {` (Rust syntax error)
+# with no generation-time diagnostic. Fix: reject rule names whose CN is empty (or tighten
+# the regex to require at least one [a-z0-9] character).
 _IDENTIFIER_RE = re.compile(r"^[_a-z][_a-z0-9]*$")
 
 # Labels whose per-label generated methods collide with fixed method names on the
@@ -30,15 +34,32 @@ _RESERVED_LABELS: dict[str, str] = {
 # clobber (NodeKind) or a Rust E0255 compile error against the use preamble in cst.rs
 # (Span, Shared, CstError).  SourceText is deliberately excluded: it is not imported
 # in cst.rs's preamble and no Python-level collision occurs post-split.
-# TODO(rust-generated-ident-collisions): pairwise collisions between rule-derived
-# identifiers (e.g. foo_child rule → FooChild conflicts with Foo's child enum) require
-# cross-rule analysis rather than a fixed set; deferred.
+# Cross-rule pairwise collisions (e.g. rule `foo_child` → `FooChild` vs rule `foo`'s
+# child enum `FooChild`) are detected in RustCstGenerator.__init__ after this set check.
+# The cross-rule check does NOT seed reserved names into the claims dict, relying on the
+# invariant below (machine-checked at module load) that no reserved name can equal a
+# derived per-rule identifier (Py{CN}, {CN}Child, {CN}Label).  If a future reserved name
+# breaks that invariant (e.g. "PyNode"), it must also be seeded into claims.
 _RESERVED_CLASS_NAMES: dict[str, str] = {
     "NodeKind": "the generated NodeKind enum",
     "Span": "fltk_cst_core::Span (imported by generated cst.rs and parser.rs)",
     "Shared": "fltk_cst_core::Shared (imported by generated cst.rs and parser.rs)",
     "CstError": "fltk_cst_core::CstError (imported by generated cst.rs)",
+    "DropWorklistItem": "the generated DropWorklistItem drop-worklist enum",
+    "EqWorklistItem": "the generated EqWorklistItem eq-worklist enum",
 }
+
+# Machine-checked: no reserved name may start with "Py", end with "Child", or end with "Label".
+# The cross-rule claims check skips seeding reserved names on this basis; a violation here
+# means a new reserved name could shadow a derived per-rule identifier without being detected.
+# Explicit if/raise (not `assert`) so the invariant survives python -O / PYTHONOPTIMIZE.
+_bad_reserved = [n for n in _RESERVED_CLASS_NAMES if n.startswith("Py") or n.endswith("Child") or n.endswith("Label")]
+if _bad_reserved:
+    _msg = (
+        f"Reserved class name(s) {_bad_reserved!r} violate the Py/Child/Label invariant; "
+        "seed them into the cross-rule claims dict in RustCstGenerator.__init__"
+    )
+    raise RuntimeError(_msg)
 
 
 def _rust_variant_name(label: str) -> str:
@@ -98,6 +119,49 @@ class RustCstGenerator:
                                 f"the fixed method '{colliding_method}'"
                             )
                             raise ValueError(msg)
+
+        # Cross-rule identifier collision check.
+        # Detects cases where two rules derive the same Rust module-level identifier (e.g.
+        # rule `foo_child` → struct `FooChild` collides with rule `foo`'s child enum `FooChild`).
+        # Also catches non-injective snake_to_upper_camel (e.g. `foo_bar` and `foo__bar` → `FooBar`).
+        # Runs after the per-rule reserved-name check above so that a rule triggering _RESERVED_CLASS_NAMES
+        # reports that error first (better diagnostic); rules passing that check are guaranteed not to
+        # collide on CN alone with any reserved name.
+        #
+        # {CN}Label is claimed only for rules that actually have labels (emitted-only semantics):
+        # unconditional claiming would reject grammars that compile fine today (backward-compat break).
+        #
+        # The auto-added _trivia rule is annotated in error messages when the user did not define it,
+        # so users who never wrote `_trivia` are not mystified. Keyed on whether _trivia was absent from
+        # the raw pre-augmentation grammar (gsm.add_trivia_rule_to_grammar is idempotent when present).
+        trivia_is_auto_added = gsm.TRIVIA_RULE_NAME not in grammar.identifiers
+
+        # claims: ident -> list of (rule_name_for_message, family_description)
+        claims: dict[str, list[tuple[str, str]]] = {}
+        for rule in self.grammar.rules:
+            cn = self._py_gen.class_name_for_rule_node(rule.name)
+            rule_label = (
+                f"rule {rule.name!r} (auto-generated trivia rule)"
+                if trivia_is_auto_added and rule.name == gsm.TRIVIA_RULE_NAME
+                else f"rule {rule.name!r}"
+            )
+            claims.setdefault(cn, []).append((rule_label, "node struct"))
+            claims.setdefault(self.py_handle_name(cn), []).append((rule_label, "Python handle struct"))
+            claims.setdefault(self.child_enum_name(cn), []).append((rule_label, "child value enum"))
+            model = self._py_gen.rule_models[rule.name]  # invariant: always present (CstGenerator populates all rules)
+            if model.labels:
+                claims.setdefault(self._label_enum_rust_name(cn), []).append((rule_label, "label enum"))
+
+        collision_msgs: list[str] = []
+        for ident in sorted(claims):
+            claimants = claims[ident]
+            if len(claimants) > 1:
+                claimant_desc = " vs ".join(f"{family} for {rule_label}" for rule_label, family in claimants)
+                collision_msgs.append(
+                    f"Generated Rust identifier {ident!r} collides: {claimant_desc}; rename one of these rules"
+                )
+        if collision_msgs:
+            raise ValueError("\n".join(collision_msgs))
 
     def _rule_info(self) -> list[tuple[str, list[str], str]]:
         """Return [(class_name, sorted_labels, rule_name)] for every rule in the grammar.
@@ -449,13 +513,19 @@ class RustCstGenerator:
     # ------------------------------------------------------------------
 
     @staticmethod
-    def _label_enum_rust_name(class_name: str) -> str:
+    def label_enum_name(class_name: str) -> str:
         """Return the Rust-side label enum name (Phase 2: CamelCase, no underscore).
 
+        Public single source of truth, analogous to child_enum_name / py_handle_name.
         The Python-visible name is preserved via `#[pyclass(name = "ClassName_Label")]`.
         Rust consumers use `ClassNameLabel`; Python consumers see `ClassName_Label` unchanged.
         """
         return f"{class_name}Label"
+
+    @staticmethod
+    def _label_enum_rust_name(class_name: str) -> str:
+        """Deprecated alias for label_enum_name; kept for internal call sites pending migration."""
+        return RustCstGenerator.label_enum_name(class_name)
 
     @staticmethod
     def _label_enum_python_name(class_name: str) -> str:
@@ -545,6 +615,31 @@ class RustCstGenerator:
         here propagates to every emission site.
         """
         return f"{class_name}Child"
+
+    @staticmethod
+    def py_handle_name(class_name: str) -> str:
+        """Return the Rust PyO3 handle struct name for a node class (single source of truth).
+
+        Used in the cross-rule collision check and at the handle definition site in _node_block.
+        """
+        return f"Py{class_name}"
+
+    def class_name_for_rule(self, rule_name: str) -> str:
+        """Return the CamelCase class name (CN) for a grammar rule name.
+
+        Public wrapper around the internal _py_gen delegation; lets callers (e.g. tests)
+        compute derived identifier families without reaching into _py_gen directly.
+        """
+        return self._py_gen.class_name_for_rule_node(rule_name)
+
+    def rule_has_labels(self, rule_name: str) -> bool:
+        """Return True iff the rule has at least one labeled item (label enum is emitted).
+
+        Public wrapper around the internal rule_models lookup; lets callers check whether
+        label_enum_name applies to a given rule without touching _py_gen directly.
+        """
+        model = self._py_gen.rule_models[rule_name]
+        return bool(model.labels)
 
     def _child_enum_block(self, class_name: str, rule_name: str, child_union: list[str] | None = None) -> str:
         """Emit the per-node child value enum (<Name>Child) + Clone/PartialEq impls.
@@ -661,7 +756,7 @@ class RustCstGenerator:
             lines.append("                span_to_pyobject(py, s)")
             lines.append("            }")
         for child_cls in child_classes:
-            py_handle = f"Py{child_cls}"
+            py_handle = self.py_handle_name(child_cls)
             lines.append(f"            Self::{child_cls}(shared) => {{")
             lines.append("                let addr = shared.arc_ptr();")
             lines.append("                registry::get_or_insert_with(py, addr, || {")
@@ -691,7 +786,7 @@ class RustCstGenerator:
             lines.append("            return extract_span(py, obj).map(Self::Span);")
             lines.append("        }")
         for child_cls in child_classes:
-            py_handle = f"Py{child_cls}"
+            py_handle = self.py_handle_name(child_cls)
             lines.append(f"        if obj.is_instance_of::<{py_handle}>() {{")
             lines.append(f"            let handle: PyRef<{py_handle}> = obj.extract()?;")
             lines.append("            let shared = handle.inner.clone();")
@@ -739,7 +834,7 @@ class RustCstGenerator:
         enum_name = self.child_enum_name(class_name)
         label_enum_name = self._label_enum_rust_name(class_name) if labels else ""
         label_type = f"Option<{label_enum_name}>" if labels else "Option<()>"
-        py_handle = f"Py{class_name}"
+        py_handle = self.py_handle_name(class_name)
         lines: list[str] = []
 
         lines.append(f"// {'─' * 75}")
@@ -2120,7 +2215,7 @@ class RustCstGenerator:
             if labels:
                 enum_name = self._label_enum_rust_name(class_name)
                 lines.append(f"    module.add_class::<{enum_name}>()?;")
-            py_handle = f"Py{class_name}"
+            py_handle = self.py_handle_name(class_name)
             lines.append(f"    module.add_class::<{py_handle}>()?;")
         lines.append('    #[cfg(feature = "test-introspection")]')
         lines.append("    module.add_function(wrap_pyfunction!(_registry_snapshot, module)?)?;")

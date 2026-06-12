@@ -1539,7 +1539,7 @@ class TestReservedLabelRejection:
 # ---------------------------------------------------------------------------
 
 
-def _make_single_rule_grammar(rule_name: str) -> gsm.Grammar:
+def _make_single_rule_grammar(rule_name: str, *, labeled: bool = True) -> gsm.Grammar:
     """Minimal single-rule grammar with one regex item; used to test per-rule validation."""
     rule = gsm.Rule(
         name=rule_name,
@@ -1547,7 +1547,7 @@ def _make_single_rule_grammar(rule_name: str) -> gsm.Grammar:
             gsm.Items(
                 items=[
                     gsm.Item(
-                        label="value",
+                        label="value" if labeled else None,
                         disposition=gsm.Disposition.INCLUDE,
                         term=gsm.Regex(r"[a-z]+"),
                         quantifier=gsm.REQUIRED,
@@ -1570,6 +1570,8 @@ class TestReservedClassNameRejection:
             ("span", "Span", "Span"),
             ("shared", "Shared", "Shared"),
             ("cst_error", "CstError", "CstError"),
+            ("drop_worklist_item", "DropWorklistItem", "DropWorklistItem"),
+            ("eq_worklist_item", "EqWorklistItem", "EqWorklistItem"),
         ],
     )
     def test_reserved_class_name_rejected(self, rule_name: str, expected_class: str, collision_substring: str) -> None:
@@ -1608,6 +1610,220 @@ class TestReservedClassNameRejection:
         gen = RustCstGenerator(grammar)
         src = gen.generate()
         assert 'name = "SourceText"' in src, 'Expected pyclass name = "SourceText" in generated cst source'
+
+
+# ---------------------------------------------------------------------------
+# Cross-rule identifier collision check
+# ---------------------------------------------------------------------------
+
+
+def _make_two_rule_grammar(
+    rule_name_a: str, rule_name_b: str, *, labeled_a: bool = True, labeled_b: bool = True
+) -> gsm.Grammar:
+    """Two-rule grammar; each rule has a single regex item with/without a label."""
+    g_a = _make_single_rule_grammar(rule_name_a, labeled=labeled_a)
+    g_b = _make_single_rule_grammar(rule_name_b, labeled=labeled_b)
+    return gsm.Grammar(
+        rules=g_a.rules + g_b.rules,
+        identifiers={**g_a.identifiers, **g_b.identifiers},
+    )
+
+
+class TestCrossRuleIdentifierCollisions:
+    """RustCstGenerator must detect cross-rule Rust identifier collisions before emission."""
+
+    def test_foo_and_foo_child_collide_on_foo_child(self) -> None:
+        """Rule 'foo_child' derives struct FooChild, colliding with rule 'foo's child enum FooChild."""
+        grammar = _make_two_rule_grammar("foo", "foo_child")
+        with pytest.raises(ValueError) as exc_info:
+            RustCstGenerator(grammar)
+        error_text = str(exc_info.value)
+        assert "FooChild" in error_text, f"Error must name the colliding identifier FooChild: {error_text}"
+        assert "foo" in error_text, f"Error must name rule 'foo': {error_text}"
+        assert "foo_child" in error_text, f"Error must name rule 'foo_child': {error_text}"
+        assert "child value enum" in error_text, f"Error must name the 'child value enum' family: {error_text}"
+        assert "node struct" in error_text, f"Error must name the 'node struct' family: {error_text}"
+        assert "rename" in error_text, f"Error must include the 'rename' action hint: {error_text}"
+
+    def test_foo_with_label_and_foo_label_collide_on_foo_label(self) -> None:
+        """Rule 'foo_label' derives struct FooLabel, colliding with rule 'foo's label enum FooLabel."""
+        grammar = _make_two_rule_grammar("foo", "foo_label", labeled_a=True, labeled_b=True)
+        with pytest.raises(ValueError) as exc_info:
+            RustCstGenerator(grammar)
+        error_text = str(exc_info.value)
+        assert "FooLabel" in error_text, f"Error must name the colliding identifier FooLabel: {error_text}"
+        assert "foo" in error_text, f"Error must name rule 'foo': {error_text}"
+        assert "foo_label" in error_text, f"Error must name rule 'foo_label': {error_text}"
+        assert "label enum" in error_text, f"Error must name the 'label enum' family: {error_text}"
+
+    def test_foo_and_py_foo_collide_on_py_foo(self) -> None:
+        """Rule 'py_foo' derives struct PyFoo, colliding with rule 'foo's handle struct PyFoo."""
+        grammar = _make_two_rule_grammar("foo", "py_foo")
+        with pytest.raises(ValueError) as exc_info:
+            RustCstGenerator(grammar)
+        error_text = str(exc_info.value)
+        assert "PyFoo" in error_text, f"Error must name the colliding identifier PyFoo: {error_text}"
+        assert "foo" in error_text, f"Error must name rule 'foo': {error_text}"
+        assert "py_foo" in error_text, f"Error must name rule 'py_foo': {error_text}"
+        assert "Python handle struct" in error_text, f"Error must name the 'Python handle struct' family: {error_text}"
+
+    def test_non_injective_cn_collision(self) -> None:
+        """Rules 'foo_bar' and 'foo__bar' both derive CN 'FooBar'; all families collide."""
+        grammar = _make_two_rule_grammar("foo_bar", "foo__bar")
+        with pytest.raises(ValueError) as exc_info:
+            RustCstGenerator(grammar)
+        error_text = str(exc_info.value)
+        assert "FooBar" in error_text, f"Error must name the colliding identifier FooBar: {error_text}"
+        assert "foo_bar" in error_text, f"Error must name rule 'foo_bar': {error_text}"
+        assert "foo__bar" in error_text, f"Error must name rule 'foo__bar': {error_text}"
+
+    def test_foo_without_label_and_foo_label_accepted(self) -> None:
+        """Emitted-only semantics: 'foo' with no label + 'foo_label' does not collide (FooLabel not claimed for foo)."""
+        # foo has no labels so no FooLabel is emitted; foo_label's struct FooLabel is uncontested.
+        grammar = _make_two_rule_grammar("foo", "foo_label", labeled_a=False, labeled_b=True)
+        gen = RustCstGenerator(grammar)
+        source = gen.generate()
+        # foo_label's node struct must be emitted as pub struct FooLabel
+        assert "pub struct FooLabel {" in source
+        # The label enum for foo_label (which has labels) would be FooLabelLabel — verify no spurious FooLabel enum
+        assert "pub enum FooLabel {" not in source
+
+    def test_trivia_collision_annotates_auto_generated(self) -> None:
+        """User rule 'trivia' collides with auto-added '_trivia'; message annotates '_trivia' as auto-generated."""
+        grammar = _make_single_rule_grammar("trivia")
+        with pytest.raises(ValueError) as exc_info:
+            RustCstGenerator(grammar)
+        error_text = str(exc_info.value)
+        assert "trivia" in error_text, f"Error must name 'trivia': {error_text}"
+        # The auto-generated annotation must appear in the message
+        assert "auto" in error_text.lower(), f"Error must mention auto-generated trivia rule: {error_text}"
+
+    def test_user_defined_trivia_no_auto_annotation(self) -> None:
+        """User-defined '_trivia' + user rule 'trivia': both reported as ordinary rules (no auto annotation)."""
+        # Build a grammar that includes _trivia explicitly so add_trivia_rule_to_grammar is a no-op
+        trivia_rule = gsm.Rule(
+            name="_trivia",
+            alternatives=[
+                gsm.Items(
+                    items=[
+                        gsm.Item(
+                            label="ws",
+                            disposition=gsm.Disposition.INCLUDE,
+                            term=gsm.Regex(r"\s+"),
+                            quantifier=gsm.REQUIRED,
+                        ),
+                    ],
+                    sep_after=[gsm.Separator.NO_WS],
+                ),
+            ],
+        )
+        user_trivia_rule = gsm.Rule(
+            name="trivia",
+            alternatives=[
+                gsm.Items(
+                    items=[
+                        gsm.Item(
+                            label="value",
+                            disposition=gsm.Disposition.INCLUDE,
+                            term=gsm.Regex(r"[a-z]+"),
+                            quantifier=gsm.REQUIRED,
+                        ),
+                    ],
+                    sep_after=[gsm.Separator.NO_WS],
+                ),
+            ],
+        )
+        grammar = gsm.Grammar(
+            rules=(user_trivia_rule, trivia_rule),
+            identifiers={"trivia": user_trivia_rule, "_trivia": trivia_rule},
+        )
+        with pytest.raises(ValueError) as exc_info:
+            RustCstGenerator(grammar)
+        error_text = str(exc_info.value)
+        assert "trivia" in error_text, f"Error must name 'trivia': {error_text}"
+        # No auto-generated annotation: user supplied _trivia explicitly
+        assert "auto" not in error_text.lower(), (
+            f"Error must NOT mention auto-generated when user defined _trivia: {error_text}"
+        )
+
+    def test_three_way_collision_all_claimants_reported(self) -> None:
+        """Three rules sharing CN FooBar all appear in the collision message (no truncation to first two)."""
+        # foo_bar, foo__bar, foo___bar all derive CN FooBar via non-injective snake_to_upper_camel
+        g1 = _make_single_rule_grammar("foo_bar")
+        g2 = _make_single_rule_grammar("foo__bar")
+        g3 = _make_single_rule_grammar("foo___bar")
+        grammar = gsm.Grammar(
+            rules=g1.rules + g2.rules + g3.rules,
+            identifiers={**g1.identifiers, **g2.identifiers, **g3.identifiers},
+        )
+        with pytest.raises(ValueError) as exc_info:
+            RustCstGenerator(grammar)
+        error_text = str(exc_info.value)
+        assert "FooBar" in error_text, f"Error must name the colliding identifier FooBar: {error_text}"
+        assert "foo_bar" in error_text, f"Error must name rule 'foo_bar': {error_text}"
+        assert "foo__bar" in error_text, f"Error must name rule 'foo__bar': {error_text}"
+        assert "foo___bar" in error_text, f"Error must name rule 'foo___bar': {error_text}"
+
+    def test_trivia_child_rule_collides_with_auto_trivia_child_enum(self) -> None:
+        """User rule 'trivia_child' collides with auto-added _trivia's child enum TriviaChild; annotation present."""
+        grammar = _make_single_rule_grammar("trivia_child")
+        with pytest.raises(ValueError) as exc_info:
+            RustCstGenerator(grammar)
+        error_text = str(exc_info.value)
+        assert "TriviaChild" in error_text, f"Error must name TriviaChild: {error_text}"
+        assert "trivia_child" in error_text, f"Error must name rule 'trivia_child': {error_text}"
+        # The auto-generated annotation must appear (TriviaChild is claimed by the auto-added _trivia rule)
+        assert "auto" in error_text.lower(), f"Error must mention auto-generated trivia rule: {error_text}"
+
+    def test_multiple_collisions_reported_at_once(self) -> None:
+        """Grammar with foo+foo_child and bar+bar_child reports both FooChild and BarChild in one ValueError."""
+        # Merge two two-rule grammars (foo/foo_child, bar/bar_child) into one four-rule grammar.
+        g1 = _make_two_rule_grammar("foo", "foo_child")
+        g2 = _make_two_rule_grammar("bar", "bar_child")
+        grammar = gsm.Grammar(
+            rules=g1.rules + g2.rules,
+            identifiers={**g1.identifiers, **g2.identifiers},
+        )
+        with pytest.raises(ValueError) as exc_info:
+            RustCstGenerator(grammar)
+        error_text = str(exc_info.value)
+        assert "FooChild" in error_text, f"Error must name FooChild collision: {error_text}"
+        assert "BarChild" in error_text, f"Error must name BarChild collision: {error_text}"
+
+    def test_non_colliding_multi_rule_grammar_accepted(self) -> None:
+        """Multi-rule grammar with no collisions constructs and generates successfully."""
+        grammar = _make_two_rule_grammar("alpha", "beta")
+        gen = RustCstGenerator(grammar)
+        source = gen.generate()
+        assert "pub struct Alpha {" in source
+        assert "pub struct Beta {" in source
+
+    def test_prediction_vs_output_consistency(self) -> None:
+        """Drift guard: each predicted identifier appears in generate() output as a definition."""
+        grammar = _make_two_rule_grammar("alpha", "beta", labeled_a=True, labeled_b=True)
+        gen = RustCstGenerator(grammar)
+        source = gen.generate()
+
+        # Collect the augmented grammar's rules (includes _trivia)
+        for rule in gen.grammar.rules:
+            cn = gen.class_name_for_rule(rule.name)
+
+            # Node struct: pub struct CN {
+            assert f"pub struct {cn} {{" in source, f"Expected 'pub struct {cn} {{' for rule {rule.name!r}"
+            # Handle: pub struct Py{CN} {  — use py_handle_name so a rename propagates here
+            py_handle = RustCstGenerator.py_handle_name(cn)
+            assert f"pub struct {py_handle} {{" in source, (
+                f"Expected 'pub struct {py_handle} {{' for rule {rule.name!r}"
+            )
+            # Child enum: pub enum {CN}Child {
+            child_enum = RustCstGenerator.child_enum_name(cn)
+            assert f"pub enum {child_enum} {{" in source, f"Expected 'pub enum {child_enum} {{' for rule {rule.name!r}"
+            # Label enum: only for rules that have labels — use label_enum_name so a rename propagates here
+            if gen.rule_has_labels(rule.name):
+                label_enum = RustCstGenerator.label_enum_name(cn)
+                assert f"pub enum {label_enum} {{" in source, (
+                    f"Expected 'pub enum {label_enum} {{' for labeled rule {rule.name!r}"
+                )
 
 
 # ---------------------------------------------------------------------------

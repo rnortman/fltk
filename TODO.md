@@ -4,6 +4,10 @@
 
 This is a placeholder entry. Leave it here so the file is never empty. It is not a real TODO. You would reference it in code with `// TODO(example-placeholder)` comments. This is the basic TODO system design: An entry here with a slug used to join to code comments. Add real TODOs below this one in this format.
 
+## `empty-cn-underscore-rule`
+
+Underscore-only rule names (`_`, `__`, etc.) pass `_IDENTIFIER_RE` but `snake_to_upper_camel` collapses them to CN `""`, producing `pub struct  {` (Rust syntax error) with no generation-time diagnostic. Fix: reject rule names whose derived CN is empty — either tighten `_IDENTIFIER_RE` to require at least one `[a-z0-9]` character, or add an explicit post-CN check. Location: `fltk/fegen/gsm2tree_rs.py` (`_IDENTIFIER_RE` definition and per-rule validation in `RustCstGenerator.__init__`).
+
 ## `bazel-rules-rust`
 
 Add `rules_rust` to `MODULE.bazel` so that the PyO3 native extension (`fltk._native`) is buildable via Bazel. Currently, Bazel builds do not include the Rust extension. Deferred from Phase 0 because Bazel Rust support is orthogonal to the Python/maturin build path. Location: `MODULE.bazel`.
@@ -20,8 +24,4 @@ Add `rules_rust` to `MODULE.bazel` so that the PyO3 native extension (`fltk._nat
 
 `escape_control_chars` (both backends) stops at U+009F. Unicode bidi override characters (U+202A–U+202E, U+2066–U+2069), line/paragraph separators (U+2028, U+2029), and zero-width chars pass through unescaped into the quoted failing line. An attacker controlling parse input can use RLO/bidi embedding to visually reorder the rendered error line in bidi-aware terminals/UIs, or use U+2028/U+2029 to split log lines in viewers that treat them as line terminators. Lower impact than the closed ESC vector (no command execution), but the log-forging variant is the same asset class. Extending the escape set beyond C0+DEL+C1 requires a new representation spec (two-digit `\xHH` is insufficient) and cross-backend repinning. Accepted risk for the current scope; address as a follow-up if consumers surface bidi-aware display paths. Locations: `crates/fltk-parser-core/src/errors.rs` (`escape_control_chars`), `fltk/fegen/pyrt/errors.py` (`escape_control_chars`).
 
-
-## `rust-generated-ident-collisions`
-
-Pairwise Rust-identifier collisions between rule-derived names are not checked at generation time. Examples: a rule `foo_child` yields class `FooChild`, which collides with the generated `FooChild` enum for a rule `foo`'s child enum; `foo_label`/`Py`-prefix analogues exist as well. These require cross-rule analysis rather than a fixed reserved set, unlike the single-rule class-name checks in `_RESERVED_CLASS_NAMES`. Currently such grammars produce uncompilable Rust output with an opaque `cargo` error. Location: `fltk/fegen/gsm2tree_rs.py` (`RustCstGenerator.__init__`, after `_RESERVED_CLASS_NAMES` check).
 
