@@ -110,6 +110,12 @@ _CORPUS = [
     ("num", "abc", FAIL),
     ("name", "123", FAIL),
     ("stmt", "x=y", FAIL),
+    # Control characters in failing line — exercises escape_control_chars in error messages.
+    # num fails at pos 0; the quoted line contains \x1b[31m (ESC + "[31m").
+    ("num", "\x1b[31mabc", FAIL),
+    # stmt: name matches "x", WS_REQUIRED separators consume each \r (\s matches \r),
+    # rhs:atom fails at pos 4 ('@'); two \r chars before the caret get escaped.
+    ("stmt", "x\r=\r@", FAIL),
 ]
 
 _CORPUS_IDS = [f"{r}-{i}" for i, (r, _, _) in enumerate(_CORPUS)]

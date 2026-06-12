@@ -32,15 +32,6 @@ Per-label child accessors (`children_<label>`, `child_<label>`, `maybe_<label>`)
 
 `crates/fltk-cst-core/src/registry.rs` has no Rust unit tests. The four public functions (`lookup`, `register_if_absent`, `force_register`, `get_or_insert_with`) are tested only indirectly through Python integration tests. Direct unit tests are blocked by the build setup: `cargo test` on an rlib with `pyo3` (feature="python") cannot link `libpython` in the default test binary. Options: (a) build a dedicated test cdylib that exports test entry points, (b) test via the Python test harness using `ctypes`/`cffi`, or (c) add a `cargo test --target` integration test crate that links as a cdylib. Deferred; Python identity/mutation tests provide adequate coverage today. Location: `crates/fltk-cst-core/src/registry.rs`.
 
-## `error-msg-escape`
-
-`format_error_message` embeds the raw failing line from untrusted input unescaped in the
-error string. Control characters (ESC/ANSI, `\r`) pass through verbatim, enabling terminal
-escape injection and log forging against consumers that surface parse errors. This matches
-Python's `format_error_message` byte-for-byte, so it cannot be fixed unilaterally without
-breaking the Phase 3 parity comparator. Fix Python and Rust together: escape C0 controls
-(except `\n`/`\t`) in `line_text`, then update the comparator.
-Location: `crates/fltk-parser-core/src/errors.rs` (`format_error_message`).
 
 ## `rust-str-lit-shared`
 
@@ -61,6 +52,14 @@ The `XChild` and `XLabel` naming conventions for generated Rust enums are encode
 ## `regex-automata-features`
 
 `fltk-parser-core/Cargo.toml` uses `regex-automata = "0.4"` with default features, which include `dfa-build`/`dfa-search` (full DFA determinizer). The `regex = "1"` crate (the prior dependency) did not enable those features, so this change adds compile time and binary size for `fltk-parser-core` and every downstream consumer crate. The DFA-build path is a search-speed win for small patterns (and is tightly size-capped), so the default was kept deliberately, but the cost was not formally weighed at the time of the change. Consider pinning to the feature subset actually used by `regex=1` if compile time or binary size becomes a concern. Location: `crates/fltk-parser-core/Cargo.toml`.
+
+## `error-msg-bidi-escape`
+
+`escape_control_chars` (both backends) stops at U+009F. Unicode bidi override characters (U+202A–U+202E, U+2066–U+2069), line/paragraph separators (U+2028, U+2029), and zero-width chars pass through unescaped into the quoted failing line. An attacker controlling parse input can use RLO/bidi embedding to visually reorder the rendered error line in bidi-aware terminals/UIs, or use U+2028/U+2029 to split log lines in viewers that treat them as line terminators. Lower impact than the closed ESC vector (no command execution), but the log-forging variant is the same asset class. Extending the escape set beyond C0+DEL+C1 requires a new representation spec (two-digit `\xHH` is insufficient) and cross-backend repinning. Accepted risk for the current scope; address as a follow-up if consumers surface bidi-aware display paths. Locations: `crates/fltk-parser-core/src/errors.rs` (`escape_control_chars`), `fltk/fegen/pyrt/errors.py` (`escape_control_chars`).
+
+## `error-msg-escape-zero-copy`
+
+`escape_control_chars` now has an early-return fast path for control-free input (scans once, returns `s.to_owned()` / `text` unchanged). The zero-copy variant — returning `Cow<'_, str>` on the Rust side so no allocation occurs at all for clean input — would eliminate the remaining copy but requires changing the public function signature. Deferred: the `to_owned()` fast path already recovers the common-case regression; `Cow` is an API-surface decision for a future cleanup. Location: `crates/fltk-parser-core/src/errors.rs` (`escape_control_chars`).
 
 ## `parser-bindings-name-collision`
 

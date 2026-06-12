@@ -6,6 +6,7 @@
 //! `format_error_message`.
 
 use std::collections::HashMap;
+use std::fmt::Write as FmtWrite;
 
 use crate::terminalsrc::TerminalSource;
 
@@ -78,18 +79,47 @@ impl ErrorTracker {
     }
 }
 
+/// Escape control characters in a string using `\xHH` notation (lowercase hex).
+///
+/// Escaped ranges: U+0000–U+001F (except U+0009 TAB), U+007F (DEL), U+0080–U+009F (C1).
+/// TAB passes through unchanged. All other characters pass through unchanged.
+///
+/// Cross-backend pinned: output is byte-identical with the Python implementation in
+/// `fltk/fegen/pyrt/errors.py:escape_control_chars`.
+///
+/// TODO(error-msg-bidi-escape): bidi controls (U+202A–U+202E, U+2066–U+2069) and
+/// U+2028/U+2029 pass through unescaped; accepted risk per design §Open questions A1.
+/// TODO(error-msg-escape-zero-copy): fast path returns `s.to_owned()`; zero-alloc
+/// `Cow<'_, str>` variant deferred (API signature change).
+pub fn escape_control_chars(s: &str) -> String {
+    #[inline(always)]
+    fn needs_escape(cp: u32) -> bool {
+        (cp <= 0x1F && cp != 0x09) || cp == 0x7F || (0x80..=0x9F).contains(&cp)
+    }
+    // Fast path: control-free input — return a copy without rebuilding char-by-char.
+    if !s.chars().any(|c| needs_escape(c as u32)) {
+        return s.to_owned();
+    }
+    let mut out = String::with_capacity(s.len());
+    for ch in s.chars() {
+        let cp = ch as u32;
+        if needs_escape(cp) {
+            write!(out, "\\x{:02x}", cp).unwrap();
+        } else {
+            out.push(ch);
+        }
+    }
+    out
+}
+
 /// Produce a Python-equivalent error message from an `ErrorTracker`.
 ///
 /// Port of `errors.py:52-71`.
 ///
-/// # Security note
-///
-/// `line_text` (the raw failing line from untrusted input) is embedded unescaped in the
-/// returned string. Control characters including ESC (0x1b, ANSI sequences) and `\r` pass
-/// through verbatim. This matches Python's `format_error_message` byte-for-byte; fixing
-/// it unilaterally here would break Phase 3's parity comparator.
-/// TODO(error-msg-escape): if addressed, fix Python and Rust together — escape C0 controls
-/// (except `\n`/`\t`) in `line_text` and update the comparator.
+/// Control characters (ESC/ANSI, `\r`, other C0, DEL, C1) in `line_text` are escaped
+/// using `escape_control_chars` — `\xHH` notation, lowercase hex — matching Python's
+/// `escape_control_chars` byte-for-byte. The caret pad is computed from the escaped
+/// prefix so it aligns with the escaped output.
 ///
 /// Output format:
 /// ```text
@@ -131,12 +161,19 @@ pub fn format_error_message(
         }
     };
 
-    let spaces = " ".repeat(col.max(0_i64) as usize);
+    let split = col.max(0_i64) as usize;
+    // split is a codepoint index; find its byte offset to slice &str safely.
+    let split_bytes = line_text.char_indices().nth(split).map_or(line_text.len(), |(b, _)| b);
+    let escaped_prefix = escape_control_chars(&line_text[..split_bytes]);
+    let escaped_suffix = escape_control_chars(&line_text[split_bytes..]);
+    let pad = escaped_prefix.chars().count();
+    let spaces = " ".repeat(pad);
     let mut result = format!(
-        "Syntax error at line {} col {}:\n{}\n{}^\nExpected:\n",
+        "Syntax error at line {} col {}:\n{}{}\n{}^\nExpected:\n",
         line + 1,
         col + 1,
-        line_text,
+        escaped_prefix,
+        escaped_suffix,
         spaces
     );
     result.push_str(&build_expected_block(&tracker.expected_context, rule_names));
@@ -206,7 +243,7 @@ fn py_repr_str(s: &str) -> String {
                 out.push(c);
             }
             c if (c as u32) < 0x20 || c as u32 == 0x7f => {
-                out.push_str(&format!("\\x{:02x}", c as u32));
+                write!(out, "\\x{:02x}", c as u32).unwrap();
             }
             c => out.push(c),
         }
@@ -293,6 +330,105 @@ mod tests {
         t.fail_regex(2, 0, r"\s+");
         assert_eq!(t.longest_parse_len, 2);
         assert_eq!(t.expected_context[0].token_type, TokenType::Regex);
+    }
+
+    // ── escape_control_chars ─────────────────────────────────────────────────
+
+    #[test]
+    fn escape_control_chars_table() {
+        // C0 controls (except TAB) → \xHH
+        assert_eq!(escape_control_chars("\x00"), "\\x00");
+        assert_eq!(escape_control_chars("\x1b"), "\\x1b");
+        assert_eq!(escape_control_chars("\r"), "\\x0d");
+        assert_eq!(escape_control_chars("\n"), "\\x0a");
+        // DEL → \x7f
+        assert_eq!(escape_control_chars("\x7f"), "\\x7f");
+        // C1 → \xHH (two-digit)
+        assert_eq!(escape_control_chars("\u{009b}"), "\\x9b");
+        assert_eq!(escape_control_chars("\u{0080}"), "\\x80");
+        assert_eq!(escape_control_chars("\u{009f}"), "\\x9f");
+        // TAB passes through
+        assert_eq!(escape_control_chars("\t"), "\t");
+        // Printable ASCII passes through
+        assert_eq!(escape_control_chars("hello"), "hello");
+        // Multibyte (non-C1) passes through
+        assert_eq!(escape_control_chars("→"), "→");
+        // Mixed
+        assert_eq!(escape_control_chars("ab\x1bcd"), "ab\\x1bcd");
+    }
+
+    #[test]
+    fn escape_control_chars_empty() {
+        assert_eq!(escape_control_chars(""), "");
+    }
+
+    #[test]
+    fn format_error_message_with_controls_in_line() {
+        // Failing line contains \x1b[31m and \r; error at col 0.
+        use crate::terminalsrc::TerminalSource;
+        let ts = TerminalSource::new("\x1b[31mabc");
+        let mut t = ErrorTracker::default();
+        t.fail_literal(0, 0, "x");
+        let msg = format_error_message(&t, &ts, &["rule"]);
+        assert!(msg.contains("\\x1b[31m"), "ESC should be escaped: {msg:?}");
+        assert!(!msg.contains('\x1b'), "raw ESC must not appear in message: {msg:?}");
+        let lines: Vec<&str> = msg.lines().collect();
+        assert_eq!(lines[2], "^", "caret should be at col 0: {msg:?}");
+    }
+
+    #[test]
+    fn format_error_message_caret_alignment_with_escaped_prefix() {
+        // Line: "ab\x1bcd", error at col 3 (the 'c').
+        // Prefix = "ab\x1b" (3 chars) → escaped "ab\\x1b" (6 chars) → pad = 6.
+        use crate::terminalsrc::TerminalSource;
+        // Need a newline so the sentinel quirk doesn't cut the 'c' and 'd'.
+        // Use "ab\x1bcd\n" — line_ends=[5], line_span=[0,5)="ab\x1bcd".
+        let ts = TerminalSource::new("ab\x1bcd\n");
+        let mut t = ErrorTracker::default();
+        t.fail_literal(3, 0, "x"); // col=3
+        let msg = format_error_message(&t, &ts, &["rule"]);
+        let lines: Vec<&str> = msg.lines().collect();
+        // line 1: header
+        // line 2 (index 1): escaped line text
+        // line 3 (index 2): caret line
+        assert_eq!(lines[1], "ab\\x1bcd", "escaped line: {msg:?}");
+        assert_eq!(lines[2], "      ^", "pad=6 spaces then ^: {msg:?}");
+    }
+
+    #[test]
+    fn format_error_message_caret_at_control_char() {
+        // Error column is itself a control character: caret lands on the '\' of its escape.
+        // Line: "ab\x1bcd\n", error at col 2 (the ESC).
+        // Prefix = "ab" (2 chars, no controls) → escaped_prefix = "ab" → pad = 2.
+        // Escaped line = "ab\\x1bcd"; caret line = "  ^".
+        use crate::terminalsrc::TerminalSource;
+        let ts = TerminalSource::new("ab\x1bcd\n");
+        let mut t = ErrorTracker::default();
+        t.fail_literal(2, 0, "x"); // col=2, the ESC
+        let msg = format_error_message(&t, &ts, &["rule"]);
+        let lines: Vec<&str> = msg.lines().collect();
+        assert_eq!(lines[1], "ab\\x1bcd", "escaped line: {msg:?}");
+        assert_eq!(lines[2], "  ^", "pad=2 spaces then ^: {msg:?}");
+    }
+
+    #[test]
+    fn format_error_message_no_raw_controls_in_output() {
+        // Assert no raw codepoint < U+0020 (other than \t, stripped by lines()) and no
+        // U+007F, U+0080–U+009F appear in the formatted message when the input has controls.
+        use crate::terminalsrc::TerminalSource;
+        let ts = TerminalSource::new("\x00\x01\x1b\r\x7f\u{009b}abc\n");
+        let mut t = ErrorTracker::default();
+        t.fail_literal(0, 0, "x");
+        let msg = format_error_message(&t, &ts, &["rule"]);
+        for ch in msg.chars() {
+            let cp = ch as u32;
+            assert!(
+                !(cp < 0x20 && cp != 0x09 && cp != 0x0a)
+                    && cp != 0x7F
+                    && !(0x80 <= cp && cp <= 0x9F),
+                "raw control char U+{cp:04X} found in message: {msg:?}"
+            );
+        }
     }
 
     // ── format_error_message golden tests ────────────────────────────────────

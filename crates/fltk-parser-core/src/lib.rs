@@ -22,6 +22,6 @@ pub mod terminalsrc;
 // `regex-automata` dependency (version coherence guarantee).
 pub use regex_automata;
 
-pub use errors::{format_error_message, ErrorTracker, ParseContext, TokenType};
+pub use errors::{escape_control_chars, format_error_message, ErrorTracker, ParseContext, TokenType};
 pub use memo::{apply, ApplyResult, Cache, DEFAULT_MAX_DEPTH, MemoEntry, MemoResult, PackratState, RecursionInfo};
 pub use terminalsrc::{LineColPos, TerminalSource};
