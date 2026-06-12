@@ -14,11 +14,11 @@ from fltk.fegen.gsm2tree import CstGenerator, ModelType
 from fltk.iir.context import create_default_context
 from fltk.iir.py import reg as pyreg
 
-# Valid identifier pattern (matches fegen.fltkg:16 grammar rule for identifiers)
-# TODO(empty-cn-underscore-rule): underscore-only names (_, __, ...) pass this regex but
-# snake_to_upper_camel collapses them to CN="" — producing `pub struct  {` (Rust syntax error)
-# with no generation-time diagnostic. Fix: reject rule names whose CN is empty (or tighten
-# the regex to require at least one [a-z0-9] character).
+# Valid identifier pattern (matches fegen.fltkg:16 grammar rule for identifiers).
+# Underscore-only names (_, __, ...) pass this regex but snake_to_upper_camel collapses
+# them to CN="" — producing `pub struct  {` (Rust syntax error). They are rejected upstream
+# by gsm.validate_no_underscore_only_names (called from classify_trivia_rules), which fires
+# before this loop with a user-friendly diagnostic.
 _IDENTIFIER_RE = re.compile(r"^[_a-z][_a-z0-9]*$")
 
 # Labels whose per-label generated methods collide with fixed method names on the

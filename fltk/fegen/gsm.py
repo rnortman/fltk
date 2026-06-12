@@ -3,9 +3,11 @@
 import dataclasses
 import re
 from abc import ABC, abstractmethod
-from collections.abc import Mapping, Sequence
+from collections.abc import Callable, Mapping, Sequence
 from enum import Enum
 from typing import TYPE_CHECKING, Final, Optional, Union
+
+from fltk.fegen import naming
 
 if TYPE_CHECKING:
     from fltk.iir.context import CompilerContext
@@ -286,11 +288,71 @@ class Var:
     init_value: str | None
 
 
+def _for_each_item(items: "Items", visitor: "Callable[[int, Item], None]") -> None:
+    """Walk every Item in an Items sequence, recursing into Sequence[Items] sub-expressions.
+
+    Calls visitor(idx, item) for each Item in depth-first order, where idx is the item's
+    index within its enclosing items.items list.  The recursion enters every alternative
+    of a Sequence term regardless of the outer quantifier, so nested items are always visited.
+    """
+    for idx, item in enumerate(items.items):
+        visitor(idx, item)
+        if isinstance(item.term, Sequence):
+            for alt in item.term:
+                _for_each_item(alt, visitor)
+
+
+def _collect_underscore_only_label_errors(
+    items: "Items",
+    rule_name: str,
+    errors: list[str],
+) -> None:
+    """Recursively collect underscore-only label violations from an Items sequence."""
+
+    def visit(_idx: int, item: "Item") -> None:
+        if item.label is not None and naming.snake_to_upper_camel(item.label) == "":
+            errors.append(
+                f"Label {item.label!r} in rule {rule_name!r} consists only of underscores; "
+                f"generated accessor names are derived by removing underscores, which would "
+                f"produce an empty name. Rename the label (labels like '_foo' are fine)."
+            )
+
+    _for_each_item(items, visit)
+
+
+def validate_no_underscore_only_names(grammar: Grammar) -> None:
+    """Validate that no rule name or item label consists only of underscores.
+
+    The predicate is naming.snake_to_upper_camel(name) == "", which fires for any name
+    containing zero [a-z0-9] characters (underscore-only names and the empty string).
+    This keeps the check definitionally in sync with name derivation.
+
+    Raises ValueError listing all violations if any are found.
+    """
+    errors: list[str] = []
+
+    for rule in grammar.rules:
+        if naming.snake_to_upper_camel(rule.name) == "":
+            errors.append(
+                f"Rule name {rule.name!r} consists only of underscores; generated type names "
+                f"are derived by removing underscores, which would produce an empty name. "
+                f"Rename the rule (names like '_foo' are fine)."
+            )
+        for alt in rule.alternatives:
+            _collect_underscore_only_label_errors(alt, rule.name, errors)
+
+    if errors:
+        raise ValueError("Underscore-only names found:\n" + "\n".join(errors))
+
+
 def classify_trivia_rules(grammar: Grammar) -> Grammar:
     """Classify rules as trivia/non-trivia based on reachability from TRIVIA_RULE_NAME rule.
 
     Returns a new Grammar with updated Rule.is_trivia_rule flags.
     """
+    # Validate names before any trivia-specific logic; must fire even for trivia-less grammars.
+    validate_no_underscore_only_names(grammar)
+
     trivia_rule = grammar.identifiers.get(TRIVIA_RULE_NAME)
     if not trivia_rule:
         return grammar
@@ -354,13 +416,9 @@ def validate_trivia_rule_not_nil(grammar: Grammar) -> None:
 
 
 def _collect_repeated_nil_errors(items: "Items", grammar: "Grammar", rule_name: str, errors: list[str]) -> None:
-    """Recursively collect repeated-nil errors in an Items sequence.
+    """Recursively collect repeated-nil errors in an Items sequence."""
 
-    Checks every item in the sequence; for any item whose term is a sub-expression
-    (Sequence[Items]) recurses into each alternative regardless of the outer quantifier,
-    so nested +/* items are also validated.
-    """
-    for item_idx, item in enumerate(items.items):
+    def visit(item_idx: int, item: "Item") -> None:
         if item.quantifier.is_multiple():  # + or *
             if term_can_be_nil(item.term, grammar):
                 errors.append(
@@ -368,11 +426,8 @@ def _collect_repeated_nil_errors(items: "Items", grammar: "Grammar", rule_name: 
                     f"Repeated item can match empty string, causing infinite loops. "
                     f"Consider making the item required or restructuring the grammar."
                 )
-        # Recurse into sub-expressions regardless of quantifier so that nested +/* items
-        # are also checked.
-        if isinstance(item.term, Sequence):
-            for alt in item.term:
-                _collect_repeated_nil_errors(alt, grammar, rule_name, errors)
+
+    _for_each_item(items, visit)
 
 
 def validate_no_repeated_nil_items(grammar: Grammar) -> None:
