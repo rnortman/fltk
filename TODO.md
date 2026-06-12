@@ -8,10 +8,6 @@ This is a placeholder entry. Leave it here so the file is never empty. It is not
 
 Add `rules_rust` to `MODULE.bazel` so that the PyO3 native extension (`fltk._native`) is buildable via Bazel. Currently, Bazel builds do not include the Rust extension. Deferred from Phase 0 because Bazel Rust support is orthogonal to the Python/maturin build path. Location: `MODULE.bazel`.
 
-## `crosscdylib-abi-check-helper`
-
-`get_span_type` and `extract_source_text` both perform the same two-step ABI pair check (string marker then layout int), with only the type label and expected-layout constant varying. Extract a generic helper (e.g. `fn check_abi_pair<T: PyClass>(ty: &Bound<'_, PyType>, type_label: &str) -> PyResult<()>`) to eliminate the duplication and ensure uniform error messages. Currently the error-message wording diverges slightly between the two paths. Location: `crates/fltk-cst-core/src/cross_cdylib.rs` (`extract_source_text` lines 57–100, `get_span_type` lines ~255–300).
-
 ## `abi-gate-test-consolidation`
 
 `TestSpanPathAbiGate` spawns three separate subprocesses (one per scenario: ABI-string mismatch, layout mismatch, control). Since `GILOnceCell` does not cache errors, all three could share one subprocess (failures first, success last), reducing startup cost. Deferred: current structure is readable and the savings are modest. Location: `tests/test_rust_span.py` (`TestSpanPathAbiGate`).
@@ -52,6 +48,7 @@ The Rust-backend `node.children` getter returns a fresh snapshot list per call (
 ## `rust-cst-eq-depth`
 
 `PartialEq` on generated node structs recurses through `Shared<T>` children with no depth bound; tree depth is attacker-controlled for parsers over untrusted input, so `assert_eq!` or any equality check on a deep parser-produced tree aborts the process (stack exhaustion, uncatchable). Same root cause as the fixed Debug/Drop paths — `Shared<T>::PartialEq` acquires a read lock and delegates to `T::eq`, which compares `children` recursively. Fix: emit iterative `impl PartialEq` on node structs following the same generator pattern used for `impl Drop`. Locations: `fltk/fegen/gsm2tree_rs.py` (`_node_block`, `_drop_block` pattern), `crates/fltk-cst-core/src/shared.rs` (`PartialEq` impl).
+
 
 ## `rust-generated-ident-collisions`
 

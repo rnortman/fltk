@@ -15,7 +15,7 @@ use pyo3::PyTypeInfo;
 /// The string alone does NOT cover pyo3-resolution skew. The companion
 /// `_fltk_cst_core_abi_layout` classattr (`size_of::<PyClassObject<T>>()`) detects
 /// layout differences that the version string cannot — both are checked together
-/// at `GILOnceCell` init time.
+/// by `check_abi_pair`.
 pub const FLTK_CST_CORE_ABI: &str = concat!("fltk-cst-core/", env!("CARGO_PKG_VERSION"));
 
 /// Cached reference to a validated foreign `SourceText` type object.
@@ -32,9 +32,6 @@ pub const FLTK_CST_CORE_ABI: &str = concat!("fltk-cst-core/", env!("CARGO_PKG_VE
 ///
 /// `None` cell = not yet populated (first call) or canonical cdylib (fast-path hits `downcast`
 /// above and never reaches this cell).
-///
-/// TODO(crosscdylib-abi-check-helper): once the two-step ABI pair check is extracted to a
-/// generic helper, this cache's init logic will shrink accordingly.
 static FLTK_FOREIGN_SOURCE_TEXT_TYPE: GILOnceCell<Py<PyType>> = GILOnceCell::new();
 
 /// Extract a native `SourceText` (O(1): clones the inner `Arc`) from a Python object,
@@ -78,8 +75,6 @@ pub fn extract_source_text(obj: &Bound<'_, PyAny>) -> PyResult<SourceText> {
     // read.  The `FLTK_FOREIGN_SOURCE_TEXT_TYPE` cell caches the validated type after the first
     // call so subsequent calls are a single type-object pointer comparison.
     //
-    // TODO(crosscdylib-abi-check-helper): the two-step ABI pair check below duplicates
-    // `get_span_type`'s validation; extract a generic helper to unify them.
     let py = obj.py();
     let obj_type = obj.get_type();
 
@@ -95,92 +90,166 @@ pub fn extract_source_text(obj: &Bound<'_, PyAny>) -> PyResult<SourceText> {
         }
     }
 
-    if let Ok(marker) = obj_type.getattr(pyo3::intern!(py, "_fltk_cst_core_abi")) {
-        if let Ok(s) = marker.extract::<&str>() {
-            if s != FLTK_CST_CORE_ABI {
-                return Err(PyTypeError::new_err(format!(
-                    "SourceText ABI mismatch: object reports {s:?}, this module expects \
-                     {FLTK_CST_CORE_ABI:?} (fltk-cst-core version skew between cdylibs)"
-                )));
+    check_abi_pair::<SourceText>(&obj_type, "SourceText", || py_type_obj_name(&obj_type))?;
+    // ABI pair validated; cache this foreign type object for O(1) pointer-compare on
+    // future calls.  `get_or_init` is a no-op if already populated (another thread
+    // raced here first — harmless, both observed the same validated type).
+    let _ = FLTK_FOREIGN_SOURCE_TEXT_TYPE.get_or_init(py, || obj_type.clone().unbind());
+    // SAFETY: ob_type carries `_fltk_cst_core_abi == FLTK_CST_CORE_ABI` and a
+    // matching `_fltk_cst_core_abi_layout` (same `size_of::<PyClassObject<SourceText>>()`),
+    // verified by `check_abi_pair` above.
+    // These are consistent with both cdylibs linking the same fltk-cst-core rlib at the
+    // same pyo3 version, but do not prove it — size equality does not imply field-layout
+    // equality (a pyo3 build that reorders internal fields while preserving total size
+    // would pass). The probe narrows — not closes — the layout-skew window.
+    // TODO(crosscdylib-abi-size-probe): fold the resolved pyo3 version into
+    // FLTK_CST_CORE_ABI (via build script) to close the size-preserving skew residual.
+    // Forgery: a hand-crafted class could set both attrs to the right values and
+    // still have a mismatched layout — UB. The caller (`_with_source_unchecked`)
+    // is underscore-private and documented as out-of-contract for forged inputs.
+    let st = unsafe { obj.downcast_unchecked::<SourceText>() };
+    Ok(SourceText {
+        inner: st.get().inner.clone(),
+    })
+}
+
+/// Escape C0 control characters (U+0000–U+001F), DEL (U+007F), and C1 control characters
+/// (U+0080–U+009F) in `s` using `\xHH` notation (lowercase hex).  Printable ASCII, tabs,
+/// and non-ASCII codepoints outside C1 pass through unchanged.
+///
+/// Applied to attacker-influenced strings (type names, attribute values) before embedding
+/// them in error messages to prevent log injection / terminal escape-sequence injection.
+fn escape_control_chars_for_msg(s: &str) -> String {
+    let mut out = String::with_capacity(s.len());
+    for c in s.chars() {
+        let cp = c as u32;
+        if (cp <= 0x1F) || cp == 0x7F || (0x80..=0x9F).contains(&cp) {
+            // Encode as \xHH; for multi-byte C1 codepoints this writes a single \xHH
+            // using the Unicode scalar value, matching Python's escape_control_chars.
+            for byte in c.to_string().bytes() {
+                out.push_str(&format!("\\x{byte:02x}"));
             }
-            // ABI string matches; also check layout size to catch pyo3-resolution skew
-            // (two builds at the same fltk-cst-core version but different pyo3 versions
-            // produce the same ABI string over different PyClassObject<SourceText> layouts).
-            let expected_layout =
-                std::mem::size_of::<pyo3::impl_::pycell::PyClassObject<SourceText>>();
-            // A missing or non-int _fltk_cst_core_abi_layout is treated as a mismatch
-            // (partial upgrade: string attr present, layout attr absent).
-            let layout_attr = obj_type
-                .getattr(pyo3::intern!(py, "_fltk_cst_core_abi_layout"))
-                .map_err(|_| {
-                    PyTypeError::new_err(format!(
-                        "expected fltk._native.SourceText: _fltk_cst_core_abi_layout missing \
-                         (old build without layout probe); this module expects layout \
-                         {expected_layout}"
-                    ))
-                })?;
-            let reported_layout = layout_attr.extract::<usize>().map_err(|_| {
-                PyTypeError::new_err(format!(
-                    "expected fltk._native.SourceText: _fltk_cst_core_abi_layout attribute \
-                     is {}, not int",
-                    py_attr_type_name(&layout_attr)
-                ))
-            })?;
-            if reported_layout != expected_layout {
-                return Err(PyTypeError::new_err(format!(
-                    "SourceText ABI layout mismatch: object reports layout \
-                     {reported_layout}, this module expects {expected_layout} \
-                     (pyo3-resolution skew between cdylibs)"
-                )));
-            }
-            // ABI pair validated; cache this foreign type object for O(1) pointer-compare on
-            // future calls.  `get_or_init` is a no-op if already populated (another thread
-            // raced here first — harmless, both observed the same validated type).
-            let _ = FLTK_FOREIGN_SOURCE_TEXT_TYPE.get_or_init(py, || obj_type.clone().unbind());
-            // SAFETY: ob_type carries `_fltk_cst_core_abi == FLTK_CST_CORE_ABI` and a
-            // matching `_fltk_cst_core_abi_layout` (same `size_of::<PyClassObject<SourceText>>()`).
-            // These are consistent with both cdylibs linking the same fltk-cst-core rlib at the
-            // same pyo3 version, but do not prove it — size equality does not imply field-layout
-            // equality (a pyo3 build that reorders internal fields while preserving total size
-            // would pass). The probe narrows — not closes — the layout-skew window.
-            // TODO(crosscdylib-abi-size-probe): fold the resolved pyo3 version into
-            // FLTK_CST_CORE_ABI (via build script) to close the size-preserving skew residual.
-            // Forgery: a hand-crafted class could set both attrs to the right values and
-            // still have a mismatched layout — UB. The caller (`_with_source_unchecked`)
-            // is underscore-private and documented as out-of-contract for forged inputs.
-            let st = unsafe { obj.downcast_unchecked::<SourceText>() };
-            return Ok(SourceText {
-                inner: st.get().inner.clone(),
-            });
+        } else {
+            out.push(c);
         }
-        // Marker attribute exists but is not a str — report the actual type.
+    }
+    out
+}
+
+/// Return the Python type name of any `PyAny` object for use in error messages
+/// (control chars escaped).  Works for both direct objects and attribute values.
+fn py_any_type_name(obj: &Bound<'_, PyAny>) -> String {
+    let raw = obj
+        .get_type()
+        .name()
+        .map(|n| n.to_string())
+        .unwrap_or_else(|_| "<unknown type>".to_string());
+    escape_control_chars_for_msg(&raw)
+}
+
+/// Return the fully-qualified Python type name of a type object for use in error messages
+/// (control chars escaped).
+/// Uses `fully_qualified_name()` with fallback `"<unknown type>"`.
+/// Note: pyo3 0.23.5 strips `"builtins"` and `"__main__"` module prefixes, so classes
+/// defined in those modules render as bare `__qualname__` (e.g. `"str"`, `"SourceText"`).
+/// Classes in test modules render fully qualified (e.g. `"test_rust_span.<locals>.FakeSource"`).
+fn py_type_obj_name(ty: &Bound<'_, PyType>) -> String {
+    let raw = ty
+        .fully_qualified_name()
+        .map(|n| n.to_string())
+        .unwrap_or_else(|_| "<unknown type>".to_string());
+    escape_control_chars_for_msg(&raw)
+}
+
+/// Validate the cross-cdylib ABI pair (`_fltk_cst_core_abi` string marker, then
+/// `_fltk_cst_core_abi_layout == size_of::<PyClassObject<T>>()`) on `ty`.
+///
+/// `type_label` is the logical class name used in error prefixes ("SourceText" or "Span").
+/// `subject_fn` is called lazily — only when an error is being constructed — to produce the
+/// string identifying the checked type in error bodies.  Callers supply:
+/// - Span path: `|| "fltk._native.Span".to_string()` (lookup-path identity, truthful even
+///   when that attribute is monkeypatched, as the subprocess gate tests do).
+/// - SourceText path: `|| py_type_obj_name(&obj_type)` (derived from caller-supplied type;
+///   called only on the failure branch, avoiding an eager Python C-API round-trip on every
+///   slow-path validation that succeeds).
+///
+/// `Ok(())` means `ty` is safe to treat as `T` for `downcast_unchecked`, subject to the
+/// documented forgery and size-preserving-skew residuals (see callers' SAFETY comments).
+fn check_abi_pair<T: pyo3::PyClass>(
+    ty: &Bound<'_, PyType>,
+    type_label: &str,
+    subject_fn: impl Fn() -> String,
+) -> PyResult<()> {
+    let py = ty.py();
+    // Step 1: missing marker — treat as mismatch (pre-sentinel build or unrelated type).
+    // Use map_err(|e| ...) rather than map_err(|_| ...) so that non-AttributeError
+    // exceptions from a raising __getattr__ are captured in the diagnostic rather than
+    // silently discarded.
+    let marker = ty
+        .getattr(pyo3::intern!(py, "_fltk_cst_core_abi"))
+        .map_err(|e| {
+            let subject = subject_fn();
+            PyTypeError::new_err(format!(
+                "{type_label} ABI mismatch: {subject} has no _fltk_cst_core_abi marker \
+                 (not a {type_label} from a compatible fltk-cst-core build, or a \
+                 pre-sentinel build); this module expects {FLTK_CST_CORE_ABI:?}\
+                 ; getattr raised: {}",
+                escape_control_chars_for_msg(&e.to_string())
+            ))
+        })?;
+    // Step 2: non-str marker.
+    let s = marker.extract::<&str>().map_err(|e| {
+        let subject = subject_fn();
+        PyTypeError::new_err(format!(
+            "{type_label} ABI mismatch: {subject}._fltk_cst_core_abi is {}, not str\
+             ; extract raised: {}",
+            py_any_type_name(&marker),
+            escape_control_chars_for_msg(&e.to_string())
+        ))
+    })?;
+    // Step 3: string mismatch.
+    if s != FLTK_CST_CORE_ABI {
+        let subject = subject_fn();
         return Err(PyTypeError::new_err(format!(
-            "expected fltk._native.SourceText: _fltk_cst_core_abi attribute \
-             is {}, not str",
-            py_attr_type_name(&marker)
+            "{type_label} ABI mismatch: {subject} reports {s:?}, this module expects \
+             {FLTK_CST_CORE_ABI:?} (fltk-cst-core version skew between cdylibs)"
         )));
     }
-    Err(PyTypeError::new_err(format!(
-        "expected fltk._native.SourceText, got {}",
-        py_type_name(obj)
-    )))
-}
-
-/// Return the Python type name of `obj` for use in error messages.
-fn py_type_name(obj: &Bound<'_, PyAny>) -> String {
-    obj.get_type()
-        .name()
-        .map(|n| n.to_string())
-        .unwrap_or_else(|_| "<unknown type>".to_string())
-}
-
-/// Return the Python type name of an *attribute value* for use in error messages.
-/// Identical idiom to `py_type_name` but takes the attribute `Bound` directly.
-fn py_attr_type_name(attr: &Bound<'_, PyAny>) -> String {
-    attr.get_type()
-        .name()
-        .map(|n| n.to_string())
-        .unwrap_or_else(|_| "<unknown>".to_string())
+    // Step 4: compute expected layout.
+    let expected_layout =
+        std::mem::size_of::<pyo3::impl_::pycell::PyClassObject<T>>();
+    // Step 5: missing layout attr — same reasoning as step 1.
+    let layout_attr = ty
+        .getattr(pyo3::intern!(py, "_fltk_cst_core_abi_layout"))
+        .map_err(|e| {
+            let subject = subject_fn();
+            PyTypeError::new_err(format!(
+                "{type_label} ABI mismatch: {subject} has no _fltk_cst_core_abi_layout \
+                 (partial-upgrade build); this module expects layout {expected_layout}\
+                 ; getattr raised: {}",
+                escape_control_chars_for_msg(&e.to_string())
+            ))
+        })?;
+    // Step 6: non-int layout attr.
+    let reported_layout = layout_attr.extract::<usize>().map_err(|e| {
+        let subject = subject_fn();
+        PyTypeError::new_err(format!(
+            "{type_label} ABI mismatch: {subject}._fltk_cst_core_abi_layout is {}, not int\
+             ; extract raised: {}",
+            py_any_type_name(&layout_attr),
+            escape_control_chars_for_msg(&e.to_string())
+        ))
+    })?;
+    // Step 7: layout mismatch.
+    if reported_layout != expected_layout {
+        let subject = subject_fn();
+        return Err(PyTypeError::new_err(format!(
+            "{type_label} ABI layout mismatch: {subject} reports layout {reported_layout}, \
+             this module expects {expected_layout} \
+             (pyo3-resolution skew between cdylibs)"
+        )));
+    }
+    Ok(())
 }
 
 /// Cached: whether this cdylib IS `fltk._native` (fast-path bypass for `span_to_pyobject`).
@@ -225,6 +294,11 @@ pub fn span_to_pyobject(py: Python<'_>, span: &Span) -> PyResult<PyObject> {
                 span_type
                     .getattr(pyo3::intern!(py, "_with_source_unchecked"))
                     .map(|m| m.unbind())
+                    .map_err(|e| {
+                        pyo3::exceptions::PyRuntimeError::new_err(format!(
+                            "fltk._native.Span._with_source_unchecked lookup failed: {e}"
+                        ))
+                    })
             })?;
             method
                 .call1(py, (span.start(), span.end(), st))
@@ -265,18 +339,18 @@ pub fn extract_span(py: Python<'_>, obj: &Bound<'_, PyAny>) -> PyResult<Span> {
     // the same fltk-cst-core rlib with the same pyo3 version.
     let native_span_type = get_span_type(py)?;
     if obj.is_instance(&native_span_type)? {
-        // SAFETY: `get_span_type` verified `_fltk_cst_core_abi == FLTK_CST_CORE_ABI` and
-        // `_fltk_cst_core_abi_layout` matches `size_of::<PyClassObject<Span>>()` on the
-        // canonical type. These checks are consistent with both cdylibs linking the same
-        // fltk-cst-core rlib at the same pyo3 version, but do not prove it — size equality
-        // does not imply field-layout equality. The probe narrows — not closes — the skew
-        // window. See TODO(crosscdylib-abi-size-probe) in extract_source_text above.
+        // SAFETY: `get_span_type` called `check_abi_pair::<Span>`, which verified
+        // `_fltk_cst_core_abi == FLTK_CST_CORE_ABI` and `_fltk_cst_core_abi_layout` matches
+        // `size_of::<PyClassObject<Span>>()` on the canonical type. These checks are consistent
+        // with both cdylibs linking the same fltk-cst-core rlib at the same pyo3 version, but
+        // do not prove it — size equality does not imply field-layout equality. The probe
+        // narrows — not closes — the skew window. See TODO(crosscdylib-abi-size-probe).
         let span = unsafe { obj.downcast_unchecked::<Span>() };
         return Ok(span.borrow().clone());
     }
     Err(PyTypeError::new_err(format!(
         "expected fltk._native.Span, got {}",
-        py_type_name(obj)
+        py_any_type_name(obj)
     )))
 }
 
@@ -301,61 +375,7 @@ pub fn get_span_type(py: Python<'_>) -> PyResult<Bound<'_, PyType>> {
                         "cross-cdylib Span type lookup failed (fltk._native.Span): {e}"
                     ))
                 })?;
-            // TODO(crosscdylib-abi-check-helper): this two-step ABI pair check (string marker
-            // then layout int) duplicates the same logic in `extract_source_text`'s slow path.
-            // Extract a generic helper (e.g. `fn check_abi_pair<T: PyClass>(ty, label)`) to
-            // unify them and keep error-message wording in sync.
-            //
-            // ABI string check: fail fast on version skew.
-            // A missing or non-string attr means the canonical Span was built without the
-            // marker (old build = wrong ABI), which is exactly the version-skew case this
-            // gate exists to catch — treat it as a mismatch, not a pass.
-            let marker = span_type
-                .getattr(pyo3::intern!(py, "_fltk_cst_core_abi"))
-                .map_err(|_| {
-                    PyTypeError::new_err(format!(
-                        "Span ABI mismatch: fltk._native.Span has no _fltk_cst_core_abi \
-                         marker (pre-sentinel build); this module expects {FLTK_CST_CORE_ABI:?}"
-                    ))
-                })?;
-            let s = marker.extract::<&str>().map_err(|_| {
-                PyTypeError::new_err(format!(
-                    "fltk._native.Span._fltk_cst_core_abi is {}, not str",
-                    py_attr_type_name(&marker)
-                ))
-            })?;
-            if s != FLTK_CST_CORE_ABI {
-                return Err(PyTypeError::new_err(format!(
-                    "Span ABI mismatch: fltk._native.Span reports {s:?}, \
-                     this module expects {FLTK_CST_CORE_ABI:?} \
-                     (fltk-cst-core version skew between cdylibs)"
-                )));
-            }
-            // Layout probe: catch pyo3-resolution skew that the version string alone cannot.
-            // A missing or non-int attr is also treated as a mismatch.
-            let expected_layout =
-                std::mem::size_of::<pyo3::impl_::pycell::PyClassObject<Span>>();
-            let layout_attr = span_type
-                .getattr(pyo3::intern!(py, "_fltk_cst_core_abi_layout"))
-                .map_err(|_| {
-                    PyTypeError::new_err(format!(
-                        "Span ABI mismatch: fltk._native.Span has no _fltk_cst_core_abi_layout \
-                         (partial-upgrade build); this module expects layout {expected_layout}"
-                    ))
-                })?;
-            let reported_layout = layout_attr.extract::<usize>().map_err(|_| {
-                PyTypeError::new_err(format!(
-                    "fltk._native.Span._fltk_cst_core_abi_layout is {}, not int",
-                    py_attr_type_name(&layout_attr)
-                ))
-            })?;
-            if reported_layout != expected_layout {
-                return Err(PyTypeError::new_err(format!(
-                    "Span ABI layout mismatch: fltk._native.Span reports layout \
-                     {reported_layout}, this module expects {expected_layout} \
-                     (pyo3-resolution skew between cdylibs)"
-                )));
-            }
+            check_abi_pair::<Span>(&span_type, "Span", || "fltk._native.Span".to_string())?;
             Ok(span_type.unbind())
         })
         .map(|t| t.bind(py).clone())
@@ -372,6 +392,11 @@ pub(crate) static FLTK_NATIVE_SOURCE_TEXT_TYPE: GILOnceCell<Py<PyType>> = GILOnc
 ///
 /// Retained for compatibility with previously-generated consumer `cst.rs` files.
 /// New generated code uses `span_to_pyobject` instead (O(1) source-preserving path).
+///
+/// # Safety contract gap
+/// The returned type object is NOT ABI-validated (no `check_abi_pair` call).
+/// Callers MUST NOT use it for `downcast_unchecked` — restrict use to `isinstance` checks
+/// only, or call `check_abi_pair` separately before any unchecked downcast.
 pub fn get_source_text_type(py: Python<'_>) -> PyResult<Bound<'_, PyType>> {
     FLTK_NATIVE_SOURCE_TEXT_TYPE
         .get_or_try_init(py, || {

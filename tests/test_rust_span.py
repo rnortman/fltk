@@ -296,36 +296,66 @@ class TestAbiMarkerClassattr:
         assert merged.text() == "hello world"
 
     def test_with_source_unchecked_str_raises_type_error(self):
-        """Span._with_source_unchecked with a plain str raises TypeError naming the type."""
-        with pytest.raises(TypeError, match="fltk._native.SourceText"):
+        """Span._with_source_unchecked with a plain str raises TypeError naming the ABI marker.
+
+        Deliberate behavior change (crosscdylib-abi-check-helper ADR): a missing-marker object
+        now raises with the unified ABI-mismatch template instead of the old generic
+        "expected fltk._native.SourceText, got str" message.
+        """
+        with pytest.raises(TypeError, match="SourceText ABI mismatch") as exc_info:
             Span._with_source_unchecked(0, 5, "hello world")  # type: ignore[attr-defined]
+        msg = str(exc_info.value)
+        assert "_fltk_cst_core_abi marker" in msg, f"missing marker name in: {msg!r}"
+        assert "pre-sentinel build" in msg, f"missing sentinel hint in: {msg!r}"
 
     def test_with_source_unchecked_no_marker_attr_raises_type_error(self):
-        """An object with no _fltk_cst_core_abi attribute raises TypeError naming the type."""
+        """An object with no _fltk_cst_core_abi attribute raises TypeError naming the ABI marker.
+
+        Deliberate behavior change (crosscdylib-abi-check-helper ADR): a missing-marker object
+        now raises with the unified ABI-mismatch template instead of the old generic
+        "expected fltk._native.SourceText, got <type>" message.
+        """
 
         class NoMarker:
             pass
 
-        with pytest.raises(TypeError, match="fltk._native.SourceText"):
+        with pytest.raises(TypeError, match="SourceText ABI mismatch") as exc_info:
             Span._with_source_unchecked(0, 5, NoMarker())  # type: ignore[attr-defined]
+        msg = str(exc_info.value)
+        assert "_fltk_cst_core_abi marker" in msg, f"missing marker name in: {msg!r}"
+        assert "pre-sentinel build" in msg, f"missing sentinel hint in: {msg!r}"
 
     def test_with_source_unchecked_non_str_marker_raises_type_error(self):
-        """An object whose _fltk_cst_core_abi is a non-str raises TypeError naming the attribute type."""
+        """An object whose _fltk_cst_core_abi is a non-str raises TypeError with unified ABI template.
+
+        Pins template 2: the unified check_abi_pair message includes "SourceText ABI mismatch",
+        the attribute name, and "not str".
+        """
 
         class IntMarker:
             _fltk_cst_core_abi = 42
 
-        with pytest.raises(TypeError, match="_fltk_cst_core_abi"):
+        with pytest.raises(TypeError, match="SourceText ABI mismatch") as exc_info:
             Span._with_source_unchecked(0, 5, IntMarker())  # type: ignore[attr-defined]
+        msg = str(exc_info.value)
+        assert "_fltk_cst_core_abi" in msg, f"missing attr name in: {msg!r}"
+        assert "not str" in msg, f"missing 'not str' in: {msg!r}"
 
     def test_with_source_unchecked_bogus_abi_marker_raises_type_error(self):
-        """An object with _fltk_cst_core_abi = 'bogus/0.0.0' raises TypeError mentioning ABI mismatch."""
+        """An object with _fltk_cst_core_abi = 'bogus/0.0.0' raises TypeError mentioning ABI mismatch.
+
+        Also pins that the {subject} in the error is the derived type name (FakeSource),
+        verifying the py_type_obj_name() derivation on the SourceText path (§2 of the
+        crosscdylib-abi-check-helper design).
+        """
 
         class FakeSource:
             _fltk_cst_core_abi = "bogus/0.0.0"
 
-        with pytest.raises(TypeError, match="ABI mismatch"):
+        with pytest.raises(TypeError, match="ABI mismatch") as exc_info:
             Span._with_source_unchecked(0, 5, FakeSource())  # type: ignore[attr-defined]
+        msg = str(exc_info.value)
+        assert "FakeSource" in msg, f"derived type name missing from error: {msg!r}"
 
     def test_with_source_keeps_exact_behavior(self):
         """Public with_source still rejects foreign-cdylib SourceText (pinned behavior).
@@ -615,6 +645,86 @@ except TypeError as e:
         assert result.returncode == 0, f"subprocess failed:\nstdout: {result.stdout}\nstderr: {result.stderr}"
         assert "OK" in result.stdout
 
+    def test_non_str_abi_marker_raises_type_error(self):
+        """Patching fltk._native.Span._fltk_cst_core_abi to a non-str fires TypeError (template 2).
+
+        Pins check_abi_pair step 2 on the Span path: message includes "Span ABI mismatch"
+        and "not str".
+        """
+        phase4 = pytest.importorskip(
+            "phase4_roundtrip_cst",
+            reason="phase4_roundtrip_cst not built; run 'make build-test-user-ext' first",
+        )
+        del phase4
+
+        script = """
+import fltk._native as native
+
+real_layout = native.Span._fltk_cst_core_abi_layout
+
+class FakeSpan:
+    _fltk_cst_core_abi = 42  # non-str marker (should be a string)
+    _fltk_cst_core_abi_layout = real_layout
+    def __init__(self, *a, **kw): pass
+
+native.Span = FakeSpan
+assert native.Span is FakeSpan, "patch did not take effect"
+
+import phase4_roundtrip_cst as cst
+node = cst.cst.Config(span=cst.Span(0, 5))
+try:
+    s = node.span
+    print(f"FAIL: no error, got {s!r}")
+except TypeError as e:
+    msg = str(e)
+    assert "Span ABI mismatch" in msg, f"missing 'Span ABI mismatch' in: {msg!r}"
+    assert "not str" in msg, f"missing 'not str' in: {msg!r}"
+    print("OK")
+"""
+        result = self._run_script(script)
+        assert result.returncode == 0, f"subprocess failed:\nstdout: {result.stdout}\nstderr: {result.stderr}"
+        assert "OK" in result.stdout
+
+    def test_non_int_abi_layout_raises_type_error(self):
+        """Patching fltk._native.Span._fltk_cst_core_abi_layout to a non-int fires TypeError (template 5).
+
+        Pins check_abi_pair step 6 on the Span path: message includes "Span ABI mismatch"
+        and "not int".
+        """
+        phase4 = pytest.importorskip(
+            "phase4_roundtrip_cst",
+            reason="phase4_roundtrip_cst not built; run 'make build-test-user-ext' first",
+        )
+        del phase4
+
+        script = """
+import fltk._native as native
+
+real_abi = native.Span._fltk_cst_core_abi
+
+class FakeSpan:
+    _fltk_cst_core_abi = real_abi
+    _fltk_cst_core_abi_layout = "oops"  # non-int layout (should be an int)
+    def __init__(self, *a, **kw): pass
+
+native.Span = FakeSpan
+assert native.Span is FakeSpan, "patch did not take effect"
+
+import phase4_roundtrip_cst as cst
+node = cst.cst.Config(span=cst.Span(0, 5))
+try:
+    s = node.span
+    print(f"FAIL: no error, got {s!r}")
+except TypeError as e:
+    msg = str(e)
+    assert "Span ABI mismatch" in msg, f"missing 'Span ABI mismatch' in: {msg!r}"
+    assert "not int" in msg, f"missing 'not int' in: {msg!r}"
+    print("OK")
+"""
+        result = self._run_script(script)
+        assert result.returncode == 0, f"subprocess failed:\nstdout: {result.stdout}\nstderr: {result.stderr}"
+        assert "OK" in result.stdout
+
 
 class TestSpanToPyobjectCaching:
     """Phase 0 §4.1 item 3: boundary caching smoke tests for span_to_pyobject."""
@@ -670,8 +780,10 @@ class TestSpanToPyobjectCaching:
             _fltk_cst_core_abi = SourceText._fltk_cst_core_abi  # type: ignore[attr-defined]
             # _fltk_cst_core_abi_layout intentionally absent
 
-        with pytest.raises(TypeError, match="_fltk_cst_core_abi_layout missing"):
+        with pytest.raises(TypeError, match="has no _fltk_cst_core_abi_layout") as exc_info:
             Span._with_source_unchecked(0, 5, FakeSourceNoLayout())  # type: ignore[attr-defined]
+        msg = str(exc_info.value)
+        assert "partial-upgrade" in msg, f"missing partial-upgrade hint in: {msg!r}"
 
     def test_source_text_abi_layout_non_int_raises(self):
         """SourceText: non-int _fltk_cst_core_abi_layout raises TypeError naming the attr type."""
@@ -680,18 +792,30 @@ class TestSpanToPyobjectCaching:
             _fltk_cst_core_abi = SourceText._fltk_cst_core_abi  # type: ignore[attr-defined]
             _fltk_cst_core_abi_layout = "not-an-int"
 
-        with pytest.raises(TypeError, match="_fltk_cst_core_abi_layout attribute is"):
+        with pytest.raises(TypeError, match="_fltk_cst_core_abi_layout is") as exc_info:
             Span._with_source_unchecked(0, 5, FakeSourceBadLayoutType())  # type: ignore[attr-defined]
+        msg = str(exc_info.value)
+        assert "not int" in msg, f"missing 'not int' in: {msg!r}"
 
     def test_source_text_abi_string_missing_raises(self):
-        """SourceText: absent _fltk_cst_core_abi on a foreign-looking object raises TypeError."""
+        """SourceText: absent _fltk_cst_core_abi on a foreign-looking object raises TypeError.
+
+        Pins the deliberate behavior change from crosscdylib-abi-check-helper ADR: a missing
+        _fltk_cst_core_abi marker now raises the unified ABI-mismatch template (template 1)
+        instead of the old generic "expected fltk._native.SourceText, got <type>" message.
+        Both are PyTypeError; the new message is strictly more informative (names the missing
+        attr, the expected ABI string, and the "pre-sentinel build" diagnostic hint).
+        """
 
         class FakeSourceNoAbi:
             _fltk_cst_core_abi_layout = SourceText._fltk_cst_core_abi_layout  # type: ignore[attr-defined]
             # _fltk_cst_core_abi intentionally absent
 
-        with pytest.raises(TypeError, match="expected fltk._native.SourceText"):
+        with pytest.raises(TypeError, match="SourceText ABI mismatch") as exc_info:
             Span._with_source_unchecked(0, 5, FakeSourceNoAbi())  # type: ignore[attr-defined]
+        msg = str(exc_info.value)
+        assert "_fltk_cst_core_abi marker" in msg, f"missing marker name in: {msg!r}"
+        assert "pre-sentinel build" in msg, f"missing sentinel hint in: {msg!r}"
 
     def test_source_text_fast_path_succeeds(self):
         """SourceText in-process fast path (downcast): canonical SourceText is accepted immediately.
