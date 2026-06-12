@@ -26,7 +26,7 @@
 /// `weakref.WeakValueDictionary`, so all access goes through Python object protocol.
 use pyo3::prelude::*;
 use pyo3::sync::GILOnceCell;
-#[cfg(test)]
+#[cfg(any(test, feature = "test-introspection"))]
 use pyo3::types::PyDict;
 
 /// Process-wide registry: a Python `weakref.WeakValueDictionary` mapping
@@ -125,18 +125,22 @@ pub fn get_or_insert_with(
     }
 }
 
-// TODO(registry-unit-tests): add Rust unit tests for lookup/register_if_absent/force_register/
-// get_or_insert_with. Blocked by rlib + pyo3 linkage: `cargo test` on this crate cannot link
-// libpython without a dedicated test cdylib or a linked integration crate. See TODO.md for options.
-
 /// Build a `PyDict` snapshot of the registry for testing/debugging.
 ///
 /// Returns a plain `dict` copy of the `WeakValueDictionary`'s current live entries.
-/// Only used in tests.
-#[cfg(test)]
+/// Only compiled under `cfg(test)` or the `test-introspection` feature; never enabled
+/// in production builds.
+///
+/// Uses `.items()` rather than the `dict(mapping)` constructor to avoid a TOCTOU
+/// race: `dict(WeakValueDictionary)` does `keys()` then `__getitem__` per key, and
+/// `__getitem__` raises `KeyError` if the weak value died between the two steps
+/// (e.g. if an allocation inside the copy triggers cyclic GC).  `WeakValueDictionary
+/// .items()` dereferences each weakref and skips dead entries atomically per entry.
+#[cfg(any(test, feature = "test-introspection"))]
 pub fn snapshot(py: Python<'_>) -> PyResult<Bound<'_, PyDict>> {
     let registry = get_registry(py)?;
     let dict_class = py.import("builtins")?.getattr("dict")?;
-    let d = dict_class.call1((registry,))?;
+    let items = registry.call_method0("items")?;
+    let d = dict_class.call1((items,))?;
     d.downcast_into::<PyDict>().map_err(|e| e.into())
 }

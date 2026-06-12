@@ -20,11 +20,6 @@ The `_fltk_cst_core_abi_layout` classattr probe compares `size_of::<PyClassObjec
 
 The Rust-backend `node.children` getter returns a fresh snapshot list per call (a `PyList` rebuilt from `Vec` on each access); in-place mutation of the returned list is a silent no-op on the tree. The Python backend returns the node's actual internal list, so in-place list mutation edits the tree. Closing this divergence would require a live sequence-proxy pyclass. Deferred as additive; the Python-backend behavior is documented in the Phase 3 docs. Location: `fltk/fegen/gsm2tree_rs.py` (`_children_getter`, lines 682–700).
 
-## `registry-unit-tests`
-
-`crates/fltk-cst-core/src/registry.rs` has no Rust unit tests. The four public functions (`lookup`, `register_if_absent`, `force_register`, `get_or_insert_with`) are tested only indirectly through Python integration tests. Direct unit tests are blocked by the build setup: `cargo test` on an rlib with `pyo3` (feature="python") cannot link `libpython` in the default test binary. Options: (a) build a dedicated test cdylib that exports test entry points, (b) test via the Python test harness using `ctypes`/`cffi`, or (c) add a `cargo test --target` integration test crate that links as a cdylib. Deferred; Python identity/mutation tests provide adequate coverage today. Location: `crates/fltk-cst-core/src/registry.rs`.
-
-
 ## `rust-str-lit-shared`
 
 `_rust_str_lit` is only defined in `fltk/fegen/gsm2parser_rs.py`. `gsm2tree_rs.py` embeds Rust string literals in f-strings without going through an escaping helper, meaning any rule name or label containing characters that require escaping (backslash, double-quote, control chars) would produce malformed Rust there. Extract to a shared utility so both generators use the same escaping path. Location: `fltk/fegen/gsm2parser_rs.py` (`_rust_str_lit`, module level).

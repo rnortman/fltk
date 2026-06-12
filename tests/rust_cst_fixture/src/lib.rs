@@ -13,11 +13,16 @@ use pyo3::prelude::*;
 
 mod cst;
 mod native_tests;
+mod registry_introspection;
 
 #[pymodule]
 fn phase4_roundtrip_cst(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_class::<Span>()?;
     m.add_class::<SourceText>()?;
     register_submodule(m, "cst", cst::register_classes)?;
+    m.add_function(wrap_pyfunction!(registry_introspection::_registry_snapshot, m)?)?;
+    m.add_function(wrap_pyfunction!(registry_introspection::_registry_lookup, m)?)?;
+    m.add_function(wrap_pyfunction!(registry_introspection::_registry_register_if_absent, m)?)?;
+    m.add_function(wrap_pyfunction!(registry_introspection::_registry_force_register, m)?)?;
     Ok(())
 }

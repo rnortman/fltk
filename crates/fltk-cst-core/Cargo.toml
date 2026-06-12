@@ -17,3 +17,6 @@ pyo3 = { version = "0.23", features = ["abi3-py310"], optional = true }
 [features]
 default = ["python"]
 python = ["dep:pyo3"]
+# test-introspection: enables registry introspection helpers (snapshot) for test fixture crates.
+# Never enable in production extensions — test-only plumbing.
+test-introspection = ["python"]
