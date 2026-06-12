@@ -101,9 +101,10 @@ pub fn extract_source_text(obj: &Bound<'_, PyAny>) -> PyResult<SourceText> {
     // These are consistent with both cdylibs linking the same fltk-cst-core rlib at the
     // same pyo3 version, but do not prove it — size equality does not imply field-layout
     // equality (a pyo3 build that reorders internal fields while preserving total size
-    // would pass). The probe narrows — not closes — the layout-skew window.
-    // TODO(crosscdylib-abi-size-probe): fold the resolved pyo3 version into
-    // FLTK_CST_CORE_ABI (via build script) to close the size-preserving skew residual.
+    // would pass). The probe narrows — not closes — the layout-skew window. Accepted risk:
+    // for frozen pyo3 types without dict/weakref, PyClassObject<T> collapses to
+    // {ffi::PyObject, T} (repr(C)); a size-preserving internal reorder is not constructible
+    // without changing ffi::PyObject itself, which would also change the size the probe catches.
     // Forgery: a hand-crafted class could set both attrs to the right values and
     // still have a mismatched layout — UB. The caller (`_with_source_unchecked`)
     // is underscore-private and documented as out-of-contract for forged inputs.
@@ -344,7 +345,9 @@ pub fn extract_span(py: Python<'_>, obj: &Bound<'_, PyAny>) -> PyResult<Span> {
         // `size_of::<PyClassObject<Span>>()` on the canonical type. These checks are consistent
         // with both cdylibs linking the same fltk-cst-core rlib at the same pyo3 version, but
         // do not prove it — size equality does not imply field-layout equality. The probe
-        // narrows — not closes — the skew window. See TODO(crosscdylib-abi-size-probe).
+        // narrows — not closes — the skew window. Accepted risk: for frozen pyo3 types without
+        // dict/weakref, PyClassObject<T> reduces to {ffi::PyObject, T} (repr(C)); a
+        // size-preserving internal reorder is not constructible without changing ffi::PyObject.
         let span = unsafe { obj.downcast_unchecked::<Span>() };
         return Ok(span.borrow().clone());
     }

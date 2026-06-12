@@ -454,8 +454,6 @@ class TestSpanPathAbiGate:
     Note: GILOnceCell does NOT cache errors, so all three scenarios (wrong-ABI-string,
     wrong-layout, success) could in principle share one subprocess (run failures first,
     success last).  Each scenario has its own subprocess for isolation and readability.
-    TODO(abi-gate-test-consolidation): if subprocess startup cost becomes significant,
-    collapse to one subprocess driving all three scenarios sequentially.
     """
 
     @staticmethod

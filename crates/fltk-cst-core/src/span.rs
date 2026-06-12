@@ -117,8 +117,10 @@ impl SourceText {
     ///
     /// **Limitation**: size equality is necessary but not sufficient for layout identity —
     /// a pyo3 build that reorders internal fields while preserving total size passes the
-    /// probe. The check narrows — not closes — the layout-skew window.
-    /// See ``TODO(crosscdylib-abi-size-probe)`` for the path to a complete fix.
+    /// probe. The check narrows — not closes — the layout-skew window. Accepted risk: for
+    /// frozen pyo3 types without dict/weakref, ``PyClassObject<T>`` reduces to
+    /// ``{ffi::PyObject, T}`` (repr(C)); a size-preserving internal reorder is not
+    /// constructible without changing ``ffi::PyObject`` itself, which changes the size.
     ///
     /// ``PyClassObject<T>`` is a pyo3 internal type; its layout is intentionally NOT
     /// stable across pyo3 minor versions — that instability is exactly what this probe
@@ -393,8 +395,10 @@ impl Span {
     ///
     /// **Limitation**: size equality is necessary but not sufficient for layout identity —
     /// a pyo3 build that reorders internal fields while preserving total size passes the
-    /// probe. The check narrows — not closes — the layout-skew window.
-    /// See ``TODO(crosscdylib-abi-size-probe)`` for the path to a complete fix.
+    /// probe. The check narrows — not closes — the layout-skew window. Accepted risk: for
+    /// frozen pyo3 types without dict/weakref, ``PyClassObject<T>`` reduces to
+    /// ``{ffi::PyObject, T}`` (repr(C)); a size-preserving internal reorder is not
+    /// constructible without changing ``ffi::PyObject`` itself, which changes the size.
     #[classattr]
     fn _fltk_cst_core_abi_layout() -> usize {
         std::mem::size_of::<PyClassObject<Span>>()

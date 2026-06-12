@@ -150,6 +150,8 @@ Both changes are required regardless of whether you regenerate `cst.rs`. Apply t
 rebuild. If you then regenerate (`make gencode` equivalent), the new cfg-gated output is compatible
 with the same `Cargo.toml`.
 
+`node.children` returns a snapshot on the Rust backend; mutate via the named mutator API.
+
 ---
 
 ## Limitations

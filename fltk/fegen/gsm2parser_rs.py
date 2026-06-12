@@ -28,9 +28,6 @@ _CTRL_MAX = 0x20  # exclusive: code points < 0x20 get \u{XX} escaping
 _DEL = 0x7F  # DEL character: also gets \u{XX} escaping
 
 
-# TODO(rust-str-lit-shared): _rust_str_lit is only defined here; gsm2tree_rs.py embeds
-# Rust string literals in f-strings without escaping.  If escaping rules ever change
-# (e.g. non-BMP characters), both files need updating.  Extract to a shared module.
 def _rust_str_lit(s: str) -> str:
     """Return the Rust string literal content (no outer quotes) for string s."""
     out = []
