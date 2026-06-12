@@ -37,10 +37,6 @@ The Rust-backend `node.children` getter returns a fresh snapshot list per call (
 
 `extend_children(&Self)` clones every child Arc even though the donor node is immediately dropped after the call (inline-to-parent sub-expression and `+`/`*` loop paths). A consuming variant `extend_children_owned(other: Self)` using `Vec::append` would avoid the atomic inc+dec pairs per child on the parse hot path. Blocked on `gsm2tree_rs.py` adding the method to the generated CST node API. Location: `fltk/fegen/gsm2parser_rs.py` (`_gen_item_multiple`, `_gen_append_code`), `fltk/fegen/gsm2tree_rs.py` (generated `impl <Node>` blocks).
 
-## `rust-cst-debug-depth`
-
-`derive(Debug)` on generated node structs recurses through `Shared<T>` children with no depth bound and no cycle detection. For downstream apps that parse untrusted input (the design's primary use case via R4), tree depth is attacker-controlled; debug-logging a deeply-nested tree causes stack exhaustion → uncatchable process abort. The cycle case is design-accepted (§5); this TODO tracks the unbounded-depth DoS on acyclic attacker-controlled input, which is new exposure introduced by Phase 2's `derive(Debug)`. Fix: emit a manual depth-capped `Debug` (elide children past depth N or print child count beyond a cutoff — the existing non-recursive `__repr__` in gsm2tree_rs.py is the model) instead of `derive(Debug)`. Alternatively, extend Phase-3 docs to explicitly warn authors of parsers over untrusted input not to `{:?}` unbounded trees. Location: `fltk/fegen/gsm2tree_rs.py` (the `#[derive(Clone, Debug)]` emit on node data structs, ~line 638).
-
 ## `regex-automata-features`
 
 `fltk-parser-core/Cargo.toml` uses `regex-automata = "0.4"` with default features, which include `dfa-build`/`dfa-search` (full DFA determinizer). The `regex = "1"` crate (the prior dependency) did not enable those features, so this change adds compile time and binary size for `fltk-parser-core` and every downstream consumer crate. The DFA-build path is a search-speed win for small patterns (and is tightly size-capped), so the default was kept deliberately, but the cost was not formally weighed at the time of the change. Consider pinning to the feature subset actually used by `regex=1` if compile time or binary size becomes a concern. Location: `crates/fltk-parser-core/Cargo.toml`.
@@ -52,6 +48,10 @@ The Rust-backend `node.children` getter returns a fresh snapshot list per call (
 ## `error-msg-escape-zero-copy`
 
 `escape_control_chars` now has an early-return fast path for control-free input (scans once, returns `s.to_owned()` / `text` unchanged). The zero-copy variant — returning `Cow<'_, str>` on the Rust side so no allocation occurs at all for clean input — would eliminate the remaining copy but requires changing the public function signature. Deferred: the `to_owned()` fast path already recovers the common-case regression; `Cow` is an API-surface decision for a future cleanup. Location: `crates/fltk-parser-core/src/errors.rs` (`escape_control_chars`).
+
+## `rust-cst-eq-depth`
+
+`PartialEq` on generated node structs recurses through `Shared<T>` children with no depth bound; tree depth is attacker-controlled for parsers over untrusted input, so `assert_eq!` or any equality check on a deep parser-produced tree aborts the process (stack exhaustion, uncatchable). Same root cause as the fixed Debug/Drop paths — `Shared<T>::PartialEq` acquires a read lock and delegates to `T::eq`, which compares `children` recursively. Fix: emit iterative `impl PartialEq` on node structs following the same generator pattern used for `impl Drop`. Locations: `fltk/fegen/gsm2tree_rs.py` (`_node_block`, `_drop_block` pattern), `crates/fltk-cst-core/src/shared.rs` (`PartialEq` impl).
 
 ## `rust-generated-ident-collisions`
 

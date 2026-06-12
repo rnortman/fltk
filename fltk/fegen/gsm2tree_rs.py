@@ -256,6 +256,19 @@ class RustCstGenerator:
 
         return re.sub(r'"([A-Z][A-Za-z0-9_]*)"', _replace_quoted, raw)
 
+    def _child_class_union(self) -> list[str]:
+        """Return the sorted list of node class names that appear as node-typed children in any child enum.
+
+        These are the classes that need a DropWorklistItem variant.  Never-child root classes
+        (no rule ever produces them as a child) are excluded: their own `impl Drop` seeds the
+        worklist directly from `self.children`, so they need no variant.
+        """
+        union: set[str] = set()
+        for rule in self.grammar.rules:
+            child_classes, _has_span = self._child_variants_for_rule(rule.name)
+            union.update(child_classes)
+        return sorted(union)
+
     def generate(self) -> str:
         """Return a complete, compilable .rs file as a string."""
         parts: list[str] = []
@@ -265,10 +278,16 @@ class RustCstGenerator:
         # Emit NodeKind enum before node structs so the kind getter can reference it.
         parts.append(self._node_kind_block())
 
+        child_union = self._child_class_union()
+
         for class_name, labels, rule_name in self._rule_info():
             parts.append(self._label_enum_block(class_name, labels))
-            parts.append(self._child_enum_block(class_name, rule_name))
+            parts.append(self._child_enum_block(class_name, rule_name, child_union))
             parts.append(self._node_block(class_name, labels, rule_name))
+
+        drop_block = self._drop_block(child_union)
+        if drop_block:
+            parts.append(drop_block)
 
         parts.append(self._register_classes_fn())
 
@@ -283,6 +302,7 @@ class RustCstGenerator:
             "use fltk_cst_core::CstError;\n"
             "use fltk_cst_core::Span;\n"
             "use fltk_cst_core::Shared;\n"
+            "use std::fmt;\n"
             '#[cfg(feature = "python")]\n'
             "use fltk_cst_core::{extract_span, get_span_type, span_to_pyobject};\n"
             '#[cfg(feature = "python")]\n'
@@ -514,13 +534,14 @@ class RustCstGenerator:
         """
         return f"{class_name}Child"
 
-    def _child_enum_block(self, class_name: str, rule_name: str) -> str:
+    def _child_enum_block(self, class_name: str, rule_name: str, child_union: list[str] | None = None) -> str:
         """Emit the per-node child value enum (<Name>Child) + Clone/PartialEq impls.
 
         Node-typed variants use Shared<T> instead of Box<T> (Phase 1 ownership model).
         to_pyobject routes through the canonical-wrapper registry so repeated reads of
         the same child return the same Python handle (is-stable identity).
         extract_from_pyobject extracts the Shared<T> from the handle and hand-ins to registry.
+        child_union: the sorted list of all node-typed child class names across all rules.
         """
         child_classes, has_span = self._child_variants_for_rule(rule_name)
         enum_name = self.child_enum_name(class_name)
@@ -558,6 +579,30 @@ class RustCstGenerator:
         lines.append("    }")
         lines.append("}")
         lines.append("")
+
+        # into_drop_item: convert a child enum variant to an optional DropWorklistItem.
+        # Emit when:
+        # - class_name is in child_union: its Shared handle may appear in the worklist, so
+        #   drain_into will call into_drop_item on its children to continue draining.
+        # - child_classes is non-empty: the class's own impl Drop calls into_drop_item on its
+        #   children to seed the worklist.
+        # Span-only union members (e.g. Num, Name, Trivia) still need this method because
+        # drain_into calls it; it just returns None for all Span variants.
+        # Omitted only when the class is neither a child-union member nor has a Drop impl:
+        # such an enum's into_drop_item would be uncalled → dead_code → -D warnings failure.
+        needs_drop_item = child_classes or (child_union is not None and class_name in child_union)
+        if needs_drop_item:
+            lines.append(f"impl {enum_name} {{")
+            lines.append("    fn into_drop_item(self) -> Option<DropWorklistItem> {")
+            lines.append("        match self {")
+            if has_span:
+                lines.append("            Self::Span(_) => None,")
+            for child_cls in child_classes:
+                lines.append(f"            Self::{child_cls}(s) => Some(DropWorklistItem::{child_cls}(s)),")
+            lines.append("        }")
+            lines.append("    }")
+            lines.append("}")
+            lines.append("")
 
         # to_pyobject/extract_from_pyobject: python-only, gate the entire impl block
         lines.append('#[cfg(feature = "python")]')
@@ -645,6 +690,9 @@ class RustCstGenerator:
           Python class name is unchanged (name = "ClassName").
 
         The handle is named Py<ClassName> in Rust; the data struct keeps the original name.
+        Span-only nodes (no Shared<T> children) get no impl Drop: their drop glue is trivially
+        non-recursive, and skipping Drop avoids the E0509 restriction on moving fields out of
+        types that implement Drop.
         """
         child_classes, has_span = self._child_variants_for_rule(rule_name)
         enum_name = self.child_enum_name(class_name)
@@ -664,9 +712,14 @@ class RustCstGenerator:
             f"/// CST data struct for `{class_name}`."
             " See [`fltk_cst_core::Shared`] for clone/equality/reference semantics."
         )
-        # TODO(rust-cst-debug-depth): derived Debug recurses without depth bound; DoS risk for
-        # downstream parsers over untrusted input (tree depth is attacker-controlled).
-        lines.append("#[derive(Clone, Debug)]")
+        lines.append("///")
+        lines.append(
+            "/// `Debug` output is non-recursive: prints span + child count only."
+            " Traverse via `children()` to inspect subtrees."
+        )
+        if child_classes:
+            lines.append("/// Teardown is iterative: bounded stack at any depth.")
+        lines.append("#[derive(Clone)]")
         lines.append(f"pub struct {class_name} {{")
         lines.append("    // Not pub: use span() / children() / push_child() — the stable accessor API.")
         lines.append("    // Direct field access bypasses any future validation logic on setters.")
@@ -675,6 +728,61 @@ class RustCstGenerator:
         lines.append("}")
         lines.append("")
 
+        # Manual Debug: non-recursive, prints span + child count.
+        # Derived Debug would recurse through Shared<T> children with no depth bound;
+        # tree depth is attacker-controlled for parsers over untrusted input,
+        # so {:?} on a deep tree would abort the process (stack exhaustion, uncatchable).
+        lines.append("// Manual Debug: prints span + child COUNT, never recursing into children.")
+        lines.append("// A derived Debug would recurse through Shared<T> children with no depth")
+        lines.append("// bound; tree depth is attacker-controlled for parsers over untrusted")
+        lines.append("// input, so `{:?}` on a deep tree would abort the process (stack")
+        lines.append("// exhaustion, uncatchable). Mirrors the Python __repr__'s content.")
+        lines.append(f"impl fmt::Debug for {class_name} {{")
+        lines.append("    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {")
+        lines.append(f'        f.debug_struct("{class_name}")')
+        lines.append('            .field("span", &self.span)')
+        lines.append('            .field("children", &format_args!("<{} child(ren)>", self.children.len()))')
+        lines.append("            .finish()")
+        lines.append("    }")
+        lines.append("}")
+        lines.append("")
+
+        # impl Drop: iterative worklist teardown for nodes with node-typed children.
+        # Derived drop glue would recurse through Shared children one frame set per tree level;
+        # tree depth is attacker-controlled for parsers over untrusted input → stack exhaustion,
+        # uncatchable abort. Only emitted when child_classes is non-empty; span-only nodes
+        # cannot recurse on drop and get no Drop impl (also avoids an E0509 restriction
+        # on moving fields out of types implementing Drop).
+        if child_classes:
+            lines.append("// Iterative Drop: derived drop glue would recurse through Shared children")
+            lines.append("// one frame set per tree level (attacker-controlled depth → stack")
+            lines.append("// exhaustion, uncatchable abort). Drains the subtree via a worklist instead.")
+            lines.append(f"impl Drop for {class_name} {{")
+            lines.append("    fn drop(&mut self) {")
+            lines.append("        if self.children.is_empty() {")
+            lines.append("            return; // also the recursion terminator for nodes drained by the worklist")
+            lines.append("        }")
+            lines.append("        // Worklist is allocated lazily: Vec::new() does not heap-allocate until")
+            lines.append("        // the first push.  drain_into pushes only when it steals (count == 1).")
+            lines.append("        // In the common backtracking case (shared/memoized children) no steal")
+            lines.append("        // occurs and no allocation happens.  Owned deep chains allocate once.")
+            lines.append("        let mut worklist: Vec<DropWorklistItem> = Vec::new();")
+            lines.append("        for (_, child) in self.children.drain(..) {")
+            lines.append("            if let Some(item) = child.into_drop_item() {")
+            lines.append("                item.drain_into(&mut worklist);")
+            lines.append("            }")
+            lines.append("        }")
+            lines.append("        while let Some(item) = worklist.pop() {")
+            lines.append("            item.drain_into(&mut worklist);")
+            lines.append("        }")
+            lines.append("    }")
+            lines.append("}")
+            lines.append("")
+
+        # TODO(rust-cst-eq-depth): this derived PartialEq recurses through Shared<T> children
+        # with no depth bound; tree depth is attacker-controlled, so assert_eq! on a deep
+        # parser-produced tree aborts (stack exhaustion, uncatchable). Fix: emit iterative
+        # impl PartialEq following the same _drop_block worklist pattern.
         # Native PartialEq: compares span + children recursively.  For node-typed children,
         # Shared::PartialEq applies a ptr_eq short-circuit which eliminates same-lock re-entry
         # on `x == x`.  DAG comparisons (position-shifted sharing) still hold both guards
@@ -1539,6 +1647,69 @@ class RustCstGenerator:
             "    }",
             "",
         ]
+
+    # ------------------------------------------------------------------
+    # Drop worklist block (emitted once per file, after per-rule loop)
+    # ------------------------------------------------------------------
+
+    @staticmethod
+    def _emit_drain_arm(lines: list[str], cls: str) -> None:
+        """Append one match arm body for `drain_into`.
+
+        All arms are structurally identical (only the variant name differs), so this helper
+        makes uniformity explicit and keeps the change surface for future edits to the drain
+        logic at one site rather than N copies in the loop below.
+        """
+        lines.append(f"            DropWorklistItem::{cls}(shared) => {{")
+        lines.append("                if shared.strong_count() == 1 {")
+        lines.append("                    // Sole owner: steal the children so the node drops childless")
+        lines.append("                    // (its Drop early-returns) instead of recursing through drop glue.")
+        lines.append("                    let children = std::mem::take(&mut shared.write().children);")
+        lines.append(
+            "                    worklist.extend(children.into_iter().filter_map(|(_, c)| c.into_drop_item()));"
+        )
+        lines.append("                }")
+        lines.append("            }")
+
+    def _drop_block(self, child_union: list[str]) -> str:
+        """Emit the DropWorklistItem enum + drain_into impl (one variant per child-class-union member).
+
+        Skipped (returns empty string) when the union is empty (flat grammar, no node-typed children).
+        Module-private (no pub) — only called by the per-node impl Drop and into_drop_item methods.
+
+        The variant set is the child-class union: classes that appear as node-typed children in any
+        child enum.  Never-child root classes are excluded (their own Drop seeds the worklist directly;
+        they never appear as a variant and an unused variant would trip dead_code under -D warnings).
+        """
+        if not child_union:
+            return ""
+
+        lines: list[str] = []
+        lines.append(f"// {'─' * 75}")
+        lines.append("// DropWorklistItem")
+        lines.append(f"// {'─' * 75}")
+        lines.append("")
+        lines.append("// Worklist item for iterative node teardown. See the per-node `impl Drop`.")
+        lines.append("// Module-private: only used by impl Drop and into_drop_item in this file.")
+        lines.append("enum DropWorklistItem {")
+        for cls in child_union:
+            lines.append(f"    {cls}(Shared<{cls}>),")
+        lines.append("}")
+        lines.append("")
+        lines.append("impl DropWorklistItem {")
+        lines.append("    fn drain_into(self, worklist: &mut Vec<DropWorklistItem>) {")
+        lines.append("        // Each arm: if sole owner, steal children (so the node's Drop early-returns")
+        lines.append("        // instead of recursing through drop glue); then drop `shared`.")
+        lines.append("        // count==1 → childless node after steal, trivial drop;")
+        lines.append("        // count>1 → refcount decrement only. Either way, no recursion.")
+        lines.append("        match self {")
+        for cls in child_union:
+            self._emit_drain_arm(lines, cls)
+        lines.append("        }")
+        lines.append("    }")
+        lines.append("}")
+        lines.append("")
+        return "\n".join(lines)
 
     # ------------------------------------------------------------------
     # register_classes

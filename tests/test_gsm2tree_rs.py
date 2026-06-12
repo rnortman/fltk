@@ -375,6 +375,40 @@ class TestNodeStructure:
 
 
 # ---------------------------------------------------------------------------
+# Node Debug and Drop generation
+# ---------------------------------------------------------------------------
+
+
+class TestNodeDebugDrop:
+    """Generator-level tests for the iterative Debug/Drop emission."""
+
+    def test_node_struct_derives_clone_only(self, poc_source: str) -> None:
+        """Node structs use #[derive(Clone)] only — Debug is a manual impl."""
+        assert "#[derive(Clone)]\npub struct Identifier {" in poc_source
+        assert "#[derive(Clone, Debug)]\npub struct Identifier {" not in poc_source
+
+    def test_manual_debug_impl_emitted(self, poc_source: str) -> None:
+        """Manual impl fmt::Debug is emitted for every node struct."""
+        assert "impl fmt::Debug for Identifier {" in poc_source
+        assert "impl fmt::Debug for Items {" in poc_source
+        assert 'f.debug_struct("Identifier")' in poc_source
+        assert '"<{} child(ren)>"' in poc_source
+
+    def test_drop_worklist_emitted_for_non_flat_grammar(self, poc_source: str) -> None:
+        """DropWorklistItem enum is emitted when the grammar has node-typed children."""
+        # PoC grammar: Items has an Identifier child, so child-class union is non-empty.
+        assert "enum DropWorklistItem {" in poc_source
+
+    def test_drop_impl_emitted_for_node_with_node_typed_children(self, poc_source: str) -> None:
+        """impl Drop is emitted for Items (has Identifier node-typed child)."""
+        assert "impl Drop for Items {" in poc_source
+
+    def test_drop_impl_not_emitted_for_span_only_node(self, poc_source: str) -> None:
+        """impl Drop is NOT emitted for Identifier (span-only children, no recursion risk)."""
+        assert "impl Drop for Identifier {" not in poc_source
+
+
+# ---------------------------------------------------------------------------
 # AC-5: register_classes function
 # ---------------------------------------------------------------------------
 
@@ -445,12 +479,19 @@ class TestCfgFeatureGate:
                 )
 
     def test_node_struct_pyclass_gated(self, poc_source: str) -> None:
-        """Phase 1: data struct uses #[derive(Clone, Debug)] (no pyclass); handle uses
+        """Phase 1: data struct has no pyclass; handle uses
         #[cfg(feature = "python")] + #[pyclass(frozen, weakref, name = "...")] .
-        Phase 2: data struct now also derives Debug.
+        Phase 2: data struct derives Clone only; a manual impl fmt::Debug is emitted instead
+        of derive(Debug) to keep Debug non-recursive (depth-bounded output).
         """
-        # Data struct derives Clone and Debug (Phase 2)
-        assert "#[derive(Clone, Debug)]" in poc_source
+        # Node data struct derives Clone only (not Debug — Debug is a manual impl).
+        assert "#[derive(Clone)]\npub struct Identifier {" in poc_source
+        # Node data structs must NOT have derive(Debug).
+        assert "#[derive(Clone, Debug)]\npub struct Identifier {" not in poc_source
+        # Manual Debug impl must be present for each node struct.
+        assert "impl fmt::Debug for Identifier {" in poc_source
+        assert 'f.debug_struct("Identifier")' in poc_source
+        assert '"<{} child(ren)>"' in poc_source
         # Handle pyclass gate
         assert '#[cfg(feature = "python")]' in poc_source
         # No raw bare #[pyclass] without attributes
@@ -642,6 +683,14 @@ class TestMinimalGrammar:
         assert "UNKNOWN_SPAN_CACHE" not in minimal_source
         assert "FLTK_NATIVE_SPAN_TYPE" not in minimal_source
         assert "get_source_text_type" not in minimal_source
+
+    def test_flat_grammar_no_drop_worklist(self, minimal_source: str) -> None:
+        """Flat grammar (no node-typed children anywhere) must not emit DropWorklistItem.
+
+        An empty-union DropWorklistItem would cause dead_code warnings under -D warnings.
+        """
+        assert "DropWorklistItem" not in minimal_source, "flat grammar must not emit DropWorklistItem"
+        assert "impl Drop" not in minimal_source, "flat grammar must not emit impl Drop"
 
 
 # ---------------------------------------------------------------------------

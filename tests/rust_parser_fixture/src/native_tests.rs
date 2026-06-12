@@ -2,6 +2,187 @@
 mod tests {
     use crate::cst;
     use crate::parser::Parser;
+    use fltk_cst_core::Shared;
+
+    // ── deep-tree tests (iterative Debug + iterative Drop) ────────────────
+
+    const DEEP_TREE_DEPTH: usize = 100_000;
+
+    /// Build a `DEEP_TREE_DEPTH`-level Expr chain iteratively (leaf-up).
+    /// Each level is an Expr with one lhs:Expr child pointing to the previous level.
+    /// Only the root Shared is retained; chain construction is non-recursive.
+    fn build_deep_expr_chain() -> Shared<cst::Expr> {
+        // Build an atom leaf (Atom wrapping a Num wrapping a Span) at the bottom.
+        // Num: span-only.
+        let leaf_num = Shared::new(cst::Num::new(fltk_cst_core::Span::unknown()));
+        let mut leaf_atom = cst::Atom::new(fltk_cst_core::Span::unknown());
+        leaf_atom.append_num(leaf_num);
+        let leaf_atom_shared = Shared::new(leaf_atom);
+
+        // First Expr is atom:leaf_atom.
+        let mut bottom = cst::Expr::new(fltk_cst_core::Span::unknown());
+        bottom.append_atom(leaf_atom_shared);
+        let mut prev = Shared::new(bottom);
+
+        // Each subsequent level wraps the previous as lhs:Expr.
+        for _ in 1..DEEP_TREE_DEPTH {
+            let mut node = cst::Expr::new(fltk_cst_core::Span::unknown());
+            node.append_lhs(prev.clone());
+            prev = Shared::new(node);
+        }
+        prev
+    }
+
+    /// Test 1: deep-tree Debug completes without stack overflow; output is bounded.
+    /// Pre-fix: the derived Debug would abort (stack exhaustion) at format!.
+    #[test]
+    fn test_deep_tree_debug_non_recursive() {
+        let root = build_deep_expr_chain();
+        // format! must complete (not abort or overflow).
+        let s = format!("{:?}", root.read());
+        // Output must contain the structural markers: "span" and "<N child(ren)>".
+        assert!(s.contains("span"), "Debug output must contain 'span'; got: {s}");
+        assert!(s.contains("child(ren)"), "Debug output must contain 'child(ren)'; got: {s}");
+        // Output must be bounded regardless of tree depth: << 1 KiB.
+        assert!(
+            s.len() < 256,
+            "Debug output must be small (< 256 bytes); got {} bytes: {s}",
+            s.len()
+        );
+        // Natural drop here also exercises iterative Drop (test 1 covers both).
+    }
+
+    /// Test 2: deep-tree drop completes without stack overflow.
+    /// Isolates the Drop fix from the Debug fix.
+    /// Pre-fix: the compiler-generated drop glue recurses per level → abort.
+    #[test]
+    fn test_deep_tree_drop_iterative() {
+        let root = build_deep_expr_chain();
+        // drop must complete (not abort or overflow).
+        drop(root);
+    }
+
+    /// Test 3: shared-subtree survival.  Parent drops iteratively; the shared child is
+    /// NOT stolen (strong_count > 1) and remains accessible through the retained handle.
+    #[test]
+    fn test_shared_subtree_survives_parent_drop() {
+        // grandchild
+        let grandchild = Shared::new(cst::Expr::new(fltk_cst_core::Span::unknown()));
+        // child wraps grandchild via lhs
+        let mut child_node = cst::Expr::new(fltk_cst_core::Span::unknown());
+        child_node.append_lhs(grandchild);
+        let child = Shared::new(child_node);
+        // parent wraps child via lhs
+        let mut parent_node = cst::Expr::new(fltk_cst_core::Span::unknown());
+        parent_node.append_lhs(child.clone()); // clone: parent + retained handle both point to child
+        let parent = Shared::new(parent_node);
+
+        // Verify child strong_count is 2: parent's child list + our retained handle.
+        assert_eq!(child.strong_count(), 2, "child strong_count must be 2 before parent drop");
+
+        // Drop parent: iterative Drop should NOT steal child (strong_count == 2 → skip steal).
+        drop(parent);
+
+        // child must still be live: our retained handle holds it.
+        // Its grandchild (the lhs) must still be present: child was not stolen.
+        assert_eq!(
+            child.read().children().len(),
+            1,
+            "child must still have its grandchild after parent drop (not stolen)"
+        );
+
+        // Drop retained handle: frees child + grandchild iteratively.
+        drop(child);
+    }
+
+    /// Test 4: Shared::strong_count reachability from a downstream crate.
+    /// The method contract (new→1, clone→2, drop→1) is the canonical unit test in
+    /// fltk-cst-core/src/shared.rs; this test only confirms the method is publicly
+    /// accessible when called on a generated CST type from a dependent crate.
+    #[test]
+    fn test_shared_strong_count() {
+        let s: Shared<cst::Expr> = Shared::new(cst::Expr::new(fltk_cst_core::Span::unknown()));
+        assert_eq!(s.strong_count(), 1, "count must be 1 after new");
+        let s2 = s.clone();
+        assert_eq!(s.strong_count(), 2, "count must be 2 after clone");
+        drop(s2);
+        assert_eq!(s.strong_count(), 1, "count must be back to 1 after drop of clone");
+    }
+
+    /// Test 4b: multi-child worklist drain.
+    /// Tests 1 and 2 each build a chain where every Expr has exactly 1 node-typed child
+    /// (lhs:Expr), so the worklist holds at most 1 item at a time.  This test builds a tree
+    /// where each parent has two node-typed children (lhs:Expr + rhs:Atom) to exercise the
+    /// multi-child drain path that enqueues both children.
+    #[test]
+    fn test_multi_child_drop_worklist() {
+        // Build a 100-level chain; each level has lhs:Expr (node-typed) and rhs:Atom (node-typed).
+        // At each level the worklist must hold at least 2 items simultaneously.
+        let leaf_num = Shared::new(cst::Num::new(fltk_cst_core::Span::unknown()));
+        let mut leaf_atom = cst::Atom::new(fltk_cst_core::Span::unknown());
+        leaf_atom.append_num(leaf_num);
+        let leaf_atom_shared = Shared::new(leaf_atom);
+
+        // Bottom Expr: atom:leaf_atom (atom-only variant).
+        let mut bottom = cst::Expr::new(fltk_cst_core::Span::unknown());
+        bottom.append_atom(leaf_atom_shared.clone());
+        let mut prev = Shared::new(bottom);
+
+        // Build 100 levels; each level adds lhs:Expr + rhs:Atom children.
+        for _ in 0..100 {
+            let mut node = cst::Expr::new(fltk_cst_core::Span::unknown());
+            node.append_lhs(prev);
+            // rhs: a fresh atom (owned, sole ref → will be stolen and enqueued)
+            let mut rhs_atom = cst::Atom::new(fltk_cst_core::Span::unknown());
+            rhs_atom.append_num(Shared::new(cst::Num::new(fltk_cst_core::Span::unknown())));
+            node.append_rhs(Shared::new(rhs_atom));
+            prev = Shared::new(node);
+        }
+        // drop must complete without stack overflow; both child paths are exercised.
+        drop(prev);
+        drop(leaf_atom_shared);
+    }
+
+    /// Test 5: parser-produced deep-tree.  Left-recursive seed-grow creates trees whose
+    /// depth scales with input length (evaluation-drop-depth-reachability.md §2), independently
+    /// of the parse-depth-limit.  This test pins reachability via actual parsing in CI.
+    #[test]
+    fn test_parser_produced_deep_tree_debug_and_drop() {
+        // Input: "1" + "+1" * DEEP_TREE_DEPTH ≈ 200 KiB; left-recursive expr builds a DEEP_TREE_DEPTH-level chain.
+        let n = DEEP_TREE_DEPTH;
+        let mut src = String::with_capacity(1 + 2 * n);
+        src.push('1');
+        for _ in 0..n {
+            src.push_str("+1");
+        }
+
+        let mut parser = Parser::new(&src, false);
+        let result = parser.apply__parse_expr(0);
+        assert!(
+            result.is_some(),
+            "parser must succeed on deep input: {}",
+            parser.error_message()
+        );
+        let r = result.unwrap();
+        assert_eq!(r.pos, (1 + 2 * n) as i64, "parser must consume all input");
+
+        // format! must complete (not abort).
+        let dbg = format!("{:?}", r.result.read());
+        assert!(
+            dbg.contains("child(ren)"),
+            "Debug output must contain 'child(ren)'; got: {dbg}"
+        );
+        assert!(dbg.len() < 256, "Debug output must be bounded; got {} bytes", dbg.len());
+
+        // Explicit drop ordering: result (r) first, then parser (memo table).
+        // `r` was declared after `parser`, so Rust's LIFO destructor order would drop it
+        // first anyway; the explicit calls make the intended sequence visible and testable.
+        // After drop(r): root's iterative Drop runs.
+        // After drop(parser): the memo cache releases its ~100_000 memoized Shared<Expr>
+        // handles; each whose count hits 1 runs an iterative Drop.
+        drop(r);
+        drop(parser);
+    }
 
     // ── num rule ──────────────────────────────────────────────────────────
 

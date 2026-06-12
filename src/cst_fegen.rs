@@ -1,6 +1,7 @@
 use fltk_cst_core::CstError;
 use fltk_cst_core::Span;
 use fltk_cst_core::Shared;
+use std::fmt;
 #[cfg(feature = "python")]
 use fltk_cst_core::{extract_span, get_span_type, span_to_pyobject};
 #[cfg(feature = "python")]
@@ -197,6 +198,15 @@ impl PartialEq for GrammarChild {
     }
 }
 
+impl GrammarChild {
+    fn into_drop_item(self) -> Option<DropWorklistItem> {
+        match self {
+            Self::Rule(s) => Some(DropWorklistItem::Rule(s)),
+            Self::Trivia(s) => Some(DropWorklistItem::Trivia(s)),
+        }
+    }
+}
+
 #[cfg(feature = "python")]
 impl GrammarChild {
     fn to_pyobject(&self, py: Python<'_>) -> PyResult<PyObject> {
@@ -259,12 +269,53 @@ impl GrammarChild {
 // ───────────────────────────────────────────────────────────────────────────
 
 /// CST data struct for `Grammar`. See [`fltk_cst_core::Shared`] for clone/equality/reference semantics.
-#[derive(Clone, Debug)]
+///
+/// `Debug` output is non-recursive: prints span + child count only. Traverse via `children()` to inspect subtrees.
+/// Teardown is iterative: bounded stack at any depth.
+#[derive(Clone)]
 pub struct Grammar {
     // Not pub: use span() / children() / push_child() — the stable accessor API.
     // Direct field access bypasses any future validation logic on setters.
     span: Span,
     children: Vec<(Option<GrammarLabel>, GrammarChild)>,
+}
+
+// Manual Debug: prints span + child COUNT, never recursing into children.
+// A derived Debug would recurse through Shared<T> children with no depth
+// bound; tree depth is attacker-controlled for parsers over untrusted
+// input, so `{:?}` on a deep tree would abort the process (stack
+// exhaustion, uncatchable). Mirrors the Python __repr__'s content.
+impl fmt::Debug for Grammar {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("Grammar")
+            .field("span", &self.span)
+            .field("children", &format_args!("<{} child(ren)>", self.children.len()))
+            .finish()
+    }
+}
+
+// Iterative Drop: derived drop glue would recurse through Shared children
+// one frame set per tree level (attacker-controlled depth → stack
+// exhaustion, uncatchable abort). Drains the subtree via a worklist instead.
+impl Drop for Grammar {
+    fn drop(&mut self) {
+        if self.children.is_empty() {
+            return; // also the recursion terminator for nodes drained by the worklist
+        }
+        // Worklist is allocated lazily: Vec::new() does not heap-allocate until
+        // the first push.  drain_into pushes only when it steals (count == 1).
+        // In the common backtracking case (shared/memoized children) no steal
+        // occurs and no allocation happens.  Owned deep chains allocate once.
+        let mut worklist: Vec<DropWorklistItem> = Vec::new();
+        for (_, child) in self.children.drain(..) {
+            if let Some(item) = child.into_drop_item() {
+                item.drain_into(&mut worklist);
+            }
+        }
+        while let Some(item) = worklist.pop() {
+            item.drain_into(&mut worklist);
+        }
+    }
 }
 
 impl PartialEq for Grammar {
@@ -798,6 +849,16 @@ impl PartialEq for RuleChild {
     }
 }
 
+impl RuleChild {
+    fn into_drop_item(self) -> Option<DropWorklistItem> {
+        match self {
+            Self::Alternatives(s) => Some(DropWorklistItem::Alternatives(s)),
+            Self::Identifier(s) => Some(DropWorklistItem::Identifier(s)),
+            Self::Trivia(s) => Some(DropWorklistItem::Trivia(s)),
+        }
+    }
+}
+
 #[cfg(feature = "python")]
 impl RuleChild {
     fn to_pyobject(&self, py: Python<'_>) -> PyResult<PyObject> {
@@ -879,12 +940,53 @@ impl RuleChild {
 // ───────────────────────────────────────────────────────────────────────────
 
 /// CST data struct for `Rule`. See [`fltk_cst_core::Shared`] for clone/equality/reference semantics.
-#[derive(Clone, Debug)]
+///
+/// `Debug` output is non-recursive: prints span + child count only. Traverse via `children()` to inspect subtrees.
+/// Teardown is iterative: bounded stack at any depth.
+#[derive(Clone)]
 pub struct Rule {
     // Not pub: use span() / children() / push_child() — the stable accessor API.
     // Direct field access bypasses any future validation logic on setters.
     span: Span,
     children: Vec<(Option<RuleLabel>, RuleChild)>,
+}
+
+// Manual Debug: prints span + child COUNT, never recursing into children.
+// A derived Debug would recurse through Shared<T> children with no depth
+// bound; tree depth is attacker-controlled for parsers over untrusted
+// input, so `{:?}` on a deep tree would abort the process (stack
+// exhaustion, uncatchable). Mirrors the Python __repr__'s content.
+impl fmt::Debug for Rule {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("Rule")
+            .field("span", &self.span)
+            .field("children", &format_args!("<{} child(ren)>", self.children.len()))
+            .finish()
+    }
+}
+
+// Iterative Drop: derived drop glue would recurse through Shared children
+// one frame set per tree level (attacker-controlled depth → stack
+// exhaustion, uncatchable abort). Drains the subtree via a worklist instead.
+impl Drop for Rule {
+    fn drop(&mut self) {
+        if self.children.is_empty() {
+            return; // also the recursion terminator for nodes drained by the worklist
+        }
+        // Worklist is allocated lazily: Vec::new() does not heap-allocate until
+        // the first push.  drain_into pushes only when it steals (count == 1).
+        // In the common backtracking case (shared/memoized children) no steal
+        // occurs and no allocation happens.  Owned deep chains allocate once.
+        let mut worklist: Vec<DropWorklistItem> = Vec::new();
+        for (_, child) in self.children.drain(..) {
+            if let Some(item) = child.into_drop_item() {
+                item.drain_into(&mut worklist);
+            }
+        }
+        while let Some(item) = worklist.pop() {
+            item.drain_into(&mut worklist);
+        }
+    }
 }
 
 impl PartialEq for Rule {
@@ -1572,6 +1674,15 @@ impl PartialEq for AlternativesChild {
     }
 }
 
+impl AlternativesChild {
+    fn into_drop_item(self) -> Option<DropWorklistItem> {
+        match self {
+            Self::Items(s) => Some(DropWorklistItem::Items(s)),
+            Self::Trivia(s) => Some(DropWorklistItem::Trivia(s)),
+        }
+    }
+}
+
 #[cfg(feature = "python")]
 impl AlternativesChild {
     fn to_pyobject(&self, py: Python<'_>) -> PyResult<PyObject> {
@@ -1634,12 +1745,53 @@ impl AlternativesChild {
 // ───────────────────────────────────────────────────────────────────────────
 
 /// CST data struct for `Alternatives`. See [`fltk_cst_core::Shared`] for clone/equality/reference semantics.
-#[derive(Clone, Debug)]
+///
+/// `Debug` output is non-recursive: prints span + child count only. Traverse via `children()` to inspect subtrees.
+/// Teardown is iterative: bounded stack at any depth.
+#[derive(Clone)]
 pub struct Alternatives {
     // Not pub: use span() / children() / push_child() — the stable accessor API.
     // Direct field access bypasses any future validation logic on setters.
     span: Span,
     children: Vec<(Option<AlternativesLabel>, AlternativesChild)>,
+}
+
+// Manual Debug: prints span + child COUNT, never recursing into children.
+// A derived Debug would recurse through Shared<T> children with no depth
+// bound; tree depth is attacker-controlled for parsers over untrusted
+// input, so `{:?}` on a deep tree would abort the process (stack
+// exhaustion, uncatchable). Mirrors the Python __repr__'s content.
+impl fmt::Debug for Alternatives {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("Alternatives")
+            .field("span", &self.span)
+            .field("children", &format_args!("<{} child(ren)>", self.children.len()))
+            .finish()
+    }
+}
+
+// Iterative Drop: derived drop glue would recurse through Shared children
+// one frame set per tree level (attacker-controlled depth → stack
+// exhaustion, uncatchable abort). Drains the subtree via a worklist instead.
+impl Drop for Alternatives {
+    fn drop(&mut self) {
+        if self.children.is_empty() {
+            return; // also the recursion terminator for nodes drained by the worklist
+        }
+        // Worklist is allocated lazily: Vec::new() does not heap-allocate until
+        // the first push.  drain_into pushes only when it steals (count == 1).
+        // In the common backtracking case (shared/memoized children) no steal
+        // occurs and no allocation happens.  Owned deep chains allocate once.
+        let mut worklist: Vec<DropWorklistItem> = Vec::new();
+        for (_, child) in self.children.drain(..) {
+            if let Some(item) = child.into_drop_item() {
+                item.drain_into(&mut worklist);
+            }
+        }
+        while let Some(item) = worklist.pop() {
+            item.drain_into(&mut worklist);
+        }
+    }
 }
 
 impl PartialEq for Alternatives {
@@ -2181,6 +2333,16 @@ impl PartialEq for ItemsChild {
     }
 }
 
+impl ItemsChild {
+    fn into_drop_item(self) -> Option<DropWorklistItem> {
+        match self {
+            Self::Span(_) => None,
+            Self::Item(s) => Some(DropWorklistItem::Item(s)),
+            Self::Trivia(s) => Some(DropWorklistItem::Trivia(s)),
+        }
+    }
+}
+
 #[cfg(feature = "python")]
 impl ItemsChild {
     fn to_pyobject(&self, py: Python<'_>) -> PyResult<PyObject> {
@@ -2250,12 +2412,53 @@ impl ItemsChild {
 // ───────────────────────────────────────────────────────────────────────────
 
 /// CST data struct for `Items`. See [`fltk_cst_core::Shared`] for clone/equality/reference semantics.
-#[derive(Clone, Debug)]
+///
+/// `Debug` output is non-recursive: prints span + child count only. Traverse via `children()` to inspect subtrees.
+/// Teardown is iterative: bounded stack at any depth.
+#[derive(Clone)]
 pub struct Items {
     // Not pub: use span() / children() / push_child() — the stable accessor API.
     // Direct field access bypasses any future validation logic on setters.
     span: Span,
     children: Vec<(Option<ItemsLabel>, ItemsChild)>,
+}
+
+// Manual Debug: prints span + child COUNT, never recursing into children.
+// A derived Debug would recurse through Shared<T> children with no depth
+// bound; tree depth is attacker-controlled for parsers over untrusted
+// input, so `{:?}` on a deep tree would abort the process (stack
+// exhaustion, uncatchable). Mirrors the Python __repr__'s content.
+impl fmt::Debug for Items {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("Items")
+            .field("span", &self.span)
+            .field("children", &format_args!("<{} child(ren)>", self.children.len()))
+            .finish()
+    }
+}
+
+// Iterative Drop: derived drop glue would recurse through Shared children
+// one frame set per tree level (attacker-controlled depth → stack
+// exhaustion, uncatchable abort). Drains the subtree via a worklist instead.
+impl Drop for Items {
+    fn drop(&mut self) {
+        if self.children.is_empty() {
+            return; // also the recursion terminator for nodes drained by the worklist
+        }
+        // Worklist is allocated lazily: Vec::new() does not heap-allocate until
+        // the first push.  drain_into pushes only when it steals (count == 1).
+        // In the common backtracking case (shared/memoized children) no steal
+        // occurs and no allocation happens.  Owned deep chains allocate once.
+        let mut worklist: Vec<DropWorklistItem> = Vec::new();
+        for (_, child) in self.children.drain(..) {
+            if let Some(item) = child.into_drop_item() {
+                item.drain_into(&mut worklist);
+            }
+        }
+        while let Some(item) = worklist.pop() {
+            item.drain_into(&mut worklist);
+        }
+    }
 }
 
 impl PartialEq for Items {
@@ -3281,6 +3484,18 @@ impl PartialEq for ItemChild {
     }
 }
 
+impl ItemChild {
+    fn into_drop_item(self) -> Option<DropWorklistItem> {
+        match self {
+            Self::Disposition(s) => Some(DropWorklistItem::Disposition(s)),
+            Self::Identifier(s) => Some(DropWorklistItem::Identifier(s)),
+            Self::Quantifier(s) => Some(DropWorklistItem::Quantifier(s)),
+            Self::Term(s) => Some(DropWorklistItem::Term(s)),
+            Self::Trivia(s) => Some(DropWorklistItem::Trivia(s)),
+        }
+    }
+}
+
 #[cfg(feature = "python")]
 impl ItemChild {
     fn to_pyobject(&self, py: Python<'_>) -> PyResult<PyObject> {
@@ -3400,12 +3615,53 @@ impl ItemChild {
 // ───────────────────────────────────────────────────────────────────────────
 
 /// CST data struct for `Item`. See [`fltk_cst_core::Shared`] for clone/equality/reference semantics.
-#[derive(Clone, Debug)]
+///
+/// `Debug` output is non-recursive: prints span + child count only. Traverse via `children()` to inspect subtrees.
+/// Teardown is iterative: bounded stack at any depth.
+#[derive(Clone)]
 pub struct Item {
     // Not pub: use span() / children() / push_child() — the stable accessor API.
     // Direct field access bypasses any future validation logic on setters.
     span: Span,
     children: Vec<(Option<ItemLabel>, ItemChild)>,
+}
+
+// Manual Debug: prints span + child COUNT, never recursing into children.
+// A derived Debug would recurse through Shared<T> children with no depth
+// bound; tree depth is attacker-controlled for parsers over untrusted
+// input, so `{:?}` on a deep tree would abort the process (stack
+// exhaustion, uncatchable). Mirrors the Python __repr__'s content.
+impl fmt::Debug for Item {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("Item")
+            .field("span", &self.span)
+            .field("children", &format_args!("<{} child(ren)>", self.children.len()))
+            .finish()
+    }
+}
+
+// Iterative Drop: derived drop glue would recurse through Shared children
+// one frame set per tree level (attacker-controlled depth → stack
+// exhaustion, uncatchable abort). Drains the subtree via a worklist instead.
+impl Drop for Item {
+    fn drop(&mut self) {
+        if self.children.is_empty() {
+            return; // also the recursion terminator for nodes drained by the worklist
+        }
+        // Worklist is allocated lazily: Vec::new() does not heap-allocate until
+        // the first push.  drain_into pushes only when it steals (count == 1).
+        // In the common backtracking case (shared/memoized children) no steal
+        // occurs and no allocation happens.  Owned deep chains allocate once.
+        let mut worklist: Vec<DropWorklistItem> = Vec::new();
+        for (_, child) in self.children.drain(..) {
+            if let Some(item) = child.into_drop_item() {
+                item.drain_into(&mut worklist);
+            }
+        }
+        while let Some(item) = worklist.pop() {
+            item.drain_into(&mut worklist);
+        }
+    }
 }
 
 impl PartialEq for Item {
@@ -4431,6 +4687,18 @@ impl PartialEq for TermChild {
     }
 }
 
+impl TermChild {
+    fn into_drop_item(self) -> Option<DropWorklistItem> {
+        match self {
+            Self::Alternatives(s) => Some(DropWorklistItem::Alternatives(s)),
+            Self::Identifier(s) => Some(DropWorklistItem::Identifier(s)),
+            Self::Literal(s) => Some(DropWorklistItem::Literal(s)),
+            Self::RawString(s) => Some(DropWorklistItem::RawString(s)),
+            Self::Trivia(s) => Some(DropWorklistItem::Trivia(s)),
+        }
+    }
+}
+
 #[cfg(feature = "python")]
 impl TermChild {
     fn to_pyobject(&self, py: Python<'_>) -> PyResult<PyObject> {
@@ -4550,12 +4818,53 @@ impl TermChild {
 // ───────────────────────────────────────────────────────────────────────────
 
 /// CST data struct for `Term`. See [`fltk_cst_core::Shared`] for clone/equality/reference semantics.
-#[derive(Clone, Debug)]
+///
+/// `Debug` output is non-recursive: prints span + child count only. Traverse via `children()` to inspect subtrees.
+/// Teardown is iterative: bounded stack at any depth.
+#[derive(Clone)]
 pub struct Term {
     // Not pub: use span() / children() / push_child() — the stable accessor API.
     // Direct field access bypasses any future validation logic on setters.
     span: Span,
     children: Vec<(Option<TermLabel>, TermChild)>,
+}
+
+// Manual Debug: prints span + child COUNT, never recursing into children.
+// A derived Debug would recurse through Shared<T> children with no depth
+// bound; tree depth is attacker-controlled for parsers over untrusted
+// input, so `{:?}` on a deep tree would abort the process (stack
+// exhaustion, uncatchable). Mirrors the Python __repr__'s content.
+impl fmt::Debug for Term {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("Term")
+            .field("span", &self.span)
+            .field("children", &format_args!("<{} child(ren)>", self.children.len()))
+            .finish()
+    }
+}
+
+// Iterative Drop: derived drop glue would recurse through Shared children
+// one frame set per tree level (attacker-controlled depth → stack
+// exhaustion, uncatchable abort). Drains the subtree via a worklist instead.
+impl Drop for Term {
+    fn drop(&mut self) {
+        if self.children.is_empty() {
+            return; // also the recursion terminator for nodes drained by the worklist
+        }
+        // Worklist is allocated lazily: Vec::new() does not heap-allocate until
+        // the first push.  drain_into pushes only when it steals (count == 1).
+        // In the common backtracking case (shared/memoized children) no steal
+        // occurs and no allocation happens.  Owned deep chains allocate once.
+        let mut worklist: Vec<DropWorklistItem> = Vec::new();
+        for (_, child) in self.children.drain(..) {
+            if let Some(item) = child.into_drop_item() {
+                item.drain_into(&mut worklist);
+            }
+        }
+        while let Some(item) = worklist.pop() {
+            item.drain_into(&mut worklist);
+        }
+    }
 }
 
 impl PartialEq for Term {
@@ -5568,6 +5877,14 @@ impl PartialEq for DispositionChild {
     }
 }
 
+impl DispositionChild {
+    fn into_drop_item(self) -> Option<DropWorklistItem> {
+        match self {
+            Self::Span(_) => None,
+        }
+    }
+}
+
 #[cfg(feature = "python")]
 impl DispositionChild {
     fn to_pyobject(&self, py: Python<'_>) -> PyResult<PyObject> {
@@ -5599,12 +5916,28 @@ impl DispositionChild {
 // ───────────────────────────────────────────────────────────────────────────
 
 /// CST data struct for `Disposition`. See [`fltk_cst_core::Shared`] for clone/equality/reference semantics.
-#[derive(Clone, Debug)]
+///
+/// `Debug` output is non-recursive: prints span + child count only. Traverse via `children()` to inspect subtrees.
+#[derive(Clone)]
 pub struct Disposition {
     // Not pub: use span() / children() / push_child() — the stable accessor API.
     // Direct field access bypasses any future validation logic on setters.
     span: Span,
     children: Vec<(Option<DispositionLabel>, DispositionChild)>,
+}
+
+// Manual Debug: prints span + child COUNT, never recursing into children.
+// A derived Debug would recurse through Shared<T> children with no depth
+// bound; tree depth is attacker-controlled for parsers over untrusted
+// input, so `{:?}` on a deep tree would abort the process (stack
+// exhaustion, uncatchable). Mirrors the Python __repr__'s content.
+impl fmt::Debug for Disposition {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("Disposition")
+            .field("span", &self.span)
+            .field("children", &format_args!("<{} child(ren)>", self.children.len()))
+            .finish()
+    }
 }
 
 impl PartialEq for Disposition {
@@ -6442,6 +6775,14 @@ impl PartialEq for QuantifierChild {
     }
 }
 
+impl QuantifierChild {
+    fn into_drop_item(self) -> Option<DropWorklistItem> {
+        match self {
+            Self::Span(_) => None,
+        }
+    }
+}
+
 #[cfg(feature = "python")]
 impl QuantifierChild {
     fn to_pyobject(&self, py: Python<'_>) -> PyResult<PyObject> {
@@ -6473,12 +6814,28 @@ impl QuantifierChild {
 // ───────────────────────────────────────────────────────────────────────────
 
 /// CST data struct for `Quantifier`. See [`fltk_cst_core::Shared`] for clone/equality/reference semantics.
-#[derive(Clone, Debug)]
+///
+/// `Debug` output is non-recursive: prints span + child count only. Traverse via `children()` to inspect subtrees.
+#[derive(Clone)]
 pub struct Quantifier {
     // Not pub: use span() / children() / push_child() — the stable accessor API.
     // Direct field access bypasses any future validation logic on setters.
     span: Span,
     children: Vec<(Option<QuantifierLabel>, QuantifierChild)>,
+}
+
+// Manual Debug: prints span + child COUNT, never recursing into children.
+// A derived Debug would recurse through Shared<T> children with no depth
+// bound; tree depth is attacker-controlled for parsers over untrusted
+// input, so `{:?}` on a deep tree would abort the process (stack
+// exhaustion, uncatchable). Mirrors the Python __repr__'s content.
+impl fmt::Debug for Quantifier {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("Quantifier")
+            .field("span", &self.span)
+            .field("children", &format_args!("<{} child(ren)>", self.children.len()))
+            .finish()
+    }
 }
 
 impl PartialEq for Quantifier {
@@ -7308,6 +7665,14 @@ impl PartialEq for IdentifierChild {
     }
 }
 
+impl IdentifierChild {
+    fn into_drop_item(self) -> Option<DropWorklistItem> {
+        match self {
+            Self::Span(_) => None,
+        }
+    }
+}
+
 #[cfg(feature = "python")]
 impl IdentifierChild {
     fn to_pyobject(&self, py: Python<'_>) -> PyResult<PyObject> {
@@ -7339,12 +7704,28 @@ impl IdentifierChild {
 // ───────────────────────────────────────────────────────────────────────────
 
 /// CST data struct for `Identifier`. See [`fltk_cst_core::Shared`] for clone/equality/reference semantics.
-#[derive(Clone, Debug)]
+///
+/// `Debug` output is non-recursive: prints span + child count only. Traverse via `children()` to inspect subtrees.
+#[derive(Clone)]
 pub struct Identifier {
     // Not pub: use span() / children() / push_child() — the stable accessor API.
     // Direct field access bypasses any future validation logic on setters.
     span: Span,
     children: Vec<(Option<IdentifierLabel>, IdentifierChild)>,
+}
+
+// Manual Debug: prints span + child COUNT, never recursing into children.
+// A derived Debug would recurse through Shared<T> children with no depth
+// bound; tree depth is attacker-controlled for parsers over untrusted
+// input, so `{:?}` on a deep tree would abort the process (stack
+// exhaustion, uncatchable). Mirrors the Python __repr__'s content.
+impl fmt::Debug for Identifier {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("Identifier")
+            .field("span", &self.span)
+            .field("children", &format_args!("<{} child(ren)>", self.children.len()))
+            .finish()
+    }
 }
 
 impl PartialEq for Identifier {
@@ -7864,6 +8245,14 @@ impl PartialEq for RawStringChild {
     }
 }
 
+impl RawStringChild {
+    fn into_drop_item(self) -> Option<DropWorklistItem> {
+        match self {
+            Self::Span(_) => None,
+        }
+    }
+}
+
 #[cfg(feature = "python")]
 impl RawStringChild {
     fn to_pyobject(&self, py: Python<'_>) -> PyResult<PyObject> {
@@ -7895,12 +8284,28 @@ impl RawStringChild {
 // ───────────────────────────────────────────────────────────────────────────
 
 /// CST data struct for `RawString`. See [`fltk_cst_core::Shared`] for clone/equality/reference semantics.
-#[derive(Clone, Debug)]
+///
+/// `Debug` output is non-recursive: prints span + child count only. Traverse via `children()` to inspect subtrees.
+#[derive(Clone)]
 pub struct RawString {
     // Not pub: use span() / children() / push_child() — the stable accessor API.
     // Direct field access bypasses any future validation logic on setters.
     span: Span,
     children: Vec<(Option<RawStringLabel>, RawStringChild)>,
+}
+
+// Manual Debug: prints span + child COUNT, never recursing into children.
+// A derived Debug would recurse through Shared<T> children with no depth
+// bound; tree depth is attacker-controlled for parsers over untrusted
+// input, so `{:?}` on a deep tree would abort the process (stack
+// exhaustion, uncatchable). Mirrors the Python __repr__'s content.
+impl fmt::Debug for RawString {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("RawString")
+            .field("span", &self.span)
+            .field("children", &format_args!("<{} child(ren)>", self.children.len()))
+            .finish()
+    }
 }
 
 impl PartialEq for RawString {
@@ -8420,6 +8825,14 @@ impl PartialEq for LiteralChild {
     }
 }
 
+impl LiteralChild {
+    fn into_drop_item(self) -> Option<DropWorklistItem> {
+        match self {
+            Self::Span(_) => None,
+        }
+    }
+}
+
 #[cfg(feature = "python")]
 impl LiteralChild {
     fn to_pyobject(&self, py: Python<'_>) -> PyResult<PyObject> {
@@ -8451,12 +8864,28 @@ impl LiteralChild {
 // ───────────────────────────────────────────────────────────────────────────
 
 /// CST data struct for `Literal`. See [`fltk_cst_core::Shared`] for clone/equality/reference semantics.
-#[derive(Clone, Debug)]
+///
+/// `Debug` output is non-recursive: prints span + child count only. Traverse via `children()` to inspect subtrees.
+#[derive(Clone)]
 pub struct Literal {
     // Not pub: use span() / children() / push_child() — the stable accessor API.
     // Direct field access bypasses any future validation logic on setters.
     span: Span,
     children: Vec<(Option<LiteralLabel>, LiteralChild)>,
+}
+
+// Manual Debug: prints span + child COUNT, never recursing into children.
+// A derived Debug would recurse through Shared<T> children with no depth
+// bound; tree depth is attacker-controlled for parsers over untrusted
+// input, so `{:?}` on a deep tree would abort the process (stack
+// exhaustion, uncatchable). Mirrors the Python __repr__'s content.
+impl fmt::Debug for Literal {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("Literal")
+            .field("span", &self.span)
+            .field("children", &format_args!("<{} child(ren)>", self.children.len()))
+            .finish()
+    }
 }
 
 impl PartialEq for Literal {
@@ -8985,6 +9414,16 @@ impl PartialEq for TriviaChild {
     }
 }
 
+impl TriviaChild {
+    fn into_drop_item(self) -> Option<DropWorklistItem> {
+        match self {
+            Self::Span(_) => None,
+            Self::BlockComment(s) => Some(DropWorklistItem::BlockComment(s)),
+            Self::LineComment(s) => Some(DropWorklistItem::LineComment(s)),
+        }
+    }
+}
+
 #[cfg(feature = "python")]
 impl TriviaChild {
     fn to_pyobject(&self, py: Python<'_>) -> PyResult<PyObject> {
@@ -9054,12 +9493,53 @@ impl TriviaChild {
 // ───────────────────────────────────────────────────────────────────────────
 
 /// CST data struct for `Trivia`. See [`fltk_cst_core::Shared`] for clone/equality/reference semantics.
-#[derive(Clone, Debug)]
+///
+/// `Debug` output is non-recursive: prints span + child count only. Traverse via `children()` to inspect subtrees.
+/// Teardown is iterative: bounded stack at any depth.
+#[derive(Clone)]
 pub struct Trivia {
     // Not pub: use span() / children() / push_child() — the stable accessor API.
     // Direct field access bypasses any future validation logic on setters.
     span: Span,
     children: Vec<(Option<TriviaLabel>, TriviaChild)>,
+}
+
+// Manual Debug: prints span + child COUNT, never recursing into children.
+// A derived Debug would recurse through Shared<T> children with no depth
+// bound; tree depth is attacker-controlled for parsers over untrusted
+// input, so `{:?}` on a deep tree would abort the process (stack
+// exhaustion, uncatchable). Mirrors the Python __repr__'s content.
+impl fmt::Debug for Trivia {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("Trivia")
+            .field("span", &self.span)
+            .field("children", &format_args!("<{} child(ren)>", self.children.len()))
+            .finish()
+    }
+}
+
+// Iterative Drop: derived drop glue would recurse through Shared children
+// one frame set per tree level (attacker-controlled depth → stack
+// exhaustion, uncatchable abort). Drains the subtree via a worklist instead.
+impl Drop for Trivia {
+    fn drop(&mut self) {
+        if self.children.is_empty() {
+            return; // also the recursion terminator for nodes drained by the worklist
+        }
+        // Worklist is allocated lazily: Vec::new() does not heap-allocate until
+        // the first push.  drain_into pushes only when it steals (count == 1).
+        // In the common backtracking case (shared/memoized children) no steal
+        // occurs and no allocation happens.  Owned deep chains allocate once.
+        let mut worklist: Vec<DropWorklistItem> = Vec::new();
+        for (_, child) in self.children.drain(..) {
+            if let Some(item) = child.into_drop_item() {
+                item.drain_into(&mut worklist);
+            }
+        }
+        while let Some(item) = worklist.pop() {
+            item.drain_into(&mut worklist);
+        }
+    }
 }
 
 impl PartialEq for Trivia {
@@ -9748,6 +10228,14 @@ impl PartialEq for LineCommentChild {
     }
 }
 
+impl LineCommentChild {
+    fn into_drop_item(self) -> Option<DropWorklistItem> {
+        match self {
+            Self::Span(_) => None,
+        }
+    }
+}
+
 #[cfg(feature = "python")]
 impl LineCommentChild {
     fn to_pyobject(&self, py: Python<'_>) -> PyResult<PyObject> {
@@ -9779,12 +10267,28 @@ impl LineCommentChild {
 // ───────────────────────────────────────────────────────────────────────────
 
 /// CST data struct for `LineComment`. See [`fltk_cst_core::Shared`] for clone/equality/reference semantics.
-#[derive(Clone, Debug)]
+///
+/// `Debug` output is non-recursive: prints span + child count only. Traverse via `children()` to inspect subtrees.
+#[derive(Clone)]
 pub struct LineComment {
     // Not pub: use span() / children() / push_child() — the stable accessor API.
     // Direct field access bypasses any future validation logic on setters.
     span: Span,
     children: Vec<(Option<LineCommentLabel>, LineCommentChild)>,
+}
+
+// Manual Debug: prints span + child COUNT, never recursing into children.
+// A derived Debug would recurse through Shared<T> children with no depth
+// bound; tree depth is attacker-controlled for parsers over untrusted
+// input, so `{:?}` on a deep tree would abort the process (stack
+// exhaustion, uncatchable). Mirrors the Python __repr__'s content.
+impl fmt::Debug for LineComment {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("LineComment")
+            .field("span", &self.span)
+            .field("children", &format_args!("<{} child(ren)>", self.children.len()))
+            .finish()
+    }
 }
 
 impl PartialEq for LineComment {
@@ -10467,6 +10971,14 @@ impl PartialEq for BlockCommentChild {
     }
 }
 
+impl BlockCommentChild {
+    fn into_drop_item(self) -> Option<DropWorklistItem> {
+        match self {
+            Self::Span(_) => None,
+        }
+    }
+}
+
 #[cfg(feature = "python")]
 impl BlockCommentChild {
     fn to_pyobject(&self, py: Python<'_>) -> PyResult<PyObject> {
@@ -10498,12 +11010,28 @@ impl BlockCommentChild {
 // ───────────────────────────────────────────────────────────────────────────
 
 /// CST data struct for `BlockComment`. See [`fltk_cst_core::Shared`] for clone/equality/reference semantics.
-#[derive(Clone, Debug)]
+///
+/// `Debug` output is non-recursive: prints span + child count only. Traverse via `children()` to inspect subtrees.
+#[derive(Clone)]
 pub struct BlockComment {
     // Not pub: use span() / children() / push_child() — the stable accessor API.
     // Direct field access bypasses any future validation logic on setters.
     span: Span,
     children: Vec<(Option<BlockCommentLabel>, BlockCommentChild)>,
+}
+
+// Manual Debug: prints span + child COUNT, never recursing into children.
+// A derived Debug would recurse through Shared<T> children with no depth
+// bound; tree depth is attacker-controlled for parsers over untrusted
+// input, so `{:?}` on a deep tree would abort the process (stack
+// exhaustion, uncatchable). Mirrors the Python __repr__'s content.
+impl fmt::Debug for BlockComment {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("BlockComment")
+            .field("span", &self.span)
+            .field("children", &format_args!("<{} child(ren)>", self.children.len()))
+            .finish()
+    }
 }
 
 impl PartialEq for BlockComment {
@@ -11259,6 +11787,143 @@ impl PyBlockComment {
         )
     }
 
+}
+
+// ───────────────────────────────────────────────────────────────────────────
+// DropWorklistItem
+// ───────────────────────────────────────────────────────────────────────────
+
+// Worklist item for iterative node teardown. See the per-node `impl Drop`.
+// Module-private: only used by impl Drop and into_drop_item in this file.
+enum DropWorklistItem {
+    Alternatives(Shared<Alternatives>),
+    BlockComment(Shared<BlockComment>),
+    Disposition(Shared<Disposition>),
+    Identifier(Shared<Identifier>),
+    Item(Shared<Item>),
+    Items(Shared<Items>),
+    LineComment(Shared<LineComment>),
+    Literal(Shared<Literal>),
+    Quantifier(Shared<Quantifier>),
+    RawString(Shared<RawString>),
+    Rule(Shared<Rule>),
+    Term(Shared<Term>),
+    Trivia(Shared<Trivia>),
+}
+
+impl DropWorklistItem {
+    fn drain_into(self, worklist: &mut Vec<DropWorklistItem>) {
+        // Each arm: if sole owner, steal children (so the node's Drop early-returns
+        // instead of recursing through drop glue); then drop `shared`.
+        // count==1 → childless node after steal, trivial drop;
+        // count>1 → refcount decrement only. Either way, no recursion.
+        match self {
+            DropWorklistItem::Alternatives(shared) => {
+                if shared.strong_count() == 1 {
+                    // Sole owner: steal the children so the node drops childless
+                    // (its Drop early-returns) instead of recursing through drop glue.
+                    let children = std::mem::take(&mut shared.write().children);
+                    worklist.extend(children.into_iter().filter_map(|(_, c)| c.into_drop_item()));
+                }
+            }
+            DropWorklistItem::BlockComment(shared) => {
+                if shared.strong_count() == 1 {
+                    // Sole owner: steal the children so the node drops childless
+                    // (its Drop early-returns) instead of recursing through drop glue.
+                    let children = std::mem::take(&mut shared.write().children);
+                    worklist.extend(children.into_iter().filter_map(|(_, c)| c.into_drop_item()));
+                }
+            }
+            DropWorklistItem::Disposition(shared) => {
+                if shared.strong_count() == 1 {
+                    // Sole owner: steal the children so the node drops childless
+                    // (its Drop early-returns) instead of recursing through drop glue.
+                    let children = std::mem::take(&mut shared.write().children);
+                    worklist.extend(children.into_iter().filter_map(|(_, c)| c.into_drop_item()));
+                }
+            }
+            DropWorklistItem::Identifier(shared) => {
+                if shared.strong_count() == 1 {
+                    // Sole owner: steal the children so the node drops childless
+                    // (its Drop early-returns) instead of recursing through drop glue.
+                    let children = std::mem::take(&mut shared.write().children);
+                    worklist.extend(children.into_iter().filter_map(|(_, c)| c.into_drop_item()));
+                }
+            }
+            DropWorklistItem::Item(shared) => {
+                if shared.strong_count() == 1 {
+                    // Sole owner: steal the children so the node drops childless
+                    // (its Drop early-returns) instead of recursing through drop glue.
+                    let children = std::mem::take(&mut shared.write().children);
+                    worklist.extend(children.into_iter().filter_map(|(_, c)| c.into_drop_item()));
+                }
+            }
+            DropWorklistItem::Items(shared) => {
+                if shared.strong_count() == 1 {
+                    // Sole owner: steal the children so the node drops childless
+                    // (its Drop early-returns) instead of recursing through drop glue.
+                    let children = std::mem::take(&mut shared.write().children);
+                    worklist.extend(children.into_iter().filter_map(|(_, c)| c.into_drop_item()));
+                }
+            }
+            DropWorklistItem::LineComment(shared) => {
+                if shared.strong_count() == 1 {
+                    // Sole owner: steal the children so the node drops childless
+                    // (its Drop early-returns) instead of recursing through drop glue.
+                    let children = std::mem::take(&mut shared.write().children);
+                    worklist.extend(children.into_iter().filter_map(|(_, c)| c.into_drop_item()));
+                }
+            }
+            DropWorklistItem::Literal(shared) => {
+                if shared.strong_count() == 1 {
+                    // Sole owner: steal the children so the node drops childless
+                    // (its Drop early-returns) instead of recursing through drop glue.
+                    let children = std::mem::take(&mut shared.write().children);
+                    worklist.extend(children.into_iter().filter_map(|(_, c)| c.into_drop_item()));
+                }
+            }
+            DropWorklistItem::Quantifier(shared) => {
+                if shared.strong_count() == 1 {
+                    // Sole owner: steal the children so the node drops childless
+                    // (its Drop early-returns) instead of recursing through drop glue.
+                    let children = std::mem::take(&mut shared.write().children);
+                    worklist.extend(children.into_iter().filter_map(|(_, c)| c.into_drop_item()));
+                }
+            }
+            DropWorklistItem::RawString(shared) => {
+                if shared.strong_count() == 1 {
+                    // Sole owner: steal the children so the node drops childless
+                    // (its Drop early-returns) instead of recursing through drop glue.
+                    let children = std::mem::take(&mut shared.write().children);
+                    worklist.extend(children.into_iter().filter_map(|(_, c)| c.into_drop_item()));
+                }
+            }
+            DropWorklistItem::Rule(shared) => {
+                if shared.strong_count() == 1 {
+                    // Sole owner: steal the children so the node drops childless
+                    // (its Drop early-returns) instead of recursing through drop glue.
+                    let children = std::mem::take(&mut shared.write().children);
+                    worklist.extend(children.into_iter().filter_map(|(_, c)| c.into_drop_item()));
+                }
+            }
+            DropWorklistItem::Term(shared) => {
+                if shared.strong_count() == 1 {
+                    // Sole owner: steal the children so the node drops childless
+                    // (its Drop early-returns) instead of recursing through drop glue.
+                    let children = std::mem::take(&mut shared.write().children);
+                    worklist.extend(children.into_iter().filter_map(|(_, c)| c.into_drop_item()));
+                }
+            }
+            DropWorklistItem::Trivia(shared) => {
+                if shared.strong_count() == 1 {
+                    // Sole owner: steal the children so the node drops childless
+                    // (its Drop early-returns) instead of recursing through drop glue.
+                    let children = std::mem::take(&mut shared.write().children);
+                    worklist.extend(children.into_iter().filter_map(|(_, c)| c.into_drop_item()));
+                }
+            }
+        }
+    }
 }
 
 #[cfg(feature = "python")]

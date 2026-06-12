@@ -365,16 +365,44 @@ fn debug_node_kind_and_label_enums() {
 fn debug_child_enums_and_node_structs() {
     let src = make_source();
     let span_child = IdentifierChild::Span(span(0, 5, &src));
-    let _ = format!("{span_child:?}");
+    let span_child_dbg = format!("{span_child:?}");
+    assert!(
+        span_child_dbg.contains("Span"),
+        "IdentifierChild::Span Debug must contain 'Span': {span_child_dbg}"
+    );
 
     let items_child = ItemsChild::Identifier(Shared::new(Identifier::new(span(0, 5, &src))));
-    let _ = format!("{items_child:?}");
+    let items_child_dbg = format!("{items_child:?}");
+    assert!(
+        items_child_dbg.contains("Identifier"),
+        "ItemsChild::Identifier Debug must contain 'Identifier': {items_child_dbg}"
+    );
+    assert!(
+        items_child_dbg.contains("child(ren)"),
+        "ItemsChild::Identifier Debug must contain 'child(ren)' (one-level delegation through Shared works): {items_child_dbg}"
+    );
 
     let node = Identifier::new(span(0, 5, &src));
-    let _ = format!("{node:?}");
+    let node_dbg = format!("{node:?}");
+    assert!(
+        node_dbg.contains("span"),
+        "Identifier Debug must contain 'span': {node_dbg}"
+    );
+    assert!(
+        node_dbg.contains("<0 child(ren)>"),
+        "Identifier Debug must contain '<0 child(ren)>': {node_dbg}"
+    );
 
     let shared_node = Shared::new(Identifier::new(span(0, 5, &src)));
-    let _ = format!("{shared_node:?}");
+    let shared_dbg = format!("{shared_node:?}");
+    assert!(
+        shared_dbg.contains("span"),
+        "Shared<Identifier> Debug must contain 'span': {shared_dbg}"
+    );
+    assert!(
+        shared_dbg.contains("<0 child(ren)>"),
+        "Shared<Identifier> Debug must contain '<0 child(ren)>': {shared_dbg}"
+    );
 }
 
 #[test]

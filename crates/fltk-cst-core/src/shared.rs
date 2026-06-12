@@ -73,6 +73,14 @@ impl<T> Shared<T> {
     pub fn arc_ptr(&self) -> usize {
         Arc::as_ptr(&self.0) as usize
     }
+
+    /// Return the number of strong handles to this allocation (`Arc::strong_count`).
+    ///
+    /// Used by the iterative `Drop` impl in generated node structs to determine sole
+    /// ownership before stealing children for worklist-based teardown.
+    pub fn strong_count(&self) -> usize {
+        Arc::strong_count(&self.0)
+    }
 }
 
 impl<T> Clone for Shared<T> {
@@ -82,6 +90,11 @@ impl<T> Clone for Shared<T> {
     }
 }
 
+// TODO(rust-cst-eq-depth): this PartialEq delegates to T::eq, which for generated node
+// structs recurses through Shared<T> children with no depth bound; tree depth is
+// attacker-controlled, so assert_eq! on a deep parser-produced tree aborts (stack
+// exhaustion, uncatchable). Fix: emit iterative impl PartialEq on node structs, same
+// pattern as the iterative impl Drop in gsm2tree_rs.py.
 impl<T: PartialEq> PartialEq for Shared<T> {
     fn eq(&self, other: &Self) -> bool {
         // Short-circuit: same pointer → equal without locking.
@@ -104,5 +117,20 @@ impl<T: fmt::Debug> fmt::Debug for Shared<T> {
 impl<T> From<T> for Shared<T> {
     fn from(value: T) -> Self {
         Shared::new(value)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::Shared;
+
+    #[test]
+    fn test_strong_count_new_clone_drop() {
+        let s: Shared<u32> = Shared::new(42);
+        assert_eq!(s.strong_count(), 1, "count must be 1 after new");
+        let s2 = s.clone();
+        assert_eq!(s.strong_count(), 2, "count must be 2 after clone");
+        drop(s2);
+        assert_eq!(s.strong_count(), 1, "count must be back to 1 after drop of clone");
     }
 }
