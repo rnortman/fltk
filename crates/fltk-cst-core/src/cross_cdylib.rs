@@ -1,4 +1,4 @@
-use crate::{SourceText, Span};
+use crate::{escape::escape_control_chars, SourceText, Span};
 use pyo3::exceptions::PyTypeError;
 use pyo3::prelude::*;
 use pyo3::sync::GILOnceCell;
@@ -114,42 +114,20 @@ pub fn extract_source_text(obj: &Bound<'_, PyAny>) -> PyResult<SourceText> {
     })
 }
 
-/// Escape C0 control characters (U+0000–U+001F), DEL (U+007F), and C1 control characters
-/// (U+0080–U+009F) in `s` using `\xHH` notation (lowercase hex).  Printable ASCII, tabs,
-/// and non-ASCII codepoints outside C1 pass through unchanged.
-///
-/// Applied to attacker-influenced strings (type names, attribute values) before embedding
-/// them in error messages to prevent log injection / terminal escape-sequence injection.
-fn escape_control_chars_for_msg(s: &str) -> String {
-    let mut out = String::with_capacity(s.len());
-    for c in s.chars() {
-        let cp = c as u32;
-        if (cp <= 0x1F) || cp == 0x7F || (0x80..=0x9F).contains(&cp) {
-            // Encode as \xHH; for multi-byte C1 codepoints this writes a single \xHH
-            // using the Unicode scalar value, matching Python's escape_control_chars.
-            for byte in c.to_string().bytes() {
-                out.push_str(&format!("\\x{byte:02x}"));
-            }
-        } else {
-            out.push(c);
-        }
-    }
-    out
-}
-
 /// Return the Python type name of any `PyAny` object for use in error messages
-/// (control chars escaped).  Works for both direct objects and attribute values.
+/// (control chars escaped via canonical `escape_control_chars`).
+/// Works for both direct objects and attribute values.
 fn py_any_type_name(obj: &Bound<'_, PyAny>) -> String {
     let raw = obj
         .get_type()
         .name()
         .map(|n| n.to_string())
         .unwrap_or_else(|_| "<unknown type>".to_string());
-    escape_control_chars_for_msg(&raw)
+    escape_control_chars(&raw)
 }
 
 /// Return the fully-qualified Python type name of a type object for use in error messages
-/// (control chars escaped).
+/// (control chars escaped via canonical `escape_control_chars`).
 /// Uses `fully_qualified_name()` with fallback `"<unknown type>"`.
 /// Note: pyo3 0.23.5 strips `"builtins"` and `"__main__"` module prefixes, so classes
 /// defined in those modules render as bare `__qualname__` (e.g. `"str"`, `"SourceText"`).
@@ -159,7 +137,7 @@ fn py_type_obj_name(ty: &Bound<'_, PyType>) -> String {
         .fully_qualified_name()
         .map(|n| n.to_string())
         .unwrap_or_else(|_| "<unknown type>".to_string());
-    escape_control_chars_for_msg(&raw)
+    escape_control_chars(&raw)
 }
 
 /// Validate the cross-cdylib ABI pair (`_fltk_cst_core_abi` string marker, then
@@ -195,7 +173,7 @@ fn check_abi_pair<T: pyo3::PyClass>(
                  (not a {type_label} from a compatible fltk-cst-core build, or a \
                  pre-sentinel build); this module expects {FLTK_CST_CORE_ABI:?}\
                  ; getattr raised: {}",
-                escape_control_chars_for_msg(&e.to_string())
+                escape_control_chars(&e.to_string())
             ))
         })?;
     // Step 2: non-str marker.
@@ -205,7 +183,7 @@ fn check_abi_pair<T: pyo3::PyClass>(
             "{type_label} ABI mismatch: {subject}._fltk_cst_core_abi is {}, not str\
              ; extract raised: {}",
             py_any_type_name(&marker),
-            escape_control_chars_for_msg(&e.to_string())
+            escape_control_chars(&e.to_string())
         ))
     })?;
     // Step 3: string mismatch.
@@ -228,7 +206,7 @@ fn check_abi_pair<T: pyo3::PyClass>(
                 "{type_label} ABI mismatch: {subject} has no _fltk_cst_core_abi_layout \
                  (partial-upgrade build); this module expects layout {expected_layout}\
                  ; getattr raised: {}",
-                escape_control_chars_for_msg(&e.to_string())
+                escape_control_chars(&e.to_string())
             ))
         })?;
     // Step 6: non-int layout attr.
@@ -238,7 +216,7 @@ fn check_abi_pair<T: pyo3::PyClass>(
             "{type_label} ABI mismatch: {subject}._fltk_cst_core_abi_layout is {}, not int\
              ; extract raised: {}",
             py_any_type_name(&layout_attr),
-            escape_control_chars_for_msg(&e.to_string())
+            escape_control_chars(&e.to_string())
         ))
     })?;
     // Step 7: layout mismatch.
@@ -297,7 +275,8 @@ pub fn span_to_pyobject(py: Python<'_>, span: &Span) -> PyResult<PyObject> {
                     .map(|m| m.unbind())
                     .map_err(|e| {
                         pyo3::exceptions::PyRuntimeError::new_err(format!(
-                            "fltk._native.Span._with_source_unchecked lookup failed: {e}"
+                            "fltk._native.Span._with_source_unchecked lookup failed: {}",
+                            escape_control_chars(&e.to_string())
                         ))
                     })
             })?;
@@ -375,7 +354,8 @@ pub fn get_span_type(py: Python<'_>) -> PyResult<Bound<'_, PyType>> {
                 .and_then(|s| s.downcast_into::<PyType>().map_err(|e| e.into()))
                 .map_err(|e| {
                     pyo3::exceptions::PyRuntimeError::new_err(format!(
-                        "cross-cdylib Span type lookup failed (fltk._native.Span): {e}"
+                        "cross-cdylib Span type lookup failed (fltk._native.Span): {}",
+                        escape_control_chars(&e.to_string())
                     ))
                 })?;
             check_abi_pair::<Span>(&span_type, "Span", || "fltk._native.Span".to_string())?;
@@ -408,7 +388,8 @@ pub fn get_source_text_type(py: Python<'_>) -> PyResult<Bound<'_, PyType>> {
                 .and_then(|s| s.downcast_into::<PyType>().map_err(|e| e.into()))
                 .map(|t: Bound<'_, PyType>| t.unbind())
                 .map_err(|e| pyo3::exceptions::PyRuntimeError::new_err(format!(
-                    "span source preservation requires fltk._native (SourceText): {e}"
+                    "span source preservation requires fltk._native (SourceText): {}",
+                    escape_control_chars(&e.to_string())
                 )))
         })
         .map(|t| t.bind(py).clone())

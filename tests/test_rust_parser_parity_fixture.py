@@ -116,6 +116,15 @@ _CORPUS = [
     # stmt: name matches "x", WS_REQUIRED separators consume each \r (\s matches \r),
     # rhs:atom fails at pos 4 ('@'); two \r chars before the caret get escaped.
     ("stmt", "x\r=\r@", FAIL),
+    # Bidi/invisible characters in failing input — exercises the extended escape set.
+    # num fails at pos 0; U+202E (RLO bidi override) in the quoted line must be escaped as \u202e.
+    ("num", "\u202e123", FAIL),
+    # name fails at pos 0; LRI (U+2066) + ZWSP (U+200B) are both invisible and must be escaped.
+    ("name", "\u2066\u200babc", FAIL),
+    # stmt: name matches "x", WS_REQUIRED separators consume each U+2028 LS (\s matches it),
+    # rhs:atom fails at pos 4 ('@'); two \u2028 escapes before the caret are produced.
+    # Also pins that the parity comparator's str.splitlines() sees no raw LS in the message.
+    ("stmt", "x\u2028=\u2028@", FAIL),
 ]
 
 _CORPUS_IDS = [f"{r}-{i}" for i, (r, _, _) in enumerate(_CORPUS)]

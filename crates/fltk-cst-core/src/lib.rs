@@ -1,6 +1,8 @@
 #[cfg(feature = "python")]
 mod cross_cdylib;
 mod error;
+#[doc(hidden)] // implementation-sharing module; not a public API — use fltk_parser_core::escape_control_chars
+pub mod escape;
 mod py_module;
 #[cfg(feature = "python")]
 pub mod registry;

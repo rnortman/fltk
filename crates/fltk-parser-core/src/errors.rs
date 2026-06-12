@@ -79,43 +79,22 @@ impl ErrorTracker {
     }
 }
 
-/// Escape control characters in a string using `\xHH` notation (lowercase hex).
+/// Escape control, bidi-control, line-separator, and zero-width characters.
 ///
-/// Escaped ranges: U+0000–U+001F (except U+0009 TAB), U+007F (DEL), U+0080–U+009F (C1).
-/// TAB passes through unchanged. All other characters pass through unchanged.
+/// Implementation lives in `fltk_cst_core::escape::escape_control_chars`; re-exported
+/// here to preserve the public path `fltk_parser_core::errors::escape_control_chars`.
 ///
-/// Cross-backend pinned: output is byte-identical with the Python implementation in
-/// `fltk/fegen/pyrt/errors.py:escape_control_chars`.
-///
-/// TODO(error-msg-bidi-escape): bidi controls (U+202A–U+202E, U+2066–U+2069) and
-/// U+2028/U+2029 pass through unescaped; accepted risk per design §Open questions A1.
-pub fn escape_control_chars(s: &str) -> String {
-    #[inline(always)]
-    fn needs_escape(cp: u32) -> bool {
-        (cp <= 0x1F && cp != 0x09) || cp == 0x7F || (0x80..=0x9F).contains(&cp)
-    }
-    // Fast path: control-free input — return a copy without rebuilding char-by-char.
-    if !s.chars().any(|c| needs_escape(c as u32)) {
-        return s.to_owned();
-    }
-    let mut out = String::with_capacity(s.len());
-    for ch in s.chars() {
-        let cp = ch as u32;
-        if needs_escape(cp) {
-            write!(out, "\\x{:02x}", cp).unwrap();
-        } else {
-            out.push(ch);
-        }
-    }
-    out
-}
+/// See `crates/fltk-cst-core/src/escape.rs` for the full escape specification and
+/// the cross-backend pin note.
+pub use fltk_cst_core::escape::escape_control_chars;
 
 /// Produce a Python-equivalent error message from an `ErrorTracker`.
 ///
 /// Port of `errors.py:52-71`.
 ///
-/// Control characters (ESC/ANSI, `\r`, other C0, DEL, C1) in `line_text` are escaped
-/// using `escape_control_chars` — `\xHH` notation, lowercase hex — matching Python's
+/// Control characters and bidi/zero-width chars in `line_text` are escaped
+/// using `escape_control_chars` (see `crates/fltk-cst-core/src/escape.rs`) —
+/// `\xHH` for C0/DEL/C1, `\uXXXX` for bidi/LS/PS/zero-width — matching Python's
 /// `escape_control_chars` byte-for-byte. The caret pad is computed from the escaped
 /// prefix so it aligns with the escaped output.
 ///
@@ -330,35 +309,8 @@ mod tests {
         assert_eq!(t.expected_context[0].token_type, TokenType::Regex);
     }
 
-    // ── escape_control_chars ─────────────────────────────────────────────────
-
-    #[test]
-    fn escape_control_chars_table() {
-        // C0 controls (except TAB) → \xHH
-        assert_eq!(escape_control_chars("\x00"), "\\x00");
-        assert_eq!(escape_control_chars("\x1b"), "\\x1b");
-        assert_eq!(escape_control_chars("\r"), "\\x0d");
-        assert_eq!(escape_control_chars("\n"), "\\x0a");
-        // DEL → \x7f
-        assert_eq!(escape_control_chars("\x7f"), "\\x7f");
-        // C1 → \xHH (two-digit)
-        assert_eq!(escape_control_chars("\u{009b}"), "\\x9b");
-        assert_eq!(escape_control_chars("\u{0080}"), "\\x80");
-        assert_eq!(escape_control_chars("\u{009f}"), "\\x9f");
-        // TAB passes through
-        assert_eq!(escape_control_chars("\t"), "\t");
-        // Printable ASCII passes through
-        assert_eq!(escape_control_chars("hello"), "hello");
-        // Multibyte (non-C1) passes through
-        assert_eq!(escape_control_chars("→"), "→");
-        // Mixed
-        assert_eq!(escape_control_chars("ab\x1bcd"), "ab\\x1bcd");
-    }
-
-    #[test]
-    fn escape_control_chars_empty() {
-        assert_eq!(escape_control_chars(""), "");
-    }
+    // escape_control_chars unit tests live in crates/fltk-cst-core/src/escape.rs.
+    // The format_error_message tests below exercise the re-export indirectly.
 
     #[test]
     fn format_error_message_with_controls_in_line() {
@@ -427,6 +379,61 @@ mod tests {
                 "raw control char U+{cp:04X} found in message: {msg:?}"
             );
         }
+    }
+
+    #[test]
+    fn format_error_message_no_raw_extended_set_in_output() {
+        // Assert no raw codepoint from the full extended escape set appears in the
+        // formatted message when the input contains one char from every class.
+        use crate::terminalsrc::TerminalSource;
+        let input = "\x00\x1b\r\x7f\u{009b}\u{061c}\u{200b}\u{200e}\u{2028}\u{202e}\u{2060}\u{2066}\u{feff}abc\n";
+        let ts = TerminalSource::new(input);
+        let mut t = ErrorTracker::default();
+        t.fail_literal(0, 0, "x");
+        let msg = format_error_message(&t, &ts, &["rule"]);
+        for ch in msg.chars() {
+            // Use escape_control_chars as oracle: if a char would be escaped, it must not
+            // appear raw in the output. LF (U+000A) is in the escape set but appears raw as
+            // the message's line separator — carve it out explicitly.
+            if ch == '\n' {
+                continue;
+            }
+            let escaped = escape_control_chars(&ch.to_string());
+            assert!(
+                escaped == ch.to_string(),
+                "raw escaped-set char U+{:04X} found in message: {msg:?}",
+                ch as u32
+            );
+        }
+    }
+
+    #[test]
+    fn format_error_message_bidi_golden() {
+        // Failing line contains U+202E (RLO bidi override); error at col 0.
+        // Escaped line = "\\u202e123"; caret at col 0 → no pad.
+        use crate::terminalsrc::TerminalSource;
+        let ts = TerminalSource::new("\u{202e}123");
+        let mut t = ErrorTracker::default();
+        t.fail_literal(0, 0, "x");
+        let msg = format_error_message(&t, &ts, &["rule"]);
+        let lines: Vec<&str> = msg.lines().collect();
+        assert!(lines[1].starts_with("\\u202e"), "escaped line starts with \\u202e: {msg:?}");
+        assert_eq!(lines[2], "^", "caret at col 0: {msg:?}");
+        assert!(!msg.contains('\u{202e}'), "raw U+202E must not appear: {msg:?}");
+    }
+
+    #[test]
+    fn format_error_message_bidi_caret_alignment() {
+        // Line: U+202E (RLO) + "abc\n"; error at col 1 (the 'a').
+        // Prefix = "\u{202e}" (1 codepoint) → escaped "\\u202e" (6 chars) → pad = 6.
+        use crate::terminalsrc::TerminalSource;
+        let ts = TerminalSource::new("\u{202e}abc\n");
+        let mut t = ErrorTracker::default();
+        t.fail_literal(1, 0, "x"); // col=1, the 'a'
+        let msg = format_error_message(&t, &ts, &["rule"]);
+        let lines: Vec<&str> = msg.lines().collect();
+        assert_eq!(lines[1], "\\u202eabc", "escaped line: {msg:?}");
+        assert_eq!(lines[2], "      ^", "pad=6 spaces (\\u202e = 6 chars): {msg:?}");
     }
 
     // ── format_error_message golden tests ────────────────────────────────────

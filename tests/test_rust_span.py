@@ -357,6 +357,28 @@ class TestAbiMarkerClassattr:
         msg = str(exc_info.value)
         assert "FakeSource" in msg, f"derived type name missing from error: {msg!r}"
 
+    def test_with_source_unchecked_escape_in_type_name(self):
+        """Type names containing bidi/C1/TAB are escaped correctly in TypeError text.
+
+        Exercises the py_type_obj_name path through the canonical escape_control_chars:
+        - U+202E (RLO bidi override) → \\u202e in the error
+        - U+0085 (C1 NEL) → \\x85 in the error (one codepoint escape, NOT per-UTF-8-byte \\xc2\\x85)
+        - TAB → passes through unchanged (TAB exclusion from C0 escaping)
+        - No raw U+202E or U+0085 in the error message
+        """
+        # Dynamically create a class with a name containing RLO (U+202E), TAB, and C1 NEL (U+0085).
+        fake_type = type("Fake\u202eSrc\t\x85", (), {"_fltk_cst_core_abi": "bogus/0.0.0"})
+
+        with pytest.raises(TypeError, match="ABI mismatch") as exc_info:
+            Span._with_source_unchecked(0, 5, fake_type())  # type: ignore[attr-defined]
+        msg = str(exc_info.value)
+        assert "\\u202e" in msg, f"U+202E should be escaped as \\u202e: {msg!r}"
+        assert "\\x85" in msg, f"U+0085 should be escaped as \\x85 (single codepoint): {msg!r}"
+        assert "\t" in msg, f"TAB should pass through unescaped: {msg!r}"
+        assert "\u202e" not in msg, f"raw U+202E must not appear in error: {msg!r}"
+        assert "\x85" not in msg, f"raw U+0085 must not appear in error: {msg!r}"
+        assert "\\xc2\\x85" not in msg, f"UTF-8 byte escapes must not appear (was per-byte, now codepoint): {msg!r}"
+
     def test_with_source_keeps_exact_behavior(self):
         """Public with_source still rejects foreign-cdylib SourceText (pinned behavior).
 
