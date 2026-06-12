@@ -1,0 +1,22 @@
+// Collision fixture: grammar with rules named 'parser' and 'apply_result'.
+// After the cst/parser module split, Parser and ApplyResult CST classes land in
+// <module>.collision_cst and the parser machinery lands in <module>.collision_parser —
+// both are reachable without clobbering each other.
+
+// Root rule: a sequence of parser rules, each with an optional apply_result annotation.
+root := item:item+ ;
+
+// A plain name token.
+name := value:/[a-z_]+/ ;
+
+// Rule named 'parser': generates a CST class whose Python name is 'Parser'.
+// Post-split this class lives in collision_cst — no collision with the Parser
+// class in collision_parser.
+parser := name:name ;
+
+// Rule named 'apply_result': generates a CST class 'ApplyResult' in collision_cst.
+// Post-split no collision with ApplyResult in collision_parser.
+apply_result := name:name ;
+
+// Wrapper rule that references both to make the grammar meaningful.
+item := p:parser | a:apply_result ;

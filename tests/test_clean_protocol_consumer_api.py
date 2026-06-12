@@ -358,7 +358,7 @@ def test_fltk2gsm_behavioral_equivalence() -> None:
     Exercises the existing fegen self-host round-trip; both backends must produce equal GSMs.
     """
     python_gsm = parse_grammar_file(FEGEN_FLTKG_PATH)
-    rust_gsm = parse_grammar_file(FEGEN_FLTKG_PATH, rust_fegen_cst_module="fegen_rust_cst")
+    rust_gsm = parse_grammar_file(FEGEN_FLTKG_PATH, rust_fegen_cst_module="fegen_rust_cst.cst")
     assert python_gsm == rust_gsm, "fltk2gsm produces different GSM from Python vs Rust backend"
 
 
@@ -448,9 +448,9 @@ class TestCrossBackendEqualityHash:
 
     @_FEGEN_RUST_CST_SKIP
     def test_nodekind_proto_eq_rust_external(self) -> None:
-        """proto_cst.NodeKind.ITEMS == fegen_rust_cst.NodeKind.ITEMS (and reverse)."""
+        """proto_cst.NodeKind.ITEMS == fegen_rust_cst.cst.NodeKind.ITEMS (and reverse)."""
         proto_kind = proto_cst.NodeKind.ITEMS
-        rust_kind = fegen_rust_cst.NodeKind.ITEMS
+        rust_kind = fegen_rust_cst.cst.NodeKind.ITEMS
         assert proto_kind == rust_kind, "proto NodeKind.ITEMS != external rust NodeKind.ITEMS"
         assert rust_kind == proto_kind, "external rust NodeKind.ITEMS != proto NodeKind.ITEMS (reverse)"
 
@@ -467,8 +467,8 @@ class TestCrossBackendEqualityHash:
     def test_nodekind_nonmatching_neq_rust_external(self) -> None:
         """proto NodeKind.ITEMS != fegen_rust_cst NodeKind.GRAMMAR (both operand orders)."""
         proto_kind = proto_cst.NodeKind.ITEMS
-        assert proto_kind != fegen_rust_cst.NodeKind.GRAMMAR
-        assert fegen_rust_cst.NodeKind.GRAMMAR != proto_kind
+        assert proto_kind != fegen_rust_cst.cst.NodeKind.GRAMMAR
+        assert fegen_rust_cst.cst.NodeKind.GRAMMAR != proto_kind
 
     def test_nodekind_hash_consistent(self) -> None:
         """hash(proto NodeKind.X) == hash(py NodeKind.X) == hash(rust emb NodeKind.X)."""
@@ -484,7 +484,7 @@ class TestCrossBackendEqualityHash:
         """hash(proto NodeKind.X) == hash(fegen_rust_cst NodeKind.X)."""
         for member in ("ITEMS", "GRAMMAR", "RULE", "ITEM"):
             proto_kind = getattr(proto_cst.NodeKind, member)
-            rust_ext_kind = getattr(fegen_rust_cst.NodeKind, member)
+            rust_ext_kind = getattr(fegen_rust_cst.cst.NodeKind, member)
             assert hash(proto_kind) == hash(rust_ext_kind), f"hash mismatch proto vs rust ext for NodeKind.{member}"
 
     # --- Label (Items.Label.ITEM) ---
@@ -505,9 +505,9 @@ class TestCrossBackendEqualityHash:
 
     @_FEGEN_RUST_CST_SKIP
     def test_label_proto_eq_rust_external_matching(self) -> None:
-        """proto Items.Label.ITEM == fegen_rust_cst.Items.Label.ITEM (both orders)."""
+        """proto Items.Label.ITEM == fegen_rust_cst.cst.Items.Label.ITEM (both orders)."""
         proto_label = proto_cst.Items.Label.ITEM
-        rust_label = fegen_rust_cst.Items.Label.ITEM
+        rust_label = fegen_rust_cst.cst.Items.Label.ITEM
         assert proto_label == rust_label, "proto Items.Label.ITEM != rust ext Items.Label.ITEM"
         assert rust_label == proto_label, "rust ext Items.Label.ITEM != proto Items.Label.ITEM (reverse)"
 
@@ -535,7 +535,7 @@ class TestCrossBackendEqualityHash:
         """hash(proto_label) == hash(fegen_rust_cst label) for matching pairs."""
         for member in ("ITEM", "NO_WS", "WS_ALLOWED", "WS_REQUIRED"):
             proto_label = getattr(proto_cst.Items.Label, member)
-            rust_ext_label = getattr(fegen_rust_cst.Items.Label, member)
+            rust_ext_label = getattr(fegen_rust_cst.cst.Items.Label, member)
             assert hash(proto_label) == hash(rust_ext_label), (
                 f"hash mismatch proto vs rust ext for Items.Label.{member}"
             )
@@ -752,7 +752,7 @@ class TestCanonicalStringAgreement:
     def test_nodekind_canonical_strings_agree_rust_external(self) -> None:
         """NodeKind._fltk_canonical_name agrees for fegen_rust_cst (external Rust backend)."""
         for member in ("ITEMS", "GRAMMAR", "RULE", "ITEM", "TERM"):
-            rust_ext_kind = getattr(fegen_rust_cst.NodeKind, member)
+            rust_ext_kind = getattr(fegen_rust_cst.cst.NodeKind, member)
             expected = f"NodeKind.{member}"
             assert rust_ext_kind._fltk_canonical_name == expected, (
                 f"rust ext NodeKind.{member} canonical name: {rust_ext_kind._fltk_canonical_name!r} != {expected!r}"

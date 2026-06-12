@@ -106,8 +106,9 @@ build-test-user-ext:
 	cd tests/rust_cst_fixture && uv run --group dev maturin develop
 
 # Build FLTK's fegen Rust CST extension (separate cdylib crate).
-# Produces the importable module 'fegen_rust_cst' used by parse_grammar(rust_fegen_cst_module=...)
-# and the AC8 Tier-2 test (real Cst2Gsm on Rust fegen backend).
+# Produces the importable module 'fegen_rust_cst' used by
+# parse_grammar(rust_fegen_cst_module="fegen_rust_cst.cst") and the AC8 Tier-2 test
+# (real Cst2Gsm on Rust fegen backend).
 build-fegen-rust-cst:
 	cd tests/rust_cst_fegen && uv run --group dev maturin develop
 
@@ -181,6 +182,12 @@ gencode:
 	# Rust: tests/rust_parser_fixture/src/cst.rs and parser.rs (rust_parser_fixture.fltkg)
 	$(MAKE) gen-rust-cst GRAMMAR=fltk/fegen/test_data/rust_parser_fixture.fltkg RS_OUT=tests/rust_parser_fixture/src/cst.rs
 	$(MAKE) gen-rust-parser GRAMMAR=fltk/fegen/test_data/rust_parser_fixture.fltkg RS_OUT=tests/rust_parser_fixture/src/parser.rs
+	# Rust: tests/rust_parser_fixture/src/collision_cst.rs and collision_parser.rs (collision_fixture.fltkg)
+	# Demonstrates that a cdylib can host multiple grammars; proves Parser/ApplyResult CST
+	# classes and the parser machinery coexist without collision after the cst/parser split.
+	$(MAKE) gen-rust-cst GRAMMAR=fltk/fegen/test_data/collision_fixture.fltkg RS_OUT=tests/rust_parser_fixture/src/collision_cst.rs
+	uv run python -m fltk.fegen.genparser gen-rust-parser --cst-mod-path super::collision_cst \
+		fltk/fegen/test_data/collision_fixture.fltkg tests/rust_parser_fixture/src/collision_parser.rs
 	# Rust: crates/fltk-cst-spike/src/cst.rs — same grammar as cst_generated.rs; cp makes identity explicit
 	cp src/cst_generated.rs crates/fltk-cst-spike/src/cst.rs
 	# Normalize formatting. Order matters:

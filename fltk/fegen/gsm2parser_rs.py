@@ -843,13 +843,7 @@ class RustParserGenerator:
     # ------------------------------------------------------------------
 
     def _gen_python_bindings(self) -> str:
-        """Generate the python-gated bindings block for the parser.
-
-        TODO(parser-bindings-name-collision): add a generation-time check that raises an
-        error when any grammar rule's CamelCase class name collides with the fixed registered
-        names ('Parser', 'ApplyResult', 'Span', 'SourceText') to prevent silent module-level
-        shadowing of generated CST node classes.
-        """
+        """Generate the python-gated bindings block for the parser."""
         # Boilerplate skeleton: all non-parametric structure in one template string.
         boilerplate = """\
 

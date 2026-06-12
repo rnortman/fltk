@@ -25,6 +25,21 @@ _RESERVED_LABELS: dict[str, str] = {
     "children": "extend_children",
 }
 
+# Rule-derived class names that collide with fixed names in the generated cst module.
+# A rule whose snake_to_upper_camel name is in this set produces either a Python-side
+# clobber (NodeKind) or a Rust E0255 compile error against the use preamble in cst.rs
+# (Span, Shared, CstError).  SourceText is deliberately excluded: it is not imported
+# in cst.rs's preamble and no Python-level collision occurs post-split.
+# TODO(rust-generated-ident-collisions): pairwise collisions between rule-derived
+# identifiers (e.g. foo_child rule → FooChild conflicts with Foo's child enum) require
+# cross-rule analysis rather than a fixed set; deferred.
+_RESERVED_CLASS_NAMES: dict[str, str] = {
+    "NodeKind": "the generated NodeKind enum",
+    "Span": "fltk_cst_core::Span (imported by generated cst.rs and parser.rs)",
+    "Shared": "fltk_cst_core::Shared (imported by generated cst.rs and parser.rs)",
+    "CstError": "fltk_cst_core::CstError (imported by generated cst.rs)",
+}
+
 
 def _rust_variant_name(label: str) -> str:
     """Label -> CamelCase Rust enum variant. 'no_ws' -> 'NoWs'."""
@@ -60,6 +75,11 @@ class RustCstGenerator:
         for rule in self.grammar.rules:
             if not _IDENTIFIER_RE.match(rule.name):
                 msg = f"Rule name {rule.name!r} is not a valid identifier (must match {_IDENTIFIER_RE.pattern!r})"
+                raise ValueError(msg)
+            class_name = self._py_gen.class_name_for_rule_node(rule.name)
+            if class_name in _RESERVED_CLASS_NAMES:
+                collision_target = _RESERVED_CLASS_NAMES[class_name]
+                msg = f"Rule {rule.name!r} derives class name {class_name!r}, which collides with {collision_target}"
                 raise ValueError(msg)
             for alt in rule.alternatives:
                 for item in alt.items:
@@ -132,15 +152,15 @@ class RustCstGenerator:
         it under the alias '_proto', so the stub cannot satisfy pyright with stub-local
         nominal types (§1 of the design).
 
-        Callers write this string to <compiled_module_name>.pyi alongside the .rs file,
-        or to a custom path via --pyi-output when the .rs stem differs from the import name.
+        Callers write this string to <name>/cst.pyi inside a stub-package directory
+        (i.e. <name>/__init__.pyi + <name>/cst.pyi), or to a custom path via --pyi-output.
+        The stub-package directory must never gain an __init__.py or it will shadow the
+        compiled extension at runtime. See design §2.8.
         """
         lines: list[str] = []
 
         # Header: ruff noqa for PascalCase module-level names (same as protocol generator).
         lines.append("# ruff: noqa: N802")
-        # Safety note: this directory must never gain an __init__.py or it will shadow the
-        # compiled extension and break all runtime imports. See design §2.3.
         lines.append("from __future__ import annotations")
         lines.append("import typing")
         lines.append("import fltk.fegen.pyrt.terminalsrc")

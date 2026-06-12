@@ -51,7 +51,7 @@ _GRAMMAR_PATH = Path(__file__).parent.parent / "fltk" / "fegen" / "test_data" / 
 _grammar_for_rust = parse_grammar_file(_GRAMMAR_PATH)
 _grammar_for_python = parse_grammar_file(_GRAMMAR_PATH)
 
-_rust_pr = generate_parser(_grammar_for_rust, rust_cst_module="phase4_roundtrip_cst")
+_rust_pr = generate_parser(_grammar_for_rust, rust_cst_module="phase4_roundtrip_cst.cst")
 _python_pr = generate_parser(_grammar_for_python)  # Python backend for AC7 comparison
 
 # Convenience alias used by most single-backend tests.

@@ -1146,3 +1146,33 @@ def test_dangling_identifier_in_subexpression_raises() -> None:
     grammar = gsm.Grammar(rules=[rule], identifiers={"broken": rule})
     with pytest.raises(ValueError, match="nosuchrule"):
         RustParserGenerator(grammar)
+
+
+@pytest.mark.parametrize("rule_name", ["parser", "apply_result"])
+def test_parser_apply_result_grammar_rules_coexist_with_fixed_pyclass_names(rule_name: str) -> None:
+    """Rules named 'parser'/'apply_result' generate parser source that still contains the fixed
+    Parser/ApplyResult pyclass names from the parser machinery, proving the split (not a rename)
+    resolves the collision.
+    """
+    rule = gsm.Rule(
+        name=rule_name,
+        alternatives=[
+            gsm.Items(
+                items=[
+                    gsm.Item(
+                        label="value",
+                        disposition=gsm.Disposition.INCLUDE,
+                        term=gsm.Regex(r"[a-z]+"),
+                        quantifier=gsm.REQUIRED,
+                    )
+                ],
+                sep_after=[gsm.Separator.NO_WS],
+            )
+        ],
+    )
+    grammar = gsm.Grammar(rules=(rule,), identifiers={rule_name: rule})
+    gen = RustParserGenerator(grammar)
+    src = gen.generate()
+    # Fixed machinery class names must still appear in the parser source.
+    assert 'name = "Parser"' in src, "Fixed Parser pyclass name must appear in parser source"
+    assert 'name = "ApplyResult"' in src, "Fixed ApplyResult pyclass name must appear in parser source"

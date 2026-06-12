@@ -47,7 +47,7 @@ def _py_parser(text: str, capture_trivia: bool):  # noqa: FBT001
 
 
 def _rust_parser(text: str, capture_trivia: bool):  # noqa: FBT001
-    return rust_parser_fixture.Parser(text, capture_trivia)
+    return rust_parser_fixture.parser.Parser(text, capture_trivia)
 
 
 _CORPUS = [

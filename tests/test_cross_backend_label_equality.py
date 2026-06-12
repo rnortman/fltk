@@ -44,7 +44,7 @@ _BACKEND_PAIRS = [
 _BACKENDS = {
     "py": py_cst,
     "emb": emb_cst,
-    "ext": fegen_rust_cst,
+    "ext": fegen_rust_cst.cst,
 }
 
 
@@ -162,14 +162,14 @@ class TestAC8TwoRustCrates:
 
     def test_crates_are_distinct_python_types(self) -> None:
         """The two Rust crates expose distinct Python types for the same class name."""
-        assert type(emb_cst.Items.Label.NO_WS) is not type(fegen_rust_cst.Items.Label.NO_WS), (
+        assert type(emb_cst.Items.Label.NO_WS) is not type(fegen_rust_cst.cst.Items.Label.NO_WS), (
             "emb and ext crates should have distinct Python types for Items_Label"
         )
 
     def test_cross_crate_label_eq(self) -> None:
         """emb.Items.Label.NO_WS == ext.Items.Label.NO_WS both directions."""
         a = emb_cst.Items.Label.NO_WS
-        b = fegen_rust_cst.Items.Label.NO_WS
+        b = fegen_rust_cst.cst.Items.Label.NO_WS
         assert a == b
         assert b == a
 
@@ -177,7 +177,7 @@ class TestAC8TwoRustCrates:
         """hash agrees between the two distinct Rust crates (both route through CPython hash)."""
         for member in ["NO_WS", "WS_ALLOWED", "ITEM"]:
             a = getattr(emb_cst.Items.Label, member)
-            b = getattr(fegen_rust_cst.Items.Label, member)
+            b = getattr(fegen_rust_cst.cst.Items.Label, member)
             assert hash(a) == hash(b), f"hash mismatch between emb and ext crates for Items.Label.{member}"
 
 
@@ -278,7 +278,7 @@ class TestMarkerScope:
 
     def test_rust_node_has_no_canonical_name_marker(self) -> None:
         """Rust Items() node does not expose _fltk_canonical_name."""
-        node = fegen_rust_cst.Items()
+        node = fegen_rust_cst.cst.Items()
         assert not hasattr(node, "_fltk_canonical_name"), (
             "Rust node should not expose _fltk_canonical_name; marker is for Label/NodeKind only"
         )
@@ -300,7 +300,7 @@ class TestMarkerScope:
     def test_node_neq_label_cross_backend(self) -> None:
         """Python node != Rust label (cross-backend path must also stay False)."""
         node = py_cst.Items()
-        label = fegen_rust_cst.Items.Label.ITEM
+        label = fegen_rust_cst.cst.Items.Label.ITEM
         assert node != label, "Python Items() node should not equal Rust Items.Label.ITEM"
         assert not (node == label), "Python Items() == Rust Items.Label.ITEM should be False"
 

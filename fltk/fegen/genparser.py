@@ -283,10 +283,13 @@ def gen_rust_cst(
         typer.Option(
             "--pyi-output",
             help=(
-                "Path to write the .pyi stub. Defaults to output_file with .pyi suffix "
-                "(co-located with the .rs). Override when the .rs stem differs from the "
-                "compiled module's import name — pyright resolves stubs by import name, "
-                "not .rs file name. Example: 'src/cst_fegen.rs' backs 'fegen_cst', "
+                "Path to write the .pyi stub. The canonical location is "
+                "<name>/cst.pyi inside a stub-package directory (alongside "
+                "<name>/__init__.pyi). Defaults to output_file with .pyi suffix "
+                "when --protocol-module is given. Override when the .rs stem differs "
+                "from the compiled module's import name — pyright resolves stubs by "
+                "import name, not .rs file name. "
+                "Example: 'src/cst_fegen.rs' backs 'fltk._native.fegen_cst', "
                 "so --pyi-output fltk/_native/fegen_cst.pyi is required."
             ),
         ),
@@ -299,10 +302,24 @@ def gen_rust_cst(
     The generated .rs file is independent of FLTK's crate at link time; it
     depends on fltk._native only at runtime for the UnknownSpan sentinel.
 
+    The generated cst.rs wires into the cst submodule of the compiled extension,
+    e.g. <module>.cst. Import Span and SourceText from fltk._native, not from
+    the generated module.
+
+    Wire the generated cst.rs and parser.rs into your lib.rs like this:
+
+        use fltk_cst_core::register_submodule;
+        #[pymodule]
+        fn my_grammar(m: &Bound<'_, PyModule>) -> PyResult<()> {
+            register_submodule(m, "cst", cst::register_classes)?;
+            register_submodule(m, "parser", parser::register_classes)?;
+            Ok(())
+        }
+
     When --protocol-module is given, also emits a .pyi stub derived from the same
     GSM so pyright can verify the compiled extension satisfies CstModule without a
-    cast. The stub path defaults to output_file.with_suffix('.pyi'); use --pyi-output
-    to override (needed when the .rs stem differs from the compiled module's import name).
+    cast. The stub goes in a stub-package directory <name>/ as <name>/cst.pyi;
+    use --pyi-output to control the exact path.
 
     Examples:
         genparser gen-rust-cst grammar.fltkg output/cst.rs

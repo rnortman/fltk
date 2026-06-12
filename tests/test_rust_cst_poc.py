@@ -4,7 +4,8 @@ import pytest
 
 _native_module = pytest.importorskip("fltk._native", reason="Rust extension not available")
 
-from fltk._native import Identifier, Items, SourceText, Span, UnknownSpan  # noqa: E402
+from fltk._native import SourceText, Span, UnknownSpan  # noqa: E402
+from fltk._native.poc_cst import Identifier, Items  # noqa: E402
 
 
 def _span(start: int = 0, end: int = 1) -> Span:

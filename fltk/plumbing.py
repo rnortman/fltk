@@ -82,7 +82,14 @@ def _load_rust_cst_classes(module_name: str) -> dict[str, object]:
     """Import a pre-built Rust CST extension and return its public CST node classes.
 
     Args:
-        module_name: Dotted module name of the user's installed Rust CST extension.
+        module_name: Dotted module name of the *cst submodule* of the user's installed
+            Rust CST extension (e.g. ``"mygrammar.cst"``), not the top-level extension
+            module.  After the cst/parser module split, the cst submodule contains only
+            ``NodeKind``, per-rule node classes, and label enums — no ``Parser``,
+            ``ApplyResult``, ``Span``, or ``SourceText``.  Passing the top-level module
+            name will yield the existing ``RustBackendUnavailableError("exposes no CST
+            classes")`` because submodules are not ``type`` instances.
+
             This must be a statically known, trusted value — never forward a string
             derived from untrusted input (e.g. config files, HTTP requests, CLI args
             from external callers) into this parameter.  ``importlib.import_module``
@@ -115,9 +122,10 @@ def parse_grammar(grammar_text: str, *, rust_fegen_cst_module: str | None = None
 
     Args:
         grammar_text: The .fltkg grammar source text
-        rust_fegen_cst_module: If provided, the dotted module name of a pre-built Rust CST
-            extension for the fegen grammar.  The fegen grammar is parsed using a
-            Rust-backed fegen parser and the real Cst2Gsm is run against those Rust nodes.
+        rust_fegen_cst_module: If provided, the dotted module name of the *cst submodule*
+            of a pre-built Rust CST extension for the fegen grammar (e.g.
+            ``"fegen_rust_cst.cst"``).  The fegen grammar is parsed using a Rust-backed
+            fegen parser and the real Cst2Gsm is run against those Rust nodes.
             If None (default), uses the committed Python fltk_parser and Python fltk_cst.
 
     Returns:
@@ -213,8 +221,9 @@ def generate_parser(
         grammar: The parsed grammar
         capture_trivia: If True, generates parser that captures whitespace/comments as Trivia nodes.
                        If False, generates simpler parser that skips whitespace.
-        rust_cst_module: If provided, the dotted module name of a pre-built standalone Rust CST
-                        extension. That module is imported and its public CST node classes are used
+        rust_cst_module: If provided, the dotted module name of the *cst submodule* of a
+                        pre-built standalone Rust CST extension (e.g. ``"mygrammar.cst"``).
+                        That submodule is imported and its public CST node classes are used
                         instead of generating Python dataclass CST classes at runtime.
                         If None (default), generates Python dataclass CST classes via exec().
 

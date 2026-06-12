@@ -3,8 +3,11 @@
 // importable as `fegen_rust_cst`.
 //
 // The parser module is generated from fegen.fltkg and builds against the cst module.
+// CST node classes and NodeKind are in the `cst` submodule; Parser and ApplyResult
+// are in the `parser` submodule.  Span/SourceText are not registered here; use
+// fltk._native.Span / fltk._native.SourceText.
 #[cfg(feature = "python")]
-use fltk_cst_core::{SourceText, Span};
+use fltk_cst_core::register_submodule;
 #[cfg(feature = "python")]
 use pyo3::prelude::*;
 
@@ -15,9 +18,7 @@ mod native_parser_tests;
 #[cfg(feature = "python")]
 #[pymodule]
 fn fegen_rust_cst(m: &Bound<'_, PyModule>) -> PyResult<()> {
-    m.add_class::<Span>()?;
-    m.add_class::<SourceText>()?;
-    cst::register_classes(m)?;
-    parser::register_classes(m)?;
+    register_submodule(m, "cst", cst::register_classes)?;
+    register_submodule(m, "parser", parser::register_classes)?;
     Ok(())
 }

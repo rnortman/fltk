@@ -1,3 +1,4 @@
+use fltk_cst_core::register_submodule;
 use pyo3::prelude::*;
 use pyo3::sync::GILOnceCell;
 
@@ -17,6 +18,7 @@ pub(crate) static UNKNOWN_SPAN: GILOnceCell<PyObject> = GILOnceCell::new();
 
 #[pymodule]
 fn _native(m: &Bound<'_, PyModule>) -> PyResult<()> {
+    // Canonical Span/SourceText/UnknownSpan live at the top level.
     m.add_class::<Span>()?;
     m.add_class::<SourceText>()?;
     let unknown_span_obj = Py::new(m.py(), Span::unknown())?.into_any();
@@ -25,26 +27,12 @@ fn _native(m: &Bound<'_, PyModule>) -> PyResult<()> {
         .set(m.py(), unknown_span_obj)
         .expect("UNKNOWN_SPAN already set; module initialized twice");
 
-    // CST node types (PoC grammar: Identifier, Items, Trivia)
-    cst_generated::register_classes(m)?;
+    // PoC grammar classes in a submodule (avoids clobbering canonical Span/SourceText
+    // if a PoC rule name collides, and keeps top-level clean).
+    register_submodule(m, "poc_cst", cst_generated::register_classes)?;
 
-    // Fegen grammar classes in a submodule to avoid name collisions
-    // (both grammars produce Identifier, Items, Trivia)
-    let fegen_sub = PyModule::new(m.py(), "fegen_cst")?;
-    cst_fegen::register_classes(&fegen_sub)?;
-    m.add_submodule(&fegen_sub)?;
-
-    // PyO3's add_submodule does NOT register in sys.modules, so
-    // `from fltk._native.fegen_cst import X` would fail with
-    // ModuleNotFoundError. Fix by inserting manually:
-    let sys = m.py().import("sys")?;
-    sys.getattr("modules")?
-        .set_item("fltk._native.fegen_cst", &fegen_sub)
-        .map_err(|e| {
-            pyo3::exceptions::PyRuntimeError::new_err(format!(
-                "Failed to register fltk._native.fegen_cst in sys.modules: {e}"
-            ))
-        })?;
+    // Fegen grammar classes in a submodule (both grammars produce Identifier, Items, Trivia).
+    register_submodule(m, "fegen_cst", cst_fegen::register_classes)?;
 
     Ok(())
 }

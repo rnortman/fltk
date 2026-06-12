@@ -6,12 +6,12 @@
 # module at import time. Adding an __init__.py here WOULD shadow the extension and
 # break every runtime import of fltk._native. Do not add __init__.py.
 #
-# PoC grammar classes (Identifier, Items, Trivia and their Label enums) registered
-# by cst_generated::register_classes (src/lib.rs:29) are intentionally omitted.
-# They have no committed protocol module (required by the OQ-0(a) .pyi emitter) and
-# no static in-repo references, so omission costs nothing statically.
-# The PoC grammar source is at fltk/fegen/test_data/poc_grammar.fltkg; classes would need
-# to be hand-maintained here if a protocol module were added for the PoC grammar.
+# PoC grammar classes (Identifier, Items, Trivia and their Label enums) are in the
+# fltk._native.poc_cst submodule (src/lib.rs; cst_generated::register_classes). They are
+# intentionally omitted from this stub: no committed protocol module (required by the
+# OQ-0(a) .pyi emitter) and no static in-repo references. The PoC grammar source is at
+# fltk/fegen/test_data/poc_grammar.fltkg; classes would need to be hand-maintained here
+# if a protocol module were added for the PoC grammar.
 from __future__ import annotations
 
 import typing

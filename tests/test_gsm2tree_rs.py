@@ -1243,6 +1243,82 @@ class TestReservedLabelRejection:
 
 
 # ---------------------------------------------------------------------------
+# Reserved class name rejection (§2.6 of design ADR 2026/06/11-rust-bindings-module-split)
+# ---------------------------------------------------------------------------
+
+
+def _make_single_rule_grammar(rule_name: str) -> gsm.Grammar:
+    """Minimal single-rule grammar with one regex item; used to test per-rule validation."""
+    rule = gsm.Rule(
+        name=rule_name,
+        alternatives=[
+            gsm.Items(
+                items=[
+                    gsm.Item(
+                        label="value",
+                        disposition=gsm.Disposition.INCLUDE,
+                        term=gsm.Regex(r"[a-z]+"),
+                        quantifier=gsm.REQUIRED,
+                    ),
+                ],
+                sep_after=[gsm.Separator.NO_WS],
+            ),
+        ],
+    )
+    return gsm.Grammar(rules=(rule,), identifiers={rule_name: rule})
+
+
+class TestReservedClassNameRejection:
+    """RustCstGenerator must reject rule names that derive a class name colliding with fixed cst-module names."""
+
+    @pytest.mark.parametrize(
+        ("rule_name", "expected_class", "collision_substring"),
+        [
+            ("node_kind", "NodeKind", "NodeKind"),
+            ("span", "Span", "Span"),
+            ("shared", "Shared", "Shared"),
+            ("cst_error", "CstError", "CstError"),
+        ],
+    )
+    def test_reserved_class_name_rejected(self, rule_name: str, expected_class: str, collision_substring: str) -> None:
+        """Rules whose derived class name collides with fixed cst module names are rejected at generation time."""
+        grammar = _make_single_rule_grammar(rule_name)
+        with pytest.raises(ValueError, match=rule_name) as exc_info:
+            RustCstGenerator(grammar)
+        error_text = str(exc_info.value)
+        assert expected_class in error_text, f"Error should name the derived class {expected_class!r}: {error_text}"
+        assert collision_substring in error_text, f"Error should name collision target: {error_text}"
+
+    def test_source_text_rule_accepted(self) -> None:
+        """Rule named 'source_text' is NOT reserved: SourceText is not in the cst.rs preamble."""
+        grammar = _make_single_rule_grammar("source_text")
+        gen = RustCstGenerator(grammar)
+        assert gen is not None
+
+    @pytest.mark.parametrize(
+        ("rule_name", "expected_class_name"),
+        [("parser", "Parser"), ("apply_result", "ApplyResult")],
+    )
+    def test_parser_apply_result_rules_accepted(self, rule_name: str, expected_class_name: str) -> None:
+        """Rules named 'parser'/'apply_result' are NOT reserved: their CST classes coexist in the cst submodule."""
+        grammar = _make_single_rule_grammar(rule_name)
+        gen = RustCstGenerator(grammar)
+        src = gen.generate()
+        # The generated cst source must contain the rule's pyclass name handle,
+        # proving the rule's CST class is correctly emitted (not silently renamed or dropped).
+        assert f'name = "{expected_class_name}"' in src, (
+            f"Expected pyclass name = {expected_class_name!r} in generated cst source"
+        )
+
+    def test_source_text_rule_cst_class_name_in_source(self) -> None:
+        """source_text rule is not reserved; generated cst source contains name = \"SourceText\" (positive case)."""
+        grammar = _make_single_rule_grammar("source_text")
+        gen = RustCstGenerator(grammar)
+        src = gen.generate()
+        assert 'name = "SourceText"' in src, 'Expected pyclass name = "SourceText" in generated cst source'
+
+
+# ---------------------------------------------------------------------------
 # Union-label native accessor generation (quality-2 fix)
 # ---------------------------------------------------------------------------
 

@@ -452,7 +452,7 @@ import fltk._native as native  # ensure real module is loaded
 # Control: no patch applied; verify the real Span is intact.
 assert hasattr(native.Span, "_fltk_cst_core_abi"), "real Span missing ABI marker (unexpected)"
 import phase4_roundtrip_cst as cst
-node = cst.Config(span=cst.Span(0, 5))
+node = cst.cst.Config(span=cst.Span(0, 5))
 s = node.span
 # s is a fltk._native.Span (returned by span_to_pyobject slow path);
 # check via repr since cross-cdylib == is not guaranteed for frozen pyo3 types
@@ -483,7 +483,7 @@ native.Span = FakeSpan  # patch before first span boundary crossing
 assert native.Span is FakeSpan, "patch did not take effect"
 
 import phase4_roundtrip_cst as cst
-node = cst.Config(span=cst.Span(0, 5))
+node = cst.cst.Config(span=cst.Span(0, 5))
 try:
     s = node.span
     print(f"FAIL: no error, got {s!r}")
@@ -521,7 +521,7 @@ native.Span = FakeSpan
 assert native.Span is FakeSpan, "patch did not take effect"
 
 import phase4_roundtrip_cst as cst
-node = cst.Config(span=cst.Span(0, 5))
+node = cst.cst.Config(span=cst.Span(0, 5))
 try:
     s = node.span
     print(f"FAIL: no error, got {s!r}")
@@ -561,7 +561,7 @@ native.Span = FakeSpan
 assert native.Span is FakeSpan, "patch did not take effect"
 
 import phase4_roundtrip_cst as cst
-node = cst.Config(span=cst.Span(0, 5))
+node = cst.cst.Config(span=cst.Span(0, 5))
 try:
     s = node.span
     print(f"FAIL: no error, got {s!r}")
@@ -601,7 +601,7 @@ native.Span = FakeSpan
 assert native.Span is FakeSpan, "patch did not take effect"
 
 import phase4_roundtrip_cst as cst
-node = cst.Config(span=cst.Span(0, 5))
+node = cst.cst.Config(span=cst.Span(0, 5))
 try:
     s = node.span
     print(f"FAIL: no error, got {s!r}")
@@ -633,7 +633,7 @@ class TestSpanToPyobjectCaching:
             "phase4_roundtrip_cst",
             reason="phase4_roundtrip_cst not built; run 'make build-test-user-ext' first",
         )
-        node = phase4.Config(span=phase4.Span(3, 7))  # type: ignore[attr-defined]
+        node = phase4.cst.Config(span=phase4.Span(3, 7))  # type: ignore[attr-defined]
         results = [node.span for _ in range(5)]
         assert all(s == Span(3, 7) for s in results)
 
@@ -644,7 +644,7 @@ class TestSpanToPyobjectCaching:
             reason="phase4_roundtrip_cst not built; run 'make build-test-user-ext' first",
         )
         src = phase4.SourceText("hello world")  # type: ignore[attr-defined]
-        node = phase4.Config(span=phase4.Span.with_source(0, 11, src))  # type: ignore[attr-defined]
+        node = phase4.cst.Config(span=phase4.Span.with_source(0, 11, src))  # type: ignore[attr-defined]
         results = [node.span for _ in range(5)]
         assert all(s == Span(0, 11) for s in results), f"unexpected spans: {results}"
         assert all(s.has_source() for s in results), "source-bearing spans should carry source"

@@ -18,36 +18,40 @@ fegen_rust_cst = pytest.importorskip(
 import fltk.fegen.fltk_parser as py_parser_mod  # noqa: E402
 from fltk.fegen.pyrt import terminalsrc as tsrc  # noqa: E402
 
+# CST classes are in the cst submodule; Parser/ApplyResult are in the parser submodule.
+fegen_rust_cst_cst = fegen_rust_cst.cst
+fegen_rust_cst_parser = fegen_rust_cst.parser
+
 
 def test_constructor_default_capture_trivia():
-    p = fegen_rust_cst.Parser("x := y ;")
+    p = fegen_rust_cst_parser.Parser("x := y ;")
     assert p.capture_trivia is False
 
 
 def test_constructor_capture_trivia_positional():
-    p = fegen_rust_cst.Parser("x := y ;", True)
+    p = fegen_rust_cst_parser.Parser("x := y ;", True)
     assert p.capture_trivia is True
 
 
 def test_constructor_capture_trivia_keyword():
-    p = fegen_rust_cst.Parser("x := y ;", capture_trivia=True)
+    p = fegen_rust_cst_parser.Parser("x := y ;", capture_trivia=True)
     assert p.capture_trivia is True
 
 
 def test_constructor_non_str_raises_type_error():
     with pytest.raises(TypeError):
-        fegen_rust_cst.Parser(42)
+        fegen_rust_cst_parser.Parser(42)
 
 
 def test_pos_validation_negative_raises_value_error():
-    p = fegen_rust_cst.Parser("hello")
+    p = fegen_rust_cst_parser.Parser("hello")
     with pytest.raises(ValueError):
         p.apply__parse_grammar(-1)
 
 
 def test_pos_validation_too_large_raises_value_error():
     text = "x := y ;"
-    p = fegen_rust_cst.Parser(text)
+    p = fegen_rust_cst_parser.Parser(text)
     with pytest.raises(ValueError):
         p.apply__parse_grammar(len(text) + 1)
 
@@ -55,13 +59,13 @@ def test_pos_validation_too_large_raises_value_error():
 def test_pos_at_len_valid_nullable_or_not():
     """pos == len(text) must not raise ValueError."""
     text = "x := y ;"
-    p = fegen_rust_cst.Parser(text)
+    p = fegen_rust_cst_parser.Parser(text)
     result = p.apply__parse_grammar(len(text))
     assert result is None
 
 
 def test_apply_result_pos_attribute():
-    p = fegen_rust_cst.Parser('x := "a" ;')
+    p = fegen_rust_cst_parser.Parser('x := "a" ;')
     r = p.apply__parse_rule(0)
     assert r is not None
     assert isinstance(r.pos, int)
@@ -69,15 +73,15 @@ def test_apply_result_pos_attribute():
 
 
 def test_apply_result_result_is_cst_node():
-    p = fegen_rust_cst.Parser('x := "a" ;')
+    p = fegen_rust_cst_parser.Parser('x := "a" ;')
     r = p.apply__parse_rule(0)
     assert r is not None
-    assert isinstance(r.result, fegen_rust_cst.Rule)
+    assert isinstance(r.result, fegen_rust_cst_cst.Rule)
 
 
 def test_apply_result_twice_same_object():
     """Two apply__ calls at same pos return the same .result object (registry identity)."""
-    p = fegen_rust_cst.Parser('x := "a" ;')
+    p = fegen_rust_cst_parser.Parser('x := "a" ;')
     r1 = p.apply__parse_rule(0)
     r2 = p.apply__parse_rule(0)
     assert r1 is not None and r2 is not None
@@ -85,7 +89,7 @@ def test_apply_result_twice_same_object():
 
 
 def test_rule_names_indexable():
-    p = fegen_rust_cst.Parser("")
+    p = fegen_rust_cst_parser.Parser("")
     names = p.rule_names
     assert len(names) > 0
     assert names[0] == "grammar"
@@ -96,12 +100,12 @@ def test_rule_names_matches_python_parser():
     text = ""
     ts = tsrc.TerminalSource(text)
     py_p = py_parser_mod.Parser(terminalsrc=ts)
-    rust_p = fegen_rust_cst.Parser(text)
+    rust_p = fegen_rust_cst_parser.Parser(text)
     assert list(rust_p.rule_names) == list(py_p.rule_names)
 
 
 def test_error_position_none_on_fresh_parser():
-    p = fegen_rust_cst.Parser("")
+    p = fegen_rust_cst_parser.Parser("")
     assert p.error_position() is None
 
 
@@ -119,14 +123,14 @@ def test_error_message_on_fresh_parser():
     py_p = py_parser_mod.Parser(terminalsrc=ts)
     py_msg = py_errors.format_error_message(py_p.error_tracker, ts, lambda rid: py_p.rule_names[rid])
 
-    rust_p = fegen_rust_cst.Parser(text)
+    rust_p = fegen_rust_cst_parser.Parser(text)
     rust_msg = rust_p.error_message()
     assert rust_msg == py_msg, f"No-failure message mismatch:\nPython: {py_msg!r}\nRust: {rust_msg!r}"
 
 
 def test_error_position_after_failed_parse():
     text = "broken :="
-    p = fegen_rust_cst.Parser(text)
+    p = fegen_rust_cst_parser.Parser(text)
     p.apply__parse_grammar(0)
     pos = p.error_position()
     assert pos is not None
@@ -136,7 +140,7 @@ def test_error_position_after_failed_parse():
 
 def test_error_message_after_failed_parse():
     text = "broken :="
-    p = fegen_rust_cst.Parser(text)
+    p = fegen_rust_cst_parser.Parser(text)
     p.apply__parse_grammar(0)
     msg = p.error_message()
     assert isinstance(msg, str)

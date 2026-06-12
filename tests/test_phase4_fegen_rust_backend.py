@@ -9,7 +9,7 @@ is not being built.
 Test coverage:
   AC6 (partial) — make build-fegen-rust-cst produces an importable fegen_rust_cst module
   AC8 — the *real* fltk2gsm.Cst2Gsm runs against the Rust fegen backend via
-         parse_grammar(rust_fegen_cst_module="fegen_rust_cst"); the resulting
+         parse_grammar(rust_fegen_cst_module="fegen_rust_cst.cst"); the resulting
          gsm.Grammar is equal to the Python-backend result on the same input.
          No hand-written substitute for Cst2Gsm.
 """
@@ -60,7 +60,7 @@ _FEGEN_FLTKG_PATH = Path(__file__).parent.parent / "fltk" / "fegen" / "fegen.flt
 class TestAC8RealCst2GsmRustBackend:
     """AC8 (binding): real fltk2gsm.Cst2Gsm runs against Rust fegen CST.
 
-    parse_grammar(text, rust_fegen_cst_module="fegen_rust_cst") must produce
+    parse_grammar(text, rust_fegen_cst_module="fegen_rust_cst.cst") must produce
     a gsm.Grammar equal to parse_grammar(text) (Python backend) on the same input.
     No hand-written Cst2Gsm substitute.
     """
@@ -68,13 +68,13 @@ class TestAC8RealCst2GsmRustBackend:
     def test_simple_grammar_rust_equals_python(self):
         """Simple single-rule grammar: Rust backend produces the same gsm.Grammar as Python."""
         python_result = parse_grammar(_SIMPLE_GRAMMAR)
-        rust_result = parse_grammar(_SIMPLE_GRAMMAR, rust_fegen_cst_module="fegen_rust_cst")
+        rust_result = parse_grammar(_SIMPLE_GRAMMAR, rust_fegen_cst_module="fegen_rust_cst.cst")
         assert python_result == rust_result
 
     def test_multi_rule_grammar_rust_equals_python(self):
         """Multi-rule grammar with alternatives: Rust == Python backend."""
         python_result = parse_grammar(_MULTI_RULE_GRAMMAR)
-        rust_result = parse_grammar(_MULTI_RULE_GRAMMAR, rust_fegen_cst_module="fegen_rust_cst")
+        rust_result = parse_grammar(_MULTI_RULE_GRAMMAR, rust_fegen_cst_module="fegen_rust_cst.cst")
         assert python_result == rust_result
 
     def test_fegen_grammar_itself_rust_equals_python(self):
@@ -84,7 +84,7 @@ class TestAC8RealCst2GsmRustBackend:
         all user grammars) produces the same gsm.Grammar regardless of CST backend.
         """
         python_result = parse_grammar_file(_FEGEN_FLTKG_PATH)
-        rust_result = parse_grammar_file(_FEGEN_FLTKG_PATH, rust_fegen_cst_module="fegen_rust_cst")
+        rust_result = parse_grammar_file(_FEGEN_FLTKG_PATH, rust_fegen_cst_module="fegen_rust_cst.cst")
         assert python_result == rust_result
 
     def test_rust_backend_uses_real_cst2gsm(self):
@@ -102,7 +102,7 @@ class TestAC8RealCst2GsmRustBackend:
 
         fltk2gsm_mod.Cst2Gsm.__init__ = recording_init
         try:
-            parse_grammar(_SIMPLE_GRAMMAR, rust_fegen_cst_module="fegen_rust_cst")
+            parse_grammar(_SIMPLE_GRAMMAR, rust_fegen_cst_module="fegen_rust_cst.cst")
         finally:
             fltk2gsm_mod.Cst2Gsm.__init__ = original_init
 
@@ -115,9 +115,9 @@ class TestAC8RealCst2GsmRustBackend:
 _CHILD_SPAN_PARAMS = pytest.mark.parametrize(
     "node_class,append_method,child_method",
     [
-        (fegen_rust_cst.Identifier, "append_name", "child_name"),
-        (fegen_rust_cst.Literal, "append_value", "child_value"),
-        (fegen_rust_cst.RawString, "append_value", "child_value"),
+        (fegen_rust_cst.cst.Identifier, "append_name", "child_name"),
+        (fegen_rust_cst.cst.Literal, "append_value", "child_value"),
+        (fegen_rust_cst.cst.RawString, "append_value", "child_value"),
     ],
     ids=["Identifier.child_name", "Literal.child_value", "RawString.child_value"],
 )
@@ -193,9 +193,9 @@ class TestAC6FegenRustCstModule:
 
     @pytest.mark.parametrize("class_name", _EXPECTED_CLASSES)
     def test_class_exposed(self, class_name: str):
-        """fegen_rust_cst exposes each expected grammar node class."""
-        assert hasattr(fegen_rust_cst, class_name), f"Missing class: {class_name}"
-        assert isinstance(getattr(fegen_rust_cst, class_name), type)
+        """fegen_rust_cst.cst exposes each expected grammar node class."""
+        assert hasattr(fegen_rust_cst.cst, class_name), f"Missing class: {class_name}"
+        assert isinstance(getattr(fegen_rust_cst.cst, class_name), type)
 
     def test_module_is_standalone(self):
         """The fegen_rust_cst module is importable separately from fltk._native.fegen_cst."""
@@ -217,13 +217,13 @@ class TestAC9LabelBackendIndependence:
 
     def test_rust_label_equals_python_constant(self):
         """A Rust-backend label compares == to the Python fltk_cst constant."""
-        rust_label = fegen_rust_cst.Items.Label.NO_WS
+        rust_label = fegen_rust_cst.cst.Items.Label.NO_WS
         py_label = py_cst.Items.Label.NO_WS
         assert rust_label == py_label, f"Rust label {rust_label!r} != Python label {py_label!r}"
 
     def test_rust_label_in_python_tuple(self):
         """A Rust-backend label is found in a tuple of Python constants."""
-        rust_label = fegen_rust_cst.Items.Label.ITEM
+        rust_label = fegen_rust_cst.cst.Items.Label.ITEM
         assert rust_label in (py_cst.Items.Label.ITEM, py_cst.Items.Label.NO_WS)
 
     def test_cst2gsm_no_cst_parameter(self):
@@ -239,8 +239,8 @@ class TestAC9LabelBackendIndependence:
 class TestRustParserSelfHosting:
     """Self-hosting: Rust-generated parser → Rust CST → real Cst2Gsm equals Python path.
 
-    Exercises fegen_rust_cst.Parser directly (not via plumbing.parse_grammar):
-      1. Instantiate fegen_rust_cst.Parser(text, capture_trivia=False)
+    Exercises fegen_rust_cst.parser.Parser directly (not via plumbing.parse_grammar):
+      1. Instantiate fegen_rust_cst.parser.Parser(text, capture_trivia=False)
       2. Call parser.apply__parse_grammar(0)
       3. Assert result is not None and result.pos == len(text)
       4. Run fltk2gsm.Cst2Gsm(text).visit_grammar(result.result)
@@ -252,13 +252,13 @@ class TestRustParserSelfHosting:
 
     def _assert_rust_parser_equals_python(self, text: str) -> None:
         """Parse text with the Rust parser and compare the resulting GSM to the Python path."""
-        parser = fegen_rust_cst.Parser(text, capture_trivia=False)
+        parser = fegen_rust_cst.parser.Parser(text, capture_trivia=False)
         result = parser.apply__parse_grammar(0)
         assert result is not None, parser.error_message()
         assert result.pos == len(text), (
             f"Partial parse: consumed {result.pos}/{len(text)} chars. Error tracker: {parser.error_message()}"
         )
-        assert isinstance(result.result, fegen_rust_cst.Grammar), type(result.result)
+        assert isinstance(result.result, fegen_rust_cst.cst.Grammar), type(result.result)
         gsm_rust = fltk2gsm.Cst2Gsm(text).visit_grammar(result.result)
         gsm_python = parse_grammar(text)
         assert gsm_rust == gsm_python
