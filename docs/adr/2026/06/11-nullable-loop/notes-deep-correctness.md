@@ -1,0 +1,27 @@
+# Deep correctness review — nullable-loop (61f9384..6ac52d5, HEAD 6ac52d5)
+
+Concise. Precise. Complete. Unambiguous. No padding.
+
+## correctness-1
+
+- **Where:** `fltk/fegen/gsm.py:339-355` (`validate_no_repeated_nil_items`).
+- **What:** The validator only inspects top-level items of each rule's alternatives. A `+`/`*` item nested inside a sub-expression term is never checked. Empirically confirmed against HEAD: grammar `rule := (pre:"b" (x:r"a*")+ .)` — outer item REQUIRED sub-expression, inner item ONE_OR_MORE over `Regex(r"a*")` — passes `validate_no_repeated_nil_items` and reaches codegen (`_gen_item`/`gen_item_parser_multiple` generate the inner loop for nested quantified items).
+- **Why:** The loop is `for rule → for alternative → for item: if item.quantifier.is_multiple(): check term_can_be_nil(item.term)`. No recursion into `Sequence[Items]` terms. Repetitions in *other rules* are covered (each rule is visited), but sub-expression nesting is not.
+- **Consequence:** Design §3.1 states grammars with repeated nullable terms are "now rejected at grammar-validation time"; false for sub-expression-nested repetitions. Such a grammar is accepted and at parse time gets the new guard's discard semantics (zero-width match silently dropped, `+` fails if first iteration is empty) instead of a validation error — divergent treatment of structurally equivalent grammars. Bounded: the guard prevents the hang, both backends behave identically. Top-level cases and all three tested trigger variants are correctly rejected.
+- **Suggested fix:** Recurse into `Sequence[Items]` terms in `validate_no_repeated_nil_items` (walk nested items the same way `_mark_trivia_reachable_in_items` does). Alternatively, record the gap explicitly (TODO entry) as accepted defense-in-depth scope.
+
+## correctness-2
+
+- **Where:** `fltk/fegen/gsm.py:30/75` (`Rule._can_be_nil`, `Items._can_be_nil` memo fields) interacting with the §2.1 change at `gsm.py:108-110`.
+- **What:** Pre-change, `Item.can_be_nil` ignored the grammar, so the `Rule`/`Items` nullability memos were grammar-independent by construction. The change routes `Item.can_be_nil` through `term_can_be_nil(self.term, grammar)` (Identifier → `grammar.identifiers` lookup), making the cached values grammar-dependent — but the per-object memo is not keyed on the grammar.
+- **Why / repro (run against HEAD):** `caller := r:other` queried first under grammar A lacking rule `other` → caches `False`; the same `Rule` object queried under grammar B where `other` exists and is nullable still returns `False` (stale). Confirmed empirically.
+- **Consequence:** Any flow that reuses `Rule`/`Items` objects across `Grammar` instances with differing `identifiers` (e.g. `dataclasses.replace`-style grammar transforms, incremental grammar construction — `classify_trivia_rules` itself shares `Items` objects between old and new rules) can validate against stale nullability: `validate_no_repeated_nil_items` / `validate_trivia_rule_not_nil` may accept a repetition over a term that is nullable in the final grammar (runtime falls through to the guard: silent empty-match discard instead of rejection) or, in the True→stale-True direction, wrongly reject. The standard in-tree pipeline (`add_trivia_rule_to_grammar` → `classify_trivia_rules` → validators) queries each object under one grammar only, so in-tree behavior is unaffected; the hazard is for out-of-tree API users (per CLAUDE.md, absence of an in-tree consumer is not evidence of safety). Design §4 calls the caches "pre-existing pattern, unchanged" — the caches are unchanged, but their grammar-dependence is new in this diff.
+- **Suggested fix:** Key the memo on `id(grammar)` (store `(grammar_id, result)`), or restrict memoization to grammar-independent terms (`Regex._can_be_nil` is safe), or document the single-grammar-per-object invariant on `Rule`/`Items`.
+
+## Checked, no finding
+
+- Guard placement: before `pos` update in both backends (`gsm2parser.py:564-574`, `gsm2parser_rs.py:705-709`); each backend has exactly one repetition emission site (`gen_item_parser_multiple`, `_gen_item_multiple`); all 10 regenerated artifacts verified — loop count equals guard count in every file.
+- `iir.Break` lowering (`compiler.py:218-220` → `ast.Break`) and `Block.break_` parent_block wiring are correct; committed generated Python confirms `if one_result.pos == pos: break` ahead of the assignment.
+- No-behavior-change claim for validated grammars holds: `can_be_nil(...) == False` implies every successful match consumes ≥1 char (WS_REQUIRED separators are non-nil because the trivia rule is validated non-nil), so the guard cannot fire; `one_result.pos < pos` is unreachable (consume helpers return span ends ≥ input pos; memo is keyed by pos).
+- `+` post-loop `pos == span_start` check composes correctly with the guard in both backends: first-iteration empty → fail; empty after k productive iterations → success at iteration-k pos. Rust `is_one_or_more = quantifier.is_required()` is correct for ONE_OR_MORE vs ZERO_OR_MORE.
+- Note (no consequence found): post-guard, a ONE_OR_MORE item over a nullable term *fails* on a zero-width first match rather than matching nil, so `Item.can_be_nil` returning True for it is an over-approximation; conservative direction only (extra rejection), and any such grammar is independently rejected by `validate_no_repeated_nil_items` at top level, so no observable over-rejection.

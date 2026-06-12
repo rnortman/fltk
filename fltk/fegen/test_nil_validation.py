@@ -76,6 +76,98 @@ def test_repeated_nil_validation_catches_trivia_issue():
         gsm.validate_no_repeated_nil_items(grammar)
 
 
+def test_repeated_nil_validation_rejects_nested_subexpr():
+    """validate_no_repeated_nil_items rejects +/* item nested inside a sub-expression.
+
+    Grammar: rule := outer:( (x:r"a*")+ )
+    The outer item is REQUIRED over a sub-expression; the inner item is ONE_OR_MORE
+    over Regex(r"a*").  Previously the validator only inspected top-level items and
+    missed the nested ONE_OR_MORE, so such grammars passed validation and reached
+    codegen.  With the recursive walk, the inner item is found and rejected.
+    """
+    inner_items = gsm.Items(
+        items=[
+            gsm.Item(
+                label="x",
+                disposition=gsm.Disposition.INCLUDE,
+                term=gsm.Regex(r"a*"),  # nullable
+                quantifier=gsm.ONE_OR_MORE,  # nested +
+            )
+        ],
+        sep_after=[gsm.Separator.NO_WS],
+    )
+    rule = gsm.Rule(
+        name="rule",
+        alternatives=[
+            gsm.Items(
+                items=[
+                    gsm.Item(
+                        label="outer",
+                        disposition=gsm.Disposition.INCLUDE,
+                        term=[inner_items],  # sub-expression wrapping the + item
+                        quantifier=gsm.REQUIRED,  # REQUIRED outer — top-level walk missed this
+                    )
+                ],
+                sep_after=[gsm.Separator.NO_WS],
+            )
+        ],
+    )
+    grammar = gsm.Grammar(rules=[rule], identifiers={"rule": rule})
+
+    with pytest.raises(ValueError, match="Repeated potentially-nil items found"):
+        gsm.validate_no_repeated_nil_items(grammar)
+
+
+def test_repeated_nil_validation_rejects_deeply_nested_subexpr():
+    """validate_no_repeated_nil_items rejects +/* item two sub-expression levels deep.
+
+    Grammar: rule := outer:( wrapper:( (x:r"a*")* ) )
+    The ZERO_OR_MORE item lives two sub-expression levels below the rule alternative.
+    """
+    innermost_items = gsm.Items(
+        items=[
+            gsm.Item(
+                label="x",
+                disposition=gsm.Disposition.INCLUDE,
+                term=gsm.Regex(r"a*"),  # nullable
+                quantifier=gsm.ZERO_OR_MORE,  # *
+            )
+        ],
+        sep_after=[gsm.Separator.NO_WS],
+    )
+    wrapper_items = gsm.Items(
+        items=[
+            gsm.Item(
+                label="wrapper",
+                disposition=gsm.Disposition.INCLUDE,
+                term=[innermost_items],
+                quantifier=gsm.REQUIRED,
+            )
+        ],
+        sep_after=[gsm.Separator.NO_WS],
+    )
+    rule = gsm.Rule(
+        name="rule",
+        alternatives=[
+            gsm.Items(
+                items=[
+                    gsm.Item(
+                        label="outer",
+                        disposition=gsm.Disposition.INCLUDE,
+                        term=[wrapper_items],
+                        quantifier=gsm.REQUIRED,
+                    )
+                ],
+                sep_after=[gsm.Separator.NO_WS],
+            )
+        ],
+    )
+    grammar = gsm.Grammar(rules=[rule], identifiers={"rule": rule})
+
+    with pytest.raises(ValueError, match="Repeated potentially-nil items found"):
+        gsm.validate_no_repeated_nil_items(grammar)
+
+
 def test_repeated_nil_validation_allows_safe_patterns():
     """Test that the validation allows safe patterns."""
     # Create a rule with required items (safe to repeat)
@@ -103,8 +195,8 @@ def test_repeated_nil_validation_allows_safe_patterns():
 
 
 def test_trivia_rule_not_nil_validation():
-    """Test that trivia rules cannot be nil."""
-    # Create a trivia rule that can be nil
+    """Test that trivia rules cannot be nil (optional-quantifier path, pre-existing)."""
+    # Create a trivia rule that can be nil via NOT_REQUIRED quantifier
     nil_trivia_rule = gsm.Rule(
         name="_trivia",
         alternatives=[
@@ -125,6 +217,35 @@ def test_trivia_rule_not_nil_validation():
     grammar = gsm.Grammar(rules=[nil_trivia_rule], identifiers={"_trivia": nil_trivia_rule})
 
     # This should raise a ValueError
+    with pytest.raises(ValueError, match="Trivia rule '_trivia' cannot match empty string"):
+        gsm.validate_trivia_rule_not_nil(grammar)
+
+
+def test_trivia_rule_not_nil_required_nullable_term():
+    """validate_trivia_rule_not_nil rejects REQUIRED quantifier + nullable regex term.
+
+    Pre-fix: the quantifier-only check (is_optional()) returned False for REQUIRED,
+    so this trivia rule was accepted even though it can produce empty matches.
+    Post-fix: Item.can_be_nil is term-aware; REQUIRED + Regex(r"\\s*") → True → rejected.
+    """
+    nil_trivia_rule = gsm.Rule(
+        name="_trivia",
+        alternatives=[
+            gsm.Items(
+                items=[
+                    gsm.Item(
+                        label="content",
+                        disposition=gsm.Disposition.INCLUDE,
+                        term=gsm.Regex(r"\s*"),  # nullable — can match empty string
+                        quantifier=gsm.REQUIRED,  # REQUIRED quantifier, not optional
+                    ),
+                ],
+                sep_after=[gsm.Separator.NO_WS],
+            )
+        ],
+    )
+    grammar = gsm.Grammar(rules=[nil_trivia_rule], identifiers={"_trivia": nil_trivia_rule})
+
     with pytest.raises(ValueError, match="Trivia rule '_trivia' cannot match empty string"):
         gsm.validate_trivia_rule_not_nil(grammar)
 
@@ -169,14 +290,14 @@ def test_item_nil_detection_with_quantifiers():
     """Test item nil detection with different quantifiers."""
     grammar = gsm.Grammar(rules=[], identifiers={})
 
-    # Required item (never nil regardless of term)
+    # Required item with empty literal: nil because the term is nullable
     required_item = gsm.Item(
         label=None,
         disposition=gsm.Disposition.INCLUDE,
-        term=gsm.Literal(""),  # Even empty literal
+        term=gsm.Literal(""),  # Empty literal — term is nullable
         quantifier=gsm.REQUIRED,
     )
-    assert required_item.can_be_nil(grammar) is False
+    assert required_item.can_be_nil(grammar) is True
 
     # Optional item (always nil regardless of term)
     optional_item = gsm.Item(
@@ -196,14 +317,14 @@ def test_item_nil_detection_with_quantifiers():
     )
     assert zero_or_more_item.can_be_nil(grammar) is True
 
-    # One-or-more item (never nil regardless of term)
+    # One-or-more item with empty literal: nil because the term is nullable (empty match on first iteration)
     one_or_more_item = gsm.Item(
         label=None,
         disposition=gsm.Disposition.INCLUDE,
-        term=gsm.Literal(""),  # Even empty literal
+        term=gsm.Literal(""),  # Empty literal — term is nullable
         quantifier=gsm.ONE_OR_MORE,
     )
-    assert one_or_more_item.can_be_nil(grammar) is False
+    assert one_or_more_item.can_be_nil(grammar) is True
 
 
 def test_memoization():

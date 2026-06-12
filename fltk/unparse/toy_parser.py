@@ -131,6 +131,8 @@ class Parser:
             span=fltk.fegen.pyrt.span.Span.with_source(pos, -1, self._source_text)
         )
         while one_result := self.parse_expr__alt0__item1__alts(pos=pos):
+            if not one_result.pos > pos:
+                break
             pos = one_result.pos
             result.extend_children(other=one_result.result)
         result.span = fltk.fegen.pyrt.span.Span.with_source(_span_start, pos, self._source_text)
@@ -214,6 +216,8 @@ class Parser:
             span=fltk.fegen.pyrt.span.Span.with_source(pos, -1, self._source_text)
         )
         while one_result := self.parse_term__alt0__item1__alts(pos=pos):
+            if not one_result.pos > pos:
+                break
             pos = one_result.pos
             result.extend_children(other=one_result.result)
         result.span = fltk.fegen.pyrt.span.Span.with_source(_span_start, pos, self._source_text)

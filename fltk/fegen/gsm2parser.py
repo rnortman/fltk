@@ -561,6 +561,20 @@ class ParserGenerator:
                 mutable=True,
             ),
         )
+        # Per-iteration progress guard: if the consume returned a result at the same
+        # position we started (zero-width match), or at a regressed position, break to
+        # avoid an infinite loop.  Uses <= (not ==) so a position regression — impossible
+        # today but conceivable in future consume helpers — is also caught.
+        # Placement before the pos update is load-bearing: after the update the
+        # comparison would be vacuously true and break every iteration.
+        loop.block.if_(
+            condition=iir.LogicalNegation(
+                operand=iir.GreaterThan(
+                    lhs=loop.block.get_leaf_scope().lookup_as("one_result", iir.Var).load().fld.pos.load(),
+                    rhs=result.get_param("pos").load(),
+                ),
+            ),
+        ).block.break_()
         loop.block.assign(
             target=result.get_param("pos").store(),
             expr=loop.block.get_leaf_scope().lookup_as("one_result", iir.Var).load_mut().fld.pos.move(),

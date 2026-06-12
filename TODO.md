@@ -50,10 +50,6 @@ Location: `crates/fltk-parser-core/src/errors.rs` (`format_error_message`).
 
 The `XChild` and `XLabel` naming conventions for generated Rust enums are encoded independently in `gsm2parser_rs.py` (`_child_enum_name`, `_class_name`) and `gsm2tree_rs.py` (`_label_enum_rust_name`, inline `f"{class_name}Child"` in `_child_enum_block`). A rename in one place without the other produces parser code that references non-existent CST enum names (caught only at `cargo` compile time). Extract naming helpers to `RustCstGenerator` so both generators read from a single source. Location: `fltk/fegen/gsm2parser_rs.py` (`_child_enum_name`), `fltk/fegen/gsm2tree_rs.py` (`_label_enum_rust_name`, `_child_enum_block`).
 
-## `nullable-loop`
-
-`_gen_item_multiple` emits a `while let` loop with no per-iteration progress guard. For a grammar where the repeated term can match empty at a fixed position (e.g. an inner alternative whose items are all optional), the loop never advances and runs forever (100% CPU). This deliberately mirrors the Python backend (`gsm2parser.py`) for cross-backend parity (design §3), but both backends should add `if one_result.pos == pos { break; }` in lockstep. Location: `fltk/fegen/gsm2parser_rs.py` (`_gen_item_multiple`), `fltk/fegen/gsm2parser.py` (corresponding Python loop).
-
 ## `extend-children-owned`
 
 `extend_children(&Self)` clones every child Arc even though the donor node is immediately dropped after the call (inline-to-parent sub-expression and `+`/`*` loop paths). A consuming variant `extend_children_owned(other: Self)` using `Vec::append` would avoid the atomic inc+dec pairs per child on the parse hot path. Blocked on `gsm2tree_rs.py` adding the method to the generated CST node API. Location: `fltk/fegen/gsm2parser_rs.py` (`_gen_item_multiple`, `_gen_append_code`), `fltk/fegen/gsm2tree_rs.py` (generated `impl <Node>` blocks).

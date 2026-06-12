@@ -132,6 +132,8 @@ class Parser:
             span=fltk.fegen.pyrt.span.Span.with_source(pos, -1, self._source_text)
         )
         while one_result := self.apply__parse_rule(pos=pos):
+            if not one_result.pos > pos:
+                break
             pos = one_result.pos
             result.append_rule(child=one_result.result)
         if pos == _span_start:
@@ -288,6 +290,8 @@ class Parser:
             span=fltk.fegen.pyrt.span.Span.with_source(pos, -1, self._source_text)
         )
         while one_result := self.parse_alternatives__alt0__item1__alts(pos=pos):
+            if not one_result.pos > pos:
+                break
             pos = one_result.pos
             result.extend_children(other=one_result.result)
         result.span = fltk.fegen.pyrt.span.Span.with_source(_span_start, pos, self._source_text)
@@ -534,6 +538,8 @@ class Parser:
             span=fltk.fegen.pyrt.span.Span.with_source(pos, -1, self._source_text)
         )
         while one_result := self.parse_items__alt0__item2__alts(pos=pos):
+            if not one_result.pos > pos:
+                break
             pos = one_result.pos
             result.extend_children(other=one_result.result)
         result.span = fltk.fegen.pyrt.span.Span.with_source(_span_start, pos, self._source_text)
@@ -1189,6 +1195,8 @@ class Parser:
             span=fltk.fegen.pyrt.span.Span.with_source(pos, -1, self._source_text)
         )
         while one_result := self.parse__trivia__alt0__item0__alts(pos=pos):
+            if not one_result.pos > pos:
+                break
             pos = one_result.pos
             result.extend_children(other=one_result.result)
         if pos == _span_start:

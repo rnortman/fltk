@@ -200,6 +200,10 @@ class Block(Statement):
         self.body.append(ret := Return(expr=expr, parent_block=self))
         return ret
 
+    def break_(self) -> "Break":
+        self.body.append(brk := Break(parent_block=self))
+        return brk
+
 
 _ModuleSubclass = TypeVar("_ModuleSubclass", bound="Module")
 

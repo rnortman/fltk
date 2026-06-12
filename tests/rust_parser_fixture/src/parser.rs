@@ -385,6 +385,7 @@ impl Parser {
         while let Some(one_result) = {
             self.apply__parse_atom(pos)
         } {
+            if one_result.pos <= pos { break; }
             pos = one_result.pos;
             result.append_item(one_result.result);
         }
@@ -451,6 +452,7 @@ impl Parser {
         while let Some(one_result) = {
             self.apply__parse_atom(pos)
         } {
+            if one_result.pos <= pos { break; }
             pos = one_result.pos;
             result.append_item(one_result.result);
         }

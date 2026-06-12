@@ -696,14 +696,16 @@ class RustParserGenerator:
         # Use Span::unknown() for the placeholder; set_span below supplies the real span
         # (efficiency-2: avoids Arc clone on every loop entry).
         lines.append(f"        let mut result = cst::{parent_class_name}::new(Span::unknown());")
-        # TODO(nullable-loop): if the repeated term can match empty at a fixed position the
-        # loop below never advances and runs forever (100% CPU DoS on crafted input).
-        # Deliberately mirrors Python's identical behavior for cross-backend parity (design §3),
-        # but both backends should add a per-iteration progress guard in lockstep.
-        # See gsm2parser.py for the matching Python location.
+        # Per-iteration progress guard: a zero-width match (one_result.pos == pos before
+        # the update) means the consume helper matched empty at this position.  Break
+        # immediately so the loop terminates; the empty match is discarded without being
+        # appended to the CST.  Placement before the pos assignment is load-bearing:
+        # after the assignment the comparison would be vacuously true and break every
+        # iteration.  Mirrors the identical Python guard in gsm2parser.py.
         lines.append("        while let Some(one_result) = {")
         lines.append(f"            {consume_expr}")
         lines.append("        } {")
+        lines.append("            if one_result.pos <= pos { break; }")
         lines.append("            pos = one_result.pos;")
         # Generate append statement
         if one_is_inline:

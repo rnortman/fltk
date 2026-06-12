@@ -146,6 +146,7 @@ impl Parser {
         while let Some(one_result) = {
             self.apply__parse_rule(pos)
         } {
+            if one_result.pos <= pos { break; }
             pos = one_result.pos;
             result.append_rule(one_result.result);
         }
@@ -321,6 +322,7 @@ impl Parser {
         while let Some(one_result) = {
             self.parse_alternatives__alt0__item1__alts(pos)
         } {
+            if one_result.pos <= pos { break; }
             pos = one_result.pos;
             result.extend_children(&one_result.result);
         }
@@ -550,6 +552,7 @@ impl Parser {
         while let Some(one_result) = {
             self.parse_items__alt0__item2__alts(pos)
         } {
+            if one_result.pos <= pos { break; }
             pos = one_result.pos;
             result.extend_children(&one_result.result);
         }
@@ -1208,6 +1211,7 @@ impl Parser {
         while let Some(one_result) = {
             self.parse__trivia__alt0__item0__alts(pos)
         } {
+            if one_result.pos <= pos { break; }
             pos = one_result.pos;
             result.extend_children(&one_result.result);
         }

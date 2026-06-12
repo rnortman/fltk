@@ -24,6 +24,16 @@ class Grammar:
 
 @dataclasses.dataclass(frozen=True, slots=True)
 class Rule:
+    """A grammar rule.
+
+    Invariant: each Rule object must be queried under a single Grammar instance.
+    ``can_be_nil`` memoizes its result per object; since the result depends on the
+    grammar's ``identifiers`` mapping (via Identifier terms), reusing a Rule object
+    across Grammar instances with differing identifier sets will return stale cached
+    values.  ``classify_trivia_rules`` uses ``dataclasses.replace`` to create new Rule
+    objects, which resets the cache, satisfying this invariant for the standard pipeline.
+    """
+
     name: str
     alternatives: Sequence["Items"]
     is_trivia_rule: bool = False
@@ -69,6 +79,13 @@ class Separator(Enum):
 
 @dataclasses.dataclass(frozen=True, slots=True)
 class Items:
+    """A sequence of grammar items (one alternative).
+
+    Same single-grammar-per-object invariant as Rule: the ``_can_be_nil`` memo
+    is grammar-dependent (via Identifier terms) and is not keyed on the grammar.
+    Do not reuse Items objects across Grammar instances with differing identifier sets.
+    """
+
     items: Sequence["Item"]
     sep_after: Sequence[Separator]
     initial_sep: Separator = Separator.NO_WS
@@ -105,10 +122,9 @@ class Item:
     term: "Term"
     quantifier: "Quantifier"
 
-    def can_be_nil(self, grammar: "Grammar") -> bool:  # noqa: ARG002
-        """Check if this item can be nil."""
-        # Item nil if quantifier allows nil (regardless of term)
-        return self.quantifier.is_optional()
+    def can_be_nil(self, grammar: "Grammar") -> bool:
+        """Check if this item can match empty: optional quantifier, or nullable term."""
+        return self.quantifier.is_optional() or term_can_be_nil(self.term, grammar)
 
 
 @dataclasses.dataclass(frozen=True, eq=True, slots=True)
@@ -337,20 +353,46 @@ def validate_trivia_rule_not_nil(grammar: Grammar) -> None:
         raise ValueError(msg)
 
 
+def _collect_repeated_nil_errors(items: "Items", grammar: "Grammar", rule_name: str, errors: list[str]) -> None:
+    """Recursively collect repeated-nil errors in an Items sequence.
+
+    Checks every item in the sequence; for any item whose term is a sub-expression
+    (Sequence[Items]) recurses into each alternative regardless of the outer quantifier,
+    so nested +/* items are also validated.
+    """
+    for item_idx, item in enumerate(items.items):
+        if item.quantifier.is_multiple():  # + or *
+            if term_can_be_nil(item.term, grammar):
+                errors.append(
+                    f"Rule '{rule_name}' item {item_idx}: "
+                    f"Repeated item can match empty string, causing infinite loops. "
+                    f"Consider making the item required or restructuring the grammar."
+                )
+        # Recurse into sub-expressions regardless of quantifier so that nested +/* items
+        # are also checked.
+        if isinstance(item.term, Sequence):
+            for alt in item.term:
+                _collect_repeated_nil_errors(alt, grammar, rule_name, errors)
+
+
 def validate_no_repeated_nil_items(grammar: Grammar) -> None:
-    """Validate no + or * quantified items can be nil."""
+    """Validate no + or * quantified items can be nil.
+
+    Recursively checks sub-expressions so nested +/* items (e.g.
+    ``rule := ( (r"a*")+ )``) are caught as well as top-level ones.
+
+    NOTE: The loop guard in both backends (gsm2parser.py / gsm2parser_rs.py)
+    must remain as defense-in-depth even with this validator in place.  The
+    regex-emptiness check is an under-approximation: context-sensitive patterns
+    such as ``\\ba*`` or ``(?=x)`` return False from ``_test_regex_empty``
+    against ``""`` but can still produce zero-width matches on real input.
+    Those grammars pass this validator; the guard terminates them at runtime.
+    """
     errors = []
 
     for rule in grammar.rules:
-        for alt_idx, alternative in enumerate(rule.alternatives):
-            for item_idx, item in enumerate(alternative.items):
-                if item.quantifier.is_multiple():  # + or *
-                    if term_can_be_nil(item.term, grammar):
-                        errors.append(
-                            f"Rule '{rule.name}' alternative {alt_idx} item {item_idx}: "
-                            f"Repeated item can match empty string, causing infinite loops. "
-                            f"Consider making the item required or restructuring the grammar."
-                        )
+        for alternative in rule.alternatives:
+            _collect_repeated_nil_errors(alternative, grammar, rule.name, errors)
 
     if errors:
         raise ValueError("Repeated potentially-nil items found:\n" + "\n".join(errors))
