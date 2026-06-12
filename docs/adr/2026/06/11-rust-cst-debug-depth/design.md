@@ -8,7 +8,7 @@ Scope note: `request.md` covers Debug only. The Drop work (originally floated as
 
 ## Root cause / context
 
-Two unbounded recursions through the same ownership chain, both with attacker-controlled depth (tree depth is attacker-controlled for parsers over untrusted input); both end in stack exhaustion → uncatchable SIGSEGV process abort. The parse-depth-limit work does not eliminate either exposure (`exploration.md` §5).
+Two unbounded recursions through the same ownership chain, both with attacker-controlled depth (tree depth is attacker-controlled for parsers over untrusted input); both end in stack exhaustion → uncatchable SIGSEGV process abort. The parse-depth-limit work does not eliminate either exposure: left-recursive seed-grow deepens the CST one level per `grow_seed` loop iteration at ~constant `apply` depth, so parser-produced tree depth scales with input length, not `max_depth` (`evaluation-drop-depth-reachability.md` §2 — supersedes the weaker `exploration.md` §5 argument, which wrongly bounded post-limit depth at ~`max_depth`).
 
 **Debug.** `gsm2tree_rs.py:640` emits `#[derive(Clone, Debug)]` on every node data struct. The derived `Debug` formats `children: Vec<(label, ChildEnum)>`; node-typed enum variants hold `Shared<T>`, whose `Debug` (`crates/fltk-cst-core/src/shared.rs:98-102`) takes the read lock and delegates to `T::Debug`. Chain: `Shared<A> → A → Vec → ChildEnum → Shared<B> → …`, one set of stack frames per tree level. `{:?}` is ubiquitous (`assert_eq!`, `dbg!`, logging). Full validation in `exploration.md` §1-§5.
 
@@ -69,7 +69,7 @@ Soundness of the `== 1` check below: `Shared` exposes no `Weak` handles (the reg
 enum DropWorklistItem {
     {ClassA}(Shared<{ClassA}>),
     {ClassB}(Shared<{ClassB}>),
-    // … one variant per node class in the grammar
+    // … one variant per node class that appears as a node-typed child
 }
 
 impl DropWorklistItem {
@@ -85,17 +85,19 @@ impl DropWorklistItem {
                 // `shared` drops here: count==1 → childless node, trivial drop;
                 // count>1 → refcount decrement only. Either way, no recursion.
             }
-            // … uniform arm per node class
+            // … uniform arm per worklist variant
         }
     }
 }
 ```
 
-Arms are uniform across all node classes (including span-only-children classes, where the steal harmlessly takes only span children, which contribute nothing to the worklist). The write lock in `mem::take(&mut shared.write().children)` is a statement-scoped temporary guard on a sole-owned node: uncontended, released before worklist processing, never nested.
+Variant set — the **child-class union**: one variant per node class that appears as a node-typed variant in *any* child enum (computable from `_child_variants_for_rule` across all rules), one `drain_into` arm per variant, arms uniform. Never-child classes (e.g. `Items` in `cst_generated.rs`, `Grammar` in `cst_fegen.rs`, 11 of 21 classes in the parser fixture) get **no** variant: they can only be externally-dropped roots, whose own `impl Drop` drains their children directly, so a variant for them would never be constructed (only `into_drop_item` constructs variants) — and an unconstructed variant of a private enum trips `dead_code`, a hard failure under `make check`'s `cargo clippy -- -D warnings` gate (Makefile:51-54). Span-only classes that *do* appear as children keep their variant for arm uniformity: the steal harmlessly takes only span children, which contribute nothing to the worklist. Degenerate case: if the union is empty (flat grammar, no node-typed children anywhere), emit no `_drop_block` at all — no `Drop` impls or `into_drop_item` methods exist either (see piece 3), so nothing references it.
+
+The write lock in `mem::take(&mut shared.write().children)` is a statement-scoped temporary guard on a sole-owned node: uncontended, released before worklist processing, never nested.
 
 **3. Per-enum conversion + per-node `impl Drop` (in `_child_enum_block` / `_node_block`).**
 
-On each child enum, an always-compiled (not python-gated), module-private method:
+On each child enum **whose class has an `impl Drop` or a `DropWorklistItem` variant** (its only two call sites: the class's own `Drop`, and the class's `drain_into` arm), an always-compiled (not python-gated), module-private method — omitted for span-only never-child classes, where it would be uncalled and itself trip `dead_code`:
 
 ```rust
 impl {ClassName}Child {
@@ -144,8 +146,8 @@ Naming: a grammar rule named `drop_worklist_item` would generate a colliding cla
    - Emit `#[derive(Clone)]` instead of `#[derive(Clone, Debug)]`.
    - Immediately after the struct definition, before the `PartialEq` impl, emit the manual `Debug` impl; after it, the `impl Drop` (when the class has node-typed child variants).
    - Extend the struct's doc comment: Debug output is non-recursive (span + child count; traverse via `children()` to inspect subtrees); teardown is iterative (bounded stack at any depth).
-3. `_child_enum_block()` (~line 488): emit the always-compiled `into_drop_item` impl after the `PartialEq` impl (before the python-gated block). Child enums keep `#[derive(Clone, Debug)]` — see "Untouched" below.
-4. New `_drop_block()` emitting `DropWorklistItem` + `drain_into`, appended in `generate()` after the per-rule loop (Rust is order-independent; forward references from `into_drop_item` are fine).
+3. `_child_enum_block()` (~line 488): emit the always-compiled `into_drop_item` impl after the `PartialEq` impl (before the python-gated block), gated on the class having a `Drop` impl or a worklist variant (piece 3). Child enums keep `#[derive(Clone, Debug)]` — see "Untouched" below.
+4. New `_drop_block()` emitting `DropWorklistItem` + `drain_into` with one variant/arm per child-class-union member (piece 2), appended in `generate()` after the per-rule loop (Rust is order-independent; forward references from `into_drop_item` are fine). Skipped entirely when the union is empty. Requires a pre-pass over all rules' `_child_variants_for_rule` results before per-rule emission, or computing the union first; either is a trivial restructure of `generate()`.
 
 Untouched, with rationale:
 - Node `Clone` derive — unchanged (constraint); `Clone` is shallow (Arc clones), not recursive.
@@ -170,6 +172,7 @@ Rust convention treats `Debug` output as unstable; this is a format change, not 
 ## Edge cases / failure modes
 
 - **Zero children**: Debug prints `children: <0 child(ren)>` (spike-test assertion); Drop early-returns (where emitted — span-only classes have no `Drop` impl at all).
+- **Never-child root classes** (no `DropWorklistItem` variant): their own `impl Drop` seeds the worklist from their children directly; no variant for the root itself is ever needed.
 - **`{:#?}` alternate flag**: `debug_struct` handles it; still non-recursive.
 - **Lock behavior (Debug)**: node `Debug` reads own fields directly (no lock — `impl` is on the data struct, `&self`). Formatting a `Shared<T>` or a child enum still takes exactly one read lock (in `Shared::Debug`), one level deep — strictly less locking than before.
 - **Shared child (`strong_count > 1`)**: not stolen; the subtree stays intact for the other owner(s). The last owner's eventual drop tears it down iteratively (covered by test 3).
@@ -188,8 +191,9 @@ Depth rationale (applies to tests 1-2): under the old codegen each tree level co
 2. **New: deep-tree Drop test.** Build a 100 000-level `Expr` chain; `drop(root)`; test completes. Isolates the Drop fix from the Debug fix. Pre-fix: aborts at drop.
 3. **New: shared-subtree survival test.** Build `parent → child → grandchild`; retain a second `Shared` handle to `child`; `drop(parent)`; assert through the retained handle that `child` still has its grandchild (`children().len() == 1` — proves the `strong_count > 1` branch does not steal); then drop the retained handle (frees the subtree iteratively).
 4. **New: `Shared::strong_count` unit test** in `crates/fltk-cst-core` (count 1 after `new`, 2 after `clone`, back to 1 after drop).
-5. **Updated: spike smoke tests** (`crates/fltk-cst-spike/src/spike_tests.rs:364-378`): keep the four `format!` calls compiling; upgrade from discard-only to content assertions — node output contains `"span"` and `"<0 child(ren)>"`; child-enum output for `ItemsChild::Identifier` contains `"Identifier"` and `"child(ren)"` (one-level delegation through `Shared` works).
-6. **Existing suites clean**: `make gencode && make fix`, then `uv run --group dev maturin develop`, `uv run pytest` (Python `__repr__`/parity tests unaffected), `cargo test` across workspace + fixture crates (`make cargo-test`, `make test-rust-parser-fixture`, etc. — `make check` covers the full gate).
+5. **New: parser-produced deep-tree test** (per `evaluation-drop-depth-reachability.md` §4's recommendation), in the parser fixture's test suite: parse `"1" + "+1"*100_000` (~200 KiB) with the default `max_depth`; assert the parse succeeds; `format!("{:?}", root)` completes with bounded output; natural drop completes. Pins reachability-via-parsing (left-recursive seed-grow) in CI, so the manual-construction tests 1-2 cannot later be dismissed as unrealistic. (Tests 1-2 stay: they isolate each fix from parser behavior.)
+6. **Updated: spike smoke tests** (`crates/fltk-cst-spike/src/spike_tests.rs:364-378`): keep the four `format!` calls compiling; upgrade from discard-only to content assertions — node output contains `"span"` and `"<0 child(ren)>"`; child-enum output for `ItemsChild::Identifier` contains `"Identifier"` and `"child(ren)"` (one-level delegation through `Shared` works).
+7. **Existing suites clean**: `make gencode && make fix`, then `uv run --group dev maturin develop`, `uv run pytest` (Python `__repr__`/parity tests unaffected), `cargo test` across workspace + fixture crates (`make cargo-test`, `make test-rust-parser-fixture`, etc. — `make check` covers the full gate).
 
 ## Open questions
 
