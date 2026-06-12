@@ -37,10 +37,6 @@ Per-label child accessors (`children_<label>`, `child_<label>`, `maybe_<label>`)
 
 `_rust_str_lit` is only defined in `fltk/fegen/gsm2parser_rs.py`. `gsm2tree_rs.py` embeds Rust string literals in f-strings without going through an escaping helper, meaning any rule name or label containing characters that require escaping (backslash, double-quote, control chars) would produce malformed Rust there. Extract to a shared utility so both generators use the same escaping path. Location: `fltk/fegen/gsm2parser_rs.py` (`_rust_str_lit`, module level).
 
-## `rust-naming-shared`
-
-The `XChild` and `XLabel` naming conventions for generated Rust enums are encoded independently in `gsm2parser_rs.py` (`_child_enum_name`, `_class_name`) and `gsm2tree_rs.py` (`_label_enum_rust_name`, inline `f"{class_name}Child"` in `_child_enum_block`). A rename in one place without the other produces parser code that references non-existent CST enum names (caught only at `cargo` compile time). Extract naming helpers to `RustCstGenerator` so both generators read from a single source. Location: `fltk/fegen/gsm2parser_rs.py` (`_child_enum_name`), `fltk/fegen/gsm2tree_rs.py` (`_label_enum_rust_name`, `_child_enum_block`).
-
 ## `extend-children-owned`
 
 `extend_children(&Self)` clones every child Arc even though the donor node is immediately dropped after the call (inline-to-parent sub-expression and `+`/`*` loop paths). A consuming variant `extend_children_owned(other: Self)` using `Vec::append` would avoid the atomic inc+dec pairs per child on the parse hot path. Blocked on `gsm2tree_rs.py` adding the method to the generated CST node API. Location: `fltk/fegen/gsm2parser_rs.py` (`_gen_item_multiple`, `_gen_append_code`), `fltk/fegen/gsm2tree_rs.py` (generated `impl <Node>` blocks).

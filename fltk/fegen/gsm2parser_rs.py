@@ -191,11 +191,7 @@ class RustParserGenerator:
         return self._cst._py_gen.class_name_for_rule_node(rule_name)
 
     def _child_enum_name(self, rule_name: str) -> str:
-        # TODO(rust-naming-shared): The "Child" and enum-name conventions are also
-        # encoded inline in gsm2tree_rs.py (_label_enum_rust_name, _child_enum_block).
-        # A rename there must be matched here; extract to RustCstGenerator helpers to
-        # enforce that single-source-of-truth.
-        return self._class_name(rule_name) + "Child"
+        return self._cst.child_enum_name(self._class_name(rule_name))
 
     def _label_type_info(self, rule_name: str, label: str) -> tuple[str, str | None, int]:
         """Delegate to the CST generator's label type info."""

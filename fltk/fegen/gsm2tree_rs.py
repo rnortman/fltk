@@ -505,6 +505,15 @@ class RustCstGenerator:
     # Child enum
     # ------------------------------------------------------------------
 
+    @staticmethod
+    def child_enum_name(class_name: str) -> str:
+        """Return the Rust child value enum name for a node class (single source of truth).
+
+        Used by both this generator and RustParserGenerator (gsm2parser_rs.py); a rename
+        here propagates to every emission site.
+        """
+        return f"{class_name}Child"
+
     def _child_enum_block(self, class_name: str, rule_name: str) -> str:
         """Emit the per-node child value enum (<Name>Child) + Clone/PartialEq impls.
 
@@ -514,7 +523,7 @@ class RustCstGenerator:
         extract_from_pyobject extracts the Shared<T> from the handle and hand-ins to registry.
         """
         child_classes, has_span = self._child_variants_for_rule(rule_name)
-        enum_name = f"{class_name}Child"
+        enum_name = self.child_enum_name(class_name)
         lines: list[str] = []
 
         lines.append(f"/// Child value enum for `{class_name}` nodes.")
@@ -638,7 +647,7 @@ class RustCstGenerator:
         The handle is named Py<ClassName> in Rust; the data struct keeps the original name.
         """
         child_classes, has_span = self._child_variants_for_rule(rule_name)
-        enum_name = f"{class_name}Child"
+        enum_name = self.child_enum_name(class_name)
         label_enum_name = self._label_enum_rust_name(class_name) if labels else ""
         label_type = f"Option<{label_enum_name}>" if labels else "Option<()>"
         py_handle = f"Py{class_name}"
@@ -1075,7 +1084,7 @@ class RustCstGenerator:
         label_types = model.labels[label]
         child_class_names, has_span = self._child_variants_for_rule(rule_name)
         total_enum_variants = len(child_class_names) + (1 if has_span else 0)
-        enum_name = f"{self._py_gen.class_name_for_rule_node(rule_name)}Child"
+        enum_name = self.child_enum_name(self._py_gen.class_name_for_rule_node(rule_name))
 
         if len(label_types) == 1:
             (only_type,) = label_types
