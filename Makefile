@@ -1,5 +1,5 @@
 .PHONY: check lint format-check typecheck test cargo-check cargo-test cargo-clippy \
-        cargo-test-no-python cargo-clippy-no-python check-no-pyo3 \
+        cargo-test-no-python cargo-clippy-no-python check-no-pyo3 cargo-deny \
         build-native build-test-user-ext build-fegen-rust-cst build-rust-parser-fixture gen-rust-cst fix gencode
 
 # Run all checks: lint, format, type-check, tests, and Rust checks. This is the canonical
@@ -7,7 +7,7 @@
 # and its full output, then exits non-zero. Individual sub-targets are unchanged and still
 # stream output when invoked directly.
 check:
-	@steps="lint format-check typecheck test cargo-check cargo-clippy cargo-test cargo-test-no-python cargo-clippy-no-python check-no-pyo3"; \
+	@steps="lint format-check typecheck test cargo-check cargo-clippy cargo-test cargo-test-no-python cargo-clippy-no-python check-no-pyo3 cargo-deny"; \
 	failed=0; \
 	for step in $$steps; do \
 	    tmpfile=$$(mktemp); \
@@ -19,7 +19,7 @@ check:
 	    fi; \
 	    rm -f "$$tmpfile"; \
 	done; \
-	echo "check: all steps passed (lint format-check typecheck test cargo-check cargo-clippy cargo-test cargo-test-no-python cargo-clippy-no-python check-no-pyo3)"
+	echo "check: all steps passed (lint format-check typecheck test cargo-check cargo-clippy cargo-test cargo-test-no-python cargo-clippy-no-python check-no-pyo3 cargo-deny)"
 
 lint:
 	uv run --group lint --group test ruff check -q .
@@ -91,6 +91,16 @@ check-no-pyo3:
 	echo "$$fegen" | grep -q fltk-parser-core || { echo "FAIL: check-no-pyo3 broken: cargo tree output lacks fltk-parser-core"; exit 1; }; \
 	! echo "$$fegen" | grep -q pyo3 || { echo "FAIL: pyo3 present in rust_cst_fegen --no-default-features graph"; exit 1; }; \
 	echo "check-no-pyo3: pyo3 absent from python-off graphs"
+
+# Supply-chain gate: RustSec advisories, license allow-list, banned/duplicate crates,
+# and source allow-listing (cargo-deny). The tests/* fixtures are separate workspaces
+# with their own Cargo.lock, so each is checked explicitly; all four share the single
+# root deny.toml policy via --config (path resolves from cwd = repo root).
+cargo-deny:
+	cargo deny --manifest-path Cargo.toml check --config deny.toml
+	cargo deny --manifest-path tests/rust_cst_fegen/Cargo.toml check --config deny.toml
+	cargo deny --manifest-path tests/rust_cst_fixture/Cargo.toml check --config deny.toml
+	cargo deny --manifest-path tests/rust_parser_fixture/Cargo.toml check --config deny.toml
 
 # ── FLTK-internal Rust artifact targets ──────────────────────────────────────
 # These build FLTK's own test/dogfooding Rust artifacts.

@@ -2,6 +2,7 @@
 name = "fltk-cst-core"
 version = "0.1.0"
 edition = "2021"
+license = "MIT"
 
 [lib]
 name = "fltk_cst_core"

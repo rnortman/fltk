@@ -6,6 +6,7 @@
 name = "fegen-rust-cst"
 version = "0.1.0"
 edition = "2021"
+publish = false
 
 [lib]
 name = "fegen_rust_cst"

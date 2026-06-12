@@ -6,6 +6,7 @@
 name = "phase4-roundtrip-cst"
 version = "0.1.0"
 edition = "2021"
+publish = false
 
 [lib]
 name = "phase4_roundtrip_cst"
