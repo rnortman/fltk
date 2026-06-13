@@ -238,9 +238,9 @@ class TestPocGrammarLabels:
 
     def test_identifier_label_pyclass_name(self, poc_source: str) -> None:
         # Dual-cfg: python-on block uses direct #[pyclass] with name = "Identifier_Label" for compatibility.
-        assert '#[pyclass(frozen, name = "Identifier_Label")]' in poc_source
+        assert '#[pyclass(frozen, from_py_object, name = "Identifier_Label")]' in poc_source
         # The python-on enum block is wrapped in #[cfg(feature = "python")]
-        assert '#[cfg(feature = "python")]\n#[pyclass(frozen, name = "Identifier_Label")]' in poc_source
+        assert '#[cfg(feature = "python")]\n#[pyclass(frozen, from_py_object, name = "Identifier_Label")]' in poc_source
 
     def test_items_label_enum_present(self, poc_source: str) -> None:
         # Phase 2: Rust name is ItemsLabel (CamelCase).
@@ -273,7 +273,7 @@ class TestPocGrammarLabels:
 
     def test_label_eq_method(self, poc_source: str) -> None:
         """__eq__ method must be emitted on label enums."""
-        assert "fn __eq__(&self, py: Python<'_>, other: &Bound<'_, PyAny>) -> PyResult<PyObject> {" in poc_source
+        assert "fn __eq__(&self, py: Python<'_>, other: &Bound<'_, PyAny>) -> PyResult<Py<PyAny>> {" in poc_source
 
     def test_label_hash_method(self, poc_source: str) -> None:
         """__hash__ method must be emitted on label enums."""
@@ -316,13 +316,14 @@ class TestNodeStructure:
         assert "pub struct Trivia {" in poc_source
 
     def test_span_field_native(self, poc_source: str) -> None:
-        """§2.2: span field is native Span, not PyObject."""
+        """§2.2: span field is native Span, not a Python-object type."""
         assert "span: Span," in poc_source
         assert "span: PyObject," not in poc_source
+        assert "span: Py<PyAny>," not in poc_source
 
     def test_span_getter_emitted(self, poc_source: str) -> None:
-        """§2.2: explicit span getter returning fltk._native.Span (cross-cdylib via PyObject)."""
-        assert "fn span(&self, py: Python<'_>) -> PyResult<PyObject> {" in poc_source
+        """§2.2: explicit span getter returning fltk._native.Span (cross-cdylib via Py<PyAny>)."""
+        assert "fn span(&self, py: Python<'_>) -> PyResult<Py<PyAny>> {" in poc_source
 
     def test_span_setter_emitted(self, poc_source: str) -> None:
         """§2.2: explicit span setter (cross-cdylib compatible via extract_span helper).
@@ -358,7 +359,7 @@ class TestNodeStructure:
     def test_label_classattr_present(self, poc_source: str) -> None:
         assert "#[classattr]" in poc_source
         assert "#[allow(non_snake_case)]" in poc_source
-        assert "fn Label(py: Python<'_>) -> PyResult<PyObject> {" in poc_source
+        assert "fn Label(py: Python<'_>) -> PyResult<Py<PyAny>> {" in poc_source
 
     def test_extend_children_emitted(self, poc_source: str) -> None:
         """§2.3/§2.5: extend_children method is emitted for each node class.
@@ -527,9 +528,9 @@ class TestCfgFeatureGate:
 
     def test_enum_python_on_block_gated(self, poc_source: str) -> None:
         """Enum definitions with pyclass/pyo3 attrs are inside #[cfg(feature = \"python\")] blocks."""
-        assert '#[cfg(feature = "python")]\n#[pyclass(frozen, name = "NodeKind")]' in poc_source
+        assert '#[cfg(feature = "python")]\n#[pyclass(frozen, from_py_object, name = "NodeKind")]' in poc_source
         # Phase 2: Rust name is IdentifierLabel; Python name "Identifier_Label" preserved via pyclass(name=...).
-        assert '#[cfg(feature = "python")]\n#[pyclass(frozen, name = "Identifier_Label")]' in poc_source
+        assert '#[cfg(feature = "python")]\n#[pyclass(frozen, from_py_object, name = "Identifier_Label")]' in poc_source
 
     def test_enum_python_off_block_present(self, poc_source: str) -> None:
         """Enum definitions without pyo3 attrs present for python-off mode.
@@ -802,12 +803,12 @@ class TestNodeKindEnum:
     def test_node_kind_pyclass_no_eq_hash(self, poc_source: str) -> None:
         """NodeKind #[pyclass] must not have eq/hash (hand-written instead); dual-cfg form used."""
         # Dual-cfg: python-on block has direct #[pyclass]; must not have eq/hash
-        assert '#[pyclass(frozen, name = "NodeKind")]' in poc_source
-        assert '#[cfg(feature = "python")]\n#[pyclass(frozen, name = "NodeKind")]' in poc_source
+        assert '#[pyclass(frozen, from_py_object, name = "NodeKind")]' in poc_source
+        assert '#[cfg(feature = "python")]\n#[pyclass(frozen, from_py_object, name = "NodeKind")]' in poc_source
         # eq/hash must not appear in the pyclass line
         lines = poc_source.splitlines()
         for line in lines:
-            if '#[pyclass(frozen, name = "NodeKind")]' in line:
+            if '#[pyclass(frozen, from_py_object, name = "NodeKind")]' in line:
                 assert "eq" not in line
                 assert "hash" not in line
 
@@ -830,7 +831,7 @@ class TestNodeKindEnum:
 
     def test_node_kind_eq_method(self, poc_source: str) -> None:
         """NodeKind has a hand-written __eq__ reading _fltk_canonical_name off the operand."""
-        assert "fn __eq__(&self, py: Python<'_>, other: &Bound<'_, PyAny>) -> PyResult<PyObject> {" in poc_source
+        assert "fn __eq__(&self, py: Python<'_>, other: &Bound<'_, PyAny>) -> PyResult<Py<PyAny>> {" in poc_source
 
     def test_node_kind_hash_method(self, poc_source: str) -> None:
         """NodeKind has a hand-written __hash__ routing through PyString::hash."""
@@ -921,8 +922,9 @@ class TestKindGetter:
 
 class TestNoPyObjectAudit:
     def test_no_pyobject_span_field(self, poc_source: str) -> None:
-        """§4 item 2: No generated node struct has span: PyObject."""
+        """§4 item 2: No generated node struct has span stored as a Python-object type."""
         assert "span: PyObject," not in poc_source
+        assert "span: Py<PyAny>," not in poc_source
 
     def test_no_py_pylist_children(self, poc_source: str) -> None:
         """§4 item 2 (§2.3): children field is now a native Vec, not Py<PyList>."""
@@ -1226,8 +1228,8 @@ class TestMutatorsEmittedRsPymethods:
         assert "#[pyo3(signature = (index, child, label = None))]\n    fn replace_at(" in poc_source
 
     def test_remove_at_returns_pyresult_pyobject(self, poc_source: str) -> None:
-        """remove_at returns PyResult<PyObject> (tuple of label + child)."""
-        assert "fn remove_at(&self, py: Python<'_>, index: &Bound<'_, PyAny>) -> PyResult<PyObject>" in poc_source
+        """remove_at returns PyResult<Py<PyAny>> (tuple of label + child)."""
+        assert "fn remove_at(&self, py: Python<'_>, index: &Bound<'_, PyAny>) -> PyResult<Py<PyAny>>" in poc_source
 
     def test_clear_returns_pyresult_unit(self, poc_source: str) -> None:
         """clear returns PyResult<()>."""

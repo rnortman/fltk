@@ -17,6 +17,64 @@ pub use error::CstError;
 pub use shared::Shared;
 pub use span::{SourceText, Span, SpanError};
 
+/// Guard tests for the ABI layout probe — require `python` feature, GIL-free (compile-time sizes).
+///
+/// These tests assert two properties:
+/// 1. The probe value is >= `size_of::<ffi::PyObject>() + size_of::<T>()` (floor check).
+///    A constant-stub shortcut (returning 0 or any value < that floor) fails here,
+///    preventing the scout's known-wrong `0usize` stub from silently passing.
+/// 2. The probe value equals the value returned by the `_fltk_cst_core_abi_layout` classattr
+///    bodies (`span_abi_layout_probe` / `source_text_abi_layout_probe`).  This guards against
+///    replacing those bodies with hardcoded constants: the test recomputes independently and
+///    the classattr body must match (correctness-2).
+#[cfg(all(test, feature = "python"))]
+mod abi_probe_tests {
+    use super::span::{source_text_abi_layout_probe, span_abi_layout_probe};
+    use super::{SourceText, Span};
+    use pyo3::impl_::pyclass::PyClassImpl;
+
+    #[test]
+    fn span_probe_above_floor() {
+        let probe = std::mem::size_of::<<Span as PyClassImpl>::Layout>();
+        let floor = std::mem::size_of::<pyo3::ffi::PyObject>() + std::mem::size_of::<Span>();
+        assert!(
+            probe >= floor,
+            "Span layout probe {probe} < floor {floor}; the probe stub is broken"
+        );
+    }
+
+    #[test]
+    fn span_probe_matches_classattr_body() {
+        let probe = std::mem::size_of::<<Span as PyClassImpl>::Layout>();
+        let classattr = span_abi_layout_probe();
+        assert_eq!(
+            probe, classattr,
+            "Span layout probe {probe} != classattr body {classattr}; classattr is a stub"
+        );
+    }
+
+    #[test]
+    fn source_text_probe_above_floor() {
+        let probe = std::mem::size_of::<<SourceText as PyClassImpl>::Layout>();
+        let floor =
+            std::mem::size_of::<pyo3::ffi::PyObject>() + std::mem::size_of::<SourceText>();
+        assert!(
+            probe >= floor,
+            "SourceText layout probe {probe} < floor {floor}; the probe stub is broken"
+        );
+    }
+
+    #[test]
+    fn source_text_probe_matches_classattr_body() {
+        let probe = std::mem::size_of::<<SourceText as PyClassImpl>::Layout>();
+        let classattr = source_text_abi_layout_probe();
+        assert_eq!(
+            probe, classattr,
+            "SourceText layout probe {probe} != classattr body {classattr}; classattr is a stub"
+        );
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

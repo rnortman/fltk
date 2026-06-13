@@ -334,7 +334,7 @@ mod python_bindings {
     #[pyclass(frozen, name = "ApplyResult")]
     pub struct PyApplyResult {
         pos: i64,
-        result: PyObject,
+        result: Py<PyAny>,
     }
 
     #[pymethods]
@@ -342,7 +342,7 @@ mod python_bindings {
         #[getter]
         fn pos(&self) -> i64 { self.pos }
         #[getter]
-        fn result(&self, py: Python<'_>) -> PyObject { self.result.clone_ref(py) }
+        fn result(&self, py: Python<'_>) -> Py<PyAny> { self.result.clone_ref(py) }
     }
 
     /// Recursive-descent parser with a configurable rule-application depth limit.

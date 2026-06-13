@@ -56,11 +56,14 @@ python = ["fltk-cst-core/python"]
 
 [dependencies]
 # If using a published release:
-fltk-cst-core = { version = "0.1", default-features = false, features = ["python"] }
+fltk-cst-core = { version = "0.2", default-features = false, features = ["python"] }
 # Or if referencing a local checkout or git revision (no crates.io release yet):
 # fltk-cst-core = { path = "../fltk/crates/fltk-cst-core", default-features = false, features = ["python"] }
 # fltk-cst-core = { git = "https://github.com/your-org/fltk", default-features = false, features = ["python"] }
-pyo3 = { version = "0.23", features = ["abi3-py310"] }
+pyo3 = { version = "0.29", features = ["abi3-py310"] }
+# NOTE: existing consumer extension crates must be rebuilt against fltk-cst-core 0.2 + pyo3 0.29.
+# The ABI string marker in fltk-cst-core 0.2 deterministically rejects old builds (pyo3 0.23/fltk-cst-core 0.1)
+# with a TypeError on first cross-cdylib span operation, preventing silent layout-skew UB.
 ```
 
 **`src/lib.rs`**:

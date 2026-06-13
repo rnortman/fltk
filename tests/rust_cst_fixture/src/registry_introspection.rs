@@ -25,7 +25,7 @@ pub fn _registry_snapshot(py: Python<'_>) -> PyResult<Bound<'_, PyDict>> {
 
 /// Look up the canonical handle for `addr`.  Returns the handle or `None` if absent/evicted.
 #[pyfunction]
-pub fn _registry_lookup(py: Python<'_>, addr: usize) -> PyResult<Option<PyObject>> {
+pub fn _registry_lookup(py: Python<'_>, addr: usize) -> PyResult<Option<Py<PyAny>>> {
     registry::lookup(py, addr)
 }
 

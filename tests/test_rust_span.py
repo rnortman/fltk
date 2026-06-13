@@ -1,5 +1,6 @@
 """Tests for the Rust-backed Span backend (fltk._native)."""
 
+import ctypes
 import subprocess
 import sys
 
@@ -451,11 +452,15 @@ class TestAbiLayoutClassattr:
         layout = Span._fltk_cst_core_abi_layout  # type: ignore[attr-defined]
         assert isinstance(layout, int)
         assert layout > 0
+        # Must be at least sizeof(PyObject) — rules out stub constants <= 8.
+        assert layout >= ctypes.sizeof(ctypes.py_object)
 
     def test_source_text_abi_layout_is_positive_int(self):
         layout = SourceText._fltk_cst_core_abi_layout  # type: ignore[attr-defined]
         assert isinstance(layout, int)
         assert layout > 0
+        # Must be at least sizeof(PyObject) — rules out stub constants <= 8.
+        assert layout >= ctypes.sizeof(ctypes.py_object)
 
     def test_span_abi_layout_accessible_via_instance_type(self):
         s = Span(0, 5)
@@ -467,13 +472,13 @@ class TestAbiLayoutClassattr:
 
 
 class TestSpanPathAbiGate:
-    """Phase 0 §4.1 item 1: ABI gate on the Span path (subprocess tests for GILOnceCell init).
+    """Phase 0 §4.1 item 1: ABI gate on the Span path (subprocess tests for PyOnceLock init).
 
-    The ABI check fires once in get_span_type's GILOnceCell init, which is not resettable
+    The ABI check fires once in get_span_type's PyOnceLock init, which is not resettable
     within a live process.  Subprocess tests ensure a fresh interpreter for each scenario.
     The cross-cdylib fixture (phase4_roundtrip_cst) is required; tests skip if unavailable.
 
-    Note: GILOnceCell does NOT cache errors, so all three scenarios (wrong-ABI-string,
+    Note: PyOnceLock does NOT cache errors, so all three scenarios (wrong-ABI-string,
     wrong-layout, success) could in principle share one subprocess (run failures first,
     success last).  Each scenario has its own subprocess for isolation and readability.
     """

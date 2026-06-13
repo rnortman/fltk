@@ -25,7 +25,7 @@ use pyo3::PyTypeInfo;
 /// One variant per grammar rule. Returned by `kind()` on every data struct
 /// and handle. Python-visible name is the same ALL_CAPS form as the protocol.
 #[cfg(feature = "python")]
-#[pyclass(frozen, name = "NodeKind")]
+#[pyclass(frozen, from_py_object, name = "NodeKind")]
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
 pub enum NodeKind {
     #[pyo3(name = "ROOT")]
@@ -72,7 +72,7 @@ impl NodeKind {
         self.__repr__()
     }
 
-    fn __eq__(&self, py: Python<'_>, other: &Bound<'_, PyAny>) -> PyResult<PyObject> {
+    fn __eq__(&self, py: Python<'_>, other: &Bound<'_, PyAny>) -> PyResult<Py<PyAny>> {
         if let Ok(other_kind) = other.extract::<NodeKind>() {
             return Ok((self == &other_kind).into_pyobject(py)?.to_owned().unbind().into_any());
         }
@@ -100,7 +100,7 @@ impl NodeKind {
 /// Python-visible name is `Root_Label` (preserved for compatibility).
 /// Rust consumers use the CamelCase `RootLabel` name.
 #[cfg(feature = "python")]
-#[pyclass(frozen, name = "Root_Label")]
+#[pyclass(frozen, from_py_object, name = "Root_Label")]
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
 pub enum RootLabel {
     #[pyo3(name = "ITEM")]
@@ -127,7 +127,7 @@ impl RootLabel {
         self.__repr__()
     }
 
-    fn __eq__(&self, py: Python<'_>, other: &Bound<'_, PyAny>) -> PyResult<PyObject> {
+    fn __eq__(&self, py: Python<'_>, other: &Bound<'_, PyAny>) -> PyResult<Py<PyAny>> {
         if let Ok(other_kind) = other.extract::<RootLabel>() {
             return Ok((self == &other_kind).into_pyobject(py)?.to_owned().unbind().into_any());
         }
@@ -187,7 +187,7 @@ impl RootChild {
 
 #[cfg(feature = "python")]
 impl RootChild {
-    fn to_pyobject(&self, py: Python<'_>) -> PyResult<PyObject> {
+    fn to_pyobject(&self, py: Python<'_>) -> PyResult<Py<PyAny>> {
         match self {
             Self::Item(shared) => {
                 let addr = shared.arc_ptr();
@@ -489,7 +489,7 @@ impl PyRoot {
             let handle = PyRoot { inner: s.clone() };
             Py::new(py, handle).map(|p| p.into_any())
         })?;
-        obj.bind(py).downcast::<PyRoot>().map(|b| b.clone().unbind()).map_err(|e| e.into())
+        obj.bind(py).cast::<PyRoot>().map(|b| b.clone().unbind()).map_err(|e| e.into())
     }
 }
 
@@ -517,7 +517,7 @@ impl PyRoot {
     }
 
     #[getter]
-    fn span(&self, py: Python<'_>) -> PyResult<PyObject> {
+    fn span(&self, py: Python<'_>) -> PyResult<Py<PyAny>> {
         // Snapshot the span under the read lock, then drop the guard before
         // calling span_to_pyobject — which performs Python work (Py::new or
         // Python method calls) that must not happen while a node lock is held.
@@ -538,7 +538,7 @@ impl PyRoot {
 
     #[classattr]
     #[allow(non_snake_case)]
-    fn Label(py: Python<'_>) -> PyResult<PyObject> {
+    fn Label(py: Python<'_>) -> PyResult<Py<PyAny>> {
         Ok(RootLabel::type_object(py).into_any().unbind())
     }
 
@@ -552,7 +552,7 @@ impl PyRoot {
         };
         let result = PyList::empty(py);
         for (label, child) in &snapshot {
-            let label_obj: PyObject = match label {
+            let label_obj: Py<PyAny> = match label {
                 None => py.None(),
                 Some(lbl) => lbl.clone().into_pyobject(py)?.into_any().unbind(),
             };
@@ -564,7 +564,9 @@ impl PyRoot {
     }
 
     #[pyo3(signature = (child, label = None))]
-    fn append(&self, py: Python<'_>, child: &Bound<'_, PyAny>, label: Option<PyObject>) -> PyResult<()> {
+    fn append(
+        &self, py: Python<'_>, child: &Bound<'_, PyAny>, label: Option<Py<PyAny>>,
+    ) -> PyResult<()> {
         let span_type = get_span_type(py)?;
         let native_child = RootChild::extract_from_pyobject(py, child, &span_type)?;
         let native_label = match label {
@@ -589,7 +591,7 @@ impl PyRoot {
         &self,
         py: Python<'_>,
         children: &Bound<'_, PyAny>,
-        label: Option<PyObject>,
+        label: Option<Py<PyAny>>,
     ) -> PyResult<()> {
         let span_type = get_span_type(py)?;
         let native_label = match label {
@@ -632,7 +634,7 @@ impl PyRoot {
         Ok(())
     }
 
-    fn child(&self, py: Python<'_>) -> PyResult<PyObject> {
+    fn child(&self, py: Python<'_>) -> PyResult<Py<PyAny>> {
         // Lock scope: read len and clone at most the single entry under the guard;
         // drop the guard before any Python work (object conversion, exception raise).
         let (n, entry) = {
@@ -646,7 +648,7 @@ impl PyRoot {
                 "Expected one child but have {n}"
             )));
         };
-        let label_obj: PyObject = match label {
+        let label_obj: Py<PyAny> = match label {
             None => py.None(),
             Some(lbl) => lbl.into_pyobject(py)?.into_any().unbind(),
         };
@@ -660,7 +662,7 @@ impl PyRoot {
         py: Python<'_>,
         index: &Bound<'_, PyAny>,
         child: &Bound<'_, PyAny>,
-        label: Option<PyObject>,
+        label: Option<Py<PyAny>>,
     ) -> PyResult<()> {
         // Validate child and label BEFORE taking the write lock (§2.3 lock discipline).
         let span_type = get_span_type(py)?;
@@ -713,7 +715,7 @@ impl PyRoot {
         Ok(())
     }
 
-    fn remove_at(&self, py: Python<'_>, index: &Bound<'_, PyAny>) -> PyResult<PyObject> {
+    fn remove_at(&self, py: Python<'_>, index: &Bound<'_, PyAny>) -> PyResult<Py<PyAny>> {
         // Capture the caller's original string representation BEFORE normalization,
         // so error messages show the original value (e.g. `True` not `1`).
         let orig_str = index.str()?.to_string_lossy().into_owned();
@@ -752,7 +754,7 @@ impl PyRoot {
             ))
         })?;
         // Python wrap-out happens after the guard is released (§2.3 lock discipline).
-        let label_obj: PyObject = match label {
+        let label_obj: Py<PyAny> = match label {
             None => py.None(),
             Some(lbl) => lbl.into_pyobject(py)?.into_any().unbind(),
         };
@@ -766,7 +768,7 @@ impl PyRoot {
         py: Python<'_>,
         index: &Bound<'_, PyAny>,
         child: &Bound<'_, PyAny>,
-        label: Option<PyObject>,
+        label: Option<Py<PyAny>>,
     ) -> PyResult<()> {
         // Validate child and label BEFORE taking the write lock (§2.3 lock discipline).
         let span_type = get_span_type(py)?;
@@ -870,7 +872,7 @@ impl PyRoot {
         Ok(result.unbind())
     }
 
-    fn child_item(&self, py: Python<'_>) -> PyResult<PyObject> {
+    fn child_item(&self, py: Python<'_>) -> PyResult<Py<PyAny>> {
         // Lock scope: count label matches and clone only the first under the guard;
         // drop the guard before to_pyobject / exception raise (Python work).
         let (count, first) = {
@@ -896,7 +898,7 @@ impl PyRoot {
             .to_pyobject(py)
     }
 
-    fn maybe_item(&self, py: Python<'_>) -> PyResult<Option<PyObject>> {
+    fn maybe_item(&self, py: Python<'_>) -> PyResult<Option<Py<PyAny>>> {
         // Lock scope: count label matches and clone only the first under the guard;
         // drop the guard before to_pyobject / exception raise (Python work).
         let (count, first) = {
@@ -924,7 +926,7 @@ impl PyRoot {
         }
     }
 
-    fn __eq__(&self, py: Python<'_>, other: &Bound<'_, PyAny>) -> PyResult<PyObject> {
+    fn __eq__(&self, py: Python<'_>, other: &Bound<'_, PyAny>) -> PyResult<Py<PyAny>> {
         if !other.is_instance_of::<PyRoot>() {
             return Ok(py.NotImplemented());
         }
@@ -959,7 +961,7 @@ impl PyRoot {
 /// Python-visible name is `Name_Label` (preserved for compatibility).
 /// Rust consumers use the CamelCase `NameLabel` name.
 #[cfg(feature = "python")]
-#[pyclass(frozen, name = "Name_Label")]
+#[pyclass(frozen, from_py_object, name = "Name_Label")]
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
 pub enum NameLabel {
     #[pyo3(name = "VALUE")]
@@ -986,7 +988,7 @@ impl NameLabel {
         self.__repr__()
     }
 
-    fn __eq__(&self, py: Python<'_>, other: &Bound<'_, PyAny>) -> PyResult<PyObject> {
+    fn __eq__(&self, py: Python<'_>, other: &Bound<'_, PyAny>) -> PyResult<Py<PyAny>> {
         if let Ok(other_kind) = other.extract::<NameLabel>() {
             return Ok((self == &other_kind).into_pyobject(py)?.to_owned().unbind().into_any());
         }
@@ -1041,7 +1043,7 @@ impl NameChild {
 
 #[cfg(feature = "python")]
 impl NameChild {
-    fn to_pyobject(&self, py: Python<'_>) -> PyResult<PyObject> {
+    fn to_pyobject(&self, py: Python<'_>) -> PyResult<Py<PyAny>> {
         match self {
             Self::Span(s) => {
                 span_to_pyobject(py, s)
@@ -1287,7 +1289,7 @@ impl PyName {
             let handle = PyName { inner: s.clone() };
             Py::new(py, handle).map(|p| p.into_any())
         })?;
-        obj.bind(py).downcast::<PyName>().map(|b| b.clone().unbind()).map_err(|e| e.into())
+        obj.bind(py).cast::<PyName>().map(|b| b.clone().unbind()).map_err(|e| e.into())
     }
 }
 
@@ -1315,7 +1317,7 @@ impl PyName {
     }
 
     #[getter]
-    fn span(&self, py: Python<'_>) -> PyResult<PyObject> {
+    fn span(&self, py: Python<'_>) -> PyResult<Py<PyAny>> {
         // Snapshot the span under the read lock, then drop the guard before
         // calling span_to_pyobject — which performs Python work (Py::new or
         // Python method calls) that must not happen while a node lock is held.
@@ -1336,7 +1338,7 @@ impl PyName {
 
     #[classattr]
     #[allow(non_snake_case)]
-    fn Label(py: Python<'_>) -> PyResult<PyObject> {
+    fn Label(py: Python<'_>) -> PyResult<Py<PyAny>> {
         Ok(NameLabel::type_object(py).into_any().unbind())
     }
 
@@ -1350,7 +1352,7 @@ impl PyName {
         };
         let result = PyList::empty(py);
         for (label, child) in &snapshot {
-            let label_obj: PyObject = match label {
+            let label_obj: Py<PyAny> = match label {
                 None => py.None(),
                 Some(lbl) => lbl.clone().into_pyobject(py)?.into_any().unbind(),
             };
@@ -1362,7 +1364,9 @@ impl PyName {
     }
 
     #[pyo3(signature = (child, label = None))]
-    fn append(&self, py: Python<'_>, child: &Bound<'_, PyAny>, label: Option<PyObject>) -> PyResult<()> {
+    fn append(
+        &self, py: Python<'_>, child: &Bound<'_, PyAny>, label: Option<Py<PyAny>>,
+    ) -> PyResult<()> {
         let span_type = get_span_type(py)?;
         let native_child = NameChild::extract_from_pyobject(py, child, &span_type)?;
         let native_label = match label {
@@ -1387,7 +1391,7 @@ impl PyName {
         &self,
         py: Python<'_>,
         children: &Bound<'_, PyAny>,
-        label: Option<PyObject>,
+        label: Option<Py<PyAny>>,
     ) -> PyResult<()> {
         let span_type = get_span_type(py)?;
         let native_label = match label {
@@ -1430,7 +1434,7 @@ impl PyName {
         Ok(())
     }
 
-    fn child(&self, py: Python<'_>) -> PyResult<PyObject> {
+    fn child(&self, py: Python<'_>) -> PyResult<Py<PyAny>> {
         // Lock scope: read len and clone at most the single entry under the guard;
         // drop the guard before any Python work (object conversion, exception raise).
         let (n, entry) = {
@@ -1444,7 +1448,7 @@ impl PyName {
                 "Expected one child but have {n}"
             )));
         };
-        let label_obj: PyObject = match label {
+        let label_obj: Py<PyAny> = match label {
             None => py.None(),
             Some(lbl) => lbl.into_pyobject(py)?.into_any().unbind(),
         };
@@ -1458,7 +1462,7 @@ impl PyName {
         py: Python<'_>,
         index: &Bound<'_, PyAny>,
         child: &Bound<'_, PyAny>,
-        label: Option<PyObject>,
+        label: Option<Py<PyAny>>,
     ) -> PyResult<()> {
         // Validate child and label BEFORE taking the write lock (§2.3 lock discipline).
         let span_type = get_span_type(py)?;
@@ -1511,7 +1515,7 @@ impl PyName {
         Ok(())
     }
 
-    fn remove_at(&self, py: Python<'_>, index: &Bound<'_, PyAny>) -> PyResult<PyObject> {
+    fn remove_at(&self, py: Python<'_>, index: &Bound<'_, PyAny>) -> PyResult<Py<PyAny>> {
         // Capture the caller's original string representation BEFORE normalization,
         // so error messages show the original value (e.g. `True` not `1`).
         let orig_str = index.str()?.to_string_lossy().into_owned();
@@ -1550,7 +1554,7 @@ impl PyName {
             ))
         })?;
         // Python wrap-out happens after the guard is released (§2.3 lock discipline).
-        let label_obj: PyObject = match label {
+        let label_obj: Py<PyAny> = match label {
             None => py.None(),
             Some(lbl) => lbl.into_pyobject(py)?.into_any().unbind(),
         };
@@ -1564,7 +1568,7 @@ impl PyName {
         py: Python<'_>,
         index: &Bound<'_, PyAny>,
         child: &Bound<'_, PyAny>,
-        label: Option<PyObject>,
+        label: Option<Py<PyAny>>,
     ) -> PyResult<()> {
         // Validate child and label BEFORE taking the write lock (§2.3 lock discipline).
         let span_type = get_span_type(py)?;
@@ -1668,7 +1672,7 @@ impl PyName {
         Ok(result.unbind())
     }
 
-    fn child_value(&self, py: Python<'_>) -> PyResult<PyObject> {
+    fn child_value(&self, py: Python<'_>) -> PyResult<Py<PyAny>> {
         // Lock scope: count label matches and clone only the first under the guard;
         // drop the guard before to_pyobject / exception raise (Python work).
         let (count, first) = {
@@ -1694,7 +1698,7 @@ impl PyName {
             .to_pyobject(py)
     }
 
-    fn maybe_value(&self, py: Python<'_>) -> PyResult<Option<PyObject>> {
+    fn maybe_value(&self, py: Python<'_>) -> PyResult<Option<Py<PyAny>>> {
         // Lock scope: count label matches and clone only the first under the guard;
         // drop the guard before to_pyobject / exception raise (Python work).
         let (count, first) = {
@@ -1722,7 +1726,7 @@ impl PyName {
         }
     }
 
-    fn __eq__(&self, py: Python<'_>, other: &Bound<'_, PyAny>) -> PyResult<PyObject> {
+    fn __eq__(&self, py: Python<'_>, other: &Bound<'_, PyAny>) -> PyResult<Py<PyAny>> {
         if !other.is_instance_of::<PyName>() {
             return Ok(py.NotImplemented());
         }
@@ -1757,7 +1761,7 @@ impl PyName {
 /// Python-visible name is `Parser_Label` (preserved for compatibility).
 /// Rust consumers use the CamelCase `ParserLabel` name.
 #[cfg(feature = "python")]
-#[pyclass(frozen, name = "Parser_Label")]
+#[pyclass(frozen, from_py_object, name = "Parser_Label")]
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
 pub enum ParserLabel {
     #[pyo3(name = "NAME")]
@@ -1784,7 +1788,7 @@ impl ParserLabel {
         self.__repr__()
     }
 
-    fn __eq__(&self, py: Python<'_>, other: &Bound<'_, PyAny>) -> PyResult<PyObject> {
+    fn __eq__(&self, py: Python<'_>, other: &Bound<'_, PyAny>) -> PyResult<Py<PyAny>> {
         if let Ok(other_kind) = other.extract::<ParserLabel>() {
             return Ok((self == &other_kind).into_pyobject(py)?.to_owned().unbind().into_any());
         }
@@ -1844,7 +1848,7 @@ impl ParserChild {
 
 #[cfg(feature = "python")]
 impl ParserChild {
-    fn to_pyobject(&self, py: Python<'_>) -> PyResult<PyObject> {
+    fn to_pyobject(&self, py: Python<'_>) -> PyResult<Py<PyAny>> {
         match self {
             Self::Name(shared) => {
                 let addr = shared.arc_ptr();
@@ -2146,7 +2150,7 @@ impl PyParser {
             let handle = PyParser { inner: s.clone() };
             Py::new(py, handle).map(|p| p.into_any())
         })?;
-        obj.bind(py).downcast::<PyParser>().map(|b| b.clone().unbind()).map_err(|e| e.into())
+        obj.bind(py).cast::<PyParser>().map(|b| b.clone().unbind()).map_err(|e| e.into())
     }
 }
 
@@ -2174,7 +2178,7 @@ impl PyParser {
     }
 
     #[getter]
-    fn span(&self, py: Python<'_>) -> PyResult<PyObject> {
+    fn span(&self, py: Python<'_>) -> PyResult<Py<PyAny>> {
         // Snapshot the span under the read lock, then drop the guard before
         // calling span_to_pyobject — which performs Python work (Py::new or
         // Python method calls) that must not happen while a node lock is held.
@@ -2195,7 +2199,7 @@ impl PyParser {
 
     #[classattr]
     #[allow(non_snake_case)]
-    fn Label(py: Python<'_>) -> PyResult<PyObject> {
+    fn Label(py: Python<'_>) -> PyResult<Py<PyAny>> {
         Ok(ParserLabel::type_object(py).into_any().unbind())
     }
 
@@ -2209,7 +2213,7 @@ impl PyParser {
         };
         let result = PyList::empty(py);
         for (label, child) in &snapshot {
-            let label_obj: PyObject = match label {
+            let label_obj: Py<PyAny> = match label {
                 None => py.None(),
                 Some(lbl) => lbl.clone().into_pyobject(py)?.into_any().unbind(),
             };
@@ -2221,7 +2225,9 @@ impl PyParser {
     }
 
     #[pyo3(signature = (child, label = None))]
-    fn append(&self, py: Python<'_>, child: &Bound<'_, PyAny>, label: Option<PyObject>) -> PyResult<()> {
+    fn append(
+        &self, py: Python<'_>, child: &Bound<'_, PyAny>, label: Option<Py<PyAny>>,
+    ) -> PyResult<()> {
         let span_type = get_span_type(py)?;
         let native_child = ParserChild::extract_from_pyobject(py, child, &span_type)?;
         let native_label = match label {
@@ -2246,7 +2252,7 @@ impl PyParser {
         &self,
         py: Python<'_>,
         children: &Bound<'_, PyAny>,
-        label: Option<PyObject>,
+        label: Option<Py<PyAny>>,
     ) -> PyResult<()> {
         let span_type = get_span_type(py)?;
         let native_label = match label {
@@ -2289,7 +2295,7 @@ impl PyParser {
         Ok(())
     }
 
-    fn child(&self, py: Python<'_>) -> PyResult<PyObject> {
+    fn child(&self, py: Python<'_>) -> PyResult<Py<PyAny>> {
         // Lock scope: read len and clone at most the single entry under the guard;
         // drop the guard before any Python work (object conversion, exception raise).
         let (n, entry) = {
@@ -2303,7 +2309,7 @@ impl PyParser {
                 "Expected one child but have {n}"
             )));
         };
-        let label_obj: PyObject = match label {
+        let label_obj: Py<PyAny> = match label {
             None => py.None(),
             Some(lbl) => lbl.into_pyobject(py)?.into_any().unbind(),
         };
@@ -2317,7 +2323,7 @@ impl PyParser {
         py: Python<'_>,
         index: &Bound<'_, PyAny>,
         child: &Bound<'_, PyAny>,
-        label: Option<PyObject>,
+        label: Option<Py<PyAny>>,
     ) -> PyResult<()> {
         // Validate child and label BEFORE taking the write lock (§2.3 lock discipline).
         let span_type = get_span_type(py)?;
@@ -2370,7 +2376,7 @@ impl PyParser {
         Ok(())
     }
 
-    fn remove_at(&self, py: Python<'_>, index: &Bound<'_, PyAny>) -> PyResult<PyObject> {
+    fn remove_at(&self, py: Python<'_>, index: &Bound<'_, PyAny>) -> PyResult<Py<PyAny>> {
         // Capture the caller's original string representation BEFORE normalization,
         // so error messages show the original value (e.g. `True` not `1`).
         let orig_str = index.str()?.to_string_lossy().into_owned();
@@ -2409,7 +2415,7 @@ impl PyParser {
             ))
         })?;
         // Python wrap-out happens after the guard is released (§2.3 lock discipline).
-        let label_obj: PyObject = match label {
+        let label_obj: Py<PyAny> = match label {
             None => py.None(),
             Some(lbl) => lbl.into_pyobject(py)?.into_any().unbind(),
         };
@@ -2423,7 +2429,7 @@ impl PyParser {
         py: Python<'_>,
         index: &Bound<'_, PyAny>,
         child: &Bound<'_, PyAny>,
-        label: Option<PyObject>,
+        label: Option<Py<PyAny>>,
     ) -> PyResult<()> {
         // Validate child and label BEFORE taking the write lock (§2.3 lock discipline).
         let span_type = get_span_type(py)?;
@@ -2527,7 +2533,7 @@ impl PyParser {
         Ok(result.unbind())
     }
 
-    fn child_name(&self, py: Python<'_>) -> PyResult<PyObject> {
+    fn child_name(&self, py: Python<'_>) -> PyResult<Py<PyAny>> {
         // Lock scope: count label matches and clone only the first under the guard;
         // drop the guard before to_pyobject / exception raise (Python work).
         let (count, first) = {
@@ -2553,7 +2559,7 @@ impl PyParser {
             .to_pyobject(py)
     }
 
-    fn maybe_name(&self, py: Python<'_>) -> PyResult<Option<PyObject>> {
+    fn maybe_name(&self, py: Python<'_>) -> PyResult<Option<Py<PyAny>>> {
         // Lock scope: count label matches and clone only the first under the guard;
         // drop the guard before to_pyobject / exception raise (Python work).
         let (count, first) = {
@@ -2581,7 +2587,7 @@ impl PyParser {
         }
     }
 
-    fn __eq__(&self, py: Python<'_>, other: &Bound<'_, PyAny>) -> PyResult<PyObject> {
+    fn __eq__(&self, py: Python<'_>, other: &Bound<'_, PyAny>) -> PyResult<Py<PyAny>> {
         if !other.is_instance_of::<PyParser>() {
             return Ok(py.NotImplemented());
         }
@@ -2616,7 +2622,7 @@ impl PyParser {
 /// Python-visible name is `ApplyResult_Label` (preserved for compatibility).
 /// Rust consumers use the CamelCase `ApplyResultLabel` name.
 #[cfg(feature = "python")]
-#[pyclass(frozen, name = "ApplyResult_Label")]
+#[pyclass(frozen, from_py_object, name = "ApplyResult_Label")]
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
 pub enum ApplyResultLabel {
     #[pyo3(name = "NAME")]
@@ -2643,7 +2649,7 @@ impl ApplyResultLabel {
         self.__repr__()
     }
 
-    fn __eq__(&self, py: Python<'_>, other: &Bound<'_, PyAny>) -> PyResult<PyObject> {
+    fn __eq__(&self, py: Python<'_>, other: &Bound<'_, PyAny>) -> PyResult<Py<PyAny>> {
         if let Ok(other_kind) = other.extract::<ApplyResultLabel>() {
             return Ok((self == &other_kind).into_pyobject(py)?.to_owned().unbind().into_any());
         }
@@ -2703,7 +2709,7 @@ impl ApplyResultChild {
 
 #[cfg(feature = "python")]
 impl ApplyResultChild {
-    fn to_pyobject(&self, py: Python<'_>) -> PyResult<PyObject> {
+    fn to_pyobject(&self, py: Python<'_>) -> PyResult<Py<PyAny>> {
         match self {
             Self::Name(shared) => {
                 let addr = shared.arc_ptr();
@@ -3005,7 +3011,7 @@ impl PyApplyResult {
             let handle = PyApplyResult { inner: s.clone() };
             Py::new(py, handle).map(|p| p.into_any())
         })?;
-        obj.bind(py).downcast::<PyApplyResult>().map(|b| b.clone().unbind()).map_err(|e| e.into())
+        obj.bind(py).cast::<PyApplyResult>().map(|b| b.clone().unbind()).map_err(|e| e.into())
     }
 }
 
@@ -3033,7 +3039,7 @@ impl PyApplyResult {
     }
 
     #[getter]
-    fn span(&self, py: Python<'_>) -> PyResult<PyObject> {
+    fn span(&self, py: Python<'_>) -> PyResult<Py<PyAny>> {
         // Snapshot the span under the read lock, then drop the guard before
         // calling span_to_pyobject — which performs Python work (Py::new or
         // Python method calls) that must not happen while a node lock is held.
@@ -3054,7 +3060,7 @@ impl PyApplyResult {
 
     #[classattr]
     #[allow(non_snake_case)]
-    fn Label(py: Python<'_>) -> PyResult<PyObject> {
+    fn Label(py: Python<'_>) -> PyResult<Py<PyAny>> {
         Ok(ApplyResultLabel::type_object(py).into_any().unbind())
     }
 
@@ -3068,7 +3074,7 @@ impl PyApplyResult {
         };
         let result = PyList::empty(py);
         for (label, child) in &snapshot {
-            let label_obj: PyObject = match label {
+            let label_obj: Py<PyAny> = match label {
                 None => py.None(),
                 Some(lbl) => lbl.clone().into_pyobject(py)?.into_any().unbind(),
             };
@@ -3080,7 +3086,9 @@ impl PyApplyResult {
     }
 
     #[pyo3(signature = (child, label = None))]
-    fn append(&self, py: Python<'_>, child: &Bound<'_, PyAny>, label: Option<PyObject>) -> PyResult<()> {
+    fn append(
+        &self, py: Python<'_>, child: &Bound<'_, PyAny>, label: Option<Py<PyAny>>,
+    ) -> PyResult<()> {
         let span_type = get_span_type(py)?;
         let native_child = ApplyResultChild::extract_from_pyobject(py, child, &span_type)?;
         let native_label = match label {
@@ -3105,7 +3113,7 @@ impl PyApplyResult {
         &self,
         py: Python<'_>,
         children: &Bound<'_, PyAny>,
-        label: Option<PyObject>,
+        label: Option<Py<PyAny>>,
     ) -> PyResult<()> {
         let span_type = get_span_type(py)?;
         let native_label = match label {
@@ -3148,7 +3156,7 @@ impl PyApplyResult {
         Ok(())
     }
 
-    fn child(&self, py: Python<'_>) -> PyResult<PyObject> {
+    fn child(&self, py: Python<'_>) -> PyResult<Py<PyAny>> {
         // Lock scope: read len and clone at most the single entry under the guard;
         // drop the guard before any Python work (object conversion, exception raise).
         let (n, entry) = {
@@ -3162,7 +3170,7 @@ impl PyApplyResult {
                 "Expected one child but have {n}"
             )));
         };
-        let label_obj: PyObject = match label {
+        let label_obj: Py<PyAny> = match label {
             None => py.None(),
             Some(lbl) => lbl.into_pyobject(py)?.into_any().unbind(),
         };
@@ -3176,7 +3184,7 @@ impl PyApplyResult {
         py: Python<'_>,
         index: &Bound<'_, PyAny>,
         child: &Bound<'_, PyAny>,
-        label: Option<PyObject>,
+        label: Option<Py<PyAny>>,
     ) -> PyResult<()> {
         // Validate child and label BEFORE taking the write lock (§2.3 lock discipline).
         let span_type = get_span_type(py)?;
@@ -3229,7 +3237,7 @@ impl PyApplyResult {
         Ok(())
     }
 
-    fn remove_at(&self, py: Python<'_>, index: &Bound<'_, PyAny>) -> PyResult<PyObject> {
+    fn remove_at(&self, py: Python<'_>, index: &Bound<'_, PyAny>) -> PyResult<Py<PyAny>> {
         // Capture the caller's original string representation BEFORE normalization,
         // so error messages show the original value (e.g. `True` not `1`).
         let orig_str = index.str()?.to_string_lossy().into_owned();
@@ -3268,7 +3276,7 @@ impl PyApplyResult {
             ))
         })?;
         // Python wrap-out happens after the guard is released (§2.3 lock discipline).
-        let label_obj: PyObject = match label {
+        let label_obj: Py<PyAny> = match label {
             None => py.None(),
             Some(lbl) => lbl.into_pyobject(py)?.into_any().unbind(),
         };
@@ -3282,7 +3290,7 @@ impl PyApplyResult {
         py: Python<'_>,
         index: &Bound<'_, PyAny>,
         child: &Bound<'_, PyAny>,
-        label: Option<PyObject>,
+        label: Option<Py<PyAny>>,
     ) -> PyResult<()> {
         // Validate child and label BEFORE taking the write lock (§2.3 lock discipline).
         let span_type = get_span_type(py)?;
@@ -3386,7 +3394,7 @@ impl PyApplyResult {
         Ok(result.unbind())
     }
 
-    fn child_name(&self, py: Python<'_>) -> PyResult<PyObject> {
+    fn child_name(&self, py: Python<'_>) -> PyResult<Py<PyAny>> {
         // Lock scope: count label matches and clone only the first under the guard;
         // drop the guard before to_pyobject / exception raise (Python work).
         let (count, first) = {
@@ -3412,7 +3420,7 @@ impl PyApplyResult {
             .to_pyobject(py)
     }
 
-    fn maybe_name(&self, py: Python<'_>) -> PyResult<Option<PyObject>> {
+    fn maybe_name(&self, py: Python<'_>) -> PyResult<Option<Py<PyAny>>> {
         // Lock scope: count label matches and clone only the first under the guard;
         // drop the guard before to_pyobject / exception raise (Python work).
         let (count, first) = {
@@ -3440,7 +3448,7 @@ impl PyApplyResult {
         }
     }
 
-    fn __eq__(&self, py: Python<'_>, other: &Bound<'_, PyAny>) -> PyResult<PyObject> {
+    fn __eq__(&self, py: Python<'_>, other: &Bound<'_, PyAny>) -> PyResult<Py<PyAny>> {
         if !other.is_instance_of::<PyApplyResult>() {
             return Ok(py.NotImplemented());
         }
@@ -3475,7 +3483,7 @@ impl PyApplyResult {
 /// Python-visible name is `Item_Label` (preserved for compatibility).
 /// Rust consumers use the CamelCase `ItemLabel` name.
 #[cfg(feature = "python")]
-#[pyclass(frozen, name = "Item_Label")]
+#[pyclass(frozen, from_py_object, name = "Item_Label")]
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
 pub enum ItemLabel {
     #[pyo3(name = "A")]
@@ -3506,7 +3514,7 @@ impl ItemLabel {
         self.__repr__()
     }
 
-    fn __eq__(&self, py: Python<'_>, other: &Bound<'_, PyAny>) -> PyResult<PyObject> {
+    fn __eq__(&self, py: Python<'_>, other: &Bound<'_, PyAny>) -> PyResult<Py<PyAny>> {
         if let Ok(other_kind) = other.extract::<ItemLabel>() {
             return Ok((self == &other_kind).into_pyobject(py)?.to_owned().unbind().into_any());
         }
@@ -3577,7 +3585,7 @@ impl ItemChild {
 
 #[cfg(feature = "python")]
 impl ItemChild {
-    fn to_pyobject(&self, py: Python<'_>) -> PyResult<PyObject> {
+    fn to_pyobject(&self, py: Python<'_>) -> PyResult<Py<PyAny>> {
         match self {
             Self::ApplyResult(shared) => {
                 let addr = shared.arc_ptr();
@@ -3972,7 +3980,7 @@ impl PyItem {
             let handle = PyItem { inner: s.clone() };
             Py::new(py, handle).map(|p| p.into_any())
         })?;
-        obj.bind(py).downcast::<PyItem>().map(|b| b.clone().unbind()).map_err(|e| e.into())
+        obj.bind(py).cast::<PyItem>().map(|b| b.clone().unbind()).map_err(|e| e.into())
     }
 }
 
@@ -4000,7 +4008,7 @@ impl PyItem {
     }
 
     #[getter]
-    fn span(&self, py: Python<'_>) -> PyResult<PyObject> {
+    fn span(&self, py: Python<'_>) -> PyResult<Py<PyAny>> {
         // Snapshot the span under the read lock, then drop the guard before
         // calling span_to_pyobject — which performs Python work (Py::new or
         // Python method calls) that must not happen while a node lock is held.
@@ -4021,7 +4029,7 @@ impl PyItem {
 
     #[classattr]
     #[allow(non_snake_case)]
-    fn Label(py: Python<'_>) -> PyResult<PyObject> {
+    fn Label(py: Python<'_>) -> PyResult<Py<PyAny>> {
         Ok(ItemLabel::type_object(py).into_any().unbind())
     }
 
@@ -4035,7 +4043,7 @@ impl PyItem {
         };
         let result = PyList::empty(py);
         for (label, child) in &snapshot {
-            let label_obj: PyObject = match label {
+            let label_obj: Py<PyAny> = match label {
                 None => py.None(),
                 Some(lbl) => lbl.clone().into_pyobject(py)?.into_any().unbind(),
             };
@@ -4047,7 +4055,9 @@ impl PyItem {
     }
 
     #[pyo3(signature = (child, label = None))]
-    fn append(&self, py: Python<'_>, child: &Bound<'_, PyAny>, label: Option<PyObject>) -> PyResult<()> {
+    fn append(
+        &self, py: Python<'_>, child: &Bound<'_, PyAny>, label: Option<Py<PyAny>>,
+    ) -> PyResult<()> {
         let span_type = get_span_type(py)?;
         let native_child = ItemChild::extract_from_pyobject(py, child, &span_type)?;
         let native_label = match label {
@@ -4072,7 +4082,7 @@ impl PyItem {
         &self,
         py: Python<'_>,
         children: &Bound<'_, PyAny>,
-        label: Option<PyObject>,
+        label: Option<Py<PyAny>>,
     ) -> PyResult<()> {
         let span_type = get_span_type(py)?;
         let native_label = match label {
@@ -4115,7 +4125,7 @@ impl PyItem {
         Ok(())
     }
 
-    fn child(&self, py: Python<'_>) -> PyResult<PyObject> {
+    fn child(&self, py: Python<'_>) -> PyResult<Py<PyAny>> {
         // Lock scope: read len and clone at most the single entry under the guard;
         // drop the guard before any Python work (object conversion, exception raise).
         let (n, entry) = {
@@ -4129,7 +4139,7 @@ impl PyItem {
                 "Expected one child but have {n}"
             )));
         };
-        let label_obj: PyObject = match label {
+        let label_obj: Py<PyAny> = match label {
             None => py.None(),
             Some(lbl) => lbl.into_pyobject(py)?.into_any().unbind(),
         };
@@ -4143,7 +4153,7 @@ impl PyItem {
         py: Python<'_>,
         index: &Bound<'_, PyAny>,
         child: &Bound<'_, PyAny>,
-        label: Option<PyObject>,
+        label: Option<Py<PyAny>>,
     ) -> PyResult<()> {
         // Validate child and label BEFORE taking the write lock (§2.3 lock discipline).
         let span_type = get_span_type(py)?;
@@ -4196,7 +4206,7 @@ impl PyItem {
         Ok(())
     }
 
-    fn remove_at(&self, py: Python<'_>, index: &Bound<'_, PyAny>) -> PyResult<PyObject> {
+    fn remove_at(&self, py: Python<'_>, index: &Bound<'_, PyAny>) -> PyResult<Py<PyAny>> {
         // Capture the caller's original string representation BEFORE normalization,
         // so error messages show the original value (e.g. `True` not `1`).
         let orig_str = index.str()?.to_string_lossy().into_owned();
@@ -4235,7 +4245,7 @@ impl PyItem {
             ))
         })?;
         // Python wrap-out happens after the guard is released (§2.3 lock discipline).
-        let label_obj: PyObject = match label {
+        let label_obj: Py<PyAny> = match label {
             None => py.None(),
             Some(lbl) => lbl.into_pyobject(py)?.into_any().unbind(),
         };
@@ -4249,7 +4259,7 @@ impl PyItem {
         py: Python<'_>,
         index: &Bound<'_, PyAny>,
         child: &Bound<'_, PyAny>,
-        label: Option<PyObject>,
+        label: Option<Py<PyAny>>,
     ) -> PyResult<()> {
         // Validate child and label BEFORE taking the write lock (§2.3 lock discipline).
         let span_type = get_span_type(py)?;
@@ -4353,7 +4363,7 @@ impl PyItem {
         Ok(result.unbind())
     }
 
-    fn child_a(&self, py: Python<'_>) -> PyResult<PyObject> {
+    fn child_a(&self, py: Python<'_>) -> PyResult<Py<PyAny>> {
         // Lock scope: count label matches and clone only the first under the guard;
         // drop the guard before to_pyobject / exception raise (Python work).
         let (count, first) = {
@@ -4379,7 +4389,7 @@ impl PyItem {
             .to_pyobject(py)
     }
 
-    fn maybe_a(&self, py: Python<'_>) -> PyResult<Option<PyObject>> {
+    fn maybe_a(&self, py: Python<'_>) -> PyResult<Option<Py<PyAny>>> {
         // Lock scope: count label matches and clone only the first under the guard;
         // drop the guard before to_pyobject / exception raise (Python work).
         let (count, first) = {
@@ -4444,7 +4454,7 @@ impl PyItem {
         Ok(result.unbind())
     }
 
-    fn child_p(&self, py: Python<'_>) -> PyResult<PyObject> {
+    fn child_p(&self, py: Python<'_>) -> PyResult<Py<PyAny>> {
         // Lock scope: count label matches and clone only the first under the guard;
         // drop the guard before to_pyobject / exception raise (Python work).
         let (count, first) = {
@@ -4470,7 +4480,7 @@ impl PyItem {
             .to_pyobject(py)
     }
 
-    fn maybe_p(&self, py: Python<'_>) -> PyResult<Option<PyObject>> {
+    fn maybe_p(&self, py: Python<'_>) -> PyResult<Option<Py<PyAny>>> {
         // Lock scope: count label matches and clone only the first under the guard;
         // drop the guard before to_pyobject / exception raise (Python work).
         let (count, first) = {
@@ -4498,7 +4508,7 @@ impl PyItem {
         }
     }
 
-    fn __eq__(&self, py: Python<'_>, other: &Bound<'_, PyAny>) -> PyResult<PyObject> {
+    fn __eq__(&self, py: Python<'_>, other: &Bound<'_, PyAny>) -> PyResult<Py<PyAny>> {
         if !other.is_instance_of::<PyItem>() {
             return Ok(py.NotImplemented());
         }
@@ -4533,7 +4543,7 @@ impl PyItem {
 /// Python-visible name is `Trivia_Label` (preserved for compatibility).
 /// Rust consumers use the CamelCase `TriviaLabel` name.
 #[cfg(feature = "python")]
-#[pyclass(frozen, name = "Trivia_Label")]
+#[pyclass(frozen, from_py_object, name = "Trivia_Label")]
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
 pub enum TriviaLabel {
     #[pyo3(name = "CONTENT")]
@@ -4560,7 +4570,7 @@ impl TriviaLabel {
         self.__repr__()
     }
 
-    fn __eq__(&self, py: Python<'_>, other: &Bound<'_, PyAny>) -> PyResult<PyObject> {
+    fn __eq__(&self, py: Python<'_>, other: &Bound<'_, PyAny>) -> PyResult<Py<PyAny>> {
         if let Ok(other_kind) = other.extract::<TriviaLabel>() {
             return Ok((self == &other_kind).into_pyobject(py)?.to_owned().unbind().into_any());
         }
@@ -4598,7 +4608,7 @@ impl PartialEq for TriviaChild {
 
 #[cfg(feature = "python")]
 impl TriviaChild {
-    fn to_pyobject(&self, py: Python<'_>) -> PyResult<PyObject> {
+    fn to_pyobject(&self, py: Python<'_>) -> PyResult<Py<PyAny>> {
         match self {
             Self::Span(s) => {
                 span_to_pyobject(py, s)
@@ -4844,7 +4854,7 @@ impl PyTrivia {
             let handle = PyTrivia { inner: s.clone() };
             Py::new(py, handle).map(|p| p.into_any())
         })?;
-        obj.bind(py).downcast::<PyTrivia>().map(|b| b.clone().unbind()).map_err(|e| e.into())
+        obj.bind(py).cast::<PyTrivia>().map(|b| b.clone().unbind()).map_err(|e| e.into())
     }
 }
 
@@ -4872,7 +4882,7 @@ impl PyTrivia {
     }
 
     #[getter]
-    fn span(&self, py: Python<'_>) -> PyResult<PyObject> {
+    fn span(&self, py: Python<'_>) -> PyResult<Py<PyAny>> {
         // Snapshot the span under the read lock, then drop the guard before
         // calling span_to_pyobject — which performs Python work (Py::new or
         // Python method calls) that must not happen while a node lock is held.
@@ -4893,7 +4903,7 @@ impl PyTrivia {
 
     #[classattr]
     #[allow(non_snake_case)]
-    fn Label(py: Python<'_>) -> PyResult<PyObject> {
+    fn Label(py: Python<'_>) -> PyResult<Py<PyAny>> {
         Ok(TriviaLabel::type_object(py).into_any().unbind())
     }
 
@@ -4907,7 +4917,7 @@ impl PyTrivia {
         };
         let result = PyList::empty(py);
         for (label, child) in &snapshot {
-            let label_obj: PyObject = match label {
+            let label_obj: Py<PyAny> = match label {
                 None => py.None(),
                 Some(lbl) => lbl.clone().into_pyobject(py)?.into_any().unbind(),
             };
@@ -4919,7 +4929,9 @@ impl PyTrivia {
     }
 
     #[pyo3(signature = (child, label = None))]
-    fn append(&self, py: Python<'_>, child: &Bound<'_, PyAny>, label: Option<PyObject>) -> PyResult<()> {
+    fn append(
+        &self, py: Python<'_>, child: &Bound<'_, PyAny>, label: Option<Py<PyAny>>,
+    ) -> PyResult<()> {
         let span_type = get_span_type(py)?;
         let native_child = TriviaChild::extract_from_pyobject(py, child, &span_type)?;
         let native_label = match label {
@@ -4944,7 +4956,7 @@ impl PyTrivia {
         &self,
         py: Python<'_>,
         children: &Bound<'_, PyAny>,
-        label: Option<PyObject>,
+        label: Option<Py<PyAny>>,
     ) -> PyResult<()> {
         let span_type = get_span_type(py)?;
         let native_label = match label {
@@ -4987,7 +4999,7 @@ impl PyTrivia {
         Ok(())
     }
 
-    fn child(&self, py: Python<'_>) -> PyResult<PyObject> {
+    fn child(&self, py: Python<'_>) -> PyResult<Py<PyAny>> {
         // Lock scope: read len and clone at most the single entry under the guard;
         // drop the guard before any Python work (object conversion, exception raise).
         let (n, entry) = {
@@ -5001,7 +5013,7 @@ impl PyTrivia {
                 "Expected one child but have {n}"
             )));
         };
-        let label_obj: PyObject = match label {
+        let label_obj: Py<PyAny> = match label {
             None => py.None(),
             Some(lbl) => lbl.into_pyobject(py)?.into_any().unbind(),
         };
@@ -5015,7 +5027,7 @@ impl PyTrivia {
         py: Python<'_>,
         index: &Bound<'_, PyAny>,
         child: &Bound<'_, PyAny>,
-        label: Option<PyObject>,
+        label: Option<Py<PyAny>>,
     ) -> PyResult<()> {
         // Validate child and label BEFORE taking the write lock (§2.3 lock discipline).
         let span_type = get_span_type(py)?;
@@ -5068,7 +5080,7 @@ impl PyTrivia {
         Ok(())
     }
 
-    fn remove_at(&self, py: Python<'_>, index: &Bound<'_, PyAny>) -> PyResult<PyObject> {
+    fn remove_at(&self, py: Python<'_>, index: &Bound<'_, PyAny>) -> PyResult<Py<PyAny>> {
         // Capture the caller's original string representation BEFORE normalization,
         // so error messages show the original value (e.g. `True` not `1`).
         let orig_str = index.str()?.to_string_lossy().into_owned();
@@ -5107,7 +5119,7 @@ impl PyTrivia {
             ))
         })?;
         // Python wrap-out happens after the guard is released (§2.3 lock discipline).
-        let label_obj: PyObject = match label {
+        let label_obj: Py<PyAny> = match label {
             None => py.None(),
             Some(lbl) => lbl.into_pyobject(py)?.into_any().unbind(),
         };
@@ -5121,7 +5133,7 @@ impl PyTrivia {
         py: Python<'_>,
         index: &Bound<'_, PyAny>,
         child: &Bound<'_, PyAny>,
-        label: Option<PyObject>,
+        label: Option<Py<PyAny>>,
     ) -> PyResult<()> {
         // Validate child and label BEFORE taking the write lock (§2.3 lock discipline).
         let span_type = get_span_type(py)?;
@@ -5225,7 +5237,7 @@ impl PyTrivia {
         Ok(result.unbind())
     }
 
-    fn child_content(&self, py: Python<'_>) -> PyResult<PyObject> {
+    fn child_content(&self, py: Python<'_>) -> PyResult<Py<PyAny>> {
         // Lock scope: count label matches and clone only the first under the guard;
         // drop the guard before to_pyobject / exception raise (Python work).
         let (count, first) = {
@@ -5251,7 +5263,7 @@ impl PyTrivia {
             .to_pyobject(py)
     }
 
-    fn maybe_content(&self, py: Python<'_>) -> PyResult<Option<PyObject>> {
+    fn maybe_content(&self, py: Python<'_>) -> PyResult<Option<Py<PyAny>>> {
         // Lock scope: count label matches and clone only the first under the guard;
         // drop the guard before to_pyobject / exception raise (Python work).
         let (count, first) = {
@@ -5279,7 +5291,7 @@ impl PyTrivia {
         }
     }
 
-    fn __eq__(&self, py: Python<'_>, other: &Bound<'_, PyAny>) -> PyResult<PyObject> {
+    fn __eq__(&self, py: Python<'_>, other: &Bound<'_, PyAny>) -> PyResult<Py<PyAny>> {
         if !other.is_instance_of::<PyTrivia>() {
             return Ok(py.NotImplemented());
         }

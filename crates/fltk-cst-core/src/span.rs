@@ -3,11 +3,9 @@ use crate::cross_cdylib::{extract_source_text, FLTK_CST_CORE_ABI};
 #[cfg(feature = "python")]
 use pyo3::exceptions::PyValueError;
 #[cfg(feature = "python")]
-use pyo3::impl_::pycell::PyClassObject;
-#[cfg(feature = "python")]
 use pyo3::prelude::*;
 #[cfg(feature = "python")]
-use pyo3::sync::GILOnceCell;
+use pyo3::sync::PyOnceLock;
 #[cfg(feature = "python")]
 use pyo3::types::PyType;
 use std::fmt;
@@ -37,7 +35,7 @@ impl std::error::Error for SpanError {}
 /// ACYCLICITY: `terminalsrc` must never import `fltk._native` (verified at design time;
 /// see design.md §2.2). If that invariant breaks, this import becomes a cycle.
 #[cfg(feature = "python")]
-static SPAN_KIND_SPAN_CACHE: GILOnceCell<PyObject> = GILOnceCell::new();
+static SPAN_KIND_SPAN_CACHE: PyOnceLock<Py<PyAny>> = PyOnceLock::new();
 
 /// Shared heap allocation holding source text.
 ///
@@ -107,28 +105,36 @@ impl SourceText {
         FLTK_CST_CORE_ABI
     }
 
-    /// Layout probe: ``size_of::<PyClassObject<SourceText>>()`` baked at compile time.
+    /// Layout probe: ``size_of::<<SourceText as pyo3::impl_::pyclass::PyClassImpl>::Layout>()``
+    /// baked at compile time.
     ///
     /// Compared numerically (not by string equality) by ``extract_source_text``
     /// (``cross_cdylib.rs``) alongside ``_fltk_cst_core_abi``. A pyo3 version bump that
-    /// changes ``PyClassObject`` layout will typically produce a different integer here,
+    /// changes the allocation layout will typically produce a different integer here,
     /// so a layout mismatch fails with ``TypeError`` instead of proceeding to
-    /// ``downcast_unchecked`` UB.
+    /// ``cast_unchecked`` UB.
     ///
     /// **Limitation**: size equality is necessary but not sufficient for layout identity —
     /// a pyo3 build that reorders internal fields while preserving total size passes the
     /// probe. The check narrows — not closes — the layout-skew window. Accepted risk: for
-    /// frozen pyo3 types without dict/weakref, ``PyClassObject<T>`` reduces to
-    /// ``{ffi::PyObject, T}`` (repr(C)); a size-preserving internal reorder is not
+    /// frozen pyo3 types without dict/weakref, ``PyClassImpl::Layout`` (``PyStaticClassObject<T>``)
+    /// reduces to ``{ffi::PyObject, T}`` (repr(C)); a size-preserving internal reorder is not
     /// constructible without changing ``ffi::PyObject`` itself, which changes the size.
     ///
-    /// ``PyClassObject<T>`` is a pyo3 internal type; its layout is intentionally NOT
+    /// ``PyClassImpl::Layout`` is a pyo3 internal type; its layout is intentionally NOT
     /// stable across pyo3 minor versions — that instability is exactly what this probe
     /// is designed to detect.
     #[classattr]
     fn _fltk_cst_core_abi_layout() -> usize {
-        std::mem::size_of::<PyClassObject<SourceText>>()
+        source_text_abi_layout_probe()
     }
+}
+
+/// Returns the ABI layout probe value for `SourceText` — exposed `pub(crate)` so that
+/// `lib.rs` tests can assert the classattr body delegates to this, not a hardcoded stub.
+#[cfg(feature = "python")]
+pub(crate) fn source_text_abi_layout_probe() -> usize {
+    std::mem::size_of::<<SourceText as pyo3::impl_::pyclass::PyClassImpl>::Layout>()
 }
 
 /// Half-open **Unicode-codepoint** index range ``[start, end)`` into a shared UTF-8 source string.
@@ -146,7 +152,7 @@ impl SourceText {
 /// at the same position.
 ///
 /// **Frozen:** assignment to any attribute raises ``AttributeError`` from Python.
-#[cfg_attr(feature = "python", pyclass(frozen, eq, hash))]
+#[cfg_attr(feature = "python", pyclass(frozen, eq, hash, from_py_object))]
 #[derive(Clone)]
 pub struct Span {
     pub(crate) start: i64,
@@ -378,30 +384,31 @@ impl Span {
 impl Span {
     /// ABI marker for ``Span``: identical value to ``SourceText._fltk_cst_core_abi``.
     ///
-    /// Checked once in ``get_span_type``'s ``GILOnceCell`` init (``cross_cdylib.rs``) so that
+    /// Checked once in ``get_span_type``'s ``PyOnceLock`` init (``cross_cdylib.rs``) so that
     /// version skew on the ``Span`` path fails with a clear ``TypeError`` naming both ABI
-    /// strings instead of proceeding to ``downcast_unchecked`` UB in ``extract_span``.
+    /// strings instead of proceeding to ``cast_unchecked`` UB in ``extract_span``.
     #[classattr]
     fn _fltk_cst_core_abi() -> &'static str {
         FLTK_CST_CORE_ABI
     }
 
-    /// Layout probe for ``Span``: ``size_of::<PyClassObject<Span>>()`` baked at compile time.
+    /// Layout probe for ``Span``: ``size_of::<<Span as pyo3::impl_::pyclass::PyClassImpl>::Layout>()``
+    /// baked at compile time.
     ///
     /// Checked numerically alongside ``_fltk_cst_core_abi`` in ``get_span_type``'s init.
-    /// A pyo3 version bump that changes ``PyClassObject`` layout will typically produce a
+    /// A pyo3 version bump that changes the allocation layout will typically produce a
     /// different integer here, catching pyo3-resolution skew that the version string alone
     /// cannot detect.
     ///
     /// **Limitation**: size equality is necessary but not sufficient for layout identity —
     /// a pyo3 build that reorders internal fields while preserving total size passes the
     /// probe. The check narrows — not closes — the layout-skew window. Accepted risk: for
-    /// frozen pyo3 types without dict/weakref, ``PyClassObject<T>`` reduces to
-    /// ``{ffi::PyObject, T}`` (repr(C)); a size-preserving internal reorder is not
+    /// frozen pyo3 types without dict/weakref, ``PyClassImpl::Layout`` (``PyStaticClassObject<T>``)
+    /// reduces to ``{ffi::PyObject, T}`` (repr(C)); a size-preserving internal reorder is not
     /// constructible without changing ``ffi::PyObject`` itself, which changes the size.
     #[classattr]
     fn _fltk_cst_core_abi_layout() -> usize {
-        std::mem::size_of::<PyClassObject<Span>>()
+        span_abi_layout_probe()
     }
 
     /// Construct a sourceless span ``[start, end)``.
@@ -562,12 +569,12 @@ impl Span {
     /// ``fltk.fegen.pyrt.terminalsrc``.
     ///
     /// Returns the *same* Python object as the pure-Python ``terminalsrc.Span.kind`` field,
-    /// so identity holds and equality is trivially satisfied.  Uses a ``GILOnceCell`` cache
+    /// so identity holds and equality is trivially satisfied.  Uses a ``PyOnceLock`` cache
     /// to avoid a Python attribute lookup on every call.
     #[getter]
-    fn kind(&self, py: Python<'_>) -> PyResult<PyObject> {
+    fn kind(&self, py: Python<'_>) -> PyResult<Py<PyAny>> {
         SPAN_KIND_SPAN_CACHE
-            .get_or_try_init(py, || -> PyResult<PyObject> {
+            .get_or_try_init(py, || -> PyResult<Py<PyAny>> {
                 py.import("fltk.fegen.pyrt.terminalsrc")
                     .and_then(|m| m.getattr("SpanKind"))
                     .and_then(|sk| sk.getattr("SPAN"))
@@ -581,4 +588,11 @@ impl Span {
             })
             .map(|obj| obj.clone_ref(py))
     }
+}
+
+/// Returns the ABI layout probe value for `Span` — exposed `pub(crate)` so that
+/// `lib.rs` tests can assert the classattr body delegates to this, not a hardcoded stub.
+#[cfg(feature = "python")]
+pub(crate) fn span_abi_layout_probe() -> usize {
+    std::mem::size_of::<<Span as pyo3::impl_::pyclass::PyClassImpl>::Layout>()
 }

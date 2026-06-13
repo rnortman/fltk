@@ -1,5 +1,6 @@
 .PHONY: check lint format-check typecheck test cargo-check cargo-test cargo-clippy \
         cargo-test-no-python cargo-clippy-no-python check-no-pyo3 cargo-deny \
+        cargo-test-python-features \
         build-native build-test-user-ext build-fegen-rust-cst build-rust-parser-fixture gen-rust-cst fix gencode
 
 # Run all checks: lint, format, type-check, tests, and Rust checks. This is the canonical
@@ -7,7 +8,7 @@
 # and its full output, then exits non-zero. Individual sub-targets are unchanged and still
 # stream output when invoked directly.
 check:
-	@steps="lint format-check typecheck test cargo-check cargo-clippy cargo-test cargo-test-no-python cargo-clippy-no-python check-no-pyo3 cargo-deny"; \
+	@steps="lint format-check typecheck test cargo-check cargo-clippy cargo-test cargo-test-python-features cargo-test-no-python cargo-clippy-no-python check-no-pyo3 cargo-deny"; \
 	failed=0; \
 	for step in $$steps; do \
 	    tmpfile=$$(mktemp); \
@@ -19,7 +20,7 @@ check:
 	    fi; \
 	    rm -f "$$tmpfile"; \
 	done; \
-	echo "check: all steps passed (lint format-check typecheck test cargo-check cargo-clippy cargo-test cargo-test-no-python cargo-clippy-no-python check-no-pyo3 cargo-deny)"
+	echo "check: all steps passed (lint format-check typecheck test cargo-check cargo-clippy cargo-test cargo-test-python-features cargo-test-no-python cargo-clippy-no-python check-no-pyo3 cargo-deny)"
 
 lint:
 	uv run --group lint --group test ruff check -q .
@@ -45,6 +46,23 @@ cargo-check:
 
 cargo-test:
 	cargo test -q
+
+# Run fltk-cst-core tests with the python feature enabled, linking libpython via a uv-managed
+# interpreter (python-build-standalone ships the unversioned libpython3.10.so required to link).
+# PYO3_PYTHON points pyo3's build script at the managed interpreter; it emits the correct
+# rustc-link-search automatically — no build.rs or RUSTFLAGS needed.
+#
+# `env -u VIRTUAL_ENV` is required: with a venv active, `uv python find --managed-python` returns
+# the venv's interpreter (a system python whose LIBDIR lacks the unversioned libpython3.10.so),
+# and the link fails. Stripping VIRTUAL_ENV forces resolution to a managed standalone regardless
+# of whether the caller's shell has the venv activated.
+cargo-test-python-features:
+	@PYO3_PYTHON=$$(env -u VIRTUAL_ENV uv python find --managed-python --no-project 3.10); \
+	if [ -z "$$PYO3_PYTHON" ]; then \
+	    echo "cargo-test-python-features: no uv-managed CPython 3.10 found. Run: uv python install cpython-3.10"; \
+	    exit 1; \
+	fi; \
+	PYO3_PYTHON=$$PYO3_PYTHON cargo test -q -p fltk-cst-core --features python
 
 # cargo-clippy covers test crates at their python-on feature set (the only non-default
 # feature that adds code; default features for rust_cst_fegen are already python-on).

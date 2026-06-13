@@ -421,9 +421,9 @@ class RustCstGenerator:
         ``type_name`` is the Rust type used for the own-type fast path (e.g. ``NodeKind`` or
         ``Items_Label``).  The generated __hash__ allocates a PyString per call because CPython's
         salted string hash is required for cross-backend hash agreement (AC4); amortizing this via
-        GILOnceCell is deferred.
+        PyOnceLock is deferred.
         """
-        lines.append("    fn __eq__(&self, py: Python<'_>, other: &Bound<'_, PyAny>) -> PyResult<PyObject> {")
+        lines.append("    fn __eq__(&self, py: Python<'_>, other: &Bound<'_, PyAny>) -> PyResult<Py<PyAny>> {")
         lines.append(f"        if let Ok(other_kind) = other.extract::<{type_name}>() {{")
         lines.append("            return Ok((self == &other_kind).into_pyobject(py)?.to_owned().unbind().into_any());")
         lines.append("        }")
@@ -468,7 +468,7 @@ class RustCstGenerator:
         lines.append("/// One variant per grammar rule. Returned by `kind()` on every data struct")
         lines.append("/// and handle. Python-visible name is the same ALL_CAPS form as the protocol.")
         lines.append('#[cfg(feature = "python")]')
-        lines.append('#[pyclass(frozen, name = "NodeKind")]')
+        lines.append('#[pyclass(frozen, from_py_object, name = "NodeKind")]')
         lines.append("#[derive(Clone, Debug, PartialEq, Eq, Hash)]")
         lines.append("pub enum NodeKind {")
         for variant, python_name in variant_names:
@@ -563,7 +563,7 @@ class RustCstGenerator:
         lines.append(f"/// Python-visible name is `{python_enum_name}` (preserved for compatibility).")
         lines.append(f"/// Rust consumers use the CamelCase `{enum_name}` name.")
         lines.append('#[cfg(feature = "python")]')
-        lines.append(f'#[pyclass(frozen, name = "{python_enum_name}")]')
+        lines.append(f'#[pyclass(frozen, from_py_object, name = "{python_enum_name}")]')
         lines.append("#[derive(Clone, Debug, PartialEq, Eq, Hash)]")
         lines.append(f"pub enum {enum_name} {{")
         for rust_variant, python_name in label_variants:
@@ -749,7 +749,7 @@ class RustCstGenerator:
         # return the same Python handle (is-stable identity — resolves
         # TODO(rust-cst-child-node-identity)).
         py_param = "py" if (child_classes or has_span) else "_py"
-        lines.append(f"    fn to_pyobject(&self, {py_param}: Python<'_>) -> PyResult<PyObject> {{")
+        lines.append(f"    fn to_pyobject(&self, {py_param}: Python<'_>) -> PyResult<Py<PyAny>> {{")
         lines.append("        match self {")
         if has_span:
             lines.append("            Self::Span(s) => {")
@@ -1067,9 +1067,7 @@ class RustCstGenerator:
         lines.append(f"            let handle = {py_handle} {{ inner: s.clone() }};")
         lines.append("            Py::new(py, handle).map(|p| p.into_any())")
         lines.append("        })?;")
-        lines.append(
-            f"        obj.bind(py).downcast::<{py_handle}>().map(|b| b.clone().unbind()).map_err(|e| e.into())"
-        )
+        lines.append(f"        obj.bind(py).cast::<{py_handle}>().map(|b| b.clone().unbind()).map_err(|e| e.into())")
         lines.append("    }")
         lines.append("}")
         lines.append("")
@@ -1141,7 +1139,7 @@ class RustCstGenerator:
         # take &self — mutation goes through the inner RwLock.
         return [
             "    #[getter]",
-            "    fn span(&self, py: Python<'_>) -> PyResult<PyObject> {",
+            "    fn span(&self, py: Python<'_>) -> PyResult<Py<PyAny>> {",
             "        // Snapshot the span under the read lock, then drop the guard before",
             "        // calling span_to_pyobject — which performs Python work (Py::new or",
             "        // Python method calls) that must not happen while a node lock is held.",
@@ -1173,7 +1171,7 @@ class RustCstGenerator:
         return [
             "    #[classattr]",
             "    #[allow(non_snake_case)]",
-            "    fn Label(py: Python<'_>) -> PyResult<PyObject> {",
+            "    fn Label(py: Python<'_>) -> PyResult<Py<PyAny>> {",
             f"        Ok({enum_name}::type_object(py).into_any().unbind())",
             "    }",
             "",
@@ -1202,7 +1200,7 @@ class RustCstGenerator:
             "        };",
             "        let result = PyList::empty(py);",
             "        for (label, child) in &snapshot {",
-            "            let label_obj: PyObject = match label {",
+            "            let label_obj: Py<PyAny> = match label {",
             "                None => py.None(),",
             "                Some(lbl) => lbl.clone().into_pyobject(py)?.into_any().unbind(),",
             "            };",
@@ -1218,7 +1216,9 @@ class RustCstGenerator:
     def _generic_append(self, class_name: str, enum_name: str, _label_type: str, labels: list[str]) -> list[str]:
         return [
             "    #[pyo3(signature = (child, label = None))]",
-            "    fn append(&self, py: Python<'_>, child: &Bound<'_, PyAny>, label: Option<PyObject>) -> PyResult<()> {",
+            "    fn append(",
+            "        &self, py: Python<'_>, child: &Bound<'_, PyAny>, label: Option<Py<PyAny>>,",
+            "    ) -> PyResult<()> {",
             "        let span_type = get_span_type(py)?;",
             f"        let native_child = {enum_name}::extract_from_pyobject(py, child, &span_type)?;",
             "        let native_label = match label {",
@@ -1231,7 +1231,7 @@ class RustCstGenerator:
         ]
 
     def _label_from_pyobject_match(self, class_name: str, labels: list[str], method_name: str) -> list[str]:
-        """Emit the match arms for converting an Option<PyObject> label to native label type."""
+        """Emit the match arms for converting an Option<Py<PyAny>> label to native label type."""
         if not labels:
             return [
                 "            None => None,",
@@ -1268,7 +1268,7 @@ class RustCstGenerator:
             "        &self,",
             "        py: Python<'_>,",
             "        children: &Bound<'_, PyAny>,",
-            "        label: Option<PyObject>,",
+            "        label: Option<Py<PyAny>>,",
             "    ) -> PyResult<()> {",
             "        let span_type = get_span_type(py)?;",
             "        let native_label = match label {",
@@ -1317,7 +1317,7 @@ class RustCstGenerator:
 
     def _generic_child(self, _class_name: str, _enum_name: str, _label_type: str, _labels: list[str]) -> list[str]:
         return [
-            "    fn child(&self, py: Python<'_>) -> PyResult<PyObject> {",
+            "    fn child(&self, py: Python<'_>) -> PyResult<Py<PyAny>> {",
             "        // Lock scope: read len and clone at most the single entry under the guard;",
             "        // drop the guard before any Python work (object conversion, exception raise).",
             "        let (n, entry) = {",
@@ -1331,7 +1331,7 @@ class RustCstGenerator:
             '                "Expected one child but have {n}"',
             "            )));",
             "        };",
-            "        let label_obj: PyObject = match label {",
+            "        let label_obj: Py<PyAny> = match label {",
             "            None => py.None(),",
             "            Some(lbl) => lbl.into_pyobject(py)?.into_any().unbind(),",
             "        };",
@@ -1393,7 +1393,7 @@ class RustCstGenerator:
             "        py: Python<'_>,",
             "        index: &Bound<'_, PyAny>,",
             "        child: &Bound<'_, PyAny>,",
-            "        label: Option<PyObject>,",
+            "        label: Option<Py<PyAny>>,",
             "    ) -> PyResult<()> {",
             "        // Validate child and label BEFORE taking the write lock (§2.3 lock discipline).",
             "        let span_type = get_span_type(py)?;",
@@ -1468,7 +1468,7 @@ class RustCstGenerator:
         Negative indices supported; out-of-range raises IndexError with the caller's original value.
         """
         return [
-            "    fn remove_at(&self, py: Python<'_>, index: &Bound<'_, PyAny>) -> PyResult<PyObject> {",
+            "    fn remove_at(&self, py: Python<'_>, index: &Bound<'_, PyAny>) -> PyResult<Py<PyAny>> {",
             "        // Capture the caller's original string representation BEFORE normalization,",
             "        // so error messages show the original value (e.g. `True` not `1`).",
             "        let orig_str = index.str()?.to_string_lossy().into_owned();",
@@ -1499,7 +1499,7 @@ class RustCstGenerator:
             "            ))",
             "        })?;",
             "        // Python wrap-out happens after the guard is released (§2.3 lock discipline).",
-            "        let label_obj: PyObject = match label {",
+            "        let label_obj: Py<PyAny> = match label {",
             "            None => py.None(),",
             "            Some(lbl) => lbl.into_pyobject(py)?.into_any().unbind(),",
             "        };",
@@ -1522,7 +1522,7 @@ class RustCstGenerator:
             "        py: Python<'_>,",
             "        index: &Bound<'_, PyAny>,",
             "        child: &Bound<'_, PyAny>,",
-            "        label: Option<PyObject>,",
+            "        label: Option<Py<PyAny>>,",
             "    ) -> PyResult<()> {",
             "        // Validate child and label BEFORE taking the write lock (§2.3 lock discipline).",
             "        let span_type = get_span_type(py)?;",
@@ -1974,7 +1974,7 @@ class RustCstGenerator:
         )
 
         # child_<label>: return the single child with matching label; error if not exactly one
-        lines.append(f"    fn child_{label}(&self, py: Python<'_>) -> PyResult<PyObject> {{")
+        lines.append(f"    fn child_{label}(&self, py: Python<'_>) -> PyResult<Py<PyAny>> {{")
         lines.extend(self._emit_count_first_scan_block(label_enum_name, rust_variant))
         lines.extend(
             [
@@ -1991,7 +1991,7 @@ class RustCstGenerator:
         )
 
         # maybe_<label>: return optional single child with matching label; error if more than one
-        lines.append(f"    fn maybe_{label}(&self, py: Python<'_>) -> PyResult<Option<PyObject>> {{")
+        lines.append(f"    fn maybe_{label}(&self, py: Python<'_>) -> PyResult<Option<Py<PyAny>>> {{")
         lines.extend(self._emit_count_first_scan_block(label_enum_name, rust_variant))
         lines.extend(
             [
@@ -2021,7 +2021,7 @@ class RustCstGenerator:
         generated __eq__ body.
         """
         return [
-            "    fn __eq__(&self, py: Python<'_>, other: &Bound<'_, PyAny>) -> PyResult<PyObject> {",
+            "    fn __eq__(&self, py: Python<'_>, other: &Bound<'_, PyAny>) -> PyResult<Py<PyAny>> {",
             f"        if !other.is_instance_of::<{py_handle}>() {{",
             "            return Ok(py.NotImplemented());",
             "        }",

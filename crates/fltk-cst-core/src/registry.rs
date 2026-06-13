@@ -6,8 +6,8 @@
 /// call would call `Py::new(py, handle)` and mint a fresh Python object, so `a is b` would
 /// always be `False` even if `a` and `b` refer to the same node.
 ///
-/// The registry maps `Arc` address (`usize`) → `PyObject` (weak reference) and is stored in
-/// a process-wide `GILOnceCell<PyObject>` holding a Python `weakref.WeakValueDictionary`.
+/// The registry maps `Arc` address (`usize`) → `Py<PyAny>` (weak reference) and is stored in
+/// a process-wide `PyOnceLock<Py<PyAny>>` holding a Python `weakref.WeakValueDictionary`.
 ///
 /// # Invariant
 /// At most one live Python handle exists per unique `Shared<T>` allocation.
@@ -25,20 +25,20 @@
 /// All operations require the GIL (`py: Python<'_>`).  The registry itself is a Python
 /// `weakref.WeakValueDictionary`, so all access goes through Python object protocol.
 use pyo3::prelude::*;
-use pyo3::sync::GILOnceCell;
+use pyo3::sync::PyOnceLock;
 #[cfg(any(test, feature = "test-introspection"))]
 use pyo3::types::PyDict;
 
 /// Process-wide registry: a Python `weakref.WeakValueDictionary` mapping
 /// Arc-address (int key) → canonical Python handle (weak value).
-static CANONICAL_REGISTRY: GILOnceCell<PyObject> = GILOnceCell::new();
+static CANONICAL_REGISTRY: PyOnceLock<Py<PyAny>> = PyOnceLock::new();
 
 /// Return the process-wide `weakref.WeakValueDictionary`, initialising it on first call.
 fn get_registry(py: Python<'_>) -> PyResult<Bound<'_, PyAny>> {
     let obj = CANONICAL_REGISTRY.get_or_try_init(py, || {
         let weakref = py.import("weakref")?;
         let wvd = weakref.getattr("WeakValueDictionary")?.call0()?;
-        Ok::<PyObject, PyErr>(wvd.unbind())
+        Ok::<Py<PyAny>, PyErr>(wvd.unbind())
     })?;
     Ok(obj.bind(py).clone())
 }
@@ -47,7 +47,7 @@ fn get_registry(py: Python<'_>) -> PyResult<Bound<'_, PyAny>> {
 ///
 /// Returns `Some(handle)` if a live canonical handle is registered for this address,
 /// `None` otherwise (miss: first wrap-out, or previous canonical handle was GC'd).
-pub fn lookup(py: Python<'_>, arc_addr: usize) -> PyResult<Option<PyObject>> {
+pub fn lookup(py: Python<'_>, arc_addr: usize) -> PyResult<Option<Py<PyAny>>> {
     let registry = get_registry(py)?;
     let key = arc_addr.into_pyobject(py)?;
     let result = registry.call_method1("get", (key, py.None()))?;
@@ -106,8 +106,8 @@ pub fn force_register(py: Python<'_>, arc_addr: usize, handle: &Bound<'_, PyAny>
 pub fn get_or_insert_with(
     py: Python<'_>,
     arc_addr: usize,
-    make_handle: impl FnOnce() -> PyResult<PyObject>,
-) -> PyResult<PyObject> {
+    make_handle: impl FnOnce() -> PyResult<Py<PyAny>>,
+) -> PyResult<Py<PyAny>> {
     if let Some(existing) = lookup(py, arc_addr)? {
         return Ok(existing);
     }
@@ -119,9 +119,12 @@ pub fn get_or_insert_with(
         Ok(handle)
     } else {
         // Race (single-threaded Python: unreachable in practice).
-        // If somehow reached, the entry must be live — unwrap is correct.
-        Ok(lookup(py, arc_addr)?
-            .expect("registry invariant violated: entry evicted immediately after register_if_absent returned false"))
+        // If somehow reached, the winner's entry must still be live — return it or error.
+        lookup(py, arc_addr)?.ok_or_else(|| {
+            pyo3::exceptions::PyRuntimeError::new_err(
+                "registry invariant violated: entry evicted immediately after register_if_absent returned false"
+            )
+        })
     }
 }
 
@@ -142,5 +145,5 @@ pub fn snapshot(py: Python<'_>) -> PyResult<Bound<'_, PyDict>> {
     let dict_class = py.import("builtins")?.getattr("dict")?;
     let items = registry.call_method0("items")?;
     let d = dict_class.call1((items,))?;
-    d.downcast_into::<PyDict>().map_err(|e| e.into())
+    d.cast_into::<PyDict>().map_err(|e| e.into())
 }

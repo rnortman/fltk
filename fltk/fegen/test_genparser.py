@@ -72,7 +72,7 @@ def test_gen_rust_cst_command_emits_source(simple_grammar_file: pathlib.Path, tm
 
 
 def test_gen_rust_cst_sentinel_decoupled(simple_grammar_file: pathlib.Path, tmp_path: pathlib.Path) -> None:
-    """Emitted preamble uses native Span::unknown() sentinel — no GILOnceCell cache, no
+    """Emitted preamble uses native Span::unknown() sentinel — no PyOnceLock cache, no
     fltk._native.UnknownSpan runtime import, no crate:: linkage.
 
     Design §2.2 (native span sentinel) / §Test Plan item 2.

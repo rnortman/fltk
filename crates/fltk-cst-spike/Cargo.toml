@@ -21,7 +21,7 @@ harness = false
 
 [dependencies]
 fltk-cst-core = { path = "../fltk-cst-core", default-features = false }
-pyo3 = { version = "0.23", features = ["abi3-py310"], optional = true }
+pyo3 = { version = "0.29", features = ["abi3-py310"], optional = true }
 
 [dev-dependencies]
 criterion = { version = "0.5", features = ["html_reports"] }
