@@ -1,7 +1,8 @@
 .PHONY: check lint format-check typecheck test cargo-check cargo-test cargo-clippy \
         cargo-test-no-python cargo-clippy-no-python check-no-pyo3 cargo-deny \
         cargo-test-python-features \
-        build-native build-test-user-ext build-fegen-rust-cst build-rust-parser-fixture gen-rust-cst fix gencode
+        build-native build-test-user-ext build-fegen-rust-cst build-rust-parser-fixture \
+        build-test-fixtures gen-rust-cst fix gencode
 
 # Run all checks: lint, format, type-check, tests, and Rust checks. This is the canonical
 # entry point used by CI. On success prints one line; on failure prints the failing step name
@@ -35,7 +36,12 @@ fix:
 typecheck:
 	uv run --group lint --group test pyright
 
-test:
+# Aggregate target: build every native extension the Python test suite requires.
+# Wire this as a prerequisite of `test` so `make test` and `make check` (which
+# calls $(MAKE) test) always build fixtures before running pytest — no stale-SO risk.
+build-test-fixtures: build-native build-test-user-ext build-fegen-rust-cst build-rust-parser-fixture
+
+test: build-test-fixtures
 	uv run --group lint --group test pytest -q
 
 # cargo-check: fast compile for the workspace. Test-crate per-feature checks are omitted
