@@ -1,16 +1,43 @@
-.PHONY: check lint format-check typecheck test cargo-check cargo-test cargo-clippy \
+.PHONY: check check-ci check-common lint format-check typecheck test cargo-check cargo-test cargo-clippy \
         cargo-test-no-python cargo-clippy-no-python check-no-pyo3 cargo-deny \
         cargo-test-python-features \
         build-native build-test-user-ext build-fegen-rust-cst build-rust-parser-fixture \
         build-test-fixtures gen-rust-cst fix gencode
 
-# Run all checks: lint, format, type-check, tests, and Rust checks. This is the canonical
-# entry point used by CI. On success prints one line; on failure prints the failing step name
-# and its full output, then exits non-zero. Individual sub-targets are unchanged and still
-# stream output when invoked directly.
-check:
-	@steps="lint format-check typecheck test cargo-check cargo-clippy cargo-test cargo-test-python-features cargo-test-no-python cargo-clippy-no-python check-no-pyo3 cargo-deny"; \
-	failed=0; \
+# ══════════════════════════════════════════════════════════════════════════════
+# CHECK TARGET FAMILY — READ BEFORE TOUCHING
+# ══════════════════════════════════════════════════════════════════════════════
+#
+# THREE targets, ONE sanctioned difference:
+#
+#   check-common  — every check step EXCEPT cargo-deny.
+#                   This is the shared base. BOTH lanes run exactly this.
+#
+#   check         — check-common + cargo-deny.  LOCAL / PRECOMMIT lane.
+#                   The git pre-commit hook runs this.  cargo-deny MUST run
+#                   locally because it is NOT run in CI (cargo-deny is not
+#                   installed on the GitHub Actions runner).
+#
+#   check-ci      — check-common ONLY.  CI lane.
+#                   cargo-deny is intentionally absent: the tool is not
+#                   installed on the GitHub Actions runner and we have chosen
+#                   NOT to install it there.  Supply-chain / advisory checks
+#                   are enforced via the local precommit hook instead.
+#
+# ANTI-DRIFT RULE (MANDATORY):
+#   Any new check step MUST be added to check-common so BOTH lanes pick it up
+#   automatically.  Adding a step directly to `check` or `check-ci` (other
+#   than the existing cargo-deny line on `check`) is FORBIDDEN.  Violating
+#   this rule silently breaks either local or CI coverage, and the mismatch
+#   will not be caught by the other lane.
+#
+# ══════════════════════════════════════════════════════════════════════════════
+
+# Shared base: all checks except cargo-deny.
+# ADD new steps here by appending the target name to the `steps` string below.
+# DO NOT add new steps directly to `check` or `check-ci` — they inherit via this target.
+check-common:
+	@steps="lint format-check typecheck test cargo-check cargo-clippy cargo-test cargo-test-python-features cargo-test-no-python cargo-clippy-no-python check-no-pyo3"; \
 	for step in $$steps; do \
 	    tmpfile=$$(mktemp); \
 	    if ! $(MAKE) $$step >"$$tmpfile" 2>&1; then \
@@ -21,7 +48,32 @@ check:
 	    fi; \
 	    rm -f "$$tmpfile"; \
 	done; \
-	echo "check: all steps passed (lint format-check typecheck test cargo-check cargo-clippy cargo-test cargo-test-python-features cargo-test-no-python cargo-clippy-no-python check-no-pyo3 cargo-deny)"
+	echo "check-common: all steps passed (lint format-check typecheck test cargo-check cargo-clippy cargo-test cargo-test-python-features cargo-test-no-python cargo-clippy-no-python check-no-pyo3)"
+
+# LOCAL / PRECOMMIT lane: check-ci + cargo-deny (the supply-chain gate).
+# Depends on check-ci (not check-common directly) so the one-sanctioned-divergence
+# relationship is enforced structurally: any step added to check-ci (or check-common)
+# is automatically picked up here, and a future developer cannot accidentally add a
+# step only to `check` without it being visible as a structural anomaly.
+# cargo-deny is NOT installed on the GitHub Actions runner; it is enforced
+# here via the local pre-commit hook.  DO NOT add steps here directly — add
+# them to check-common instead so check-ci also picks them up.
+check: check-ci
+	@tmpfile=$$(mktemp); \
+	if ! $(MAKE) cargo-deny >"$$tmpfile" 2>&1; then \
+	    echo "FAILED: cargo-deny"; \
+	    cat "$$tmpfile"; \
+	    rm -f "$$tmpfile"; \
+	    exit 1; \
+	fi; \
+	rm -f "$$tmpfile"; \
+	echo "check: all steps passed (check-ci + cargo-deny)"
+
+# CI lane: check-common only.  cargo-deny is deliberately omitted — it is not
+# installed on the GitHub Actions runner and supply-chain checks are enforced
+# via the local pre-commit hook instead.  DO NOT add steps here directly —
+# add them to check-common so `check` (local) also picks them up.
+check-ci: check-common
 
 lint:
 	uv run --group lint --group test ruff check -q .

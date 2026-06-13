@@ -27,5 +27,9 @@ jobs:
         with:
           toolchain: stable
 
+      # Deliberately uses check-ci, not check. cargo-deny (the supply-chain /
+      # advisory gate) is not installed on this runner; it is enforced via the
+      # local pre-commit hook instead. check-ci runs the full check-common
+      # suite, which is identical to check minus cargo-deny.
       - name: Run checks
-        run: make check
+        run: make check-ci
