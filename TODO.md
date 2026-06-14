@@ -38,6 +38,10 @@ When `Py::new(m.py(), Span::unknown())` fails during `fltk._native` module init,
 
 `fltk_pyo3_cdylib`'s assembly genrule unconditionally declares `cst.rs` and `parser.rs` as required outputs, even when `lib_rs=None` (auto-generated path). Every current caller is a grammar crate and supplies both files. A future runtime-only (span-only) crate built via this macro would hit the `test -f` guards with a misleading error. At that point, split into grammar and span-only assembly variants. Location: `rust.bzl` (`_assemble_crate` genrule, line ~239).
 
+## `cst-header-escape-dedup`
+
+`_escape_source_name` in `gsm2tree_rs.py` and `_rust_str_lit` in `gsm2parser_rs.py` both serve as escapers for source names placed in Rust `//!` doc-comment backtick spans, but they encode different policies (backtick→apostrophe vs. full Rust string-literal escaping). Additionally, `RustCstGenerator._gen_header` and `RustParserGenerator._gen_header` are structurally identical except for the tool name string. Extract a shared `_escape_source_name` (doc-comment backtick context) and `_format_generated_header(tool_name, source_name)` helper to a common module (`shared_rs.py` or similar) so both generators use one escape policy and one header template. Location: `fltk/fegen/gsm2tree_rs.py` (`_escape_source_name`, `_gen_header`), `fltk/fegen/gsm2parser_rs.py` (`_gen_header`).
+
 ## `extend-children-owned`
 
 `extend_children(&Self)` clones every child Arc even though the donor node is immediately dropped after the call (inline-to-parent sub-expression and `+`/`*` loop paths). A consuming variant `extend_children_owned(other: Self)` using `Vec::append` would avoid the atomic inc+dec pairs per child on the parse hot path. Blocked on `gsm2tree_rs.py` adding the method to the generated CST node API. Location: `fltk/fegen/gsm2parser_rs.py` (`_gen_item_multiple`, `_gen_append_code`), `fltk/fegen/gsm2tree_rs.py` (generated `impl <Node>` blocks). Re-open only with profiling evidence.

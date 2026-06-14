@@ -333,7 +333,7 @@ def gen_rust_cst(
 
     grammar = _parse_grammar_raw(grammar_file)
     try:
-        gen = gsm2tree_rs.RustCstGenerator(grammar)
+        gen = gsm2tree_rs.RustCstGenerator(grammar, source_name=str(grammar_file))
     except ValueError as e:
         typer.echo(f"Error: {e}", err=True)
         raise typer.Exit(1) from e
