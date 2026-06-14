@@ -171,6 +171,8 @@ with the same `Cargo.toml`.
 
 ## FLTK's own test artifacts
 
-`tests/rust_cst_fixture/` and `tests/rust_cst_fegen/` follow this exact pattern and serve as
-working examples. Build them with `make build-test-user-ext` and `make build-fegen-rust-cst`.
+`tests/rust_cst_fixture/` follows this exact pattern and serves as a working example. Build it with `make build-test-user-ext`.
+`crates/fegen-rust/` (built via `make build-fegen-rust-cst`) is a more complete example: it
+includes a `.pyi` stub and demonstrates the `extension-module`/`python` feature split used
+to keep pyo3 out of non-Python builds.
 These are FLTK-internal; they are not the user build recipe.

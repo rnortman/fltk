@@ -1,6 +1,5 @@
 # This is a standalone crate intentionally excluded from the root workspace.
 # It builds as a separate maturin extension (see Makefile build-fegen-rust-cst).
-# Promoted from tests/rust_cst_fegen/ — canonical first-class fegen Rust artifact.
 [workspace]
 
 [package]

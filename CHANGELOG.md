@@ -19,8 +19,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
     any accessor returns the same Python object (`is`-stable); mutations propagate across
     all references and across the language boundary.
   - `fltk-cst-core` gains `Shared<T>` (pyo3-free newtype) and a canonical-wrapper registry.
-  - `make gencode` now regenerates `tests/rust_cst_fegen/src/cst.rs` so all five Rust
-    outputs stay in sync.
+  - `make gencode` regenerates all Rust outputs in sync (see `gencode` target in Makefile
+    for the full list; includes `crates/fegen-rust/src/cst.rs`,
+    `tests/rust_cst_fixture/src/cst.rs`, `tests/rust_poc_cst/src/cst.rs`,
+    `tests/rust_parser_fixture/src/cst.rs`, `tests/rust_parser_fixture/src/parser.rs`,
+    `tests/rust_parser_fixture/src/collision_cst.rs`,
+    `tests/rust_parser_fixture/src/collision_parser.rs`,
+    and `crates/fltk-cst-spike/src/cst.rs`).
 
 ### Fixed
 - Bazel rules now work when fltk is used as a submodule (use `cst_file.dirname` for output path)
