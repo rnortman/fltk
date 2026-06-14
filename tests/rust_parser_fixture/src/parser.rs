@@ -1639,7 +1639,7 @@ mod python_bindings {
         }
     }
 
-    pub fn register_classes(module: &Bound<'_, PyModule>) -> PyResult<()> {
+    pub fn register_classes(module: &Bound<'_, pyo3::types::PyModule>) -> PyResult<()> {
         module.add_class::<PyApplyResult>()?;
         module.add_class::<PyParser>()?;
         Ok(())

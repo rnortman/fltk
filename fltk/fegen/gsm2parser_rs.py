@@ -838,6 +838,16 @@ class RustParserGenerator:
     def _gen_python_bindings(self) -> str:
         """Generate the python-gated bindings block for the parser."""
         # Boilerplate skeleton: all non-parametric structure in one template string.
+        #
+        # Asymmetry note (load-bearing, do not change without re-analysing):
+        # The parser generator emits only fixed class names (PyParser, PyApplyResult), never
+        # rule-derived `PyX` structs.  Therefore the rule-name collision analysis that applies
+        # to cst.rs (where `pub struct Py{CN}` names can collide with pyo3 imports) does NOT
+        # apply here.  The `use pyo3::prelude::*` glob inside the nested `mod python_bindings`
+        # is intentionally retained — it is self-contained and cannot collide with rule-derived
+        # names.  See design-buildfix.md §2.4 which identifies this asymmetry explicitly.
+        # If a future change emits rule-derived names in parser.rs, this analysis must be
+        # revisited and the glob must be replaced with an explicit import list for that block.
         boilerplate = """\
 
 #[cfg(feature = "python")]
@@ -948,7 +958,7 @@ mod python_bindings {
         closing = """\
     }
 
-    pub fn register_classes(module: &Bound<'_, PyModule>) -> PyResult<()> {
+    pub fn register_classes(module: &Bound<'_, pyo3::types::PyModule>) -> PyResult<()> {
         module.add_class::<PyApplyResult>()?;
         module.add_class::<PyParser>()?;
         Ok(())

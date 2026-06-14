@@ -1,0 +1,19 @@
+load("@rules_rust//rust:defs.bzl", "rust_library")
+
+rust_library(
+    name = "fltk-cst-core",
+    srcs = glob(["src/**/*.rs"]),
+    # "python" is hardcoded here because all current Bazel consumers are PyO3 cdylibs.
+    # Cargo.toml documents that pure-Rust consumers can omit this feature to exclude pyo3
+    # entirely, but the Bazel build currently has no config_setting-based variant to express
+    # that.  If a pure-Rust Bazel consumer is ever added (e.g. a CLI tool or native test
+    # that uses CST data structures without Python), a separate target or select() over a
+    # config_setting will be needed.
+    crate_features = ["python"],
+    crate_name = "fltk_cst_core",
+    edition = "2021",
+    visibility = ["//visibility:public"],
+    deps = [
+        "@fltk_crates//:pyo3",
+    ],
+)

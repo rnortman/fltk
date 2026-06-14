@@ -182,9 +182,37 @@ class TestPreamble:
         assert (
             '#[cfg(feature = "python")]\nuse pyo3::exceptions::{PyIndexError, PyTypeError, PyValueError};' in poc_source
         )
-        assert '#[cfg(feature = "python")]\nuse pyo3::prelude::*;' in poc_source
-        assert '#[cfg(feature = "python")]\nuse pyo3::types::{PyList, PyTuple, PyType};' in poc_source
-        assert '#[cfg(feature = "python")]\nuse pyo3::PyTypeInfo;' in poc_source
+        # De-globbed explicit import: prelude is NOT a glob — explicit list replaces `use pyo3::prelude::*`.
+        # Robustness requirement: the glob would import an unenumerable set of names, making it
+        # impossible for the generator to guarantee all reserved-or-qualified checks are complete.
+        assert '#[cfg(feature = "python")]\nuse pyo3::prelude::*;' not in poc_source
+        explicit_prelude = (
+            '#[cfg(feature = "python")]\n'
+            "use pyo3::prelude::{Python, Py, Bound, IntoPyObject,\n"
+            "    PyAnyMethods, PyListMethods, PyModuleMethods, PyStringMethods, PyTypeMethods,\n"
+            "    pyclass, pymethods};"
+        )
+        assert explicit_prelude in poc_source
+        # PyAny, PyResult, PyRef are NOT imported unqualified — all emission sites use
+        # fully-qualified paths (pyo3::PyAny, pyo3::PyResult, pyo3::PyRef) so that grammar
+        # rules named "any"/"result"/"ref" can generate `pub struct PyAny/PyResult/PyRef` handles.
+        assert "use pyo3::PyAny" not in poc_source
+        assert "use pyo3::PyResult" not in poc_source
+        assert "use pyo3::PyRef" not in poc_source
+        # PyList, PyTuple, PyType, PyModule are still fully-qualified at call sites.
+        assert "use pyo3::types::{PyList, PyTuple, PyType};" not in poc_source
+        # PyTypeInfo is NOT imported unqualified: a grammar rule `type_info` would derive handle
+        # `PyTypeInfo` and collide with the import.  The single call site uses UFCS instead:
+        #   <EnumName as pyo3::PyTypeInfo>::type_object(py)
+        assert "use pyo3::PyTypeInfo;" not in poc_source
+        # Combined cfg gate for test-introspection-only imports (pyfunction, wrap_pyfunction).
+        # These must appear under the combined gate, not under the plain python gate.
+        assert (
+            '#[cfg(all(feature = "python", feature = "test-introspection"))]\n'
+            "use pyo3::prelude::{pyfunction, wrap_pyfunction};"
+        ) in poc_source
+        # pyfunction and wrap_pyfunction must NOT appear inside the plain python-only gate.
+        assert '#[cfg(feature = "python")]\nuse pyo3::prelude::{pyfunction' not in poc_source
         # These must NOT appear as unconditional imports
         assert "use pyo3::sync::GILOnceCell;" not in poc_source
         # get_source_text_type is no longer imported (span_to_pyobject handles the full path)
@@ -273,12 +301,13 @@ class TestPocGrammarLabels:
 
     def test_label_eq_method(self, poc_source: str) -> None:
         """__eq__ method must be emitted on label enums."""
-        assert "fn __eq__(&self, py: Python<'_>, other: &Bound<'_, PyAny>) -> PyResult<Py<PyAny>> {" in poc_source
+        eq_sig = "fn __eq__(&self, py: Python<'_>, other: &Bound<'_, pyo3::PyAny>) -> pyo3::PyResult<Py<pyo3::PyAny>> {"
+        assert eq_sig in poc_source
 
     def test_label_hash_method(self, poc_source: str) -> None:
         """__hash__ method must be emitted on label enums."""
         # Check for hand-written __hash__ that routes through PyString
-        assert "fn __hash__(&self, py: Python<'_>) -> PyResult<isize> {" in poc_source
+        assert "fn __hash__(&self, py: Python<'_>) -> pyo3::PyResult<isize> {" in poc_source
         assert "PyString::new(py, self.__repr__())" in poc_source
 
     def test_label_eq_uses_canonical_name_marker(self, poc_source: str) -> None:
@@ -322,14 +351,15 @@ class TestNodeStructure:
         assert "span: Py<PyAny>," not in poc_source
 
     def test_span_getter_emitted(self, poc_source: str) -> None:
-        """§2.2: explicit span getter returning fltk._native.Span (cross-cdylib via Py<PyAny>)."""
-        assert "fn span(&self, py: Python<'_>) -> PyResult<Py<PyAny>> {" in poc_source
+        """§2.2: explicit span getter returning fltk._native.Span (cross-cdylib via Py<pyo3::PyAny>)."""
+        assert "fn span(&self, py: Python<'_>) -> pyo3::PyResult<Py<pyo3::PyAny>> {" in poc_source
 
     def test_span_setter_emitted(self, poc_source: str) -> None:
         """§2.2: explicit span setter (cross-cdylib compatible via extract_span helper).
         Phase 1: handle is frozen, setter takes &self (mutation through RwLock).
         """
-        assert "fn set_span(&self, py: Python<'_>, value: &Bound<'_, PyAny>) -> PyResult<()> {" in poc_source
+        set_span_sig = "fn set_span(&self, py: Python<'_>, value: &Bound<'_, pyo3::PyAny>) -> pyo3::PyResult<()> {"
+        assert set_span_sig in poc_source
 
     def test_children_field_native_vec(self, poc_source: str) -> None:
         """§2.3: children field is a native Vec, not Py<PyList>."""
@@ -339,8 +369,12 @@ class TestNodeStructure:
         assert "#[pyo3(get)]\n    children:" not in poc_source
 
     def test_children_getter_emitted(self, poc_source: str) -> None:
-        """§2.3: explicit children getter rebuilds PyList from Vec."""
-        assert "fn children(&self, py: Python<'_>) -> PyResult<Py<PyList>> {" in poc_source
+        """§2.3: explicit children getter rebuilds PyList from Vec.
+
+        The return type uses the fully-qualified pyo3::types::PyList path to avoid
+        collision with grammar rules named 'list' generating `pub struct PyList`.
+        """
+        assert "fn children(&self, py: Python<'_>) -> pyo3::PyResult<Py<pyo3::types::PyList>> {" in poc_source
 
     def test_child_enum_emitted(self, poc_source: str) -> None:
         """§2.3: per-node child enum is emitted for each node class.
@@ -359,7 +393,7 @@ class TestNodeStructure:
     def test_label_classattr_present(self, poc_source: str) -> None:
         assert "#[classattr]" in poc_source
         assert "#[allow(non_snake_case)]" in poc_source
-        assert "fn Label(py: Python<'_>) -> PyResult<Py<PyAny>> {" in poc_source
+        assert "fn Label(py: Python<'_>) -> pyo3::PyResult<Py<pyo3::PyAny>> {" in poc_source
 
     def test_extend_children_emitted(self, poc_source: str) -> None:
         """§2.3/§2.5: extend_children method is emitted for each node class.
@@ -367,7 +401,7 @@ class TestNodeStructure:
         """
         assert "fn extend_children(" in poc_source
         # Phase 1: frozen handle uses &self; parameter is &PyHandle.
-        assert "fn extend_children(&self, _py: Python<'_>, other: &PyIdentifier) -> PyResult<()> {" in poc_source
+        assert "fn extend_children(&self, _py: Python<'_>, other: &PyIdentifier) -> pyo3::PyResult<()> {" in poc_source
 
     def test_get_span_type_helper_not_emitted(self, poc_source: str) -> None:
         """quality-1: helpers now in fltk-cst-core; no local helper or per-method init block."""
@@ -418,11 +452,16 @@ class TestNodeDebugDrop:
 
 class TestRegisterClasses:
     def test_register_classes_function_present(self, poc_source: str) -> None:
-        """AC-5: pub fn register_classes is present and gated with #[cfg(feature = "python")]."""
-        assert (
-            '#[cfg(feature = "python")]\npub fn register_classes(module: &Bound<\'_, PyModule>) -> PyResult<()> {'
-            in poc_source
+        """AC-5: pub fn register_classes is present and gated with #[cfg(feature = "python")].
+
+        The PyModule parameter uses the fully-qualified pyo3::types::PyModule path to avoid
+        collision with grammar rules named "module" generating `pub struct PyModule`.
+        """
+        register_classes_sig = (
+            '#[cfg(feature = "python")]\n'
+            "pub fn register_classes(module: &Bound<'_, pyo3::types::PyModule>) -> pyo3::PyResult<()> {"
         )
+        assert register_classes_sig in poc_source
 
     def test_register_classes_adds_identifier_label(self, poc_source: str) -> None:
         # Phase 2: Rust name is IdentifierLabel; Python class name "Identifier_Label" preserved via pyclass(name=...).
@@ -606,10 +645,11 @@ class TestFegenGrammar:
             )
 
     def test_register_classes_present(self, fegen_source: str) -> None:
-        assert (
-            '#[cfg(feature = "python")]\npub fn register_classes(module: &Bound<\'_, PyModule>) -> PyResult<()> {'
-            in fegen_source
+        register_classes_sig = (
+            '#[cfg(feature = "python")]\n'
+            "pub fn register_classes(module: &Bound<'_, pyo3::types::PyModule>) -> pyo3::PyResult<()> {"
         )
+        assert register_classes_sig in fegen_source
 
     def test_all_14_classes_registered(self, fegen_source: str) -> None:
         """AC-7: all 14 classes have add_class calls in register_classes.
@@ -630,7 +670,15 @@ class TestFegenGrammar:
             '#[cfg(feature = "python")]\nuse fltk_cst_core::{extract_span, get_span_type, span_to_pyobject};'
             in fegen_source
         )
-        assert '#[cfg(feature = "python")]\nuse pyo3::prelude::*;' in fegen_source
+        # De-globbed: explicit import list, not glob
+        assert '#[cfg(feature = "python")]\nuse pyo3::prelude::*;' not in fegen_source
+        explicit_prelude = (
+            '#[cfg(feature = "python")]\n'
+            "use pyo3::prelude::{Python, Py, Bound, IntoPyObject,\n"
+            "    PyAnyMethods, PyListMethods, PyModuleMethods, PyStringMethods, PyTypeMethods,\n"
+            "    pyclass, pymethods};"
+        )
+        assert explicit_prelude in fegen_source
         assert "use pyo3::sync::GILOnceCell;" not in fegen_source
         assert "use crate::UNKNOWN_SPAN;" not in fegen_source
         assert "UNKNOWN_SPAN_CACHE" not in fegen_source
@@ -680,7 +728,15 @@ class TestMinimalGrammar:
             '#[cfg(feature = "python")]\nuse fltk_cst_core::{extract_span, get_span_type, span_to_pyobject};'
             in minimal_source
         )
-        assert '#[cfg(feature = "python")]\nuse pyo3::prelude::*;' in minimal_source
+        # De-globbed: explicit import list, not glob
+        assert '#[cfg(feature = "python")]\nuse pyo3::prelude::*;' not in minimal_source
+        explicit_prelude = (
+            '#[cfg(feature = "python")]\n'
+            "use pyo3::prelude::{Python, Py, Bound, IntoPyObject,\n"
+            "    PyAnyMethods, PyListMethods, PyModuleMethods, PyStringMethods, PyTypeMethods,\n"
+            "    pyclass, pymethods};"
+        )
+        assert explicit_prelude in minimal_source
         assert "use pyo3::sync::GILOnceCell;" not in minimal_source
         assert "use crate::UNKNOWN_SPAN;" not in minimal_source
         assert "UNKNOWN_SPAN_CACHE" not in minimal_source
@@ -831,11 +887,12 @@ class TestNodeKindEnum:
 
     def test_node_kind_eq_method(self, poc_source: str) -> None:
         """NodeKind has a hand-written __eq__ reading _fltk_canonical_name off the operand."""
-        assert "fn __eq__(&self, py: Python<'_>, other: &Bound<'_, PyAny>) -> PyResult<Py<PyAny>> {" in poc_source
+        eq_sig = "fn __eq__(&self, py: Python<'_>, other: &Bound<'_, pyo3::PyAny>) -> pyo3::PyResult<Py<pyo3::PyAny>> {"
+        assert eq_sig in poc_source
 
     def test_node_kind_hash_method(self, poc_source: str) -> None:
         """NodeKind has a hand-written __hash__ routing through PyString::hash."""
-        assert "fn __hash__(&self, py: Python<'_>) -> PyResult<isize> {" in poc_source
+        assert "fn __hash__(&self, py: Python<'_>) -> pyo3::PyResult<isize> {" in poc_source
 
     def test_node_kind_registered_first(self, poc_source: str) -> None:
         """NodeKind must be registered before node structs in register_classes."""
@@ -1216,8 +1273,11 @@ class TestMutatorsEmittedRsPymethods:
         assert "fn clear(" in poc_source
 
     def test_insert_takes_pyany_index(self, poc_source: str) -> None:
-        """insert takes index as &Bound<'_, PyAny> (not i64), for __index__ semantics."""
-        assert "fn insert(\n        &self,\n        py: Python<'_>,\n        index: &Bound<'_, PyAny>," in poc_source
+        """insert takes index as &Bound<'_, pyo3::PyAny> (not i64), for __index__ semantics."""
+        insert_sig_start = (
+            "fn insert(\n        &self,\n        py: Python<'_>,\n        index: &Bound<'_, pyo3::PyAny>,"
+        )
+        assert insert_sig_start in poc_source
 
     def test_insert_pyo3_signature(self, poc_source: str) -> None:
         """insert has #[pyo3(signature = (index, child, label = None))]."""
@@ -1228,12 +1288,15 @@ class TestMutatorsEmittedRsPymethods:
         assert "#[pyo3(signature = (index, child, label = None))]\n    fn replace_at(" in poc_source
 
     def test_remove_at_returns_pyresult_pyobject(self, poc_source: str) -> None:
-        """remove_at returns PyResult<Py<PyAny>> (tuple of label + child)."""
-        assert "fn remove_at(&self, py: Python<'_>, index: &Bound<'_, PyAny>) -> PyResult<Py<PyAny>>" in poc_source
+        """remove_at returns pyo3::PyResult<Py<pyo3::PyAny>> (tuple of label + child)."""
+        remove_at_sig = (
+            "fn remove_at(&self, py: Python<'_>, index: &Bound<'_, pyo3::PyAny>) -> pyo3::PyResult<Py<pyo3::PyAny>>"
+        )
+        assert remove_at_sig in poc_source
 
     def test_clear_returns_pyresult_unit(self, poc_source: str) -> None:
-        """clear returns PyResult<()>."""
-        assert "fn clear(&self, _py: Python<'_>) -> PyResult<()>" in poc_source
+        """clear returns pyo3::PyResult<()>."""
+        assert "fn clear(&self, _py: Python<'_>) -> pyo3::PyResult<()>" in poc_source
 
     def test_insert_index_normalization_present(self, poc_source: str) -> None:
         """insert normalizes index via operator.index (TypeError for non-indexable, not AttributeError)."""
@@ -1574,6 +1637,26 @@ class TestReservedClassNameRejection:
             ("cst_error", "CstError", "CstError"),
             ("drop_worklist_item", "DropWorklistItem", "DropWorklistItem"),
             ("eq_worklist_item", "EqWorklistItem", "EqWorklistItem"),
+            # PyO3 name guards — Half 1 (Py-prefixed): grammar rules whose class name derives a
+            # `Py{CN}` handle colliding with a pyo3 name imported UNQUALIFIED.
+            # Not reserved: "list"/"tuple"/"type"/"module"/"any"/"result"/"ref" — those pyo3 names
+            # are fully-qualified at all emission sites, so their Py{CN} handles are safe.
+            ("index_error", "IndexError", "pyo3"),
+            ("type_error", "TypeError", "pyo3"),
+            ("value_error", "ValueError", "pyo3"),
+            # PyO3 name guards — Half 2 (non-Py-prefixed): grammar rules whose bare `{CN}` data
+            # struct collides with a name in the explicit `use pyo3::prelude::{...}` import list.
+            # `bound` → CN=Bound, collides with pyo3::Bound imported unqualified.
+            ("bound", "Bound", "pyo3"),
+            # `py` → CN=Py, collides with pyo3::Py imported unqualified.
+            ("py", "Py", "pyo3"),
+            # `python` → CN=Python, collides with pyo3::Python imported unqualified.
+            ("python", "Python", "pyo3"),
+            # `into_py_object` → CN=IntoPyObject, collides with pyo3::IntoPyObject imported unqualified.
+            ("into_py_object", "IntoPyObject", "pyo3"),
+            # Note: `from_py_object` → CN=FromPyObject is NOT reserved: FromPyObject is not imported
+            # unqualified in the generated cst.rs preamble (the from_py_object pyclass param is handled
+            # internally by the pyo3 macro and does not require FromPyObject in scope).
         ],
     )
     def test_reserved_class_name_rejected(self, rule_name: str, expected_class: str, collision_substring: str) -> None:
@@ -1592,16 +1675,76 @@ class TestReservedClassNameRejection:
         assert gen is not None
 
     @pytest.mark.parametrize(
-        ("rule_name", "expected_class_name"),
-        [("parser", "Parser"), ("apply_result", "ApplyResult")],
+        ("rule_name", "expected_handle", "collision_substring"),
+        [
+            # Direct check (per-rule): CN = PyAnyMethods falls into _RESERVED_CLASS_NAMES_SEEDED.
+            ("py_any_methods", "PyAnyMethods", "pyo3"),
+            ("py_list_methods", "PyListMethods", "pyo3"),
+            ("py_module_methods", "PyModuleMethods", "pyo3"),
+            ("py_string_methods", "PyStringMethods", "pyo3"),
+            ("py_type_methods", "PyTypeMethods", "pyo3"),
+        ],
     )
-    def test_parser_apply_result_rules_accepted(self, rule_name: str, expected_class_name: str) -> None:
-        """Rules named 'parser'/'apply_result' are NOT reserved: their CST classes coexist in the cst submodule."""
+    def test_seeded_reserved_cn_rejected_directly(
+        self, rule_name: str, expected_handle: str, collision_substring: str
+    ) -> None:
+        """Rules whose CN is in _RESERVED_CLASS_NAMES_SEEDED are rejected by the per-rule check."""
+        grammar = _make_single_rule_grammar(rule_name)
+        with pytest.raises(ValueError, match=rule_name) as exc_info:
+            RustCstGenerator(grammar)
+        error_text = str(exc_info.value)
+        assert expected_handle in error_text, f"Error should name the reserved handle {expected_handle!r}: {error_text}"
+        assert collision_substring in error_text, f"Error should name collision target: {error_text}"
+
+    def test_seeded_reserved_handle_rejected_cross_rule(self) -> None:
+        """Rule 'any_methods' (handle=PyAnyMethods) is rejected because PyAnyMethods is seeded in claims."""
+        # any_methods → CN=AnyMethods, handle=PyAnyMethods.
+        # _RESERVED_CLASS_NAMES_SEEDED seeds PyAnyMethods into claims, so the cross-rule check fires.
+        grammar = _make_single_rule_grammar("any_methods")
+        with pytest.raises(ValueError) as exc_info:
+            RustCstGenerator(grammar)
+        error_text = str(exc_info.value)
+        assert "PyAnyMethods" in error_text, f"Error must name PyAnyMethods: {error_text}"
+        assert "pyo3" in error_text, f"Error must mention pyo3 import: {error_text}"
+
+    def test_type_info_rule_accepted(self) -> None:
+        """Rule 'type_info' is NOT reserved: PyTypeInfo is no longer imported unqualified."""
+        # The _label_classattr emission uses UFCS (<EnumName as pyo3::PyTypeInfo>::type_object)
+        # so `use pyo3::PyTypeInfo;` was removed, making type_info a legal rule name.
+        grammar = _make_single_rule_grammar("type_info")
+        gen = RustCstGenerator(grammar)
+        assert gen is not None
+
+    @pytest.mark.parametrize(
+        ("rule_name", "expected_class_name"),
+        [
+            ("parser", "Parser"),
+            ("apply_result", "ApplyResult"),
+            # "list"/"tuple"/"type" are NOT reserved: the generated preamble uses fully-qualified
+            # pyo3::types::PyList/PyTuple/PyType paths, so `pub struct PyList` etc. are safe.
+            ("list", "List"),
+            ("tuple", "Tuple"),
+            ("type", "Type"),
+            # "module" is NOT reserved: register_classes uses pyo3::types::PyModule qualified.
+            ("module", "Module"),
+            # "any" is NOT reserved: PyAny is now fully-qualified at all emission sites
+            # (pyo3::PyAny), so `pub struct PyAny` from rule "any" does not collide.
+            ("any", "Any"),
+            # "err"/"result" are NOT reserved: PyErr/PyResult are now fully-qualified at
+            # all emission sites, so `pub struct PyErr/PyResult` from these rules are safe.
+            ("err", "Err"),
+            ("result", "Result"),
+            # "from_py_object" is NOT reserved: FromPyObject is not imported unqualified
+            # (from_py_object in #[pyclass(...)] is a macro param, not a use-site type).
+            ("from_py_object", "FromPyObject"),
+        ],
+    )
+    def test_rules_not_reserved_are_accepted(self, rule_name: str, expected_class_name: str) -> None:
+        """Rules whose class name does NOT collide with reserved names are accepted and emitted correctly."""
         grammar = _make_single_rule_grammar(rule_name)
         gen = RustCstGenerator(grammar)
         src = gen.generate()
-        # The generated cst source must contain the rule's pyclass name handle,
-        # proving the rule's CST class is correctly emitted (not silently renamed or dropped).
+        # The generated cst source must contain the rule's pyclass name handle.
         assert f'name = "{expected_class_name}"' in src, (
             f"Expected pyclass name = {expected_class_name!r} in generated cst source"
         )
@@ -2223,3 +2366,32 @@ class TestGeneratePyiConformance:
             f"Per-class conformance failed: at least one stub class does not satisfy its "
             f"protocol counterpart without a cast.\nErrors: {errors}"
         )
+
+
+# ---------------------------------------------------------------------------
+# RustParserGenerator: register_classes signature
+# ---------------------------------------------------------------------------
+
+
+class TestRustParserRegisterClasses:
+    """register_classes in parser.rs must use fully-qualified pyo3::types::PyModule.
+
+    The parser generator uses `use pyo3::prelude::*` inside the python_bindings mod (safe
+    because the parser emits only fixed names PyParser/PyApplyResult, never rule-derived PyX).
+    But register_classes' parameter type must still be pyo3::types::PyModule (qualified) to
+    match fltk-cst-core's register_submodule signature.
+    """
+
+    def test_register_classes_signature_uses_qualified_pymodule(self) -> None:
+        """register_classes uses pyo3::types::PyModule (qualified), not bare PyModule."""
+        from fltk.fegen.gsm2parser_rs import RustParserGenerator  # noqa: PLC0415
+
+        grammar = _make_single_rule_grammar("my_rule")
+        gen = RustParserGenerator(grammar)
+        src = gen.generate()
+        expected_sig = "pub fn register_classes(module: &Bound<'_, pyo3::types::PyModule>) -> PyResult<()> {"
+        if expected_sig not in src:
+            idx = src.find("register_classes")
+            snippet = src[idx : idx + 120] if idx >= 0 else "(not found)"
+            msg = f"parser.rs register_classes must use qualified pyo3::types::PyModule. Found: {snippet}"
+            raise AssertionError(msg)

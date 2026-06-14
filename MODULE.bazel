@@ -2,9 +2,8 @@ module(
     name = "fltk",
 )
 
-# TODO(bazel-rules-rust): Add rules_rust for building the PyO3 extension via Bazel.
-
 bazel_dep(name = "rules_python", version = "1.5.0")
+bazel_dep(name = "rules_rust", version = "0.70.0")
 
 python = use_extension("@rules_python//python/extensions:python.bzl", "python")
 python.toolchain(
@@ -19,3 +18,33 @@ pip.parse(
     requirements_lock = "//:requirements_lock.txt",
 )
 use_repo(pip, "pypi")
+
+# Third-party Rust dependencies (pyo3, regex-automata, and transitive graph).
+# This hub is module-private: FLTK's macros reference it as internal labels.
+# Clockwork and other consumers do NOT need a use_repo for this hub.
+#
+# Membership note: `from_cargo` seeds from the workspace root Cargo.toml, whose
+# [workspace] members include ".", "crates/fltk-cst-core", "crates/fltk-cst-spike",
+# and "crates/fltk-parser-core".  fltk-cst-spike IS included as a workspace member
+# and its transitive deps appear in this hub.  The tests/* fixture crates have their
+# own [workspace] declarations and are genuinely excluded.
+# TODO(bazel-cst-spike-hub): if fltk-cst-spike acquires large or conflicting deps,
+# consider excluding it from the workspace root or using a dedicated minimal manifest.
+crate = use_extension("@rules_rust//crate_universe:extensions.bzl", "crate")
+crate.from_cargo(
+    name = "fltk_crates",
+    cargo_lockfile = "//:Cargo.lock",
+    manifests = [
+        "//:Cargo.toml",
+        "//crates/fltk-cst-core:Cargo.toml",
+        "//crates/fltk-parser-core:Cargo.toml",
+    ],
+    # TODO(verify-pyo3-ext-module): confirm that the `extension-module` feature is
+    # active on the @fltk_crates//:pyo3 target after crate_universe resolution.
+    # In crate_universe `from_cargo`, pyo3's extension-module feature should be
+    # activated via fltk-native's `default = ["extension-module"]` in root Cargo.toml.
+    # Verify empirically at spike time with `bazel build //:native`; if pyo3 links
+    # libpython the feature is missing and a `crate.annotation(crate = "pyo3",
+    # crate_features = ["extension-module"])` annotation is needed here.
+)
+use_repo(crate, "fltk_crates")

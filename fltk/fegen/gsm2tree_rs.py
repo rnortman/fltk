@@ -39,7 +39,7 @@ _RESERVED_LABELS: dict[str, str] = {
 # The cross-rule check does NOT seed reserved names into the claims dict, relying on the
 # invariant below (machine-checked at module load) that no reserved name can equal a
 # derived per-rule identifier (Py{CN}, {CN}Child, {CN}Label).  If a future reserved name
-# breaks that invariant (e.g. "PyNode"), it must also be seeded into claims.
+# breaks that invariant it must also be seeded into claims.
 _RESERVED_CLASS_NAMES: dict[str, str] = {
     "NodeKind": "the generated NodeKind enum",
     "Span": "fltk_cst_core::Span (imported by generated cst.rs and parser.rs)",
@@ -47,13 +47,93 @@ _RESERVED_CLASS_NAMES: dict[str, str] = {
     "CstError": "fltk_cst_core::CstError (imported by generated cst.rs)",
     "DropWorklistItem": "the generated DropWorklistItem drop-worklist enum",
     "EqWorklistItem": "the generated EqWorklistItem eq-worklist enum",
+    # PyO3 name collisions — two collision surfaces:
+    #
+    # Half 1: the rule-derived `Py{CN}` handle vs. Py-prefixed pyo3 names.
+    # PyAny, PyResult, PyRef are now used at emission sites via fully-qualified paths
+    # (pyo3::PyAny, pyo3::PyResult, pyo3::PyRef) so they are NOT imported unqualified
+    # and do not collide; grammar rules named "any"/"result"/"ref" are therefore
+    # NOT reserved for this reason.
+    # PyList, PyTuple, PyType, PyModule are also fully-qualified at emission sites.
+    #
+    # Unqualified Py-prefixed imports from pyo3::exceptions (still unqualified):
+    "IndexError": "pyo3::exceptions::PyIndexError (unqualified import in generated cst.rs preamble)",
+    "TypeError": "pyo3::exceptions::PyTypeError (unqualified import in generated cst.rs preamble)",
+    "ValueError": "pyo3::exceptions::PyValueError (unqualified import in generated cst.rs preamble)",
+    #
+    # Half 2: the bare `{CN}` data struct vs. non-Py-prefixed pyo3::prelude names.
+    # The generated preamble replaces `use pyo3::prelude::*` with an explicit import list.
+    # Non-Py-prefixed names in that list (Py-prefixed types are qualified at emission sites)
+    # can collide with bare `pub struct {CN}` if a rule derives that CN. These are reserved:
+    "Bound": "pyo3::Bound (imported unqualified from pyo3::prelude in generated cst.rs preamble)",
+    "Py": "pyo3::Py (imported unqualified from pyo3::prelude in generated cst.rs preamble)",
+    "Python": "pyo3::Python (imported unqualified from pyo3::prelude in generated cst.rs preamble)",
+    "IntoPyObject": "pyo3::IntoPyObject (imported unqualified from pyo3::prelude in generated cst.rs preamble)",
+    # Note: FromPyObject is NOT imported unqualified in the generated preamble.
+    # The from_py_object pyclass attribute parameter is handled internally by the pyo3 proc-macro;
+    # it does not require FromPyObject to be in scope at the call site.
 }
 
-# Machine-checked: no reserved name may start with "Py", end with "Child", or end with "Label".
-# The cross-rule claims check skips seeding reserved names on this basis; a violation here
-# means a new reserved name could shadow a derived per-rule identifier without being detected.
+# Reserved names that ARE in Py{CN} handle form (Py + uppercase letter).
+# These must be seeded into the cross-rule claims dict so that a rule whose handle name
+# matches them is reported as a collision rather than silently succeeding.
+# Each entry is: reserved_class_name -> description (same shape as _RESERVED_CLASS_NAMES).
+# The generator seeds these into claims with family="pyo3 method trait import" so the
+# cross-rule check can emit a clear diagnostic when a rule's handle would collide.
+#
+# PyO3 method traits: imported unqualified so their methods are available via method syntax.
+# A rule whose CN would produce a handle `PyX` colliding with one of these is rejected.
+_RESERVED_CLASS_NAMES_SEEDED: dict[str, str] = {
+    # pyo3::prelude re-exports method traits under these names:
+    "PyAnyMethods": (
+        "pyo3::PyAnyMethods (unqualified method trait import; "
+        "needed for .extract()/.is_instance_of()/.try_iter()/etc. on Bound<_, PyAny>)"
+    ),
+    "PyListMethods": (
+        "pyo3::types::PyListMethods (unqualified method trait import; needed for .append() on pyo3::types::PyList)"
+    ),
+    "PyModuleMethods": (
+        "pyo3::types::PyModuleMethods (unqualified method trait import; "
+        "needed for .add_class()/.add_function() on Bound<_, PyModule>)"
+    ),
+    "PyStringMethods": (
+        "pyo3::types::PyStringMethods (unqualified method trait import; "
+        "needed for .to_string_lossy() on pyo3::Bound<_, PyString>)"
+    ),
+    "PyTypeMethods": (
+        "pyo3::types::PyTypeMethods (unqualified method trait import; needed for .name() on pyo3::Bound<_, PyType>)"
+    ),
+}
+
+# Machine-checked: no name in _RESERVED_CLASS_NAMES may match the Py{CN} handle pattern,
+# or end with "Child" or "Label".  The cross-rule claims check skips seeding those names
+# on this basis; a violation means a new reserved name could shadow a derived per-rule
+# identifier without being detected.
+# Names in _RESERVED_CLASS_NAMES_SEEDED ARE in Py{CN} form and are seeded into claims
+# explicitly (they bypass this check).
+# The Py{CN} handle pattern is `Py` followed by an uppercase letter (snake_to_upper_camel
+# always starts CN with uppercase, so valid handles are `PyUppercaseX...`).  Names like
+# "Py" (len==2, no third char) or "Python" (third char `t` is lowercase) are NOT valid
+# Py{CN} handles and are exempt from this check even though they start with "Py".
 # Explicit if/raise (not `assert`) so the invariant survives python -O / PYTHONOPTIMIZE.
-_bad_reserved = [n for n in _RESERVED_CLASS_NAMES if n.startswith("Py") or n.endswith("Child") or n.endswith("Label")]
+_PY_PREFIX_LEN = len("Py")
+_bad_reserved = [
+    n
+    for n in _RESERVED_CLASS_NAMES
+    if (len(n) > _PY_PREFIX_LEN and n.startswith("Py") and n[_PY_PREFIX_LEN].isupper())
+    or n.endswith("Child")
+    or n.endswith("Label")
+]
+# Also check _RESERVED_CLASS_NAMES_SEEDED: entries there ARE Py{CN}-form (that is their purpose),
+# but they must NOT end with "Child" or "Label" — those suffixes would shadow derived per-rule
+# identifiers and require special seeding logic beyond what the claims-seeding loop provides.
+_bad_reserved_seeded = [n for n in _RESERVED_CLASS_NAMES_SEEDED if n.endswith("Child") or n.endswith("Label")]
+if _bad_reserved_seeded:
+    _msg_seeded = (
+        f"Seeded reserved class name(s) {_bad_reserved_seeded!r} end with 'Child' or 'Label'; "
+        "these suffixes are derived per-rule identifiers and cannot be safely seeded into claims"
+    )
+    raise RuntimeError(_msg_seeded)
 if _bad_reserved:
     _msg = (
         f"Reserved class name(s) {_bad_reserved!r} violate the Py/Child/Label invariant; "
@@ -98,8 +178,8 @@ class RustCstGenerator:
                 msg = f"Rule name {rule.name!r} is not a valid identifier (must match {_IDENTIFIER_RE.pattern!r})"
                 raise ValueError(msg)
             class_name = self._py_gen.class_name_for_rule_node(rule.name)
-            if class_name in _RESERVED_CLASS_NAMES:
-                collision_target = _RESERVED_CLASS_NAMES[class_name]
+            collision_target = _RESERVED_CLASS_NAMES.get(class_name) or _RESERVED_CLASS_NAMES_SEEDED.get(class_name)
+            if collision_target:
                 msg = f"Rule {rule.name!r} derives class name {class_name!r}, which collides with {collision_target}"
                 raise ValueError(msg)
             for alt in rule.alternatives:
@@ -137,7 +217,12 @@ class RustCstGenerator:
         trivia_is_auto_added = gsm.TRIVIA_RULE_NAME not in grammar.identifiers
 
         # claims: ident -> list of (rule_name_for_message, family_description)
-        claims: dict[str, list[tuple[str, str]]] = {}
+        # Seed the seeded-reserved names (Py-prefixed pyo3 method traits) first so that
+        # a rule whose handle name collides with them is detected by the cross-rule check.
+        claims: dict[str, list[tuple[str, str]]] = {
+            name: [("(pyo3 import)", f"pyo3 method trait import: {desc}")]
+            for name, desc in _RESERVED_CLASS_NAMES_SEEDED.items()
+        }
         for rule in self.grammar.rules:
             cn = self._py_gen.class_name_for_rule_node(rule.name)
             rule_label = (
@@ -386,11 +471,48 @@ class RustCstGenerator:
             '#[cfg(feature = "python")]\n'
             "use pyo3::exceptions::{PyIndexError, PyTypeError, PyValueError};\n"
             '#[cfg(feature = "python")]\n'
-            "use pyo3::prelude::*;\n"
-            '#[cfg(feature = "python")]\n'
-            "use pyo3::types::{PyList, PyTuple, PyType};\n"
-            '#[cfg(feature = "python")]\n'
-            "use pyo3::PyTypeInfo;\n"
+            # Replace `use pyo3::prelude::*` (glob) with an explicit import list.
+            # Robustness rationale: a glob import makes the full set of imported names
+            # unenumerable by the generator, preventing the reserved-or-qualified check
+            # from covering non-Py-prefixed names like Bound/Py/Python that appear in
+            # the prelude and can collide with bare `pub struct {CN}` data structs.
+            # With the explicit list, every unqualified name is owned data for the generator.
+            #
+            # Names NOT in this list (used via fully-qualified paths instead, to avoid
+            # Py{CN} handle collisions with grammar rules named X → pub struct PyX):
+            #   - pyo3::PyAny   — all emission sites use `pyo3::PyAny` path
+            #   - pyo3::PyResult — all emission sites use `pyo3::PyResult` path
+            #   - pyo3::PyRef   — all emission sites use `pyo3::PyRef` path
+            #   - pyo3::types::PyList/PyTuple/PyType/PyModule — always fully-qualified
+            # Non-Py-prefixed names (Bound, Py, Python, IntoPyObject, FromPyObject) can
+            # collide with bare `pub struct {CN}` and are in _RESERVED_CLASS_NAMES.
+            # Py-prefixed method traits (PyAnyMethods, PyListMethods, PyModuleMethods)
+            # must be imported for method syntax (.extract()/.add_class()/etc.) to work;
+            # their CN-form names (from rules `py_any_methods` etc.) are in
+            # _RESERVED_CLASS_NAMES_SEEDED and seeded into the cross-rule claims check.
+            # All items needed from pyo3::prelude, listed explicitly (replacing `use pyo3::prelude::*`).
+            # Types (type namespace): reserved or qualified above to avoid bare-{CN}-struct collisions.
+            # Method traits (type namespace): reserved via _RESERVED_CLASS_NAMES_SEEDED to protect
+            #   against rule-name collisions.
+            # Proc-macro attributes (macro namespace, separate from type namespace): pyclass/pymethods
+            #   cannot collide with rule-derived struct/enum names and need no reservation.
+            # Note: FromPyObject is NOT imported here — it is not needed in the generated body
+            #   (from_py_object in #[pyclass(...)] is a macro param handled internally).
+            # Note: pyfunction and wrap_pyfunction are only needed for the test-introspection feature;
+            #   they are imported under a combined cfg gate below.
+            "use pyo3::prelude::{Python, Py, Bound, IntoPyObject,\n"
+            "    PyAnyMethods, PyListMethods, PyModuleMethods, PyStringMethods, PyTypeMethods,\n"
+            "    pyclass, pymethods};\n"
+            # PyTypeInfo is NOT imported unqualified: it is a Py-prefixed trait, so a grammar rule
+            # named `type_info` would derive handle `PyTypeInfo` and collide.  The single call site
+            # that needs it (_label_classattr) uses the fully-qualified UFCS form instead:
+            #   <EnumName as pyo3::PyTypeInfo>::type_object(py)
+            # This is consistent with how PyAny/PyResult/PyRef are handled above.
+            '#[cfg(all(feature = "python", feature = "test-introspection"))]\n'
+            # pyfunction and wrap_pyfunction are only used by the _registry_snapshot pyfunction
+            # (which itself is cfg-gated on test-introspection).  Putting the imports under the
+            # same gate prevents "unused import" warnings when test-introspection is disabled.
+            "use pyo3::prelude::{pyfunction, wrap_pyfunction};\n"
             "\n"
         )
 
@@ -423,7 +545,9 @@ class RustCstGenerator:
         salted string hash is required for cross-backend hash agreement (AC4); amortizing this via
         PyOnceLock is deferred.
         """
-        lines.append("    fn __eq__(&self, py: Python<'_>, other: &Bound<'_, PyAny>) -> PyResult<Py<PyAny>> {")
+        lines.append(
+            "    fn __eq__(&self, py: Python<'_>, other: &Bound<'_, pyo3::PyAny>) -> pyo3::PyResult<Py<pyo3::PyAny>> {"
+        )
         lines.append(f"        if let Ok(other_kind) = other.extract::<{type_name}>() {{")
         lines.append("            return Ok((self == &other_kind).into_pyobject(py)?.to_owned().unbind().into_any());")
         lines.append("        }")
@@ -437,7 +561,7 @@ class RustCstGenerator:
         lines.append("        Ok(py.NotImplemented())")
         lines.append("    }")
         lines.append("")
-        lines.append("    fn __hash__(&self, py: Python<'_>) -> PyResult<isize> {")
+        lines.append("    fn __hash__(&self, py: Python<'_>) -> pyo3::PyResult<isize> {")
         lines.append("        pyo3::types::PyAnyMethods::hash(")
         lines.append("            pyo3::types::PyString::new(py, self.__repr__()).as_any()")
         lines.append("        )")
@@ -749,7 +873,7 @@ class RustCstGenerator:
         # return the same Python handle (is-stable identity — resolves
         # TODO(rust-cst-child-node-identity)).
         py_param = "py" if (child_classes or has_span) else "_py"
-        lines.append(f"    fn to_pyobject(&self, {py_param}: Python<'_>) -> PyResult<Py<PyAny>> {{")
+        lines.append(f"    fn to_pyobject(&self, {py_param}: Python<'_>) -> pyo3::PyResult<Py<pyo3::PyAny>> {{")
         lines.append("        match self {")
         if has_span:
             lines.append("            Self::Span(s) => {")
@@ -776,9 +900,9 @@ class RustCstGenerator:
         extract_span_type_param = "span_type" if has_span else "_span_type"
         lines.append("    fn extract_from_pyobject(")
         lines.append(f"        {extract_py_param}: Python<'_>,")
-        lines.append("        obj: &Bound<'_, PyAny>,")
-        lines.append(f"        {extract_span_type_param}: &Bound<'_, PyType>,")
-        lines.append("    ) -> PyResult<Self> {")
+        lines.append("        obj: &Bound<'_, pyo3::PyAny>,")
+        lines.append(f"        {extract_span_type_param}: &Bound<'_, pyo3::types::PyType>,")
+        lines.append("    ) -> pyo3::PyResult<Self> {")
         if has_span:
             # Try Span first (handles cross-cdylib span)
             lines.append("        // Try Span (terminal child) first — handles cross-cdylib span instances.")
@@ -788,7 +912,7 @@ class RustCstGenerator:
         for child_cls in child_classes:
             py_handle = self.py_handle_name(child_cls)
             lines.append(f"        if obj.is_instance_of::<{py_handle}>() {{")
-            lines.append(f"            let handle: PyRef<{py_handle}> = obj.extract()?;")
+            lines.append(f"            let handle: pyo3::PyRef<{py_handle}> = obj.extract()?;")
             lines.append("            let shared = handle.inner.clone();")
             lines.append("            let addr = shared.arc_ptr();")
             lines.append("            // Hand-in: register this Python handle as canonical for its Shared.")
@@ -1060,7 +1184,7 @@ class RustCstGenerator:
         lines.append("    /// looking up the registry first so the same handle is returned")
         lines.append("    /// for the same `Shared` allocation.")
         lines.append(
-            f"    pub fn to_py_canonical(py: Python<'_>, s: &Shared<{class_name}>) -> PyResult<Py<{py_handle}>> {{"
+            f"    pub fn to_py_canonical(py: Python<'_>, s: &Shared<{class_name}>) -> pyo3::PyResult<Py<{py_handle}>> {{"  # noqa: E501
         )
         lines.append("        let addr = s.arc_ptr();")
         lines.append("        let obj = registry::get_or_insert_with(py, addr, || {")
@@ -1114,7 +1238,7 @@ class RustCstGenerator:
         return [
             "    #[new]",
             "    #[pyo3(signature = (*, span = None))]",
-            f"    fn new(py: Python<'_>, span: Option<&Bound<'_, PyAny>>) -> PyResult<Py<{py_handle}>> {{",
+            f"    fn new(py: Python<'_>, span: Option<&Bound<'_, pyo3::PyAny>>) -> pyo3::PyResult<Py<{py_handle}>> {{",
             "        let native_span = match span {",
             "            Some(s) => extract_span(py, s)?,",
             "            None => Span::unknown(),",
@@ -1139,7 +1263,7 @@ class RustCstGenerator:
         # take &self — mutation goes through the inner RwLock.
         return [
             "    #[getter]",
-            "    fn span(&self, py: Python<'_>) -> PyResult<Py<PyAny>> {",
+            "    fn span(&self, py: Python<'_>) -> pyo3::PyResult<Py<pyo3::PyAny>> {",
             "        // Snapshot the span under the read lock, then drop the guard before",
             "        // calling span_to_pyobject — which performs Python work (Py::new or",
             "        // Python method calls) that must not happen while a node lock is held.",
@@ -1148,7 +1272,7 @@ class RustCstGenerator:
             "    }",
             "",
             "    #[setter]",
-            "    fn set_span(&self, py: Python<'_>, value: &Bound<'_, PyAny>) -> PyResult<()> {",
+            "    fn set_span(&self, py: Python<'_>, value: &Bound<'_, pyo3::PyAny>) -> pyo3::PyResult<()> {",
             "        self.inner.write().span = extract_span(py, value)?;",
             "        Ok(())",
             "    }",
@@ -1171,8 +1295,8 @@ class RustCstGenerator:
         return [
             "    #[classattr]",
             "    #[allow(non_snake_case)]",
-            "    fn Label(py: Python<'_>) -> PyResult<Py<PyAny>> {",
-            f"        Ok({enum_name}::type_object(py).into_any().unbind())",
+            "    fn Label(py: Python<'_>) -> pyo3::PyResult<Py<pyo3::PyAny>> {",
+            f"        Ok(<{enum_name} as pyo3::PyTypeInfo>::type_object(py).into_any().unbind())",
             "    }",
             "",
         ]
@@ -1191,21 +1315,21 @@ class RustCstGenerator:
         """
         return [
             "    #[getter]",
-            "    fn children(&self, py: Python<'_>) -> PyResult<Py<PyList>> {",
+            "    fn children(&self, py: Python<'_>) -> pyo3::PyResult<Py<pyo3::types::PyList>> {",
             "        // Snapshot the children vec (Arc clones for node children — O(n) refcount bumps).",
             "        // Lock scope: acquire read, snapshot, release before touching Python.",
             "        let snapshot: Vec<_> = {",
             "            let guard = self.inner.read();",
             "            guard.children.clone()",
             "        };",
-            "        let result = PyList::empty(py);",
+            "        let result = pyo3::types::PyList::empty(py);",
             "        for (label, child) in &snapshot {",
-            "            let label_obj: Py<PyAny> = match label {",
+            "            let label_obj: Py<pyo3::PyAny> = match label {",
             "                None => py.None(),",
             "                Some(lbl) => lbl.clone().into_pyobject(py)?.into_any().unbind(),",
             "            };",
             "            let child_obj = child.to_pyobject(py)?;",
-            "            let tup = PyTuple::new(py, [label_obj, child_obj])?;",
+            "            let tup = pyo3::types::PyTuple::new(py, [label_obj, child_obj])?;",
             "            result.append(tup)?;",
             "        }",
             "        Ok(result.unbind())",
@@ -1217,8 +1341,8 @@ class RustCstGenerator:
         return [
             "    #[pyo3(signature = (child, label = None))]",
             "    fn append(",
-            "        &self, py: Python<'_>, child: &Bound<'_, PyAny>, label: Option<Py<PyAny>>,",
-            "    ) -> PyResult<()> {",
+            "        &self, py: Python<'_>, child: &Bound<'_, pyo3::PyAny>, label: Option<Py<pyo3::PyAny>>,",
+            "    ) -> pyo3::PyResult<()> {",
             "        let span_type = get_span_type(py)?;",
             f"        let native_child = {enum_name}::extract_from_pyobject(py, child, &span_type)?;",
             "        let native_label = match label {",
@@ -1267,9 +1391,9 @@ class RustCstGenerator:
             "    fn extend(",
             "        &self,",
             "        py: Python<'_>,",
-            "        children: &Bound<'_, PyAny>,",
-            "        label: Option<Py<PyAny>>,",
-            "    ) -> PyResult<()> {",
+            "        children: &Bound<'_, pyo3::PyAny>,",
+            "        label: Option<Py<pyo3::PyAny>>,",
+            "    ) -> pyo3::PyResult<()> {",
             "        let span_type = get_span_type(py)?;",
             "        let native_label = match label {",
             *self._label_from_pyobject_match(class_name, labels, method_name="extend"),
@@ -1295,7 +1419,7 @@ class RustCstGenerator:
         This matches the Python backend's list-copy behavior.
         """
         return [
-            f"    fn extend_children(&self, _py: Python<'_>, other: &{py_handle}) -> PyResult<()> {{",
+            f"    fn extend_children(&self, _py: Python<'_>, other: &{py_handle}) -> pyo3::PyResult<()> {{",
             "        // Snapshot other's children first: the read guard is dropped at the end of",
             "        // this block, so the write lock below is safe even when self and other are",
             "        // the same node (self-extend). No ptr_eq call is needed here — the snapshot",
@@ -1317,7 +1441,7 @@ class RustCstGenerator:
 
     def _generic_child(self, _class_name: str, _enum_name: str, _label_type: str, _labels: list[str]) -> list[str]:
         return [
-            "    fn child(&self, py: Python<'_>) -> PyResult<Py<PyAny>> {",
+            "    fn child(&self, py: Python<'_>) -> pyo3::PyResult<Py<pyo3::PyAny>> {",
             "        // Lock scope: read len and clone at most the single entry under the guard;",
             "        // drop the guard before any Python work (object conversion, exception raise).",
             "        let (n, entry) = {",
@@ -1331,12 +1455,12 @@ class RustCstGenerator:
             '                "Expected one child but have {n}"',
             "            )));",
             "        };",
-            "        let label_obj: Py<PyAny> = match label {",
+            "        let label_obj: Py<pyo3::PyAny> = match label {",
             "            None => py.None(),",
             "            Some(lbl) => lbl.into_pyobject(py)?.into_any().unbind(),",
             "        };",
             "        let child_obj = child.to_pyobject(py)?;",
-            "        Ok(PyTuple::new(py, [label_obj, child_obj])?.into_any().unbind())",
+            "        Ok(pyo3::types::PyTuple::new(py, [label_obj, child_obj])?.into_any().unbind())",
             "    }",
             "",
         ]
@@ -1391,10 +1515,10 @@ class RustCstGenerator:
             "    fn insert(",
             "        &self,",
             "        py: Python<'_>,",
-            "        index: &Bound<'_, PyAny>,",
-            "        child: &Bound<'_, PyAny>,",
-            "        label: Option<Py<PyAny>>,",
-            "    ) -> PyResult<()> {",
+            "        index: &Bound<'_, pyo3::PyAny>,",
+            "        child: &Bound<'_, pyo3::PyAny>,",
+            "        label: Option<Py<pyo3::PyAny>>,",
+            "    ) -> pyo3::PyResult<()> {",
             "        // Validate child and label BEFORE taking the write lock (§2.3 lock discipline).",
             "        let span_type = get_span_type(py)?;",
             f"        let native_child = {enum_name}::extract_from_pyobject(py, child, &span_type)?;",
@@ -1468,7 +1592,7 @@ class RustCstGenerator:
         Negative indices supported; out-of-range raises IndexError with the caller's original value.
         """
         return [
-            "    fn remove_at(&self, py: Python<'_>, index: &Bound<'_, PyAny>) -> PyResult<Py<PyAny>> {",
+            "    fn remove_at(&self, py: Python<'_>, index: &Bound<'_, pyo3::PyAny>) -> pyo3::PyResult<Py<pyo3::PyAny>> {",  # noqa: E501
             "        // Capture the caller's original string representation BEFORE normalization,",
             "        // so error messages show the original value (e.g. `True` not `1`).",
             "        let orig_str = index.str()?.to_string_lossy().into_owned();",
@@ -1499,12 +1623,12 @@ class RustCstGenerator:
             "            ))",
             "        })?;",
             "        // Python wrap-out happens after the guard is released (§2.3 lock discipline).",
-            "        let label_obj: Py<PyAny> = match label {",
+            "        let label_obj: Py<pyo3::PyAny> = match label {",
             "            None => py.None(),",
             "            Some(lbl) => lbl.into_pyobject(py)?.into_any().unbind(),",
             "        };",
             "        let child_obj = child.to_pyobject(py)?;",
-            "        Ok(PyTuple::new(py, [label_obj, child_obj])?.into_any().unbind())",
+            "        Ok(pyo3::types::PyTuple::new(py, [label_obj, child_obj])?.into_any().unbind())",
             "    }",
             "",
         ]
@@ -1520,10 +1644,10 @@ class RustCstGenerator:
             "    fn replace_at(",
             "        &self,",
             "        py: Python<'_>,",
-            "        index: &Bound<'_, PyAny>,",
-            "        child: &Bound<'_, PyAny>,",
-            "        label: Option<Py<PyAny>>,",
-            "    ) -> PyResult<()> {",
+            "        index: &Bound<'_, pyo3::PyAny>,",
+            "        child: &Bound<'_, pyo3::PyAny>,",
+            "        label: Option<Py<pyo3::PyAny>>,",
+            "    ) -> pyo3::PyResult<()> {",
             "        // Validate child and label BEFORE taking the write lock (§2.3 lock discipline).",
             "        let span_type = get_span_type(py)?;",
             f"        let native_child = {enum_name}::extract_from_pyobject(py, child, &span_type)?;",
@@ -1566,7 +1690,7 @@ class RustCstGenerator:
     def _generic_clear(self) -> list[str]:
         """Emit the `clear` pymethod: remove all children."""
         return [
-            "    fn clear(&self, _py: Python<'_>) -> PyResult<()> {",
+            "    fn clear(&self, _py: Python<'_>) -> pyo3::PyResult<()> {",
             "        let old = {",
             "            let mut guard = self.inner.write();",
             "            std::mem::take(&mut guard.children)",
@@ -1921,7 +2045,7 @@ class RustCstGenerator:
         # append_<label>: push one child with the given label
         lines.extend(
             [
-                f"    fn append_{label}(&self, py: Python<'_>, child: &Bound<'_, PyAny>) -> PyResult<()> {{",
+                f"    fn append_{label}(&self, py: Python<'_>, child: &Bound<'_, pyo3::PyAny>) -> pyo3::PyResult<()> {{",  # noqa: E501
                 "        let span_type = get_span_type(py)?;",
                 f"        let native_child = {child_enum_name}::extract_from_pyobject(py, child, &span_type)?;",
                 f"        self.inner.write().children.push((Some({label_enum_name}::{rust_variant}), native_child));",
@@ -1934,7 +2058,7 @@ class RustCstGenerator:
         # extend_<label>: push multiple children with the given label
         lines.extend(
             [
-                f"    fn extend_{label}(&self, py: Python<'_>, children: &Bound<'_, PyAny>) -> PyResult<()> {{",
+                f"    fn extend_{label}(&self, py: Python<'_>, children: &Bound<'_, pyo3::PyAny>) -> pyo3::PyResult<()> {{",  # noqa: E501
                 "        let span_type = get_span_type(py)?;",
                 "        let iter = children.try_iter()?;",
                 "        for child_result in iter {",
@@ -1952,7 +2076,7 @@ class RustCstGenerator:
         # children_<label>: return list of all children with matching label
         lines.extend(
             [
-                f"    fn children_{label}(&self, py: Python<'_>) -> PyResult<Py<PyList>> {{",
+                f"    fn children_{label}(&self, py: Python<'_>) -> pyo3::PyResult<Py<pyo3::types::PyList>> {{",
                 "        // Lock scope: filter by label under the read guard, cloning only matching",
                 "        // children (Arc bump or Span copy each); drop the guard before to_pyobject,",
                 "        // which performs Python work that must not happen while a node lock is held.",
@@ -1963,7 +2087,7 @@ class RustCstGenerator:
                 "                .map(|(_, child)| child.clone())",
                 "                .collect()",
                 "        };",
-                "        let result = PyList::empty(py);",
+                "        let result = pyo3::types::PyList::empty(py);",
                 "        for child in &matching {",
                 "            result.append(child.to_pyobject(py)?)?;",
                 "        }",
@@ -1974,7 +2098,7 @@ class RustCstGenerator:
         )
 
         # child_<label>: return the single child with matching label; error if not exactly one
-        lines.append(f"    fn child_{label}(&self, py: Python<'_>) -> PyResult<Py<PyAny>> {{")
+        lines.append(f"    fn child_{label}(&self, py: Python<'_>) -> pyo3::PyResult<Py<pyo3::PyAny>> {{")
         lines.extend(self._emit_count_first_scan_block(label_enum_name, rust_variant))
         lines.extend(
             [
@@ -1991,7 +2115,7 @@ class RustCstGenerator:
         )
 
         # maybe_<label>: return optional single child with matching label; error if more than one
-        lines.append(f"    fn maybe_{label}(&self, py: Python<'_>) -> PyResult<Option<Py<PyAny>>> {{")
+        lines.append(f"    fn maybe_{label}(&self, py: Python<'_>) -> pyo3::PyResult<Option<Py<pyo3::PyAny>>> {{")
         lines.extend(self._emit_count_first_scan_block(label_enum_name, rust_variant))
         lines.extend(
             [
@@ -2021,11 +2145,11 @@ class RustCstGenerator:
         generated __eq__ body.
         """
         return [
-            "    fn __eq__(&self, py: Python<'_>, other: &Bound<'_, PyAny>) -> PyResult<Py<PyAny>> {",
+            "    fn __eq__(&self, py: Python<'_>, other: &Bound<'_, pyo3::PyAny>) -> pyo3::PyResult<Py<pyo3::PyAny>> {",
             f"        if !other.is_instance_of::<{py_handle}>() {{",
             "            return Ok(py.NotImplemented());",
             "        }",
-            f"        let other_handle: PyRef<{py_handle}> = other.extract()?;",
+            f"        let other_handle: pyo3::PyRef<{py_handle}> = other.extract()?;",
             "        // Delegate to Shared<T>::PartialEq which applies the ptr_eq short-circuit",
             "        // (avoids same-lock re-entry on `x == x`) then deep structural comparison.",
             "        let eq = self.inner == other_handle.inner;",
@@ -2036,7 +2160,7 @@ class RustCstGenerator:
 
     def _hash_method(self, class_name: str) -> list[str]:
         return [
-            "    fn __hash__(&self) -> PyResult<isize> {",
+            "    fn __hash__(&self) -> pyo3::PyResult<isize> {",
             f"        Err(PyTypeError::new_err(\"unhashable type: '{class_name}'\"))",
             "    }",
             "",
@@ -2203,12 +2327,14 @@ class RustCstGenerator:
         # Deliberately omitted from the .pyi stub (test support only).
         lines.append('#[cfg(all(feature = "python", feature = "test-introspection"))]')
         lines.append("#[pyfunction]")
-        lines.append("fn _registry_snapshot(py: Python<'_>) -> PyResult<pyo3::Bound<'_, pyo3::types::PyDict>> {")
+        lines.append("fn _registry_snapshot(py: Python<'_>) -> pyo3::PyResult<pyo3::Bound<'_, pyo3::types::PyDict>> {")
         lines.append("    registry::snapshot(py)")
         lines.append("}")
         lines.append("")
         lines.append('#[cfg(feature = "python")]')
-        lines.append("pub fn register_classes(module: &Bound<'_, PyModule>) -> PyResult<()> {")
+        # PyModule is imported unqualified via pyo3::prelude::*, but a grammar rule named "module"
+        # generates `pub struct PyModule` which would collide.  Use the fully-qualified path.
+        lines.append("pub fn register_classes(module: &Bound<'_, pyo3::types::PyModule>) -> pyo3::PyResult<()> {")
         # NodeKind must be registered before node structs (whose kind getter returns it).
         lines.append("    module.add_class::<NodeKind>()?;")
         for class_name, labels, _rule_name in self._rule_info():
