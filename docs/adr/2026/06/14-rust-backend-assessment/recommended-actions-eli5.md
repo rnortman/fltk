@@ -37,6 +37,8 @@ Add a check before the dangerous memory operation that verifies the incoming obj
 
 **Phase A (step 2) -- Major -- No prerequisites**
 
+STATUS: REJECTED as written: `make check` runs in precommit meaning that the proposed check would see unstaged changes and reject the commit, forcing `--no-verify` to be used to commit any intentional changes to gencode.
+
 ### What this is
 
 FLTK has code generators: Python scripts that read a grammar description and produce Rust source code (about 75,670 lines of it). That generated Rust code is checked into the repository — it is the actual product that ships. The problem is that nothing in the build system or CI (continuous integration — the automated checks that run when code is submitted) ever re-runs the generators and checks that the committed Rust code matches what the generators would produce today.
@@ -75,6 +77,8 @@ Add the standard "generated — do not edit" header to the CST generator's outpu
 
 **Phase A (step 4) -- Major -- No prerequisites**
 
+STATUS: REJECTED because it's difficult to get cargo-deny installed in Github CI runners. cargo-deny is already part of `make check` which is called by the precommit hook in a dev environment so this is already a very strong gate.
+
 ### What this is
 
 `cargo-deny` is a tool that checks Rust dependencies for known security vulnerabilities (via the RustSec advisory database), yanked (recalled) packages, and license compliance. FLTK has `cargo-deny` configured, but it only runs as part of a local pre-commit hook — a check that runs on the developer's own machine before they commit code. It never runs in CI.
@@ -92,6 +96,8 @@ Add a CI job that runs `cargo-deny`, ideally both on every pull request and on a
 ## `differential-property-harness`
 
 **Phase B (step 5) -- Major -- Depends on: `gencode-drift-gate`**
+
+STATUS: DEFER as this is rather expensive.
 
 ### What this is
 
@@ -113,6 +119,8 @@ This item depends on `gencode-drift-gate` because the drift gate ensures the gen
 
 **Phase B (step 6) -- Major -- No prerequisites**
 
+STATUS: Do this *OR* better if possible: standardize python and rust on some regex library/standard that has identical feature set and semantics across languages.
+
 ### What this is
 
 Grammars in FLTK can include regular expressions (patterns for matching text). The Python backend uses Python's built-in `re` regex engine; the Rust backend uses a different engine called `regex-automata`. These two engines handle certain advanced regex features differently — not just "one crashes and the other doesn't," but they silently produce different parse trees for the same input. The affected features include POSIX character classes (like `[[:alpha:]]`), Unicode property classes (like `\p{Letter}`), nested character sets, and lookaround assertions.
@@ -130,6 +138,8 @@ Add a check at code-generation time (when the Rust parser code is being generate
 ## `perf-harness`
 
 **Phase B (step 7) -- Major -- No prerequisites**
+
+STATUS: DEFER until Clockwork is ported, as Clockwork provides a complex grammar and large corpus of existing source code to benchmark with.
 
 ### What this is
 
@@ -187,6 +197,8 @@ Fold the spike into the existing test directory (`tests/rust_poc_cst`), eliminat
 
 **Phase C (step 9) -- Cleanup -- No prerequisites**
 
+STATUS: Much of this will be made irrelevant by resolving the regex-portability-lint and implementing the unparser (which is planned). INLINE being unsupported is not a Rust-specific cleanup. The version number disagreement is ready to be fixed.
+
 ### What this is
 
 Several things the Rust backend does not support are currently undocumented "implicit cuts" — they are simply absent, with no explicit statement that they are intentionally out of scope. This action calls for making those boundaries explicit.
@@ -208,6 +220,8 @@ Additionally, there is a three-way version number disagreement (the wheel says 0
 ## `accept-publicapi-divergences`
 
 **Phase C (step 10) -- Cleanup -- No prerequisites**
+
+STATUS: The `children` list requires out-of-tree users (Clockwork) to port away from direct `children` mutation; we can then simply make that read-only in both backends (e.g. annotate as `Sequence` in the protocol and both backends). This can also fix the label iterator. Span APIs similarly need out-of-tree consumers to update and then we can remove the older Python API.
 
 ### What this is
 
@@ -231,6 +245,8 @@ Document these in a migration guide. Optionally, change the type annotation for 
 
 **Phase D (step 11) -- Major -- Depends on: `fix-forged-abi-segfault`, `gencode-drift-gate`**
 
+STATUS: Clockwork porting is a local PoC at present. This is a non-issue. Ignore.
+
 ### What this is
 
 Clockwork is a downstream project that uses FLTK — it is the closest thing to a real consumer of the Rust backend. Currently, Clockwork depends on FLTK via a `local_path_override`, which means it points directly at a live checkout of the FLTK source code on the developer's machine. This is a temporary development convenience (there is even a TODO in the code flagging it for replacement). The actual mechanism that real consumers would use — fetching a specific committed version of FLTK from its git repository — has never been tested for the Rust/Bazel path.
@@ -248,6 +264,8 @@ Switch Clockwork's FLTK dependency from the temporary local-path override to a c
 ## `ship-opt-in-first-consumer`
 
 **Phase D (step 12) -- Strategic -- Depends on: all Phase A and Phase B items, plus `clockwork-committed-pin-proof`**
+
+STATUS: I have no idea what this actually means. We're already working on this and it honestly has nothing to do with fltk itself. IGNORE.
 
 ### What this is
 
