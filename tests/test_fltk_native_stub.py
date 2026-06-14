@@ -1,21 +1,19 @@
-"""B4 runtime-agreement tests: fltk/_native/fegen_cst.pyi vs the compiled fltk._native.fegen_cst.
+"""B4 runtime-agreement tests: fltk/_stubs/fegen_rust_cst/cst.pyi vs the compiled fegen_rust_cst.cst.
 
 Validates two directions over the generated fegen_cst surface:
   1. Every class, method, and classattr declared in the .pyi exists on the runtime module.
-  2. Every public runtime member of fltk._native.fegen_cst is declared in the .pyi.
+  2. Every public runtime member of fegen_rust_cst.cst is declared in the .pyi.
 
-Scope is fegen_cst only; fltk._native top-level members (PoC classes, Span, SourceText,
-UnknownSpan) are verified separately in tests/test_native.py. Top-level PoC classes are
-intentionally omitted from the stub — see fltk/_native/__init__.pyi header comment.
+Scope is fegen_rust_cst.cst only; fltk._native top-level members (Span, SourceText,
+UnknownSpan) are verified separately in tests/test_native.py.
 
-Skips cleanly when fltk._native is unimportable (extension not yet built).
+Skips cleanly when fegen_rust_cst is unimportable (extension not yet built).
 """
 
 from __future__ import annotations
 
 import ast
 import functools
-import importlib
 import pathlib
 from types import ModuleType
 
@@ -25,30 +23,28 @@ import pytest
 # Skip guard                                                                    #
 # --------------------------------------------------------------------------- #
 
-_NATIVE_AVAILABLE = importlib.util.find_spec("fltk._native") is not None
 
-
-def _try_import_fegen_cst() -> ModuleType | None:
+def _try_import_fegen_rust_cst_cst() -> ModuleType | None:
     try:
-        import fltk._native.fegen_cst as fc  # noqa: PLC0415
+        import fegen_rust_cst.cst as fc  # noqa: PLC0415
 
         return fc
     except (ImportError, ModuleNotFoundError):
         return None
 
 
-_FEGEN_CST_MODULE = _try_import_fegen_cst()
+_FEGEN_CST_MODULE = _try_import_fegen_rust_cst_cst()
 
-skip_if_no_native = pytest.mark.skipif(
+skip_if_no_fegen_rust_cst = pytest.mark.skipif(
     _FEGEN_CST_MODULE is None,
-    reason="fltk._native.fegen_cst not importable — run 'uv run maturin develop' first",
+    reason="fegen_rust_cst not importable — run 'make build-fegen-rust-cst' first",
 )
 
 # --------------------------------------------------------------------------- #
 # Parse the committed .pyi stub                                                 #
 # --------------------------------------------------------------------------- #
 
-_STUB_PATH = pathlib.Path(__file__).parent.parent / "fltk" / "_native" / "fegen_cst.pyi"
+_STUB_PATH = pathlib.Path(__file__).parent.parent / "fltk" / "_stubs" / "fegen_rust_cst" / "cst.pyi"
 
 
 @functools.cache
@@ -129,9 +125,9 @@ _KNOWN_RUNTIME_EXTRAS = frozenset(
 )
 
 
-@skip_if_no_native
+@skip_if_no_fegen_rust_cst
 class TestRuntimeToStub:
-    """Every public runtime member of fegen_cst is declared in the stub."""
+    """Every public runtime member of fegen_rust_cst.cst is declared in the stub."""
 
     def test_runtime_classes_in_stub(self) -> None:
         """All public class names on the runtime module are in the stub."""
@@ -145,7 +141,7 @@ class TestRuntimeToStub:
         missing = runtime_public - stub_names - _KNOWN_RUNTIME_EXTRAS
         assert not missing, (
             f"Runtime classes missing from stub: {sorted(missing)}. "
-            "Add them to fltk/_native/fegen_cst.pyi or _KNOWN_RUNTIME_EXTRAS if intentionally omitted."
+            "Add them to fltk/_stubs/fegen_rust_cst/cst.pyi or _KNOWN_RUNTIME_EXTRAS if intentionally omitted."
         )
 
     def test_runtime_module_attrs_in_stub(self) -> None:
@@ -159,7 +155,8 @@ class TestRuntimeToStub:
         stub_names = _stub_top_level_names()
         missing = runtime_non_class - stub_names - _KNOWN_RUNTIME_EXTRAS
         assert not missing, (
-            f"Runtime module attrs missing from stub: {sorted(missing)}. Add them to fltk/_native/fegen_cst.pyi."
+            f"Runtime module attrs missing from stub: {sorted(missing)}. "
+            "Add them to fltk/_stubs/fegen_rust_cst/cst.pyi."
         )
 
 
@@ -168,17 +165,17 @@ class TestRuntimeToStub:
 # --------------------------------------------------------------------------- #
 
 
-@skip_if_no_native
+@skip_if_no_fegen_rust_cst
 class TestStubToRuntime:
     """Every class and member declared in the stub exists on the runtime module."""
 
     def test_stub_classes_exist_at_runtime(self) -> None:
-        """All stub-declared classes are importable from fltk._native.fegen_cst."""
+        """All stub-declared classes are importable from fegen_rust_cst.cst."""
         assert _FEGEN_CST_MODULE is not None
         stub_classes = _stub_classes_with_members()
         for class_name in stub_classes:
             assert hasattr(_FEGEN_CST_MODULE, class_name), (
-                f"Stub declares class {class_name!r} but fltk._native.fegen_cst has no such attribute."
+                f"Stub declares class {class_name!r} but fegen_rust_cst.cst has no such attribute."
             )
 
     def test_stub_members_exist_at_runtime(self) -> None:

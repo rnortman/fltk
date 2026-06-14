@@ -20,6 +20,83 @@ registered.
 load("@rules_rust//rust:defs.bzl", "rust_shared_library")
 load("@rules_python//python:defs.bzl", "py_library")
 
+# ---- generate_rust_lib ----------------------------------------------------------
+
+def _generate_rust_lib_impl(ctx):
+    """Implementation for generate_rust_lib rule.
+
+    Runs: genparser gen-rust-lib <out> --module-name <name> [flags...]
+
+    The output file is always named "lib.rs" in a subdirectory named after the
+    rule, so that fltk_pyo3_cdylib's assembly genrule can reference it via a
+    single-file depset.
+    """
+    lib_out = ctx.actions.declare_file(ctx.attr.name + "/lib.rs")
+
+    args = ctx.actions.args()
+    args.add("gen-rust-lib")
+    args.add(lib_out)
+    args.add("--module-name")
+    args.add(ctx.attr.module_name)
+    if ctx.attr.no_cst:
+        args.add("--no-cst")
+    if ctx.attr.register_span_types:
+        args.add("--register-span-types")
+    if ctx.attr.unknown_span_static:
+        args.add("--unknown-span-static")
+
+    ctx.actions.run(
+        inputs = [],
+        outputs = [lib_out],
+        arguments = [args],
+        executable = ctx.executable._gen_tool,
+        progress_message = "Generating Rust lib.rs for module %s" % ctx.attr.module_name,
+    )
+
+    return [DefaultInfo(files = depset([lib_out]))]
+
+generate_rust_lib = rule(
+    implementation = _generate_rust_lib_impl,
+    attrs = {
+        "module_name": attr.string(
+            mandatory = True,
+            doc = "The Rust module name passed to gen-rust-lib as --module-name. Must be a valid Rust identifier and match the #[pymodule] fn name in the generated lib.rs.",
+        ),
+        "no_cst": attr.bool(
+            default = False,
+            doc = "Pass --no-cst to gen-rust-lib; generates a span-only lib.rs with no grammar submodules.",
+        ),
+        "register_span_types": attr.bool(
+            default = False,
+            doc = "Pass --register-span-types to gen-rust-lib.",
+        ),
+        "unknown_span_static": attr.bool(
+            default = False,
+            doc = "Pass --unknown-span-static to gen-rust-lib.",
+        ),
+        "_gen_tool": attr.label(
+            default = Label("//:genparser"),
+            executable = True,
+            allow_files = True,
+            cfg = "exec",
+        ),
+    },
+    doc = """Generate a Rust lib.rs entry point for a PyO3 cdylib module.
+
+Emits one action output:
+  <name>/lib.rs — generated crate root declaring mod cst; mod parser; and #[pymodule].
+
+Designed to be consumed by fltk_pyo3_cdylib (via the auto-generated lib_rs path)
+or used standalone when a hand-authored lib.rs is not required.
+
+Example:
+    generate_rust_lib(
+        name = "mymodule_lib_rs",
+        module_name = "mymodule",
+    )
+""",
+)
+
 # ---- generate_rust_parser -------------------------------------------------------
 
 def _generate_rust_parser_impl(ctx):
@@ -123,7 +200,7 @@ Example:
 def fltk_pyo3_cdylib(
         name,
         rs_srcs,
-        lib_rs,
+        lib_rs = None,
         deps = [],
         crate_features = [],
         recursion_limit = 512,
@@ -185,6 +262,9 @@ def fltk_pyo3_cdylib(
                  whose outputs include "lib.rs".
         lib_rs: Label or file of the consumer-authored lib.rs that declares
                 `mod cst;`, `mod parser;`, and the `#[pymodule]` entry point.
+                When omitted (default None), the macro generates lib.rs from
+                the target `name` using gen-rust-lib.  Pass an explicit label
+                to retain a hand-authored lib.rs (backward-compatible override).
         deps: Extra rust_library deps to link into the cdylib (for consumer
               native Rust code that coexists with the generated modules).
         crate_features: Extra crate features beyond the mandatory
@@ -201,14 +281,25 @@ def fltk_pyo3_cdylib(
         **kwargs: Forwarded to rust_shared_library (e.g. rustc_flags).
     """
 
+    # When lib_rs is omitted, generate lib.rs from the target name using the
+    # generate_rust_lib rule (a proper ctx.actions.run invocation, not a genrule
+    # shell command).  This avoids both the cross-repo $(location) fragility and
+    # any shell-quoting surface for module_name.
+    if lib_rs == None:
+        generate_rust_lib(
+            name = name + "_gen_lib",
+            module_name = name,
+        )
+        lib_rs = ":" + name + "_gen_lib"
+
     # Step 1: Crate-source assembly.
     #
     # We need lib.rs, cst.rs, and parser.rs in the same directory so that
     # bare `mod cst;` / `mod parser;` in lib.rs find their siblings.
     #
-    # lib.rs is a consumer source file; cst.rs and parser.rs are outputs of
-    # generate_rust_parser (in <rs_srcs_name>/cst.rs, <rs_srcs_name>/parser.rs
-    # relative to the package gendir).
+    # lib.rs is a consumer source file (or a generated label); cst.rs and
+    # parser.rs are outputs of generate_rust_parser (in <rs_srcs_name>/cst.rs,
+    # <rs_srcs_name>/parser.rs relative to the package gendir).
     #
     # Strategy: a single genrule that receives all three inputs and copies them
     # into a flat gendir.  We use `basename` in the shell command to strip the
@@ -217,6 +308,11 @@ def fltk_pyo3_cdylib(
     crate_cst_rs = name + "_crate_root/cst.rs"
     crate_parser_rs = name + "_crate_root/parser.rs"
 
+    # TODO(bazel-lib-rs-no-cst): the assembly genrule unconditionally requires cst.rs and
+    # parser.rs in rs_srcs, even when lib_rs=None (auto-generated span-only path).  Currently
+    # every fltk_pyo3_cdylib caller is a grammar crate and always provides both files.  If a
+    # runtime-only (span-only) crate is ever built via this macro, the test -f guards will fail
+    # misleadingly.  At that point, split into grammar and span-only assembly variants.
     native.genrule(
         name = name + "_assemble_crate",
         srcs = [lib_rs, rs_srcs],

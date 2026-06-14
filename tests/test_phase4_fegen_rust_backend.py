@@ -33,7 +33,6 @@ fegen_rust_cst = pytest.importorskip(
 
 import fltk.fegen.fltk2gsm as fltk2gsm_mod  # noqa: E402
 from fltk._native import SourceText, Span  # noqa: E402
-from fltk._native import fegen_cst as embedded_fegen_cst  # noqa: E402
 from fltk.fegen import fltk2gsm  # noqa: E402
 from fltk.fegen import fltk_cst as py_cst  # noqa: E402
 from fltk.fegen.pyrt import terminalsrc as tsrc  # noqa: E402
@@ -198,11 +197,11 @@ class TestAC6FegenRustCstModule:
         assert isinstance(getattr(fegen_rust_cst.cst, class_name), type)
 
     def test_module_is_standalone(self):
-        """The fegen_rust_cst module is importable separately from fltk._native.fegen_cst."""
+        """The fegen_rust_cst module is importable as a standalone extension."""
         mod = importlib.import_module("fegen_rust_cst")
         assert mod is not None
-        # Verify it's distinct from the embedded fltk._native.fegen_cst submodule
-        assert mod is not embedded_fegen_cst
+        # Verify the cst submodule is accessible
+        assert hasattr(mod, "cst")
 
 
 # ── AC9: label-compare backend independence ────────────────────────────────

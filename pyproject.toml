@@ -50,6 +50,7 @@ pythonVersion = "3.10"
 include = ["fltk", "*.py"]
 exclude = ["**/__pycache__"]
 stubPath = ""
+extraPaths = ["fltk/_stubs"]
 venvPath = ".venv"
 
 [tool.ruff]

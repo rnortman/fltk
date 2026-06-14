@@ -684,17 +684,15 @@ class TestAC7BothBackends:
     def test_cross_cdylib_span_merge_after_accessor(self):
         """§4 item 2: spans read from a cross-cdylib node via .span merge without ValueError.
 
-        This is the primary observable for the Arc-sharing fix: before the fix,
-        two .span reads from the same node each create a fresh Arc, so merge raises
-        ValueError("cannot merge spans from different sources"). After the fix,
-        the shared Arc is preserved across the cross-cdylib boundary.
+        Two .span reads from the same cross-cdylib node must share the same Arc so
+        merge does not raise ValueError("cannot merge spans from different sources").
         """
         result = parse_text(_rust_pr, "key = 99;", "config")
         assert result.success, result.error_message
         cst_root = result.cst
         s1 = cst_root.span
         s2 = cst_root.span
-        # Must not raise ValueError — both reads share the same Arc after the fix.
+        # Must not raise ValueError — both reads share the same Arc.
         merged = s1.merge(s2)
         assert merged == s1
 

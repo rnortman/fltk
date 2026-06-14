@@ -215,7 +215,6 @@ class TestPreamble:
         assert '#[cfg(feature = "python")]\nuse pyo3::prelude::{pyfunction' not in poc_source
         # These must NOT appear as unconditional imports
         assert "use pyo3::sync::GILOnceCell;" not in poc_source
-        # get_source_text_type is no longer imported (span_to_pyobject handles the full path)
         assert "get_source_text_type" not in poc_source
         # Old form: unconditional pyo3 import is gone
         assert "use fltk_cst_core::{extract_span, get_span_type, span_to_pyobject, Span};" not in poc_source
@@ -315,10 +314,7 @@ class TestPocGrammarLabels:
         assert '"_fltk_canonical_name"' in poc_source
 
     def test_allow_non_camel_case_types(self, poc_source: str) -> None:
-        # Phase 2: label enums are now CamelCase (IdentifierLabel, etc.) — #[allow(non_camel_case_types)]
-        # is no longer needed on label enums.  This attribute may still appear on other generated items
-        # or be zero — we only assert it does NOT appear in excess (not a hard requirement).
-        # The old check (>= 3) is now obsolete; the new check verifies the Rust names are idiomatic.
+        # Label enums are CamelCase (IdentifierLabel, etc.); verify Rust names are idiomatic.
         assert "pub enum IdentifierLabel {" in poc_source
         assert "pub enum ItemsLabel {" in poc_source
 
@@ -1708,9 +1704,7 @@ class TestReservedClassNameRejection:
         assert "pyo3" in error_text, f"Error must mention pyo3 import: {error_text}"
 
     def test_type_info_rule_accepted(self) -> None:
-        """Rule 'type_info' is NOT reserved: PyTypeInfo is no longer imported unqualified."""
-        # The _label_classattr emission uses UFCS (<EnumName as pyo3::PyTypeInfo>::type_object)
-        # so `use pyo3::PyTypeInfo;` was removed, making type_info a legal rule name.
+        """Rule 'type_info' is NOT reserved: PyTypeInfo is used via UFCS, not imported unqualified."""
         grammar = _make_single_rule_grammar("type_info")
         gen = RustCstGenerator(grammar)
         assert gen is not None

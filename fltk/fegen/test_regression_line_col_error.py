@@ -4,16 +4,8 @@ This test verifies that when errors are reported at positions on the first line
 of a source file, the column number calculation doesn't produce negative values
 and the line span is correctly calculated.
 
-The bug was in terminalsrc.py in the pos_to_line_col method:
+The fix is in terminalsrc.py in the pos_to_line_col method:
 
-Before fix (buggy code):
-    return LineColPos(
-        line=idx,
-        col=pos - self.line_ends[idx - 1] - 1,  # This causes negative col for first line
-        line_span=Span(self.line_ends[idx - 1] + 1, self.line_ends[idx]),  # Wrong span for first line
-    )
-
-After fix:
     if idx > 0:
         col = pos - self.line_ends[idx - 1] - 1
         line_span = Span(self.line_ends[idx - 1] + 1, self.line_ends[idx])
@@ -21,17 +13,14 @@ After fix:
         col = pos
         line_span = Span(0, self.line_ends[0])
 
-The issue occurred because:
-1. For positions on the first line (idx == 0), the original code tried to access
-   self.line_ends[idx - 1] which is self.line_ends[-1] (last element)
-2. This resulted in incorrect column calculations and negative column numbers
-3. The line span was also incorrectly calculated for the first line
+The issue: for positions on the first line (idx == 0), accessing
+self.line_ends[idx - 1] (i.e. self.line_ends[-1]) returned the last element,
+causing incorrect column calculations and negative column numbers.
 
-The specific scenario is:
+The specific scenario:
 1. Parse a source file that has multiple lines
 2. Report an error at a position on the first line
-3. Without fix: column number is negative due to incorrect calculation
-4. With fix: column number is correctly calculated as the position value
+3. Column number is correctly calculated as the position value
 """
 
 import logging
@@ -48,13 +37,9 @@ def test_line_col_error_first_line():
     Creates a multi-line source and tests pos_to_line_col for various positions
     on the first line to ensure column numbers are not negative and line spans
     are correctly calculated.
-
-    The bug would cause negative column numbers for positions on the first line
-    because the calculation was using self.line_ends[idx - 1] when idx == 0,
-    which accesses the last element instead of handling the first line case.
     """
 
-    # Create a multi-line source to trigger the bug
+    # Create a multi-line source
     # Line 0: "hello world"  (positions 0-10, newline at 11)
     # Line 1: "second line"  (positions 12-22, newline at 23)
     # Line 2: "third"        (positions 24-28)

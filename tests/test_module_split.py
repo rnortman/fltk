@@ -4,7 +4,7 @@ Verifies:
   §4.3 -- collision fixture: Parser/ApplyResult CST classes and parser machinery coexist.
   §4.4 -- import mechanics for fegen_rust_cst (sys.modules, from-import, importlib).
   §4.5 -- Span/SourceText absent from generated modules; present where required.
-  §4.6 -- fltk._native.poc_cst: PoC classes reachable at new path, absent from top level.
+  §4.6 -- fltk._native is runtime-only; PoC classes live in poc_cst.cst; fegen CST in fegen_rust_cst.
 """
 
 from __future__ import annotations
@@ -38,16 +38,20 @@ phase4_roundtrip_cst = pytest.importorskip(
     reason="phase4_roundtrip_cst not built; run 'make build-test-user-ext' first",
 )
 
+poc_cst = pytest.importorskip(
+    "poc_cst",
+    reason="poc_cst not built; run 'make build-poc-cst' first",
+)
+
 # Top-level imports that are used inside tests (E402: after importorskip guards, F811:
 # fegen_rust_cst.cst sub-import does not shadow the importorskip result).
 import fegen_rust_cst.cst  # noqa: E402,F811
+import poc_cst.cst  # noqa: E402,F811
 from fegen_rust_cst.parser import Parser as FegenParser  # noqa: E402
+from poc_cst.cst import Identifier as PocIdentifier  # noqa: E402
+from poc_cst.cst import Items as PocItems  # noqa: E402
 
-import fltk._native.fegen_cst  # noqa: E402
-import fltk._native.poc_cst  # noqa: E402
 from fltk._native import SourceText, Span  # noqa: E402
-from fltk._native.poc_cst import Identifier as PocIdentifier  # noqa: E402
-from fltk._native.poc_cst import Items as PocItems  # noqa: E402
 
 # ===========================================================================
 # §4.3 -- Collision fixture headline acceptance test
@@ -236,28 +240,12 @@ class TestSpanDrop:
 
 
 # ===========================================================================
-# §4.6 -- fltk._native.poc_cst
+# §4.6 -- fltk._native is runtime-only; PoC and fegen CST in standalone extensions
 # ===========================================================================
 
 
-class TestPocCstSubmodule:
-    """PoC classes are in fltk._native.poc_cst; absent from fltk._native top level."""
-
-    def test_poc_cst_identifier_reachable(self):
-        """fltk._native.poc_cst.Identifier is a type."""
-        assert isinstance(PocIdentifier, type)
-
-    def test_poc_cst_items_reachable(self):
-        """fltk._native.poc_cst.Items is a type."""
-        assert isinstance(PocItems, type)
-
-    def test_poc_cst_absent_from_native_top_level(self):
-        """fltk._native top level does not expose Identifier (moved to poc_cst)."""
-        assert not hasattr(fltk_native, "Identifier")
-
-    def test_poc_cst_items_absent_from_native_top_level(self):
-        """fltk._native top level does not expose Items (moved to poc_cst)."""
-        assert not hasattr(fltk_native, "Items")
+class TestNativeRuntimeOnly:
+    """fltk._native is runtime-only: Span/SourceText/UnknownSpan only; no submodules."""
 
     def test_native_still_has_span(self):
         """fltk._native still exposes Span at top level (canonical home)."""
@@ -271,21 +259,43 @@ class TestPocCstSubmodule:
         """fltk._native still exposes UnknownSpan at top level."""
         assert hasattr(fltk_native, "UnknownSpan")
 
-    def test_fegen_cst_still_accessible(self):
-        """fltk._native.fegen_cst is still accessible (unchanged)."""
-        assert hasattr(fltk_native, "fegen_cst")
-        assert fltk._native.fegen_cst is fltk_native.fegen_cst
+    def test_native_no_poc_cst_submodule(self):
+        """fltk._native has no poc_cst submodule (moved to standalone poc_cst extension)."""
+        assert not hasattr(fltk_native, "poc_cst")
 
-    def test_sys_modules_poc_cst(self):
-        """sys.modules['fltk._native.poc_cst'] is fltk._native.poc_cst."""
-        assert "fltk._native.poc_cst" in sys.modules
-        assert sys.modules["fltk._native.poc_cst"] is fltk._native.poc_cst
+    def test_native_no_fegen_cst_submodule(self):
+        """fltk._native has no fegen_cst submodule (moved to fegen_rust_cst extension)."""
+        assert not hasattr(fltk_native, "fegen_cst")
 
-    def test_sys_modules_fegen_cst(self):
-        """sys.modules['fltk._native.fegen_cst'] is fltk._native.fegen_cst."""
-        assert "fltk._native.fegen_cst" in sys.modules
-        assert sys.modules["fltk._native.fegen_cst"] is fltk._native.fegen_cst
+    def test_native_no_identifier_at_top_level(self):
+        """fltk._native top level does not expose Identifier."""
+        assert not hasattr(fltk_native, "Identifier")
+
+    def test_native_no_items_at_top_level(self):
+        """fltk._native top level does not expose Items."""
+        assert not hasattr(fltk_native, "Items")
+
+    def test_poc_cst_identifier_reachable_from_standalone(self):
+        """poc_cst.cst.Identifier is a type (PoC lives in standalone poc_cst extension)."""
+        assert isinstance(PocIdentifier, type)
+
+    def test_poc_cst_items_reachable_from_standalone(self):
+        """poc_cst.cst.Items is a type (PoC lives in standalone poc_cst extension)."""
+        assert isinstance(PocItems, type)
 
     def test_poc_cst_has_node_kind(self):
-        """fltk._native.poc_cst.NodeKind is present."""
-        assert hasattr(fltk._native.poc_cst, "NodeKind")
+        """poc_cst.cst.NodeKind is present."""
+        assert hasattr(poc_cst.cst, "NodeKind")
+
+    def test_sys_modules_poc_cst_cst(self):
+        """sys.modules['poc_cst.cst'] is poc_cst.cst."""
+        assert "poc_cst.cst" in sys.modules
+        assert sys.modules["poc_cst.cst"] is poc_cst.cst
+
+    def test_old_native_poc_cst_path_absent_from_sys_modules(self):
+        """fltk._native.poc_cst is not in sys.modules (old path removed)."""
+        assert "fltk._native.poc_cst" not in sys.modules
+
+    def test_old_native_fegen_cst_path_absent_from_sys_modules(self):
+        """fltk._native.fegen_cst is not in sys.modules (old path removed)."""
+        assert "fltk._native.fegen_cst" not in sys.modules

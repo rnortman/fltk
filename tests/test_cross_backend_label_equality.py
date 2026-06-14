@@ -2,13 +2,12 @@
 
 Covers AC1-AC8 from the cross-backend-label-equality design (section 4).
 
-Requires fegen_rust_cst and fltk._native.fegen_cst to be built.
+Requires fegen_rust_cst to be built.
 Tests are skipped when the modules are unavailable.
 
 Backend abbreviations used throughout:
   py      — fltk.fegen.fltk_cst (Python dataclass backend)
-  emb     — fltk._native.fegen_cst (embedded Rust crate, same abi3 as py)
-  ext     — fegen_rust_cst (external Rust crate, separate cdylib)
+  ext     — fegen_rust_cst (standalone Rust cdylib)
 """
 
 from __future__ import annotations
@@ -26,24 +25,20 @@ fegen_rust_cst = pytest.importorskip(
     reason="fegen_rust_cst not built; run 'make build-fegen-rust-cst' first",
 )
 
-from fltk._native import fegen_cst as emb_cst  # noqa: E402
 from fltk.fegen import fltk_cst as py_cst  # noqa: E402
 
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
 
-# Three backend pairs: (backend_A, backend_B)
-# Each test is parametrized over these so it exercises py↔ext, py↔emb, emb↔ext.
+# Two backend pairs: (backend_A, backend_B)
+# Each test is parametrized over these so it exercises py↔ext.
 _BACKEND_PAIRS = [
     ("py", "ext"),
-    ("py", "emb"),
-    ("emb", "ext"),
 ]
 
 _BACKENDS = {
     "py": py_cst,
-    "emb": emb_cst,
     "ext": fegen_rust_cst.cst,
 }
 
@@ -66,7 +61,7 @@ def _nodekind(backend_key: str, member_name: str) -> object:
 
 @pytest.mark.parametrize("a_key,b_key", _BACKEND_PAIRS)
 class TestLabelCrossBackend:
-    """AC1-AC7 for Label members, exercised across all three backend pairs."""
+    """AC1-AC7 for Label members, exercised across all backend pairs."""
 
     def test_ac1_equal_same_member_both_directions(self, a_key: str, b_key: str) -> None:
         """AC1: A.Items.Label.NO_WS == B.Items.Label.NO_WS both directions."""
@@ -152,33 +147,32 @@ class TestLabelCrossBackend:
 
 
 # ---------------------------------------------------------------------------
-# AC8: embedded (fltk._native.fegen_cst) ↔ external (fegen_rust_cst) pair
-# (covered above as ("emb", "ext"); this class adds a targeted explicit check)
+# AC8: py ↔ ext cross-backend pair explicit checks
 # ---------------------------------------------------------------------------
 
 
-class TestAC8TwoRustCrates:
-    """AC8: fltk._native.fegen_cst and fegen_rust_cst are distinct cdylib crates; equality holds."""
+class TestAC8PyRustCross:
+    """AC8: py and fegen_rust_cst.cst are distinct implementations; equality holds."""
 
     def test_crates_are_distinct_python_types(self) -> None:
-        """The two Rust crates expose distinct Python types for the same class name."""
-        assert type(emb_cst.Items.Label.NO_WS) is not type(fegen_rust_cst.cst.Items.Label.NO_WS), (
-            "emb and ext crates should have distinct Python types for Items_Label"
+        """The Python and Rust crates expose distinct Python types for the same class name."""
+        assert type(py_cst.Items.Label.NO_WS) is not type(fegen_rust_cst.cst.Items.Label.NO_WS), (
+            "py and ext crates should have distinct Python types for Items_Label"
         )
 
-    def test_cross_crate_label_eq(self) -> None:
-        """emb.Items.Label.NO_WS == ext.Items.Label.NO_WS both directions."""
-        a = emb_cst.Items.Label.NO_WS
+    def test_cross_backend_label_eq(self) -> None:
+        """py.Items.Label.NO_WS == ext.Items.Label.NO_WS both directions."""
+        a = py_cst.Items.Label.NO_WS
         b = fegen_rust_cst.cst.Items.Label.NO_WS
         assert a == b
         assert b == a
 
-    def test_cross_crate_hash_agreement(self) -> None:
-        """hash agrees between the two distinct Rust crates (both route through CPython hash)."""
+    def test_cross_backend_hash_agreement(self) -> None:
+        """hash agrees between the Python and Rust backends."""
         for member in ["NO_WS", "WS_ALLOWED", "ITEM"]:
-            a = getattr(emb_cst.Items.Label, member)
+            a = getattr(py_cst.Items.Label, member)
             b = getattr(fegen_rust_cst.cst.Items.Label, member)
-            assert hash(a) == hash(b), f"hash mismatch between emb and ext crates for Items.Label.{member}"
+            assert hash(a) == hash(b), f"hash mismatch between py and ext for Items.Label.{member}"
 
 
 # ---------------------------------------------------------------------------
@@ -281,13 +275,6 @@ class TestMarkerScope:
         node = fegen_rust_cst.cst.Items()
         assert not hasattr(node, "_fltk_canonical_name"), (
             "Rust node should not expose _fltk_canonical_name; marker is for Label/NodeKind only"
-        )
-
-    def test_embedded_rust_node_has_no_canonical_name_marker(self) -> None:
-        """Embedded Rust Items() node does not expose _fltk_canonical_name."""
-        node = emb_cst.Items()
-        assert not hasattr(node, "_fltk_canonical_name"), (
-            "Embedded Rust node should not expose _fltk_canonical_name; marker is for Label/NodeKind only"
         )
 
     def test_node_neq_label_python(self) -> None:

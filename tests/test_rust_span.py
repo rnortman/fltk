@@ -9,7 +9,9 @@ import pytest
 _native_module = pytest.importorskip("fltk._native", reason="Rust extension not available")
 
 from fltk._native import SourceText, Span, UnknownSpan  # noqa: E402
-from fltk._native.fegen_cst import Grammar  # noqa: E402
+
+pytest.importorskip("fegen_rust_cst", reason="fegen_rust_cst not built; run 'make build-fegen-rust-cst' first")
+from fegen_rust_cst.cst import Grammar  # noqa: E402
 
 
 class TestConstruction:

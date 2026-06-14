@@ -1,8 +1,7 @@
 """Tests for validate_no_underscore_only_names (GSM-layer name validation).
 
-All tests marked 'failing-first' demonstrate the before/after behavior:
-- Before: cryptic error (IndentationError, malformed Rust output, or silent success)
-- After: ValueError naming the offender and the cause, raised at classify_trivia_rules time.
+validate_no_underscore_only_names raises ValueError naming the offender and the cause,
+raised at classify_trivia_rules time.
 """
 
 import pytest
@@ -39,11 +38,7 @@ def _make_simple_grammar(rule_name: str, label: str | None = None) -> gsm.Gramma
 
 
 def test_rule_named_single_underscore_raises():
-    """Rule named '_' must raise ValueError naming the rule and mentioning underscore.
-
-    Before fix: raises IndentationError from pygen.stmt(' = enum.auto()')
-    After fix: raises ValueError with friendly message.
-    """
+    """Rule named '_' must raise ValueError naming the rule and mentioning underscore."""
     grammar = _make_simple_grammar("_")
     with pytest.raises(ValueError, match=r"'_'") as exc_info:
         gsm.validate_no_underscore_only_names(grammar)
@@ -51,11 +46,7 @@ def test_rule_named_single_underscore_raises():
 
 
 def test_rule_named_double_underscore_raises():
-    """Rule named '__' must raise ValueError.
-
-    Before fix: raises IndentationError.
-    After fix: raises ValueError with friendly message.
-    """
+    """Rule named '__' must raise ValueError."""
     grammar = _make_simple_grammar("__")
     with pytest.raises(ValueError, match=r"'__'") as exc_info:
         gsm.validate_no_underscore_only_names(grammar)
@@ -88,11 +79,7 @@ def test_rule_named_empty_string_raises():
 
 
 def test_top_level_label_underscore_raises():
-    """Label '_' in rule 'x' must raise ValueError naming both rule and label.
-
-    Before fix: generates successfully (Python backend produces Label._, child__()).
-    After fix: raises ValueError.
-    """
+    """Label '_' in rule 'x' must raise ValueError naming both rule and label."""
     grammar = _make_simple_grammar("x", label="_")
     with pytest.raises(ValueError) as exc_info:
         gsm.validate_no_underscore_only_names(grammar)
@@ -107,8 +94,6 @@ def test_nested_label_underscore_raises():
     """Label '_' nested inside a parenthesized sub-expression must raise ValueError.
 
     Grammar: x := (a:/[a-z]+/ | _:/[0-9]+/)
-    Before fix: generates successfully.
-    After fix: raises ValueError.
     """
     inner_items_a = gsm.Items(
         items=[
@@ -161,8 +146,7 @@ def test_nested_label_underscore_raises():
 def test_rust_path_raises_at_init():
     """RustCstGenerator.__init__ for grammar with rule '_' raises ValueError (not silent).
 
-    Before fix: __init__ succeeds, generate() emits 'pub struct  {' (malformed Rust).
-    After fix: ValueError from classify_trivia_rules inside __init__.
+    ValueError is raised by classify_trivia_rules inside __init__.
     """
     grammar = _make_simple_grammar("_")
     with pytest.raises(ValueError) as exc_info:
@@ -331,8 +315,6 @@ def test_plumbing_rejects_rule_named_single_underscore():
 
     Locks the plumbing integration: the validator fires inside classify_trivia_rules
     which is called by generate_parser, so any bypass path would leave this test failing.
-    Before fix: raises IndentationError from pygen.stmt(' = enum.auto()')
-    After fix: raises ValueError with friendly message.
     """
     grammar_text = "_ := val:/[a-z]+/ ;"
     grammar = plumbing.parse_grammar(grammar_text)
@@ -341,11 +323,7 @@ def test_plumbing_rejects_rule_named_single_underscore():
 
 
 def test_plumbing_rejects_rule_named_double_underscore():
-    """plumbing.generate_parser raises ValueError for rule '__'.
-
-    Before fix: raises IndentationError.
-    After fix: raises ValueError with friendly message.
-    """
+    """plumbing.generate_parser raises ValueError for rule '__'."""
     grammar_text = "__ := val:/[a-z]+/ ;"
     grammar = plumbing.parse_grammar(grammar_text)
     with pytest.raises(ValueError, match=r"underscore"):
@@ -353,12 +331,10 @@ def test_plumbing_rejects_rule_named_double_underscore():
 
 
 def test_plumbing_rejects_label_underscore():
-    """plumbing.generate_parser raises ValueError for a label '_' (formerly worked on Python backend).
+    """plumbing.generate_parser raises ValueError for a label '_'.
 
     Locks the plumbing integration for the label case: classify_trivia_rules fires for label
     violations too, so any future bypass would leave this test failing.
-    Before fix: generate_parser succeeds (produces Label._, child__()).
-    After fix: raises ValueError.
     """
     grammar_text = "x := _:/[a-z]+/ ;"
     grammar = plumbing.parse_grammar(grammar_text)

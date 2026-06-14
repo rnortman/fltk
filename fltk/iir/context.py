@@ -75,7 +75,7 @@ def get_parser_types():
 
 
 def _register_builtin_types(registry: TypeRegistry) -> None:
-    """Register built-in types that were previously registered globally."""
+    """Register built-in types into the given registry."""
 
     # Register the same built-in types that model.py registers globally
     builtin_types = [

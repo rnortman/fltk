@@ -1,8 +1,7 @@
-"""TDD tests for nullable-repetition infinite-loop guard + validator gap fix.
+"""Tests for nullable-repetition infinite-loop guard + validator gap.
 
-Test order follows design §5: failing tests first (§5.1, §5.2, §5.3, §5.4).
-All tests in §5.1-§5.3 FAIL against current code and PASS after the fix.
-§5.4 (source-text guard placement) also fails until the fix is applied.
+Test order follows design §5: §5.1 (backend guard), §5.2 (validator gap),
+§5.3 (generator rejection), §5.4 (source-text guard placement).
 
 Trigger grammar: rule := (r"a*" .)+
   - outer item: ONE_OR_MORE over a sub-expression
@@ -42,10 +41,8 @@ def _make_trigger_grammar() -> gsm.Grammar:
     REQUIRED with term Regex(r"a*").  The inner item always matches (including
     empty string) because `a*` can match zero characters.
 
-    The current validator accepts this grammar because Item.can_be_nil() only
-    checks the quantifier (REQUIRED → False), ignoring the term.  Post-fix,
-    Item.can_be_nil() also checks the term: REQUIRED + nullable Regex → True,
-    so validate_no_repeated_nil_items raises ValueError.
+    Item.can_be_nil() checks both the quantifier and the term: REQUIRED + nullable
+    Regex → True, so validate_no_repeated_nil_items raises ValueError.
     """
     inner_items = gsm.Items(
         items=[
@@ -167,8 +164,7 @@ def _make_trigger_grammar_nil_rule_ref() -> gsm.Grammar:
 # The subprocess script builds the trigger grammar, monkeypatches
 # validate_no_repeated_nil_items to a no-op (isolating the loop guard layer),
 # generates the parser, then calls apply__parse_rule on "aab" and "b".
-# Pre-fix: times out (infinite loop).
-# Post-fix: returns pos=2 for "aab" (empty iteration discarded) and None for "b".
+# Expected: returns pos=2 for "aab" (empty iteration discarded) and None for "b".
 
 _PYTHON_HANG_SCRIPT = textwrap.dedent("""\
     from fltk.fegen import gsm
@@ -216,8 +212,7 @@ _PYTHON_HANG_SCRIPT = textwrap.dedent("""\
     Parser = pr.parser_class
 
     # Test 1: "aab" — iteration 1 consumes "aa" (pos 0→2), iteration 2 tries at pos 2
-    # and matches empty "a*" → post-fix: break, return ApplyResult(pos=2).
-    # Pre-fix: infinite loop.
+    # and matches empty "a*" → guard fires: break, return ApplyResult(pos=2).
     terminals1 = terminalsrc.TerminalSource("aab")
     parser1 = Parser(terminalsrc=terminals1)
     result1 = parser1.apply__parse_rule(0)
@@ -225,8 +220,8 @@ _PYTHON_HANG_SCRIPT = textwrap.dedent("""\
     assert result1 is not None, "Expected Some result for 'aab'"
     assert result1.pos == 2, f"Expected pos=2 for 'aab', got pos={result1.pos}"
 
-    # Test 2: "b" — first iteration matches empty string immediately (pos 0).
-    # post-fix: break immediately, pos==span_start → + check fails → None.
+    # Test 2: "b" — first iteration matches empty string immediately (pos 0);
+    # guard fires: break immediately, pos==span_start → + check fails → None.
     terminals2 = terminalsrc.TerminalSource("b")
     parser2 = Parser(terminalsrc=terminals2)
     result2 = parser2.apply__parse_rule(0)
@@ -238,10 +233,10 @@ _PYTHON_HANG_SCRIPT = textwrap.dedent("""\
 
 
 def test_python_backend_guard():
-    """§5.1 Python backend: loop terminates (or validator rejects before generate).
+    """§5.1 Python backend: loop terminates on empty-match iteration.
 
-    Pre-fix: subprocess times out (infinite loop).
-    Post-fix: subprocess prints PASS (guard fires, loop terminates).
+    The subprocess monkeypatches the validator to a no-op so the loop guard is tested
+    in isolation; the guard fires and the subprocess prints PASS.
     """
     try:
         result = subprocess.run(  # noqa: S603
@@ -330,10 +325,10 @@ def _repo_root() -> pathlib.Path:
 
 
 def test_rust_backend_guard(tmp_path: pathlib.Path, _repo_root: pathlib.Path):
-    """§5.1 Rust backend: loop terminates (or validator rejects before generate).
+    """§5.1 Rust backend: loop terminates on empty-match iteration.
 
-    Pre-fix: binary hangs on "aab" (infinite loop).
-    Post-fix: binary prints PASS.
+    The validator is monkeypatched to a no-op so the loop guard is tested in isolation;
+    the compiled binary is expected to print PASS.
 
     Skipped if `cargo` is not on PATH (toolchain is a documented repo requirement;
     cargo absence signals environment misconfiguration, not a test failure).
@@ -398,7 +393,7 @@ def test_rust_backend_guard(tmp_path: pathlib.Path, _repo_root: pathlib.Path):
 
     binary = cargo_target_dir / "debug" / "nullable-loop-test"
 
-    # Run binary with short timeout — long timeout = hang = pre-fix behavior.
+    # Run binary with short timeout — a hang indicates an infinite loop (missing loop guard).
     try:
         run_result = subprocess.run(  # noqa: S603
             [str(binary)],
@@ -446,10 +441,10 @@ def test_cross_backend_parity():
 
 
 class TestValidatorGap:
-    """§5.2 Failing-first: Item.can_be_nil is term-aware after the fix."""
+    """§5.2 Item.can_be_nil is term-aware."""
 
     def test_item_required_nullable_regex_can_be_nil(self):
-        """REQUIRED item + nullable Regex(r"a*") → can_be_nil True after fix."""
+        """REQUIRED item + nullable Regex(r"a*") → can_be_nil True."""
         grammar = gsm.Grammar(rules=[], identifiers={})
         item = gsm.Item(
             label=None,
@@ -457,11 +452,10 @@ class TestValidatorGap:
             term=gsm.Regex(r"a*"),
             quantifier=gsm.REQUIRED,
         )
-        # Pre-fix: False (ignores term).  Post-fix: True (term is nullable).
         assert item.can_be_nil(grammar) is True
 
     def test_item_required_empty_literal_can_be_nil(self):
-        """REQUIRED item + Literal("") → can_be_nil True after fix."""
+        """REQUIRED item + Literal("") → can_be_nil True."""
         grammar = gsm.Grammar(rules=[], identifiers={})
         item = gsm.Item(
             label=None,
@@ -469,11 +463,10 @@ class TestValidatorGap:
             term=gsm.Literal(""),
             quantifier=gsm.REQUIRED,
         )
-        # Pre-fix: False.  Post-fix: True.
         assert item.can_be_nil(grammar) is True
 
     def test_item_required_nil_rule_ref_can_be_nil(self):
-        """REQUIRED item referencing a nil-able rule → can_be_nil True after fix."""
+        """REQUIRED item referencing a nil-able rule → can_be_nil True."""
         nullable_rule = gsm.Rule(
             name="nullable",
             alternatives=[
@@ -498,13 +491,11 @@ class TestValidatorGap:
             quantifier=gsm.REQUIRED,
         )
         # nullable_rule.can_be_nil(grammar) is True (its inner REQUIRED item has Regex(r"a*")
-        # which is nullable — but only after the fix).
-        # Pre-fix: nullable_rule.can_be_nil = False → item.can_be_nil = False.
-        # Post-fix: nullable_rule.can_be_nil = True → item.can_be_nil = True.
+        # which is nullable).
         assert item.can_be_nil(grammar) is True
 
     def test_item_required_non_nullable_term_not_nil(self):
-        """REQUIRED item + non-nullable regex → can_be_nil False (unchanged by fix)."""
+        """REQUIRED item + non-nullable regex → can_be_nil False."""
         grammar = gsm.Grammar(rules=[], identifiers={})
         item = gsm.Item(
             label=None,
@@ -512,7 +503,6 @@ class TestValidatorGap:
             term=gsm.Regex(r"a+"),
             quantifier=gsm.REQUIRED,
         )
-        # Unchanged before and after fix.
         assert item.can_be_nil(grammar) is False
 
     def test_item_optional_quantifier_always_nil(self):
@@ -527,10 +517,8 @@ class TestValidatorGap:
         assert item.can_be_nil(grammar) is True
 
     def test_validate_no_repeated_nil_rejects_trigger_grammar(self):
-        """validate_no_repeated_nil_items raises ValueError for the trigger grammar after fix."""
+        """validate_no_repeated_nil_items raises ValueError for the trigger grammar."""
         trigger = _make_trigger_grammar()
-        # Pre-fix: passes (validator only checks optional quantifiers).
-        # Post-fix: raises ValueError ("Repeated potentially-nil").
         with pytest.raises(ValueError, match="Repeated potentially-nil"):
             gsm.validate_no_repeated_nil_items(trigger)
 
@@ -551,7 +539,7 @@ class TestValidatorGap:
 # test_item_nil_detection_with_quantifiers that encode the old (buggy) behavior.
 # These must be checked here since we cannot modify the existing test file in this increment.
 class TestItemNilDetectionUpdated:
-    """Updated assertions for Item.can_be_nil that were wrong pre-fix (design §4 last bullet)."""
+    """Correct assertions for Item.can_be_nil (design §4 last bullet)."""
 
     def test_required_empty_literal_is_nil(self):
         """REQUIRED + empty literal IS nil (contradicts old test assertion)."""
@@ -566,9 +554,9 @@ class TestItemNilDetectionUpdated:
         assert required_item.can_be_nil(grammar) is True
 
     def test_one_or_more_empty_literal_is_nil(self):
-        """ONE_OR_MORE + empty literal: Item.can_be_nil() returns True post-fix.
+        """ONE_OR_MORE + empty literal: Item.can_be_nil() returns True.
 
-        Post-fix formula: ``is_optional() OR term_can_be_nil(term, grammar)``
+        Formula: ``is_optional() OR term_can_be_nil(term, grammar)``
         = ``False OR True`` = ``True``.
 
         The item has quantifier ONE_OR_MORE (min=1, so is_optional()=False), but its
@@ -594,21 +582,19 @@ class TestItemNilDetectionUpdated:
 
 
 class TestGeneratorRejection:
-    """§5.3 Both generator entry points reject the trigger grammar after the fix."""
+    """§5.3 Both generator entry points reject the trigger grammar."""
 
     def test_python_generate_parser_rejects_trigger_grammar(self):
         """generate_parser raises ValueError for the trigger grammar (validator wired in)."""
         trigger = _make_trigger_grammar()
-        # Pre-fix: passes validation and generates a parser that hangs.
-        # Post-fix: classify_trivia_rules → validate_no_repeated_nil_items → ValueError.
+        # classify_trivia_rules → validate_no_repeated_nil_items → ValueError.
         with pytest.raises(ValueError, match="Repeated potentially-nil"):
             generate_parser(trigger)
 
     def test_rust_parser_generator_rejects_trigger_grammar(self):
         """RustParserGenerator raises ValueError at construction for the trigger grammar."""
         trigger = _make_trigger_grammar()
-        # Pre-fix: constructs successfully, hangs at parse time.
-        # Post-fix: __init__ → classify_trivia_rules → validate_no_repeated_nil_items → ValueError.
+        # __init__ → classify_trivia_rules → validate_no_repeated_nil_items → ValueError.
         with pytest.raises(ValueError, match="Repeated potentially-nil"):
             RustParserGenerator(trigger)
 
@@ -708,7 +694,7 @@ class TestRustGuardPlacement:
         """The TODO(nullable-loop) comment block is removed from generated output."""
         gen = RustParserGenerator(_make_simple_plus_grammar())
         src = gen.generate()
-        assert "TODO(nullable-loop)" not in src, "TODO(nullable-loop) comment should be removed after fix"
+        assert "TODO(nullable-loop)" not in src, "TODO(nullable-loop) comment must not appear in generated output"
 
 
 class TestPythonGuardPlacement:

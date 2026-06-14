@@ -81,9 +81,8 @@ def test_repeated_nil_validation_rejects_nested_subexpr():
 
     Grammar: rule := outer:( (x:r"a*")+ )
     The outer item is REQUIRED over a sub-expression; the inner item is ONE_OR_MORE
-    over Regex(r"a*").  Previously the validator only inspected top-level items and
-    missed the nested ONE_OR_MORE, so such grammars passed validation and reached
-    codegen.  With the recursive walk, the inner item is found and rejected.
+    over Regex(r"a*").  The validator recursively walks sub-expressions, so the inner
+    item is found and rejected.
     """
     inner_items = gsm.Items(
         items=[
@@ -224,9 +223,7 @@ def test_trivia_rule_not_nil_validation():
 def test_trivia_rule_not_nil_required_nullable_term():
     """validate_trivia_rule_not_nil rejects REQUIRED quantifier + nullable regex term.
 
-    Pre-fix: the quantifier-only check (is_optional()) returned False for REQUIRED,
-    so this trivia rule was accepted even though it can produce empty matches.
-    Post-fix: Item.can_be_nil is term-aware; REQUIRED + Regex(r"\\s*") → True → rejected.
+    Item.can_be_nil is term-aware; REQUIRED + Regex(r"\\s*") → True → rejected.
     """
     nil_trivia_rule = gsm.Rule(
         name="_trivia",

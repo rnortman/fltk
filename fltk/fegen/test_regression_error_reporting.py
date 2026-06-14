@@ -110,10 +110,10 @@ def test_empty_source_edge_case():
     # pos == len("") == 0 should work without IndexError
     line_col = source.pos_to_line_col(0)
 
-    # For empty source, the fix adjusts pos to -1, which creates col=-1
-    # This is the actual behavior after the fix - the important part is no IndexError
+    # For empty source, pos is adjusted to -1, which creates col=-1; the important
+    # part is that no IndexError is raised.
     assert line_col.line >= 0
-    # Note: col can be -1 for empty source after the fix adjusts pos -= 1
+    # col can be -1 for empty source when pos is decremented to -1
 
     # But pos > 0 should still raise
     with pytest.raises(ValueError, match="pos 1 beyond end of terminals"):

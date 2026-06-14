@@ -1,4 +1,4 @@
-"""Tests for gen-rust-cst and gen-rust-parser CLI subcommands."""
+"""Tests for gen-rust-cst, gen-rust-parser, and gen-rust-lib CLI subcommands."""
 
 from __future__ import annotations
 
@@ -338,3 +338,198 @@ def test_gen_rust_parser_custom_cst_mod_path(simple_grammar_file: pathlib.Path, 
     assert result.exit_code == 0, f"gen-rust-parser failed:\n{result.output}"
     src = output_rs.read_text()
     assert "use my::cst;" in src
+
+
+# ---------------------------------------------------------------------------
+# gen-rust-lib CLI tests  (design §2.3 / §4)
+# ---------------------------------------------------------------------------
+
+
+def test_gen_rust_lib_standard_output(tmp_path: pathlib.Path) -> None:
+    """gen-rust-lib writes a standard lib.rs with cst and parser submodules."""
+    output_rs = tmp_path / "lib.rs"
+    runner = CliRunner()
+    result = runner.invoke(app, ["gen-rust-lib", str(output_rs), "--module-name", "clockwork_native"])
+
+    assert result.exit_code == 0, f"gen-rust-lib failed:\n{result.output}\n{result.exception}"
+    assert output_rs.exists(), "Expected lib.rs output file was not created"
+
+    src = output_rs.read_text()
+
+    # Required imports and declarations
+    assert "use fltk_cst_core::register_submodule;" in src
+    assert "use pyo3::prelude::*;" in src
+    assert "mod cst;" in src
+    assert "mod parser;" in src
+    assert "fn clockwork_native(" in src
+    assert 'register_submodule(m, "cst", cst::register_classes)' in src
+    assert 'register_submodule(m, "parser", parser::register_classes)' in src
+    assert "Ok(())" in src
+
+    # Must NOT contain span/native-only items
+    assert "recursion_limit" not in src
+    assert "Span" not in src
+    assert "SourceText" not in src
+    assert "UnknownSpan" not in src
+    assert "UNKNOWN_SPAN" not in src
+
+
+def test_gen_rust_lib_no_parser(tmp_path: pathlib.Path) -> None:
+    """gen-rust-lib --no-parser omits mod parser; and its registration."""
+    output_rs = tmp_path / "lib.rs"
+    runner = CliRunner()
+    result = runner.invoke(app, ["gen-rust-lib", str(output_rs), "--module-name", "my_module", "--no-parser"])
+
+    assert result.exit_code == 0, f"gen-rust-lib --no-parser failed:\n{result.output}"
+    src = output_rs.read_text()
+
+    # CST must still be present
+    assert "mod cst;" in src
+    assert 'register_submodule(m, "cst", cst::register_classes)' in src
+
+    # Parser must be absent
+    assert "mod parser;" not in src
+    assert '"parser"' not in src
+
+
+def test_gen_rust_lib_invalid_module_name_empty(tmp_path: pathlib.Path) -> None:
+    """gen-rust-lib rejects empty --module-name with exit 1."""
+    output_rs = tmp_path / "lib.rs"
+    runner = CliRunner()
+    result = runner.invoke(app, ["gen-rust-lib", str(output_rs), "--module-name", ""])
+
+    assert result.exit_code != 0, "Expected non-zero exit for empty --module-name"
+    assert not output_rs.exists(), "No output file should be created on error"
+    assert "''" in result.output, "Error message should name the empty module_name value"
+
+
+def test_gen_rust_lib_invalid_module_name_starts_with_digit(tmp_path: pathlib.Path) -> None:
+    """gen-rust-lib rejects module names starting with a digit."""
+    output_rs = tmp_path / "lib.rs"
+    runner = CliRunner()
+    result = runner.invoke(app, ["gen-rust-lib", str(output_rs), "--module-name", "1bad"])
+
+    assert result.exit_code != 0, "Expected non-zero exit for '1bad' module name"
+    assert not output_rs.exists(), "No output file should be created on error"
+    assert "1bad" in result.output
+
+
+def test_gen_rust_lib_invalid_module_name_has_space(tmp_path: pathlib.Path) -> None:
+    """gen-rust-lib rejects module names with spaces."""
+    output_rs = tmp_path / "lib.rs"
+    runner = CliRunner()
+    result = runner.invoke(app, ["gen-rust-lib", str(output_rs), "--module-name", "has space"])
+
+    assert result.exit_code != 0, "Expected non-zero exit for 'has space' module name"
+    assert not output_rs.exists(), "No output file should be created on error"
+    assert "has space" in result.output, "Error message should name the offending module_name value"
+
+
+def test_gen_rust_lib_invalid_module_name_has_hyphen(tmp_path: pathlib.Path) -> None:
+    """gen-rust-lib rejects module names with hyphens."""
+    output_rs = tmp_path / "lib.rs"
+    runner = CliRunner()
+    result = runner.invoke(app, ["gen-rust-lib", str(output_rs), "--module-name", "a-b"])
+
+    assert result.exit_code != 0, "Expected non-zero exit for 'a-b' module name"
+    assert not output_rs.exists(), "No output file should be created on error"
+
+
+def test_gen_rust_lib_missing_module_name(tmp_path: pathlib.Path) -> None:
+    """gen-rust-lib exits non-zero when --module-name is omitted entirely."""
+    output_rs = tmp_path / "lib.rs"
+    runner = CliRunner()
+    result = runner.invoke(app, ["gen-rust-lib", str(output_rs)])
+
+    assert result.exit_code != 0, "Expected non-zero exit when --module-name is omitted"
+
+
+# ---------------------------------------------------------------------------
+# gen-rust-lib span-only path (--no-cst --register-span-types --unknown-span-static)
+# ---------------------------------------------------------------------------
+
+
+def test_gen_rust_lib_span_only_output(tmp_path: pathlib.Path) -> None:
+    """gen-rust-lib --no-cst --register-span-types --unknown-span-static writes a runtime-only layout."""
+    output_rs = tmp_path / "lib.rs"
+    runner = CliRunner()
+    result = runner.invoke(
+        app,
+        [
+            "gen-rust-lib",
+            str(output_rs),
+            "--module-name",
+            "_native",
+            "--no-cst",
+            "--register-span-types",
+            "--unknown-span-static",
+        ],
+    )
+
+    assert result.exit_code == 0, f"gen-rust-lib span-only failed:\n{result.output}\n{result.exception}"
+    assert output_rs.exists(), "Expected lib.rs output file was not created"
+
+    src = output_rs.read_text()
+
+    # Span/SourceText/UnknownSpan registrations
+    assert "mod span;" in src
+    assert "use span::{SourceText, Span};" in src
+    assert "pyo3::sync::PyOnceLock" in src
+    assert "m.add_class::<Span>()" in src
+    assert "m.add_class::<SourceText>()" in src
+    assert 'm.add("UnknownSpan"' in src
+
+    # UNKNOWN_SPAN static and once-init
+    assert "UNKNOWN_SPAN" in src
+    assert "UNKNOWN_SPAN already set; module initialized twice" in src
+
+    # No submodule registrations — runtime-only, no grammar CST
+    assert "register_submodule" not in src
+    assert "poc_cst" not in src
+    assert "fegen_cst" not in src
+
+    # Module function name
+    assert "fn _native(" in src
+
+
+def test_gen_rust_lib_no_cst_without_span_flags_fails(tmp_path: pathlib.Path) -> None:
+    """gen-rust-lib --no-cst without span flags fails: empty spec is invalid."""
+    output_rs = tmp_path / "lib.rs"
+    runner = CliRunner()
+    result = runner.invoke(app, ["gen-rust-lib", str(output_rs), "--module-name", "_native", "--no-cst"])
+
+    assert result.exit_code != 0, "Expected non-zero exit for --no-cst without span flags"
+    assert not output_rs.exists(), "No output file should be created on error"
+
+
+def test_gen_rust_lib_unknown_span_without_register_span_types_fails(tmp_path: pathlib.Path) -> None:
+    """gen-rust-lib --unknown-span-static without --register-span-types fails (requires span types)."""
+    output_rs = tmp_path / "lib.rs"
+    runner = CliRunner()
+    result = runner.invoke(
+        app,
+        [
+            "gen-rust-lib",
+            str(output_rs),
+            "--module-name",
+            "_native",
+            "--no-cst",
+            "--unknown-span-static",
+        ],
+    )
+
+    assert result.exit_code != 0, "Expected non-zero exit for --unknown-span-static without --register-span-types"
+    assert not output_rs.exists(), "No output file should be created on error"
+
+
+def test_gen_rust_lib_span_and_submodules_fails(tmp_path: pathlib.Path) -> None:
+    """gen-rust-lib --register-span-types without --no-cst is rejected (unsupported combination)."""
+    output_rs = tmp_path / "lib.rs"
+    runner = CliRunner()
+    result = runner.invoke(
+        app,
+        ["gen-rust-lib", str(output_rs), "--module-name", "my_module", "--register-span-types"],
+    )
+
+    assert result.exit_code != 0, "Expected non-zero exit for --register-span-types without --no-cst"
+    assert not output_rs.exists(), "No output file should be created on error"

@@ -10,10 +10,6 @@ Add `rules_rust` to `MODULE.bazel` so that the PyO3 native extension (`fltk._nat
 
 Implementation in progress — see ADR at `docs/adr/2026/06/13-rust-bazel-packaging/`.
 
-## `fltk-pyo3-cdylib-smoke`
-
-Add an in-FLTK `fltk_pyo3_cdylib` invocation to `BUILD.bazel` using `bootstrap_rust_srcs` + a minimal hand-written `lib.rs` (analogous to `tests/rust_parser_fixture/src/lib.rs`) so FLTK CI covers the full macro — crate-source assembly, cdylib compilation, abi3 rename, py_library wrapper — independent of Clockwork. Currently only `generate_rust_parser` is exercised in FLTK CI; `fltk_pyo3_cdylib` is only tested transitively by Clockwork's build. Location: `BUILD.bazel` (after `bootstrap_rust_srcs`).
-
 ## `verify-pyo3-ext-module`
 
 At implementation spike time, confirm that `extension-module` is active on the `@fltk_crates//:pyo3` target after `crate_universe` resolution. Run `bazel build //:native` on a clean checkout; if pyo3 links libpython the feature is not activated and a `crate.annotation(crate = "pyo3", crate_features = ["extension-module"])` is needed in `MODULE.bazel`'s `crate.from_cargo` block. Also confirm that dev-dep crates from the root workspace do not leak into the hub. Location: `MODULE.bazel` (`crate.from_cargo` block).
@@ -21,6 +17,26 @@ At implementation spike time, confirm that `extension-module` is active on the `
 ## `bazel-cst-spike-hub`
 
 `fltk-cst-spike` is a workspace member in root `Cargo.toml` and is therefore included in the `@fltk_crates` hub via `from_cargo`. If `fltk-cst-spike` acquires large or conflicting deps, consider excluding it from the workspace root `Cargo.toml` members list or using a dedicated minimal manifest for the Bazel crate hub. Location: `MODULE.bazel` and root `Cargo.toml`.
+
+## `native-submodule-error-context`
+
+`register_submodule` propagates errors from `register_classes` via `?` with no added context naming which submodule failed. A future improvement: annotate the error with the submodule name before propagating, so an `ImportError` at module import time names `"cst"` or `"parser"` as the culprit. Location: `crates/fltk-cst-core/src/py_module.rs` (`register_submodule` definition, line ~87).
+
+## `native-span-init-error-context`
+
+When `Py::new(m.py(), Span::unknown())` fails during `fltk._native` module init, the Python import raises a generic pyo3 `RuntimeError` with no indication the failure was in UnknownSpan sentinel creation. Wrap with a structured message so on-call can distinguish this from submodule registration failures. Location: `fltk/fegen/gsm2lib_rs.py` (`RustLibGenerator.generate()`, body for `unknown_span_static`).
+
+## `submodule-register-fn-convention`
+
+`Submodule.register_fn` is validated for Rust identifier syntax but not for the convention that it should be `register_classes` (the name the codegenned `pub fn register_classes` uses). A caller with a non-standard name gets a Rust compile error rather than a Python-level error. Document or enforce the `register_classes` convention in `Submodule.validate()`. Location: `fltk/fegen/gsm2lib_rs.py` (`Submodule.validate()`).
+
+## `rust-ident-dedup`
+
+`_RUST_IDENT_RE` in `gsm2lib_rs.py` and the single-segment component of `_CST_MOD_PATH_RE` in `genparser.py` express the same Rust identifier character class independently. If more gen-* commands need single-segment validation, consolidate by importing `_validate_rust_ident` from `gsm2lib_rs`. Location: `fltk/fegen/gsm2lib_rs.py` (line ~16), `fltk/fegen/genparser.py` (`_CST_MOD_PATH_RE`).
+
+## `bazel-lib-rs-no-cst`
+
+`fltk_pyo3_cdylib`'s assembly genrule unconditionally declares `cst.rs` and `parser.rs` as required outputs, even when `lib_rs=None` (auto-generated path). Every current caller is a grammar crate and supplies both files. A future runtime-only (span-only) crate built via this macro would hit the `test -f` guards with a misleading error. At that point, split into grammar and span-only assembly variants. Location: `rust.bzl` (`_assemble_crate` genrule, line ~239).
 
 ## `extend-children-owned`
 

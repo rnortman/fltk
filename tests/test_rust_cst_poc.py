@@ -2,10 +2,12 @@
 
 import pytest
 
-_native_module = pytest.importorskip("fltk._native", reason="Rust extension not available")
+pytest.importorskip("fltk._native", reason="Rust extension not available")
+pytest.importorskip("poc_cst", reason="poc_cst not built; run 'make build-poc-cst' first")
 
-from fltk._native import SourceText, Span, UnknownSpan  # noqa: E402
-from fltk._native.poc_cst import Identifier, Items  # noqa: E402
+from poc_cst.cst import Identifier, Items
+
+from fltk._native import SourceText, Span, UnknownSpan
 
 
 def _span(start: int = 0, end: int = 1) -> Span:

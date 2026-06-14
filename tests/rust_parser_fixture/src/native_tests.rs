@@ -38,7 +38,6 @@ mod tests {
     }
 
     /// Test 1: deep-tree Debug completes without stack overflow; output is bounded.
-    /// Pre-fix: the derived Debug would abort (stack exhaustion) at format!.
     #[test]
     fn test_deep_tree_debug_non_recursive() {
         let root = build_deep_expr_chain();
@@ -57,8 +56,7 @@ mod tests {
     }
 
     /// Test 2: deep-tree drop completes without stack overflow.
-    /// Isolates the Drop fix from the Debug fix.
-    /// Pre-fix: the compiler-generated drop glue recurses per level → abort.
+    /// Isolates the iterative Drop implementation from the iterative Debug implementation.
     #[test]
     fn test_deep_tree_drop_iterative() {
         let root = build_deep_expr_chain();
@@ -191,7 +189,6 @@ mod tests {
     // ── deep-equality tests (iterative PartialEq) ────────────────────────
 
     /// EQ-1: two structurally equal 100k chains compare equal without stack overflow.
-    /// Pre-fix failure mode: process abort (stack exhaustion) from recursive PartialEq.
     #[test]
     fn test_deep_tree_eq_iterative_equal() {
         let a = build_deep_expr_chain();

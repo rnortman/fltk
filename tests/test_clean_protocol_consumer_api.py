@@ -27,7 +27,6 @@ import pytest
 
 # fltk._native is always available in the project (Rust extension built by maturin develop)
 from fltk._native import Span as RustSpan
-from fltk._native import fegen_cst as embedded_rust_cst
 from fltk.fegen import fltk_cst as py_cst
 from fltk.fegen import fltk_cst_protocol as proto_cst
 from fltk.fegen import fltk_parser
@@ -161,7 +160,7 @@ def _python_cst_grammar(grammar_text: str):  # type: ignore[return]
 def _rust_cst_grammar(grammar_text: str):  # type: ignore[return]
     """Parse grammar_text with the embedded Rust fegen parser; return CST Grammar node (Rust-backed)."""
     fegen_grammar = parse_grammar_file(FEGEN_FLTKG_PATH)
-    pr = generate_parser(fegen_grammar, capture_trivia=False, rust_cst_module="fltk._native.fegen_cst")
+    pr = generate_parser(fegen_grammar, capture_trivia=False, rust_cst_module="fegen_rust_cst.cst")
     tsrc = terminalsrc.TerminalSource(grammar_text)
     parser = pr.parser_class(terminalsrc=tsrc)
     result = parser.apply__parse_grammar(0)
@@ -426,6 +425,7 @@ def test_protocol_import_does_not_import_concrete_backends() -> None:
 # ---------------------------------------------------------------------------
 
 
+@_FEGEN_RUST_CST_SKIP
 class TestCrossBackendEqualityHash:
     """§4 item 5 (AC 7): protocol-module Label/NodeKind members compare equal to Python and Rust
     backend counterparts, both operand orders, with consistent hashing."""
@@ -440,9 +440,9 @@ class TestCrossBackendEqualityHash:
         assert py_kind == proto_kind, "python NodeKind.ITEMS != proto NodeKind.ITEMS (reverse)"
 
     def test_nodekind_proto_eq_rust_embedded(self) -> None:
-        """proto_cst.NodeKind.ITEMS == embedded_rust_cst.NodeKind.ITEMS (and reverse)."""
+        """proto_cst.NodeKind.ITEMS == fegen_rust_cst.cst.NodeKind.ITEMS (and reverse)."""
         proto_kind = proto_cst.NodeKind.ITEMS
-        rust_kind = embedded_rust_cst.NodeKind.ITEMS
+        rust_kind = fegen_rust_cst.cst.NodeKind.ITEMS
         assert proto_kind == rust_kind, "proto NodeKind.ITEMS != embedded rust NodeKind.ITEMS"
         assert rust_kind == proto_kind, "embedded rust NodeKind.ITEMS != proto NodeKind.ITEMS (reverse)"
 
@@ -460,8 +460,8 @@ class TestCrossBackendEqualityHash:
         assert proto_kind != py_cst.NodeKind.GRAMMAR
         assert py_cst.NodeKind.GRAMMAR != proto_kind
         # Rust embedded backend (always available)
-        assert proto_kind != embedded_rust_cst.NodeKind.GRAMMAR
-        assert embedded_rust_cst.NodeKind.GRAMMAR != proto_kind
+        assert proto_kind != fegen_rust_cst.cst.NodeKind.GRAMMAR
+        assert fegen_rust_cst.cst.NodeKind.GRAMMAR != proto_kind
 
     @_FEGEN_RUST_CST_SKIP
     def test_nodekind_nonmatching_neq_rust_external(self) -> None:
@@ -475,7 +475,7 @@ class TestCrossBackendEqualityHash:
         for member in ("ITEMS", "GRAMMAR", "RULE", "ITEM"):
             proto_kind = getattr(proto_cst.NodeKind, member)
             py_kind = getattr(py_cst.NodeKind, member)
-            rust_emb_kind = getattr(embedded_rust_cst.NodeKind, member)
+            rust_emb_kind = getattr(fegen_rust_cst.cst.NodeKind, member)
             assert hash(proto_kind) == hash(py_kind), f"hash mismatch proto vs py for NodeKind.{member}"
             assert hash(proto_kind) == hash(rust_emb_kind), f"hash mismatch proto vs rust emb for NodeKind.{member}"
 
@@ -497,9 +497,9 @@ class TestCrossBackendEqualityHash:
         assert py_label == proto_label, "py Items.Label.ITEM != proto Items.Label.ITEM (reverse)"
 
     def test_label_proto_eq_rust_embedded_matching(self) -> None:
-        """proto Items.Label.ITEM == embedded_rust_cst.Items.Label.ITEM (both orders)."""
+        """proto Items.Label.ITEM == fegen_rust_cst.cst.Items.Label.ITEM (both orders)."""
         proto_label = proto_cst.Items.Label.ITEM
-        rust_label = embedded_rust_cst.Items.Label.ITEM
+        rust_label = fegen_rust_cst.cst.Items.Label.ITEM
         assert proto_label == rust_label, "proto Items.Label.ITEM != rust emb Items.Label.ITEM"
         assert rust_label == proto_label, "rust emb Items.Label.ITEM != proto Items.Label.ITEM (reverse)"
 
@@ -516,15 +516,15 @@ class TestCrossBackendEqualityHash:
         proto_label = proto_cst.Items.Label.ITEM
         assert proto_label != py_cst.Items.Label.NO_WS
         assert py_cst.Items.Label.NO_WS != proto_label
-        assert proto_label != embedded_rust_cst.Items.Label.NO_WS
-        assert embedded_rust_cst.Items.Label.NO_WS != proto_label
+        assert proto_label != fegen_rust_cst.cst.Items.Label.NO_WS
+        assert fegen_rust_cst.cst.Items.Label.NO_WS != proto_label
 
     def test_label_hash_consistent(self) -> None:
         """hash(proto_label) == hash(py_label) == hash(rust_emb_label) for matching pairs."""
         for member in ("ITEM", "NO_WS", "WS_ALLOWED", "WS_REQUIRED"):
             proto_label = getattr(proto_cst.Items.Label, member)
             py_label = getattr(py_cst.Items.Label, member)
-            rust_emb_label = getattr(embedded_rust_cst.Items.Label, member)
+            rust_emb_label = getattr(fegen_rust_cst.cst.Items.Label, member)
             assert hash(proto_label) == hash(py_label), f"hash mismatch proto vs py for Items.Label.{member}"
             assert hash(proto_label) == hash(rust_emb_label), (
                 f"hash mismatch proto vs rust emb for Items.Label.{member}"
@@ -544,7 +544,7 @@ class TestCrossBackendEqualityHash:
         """{proto_label, py_label, rust_label} has length 1 for matching members."""
         proto_label = proto_cst.Items.Label.ITEM
         py_label = py_cst.Items.Label.ITEM
-        rust_label = embedded_rust_cst.Items.Label.ITEM
+        rust_label = fegen_rust_cst.cst.Items.Label.ITEM
         s = {proto_label, py_label, rust_label}
         assert len(s) == 1, f"Set did not collapse to 1 for ITEM labels: {s!r}"
 
@@ -552,7 +552,7 @@ class TestCrossBackendEqualityHash:
         """{proto NodeKind.ITEMS, py NodeKind.ITEMS, rust NodeKind.ITEMS} has length 1."""
         proto_kind = proto_cst.NodeKind.ITEMS
         py_kind = py_cst.NodeKind.ITEMS
-        rust_kind = embedded_rust_cst.NodeKind.ITEMS
+        rust_kind = fegen_rust_cst.cst.NodeKind.ITEMS
         s = {proto_kind, py_kind, rust_kind}
         assert len(s) == 1, f"NodeKind.ITEMS set did not collapse to 1: {s!r}"
 
@@ -562,6 +562,7 @@ class TestCrossBackendEqualityHash:
 # ---------------------------------------------------------------------------
 
 
+@_FEGEN_RUST_CST_SKIP
 class TestCrossBackendDualShapeDispatch:
     """§4 item 6 (AC 12): protocol-only consumer runs both Shape 1 and Shape 2 against both
     Python-produced and Rust-produced trees; identical, correct dispatch for all 4 combinations.
@@ -727,6 +728,7 @@ class TestCrossBackendDualShapeDispatch:
 # ---------------------------------------------------------------------------
 
 
+@_FEGEN_RUST_CST_SKIP
 class TestCanonicalStringAgreement:
     """§4 item 7: canonical strings agree across protocol / Python-concrete / Rust-concrete."""
 
@@ -735,7 +737,7 @@ class TestCanonicalStringAgreement:
         for member in ("ITEMS", "GRAMMAR", "RULE", "ITEM", "TERM"):
             proto_kind = getattr(proto_cst.NodeKind, member)
             py_kind = getattr(py_cst.NodeKind, member)
-            rust_emb_kind = getattr(embedded_rust_cst.NodeKind, member)
+            rust_emb_kind = getattr(fegen_rust_cst.cst.NodeKind, member)
 
             expected = f"NodeKind.{member}"
             assert proto_kind._fltk_canonical_name == expected, (
@@ -780,7 +782,7 @@ class TestCanonicalStringAgreement:
         for member in ("ITEM", "NO_WS", "WS_ALLOWED", "WS_REQUIRED"):
             proto_label = getattr(proto_cst.Items.Label, member)
             py_label = getattr(py_cst.Items.Label, member)
-            rust_emb_label = getattr(embedded_rust_cst.Items.Label, member)
+            rust_emb_label = getattr(fegen_rust_cst.cst.Items.Label, member)
 
             expected = f"Items.Label.{member}"
             assert proto_label._fltk_canonical_name == expected

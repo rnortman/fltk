@@ -91,7 +91,7 @@ typecheck:
 # Aggregate target: build every native extension the Python test suite requires.
 # Wire this as a prerequisite of `test` so `make test` and `make check` (which
 # calls $(MAKE) test) always build fixtures before running pytest — no stale-SO risk.
-build-test-fixtures: build-native build-test-user-ext build-fegen-rust-cst build-rust-parser-fixture
+build-test-fixtures: build-native build-test-user-ext build-fegen-rust-cst build-rust-parser-fixture build-poc-cst
 
 test: build-test-fixtures
 	uv run --group lint --group test pytest -q
@@ -123,10 +123,11 @@ cargo-test-python-features:
 	PYO3_PYTHON=$$PYO3_PYTHON cargo test -q -p fltk-cst-core --features python
 
 # cargo-clippy covers test crates at their python-on feature set (the only non-default
-# feature that adds code; default features for rust_cst_fegen are already python-on).
+# feature that adds code; default features for fegen-rust are already python-on).
 cargo-clippy:
 	cargo clippy -q -- -D warnings
-	cargo clippy -q --manifest-path tests/rust_cst_fegen/Cargo.toml -- -D warnings
+	cargo clippy -q --manifest-path crates/fegen-rust/Cargo.toml -- -D warnings
+	cargo clippy -q --manifest-path tests/rust_poc_cst/Cargo.toml -- -D warnings
 	cargo clippy -q --manifest-path tests/rust_parser_fixture/Cargo.toml --features python -- -D warnings
 
 # python-off lane: feature isolation requires -p selection (workspace unification would
@@ -136,7 +137,8 @@ cargo-test-no-python:
 	cargo test -q -p fltk-cst-spike
 	cargo test -q -p fltk-parser-core
 	cargo test -q --manifest-path tests/rust_parser_fixture/Cargo.toml
-	cargo test -q --manifest-path tests/rust_cst_fegen/Cargo.toml --no-default-features
+	cargo test -q --manifest-path crates/fegen-rust/Cargo.toml --no-default-features
+	cargo test -q --manifest-path tests/rust_poc_cst/Cargo.toml --no-default-features
 
 cargo-clippy-no-python:
 	cargo clippy -q -p fltk-cst-core --no-default-features -- -D warnings
@@ -144,7 +146,8 @@ cargo-clippy-no-python:
 	cargo clippy -q -p fltk-cst-spike --features python -- -D warnings
 	cargo clippy -q -p fltk-parser-core -- -D warnings
 	cargo clippy -q --manifest-path tests/rust_parser_fixture/Cargo.toml -- -D warnings
-	cargo clippy -q --manifest-path tests/rust_cst_fegen/Cargo.toml --no-default-features -- -D warnings
+	cargo clippy -q --manifest-path crates/fegen-rust/Cargo.toml --no-default-features -- -D warnings
+	cargo clippy -q --manifest-path tests/rust_poc_cst/Cargo.toml --no-default-features -- -D warnings
 
 # Mechanical check: verify pyo3 is absent from the python-off dependency graphs.
 # Uses a positive control (a crate guaranteed present in that graph) before the negative
@@ -163,20 +166,24 @@ check-no-pyo3:
 	fixture="$$(cargo tree --manifest-path tests/rust_parser_fixture/Cargo.toml --edges normal,build)"; \
 	echo "$$fixture" | grep -q fltk-parser-core || { echo "FAIL: check-no-pyo3 broken: cargo tree output lacks fltk-parser-core"; exit 1; }; \
 	! echo "$$fixture" | grep -q pyo3 || { echo "FAIL: pyo3 present in rust_parser_fixture default-features graph"; exit 1; }; \
-	fegen="$$(cargo tree --manifest-path tests/rust_cst_fegen/Cargo.toml --no-default-features --edges normal,build)"; \
+	fegen="$$(cargo tree --manifest-path crates/fegen-rust/Cargo.toml --no-default-features --edges normal,build)"; \
 	echo "$$fegen" | grep -q fltk-parser-core || { echo "FAIL: check-no-pyo3 broken: cargo tree output lacks fltk-parser-core"; exit 1; }; \
-	! echo "$$fegen" | grep -q pyo3 || { echo "FAIL: pyo3 present in rust_cst_fegen --no-default-features graph"; exit 1; }; \
+	! echo "$$fegen" | grep -q pyo3 || { echo "FAIL: pyo3 present in fegen-rust --no-default-features graph"; exit 1; }; \
+	poc="$$(cargo tree --manifest-path tests/rust_poc_cst/Cargo.toml --no-default-features --edges normal,build)"; \
+	echo "$$poc" | grep -q fltk-cst-core || { echo "FAIL: check-no-pyo3 broken: cargo tree output lacks fltk-cst-core"; exit 1; }; \
+	! echo "$$poc" | grep -q pyo3 || { echo "FAIL: pyo3 present in rust_poc_cst --no-default-features graph"; exit 1; }; \
 	echo "check-no-pyo3: pyo3 absent from python-off graphs"
 
 # Supply-chain gate: RustSec advisories, license allow-list, banned/duplicate crates,
-# and source allow-listing (cargo-deny). The tests/* fixtures are separate workspaces
-# with their own Cargo.lock, so each is checked explicitly; all four share the single
-# root deny.toml policy via --config (path resolves from cwd = repo root).
+# and source allow-listing (cargo-deny). The standalone fixture crates have their own
+# Cargo.lock, so each is checked explicitly; all share the single root deny.toml policy
+# via --config (path resolves from cwd = repo root).
 cargo-deny:
 	cargo deny --manifest-path Cargo.toml check --config deny.toml
-	cargo deny --manifest-path tests/rust_cst_fegen/Cargo.toml check --config deny.toml
+	cargo deny --manifest-path crates/fegen-rust/Cargo.toml check --config deny.toml
 	cargo deny --manifest-path tests/rust_cst_fixture/Cargo.toml check --config deny.toml
 	cargo deny --manifest-path tests/rust_parser_fixture/Cargo.toml check --config deny.toml
+	cargo deny --manifest-path tests/rust_poc_cst/Cargo.toml check --config deny.toml
 
 # ── FLTK-internal Rust artifact targets ──────────────────────────────────────
 # These build FLTK's own test/dogfooding Rust artifacts.
@@ -196,31 +203,36 @@ build-test-user-ext:
 # parse_grammar(rust_fegen_cst_module="fegen_rust_cst.cst") and the AC8 Tier-2 test
 # (real Cst2Gsm on Rust fegen backend).
 build-fegen-rust-cst:
-	cd tests/rust_cst_fegen && uv run --group dev maturin develop
+	cd crates/fegen-rust && uv run --group dev maturin develop
 
 # Build the fixture Rust parser extension (separate cdylib crate).
 # Produces the importable module 'rust_parser_fixture' used by parity tests.
 build-rust-parser-fixture:
 	cd tests/rust_parser_fixture && uv run --group dev maturin develop --features extension-module
 
+# Build the PoC CST fixture extension (separate cdylib crate).
+# Produces the importable module 'poc_cst' used by PoC CST tests.
+build-poc-cst:
+	cd tests/rust_poc_cst && uv run --group dev maturin develop
+
 # Emit Rust CST source from a grammar (no compilation).
-# Usage: make gen-rust-cst GRAMMAR=path/to/grammar.fltkg RS_OUT=path/to/output.rs
+# Usage: make gen-rust-cst GRAMMAR=path/to/grammar.fltkg RS_OUT=path/to/output.rs [EXTRA_ARGS=...]
 gen-rust-cst:
-	uv run python -m fltk.fegen.genparser gen-rust-cst $(GRAMMAR) $(RS_OUT)
+	uv run python -m fltk.fegen.genparser gen-rust-cst $(GRAMMAR) $(RS_OUT) $(EXTRA_ARGS)
 
 # Emit Rust parser source from a grammar (no compilation).
 # Usage: make gen-rust-parser GRAMMAR=path/to/grammar.fltkg RS_OUT=path/to/output.rs
 gen-rust-parser:
 	uv run python -m fltk.fegen.genparser gen-rust-parser $(GRAMMAR) $(RS_OUT)
 
-# Regenerate the parser for the fegen grammar into the rust_cst_fegen test crate.
+# Regenerate the parser for the fegen grammar into the fegen-rust crate.
 build-fegen-rust-parser:
 	uv run python -m fltk.fegen.genparser gen-rust-parser \
-		fltk/fegen/fegen.fltkg tests/rust_cst_fegen/src/parser.rs
+		fltk/fegen/fegen.fltkg crates/fegen-rust/src/parser.rs
 
 # Run native (no-Python) Rust parser tests for the fegen grammar.
 test-native-parser:
-	cd tests/rust_cst_fegen && cargo test --no-default-features
+	cd crates/fegen-rust && cargo test --no-default-features
 
 # Run native Rust parser tests for the fixture grammar.
 test-rust-parser-fixture:
@@ -250,20 +262,18 @@ gencode:
 	uv run python -m fltk.fegen.genparser generate \
 		fltk/unparse/unparsefmt.fltkg unparsefmt fltk.unparse.unparsefmt_cst \
 		--output-dir fltk/unparse
-	# Rust: src/cst_generated.rs (PoC grammar — fltk/fegen/test_data/poc_grammar.fltkg)
+	# Rust: src/lib.rs (fltk._native module wiring — span-only runtime, no grammar submodules)
+	uv run python -m fltk.fegen.genparser gen-rust-lib src/lib.rs \
+		--module-name _native --register-span-types --unknown-span-static --no-cst --no-parser
+	# Rust: tests/rust_poc_cst/src/cst.rs (PoC grammar — fltk/fegen/test_data/poc_grammar.fltkg)
 	uv run python -m fltk.fegen.genparser gen-rust-cst \
-		fltk/fegen/test_data/poc_grammar.fltkg src/cst_generated.rs
-	# Rust: src/cst_fegen.rs (fegen.fltkg) + fltk/_native/fegen_cst.pyi stub
-	uv run python -m fltk.fegen.genparser gen-rust-cst \
-		fltk/fegen/fegen.fltkg src/cst_fegen.rs \
-		--protocol-module fltk.fegen.fltk_cst_protocol \
-		--pyi-output fltk/_native/fegen_cst.pyi
+		fltk/fegen/test_data/poc_grammar.fltkg tests/rust_poc_cst/src/cst.rs
 	# Rust: tests/rust_cst_fixture/src/cst.rs (phase4_roundtrip.fltkg)
 	$(MAKE) gen-rust-cst GRAMMAR=fltk/fegen/test_data/phase4_roundtrip.fltkg RS_OUT=tests/rust_cst_fixture/src/cst.rs
-	# Rust: tests/rust_cst_fegen/src/cst.rs (fegen.fltkg) — must match src/cst_fegen.rs;
-	# regenerated here so staleness is visible to cargo check in the rust_cst_fegen workspace.
-	$(MAKE) gen-rust-cst GRAMMAR=fltk/fegen/fegen.fltkg RS_OUT=tests/rust_cst_fegen/src/cst.rs
-	# Rust: tests/rust_cst_fegen/src/parser.rs (fegen.fltkg) — generated Rust parser.
+	# Rust: crates/fegen-rust/src/cst.rs (fegen.fltkg) + fltk/_stubs/fegen_rust_cst/cst.pyi stub
+	$(MAKE) gen-rust-cst GRAMMAR=fltk/fegen/fegen.fltkg RS_OUT=crates/fegen-rust/src/cst.rs \
+		EXTRA_ARGS="--protocol-module fltk.fegen.fltk_cst_protocol --pyi-output fltk/_stubs/fegen_rust_cst/cst.pyi"
+	# Rust: crates/fegen-rust/src/parser.rs (fegen.fltkg) — generated Rust parser.
 	$(MAKE) build-fegen-rust-parser
 	# Rust: tests/rust_parser_fixture/src/cst.rs and parser.rs (rust_parser_fixture.fltkg)
 	$(MAKE) gen-rust-cst GRAMMAR=fltk/fegen/test_data/rust_parser_fixture.fltkg RS_OUT=tests/rust_parser_fixture/src/cst.rs
@@ -274,8 +284,8 @@ gencode:
 	$(MAKE) gen-rust-cst GRAMMAR=fltk/fegen/test_data/collision_fixture.fltkg RS_OUT=tests/rust_parser_fixture/src/collision_cst.rs
 	uv run python -m fltk.fegen.genparser gen-rust-parser --cst-mod-path super::collision_cst \
 		fltk/fegen/test_data/collision_fixture.fltkg tests/rust_parser_fixture/src/collision_parser.rs
-	# Rust: crates/fltk-cst-spike/src/cst.rs — same grammar as cst_generated.rs; cp makes identity explicit
-	cp src/cst_generated.rs crates/fltk-cst-spike/src/cst.rs
+	# Rust: crates/fltk-cst-spike/src/cst.rs — same grammar as rust_poc_cst/src/cst.rs; cp makes identity explicit
+	cp tests/rust_poc_cst/src/cst.rs crates/fltk-cst-spike/src/cst.rs
 	# Normalize formatting. Order matters:
 	# 1. ruff check --fix: upgrades typing.Union[X,Y] → X|Y and similar, so ruff format can then
 	#    wrap the resulting X|Y chains correctly.  Exit code ignored — residuals handled by step 2.

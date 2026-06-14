@@ -1,4 +1,4 @@
-"""Smoke tests for the fegen.fltkg Rust CST classes compiled into fltk._native.fegen_cst.
+"""Smoke tests for the fegen.fltkg Rust CST classes in fegen_rust_cst.cst.
 
 Validates AC-7 (14 classes compile) and AC-8 (construction, label access, append/child
 round-trip, children is a list). Tests are parameterized over all 14 classes.
@@ -8,8 +8,9 @@ from __future__ import annotations
 
 import pytest
 
-from fltk._native import SourceText, Span, UnknownSpan
-from fltk._native.fegen_cst import (
+pytest.importorskip("fegen_rust_cst", reason="fegen_rust_cst not built; run 'make build-fegen-rust-cst' first")
+
+from fegen_rust_cst.cst import (
     Alternatives,
     BlockComment,
     Disposition,
@@ -25,6 +26,8 @@ from fltk._native.fegen_cst import (
     Term,
     Trivia,
 )
+
+from fltk._native import SourceText, Span, UnknownSpan
 
 
 def _span() -> Span:

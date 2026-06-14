@@ -11,7 +11,7 @@ from typing import TYPE_CHECKING, Annotated, cast
 import typer
 
 from fltk import pygen
-from fltk.fegen import fltk2gsm, fltk_parser, gsm, gsm2parser, gsm2parser_rs, gsm2tree, gsm2tree_rs
+from fltk.fegen import fltk2gsm, fltk_parser, gsm, gsm2lib_rs, gsm2parser, gsm2parser_rs, gsm2tree, gsm2tree_rs
 from fltk.fegen.pyrt import errors, terminalsrc
 from fltk.iir.context import CompilerContext, create_default_context
 from fltk.iir.py import compiler
@@ -387,6 +387,87 @@ def gen_rust_parser(
         gen = gsm2parser_rs.RustParserGenerator(grammar, cst_mod_path=cst_mod_path, source_name=str(grammar_file))
         src = gen.generate()
     except (ValueError, RuntimeError, NotImplementedError) as e:
+        typer.echo(f"Error: {e}", err=True)
+        raise typer.Exit(1) from e
+
+    try:
+        output_file.write_text(src)
+    except Exception as e:
+        typer.echo(f"Error: Failed to write output file '{output_file}': {e}", err=True)
+        raise typer.Exit(1) from e
+
+
+@app.command(name="gen-rust-lib")
+def gen_rust_lib(
+    output_file: Annotated[Path, typer.Argument(help="Path to write the lib.rs source")],
+    module_name: Annotated[
+        str,
+        typer.Option(
+            "--module-name",
+            help="The #[pymodule] function name / importable module name (e.g. 'clockwork_native').",
+        ),
+    ],
+    no_parser: Annotated[
+        bool,
+        typer.Option("--no-parser", help="Emit a CST-only lib.rs (omit mod parser; and its registration)."),
+    ] = False,
+    no_cst: Annotated[
+        bool,
+        typer.Option(
+            "--no-cst",
+            help="Emit zero submodules (omit mod cst; and all registrations). "
+            "Use with --register-span-types/--unknown-span-static for runtime-only libs.",
+        ),
+    ] = False,
+    register_span_types: Annotated[
+        bool,
+        typer.Option("--register-span-types", help="Emit Span/SourceText class registration and span module import."),
+    ] = False,
+    unknown_span_static: Annotated[
+        bool,
+        typer.Option("--unknown-span-static", help="Emit the UNKNOWN_SPAN static declaration and once-init."),
+    ] = False,
+) -> None:
+    """Emit a Rust lib.rs module-wiring boilerplate for a standard pyo3 cdylib.
+
+    Unlike gen-rust-cst / gen-rust-parser, this command needs no grammar file —
+    lib.rs has no rule-derived content.  It is parameterized only by the module
+    name and whether a parser submodule is included.
+
+    Standard path: declares mod cst; (and mod parser; unless --no-parser),
+    and a #[pymodule] fn that registers them as Python submodules.
+
+    Runtime-only path (--no-cst --register-span-types --unknown-span-static):
+    emits span/UNKNOWN_SPAN wiring with zero submodules. Used for fltk._native.
+
+    Note: do NOT include #![recursion_limit] in the module name or output — the
+    fltk_pyo3_cdylib Bazel macro injects it at assembly time.
+
+    Examples:
+        genparser gen-rust-lib lib.rs --module-name clockwork_native
+        genparser gen-rust-lib lib.rs --module-name my_module --no-parser
+        genparser gen-rust-lib src/lib.rs --module-name _native --no-cst --register-span-types --unknown-span-static
+    """
+    if not no_cst and (register_span_types or unknown_span_static):
+        typer.echo(
+            "Error: --register-span-types and --unknown-span-static require --no-cst. "
+            "Combining span-type registration with grammar submodules is not a supported use case.",
+            err=True,
+        )
+        raise typer.Exit(1)
+    if no_cst:
+        spec = gsm2lib_rs.LibSpec(
+            module_name=module_name,
+            submodules=(),
+            register_span_types=register_span_types,
+            unknown_span_static=unknown_span_static,
+        )
+    else:
+        spec = gsm2lib_rs.LibSpec.standard(module_name, with_parser=not no_parser)
+    try:
+        gen = gsm2lib_rs.RustLibGenerator(spec)
+        src = gen.generate()
+    except ValueError as e:
         typer.echo(f"Error: {e}", err=True)
         raise typer.Exit(1) from e
 

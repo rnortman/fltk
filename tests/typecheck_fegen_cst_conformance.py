@@ -1,8 +1,8 @@
 # ruff: noqa
-"""Static conformance fixture: fltk._native.fegen_cst satisfies CstModule without a cast.
+"""Static conformance fixture: fegen_rust_cst.cst satisfies CstModule without a cast.
 
 This file is checked in and validated by the repo-wide `uv run pyright` gate (§2.3, §4 B4).
-It uses the stub at fltk/_native/fegen_cst.pyi — pyright reads the stub, not the compiled
+It uses the stub at fltk/_stubs/fegen_rust_cst/cst.pyi — pyright reads the stub, not the compiled
 extension — so no Rust toolchain is needed for the check.
 
 If pyright reports errors here, the stub's type annotations diverge from the CstModule
@@ -12,7 +12,7 @@ protocol. Fix the stub (re-run make gencode) and ensure the annotations satisfy 
 from __future__ import annotations
 
 import fltk.fegen.fltk_cst_protocol as cstp
-import fltk._native.fegen_cst as fegen_cst
+import fegen_rust_cst.cst as fegen_cst
 
 # B4 static conformance: whole-module no-cast assignment must produce zero pyright errors.
 _m: cstp.CstModule = fegen_cst

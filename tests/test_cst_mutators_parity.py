@@ -1,11 +1,11 @@
 """Cross-backend parity tests for named CST mutators (§4.2 of cst-named-mutators design).
 
 Asserts identical resulting trees (kind/label/span sequences) and — for errors — identical
-exception type and message text across the Python dataclass backend and the embedded Rust backend.
+exception type and message text across the Python dataclass backend and the Rust backend.
 
 Backend abbreviations:
   py  — fltk.fegen.fltk_cst (Python dataclass backend)
-  emb — fltk._native.fegen_cst (embedded Rust crate)
+  rust — fegen_rust_cst.cst (standalone Rust cdylib)
 
 Both backends use fegen CST node classes (Identifier has one label, Items has four).
 Identifier: single-label node; children are Spans.
@@ -27,10 +27,14 @@ import sys
 
 import pytest
 
-_native_module = pytest.importorskip("fltk._native", reason="Rust extension not available")
+pytest.importorskip("fltk._native", reason="Rust extension not available")
+fegen_rust_cst_mod = pytest.importorskip(
+    "fegen_rust_cst", reason="fegen_rust_cst not built; run 'make build-fegen-rust-cst' first"
+)
+
+import fegen_rust_cst.cst as rust_cst  # noqa: E402
 
 from fltk._native import Span as NativeSpan  # noqa: E402
-from fltk._native import fegen_cst as emb_cst  # noqa: E402
 from fltk.fegen import fltk_cst as py_cst  # noqa: E402
 from fltk.fegen.pyrt import terminalsrc  # noqa: E402
 from tests.gsm2tree_helpers import make_generator as _make_generator  # noqa: E402
@@ -44,7 +48,7 @@ from tests.gsm2tree_helpers import make_zero_label_grammar as _make_zero_label_g
 # span_factory(start, end) → a valid span for that backend.
 _BACKENDS = {
     "py": (py_cst, lambda start, end: terminalsrc.Span(start, end)),
-    "emb": (emb_cst, lambda start, end: NativeSpan(start, end)),
+    "rust": (rust_cst, lambda start, end: NativeSpan(start, end)),
 }
 _BACKEND_KEYS = list(_BACKENDS.keys())
 
@@ -545,14 +549,14 @@ class TestMessageParity:
 
     def test_remove_at_empty_message_parity(self) -> None:
         py_node = py_cst.Identifier()
-        emb_node = emb_cst.Identifier()
+        emb_node = rust_cst.Identifier()
         py_msg = self._try_and_capture(IndexError, lambda: py_node.remove_at(0))
         emb_msg = self._try_and_capture(IndexError, lambda: emb_node.remove_at(0))
         assert py_msg == emb_msg
 
     def test_remove_at_oob_message_parity(self) -> None:
         py_node = py_cst.Identifier()
-        emb_node = emb_cst.Identifier()
+        emb_node = rust_cst.Identifier()
         py_node.append_name(terminalsrc.Span(0, 1))
         emb_node.append_name(NativeSpan(0, 1))
         py_msg = self._try_and_capture(IndexError, lambda: py_node.remove_at(5))
@@ -561,7 +565,7 @@ class TestMessageParity:
 
     def test_replace_at_oob_message_parity(self) -> None:
         py_node = py_cst.Identifier()
-        emb_node = emb_cst.Identifier()
+        emb_node = rust_cst.Identifier()
         py_node.append_name(terminalsrc.Span(0, 1))
         emb_node.append_name(NativeSpan(0, 1))
         py_msg = self._try_and_capture(IndexError, lambda: py_node.replace_at(5, terminalsrc.Span(1, 2)))
@@ -570,7 +574,7 @@ class TestMessageParity:
 
     def test_bad_label_insert_message_parity(self) -> None:
         py_node = py_cst.Identifier()
-        emb_node = emb_cst.Identifier()
+        emb_node = rust_cst.Identifier()
         s_py = terminalsrc.Span(0, 1)
         s_emb = NativeSpan(0, 1)
         py_msg = self._try_and_capture(TypeError, lambda: py_node.insert(0, s_py, label="bad"))  # type: ignore
@@ -579,7 +583,7 @@ class TestMessageParity:
 
     def test_bad_child_type_insert_message_parity(self) -> None:
         py_node = py_cst.Items()
-        emb_node = emb_cst.Items()
+        emb_node = rust_cst.Items()
         py_msg = self._try_and_capture(TypeError, lambda: py_node.insert(0, "not_a_span"))  # type: ignore
         emb_msg = self._try_and_capture(TypeError, lambda: emb_node.insert(0, "not_a_span"))  # type: ignore
         assert py_msg == emb_msg
@@ -587,7 +591,7 @@ class TestMessageParity:
     def test_remove_at_large_positive_message_parity(self) -> None:
         big = 10**25
         py_node = py_cst.Identifier()
-        emb_node = emb_cst.Identifier()
+        emb_node = rust_cst.Identifier()
         py_node.append_name(terminalsrc.Span(0, 1))
         emb_node.append_name(NativeSpan(0, 1))
         py_msg = self._try_and_capture(IndexError, lambda: py_node.remove_at(big))
@@ -597,7 +601,7 @@ class TestMessageParity:
     def test_remove_at_large_negative_message_parity(self) -> None:
         big = -(10**25)
         py_node = py_cst.Identifier()
-        emb_node = emb_cst.Identifier()
+        emb_node = rust_cst.Identifier()
         py_node.append_name(terminalsrc.Span(0, 1))
         emb_node.append_name(NativeSpan(0, 1))
         py_msg = self._try_and_capture(IndexError, lambda: py_node.remove_at(big))
@@ -624,15 +628,15 @@ class TestMixedOperationsParity:
         node.insert(-1, s(300, 301), py_cst.Identifier.Label.NAME)
         return node
 
-    def _build_emb(self) -> emb_cst.Identifier:
-        node = emb_cst.Identifier()
+    def _build_emb(self) -> rust_cst.Identifier:
+        node = rust_cst.Identifier()
         s = NativeSpan
         for i in range(5):
             node.append_name(s(i * 10, i * 10 + 5))
-        node.insert(0, s(100, 101), emb_cst.Identifier.Label.NAME)  # prepend
+        node.insert(0, s(100, 101), rust_cst.Identifier.Label.NAME)  # prepend
         node.remove_at(2)  # remove index 2
-        node.replace_at(1, s(200, 201), emb_cst.Identifier.Label.NAME)
-        node.insert(-1, s(300, 301), emb_cst.Identifier.Label.NAME)
+        node.replace_at(1, s(200, 201), rust_cst.Identifier.Label.NAME)
+        node.insert(-1, s(300, 301), rust_cst.Identifier.Label.NAME)
         return node
 
     def test_mixed_operations_identical_structure(self) -> None:
@@ -676,7 +680,7 @@ class TestSpanHandInPerBackend:
 
     def test_python_accepts_native_span_when_loaded(self) -> None:
         """Python backend accepts native Span when fltk._native is already loaded."""
-        # fltk._native is already loaded (we imported it for emb_cst)
+        # fltk._native is already loaded (we imported it for rust_cst)
         assert "fltk._native" in sys.modules
         node = py_cst.Identifier()
         node.insert(0, NativeSpan(0, 1), py_cst.Identifier.Label.NAME)
@@ -684,15 +688,15 @@ class TestSpanHandInPerBackend:
 
     def test_rust_accepts_native_span(self) -> None:
         """Rust backend accepts native Span in insert."""
-        node = emb_cst.Identifier()
-        node.insert(0, NativeSpan(0, 1), emb_cst.Identifier.Label.NAME)
+        node = rust_cst.Identifier()
+        node.insert(0, NativeSpan(0, 1), rust_cst.Identifier.Label.NAME)
         assert len(node.children) == 1
 
     def test_rust_rejects_terminalsrc_span(self) -> None:
         """Rust backend rejects terminalsrc.Span with unsupported child type TypeError."""
-        node = emb_cst.Identifier()
+        node = rust_cst.Identifier()
         with pytest.raises(TypeError, match="unsupported child type"):
-            node.insert(0, terminalsrc.Span(0, 1), emb_cst.Identifier.Label.NAME)  # type: ignore[arg-type]
+            node.insert(0, terminalsrc.Span(0, 1), rust_cst.Identifier.Label.NAME)  # type: ignore[arg-type]
 
 
 # ---------------------------------------------------------------------------
@@ -768,27 +772,27 @@ class TestMixedOpsNodeChildren:
     def test_insert_node_child_parity(self) -> None:
         """insert with a node-typed child produces identical label sequences on both backends."""
         py_alt = py_cst.Alternatives()
-        emb_alt = emb_cst.Alternatives()
+        emb_alt = rust_cst.Alternatives()
         # Create Items children
         py_items_a = py_cst.Items()
         py_items_b = py_cst.Items()
-        emb_items_a = emb_cst.Items()
-        emb_items_b = emb_cst.Items()
+        emb_items_a = rust_cst.Items()
+        emb_items_b = rust_cst.Items()
         # Append then insert at head
         py_alt.append_items(py_items_a)
         py_alt.insert(0, py_items_b, py_cst.Alternatives.Label.ITEMS)
         emb_alt.append_items(emb_items_a)
-        emb_alt.insert(0, emb_items_b, emb_cst.Alternatives.Label.ITEMS)
+        emb_alt.insert(0, emb_items_b, rust_cst.Alternatives.Label.ITEMS)
         assert len(py_alt.children) == 2
         self._assert_items_parity(py_alt, emb_alt)
 
     def test_remove_node_child_parity(self) -> None:
         """remove_at on a node-typed child produces identical residual label sequences."""
         py_alt = py_cst.Alternatives()
-        emb_alt = emb_cst.Alternatives()
+        emb_alt = rust_cst.Alternatives()
         for _i in range(3):
             py_alt.append_items(py_cst.Items())
-            emb_alt.append_items(emb_cst.Items())
+            emb_alt.append_items(rust_cst.Items())
         py_alt.remove_at(1)
         emb_alt.remove_at(1)
         assert len(py_alt.children) == 2
@@ -797,22 +801,22 @@ class TestMixedOpsNodeChildren:
     def test_replace_node_child_parity(self) -> None:
         """replace_at on a node-typed child produces identical label sequences."""
         py_alt = py_cst.Alternatives()
-        emb_alt = emb_cst.Alternatives()
+        emb_alt = rust_cst.Alternatives()
         for _i in range(2):
             py_alt.append_items(py_cst.Items())
-            emb_alt.append_items(emb_cst.Items())
+            emb_alt.append_items(rust_cst.Items())
         py_alt.replace_at(0, py_cst.Items(), py_cst.Alternatives.Label.ITEMS)
-        emb_alt.replace_at(0, emb_cst.Items(), emb_cst.Alternatives.Label.ITEMS)
+        emb_alt.replace_at(0, rust_cst.Items(), rust_cst.Alternatives.Label.ITEMS)
         assert len(py_alt.children) == 2
         self._assert_items_parity(py_alt, emb_alt)
 
     def test_clear_node_children_parity(self) -> None:
         """clear on a node with node-typed children empties both backends identically."""
         py_alt = py_cst.Alternatives()
-        emb_alt = emb_cst.Alternatives()
+        emb_alt = rust_cst.Alternatives()
         for _i in range(3):
             py_alt.append_items(py_cst.Items())
-            emb_alt.append_items(emb_cst.Items())
+            emb_alt.append_items(rust_cst.Items())
         py_alt.clear()
         emb_alt.clear()
         assert len(py_alt.children) == 0

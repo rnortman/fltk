@@ -2,7 +2,7 @@ load("@rules_python//python:defs.bzl", "py_binary", "py_library")
 load("@rules_python//python/uv:lock.bzl", "lock")
 load("@rules_rust//rust:defs.bzl", "rust_shared_library")
 load("//:rules.bzl", "generate_parser")
-load("//:rust.bzl", "generate_rust_parser")
+load("//:rust.bzl", "fltk_pyo3_cdylib", "generate_rust_parser")
 
 lock(
     name = "requirements",
@@ -36,8 +36,8 @@ rust_shared_library(
     srcs = glob(["src/**/*.rs"]),
     crate_name = "fltk_native",
     # "extension-module" enables pyo3's no-libpython-link mode (required for cdylibs).
-    # "python" must be set explicitly: register_classes symbols in cst_generated.rs /
-    # cst_fegen.rs are gated on #[cfg(feature = "python")] and are compiled out without it.
+    # "python" must be set explicitly: Span/SourceText pyclass registration in
+    # fltk-cst-core is gated on #[cfg(feature = "python")] and is compiled out without it.
     # Cargo would forward "python" via fltk-cst-core's feature definition, but Bazel
     # crate_features do not forward transitively — each must be stated explicitly.
     crate_features = [
@@ -114,9 +114,13 @@ generate_rust_parser(
     # default cst_mod_path = "super::cst" is correct for fltk_pyo3_cdylib usage
 )
 
-# TODO(fltk-pyo3-cdylib-smoke): add an in-FLTK fltk_pyo3_cdylib invocation using
-# bootstrap_rust_srcs + a minimal hand-written lib.rs (analogous to
-# tests/rust_parser_fixture/src/lib.rs) so that FLTK CI covers the full macro —
-# crate-source assembly, cdylib compilation, abi3 rename, and py_library wrapper —
-# independent of Clockwork.  Currently only generate_rust_parser is exercised here;
-# fltk_pyo3_cdylib is only tested transitively via Clockwork's build.  (design §5.4)
+# Smoke target for fltk_pyo3_cdylib without a hand-written lib_rs: verifies the
+# no-lib_rs branch of the macro (generate_rust_lib rule + crate assembly + cdylib
+# compilation + abi3 rename + py_library) independent of Clockwork.
+# Uses bootstrap_rust_srcs so no extra grammar file is needed.
+fltk_pyo3_cdylib(
+    name = "bootstrap_native",
+    rs_srcs = ":bootstrap_rust_srcs",
+    # lib_rs omitted: the macro generates lib.rs from name="bootstrap_native"
+    # via generate_rust_lib --module-name bootstrap_native.
+)
