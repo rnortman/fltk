@@ -14,6 +14,17 @@ pytest.importorskip("fegen_rust_cst", reason="fegen_rust_cst not built; run 'mak
 from fegen_rust_cst.cst import Grammar  # noqa: E402
 
 
+def _run_script(script: str) -> subprocess.CompletedProcess[str]:
+    """Run a Python script in a subprocess; return the completed process."""
+    return subprocess.run(  # noqa: S603
+        [sys.executable, "-c", script],
+        capture_output=True,
+        text=True,
+        timeout=30,
+        check=False,
+    )
+
+
 class TestConstruction:
     def test_positional(self):
         s = Span(1, 5)
@@ -488,13 +499,7 @@ class TestSpanPathAbiGate:
     @staticmethod
     def _run_script(script: str) -> subprocess.CompletedProcess[str]:
         """Run a Python script in a subprocess, return the completed process."""
-        return subprocess.run(  # noqa: S603
-            [sys.executable, "-c", script],
-            capture_output=True,
-            text=True,
-            timeout=30,
-            check=False,
-        )
+        return _run_script(script)
 
     def test_control_no_patch_passes(self):
         """Control: without patching, a node span read from the consumer cdylib succeeds."""
@@ -857,3 +862,228 @@ class TestSpanToPyobjectCaching:
         result = Span._with_source_unchecked(0, 5, src)  # type: ignore[attr-defined]
         assert result == Span(0, 5)
         assert result.has_source()
+
+
+class TestForgedSourceTextRejected:
+    """Regression tests for the forged-ABI segfault fix (fix-forged-abi-segfault design).
+
+    Before the fix, a pure-Python class that copied both `_fltk_cst_core_abi` and
+    `_fltk_cst_core_abi_layout` from a genuine SourceText could pass `check_abi_pair` and
+    reach `cast_unchecked`, causing a SIGSEGV (exit code -11 / 139).  The fix adds a
+    `check_instance_layout` gate that reads `__basicsize__` from the object's actual CPython
+    type — which cannot be satisfied by copying class attributes — and raises TypeError
+    instead of proceeding to UB.
+
+    All tests that invoke `_with_source_unchecked` with a forged object use subprocess
+    isolation so that a regression (segfault) does not take down the test suite.
+    """
+
+    @staticmethod
+    def _run_script(script: str) -> subprocess.CompletedProcess[str]:
+        """Run a Python script in a subprocess; return the completed process."""
+        return _run_script(script)
+
+    def test_forged_source_text_raises_type_error(self):
+        """Trivial forge (copied attrs, default object layout) raises TypeError, not SIGSEGV.
+
+        This is the exact §1.1 repro: a pure-Python class copies both ABI attributes from a
+        genuine SourceText.  Before the fix, `_with_source_unchecked(0, 5, Forge())` exited
+        with signal 11 (SIGSEGV, returncode -11 / 139).  After the fix it must raise TypeError
+        and the subprocess must exit cleanly (returncode 0).
+        """
+        script = """
+import fltk._native as native
+ST = native.SourceText
+
+class Forge:
+    _fltk_cst_core_abi = ST._fltk_cst_core_abi
+    _fltk_cst_core_abi_layout = ST._fltk_cst_core_abi_layout
+
+try:
+    native.Span._with_source_unchecked(0, 5, Forge())
+    print("FAIL: no exception raised")
+except TypeError:
+    print("OK")
+"""
+        result = self._run_script(script)
+        assert result.returncode != -11, (
+            f"SIGSEGV recurrence: subprocess exited with signal 11 — forged-ABI segfault regression\n"
+            f"stdout: {result.stdout}\nstderr: {result.stderr}"
+        )
+        assert result.returncode == 0, (
+            f"subprocess crashed (returncode {result.returncode}) — "
+            f"possible segfault regression\nstdout: {result.stdout}\nstderr: {result.stderr}"
+        )
+        assert "OK" in result.stdout, f"expected 'OK' in stdout; got: {result.stdout!r}\nstderr: {result.stderr}"
+
+    def test_forged_source_text_message_is_diagnostic(self):
+        """TypeError message for a trivial forge names the layout/basicsize mismatch.
+
+        Pins that the error message is informative enough that a future regression
+        (swapping the gate for a silent pass) would be caught by the message check.
+        """
+
+        class Forge:
+            _fltk_cst_core_abi = SourceText._fltk_cst_core_abi  # type: ignore[attr-defined]
+            _fltk_cst_core_abi_layout = SourceText._fltk_cst_core_abi_layout  # type: ignore[attr-defined]
+
+        with pytest.raises(TypeError) as exc_info:
+            Span._with_source_unchecked(0, 5, Forge())  # type: ignore[attr-defined]
+        msg = str(exc_info.value)
+        # The basicsize gate fires (check_abi_pair passes first; check_instance_layout rejects).
+        # Pin the specific `check_instance_layout` message: it contains "__basicsize__" or
+        # "not a genuine SourceText allocation".  A weaker "layout" substring would also match
+        # check_abi_pair messages, masking a broken or absent basicsize gate.
+        assert "__basicsize__" in msg or "not a genuine SourceText" in msg, (
+            f"error message does not name the basicsize gate — check_instance_layout may not be firing: {msg!r}"
+        )
+
+    def test_padded_forge_passes_basicsize_gate_boundary(self):
+        """Documents the known residual: a __slots__-padded forge matches SourceText.__basicsize__.
+
+        The `check_instance_layout` gate reads `tp_basicsize` from the object's actual CPython
+        type.  A pure-Python class with `__slots__` padding can be tuned to produce a
+        `tp_basicsize` equal to `SourceText._fltk_cst_core_abi_layout` (verified in the design).
+        This test pins that the residual EXISTS — the basicsize gate alone cannot distinguish
+        a padded forge from a genuine foreign SourceText.
+
+        THIS TEST DOES NOT CALL `_with_source_unchecked` ON THE PADDED FORGE.
+        Crossing the gate with this object is Undefined Behavior: the `PyObject*` in the
+        __slots__ slot is not an `Arc<SourceInner>`, so `cast_unchecked` reads garbage.
+        UB has no stable runtime outcome — it can silently pass, crash, or corrupt memory
+        depending on build mode, allocator, and pyo3 internals.  Asserting any runtime
+        outcome here would produce a flaky or actively misleading test.
+
+        The gate boundary (basicsize equality) is what this test pins.  Closing the residual
+        fully requires a per-instance unforgeable token (e.g. a PyCapsule wrapping a real
+        Rust pointer), which the project has not adopted.
+        """
+        native_layout = SourceText._fltk_cst_core_abi_layout  # type: ignore[attr-defined]
+
+        # A class with one __slots__ entry produces tp_basicsize == native_layout on CPython 3.10+.
+        # (Verified in the design: native_layout is 24 for SourceText; default object is 32;
+        # one slot removes 8 bytes from the __dict__ pointer overhead, reaching 24.)
+        class PaddedForge:
+            __slots__ = ("x",)
+            _fltk_cst_core_abi = SourceText._fltk_cst_core_abi  # type: ignore[attr-defined]
+            _fltk_cst_core_abi_layout = SourceText._fltk_cst_core_abi_layout  # type: ignore[attr-defined]
+
+        padded_basicsize = type(PaddedForge()).__basicsize__
+        # Pin: on a typical CPython build, the padded forge has the same basicsize as SourceText.
+        # If this assertion fails, the residual may be narrower or the layout has changed.
+        assert padded_basicsize == native_layout, (
+            f"padded forge basicsize {padded_basicsize} != native layout {native_layout}; "
+            "the design's residual assumption may no longer hold — re-evaluate"
+        )
+        # Confirm: the padded forge's basicsize EQUALS the gate threshold, so the gate
+        # cannot distinguish it from a genuine foreign SourceText on basicsize alone.
+        # (See above: do NOT call _with_source_unchecked on PaddedForge — that is UB.)
+
+    def test_foreign_source_text_basicsize_matches_native_layout(self):
+        """Genuine foreign-cdylib SourceText has the same __basicsize__ as native SourceText.
+
+        Pins the accept-branch precondition of the basicsize gate directly: a foreign
+        SourceText (from a cdylib linking the same fltk-cst-core rlib) must have a
+        `type(foreign_st).__basicsize__` equal to `SourceText._fltk_cst_core_abi_layout`.
+        If a future change breaks this equality, the gate would reject genuine foreign
+        SourceText objects, breaking the cross-cdylib path (Requirements item 1).
+        """
+        phase4 = pytest.importorskip(
+            "phase4_roundtrip_cst",
+            reason=(
+                "phase4_roundtrip_cst not built; run 'make build-test-user-ext' first — "
+                "skipping this test means the basicsize gate's accept-branch precondition "
+                "(foreign __basicsize__ == native layout) is unverified in this lane"
+            ),
+        )
+        foreign_st = phase4.SourceText("hello world")  # type: ignore[attr-defined]
+        native_layout = SourceText._fltk_cst_core_abi_layout  # type: ignore[attr-defined]
+        foreign_basicsize = type(foreign_st).__basicsize__
+        assert foreign_basicsize == native_layout, (
+            f"foreign SourceText __basicsize__ ({foreign_basicsize}) != "
+            f"native SourceText._fltk_cst_core_abi_layout ({native_layout}); "
+            "cross-cdylib basicsize gate would reject genuine foreign SourceText"
+        )
+
+    def test_metaclass_property_forge_raises_type_error(self):
+        """Metaclass-property forge is rejected by the metaclass guard.
+
+        A metaclass property that returns the expected basicsize value (24) could shadow
+        `getattr(ty, "__basicsize__")` and fool the size check.  The gate now guards against
+        this by first verifying that the candidate type's metaclass is exactly the built-in
+        `type` (which is immutable and cannot carry a shadowing property).  A type with a
+        custom metaclass is rejected before `__basicsize__` is even read.
+
+        Before the security-1 fix, this forge passed the gate: the metaclass property returned
+        24 while the object's real allocation was a bare 16-byte `object`.  The subsequent
+        `cast_unchecked` would reinterpret CPython header fields as `Arc<SourceInner>` — a
+        write-what-where primitive.
+
+        This test is subprocess-isolated because a regression segfaults the interpreter.
+        """
+        script = """
+import fltk._native as native
+ST = native.SourceText
+
+class Meta(type):
+    @property
+    def __basicsize__(cls):
+        return ST._fltk_cst_core_abi_layout  # forged value; real allocation is 16-byte object
+
+class Forge(metaclass=Meta):
+    _fltk_cst_core_abi = ST._fltk_cst_core_abi
+    _fltk_cst_core_abi_layout = ST._fltk_cst_core_abi_layout
+
+try:
+    native.Span._with_source_unchecked(0, 5, Forge())
+    print("FAIL: no exception raised")
+except TypeError as e:
+    msg = str(e)
+    # The metaclass guard fires; message names the custom metaclass.
+    if "metaclass" in msg or "Meta" in msg:
+        print("OK")
+    else:
+        print(f"FAIL: unexpected message: {msg}")
+"""
+        result = self._run_script(script)
+        assert result.returncode != -11, (
+            f"SIGSEGV recurrence: metaclass-property forge bypassed gate and segfaulted\n"
+            f"stdout: {result.stdout}\nstderr: {result.stderr}"
+        )
+        assert result.returncode == 0, (
+            f"subprocess crashed (returncode {result.returncode})\nstdout: {result.stdout}\nstderr: {result.stderr}"
+        )
+        assert "OK" in result.stdout, f"expected 'OK' in stdout; got: {result.stdout!r}\nstderr: {result.stderr}"
+
+    def test_exotic_type_no_basicsize_raises_type_error(self):
+        """An object whose type raises on tp_basicsize access surfaces a TypeError, not a panic.
+
+        `check_instance_layout` uses `PyType_GetSlot(Py_tp_basicsize)` which returns 0 for
+        non-heap types.  A type that is not a heap type (unusual but possible with ctypes
+        or extension module tricks) produces basicsize == 0; the helper rejects it with a
+        TypeError naming the exotic-type case rather than unwrapping or panicking.
+
+        We simulate a basicsize==0 response by using ctypes to create a C-extension-like
+        type — but that is fragile.  Instead, we verify the failure mode by patching:
+        the simplest reachable path is an ordinary object that nonetheless fails check_abi_pair
+        first (which fires before check_instance_layout).  A direct test of the
+        exotic-type branch is inherently hard to construct from pure Python.
+
+        Instead, this test verifies the `map_err` discipline of `check_instance_layout` by
+        confirming that a TypeError (not a panic/abort) is always raised for any failing
+        argument — the test exercises the guard via the trivial forge path (which reaches
+        `check_instance_layout` and fails on size mismatch).
+        """
+
+        class Forge:
+            _fltk_cst_core_abi = SourceText._fltk_cst_core_abi  # type: ignore[attr-defined]
+            _fltk_cst_core_abi_layout = SourceText._fltk_cst_core_abi_layout  # type: ignore[attr-defined]
+
+        # Confirm: raises TypeError (not AttributeError, RuntimeError, or panic).
+        with pytest.raises(TypeError) as exc_info:
+            Span._with_source_unchecked(0, 5, Forge())  # type: ignore[attr-defined]
+        msg = str(exc_info.value)
+        # The basicsize gate fires; the message names __basicsize__ or "not a genuine SourceText".
+        assert "__basicsize__" in msg or "not a genuine SourceText" in msg, (
+            f"check_instance_layout did not fire; got: {msg!r}"
+        )

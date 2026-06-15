@@ -38,6 +38,15 @@ When `Py::new(m.py(), Span::unknown())` fails during `fltk._native` module init,
 
 `gsm._for_each_item` is a private function used internally by `gsm.py` for validation passes, but `fltk/fegen/regex_corpus.py` is the first cross-module caller. Promote it to a public name (`for_each_item`) in `gsm.py`, or add a public `iter_regexes(grammar)` helper that encapsulates the walk so callers never need to touch the structural walk API. Gives callers a stable, tested contract instead of a private-name dependency that mypy/pyright won't flag across modules. Location: `fltk/fegen/gsm.py` (`_for_each_item`), `fltk/fegen/regex_corpus.py:58` (call site).
 
+## `forged-abi-extract-span-uniformity`
+
+`check_instance_layout` is generic and could be applied to `extract_span` for uniformity.
+Currently `extract_span` is not reachable by forged objects (it is gated by `is_instance`
+against the non-subclassable canonical `fltk._native.Span` type, plus `check_abi_pair::<Span>`
+in `get_span_type`), so adding `check_instance_layout` there would add no rejection power.
+Revisit only if a future change makes `extract_span` reachable by non-canonical types.
+Location: `crates/fltk-cst-core/src/cross_cdylib.rs` (`extract_span`).
+
 ## `extend-children-owned`
 
 `extend_children(&Self)` clones every child Arc even though the donor node is immediately dropped after the call (inline-to-parent sub-expression and `+`/`*` loop paths). A consuming variant `extend_children_owned(other: Self)` using `Vec::append` would avoid the atomic inc+dec pairs per child on the parse hot path. Blocked on `gsm2tree_rs.py` adding the method to the generated CST node API. Location: `fltk/fegen/gsm2parser_rs.py` (`_gen_item_multiple`, `_gen_append_code`), `fltk/fegen/gsm2tree_rs.py` (generated `impl <Node>` blocks). Re-open only with profiling evidence.

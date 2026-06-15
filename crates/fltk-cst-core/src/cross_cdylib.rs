@@ -1,5 +1,6 @@
 use crate::{escape::escape_control_chars, SourceText, Span};
 use pyo3::exceptions::PyTypeError;
+use pyo3::impl_::pyclass::PyClassImpl;
 use pyo3::prelude::*;
 use pyo3::sync::PyOnceLock;
 use pyo3::types::PyType;
@@ -36,24 +37,43 @@ static FLTK_FOREIGN_SOURCE_TEXT_TYPE: PyOnceLock<Py<PyType>> = PyOnceLock::new()
 
 /// Extract a native `SourceText` (O(1): clones the inner `Arc`) from a Python object,
 /// accepting a `SourceText` registered by this cdylib or by any other cdylib that links
-/// the same fltk-cst-core rlib (gated by the `_fltk_cst_core_abi` and
-/// `_fltk_cst_core_abi_layout` class markers).
+/// the same fltk-cst-core rlib (gated by the `_fltk_cst_core_abi`,
+/// `_fltk_cst_core_abi_layout`, and `__basicsize__` checks).
 ///
 /// Called only from `Span::_with_source_unchecked` (span.rs), which is itself an
 /// underscore-private method called only by generated code passing `source_as_py` results.
 ///
 /// # Safety contract
-/// The gate is the pair (`_fltk_cst_core_abi`, `_fltk_cst_core_abi_layout`) on the type.
-/// Both are forgeable from pure Python; passing a forged-marker object is UB. This is
-/// acceptable because:
-///   (a) the only caller is `Span::_with_source_unchecked`, which is private by convention;
-///   (b) direct Python calls to an underscore-private method with a forged object are out
-///       of contract; the SAFETY comment and method docstring document this.
-/// These markers are *stronger* than isinstance under version skew: a mismatch produces a
-/// clean TypeError naming both ABI strings instead of proceeding to UB.
+/// On a cache miss the gate is:
 ///
-/// Soundness: Both cdylibs MUST link the same fltk-cst-core rlib (same pyo3 version, same
-/// struct layout). Then `PyClassObject<SourceText>` layout is identical and
+/// 1. `check_abi_pair` (ABI string + layout attribute pair) — version-skew diagnostic.
+/// 2. `check_instance_layout` (`__basicsize__` of the object's actual type) — rejects
+///    pure-Python forged-marker objects that copy the two class attributes but whose
+///    CPython allocation is not a genuine `PyStaticClassObject<SourceText>`.
+///
+/// Only on BOTH passing is the type cached (`get_or_init`) and `cast_unchecked` reached.
+///
+/// **Ordering is load-bearing** (see `check_abi_pair`→basicsize→`get_or_init` invariant):
+///   `check_abi_pair` runs first so its pinned diagnostic messages continue to fire for
+///   ABI-string/layout-attr mismatch inputs; the basicsize gate then narrows the forgery
+///   window further.  If the basicsize gate ran first, existing tests that pin `check_abi_pair`
+///   error messages would receive the basicsize message instead, silently weakening coverage.
+///   The cache cell (`FLTK_FOREIGN_SOURCE_TEXT_TYPE`) can therefore only ever hold a type
+///   that has passed both gates.
+///
+/// **Cache hit**: type-object pointer identity to a cell that, by the above invariant, can
+///   only hold a basicsize-validated type — no re-check needed.
+///
+/// **Residual (documented, not closed)**: `check_instance_layout` rejects custom-metaclass
+///   forgeries (step 1) and reads `tp_basicsize` via the immutable `type.__basicsize__`
+///   descriptor (step 2, safe only after step 1).  A `__slots__`-padded forge whose
+///   `tp_basicsize` exactly matches the expected value and whose metaclass is the built-in
+///   `type` passes both steps; `cast_unchecked` on such an object is still UB.  This residual
+///   (size necessary but not sufficient) is identical in kind to the one already documented in
+///   the `check_abi_pair` SAFETY comment and accepted by the project.
+///
+/// Soundness when the gate passes: both cdylibs link the same fltk-cst-core rlib (same pyo3
+/// version, same struct layout), so `PyClassObject<SourceText>` layout is identical and
 /// `cast_unchecked` merely reinterprets the same in-memory representation.
 /// `SourceText` is `#[pyclass(frozen)]` and `Sync` (`Arc<SourceInner{String}>`), so
 /// `Bound::get()` returns `&SourceText` without a borrow-flag check. Arc refcount mutation
@@ -79,10 +99,11 @@ pub fn extract_source_text(obj: &Bound<'_, PyAny>) -> PyResult<SourceText> {
     let obj_type = obj.get_type();
 
     // Cache hit: if this is the same foreign type we already validated, skip full ABI check.
+    // SAFETY: By the cache-seeding invariant below, this cell can only hold a type that has
+    // passed both `check_abi_pair` and `check_instance_layout`; pointer identity to that
+    // cell entry is genuine provenance.
     if let Some(cached_type) = FLTK_FOREIGN_SOURCE_TEXT_TYPE.get(py) {
         if cached_type.bind(py).is(&obj_type) {
-            // SAFETY: same as the cast_unchecked below — we already verified the ABI pair
-            // for this type object; pointer identity means it's the exact same class.
             let st = unsafe { obj.cast_unchecked::<SourceText>() };
             return Ok(SourceText {
                 inner: st.get().inner.clone(),
@@ -90,25 +111,31 @@ pub fn extract_source_text(obj: &Bound<'_, PyAny>) -> PyResult<SourceText> {
         }
     }
 
+    // Cache miss: run both gates before seeding the cache.
+    //
+    // Gate 1 — ABI pair (version-skew diagnostic).  Runs first so its pinned error messages
+    // fire for ABI-string/layout-attr mismatches; the basicsize gate below adds rejection power
+    // on top without replacing these messages.
     check_abi_pair::<SourceText>(&obj_type, "SourceText", || py_type_obj_name(&obj_type))?;
-    // ABI pair validated; cache this foreign type object for O(1) pointer-compare on
+    // Gate 2 — `tp_basicsize` genuineness check.  Rejects pure-Python forged-marker objects:
+    // a class body can copy the two ABI attributes but cannot present a matching `tp_basicsize`
+    // without `__slots__` padding that changes the real CPython instance allocation.
+    // First verifies the type has no custom metaclass (which could shadow `__basicsize__`
+    // via a property), then reads `__basicsize__` from the now-provably-safe built-in descriptor.
+    check_instance_layout::<SourceText>(&obj_type, "SourceText")?;
+    // Both gates passed; cache this foreign type object for O(1) pointer-compare on
     // future calls.  `get_or_init` is a no-op if already populated (another thread
     // raced here first — harmless, both observed the same validated type).
+    // Invariant: the cell can only ever hold a type that has passed both gates above.
     let _ = FLTK_FOREIGN_SOURCE_TEXT_TYPE.get_or_init(py, || obj_type.clone().unbind());
-    // SAFETY: ob_type carries `_fltk_cst_core_abi == FLTK_CST_CORE_ABI` and a
-    // matching `_fltk_cst_core_abi_layout` (same `size_of::<<SourceText as PyClassImpl>::Layout>()`),
-    // verified by `check_abi_pair` above.
-    // These are consistent with both cdylibs linking the same fltk-cst-core rlib at the
-    // same pyo3 version, but do not prove it — size equality does not imply field-layout
-    // equality (a pyo3 build that reorders internal fields while preserving total size
-    // would pass). The probe narrows — not closes — the layout-skew window. Accepted risk:
-    // for frozen pyo3 types without dict/weakref, PyClassImpl::Layout (PyStaticClassObject<T>)
-    // collapses to {ffi::PyObject, T} (repr(C)); a size-preserving internal reorder is not
-    // constructible without changing ffi::PyObject itself, which would also change the size
-    // the probe catches.
-    // Forgery: a hand-crafted class could set both attrs to the right values and
-    // still have a mismatched layout — UB. The caller (`_with_source_unchecked`)
-    // is underscore-private and documented as out-of-contract for forged inputs.
+    // SAFETY: `obj_type` has passed `check_abi_pair` (ABI string + layout attribute match)
+    // and `check_instance_layout` (`tp_basicsize` matches `size_of::<<SourceText as
+    // PyClassImpl>::Layout>()`).  Together these are consistent with both cdylibs linking
+    // the same fltk-cst-core rlib at the same pyo3 version; `cast_unchecked` merely
+    // reinterprets the same in-memory representation.
+    // Residual: a `__slots__`-padded forge can match `tp_basicsize` while having a mismatched
+    // field layout — `cast_unchecked` on such an object is still UB.  This residual is
+    // identical in kind to the one documented in `check_abi_pair` and accepted by the project.
     let st = unsafe { obj.cast_unchecked::<SourceText>() };
     Ok(SourceText {
         inner: st.get().inner.clone(),
@@ -232,6 +259,85 @@ fn check_abi_pair<T: pyo3::PyClass>(
     Ok(())
 }
 
+/// Check that `ty`'s CPython `tp_basicsize` equals the compile-time layout size of `T`.
+///
+/// Two-step check:
+///
+/// **Step 1 — metaclass guard**: verify that `type(ty)` is exactly the built-in `type`.
+/// A custom metaclass can define a `__basicsize__` property that returns any value, so
+/// reading `ty.__basicsize__` via `getattr` is only safe when the metaclass is `type`
+/// itself (which is both immutable and cannot be monkeypatched from Python).
+/// pyo3-allocated types always have `type` as their metaclass.  A metaclass-property forge
+/// has a custom metaclass and is caught here.
+///
+/// **Step 2 — basicsize gate**: read `ty.__basicsize__` via `getattr` and compare against the
+/// compile-time layout size.  After step 1 confirms the metaclass is exactly `type`, the
+/// `__basicsize__` attribute is resolved via the immutable built-in `type.__basicsize__`
+/// data descriptor, which cannot be shadowed by any user-defined Python object.  Anything
+/// whose CPython type does not carry a matching `tp_basicsize` (e.g. a class without enough
+/// `__slots__` padding) is rejected here.
+///
+/// Any read/extract failure is surfaced as a diagnostic `TypeError` rather than an unwrap
+/// panic, mirroring `check_abi_pair`'s `map_err` discipline.
+///
+/// `type_label` is the logical class name used in error prefixes (e.g. "SourceText"),
+/// matching the convention of `check_abi_pair`.  The helper is generic so it can later be
+/// reused for other types (e.g. `Span` in §2.C) without message confusion.
+///
+/// **Residual**: a `__slots__`-padded forge whose `tp_basicsize` exactly matches the expected
+/// value and whose metaclass is `type` (default for plain Python classes) passes both steps.
+/// This residual (size necessary but not sufficient for layout identity) is identical in kind
+/// to the one already accepted and documented in the `check_abi_pair` SAFETY comments; it is
+/// not closed by this helper.
+fn check_instance_layout<T: PyClassImpl>(ty: &Bound<'_, PyType>, type_label: &str) -> PyResult<()> {
+    let py = ty.py();
+    let expected = std::mem::size_of::<<T as PyClassImpl>::Layout>();
+
+    // Step 1: metaclass guard — reject types with a custom metaclass.
+    // `PyType::type_object(py)` is the built-in `type`.  A type whose metaclass is anything
+    // other than `type` can shadow `__basicsize__` via a metaclass property.
+    let metaclass = ty.get_type();
+    if !metaclass.is(PyType::type_object(py)) {
+        let meta_name = metaclass
+            .name()
+            .map(|n| escape_control_chars(&n.to_string()))
+            .unwrap_or_else(|_| "<unknown>".to_string());
+        return Err(PyTypeError::new_err(format!(
+            "{type_label} instance layout check failed: type has a custom metaclass \
+             ({meta_name}), which may shadow __basicsize__ via a property; only a genuine \
+             pyo3-allocated {type_label} from a compatible cdylib is accepted"
+        )));
+    }
+
+    // Step 2: basicsize gate — metaclass is exactly `type`, so `__basicsize__` resolves
+    // via the immutable built-in data descriptor and cannot be intercepted from Python.
+    let basicsize = ty
+        .getattr(pyo3::intern!(py, "__basicsize__"))
+        .map_err(|e| {
+            PyTypeError::new_err(format!(
+                "{type_label} instance layout check failed: __basicsize__ not readable on type \
+                 (exotic or proxy type?); getattr raised: {}",
+                escape_control_chars(&e.to_string())
+            ))
+        })?
+        .extract::<usize>()
+        .map_err(|e| {
+            PyTypeError::new_err(format!(
+                "{type_label} instance layout check failed: __basicsize__ is not an integer; \
+                 extract raised: {}",
+                escape_control_chars(&e.to_string())
+            ))
+        })?;
+    if basicsize != expected {
+        return Err(PyTypeError::new_err(format!(
+            "{type_label} instance layout check failed: object type __basicsize__ is {basicsize}, \
+             expected {expected} (not a genuine {type_label} allocation — possible forged-marker \
+             object; only a genuine pyo3-allocated {type_label} from a compatible cdylib is accepted)"
+        )));
+    }
+    Ok(())
+}
+
 /// Cached: whether this cdylib IS `fltk._native` (fast-path bypass for `span_to_pyobject`).
 /// `true` = local `Span::type_object` IS the canonical type; use `Py::new` directly.
 /// `false` = slow path: call `_with_source_unchecked` on the canonical type.
@@ -307,6 +413,12 @@ pub(crate) static FLTK_NATIVE_SPAN_TYPE: PyOnceLock<Py<PyType>> = PyOnceLock::ne
 ///
 /// The ABI gate in `get_span_type` (called below) ensures that version skew fails once,
 /// on first use, with a clear `TypeError` — before any `cast_unchecked`.
+///
+/// TODO(forged-abi-extract-span-uniformity): `check_instance_layout` could be applied here
+/// for uniformity with `extract_source_text`.  Currently adds no rejection power: this path
+/// is gated by `is_instance` against the non-subclassable canonical `Span` type (plus
+/// `check_abi_pair::<Span>` in `get_span_type`), so no forged object can reach its
+/// `cast_unchecked`.  Revisit if this path ever becomes reachable by non-canonical types.
 pub fn extract_span(py: Python<'_>, obj: &Bound<'_, PyAny>) -> PyResult<Span> {
     // Fast path: locally-registered Span type (succeeds when caller uses the same cdylib's Span).
     if let Ok(span_ref) = obj.extract::<Span>() {

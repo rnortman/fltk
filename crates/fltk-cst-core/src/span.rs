@@ -433,14 +433,27 @@ impl Span {
     /// Private cross-cdylib constructor (generated-code use only): like ``with_source``,
     /// but accepts a ``SourceText`` registered by another fltk-cst-core-linking cdylib.
     ///
-    /// "unchecked" = bypasses pyo3's registry-based type check; an ABI-marker check in
-    /// ``extract_source_text`` still gates the cast (see ``cross_cdylib.rs``).
+    /// "unchecked" = bypasses pyo3's registry-based type check; ``extract_source_text``
+    /// (``cross_cdylib.rs``) gates the cast via two checks:
+    ///   1. ABI-marker pair (``_fltk_cst_core_abi`` string + ``_fltk_cst_core_abi_layout``
+    ///      attribute) — version-skew diagnostic.
+    ///   2. Layout-genuineness gate: first rejects types with a custom metaclass (which could
+    ///      shadow ``__basicsize__`` via a metaclass property), then reads ``__basicsize__``
+    ///      via the immutable built-in ``type.__basicsize__`` descriptor (unforgeable once the
+    ///      metaclass is confirmed to be exactly ``type``).
     ///
-    /// Passing a forged-marker object (a Python class with ``_fltk_cst_core_abi`` set to the
-    /// expected string but a mismatched memory layout) is **Undefined Behavior**. This is
-    /// out-of-contract: this method is private by convention (leading underscore) and is
-    /// intended to be called only by ``span_to_pyobject`` (``cross_cdylib.rs``) passing
-    /// the result of ``source_as_py``, which always produces a genuine ``SourceText``.
+    /// A pure-Python object that fails either gate raises ``TypeError``; it does **not** cause
+    /// Undefined Behavior.  The Python backend's equivalent (``terminalsrc.with_source``) raises
+    /// ``TypeError`` for non-``SourceText`` input; this method now matches that contract for
+    /// the most common forgery patterns (trivial copies, metaclass-property overrides).
+    ///
+    /// **Residual (documented, not closed)**: a ``__slots__``-padded forge whose
+    /// ``tp_basicsize`` exactly matches the expected value passes both gates and reaches
+    /// ``cast_unchecked`` — still UB.  This residual is identical in kind to the one
+    /// accepted and documented throughout ``cross_cdylib.rs``.  This method is private by
+    /// convention (leading underscore) and is intended to be called only by
+    /// ``span_to_pyobject`` (``cross_cdylib.rs``) passing the result of ``source_as_py``,
+    /// which always produces a genuine ``SourceText``.
     #[classmethod]
     #[pyo3(signature = (start, end, source))]
     fn _with_source_unchecked(
