@@ -71,3 +71,42 @@ nest := %"(" . inner:nest . %")" | leaf:num ;
 // Left recursion whose growth step descends into nesting: a depth-rejected growth
 // iteration stalls grow_seed, which returns the seed — the Some-with-flag shape (§2).
 nest_sum := lhs:nest_sum . "+" . rhs:nest | first:nest ;
+
+// ---------------------------------------------------------------------------
+// Portable-but-tricky regex parity cases (design §5.6)
+// Each rule exercises a regex construct verified portable on both Python re and
+// Rust regex-automata.  Every pattern is non-nullable (matches ≥1 character) so
+// it is safe in quantified rules.
+// ---------------------------------------------------------------------------
+
+// ASCII \d (digit shorthand, portable for ASCII; non-ASCII residual documented)
+digit_seq := value:/\d+/ ;
+
+// ASCII \w (word char shorthand, ASCII-portable)
+word_seq := value:/\w+/ ;
+
+// ASCII \s (whitespace shorthand, ASCII-portable) — used as trivia-aware rule
+// Note: \s matches at least one char, non-nullable.
+ws_seq := value:/\s+/ ;
+
+// Bounded quantifier {m,n} (portable on both engines)
+three_to_five_digits := value:/[0-9]{3,5}/ ;
+
+// Exact-count bounded quantifier {n}
+exactly_two_digits := value:/[0-9]{2}/ ;
+
+// Escaped metacharacters (literal dot, star, plus)
+escaped_metas := value:/\.\*\+/ ;
+
+// Character range with non-ASCII (Latin Extended, as in latin_word but with ranges)
+latin_range := value:/[À-Ö]+/ ;
+
+// Non-capturing group with alternation
+nc_group_alt := value:/(?:ab|cd)+/ ;
+
+// ASCII case-insensitive flag (?i) — portable as syntax; non-ASCII case-fold residual documented
+case_insensitive := value:/(?i)[a-z]+/ ;
+
+// Anchored pattern: ^ and $ (line anchors, portable)
+// Must consume entire input for parity tests to work; use non-empty prefix
+anchored_word := value:/^[a-z]+$/ ;

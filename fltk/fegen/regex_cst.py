@@ -251,7 +251,11 @@ class Alternation:
     def append(self, child: Alternation | Concatenation, label: Label | None = None) -> None:
         self.children.append((label, child))
 
-    def extend(self, children: typing.Iterable[Alternation | Concatenation], label: Label | None = None) -> None:
+    def extend(
+        self,
+        children: typing.Iterable[Alternation | Concatenation],
+        label: Label | None = None,
+    ) -> None:
         self.children.extend((label, child) for child in children)
 
     def extend_children(self, other: Alternation) -> None:
@@ -417,7 +421,11 @@ class Concatenation:
     def append(self, child: Concatenation | Repetition, label: Label | None = None) -> None:
         self.children.append((label, child))
 
-    def extend(self, children: typing.Iterable[Concatenation | Repetition], label: Label | None = None) -> None:
+    def extend(
+        self,
+        children: typing.Iterable[Concatenation | Repetition],
+        label: Label | None = None,
+    ) -> None:
         self.children.extend((label, child) for child in children)
 
     def extend_children(self, other: Concatenation) -> None:
@@ -723,7 +731,9 @@ class Quantifier:
         self.children.append((label, child))
 
     def extend(
-        self, children: typing.Iterable[Bounded | fltk.fegen.pyrt.span.Span], label: Label | None = None
+        self,
+        children: typing.Iterable[Bounded | fltk.fegen.pyrt.span.Span],
+        label: Label | None = None,
     ) -> None:
         self.children.extend((label, child) for child in children)
 
@@ -757,7 +767,12 @@ class Quantifier:
             msg = f"{_cn}.{method}: label argument is not a {_cn}_Label; got {type(label).__name__}"
             raise TypeError(msg)
 
-    def insert(self, index: int, child: Bounded | fltk.fegen.pyrt.span.Span, label: Label | None = None) -> None:
+    def insert(
+        self,
+        index: int,
+        child: Bounded | fltk.fegen.pyrt.span.Span,
+        label: Label | None = None,
+    ) -> None:
         self._check_child_type_for_mutators(child)
         self._check_label_type_for_mutators(label, "insert")
         idx = operator.index(index)
@@ -777,7 +792,12 @@ class Quantifier:
             raise IndexError(msg)
         return self.children.pop(norm)
 
-    def replace_at(self, index: int, child: Bounded | fltk.fegen.pyrt.span.Span, label: Label | None = None) -> None:
+    def replace_at(
+        self,
+        index: int,
+        child: Bounded | fltk.fegen.pyrt.span.Span,
+        label: Label | None = None,
+    ) -> None:
         self._check_child_type_for_mutators(child)
         self._check_label_type_for_mutators(label, "replace_at")
         idx = operator.index(index)
@@ -1237,12 +1257,17 @@ class Atom:
 
     kind: typing.Literal[NodeKind.ATOM] = NodeKind.ATOM
     span: fltk.fegen.pyrt.terminalsrc.Span | fltk._native.Span = fltk.fegen.pyrt.terminalsrc.UnknownSpan
-    children: list[tuple[Label | None, Anchor | CharClass | Dot | Escape | Group | InlineFlags | LiteralChar]] = (
-        dataclasses.field(default_factory=list)
-    )
+    children: list[
+        tuple[
+            Label | None,
+            Anchor | CharClass | Dot | Escape | Group | InlineFlags | LiteralChar,
+        ]
+    ] = dataclasses.field(default_factory=list)
 
     def append(
-        self, child: Anchor | CharClass | Dot | Escape | Group | InlineFlags | LiteralChar, label: Label | None = None
+        self,
+        child: Anchor | CharClass | Dot | Escape | Group | InlineFlags | LiteralChar,
+        label: Label | None = None,
     ) -> None:
         self.children.append((label, child))
 
@@ -1256,7 +1281,12 @@ class Atom:
     def extend_children(self, other: Atom) -> None:
         self.children.extend(other.children)
 
-    def child(self) -> tuple[Label | None, Anchor | CharClass | Dot | Escape | Group | InlineFlags | LiteralChar]:
+    def child(
+        self,
+    ) -> tuple[
+        Label | None,
+        Anchor | CharClass | Dot | Escape | Group | InlineFlags | LiteralChar,
+    ]:
         if (n := len(self.children)) != 1:
             msg = f"Expected one child but have {n}"
             raise ValueError(msg)
@@ -1293,7 +1323,10 @@ class Atom:
 
     def remove_at(
         self, index: int
-    ) -> tuple[Label | None, Anchor | CharClass | Dot | Escape | Group | InlineFlags | LiteralChar]:
+    ) -> tuple[
+        Label | None,
+        Anchor | CharClass | Dot | Escape | Group | InlineFlags | LiteralChar,
+    ]:
         idx = operator.index(index)
         n = len(self.children)
         norm = idx + n if idx < 0 else idx
@@ -1790,7 +1823,9 @@ class Group:
         self.children.append((label, child))
 
     def extend(
-        self, children: typing.Iterable[Capturing | FlagGroup | NonCapturing], label: Label | None = None
+        self,
+        children: typing.Iterable[Capturing | FlagGroup | NonCapturing],
+        label: Label | None = None,
     ) -> None:
         self.children.extend((label, child) for child in children)
 
@@ -1814,7 +1849,12 @@ class Group:
             msg = f"{_cn}.{method}: label argument is not a {_cn}_Label; got {type(label).__name__}"
             raise TypeError(msg)
 
-    def insert(self, index: int, child: Capturing | FlagGroup | NonCapturing, label: Label | None = None) -> None:
+    def insert(
+        self,
+        index: int,
+        child: Capturing | FlagGroup | NonCapturing,
+        label: Label | None = None,
+    ) -> None:
         self._check_child_type_for_mutators(child)
         self._check_label_type_for_mutators(label, "insert")
         idx = operator.index(index)
@@ -1834,7 +1874,12 @@ class Group:
             raise IndexError(msg)
         return self.children.pop(norm)
 
-    def replace_at(self, index: int, child: Capturing | FlagGroup | NonCapturing, label: Label | None = None) -> None:
+    def replace_at(
+        self,
+        index: int,
+        child: Capturing | FlagGroup | NonCapturing,
+        label: Label | None = None,
+    ) -> None:
         self._check_child_type_for_mutators(child)
         self._check_label_type_for_mutators(label, "replace_at")
         idx = operator.index(index)
@@ -2538,7 +2583,9 @@ class CharClass:
         self.children.append((label, child))
 
     def extend(
-        self, children: typing.Iterable[ClassBody | fltk.fegen.pyrt.span.Span], label: Label | None = None
+        self,
+        children: typing.Iterable[ClassBody | fltk.fegen.pyrt.span.Span],
+        label: Label | None = None,
     ) -> None:
         self.children.extend((label, child) for child in children)
 
@@ -2572,7 +2619,12 @@ class CharClass:
             msg = f"{_cn}.{method}: label argument is not a {_cn}_Label; got {type(label).__name__}"
             raise TypeError(msg)
 
-    def insert(self, index: int, child: ClassBody | fltk.fegen.pyrt.span.Span, label: Label | None = None) -> None:
+    def insert(
+        self,
+        index: int,
+        child: ClassBody | fltk.fegen.pyrt.span.Span,
+        label: Label | None = None,
+    ) -> None:
         self._check_child_type_for_mutators(child)
         self._check_label_type_for_mutators(label, "insert")
         idx = operator.index(index)
@@ -2592,7 +2644,12 @@ class CharClass:
             raise IndexError(msg)
         return self.children.pop(norm)
 
-    def replace_at(self, index: int, child: ClassBody | fltk.fegen.pyrt.span.Span, label: Label | None = None) -> None:
+    def replace_at(
+        self,
+        index: int,
+        child: ClassBody | fltk.fegen.pyrt.span.Span,
+        label: Label | None = None,
+    ) -> None:
         self._check_child_type_for_mutators(child)
         self._check_label_type_for_mutators(label, "replace_at")
         idx = operator.index(index)
@@ -2692,7 +2749,9 @@ class ClassBody:
         self.children.append((label, child))
 
     def extend(
-        self, children: typing.Iterable[ClassItem | fltk.fegen.pyrt.span.Span], label: Label | None = None
+        self,
+        children: typing.Iterable[ClassItem | fltk.fegen.pyrt.span.Span],
+        label: Label | None = None,
     ) -> None:
         self.children.extend((label, child) for child in children)
 
@@ -2726,7 +2785,12 @@ class ClassBody:
             msg = f"{_cn}.{method}: label argument is not a {_cn}_Label; got {type(label).__name__}"
             raise TypeError(msg)
 
-    def insert(self, index: int, child: ClassItem | fltk.fegen.pyrt.span.Span, label: Label | None = None) -> None:
+    def insert(
+        self,
+        index: int,
+        child: ClassItem | fltk.fegen.pyrt.span.Span,
+        label: Label | None = None,
+    ) -> None:
         self._check_child_type_for_mutators(child)
         self._check_label_type_for_mutators(label, "insert")
         idx = operator.index(index)
@@ -2746,7 +2810,12 @@ class ClassBody:
             raise IndexError(msg)
         return self.children.pop(norm)
 
-    def replace_at(self, index: int, child: ClassItem | fltk.fegen.pyrt.span.Span, label: Label | None = None) -> None:
+    def replace_at(
+        self,
+        index: int,
+        child: ClassItem | fltk.fegen.pyrt.span.Span,
+        label: Label | None = None,
+    ) -> None:
         self._check_child_type_for_mutators(child)
         self._check_label_type_for_mutators(label, "replace_at")
         idx = operator.index(index)
@@ -3287,7 +3356,11 @@ class ClassRangeAtom:
     def append(self, child: ClassChar | ClassCharEscape, label: Label | None = None) -> None:
         self.children.append((label, child))
 
-    def extend(self, children: typing.Iterable[ClassChar | ClassCharEscape], label: Label | None = None) -> None:
+    def extend(
+        self,
+        children: typing.Iterable[ClassChar | ClassCharEscape],
+        label: Label | None = None,
+    ) -> None:
         self.children.extend((label, child) for child in children)
 
     def extend_children(self, other: ClassRangeAtom) -> None:
@@ -3660,7 +3733,11 @@ class ClassEscapeBody:
     def append(self, child: CharEscape | ClassShorthand, label: Label | None = None) -> None:
         self.children.append((label, child))
 
-    def extend(self, children: typing.Iterable[CharEscape | ClassShorthand], label: Label | None = None) -> None:
+    def extend(
+        self,
+        children: typing.Iterable[CharEscape | ClassShorthand],
+        label: Label | None = None,
+    ) -> None:
         self.children.extend((label, child) for child in children)
 
     def extend_children(self, other: ClassEscapeBody) -> None:
@@ -4024,7 +4101,11 @@ class EscapeBody:
         default_factory=list
     )
 
-    def append(self, child: AnchorEscape | Assertion | CharEscape | ClassShorthand, label: Label | None = None) -> None:
+    def append(
+        self,
+        child: AnchorEscape | Assertion | CharEscape | ClassShorthand,
+        label: Label | None = None,
+    ) -> None:
         self.children.append((label, child))
 
     def extend(
@@ -4037,7 +4118,9 @@ class EscapeBody:
     def extend_children(self, other: EscapeBody) -> None:
         self.children.extend(other.children)
 
-    def child(self) -> tuple[Label | None, AnchorEscape | Assertion | CharEscape | ClassShorthand]:
+    def child(
+        self,
+    ) -> tuple[Label | None, AnchorEscape | Assertion | CharEscape | ClassShorthand]:
         if (n := len(self.children)) != 1:
             msg = f"Expected one child but have {n}"
             raise ValueError(msg)
@@ -4055,7 +4138,10 @@ class EscapeBody:
             raise TypeError(msg)
 
     def insert(
-        self, index: int, child: AnchorEscape | Assertion | CharEscape | ClassShorthand, label: Label | None = None
+        self,
+        index: int,
+        child: AnchorEscape | Assertion | CharEscape | ClassShorthand,
+        label: Label | None = None,
     ) -> None:
         self._check_child_type_for_mutators(child)
         self._check_label_type_for_mutators(label, "insert")
@@ -4077,7 +4163,10 @@ class EscapeBody:
         return self.children.pop(norm)
 
     def replace_at(
-        self, index: int, child: AnchorEscape | Assertion | CharEscape | ClassShorthand, label: Label | None = None
+        self,
+        index: int,
+        child: AnchorEscape | Assertion | CharEscape | ClassShorthand,
+        label: Label | None = None,
     ) -> None:
         self._check_child_type_for_mutators(child)
         self._check_label_type_for_mutators(label, "replace_at")
@@ -4593,7 +4682,11 @@ class CharEscape:
         default_factory=list
     )
 
-    def append(self, child: ControlEscape | HexEscape | MetaEscape | UnicodeEscape, label: Label | None = None) -> None:
+    def append(
+        self,
+        child: ControlEscape | HexEscape | MetaEscape | UnicodeEscape,
+        label: Label | None = None,
+    ) -> None:
         self.children.append((label, child))
 
     def extend(
@@ -4606,7 +4699,9 @@ class CharEscape:
     def extend_children(self, other: CharEscape) -> None:
         self.children.extend(other.children)
 
-    def child(self) -> tuple[Label | None, ControlEscape | HexEscape | MetaEscape | UnicodeEscape]:
+    def child(
+        self,
+    ) -> tuple[Label | None, ControlEscape | HexEscape | MetaEscape | UnicodeEscape]:
         if (n := len(self.children)) != 1:
             msg = f"Expected one child but have {n}"
             raise ValueError(msg)
@@ -4624,7 +4719,10 @@ class CharEscape:
             raise TypeError(msg)
 
     def insert(
-        self, index: int, child: ControlEscape | HexEscape | MetaEscape | UnicodeEscape, label: Label | None = None
+        self,
+        index: int,
+        child: ControlEscape | HexEscape | MetaEscape | UnicodeEscape,
+        label: Label | None = None,
     ) -> None:
         self._check_child_type_for_mutators(child)
         self._check_label_type_for_mutators(label, "insert")
@@ -4646,7 +4744,10 @@ class CharEscape:
         return self.children.pop(norm)
 
     def replace_at(
-        self, index: int, child: ControlEscape | HexEscape | MetaEscape | UnicodeEscape, label: Label | None = None
+        self,
+        index: int,
+        child: ControlEscape | HexEscape | MetaEscape | UnicodeEscape,
+        label: Label | None = None,
     ) -> None:
         self._check_child_type_for_mutators(child)
         self._check_label_type_for_mutators(label, "replace_at")

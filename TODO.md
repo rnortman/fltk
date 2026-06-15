@@ -43,6 +43,18 @@ in `get_span_type`), so adding `check_instance_layout` there would add no reject
 Revisit only if a future change makes `extract_span` reachable by non-canonical types.
 Location: `crates/fltk-cst-core/src/cross_cdylib.rs` (`extract_span`).
 
+## `regex-unicode-class-divergence`
+
+The regex portability lint admits `\d`/`\w`/`\s` (and negations), `\b`/`\B` word boundaries, and `(?i)` as ASCII-portable constructs. However, these constructs have a non-ASCII semantic residual: the Unicode-class tables and case-folding tables differ between Python `re` and `regex-automata` by Unicode DB version. A grammar using these constructs with non-ASCII input may get different parse results on the two backends without any error. This is documented as a permanent limit of any static approach (both engines agree on syntax but differ on semantics for non-ASCII). Tracking here to ensure the `document-scope-boundary` burndown item covers the full ledger: `\d`/`\D`/`\w`/`\W`/`\s`/`\S`, `\b`/`\B`, and `(?i)` over non-ASCII. Location: `fltk/fegen/regex_portability.py` (module-level docstring), `fltk/fegen/regex.fltkg` (comments on `class_shorthand`, `assertion`, `anchor_escape`, `flag_chars`).
+
+## `regex-portability-target-list-drift`
+
+`tests/test_regex_portability.py:test_committed_rust_target_grammar_regex_is_portable` hand-copies the list of Rust-parser-target grammars from the `make gencode` recipe (Makefile lines ~276, 279, 284-285). If a new grammar is added to `gen-rust-parser` in the Makefile without being added to `_RUST_PARSER_TARGET_GRAMMARS` in the test, the completeness check silently fails to cover it. Single-source this list — e.g. a small manifest or glob that both `make gencode` and the test read — to close the drift hole. Tie this to the `gencode-drift-gate` family when that item is burned down. Location: `tests/test_regex_portability.py` (`_RUST_PARSER_TARGET_GRAMMARS` list), `Makefile` (`gencode` recipe).
+
+## `regex-portability-roundtrip-test`
+
+Design §7 specifies a "positive-control round-trip" test that pins the committed `regex_parser.py` as having been generated from a clean `regex.fltkg` — either by regenerating into a temp dir and comparing, or by asserting the committed parser re-classifies all admitted/excluded test cases identically. The whole-tree completeness test partially discharges this (grammar drift that changes classification on in-tree patterns surfaces there), but it does not catch drift that reclassifies no currently-committed pattern. Add a round-trip gate, e.g. a test that generates the parser into a temp dir and byte-compares it to the committed `regex_parser.py`, or extends the completeness test to include all unit-test `_PORTABLE_PATTERNS` / `_NON_PORTABLE_PATTERNS` cases as an oracle. Location: `tests/test_regex_portability.py` (new test function), `fltk/fegen/regex_parser.py` (committed artifact being guarded).
+
 ## `extend-children-owned`
 
 `extend_children(&Self)` clones every child Arc even though the donor node is immediately dropped after the call (inline-to-parent sub-expression and `+`/`*` loop paths). A consuming variant `extend_children_owned(other: Self)` using `Vec::append` would avoid the atomic inc+dec pairs per child on the parse hot path. Blocked on `gsm2tree_rs.py` adding the method to the generated CST node API. Location: `fltk/fegen/gsm2parser_rs.py` (`_gen_item_multiple`, `_gen_append_code`), `fltk/fegen/gsm2tree_rs.py` (generated `impl <Node>` blocks). Re-open only with profiling evidence.

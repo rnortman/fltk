@@ -20,10 +20,10 @@ use fltk_parser_core::{apply, ApplyResult, Cache, ErrorTracker, PackratState, Te
 
 use super::cst;
 
-pub const RULE_NAMES: [&str; 21] = ["num", "name", "atom", "paren_expr", "stmt", "items", "opt_item", "zero_items", "expr", "lval", "rval", "arrow", "latin_word", "tagged", "val", "leading_ws", "grouped", "rec_via_sub", "nest", "nest_sum", "_trivia"];
+pub const RULE_NAMES: [&str; 31] = ["num", "name", "atom", "paren_expr", "stmt", "items", "opt_item", "zero_items", "expr", "lval", "rval", "arrow", "latin_word", "tagged", "val", "leading_ws", "grouped", "rec_via_sub", "nest", "nest_sum", "digit_seq", "word_seq", "ws_seq", "three_to_five_digits", "exactly_two_digits", "escaped_metas", "latin_range", "nc_group_alt", "case_insensitive", "anchored_word", "_trivia"];
 
-const REGEX_PATTERNS: [&str; 5] = ["[0-9]+", "[a-z]+", "[À-ÿ]+", "[!@#$]+", "[\\s]+"];
-static REGEX_CELLS: [OnceLock<Regex>; 5] = [OnceLock::new(), OnceLock::new(), OnceLock::new(), OnceLock::new(), OnceLock::new()];
+const REGEX_PATTERNS: [&str; 15] = ["[0-9]+", "[a-z]+", "[À-ÿ]+", "[!@#$]+", "\\d+", "\\w+", "\\s+", "[0-9]{3,5}", "[0-9]{2}", "\\.\\*\\+", "[À-Ö]+", "(?:ab|cd)+", "(?i)[a-z]+", "^[a-z]+$", "[\\s]+"];
+static REGEX_CELLS: [OnceLock<Regex>; 15] = [OnceLock::new(), OnceLock::new(), OnceLock::new(), OnceLock::new(), OnceLock::new(), OnceLock::new(), OnceLock::new(), OnceLock::new(), OnceLock::new(), OnceLock::new(), OnceLock::new(), OnceLock::new(), OnceLock::new(), OnceLock::new(), OnceLock::new()];
 
 fn regex_at(idx: usize) -> &'static Regex {
     REGEX_CELLS[idx].get_or_init(|| {
@@ -57,6 +57,16 @@ pub struct Parser {
     cache__parse_rec_via_sub: Cache<Shared<cst::RecViaSub>>,
     cache__parse_nest: Cache<Shared<cst::Nest>>,
     cache__parse_nest_sum: Cache<Shared<cst::NestSum>>,
+    cache__parse_digit_seq: Cache<Shared<cst::DigitSeq>>,
+    cache__parse_word_seq: Cache<Shared<cst::WordSeq>>,
+    cache__parse_ws_seq: Cache<Shared<cst::WsSeq>>,
+    cache__parse_three_to_five_digits: Cache<Shared<cst::ThreeToFiveDigits>>,
+    cache__parse_exactly_two_digits: Cache<Shared<cst::ExactlyTwoDigits>>,
+    cache__parse_escaped_metas: Cache<Shared<cst::EscapedMetas>>,
+    cache__parse_latin_range: Cache<Shared<cst::LatinRange>>,
+    cache__parse_nc_group_alt: Cache<Shared<cst::NcGroupAlt>>,
+    cache__parse_case_insensitive: Cache<Shared<cst::CaseInsensitive>>,
+    cache__parse_anchored_word: Cache<Shared<cst::AnchoredWord>>,
     cache__parse__trivia: Cache<Shared<cst::Trivia>>,
 }
 
@@ -92,6 +102,16 @@ impl Parser {
             cache__parse_rec_via_sub: Cache::new(),
             cache__parse_nest: Cache::new(),
             cache__parse_nest_sum: Cache::new(),
+            cache__parse_digit_seq: Cache::new(),
+            cache__parse_word_seq: Cache::new(),
+            cache__parse_ws_seq: Cache::new(),
+            cache__parse_three_to_five_digits: Cache::new(),
+            cache__parse_exactly_two_digits: Cache::new(),
+            cache__parse_escaped_metas: Cache::new(),
+            cache__parse_latin_range: Cache::new(),
+            cache__parse_nc_group_alt: Cache::new(),
+            cache__parse_case_insensitive: Cache::new(),
+            cache__parse_anchored_word: Cache::new(),
             cache__parse__trivia: Cache::new(),
         }
     }
@@ -1190,12 +1210,292 @@ impl Parser {
         None
     }
 
+    pub fn apply__parse_digit_seq(&mut self, pos: i64) -> Option<ApplyResult<Shared<cst::DigitSeq>>> {
+        apply(self, 20u32, pos, |p| &mut p.packrat, |p| &mut p.cache__parse_digit_seq, Self::parse_digit_seq)
+    }
+
+    fn parse_digit_seq__alt0__item0(&mut self, pos: i64) -> Option<ApplyResult<Span>> {
+        self.consume_regex(pos, 4)
+    }
+
+    fn parse_digit_seq__alt0(&mut self, mut pos: i64) -> Option<ApplyResult<cst::DigitSeq>> {
+        let span_start = pos;
+        let mut result = cst::DigitSeq::new(Span::unknown());
+        if let Some(item0) = self.parse_digit_seq__alt0__item0(pos) {
+            pos = item0.pos;
+            result.append_value(item0.result);
+        } else {
+            return None;
+        }
+        result.set_span(Span::new_with_source(span_start, pos, self.terminals.source_text()));
+        Some(ApplyResult { pos, result })
+    }
+
+    fn parse_digit_seq(&mut self, pos: i64) -> Option<ApplyResult<Shared<cst::DigitSeq>>> {
+        if let Some(alt0) = self.parse_digit_seq__alt0(pos) {
+            return Some(ApplyResult { pos: alt0.pos, result: Shared::new(alt0.result) });
+        }
+        None
+    }
+
+    pub fn apply__parse_word_seq(&mut self, pos: i64) -> Option<ApplyResult<Shared<cst::WordSeq>>> {
+        apply(self, 21u32, pos, |p| &mut p.packrat, |p| &mut p.cache__parse_word_seq, Self::parse_word_seq)
+    }
+
+    fn parse_word_seq__alt0__item0(&mut self, pos: i64) -> Option<ApplyResult<Span>> {
+        self.consume_regex(pos, 5)
+    }
+
+    fn parse_word_seq__alt0(&mut self, mut pos: i64) -> Option<ApplyResult<cst::WordSeq>> {
+        let span_start = pos;
+        let mut result = cst::WordSeq::new(Span::unknown());
+        if let Some(item0) = self.parse_word_seq__alt0__item0(pos) {
+            pos = item0.pos;
+            result.append_value(item0.result);
+        } else {
+            return None;
+        }
+        result.set_span(Span::new_with_source(span_start, pos, self.terminals.source_text()));
+        Some(ApplyResult { pos, result })
+    }
+
+    fn parse_word_seq(&mut self, pos: i64) -> Option<ApplyResult<Shared<cst::WordSeq>>> {
+        if let Some(alt0) = self.parse_word_seq__alt0(pos) {
+            return Some(ApplyResult { pos: alt0.pos, result: Shared::new(alt0.result) });
+        }
+        None
+    }
+
+    pub fn apply__parse_ws_seq(&mut self, pos: i64) -> Option<ApplyResult<Shared<cst::WsSeq>>> {
+        apply(self, 22u32, pos, |p| &mut p.packrat, |p| &mut p.cache__parse_ws_seq, Self::parse_ws_seq)
+    }
+
+    fn parse_ws_seq__alt0__item0(&mut self, pos: i64) -> Option<ApplyResult<Span>> {
+        self.consume_regex(pos, 6)
+    }
+
+    fn parse_ws_seq__alt0(&mut self, mut pos: i64) -> Option<ApplyResult<cst::WsSeq>> {
+        let span_start = pos;
+        let mut result = cst::WsSeq::new(Span::unknown());
+        if let Some(item0) = self.parse_ws_seq__alt0__item0(pos) {
+            pos = item0.pos;
+            result.append_value(item0.result);
+        } else {
+            return None;
+        }
+        result.set_span(Span::new_with_source(span_start, pos, self.terminals.source_text()));
+        Some(ApplyResult { pos, result })
+    }
+
+    fn parse_ws_seq(&mut self, pos: i64) -> Option<ApplyResult<Shared<cst::WsSeq>>> {
+        if let Some(alt0) = self.parse_ws_seq__alt0(pos) {
+            return Some(ApplyResult { pos: alt0.pos, result: Shared::new(alt0.result) });
+        }
+        None
+    }
+
+    pub fn apply__parse_three_to_five_digits(&mut self, pos: i64) -> Option<ApplyResult<Shared<cst::ThreeToFiveDigits>>> {
+        apply(self, 23u32, pos, |p| &mut p.packrat, |p| &mut p.cache__parse_three_to_five_digits, Self::parse_three_to_five_digits)
+    }
+
+    fn parse_three_to_five_digits__alt0__item0(&mut self, pos: i64) -> Option<ApplyResult<Span>> {
+        self.consume_regex(pos, 7)
+    }
+
+    fn parse_three_to_five_digits__alt0(&mut self, mut pos: i64) -> Option<ApplyResult<cst::ThreeToFiveDigits>> {
+        let span_start = pos;
+        let mut result = cst::ThreeToFiveDigits::new(Span::unknown());
+        if let Some(item0) = self.parse_three_to_five_digits__alt0__item0(pos) {
+            pos = item0.pos;
+            result.append_value(item0.result);
+        } else {
+            return None;
+        }
+        result.set_span(Span::new_with_source(span_start, pos, self.terminals.source_text()));
+        Some(ApplyResult { pos, result })
+    }
+
+    fn parse_three_to_five_digits(&mut self, pos: i64) -> Option<ApplyResult<Shared<cst::ThreeToFiveDigits>>> {
+        if let Some(alt0) = self.parse_three_to_five_digits__alt0(pos) {
+            return Some(ApplyResult { pos: alt0.pos, result: Shared::new(alt0.result) });
+        }
+        None
+    }
+
+    pub fn apply__parse_exactly_two_digits(&mut self, pos: i64) -> Option<ApplyResult<Shared<cst::ExactlyTwoDigits>>> {
+        apply(self, 24u32, pos, |p| &mut p.packrat, |p| &mut p.cache__parse_exactly_two_digits, Self::parse_exactly_two_digits)
+    }
+
+    fn parse_exactly_two_digits__alt0__item0(&mut self, pos: i64) -> Option<ApplyResult<Span>> {
+        self.consume_regex(pos, 8)
+    }
+
+    fn parse_exactly_two_digits__alt0(&mut self, mut pos: i64) -> Option<ApplyResult<cst::ExactlyTwoDigits>> {
+        let span_start = pos;
+        let mut result = cst::ExactlyTwoDigits::new(Span::unknown());
+        if let Some(item0) = self.parse_exactly_two_digits__alt0__item0(pos) {
+            pos = item0.pos;
+            result.append_value(item0.result);
+        } else {
+            return None;
+        }
+        result.set_span(Span::new_with_source(span_start, pos, self.terminals.source_text()));
+        Some(ApplyResult { pos, result })
+    }
+
+    fn parse_exactly_two_digits(&mut self, pos: i64) -> Option<ApplyResult<Shared<cst::ExactlyTwoDigits>>> {
+        if let Some(alt0) = self.parse_exactly_two_digits__alt0(pos) {
+            return Some(ApplyResult { pos: alt0.pos, result: Shared::new(alt0.result) });
+        }
+        None
+    }
+
+    pub fn apply__parse_escaped_metas(&mut self, pos: i64) -> Option<ApplyResult<Shared<cst::EscapedMetas>>> {
+        apply(self, 25u32, pos, |p| &mut p.packrat, |p| &mut p.cache__parse_escaped_metas, Self::parse_escaped_metas)
+    }
+
+    fn parse_escaped_metas__alt0__item0(&mut self, pos: i64) -> Option<ApplyResult<Span>> {
+        self.consume_regex(pos, 9)
+    }
+
+    fn parse_escaped_metas__alt0(&mut self, mut pos: i64) -> Option<ApplyResult<cst::EscapedMetas>> {
+        let span_start = pos;
+        let mut result = cst::EscapedMetas::new(Span::unknown());
+        if let Some(item0) = self.parse_escaped_metas__alt0__item0(pos) {
+            pos = item0.pos;
+            result.append_value(item0.result);
+        } else {
+            return None;
+        }
+        result.set_span(Span::new_with_source(span_start, pos, self.terminals.source_text()));
+        Some(ApplyResult { pos, result })
+    }
+
+    fn parse_escaped_metas(&mut self, pos: i64) -> Option<ApplyResult<Shared<cst::EscapedMetas>>> {
+        if let Some(alt0) = self.parse_escaped_metas__alt0(pos) {
+            return Some(ApplyResult { pos: alt0.pos, result: Shared::new(alt0.result) });
+        }
+        None
+    }
+
+    pub fn apply__parse_latin_range(&mut self, pos: i64) -> Option<ApplyResult<Shared<cst::LatinRange>>> {
+        apply(self, 26u32, pos, |p| &mut p.packrat, |p| &mut p.cache__parse_latin_range, Self::parse_latin_range)
+    }
+
+    fn parse_latin_range__alt0__item0(&mut self, pos: i64) -> Option<ApplyResult<Span>> {
+        self.consume_regex(pos, 10)
+    }
+
+    fn parse_latin_range__alt0(&mut self, mut pos: i64) -> Option<ApplyResult<cst::LatinRange>> {
+        let span_start = pos;
+        let mut result = cst::LatinRange::new(Span::unknown());
+        if let Some(item0) = self.parse_latin_range__alt0__item0(pos) {
+            pos = item0.pos;
+            result.append_value(item0.result);
+        } else {
+            return None;
+        }
+        result.set_span(Span::new_with_source(span_start, pos, self.terminals.source_text()));
+        Some(ApplyResult { pos, result })
+    }
+
+    fn parse_latin_range(&mut self, pos: i64) -> Option<ApplyResult<Shared<cst::LatinRange>>> {
+        if let Some(alt0) = self.parse_latin_range__alt0(pos) {
+            return Some(ApplyResult { pos: alt0.pos, result: Shared::new(alt0.result) });
+        }
+        None
+    }
+
+    pub fn apply__parse_nc_group_alt(&mut self, pos: i64) -> Option<ApplyResult<Shared<cst::NcGroupAlt>>> {
+        apply(self, 27u32, pos, |p| &mut p.packrat, |p| &mut p.cache__parse_nc_group_alt, Self::parse_nc_group_alt)
+    }
+
+    fn parse_nc_group_alt__alt0__item0(&mut self, pos: i64) -> Option<ApplyResult<Span>> {
+        self.consume_regex(pos, 11)
+    }
+
+    fn parse_nc_group_alt__alt0(&mut self, mut pos: i64) -> Option<ApplyResult<cst::NcGroupAlt>> {
+        let span_start = pos;
+        let mut result = cst::NcGroupAlt::new(Span::unknown());
+        if let Some(item0) = self.parse_nc_group_alt__alt0__item0(pos) {
+            pos = item0.pos;
+            result.append_value(item0.result);
+        } else {
+            return None;
+        }
+        result.set_span(Span::new_with_source(span_start, pos, self.terminals.source_text()));
+        Some(ApplyResult { pos, result })
+    }
+
+    fn parse_nc_group_alt(&mut self, pos: i64) -> Option<ApplyResult<Shared<cst::NcGroupAlt>>> {
+        if let Some(alt0) = self.parse_nc_group_alt__alt0(pos) {
+            return Some(ApplyResult { pos: alt0.pos, result: Shared::new(alt0.result) });
+        }
+        None
+    }
+
+    pub fn apply__parse_case_insensitive(&mut self, pos: i64) -> Option<ApplyResult<Shared<cst::CaseInsensitive>>> {
+        apply(self, 28u32, pos, |p| &mut p.packrat, |p| &mut p.cache__parse_case_insensitive, Self::parse_case_insensitive)
+    }
+
+    fn parse_case_insensitive__alt0__item0(&mut self, pos: i64) -> Option<ApplyResult<Span>> {
+        self.consume_regex(pos, 12)
+    }
+
+    fn parse_case_insensitive__alt0(&mut self, mut pos: i64) -> Option<ApplyResult<cst::CaseInsensitive>> {
+        let span_start = pos;
+        let mut result = cst::CaseInsensitive::new(Span::unknown());
+        if let Some(item0) = self.parse_case_insensitive__alt0__item0(pos) {
+            pos = item0.pos;
+            result.append_value(item0.result);
+        } else {
+            return None;
+        }
+        result.set_span(Span::new_with_source(span_start, pos, self.terminals.source_text()));
+        Some(ApplyResult { pos, result })
+    }
+
+    fn parse_case_insensitive(&mut self, pos: i64) -> Option<ApplyResult<Shared<cst::CaseInsensitive>>> {
+        if let Some(alt0) = self.parse_case_insensitive__alt0(pos) {
+            return Some(ApplyResult { pos: alt0.pos, result: Shared::new(alt0.result) });
+        }
+        None
+    }
+
+    pub fn apply__parse_anchored_word(&mut self, pos: i64) -> Option<ApplyResult<Shared<cst::AnchoredWord>>> {
+        apply(self, 29u32, pos, |p| &mut p.packrat, |p| &mut p.cache__parse_anchored_word, Self::parse_anchored_word)
+    }
+
+    fn parse_anchored_word__alt0__item0(&mut self, pos: i64) -> Option<ApplyResult<Span>> {
+        self.consume_regex(pos, 13)
+    }
+
+    fn parse_anchored_word__alt0(&mut self, mut pos: i64) -> Option<ApplyResult<cst::AnchoredWord>> {
+        let span_start = pos;
+        let mut result = cst::AnchoredWord::new(Span::unknown());
+        if let Some(item0) = self.parse_anchored_word__alt0__item0(pos) {
+            pos = item0.pos;
+            result.append_value(item0.result);
+        } else {
+            return None;
+        }
+        result.set_span(Span::new_with_source(span_start, pos, self.terminals.source_text()));
+        Some(ApplyResult { pos, result })
+    }
+
+    fn parse_anchored_word(&mut self, pos: i64) -> Option<ApplyResult<Shared<cst::AnchoredWord>>> {
+        if let Some(alt0) = self.parse_anchored_word__alt0(pos) {
+            return Some(ApplyResult { pos: alt0.pos, result: Shared::new(alt0.result) });
+        }
+        None
+    }
+
     pub fn apply__parse__trivia(&mut self, pos: i64) -> Option<ApplyResult<Shared<cst::Trivia>>> {
-        apply(self, 20u32, pos, |p| &mut p.packrat, |p| &mut p.cache__parse__trivia, Self::parse__trivia)
+        apply(self, 30u32, pos, |p| &mut p.packrat, |p| &mut p.cache__parse__trivia, Self::parse__trivia)
     }
 
     fn parse__trivia__alt0__item0(&mut self, pos: i64) -> Option<ApplyResult<Span>> {
-        self.consume_regex(pos, 4)
+        self.consume_regex(pos, 14)
     }
 
     fn parse__trivia__alt0(&mut self, mut pos: i64) -> Option<ApplyResult<cst::Trivia>> {
@@ -1616,6 +1916,166 @@ mod python_bindings {
             match result {
                 Some(r) => {
                     let handle = cst::PyNestSum::to_py_canonical(py, &r.result)?;
+                    Ok(Some(PyApplyResult { pos: r.pos, result: handle.into_any() }))
+                }
+                None => Ok(None),
+            }
+        }
+
+        fn apply__parse_digit_seq(&mut self, py: Python<'_>, pos: i64) -> PyResult<Option<PyApplyResult>> {
+            self.check_pos(pos)?;
+            let result = self.inner.apply__parse_digit_seq(pos);
+            if self.inner.depth_exceeded() {
+                return Err(PyRecursionError::new_err(format!(
+                    "parse depth limit exceeded (max_depth = {})", self.inner.max_depth())));
+            }
+            match result {
+                Some(r) => {
+                    let handle = cst::PyDigitSeq::to_py_canonical(py, &r.result)?;
+                    Ok(Some(PyApplyResult { pos: r.pos, result: handle.into_any() }))
+                }
+                None => Ok(None),
+            }
+        }
+
+        fn apply__parse_word_seq(&mut self, py: Python<'_>, pos: i64) -> PyResult<Option<PyApplyResult>> {
+            self.check_pos(pos)?;
+            let result = self.inner.apply__parse_word_seq(pos);
+            if self.inner.depth_exceeded() {
+                return Err(PyRecursionError::new_err(format!(
+                    "parse depth limit exceeded (max_depth = {})", self.inner.max_depth())));
+            }
+            match result {
+                Some(r) => {
+                    let handle = cst::PyWordSeq::to_py_canonical(py, &r.result)?;
+                    Ok(Some(PyApplyResult { pos: r.pos, result: handle.into_any() }))
+                }
+                None => Ok(None),
+            }
+        }
+
+        fn apply__parse_ws_seq(&mut self, py: Python<'_>, pos: i64) -> PyResult<Option<PyApplyResult>> {
+            self.check_pos(pos)?;
+            let result = self.inner.apply__parse_ws_seq(pos);
+            if self.inner.depth_exceeded() {
+                return Err(PyRecursionError::new_err(format!(
+                    "parse depth limit exceeded (max_depth = {})", self.inner.max_depth())));
+            }
+            match result {
+                Some(r) => {
+                    let handle = cst::PyWsSeq::to_py_canonical(py, &r.result)?;
+                    Ok(Some(PyApplyResult { pos: r.pos, result: handle.into_any() }))
+                }
+                None => Ok(None),
+            }
+        }
+
+        fn apply__parse_three_to_five_digits(&mut self, py: Python<'_>, pos: i64) -> PyResult<Option<PyApplyResult>> {
+            self.check_pos(pos)?;
+            let result = self.inner.apply__parse_three_to_five_digits(pos);
+            if self.inner.depth_exceeded() {
+                return Err(PyRecursionError::new_err(format!(
+                    "parse depth limit exceeded (max_depth = {})", self.inner.max_depth())));
+            }
+            match result {
+                Some(r) => {
+                    let handle = cst::PyThreeToFiveDigits::to_py_canonical(py, &r.result)?;
+                    Ok(Some(PyApplyResult { pos: r.pos, result: handle.into_any() }))
+                }
+                None => Ok(None),
+            }
+        }
+
+        fn apply__parse_exactly_two_digits(&mut self, py: Python<'_>, pos: i64) -> PyResult<Option<PyApplyResult>> {
+            self.check_pos(pos)?;
+            let result = self.inner.apply__parse_exactly_two_digits(pos);
+            if self.inner.depth_exceeded() {
+                return Err(PyRecursionError::new_err(format!(
+                    "parse depth limit exceeded (max_depth = {})", self.inner.max_depth())));
+            }
+            match result {
+                Some(r) => {
+                    let handle = cst::PyExactlyTwoDigits::to_py_canonical(py, &r.result)?;
+                    Ok(Some(PyApplyResult { pos: r.pos, result: handle.into_any() }))
+                }
+                None => Ok(None),
+            }
+        }
+
+        fn apply__parse_escaped_metas(&mut self, py: Python<'_>, pos: i64) -> PyResult<Option<PyApplyResult>> {
+            self.check_pos(pos)?;
+            let result = self.inner.apply__parse_escaped_metas(pos);
+            if self.inner.depth_exceeded() {
+                return Err(PyRecursionError::new_err(format!(
+                    "parse depth limit exceeded (max_depth = {})", self.inner.max_depth())));
+            }
+            match result {
+                Some(r) => {
+                    let handle = cst::PyEscapedMetas::to_py_canonical(py, &r.result)?;
+                    Ok(Some(PyApplyResult { pos: r.pos, result: handle.into_any() }))
+                }
+                None => Ok(None),
+            }
+        }
+
+        fn apply__parse_latin_range(&mut self, py: Python<'_>, pos: i64) -> PyResult<Option<PyApplyResult>> {
+            self.check_pos(pos)?;
+            let result = self.inner.apply__parse_latin_range(pos);
+            if self.inner.depth_exceeded() {
+                return Err(PyRecursionError::new_err(format!(
+                    "parse depth limit exceeded (max_depth = {})", self.inner.max_depth())));
+            }
+            match result {
+                Some(r) => {
+                    let handle = cst::PyLatinRange::to_py_canonical(py, &r.result)?;
+                    Ok(Some(PyApplyResult { pos: r.pos, result: handle.into_any() }))
+                }
+                None => Ok(None),
+            }
+        }
+
+        fn apply__parse_nc_group_alt(&mut self, py: Python<'_>, pos: i64) -> PyResult<Option<PyApplyResult>> {
+            self.check_pos(pos)?;
+            let result = self.inner.apply__parse_nc_group_alt(pos);
+            if self.inner.depth_exceeded() {
+                return Err(PyRecursionError::new_err(format!(
+                    "parse depth limit exceeded (max_depth = {})", self.inner.max_depth())));
+            }
+            match result {
+                Some(r) => {
+                    let handle = cst::PyNcGroupAlt::to_py_canonical(py, &r.result)?;
+                    Ok(Some(PyApplyResult { pos: r.pos, result: handle.into_any() }))
+                }
+                None => Ok(None),
+            }
+        }
+
+        fn apply__parse_case_insensitive(&mut self, py: Python<'_>, pos: i64) -> PyResult<Option<PyApplyResult>> {
+            self.check_pos(pos)?;
+            let result = self.inner.apply__parse_case_insensitive(pos);
+            if self.inner.depth_exceeded() {
+                return Err(PyRecursionError::new_err(format!(
+                    "parse depth limit exceeded (max_depth = {})", self.inner.max_depth())));
+            }
+            match result {
+                Some(r) => {
+                    let handle = cst::PyCaseInsensitive::to_py_canonical(py, &r.result)?;
+                    Ok(Some(PyApplyResult { pos: r.pos, result: handle.into_any() }))
+                }
+                None => Ok(None),
+            }
+        }
+
+        fn apply__parse_anchored_word(&mut self, py: Python<'_>, pos: i64) -> PyResult<Option<PyApplyResult>> {
+            self.check_pos(pos)?;
+            let result = self.inner.apply__parse_anchored_word(pos);
+            if self.inner.depth_exceeded() {
+                return Err(PyRecursionError::new_err(format!(
+                    "parse depth limit exceeded (max_depth = {})", self.inner.max_depth())));
+            }
+            match result {
+                Some(r) => {
+                    let handle = cst::PyAnchoredWord::to_py_canonical(py, &r.result)?;
                     Ok(Some(PyApplyResult { pos: r.pos, result: handle.into_any() }))
                 }
                 None => Ok(None),

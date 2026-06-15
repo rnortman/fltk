@@ -3,15 +3,42 @@
 Generates a standalone .rs file implementing a packrat parser that
 produces CST nodes from the generated cst.rs module.
 
-Regex subset restriction: grammar regexes must use the common subset of Python ``re``
-and ``regex-syntax`` (shared by the ``regex`` and ``regex-automata`` crates).  Lookahead,
-lookbehind, and backreferences are not supported; ``regex_automata::meta::Regex`` rejects
-them at compile time.  The generated ``#[test] fn all_regex_patterns_compile`` (emitted
-into every generated parser) enforces this by attempting
-``regex_automata::meta::Regex::new(pattern)`` for each pattern at ``cargo test`` time,
-naming any unsupported pattern in the failure message.  See ADR
-``docs/adr/2026/06/10-rust-parser-codegen/README.md`` §Regex subset for the full
-constraint and the rationale for keeping it as the permanent default.
+Regex portability enforcement (hard semantic boundary)
+------------------------------------------------------
+FLTK runs two regex engines against the same pattern strings: Python ``re`` on the
+Python backend and ``regex_automata::meta::Regex`` on the Rust backend.  These engines
+are **not** a common subset: they agree on ASCII constructs but diverge silently on:
+
+  - POSIX classes ``[[:alpha:]]`` -- Rust matches the POSIX class; Python ``re``
+    parses the construct as a malformed nested set and matches *nothing* (no error,
+    just a different result).
+  - Unicode property escapes ``\\p{L}``/``\\P{N}`` -- ``regex-automata`` accepts them;
+    Python ``re`` rejects them.
+  - Nested set operations ``&&`` / ``--`` -- Rust set operations; Python ``re`` has no
+    equivalent (raises ``FutureWarning`` or interprets the characters literally).
+  - Non-ASCII ``\\d``/``\\w``/``\\s``/``\\b`` / ``(?i)`` -- admitted as ASCII-portable
+    but carry a Unicode-DB-version residual (documented-only limit, see
+    ``fltk/fegen/regex_portability.py``).
+
+The *existing* compile-time guard is the generated ``#[test] fn all_regex_patterns_compile``
+(emitted by this module, ~line 976+), which calls
+``regex_automata::meta::Regex::new(pattern)`` for each pattern under ``cargo test``.
+That catches constructs the Rust engine *rejects at compile time* (lookahead, lookbehind,
+backreferences) but it cannot catch *silent semantic divergence* -- constructs that compile
+cleanly on both engines but match differently at runtime (the POSIX / ``\\p{}`` / nested-set
+class above).
+
+**This generator therefore validates each grammar-author-supplied regex** against
+``fltk/fegen/regex.fltkg``, an FLTK grammar of the portable subset.  A pattern is
+portable iff the generated ``regex_parser`` (derived from ``regex.fltkg``) parses it to
+end of input; anything outside the subset stalls the parser short of end-of-input and
+raises ``ValueError`` before any Rust code is emitted (see ``check_regex_portable`` in
+``fltk.fegen.regex_portability``).  The check runs only here (the Rust generator) -- the
+Python generator is not affected, since the Python ``re`` semantics are the stable
+baseline and the constraint exists to protect the Rust backend.
+
+See ``fltk/fegen/regex.fltkg`` for the executable definition of the portable subset and
+``fltk/fegen/regex_portability.py`` for the wrapper.
 """
 
 from __future__ import annotations
@@ -22,6 +49,7 @@ from dataclasses import dataclass
 
 from fltk.fegen import gsm
 from fltk.fegen.gsm2tree_rs import RustCstGenerator
+from fltk.fegen.regex_portability import check_regex_portable
 
 # Code point thresholds for Rust string literal escaping
 _CTRL_MAX = 0x20  # exclusive: code points < 0x20 get \u{XX} escaping
@@ -755,6 +783,23 @@ class RustParserGenerator:
             return f'self.consume_literal(pos, "{escaped}")', result_ty, False
 
         elif isinstance(term, gsm.Regex):
+            # Validate portability before registering the pattern.  Check at the
+            # user-term site (not inside _regex_idx) so the domain is author-written
+            # patterns only -- _regex_idx is also called for the internal trivia
+            # pattern \s+ which the grammar author never wrote (design §5.3).
+            # Gate on _regex_index miss so each distinct pattern is checked once --
+            # a pattern used in N rules is fully re-parsed N times otherwise (the check
+            # is pure and the result identical for a given string, so de-duplication is
+            # safe and keeps generation proportional to distinct patterns, not occurrences).
+            if term.value not in self._regex_index:
+                issue = check_regex_portable(term.value)
+                if issue is not None:
+                    msg = (
+                        f"Regex pattern {term.value!r} is outside the portable subset "
+                        f"(furthest progress: offset {issue.offset}): {issue.detail}\n"
+                        f"See fltk/fegen/regex.fltkg for the executable portable-subset definition."
+                    )
+                    raise ValueError(msg)
             idx = self._regex_idx(term.value)
             self._uses_regex = True
             result_ty = ResultTy(is_span=True, class_name=None)

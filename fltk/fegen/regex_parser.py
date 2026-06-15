@@ -1688,7 +1688,7 @@ class Parser:
     def parse_class_char__alt0__item0(
         self, pos: int
     ) -> fltk.fegen.pyrt.memo.ApplyResult[int, fltk.fegen.pyrt.span.Span] | None:
-        return self.consume_regex(pos=pos, regex="[^\\\\\\]\\[\\-\\n]")
+        return self.consume_regex(pos=pos, regex="[^\\\\\\]\\[\\-\\n&]")
 
     def parse_class_escape(
         self, pos: int
@@ -2209,7 +2209,7 @@ class Parser:
     def parse_control_escape__alt0__item0(
         self, pos: int
     ) -> fltk.fegen.pyrt.memo.ApplyResult[int, fltk.fegen.pyrt.span.Span] | None:
-        return self.consume_regex(pos=pos, regex="[nrtfv0a]")
+        return self.consume_regex(pos=pos, regex="[nrtfva]")
 
     def parse_hex_escape(
         self, pos: int

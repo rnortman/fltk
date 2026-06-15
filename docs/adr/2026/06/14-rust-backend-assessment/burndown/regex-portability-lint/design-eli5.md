@@ -8,9 +8,9 @@ FLTK originally ran entirely in Python. Recently, a Rust backend was added to ma
 
 Here is the problem: the Python backend and the Rust backend use different regex engines. Python uses its built-in `re` module. The Rust backend uses a library called `regex-automata`. Both engines accept regex patterns written as text strings, but they do not interpret all patterns the same way. Some patterns compile and run on both engines but silently produce different results.
 
-The most concretely verified example is POSIX character classes, like `[[:alpha:]]`. On the Rust engine, this means "match any letter." On the Python engine, this syntax is not recognized as a character class at all -- Python treats it as a malformed nested bracket expression and matches nothing (it emits a warning, but no error). So a grammar rule like `word := value:/[[:alpha:]]+/` would successfully parse the word "hello" on the Rust backend and fail entirely on the Python backend. Same grammar, same input, opposite result, no error on either side.
+The most concretely verified example is POSIX character classes, like `[[:alpha:]]`. On the Rust engine, this means "match any letter." On the Python engine, this syntax is not recognized as a character class at all -- Python treats it as a malformed nested bracket expression and matches nothing (it emits a warning, but no error). So a grammar rule like `word := value:/[[:alpha:]]+/` would successfully parse the word "hello" on the Rust backend and fail entirely on the Python backend. Same grammar, same input, opposite result, no error on either side. The same behavior occurs with `[[:digit:]]`, `[[:space:]]`, and `[[:alnum:]]`.
 
-This is exactly the kind of silent breakage the project's public-API contract is designed to prevent. A grammar author could write a regex that works with the Python backend, switch to the Rust backend, and get silently wrong results with no warning.
+This is exactly the kind of silent breakage the project's public-API contract is designed to prevent. A grammar author could write a regex that works with one backend, switch to the other, and get silently wrong results with no warning.
 
 Today, there is one existing safeguard: every generated Rust parser includes a test that tries to compile each regex pattern with the Rust engine. This catches patterns the Rust engine flat-out rejects (like lookahead assertions or backreferences), but it does not catch patterns that both engines accept yet interpret differently. The POSIX-class divergence sails right through this check.
 
@@ -62,50 +62,70 @@ This inversion -- from "reject known bad" to "accept only known good" -- is the 
 
 ### The regex-subset grammar
 
-A new FLTK grammar file defines the portable regex subset. It is a recognizer: the CST it produces is not consumed structurally. The only question is "did the parser consume the entire input?" The grammar must be complete enough to accept the portable constructs real grammars use and exclude the divergent ones.
+A new FLTK grammar file defines the portable regex subset. It is a recognizer: the CST it produces is not consumed structurally. The only question is "did the parser consume the entire input?" The grammar must be complete enough to accept the portable constructs real grammars use and exclude the divergent ones. Every admit/reject decision was verified by executing both engines; a construct is admitted only if both accept it and agree, and excluded if either rejects it or the two disagree.
 
 **What the grammar admits** (portable constructs):
-- Ordinary literal characters (anything not a regex metacharacter).
-- Escape sequences: backslash followed by a metacharacter or a portable shorthand (`\d`, `\w`, `\s` and their negations, `\b`, `\B`, `\n`, `\r`, `\t`, `\f`, `\v`, `\0`, escaped metacharacters like `\.` or `\*`, and numeric escapes `\xHH` and `\uHHHH`).
-- Character classes (`[...]` and `[^...]`) containing single characters, escapes, and ranges like `a-z`.
-- Anchors (`^` and `$`).
-- Quantifiers (`?`, `*`, `+`, `{m}`, `{m,}`, `{m,n}`, each optionally followed by `?` for lazy matching).
-- Capturing groups `(...)` and non-capturing groups `(?:...)`.
-- Inline flags like `(?i)`, `(?m)`, `(?s)`, `(?x)` and combinations.
-- Alternation (`A|B|...`).
 
-**What the grammar excludes** (rejected by the simple fact that the grammar does not contain rules for them):
-- POSIX character classes (`[[:alpha:]]`, etc.) -- the Rust engine treats these as real character classes; the Python engine treats them as malformed and matches nothing.
-- Unicode property classes (`\p{L}`, `\P{N}`, etc.) -- the Rust engine accepts these; the Python engine rejects them outright.
-- Set-operation syntax inside character classes (`[a-z&&[^aeiou]]`, `[\w--_]`) -- the Rust engine supports these; the Python engine does not.
-- Lookahead and lookbehind (`(?=...)`, `(?!...)`, `(?<=...)`, `(?<!...)`) -- the Rust engine already rejects these at compile time, but excluding them from the grammar surfaces the failure earlier and with a uniform error message.
-- Backreferences (`\1`, `(?P=name)`) -- same situation as lookahead.
+- Ordinary literal characters (anything not a regex metacharacter). The bare closers `]` and `}` are admitted as literals outside a character class (both engines treat a bare `]` or `}` as a literal -- verified portable). A bare `{`, however, is not a literal: the Rust engine rejects a bare `{` while the Python engine treats it as a literal. So `{` is admitted only as the opener of a valid bounded quantifier, never as a standalone character.
+- Escape sequences at the top level: backslash followed by a portable shorthand or metacharacter. Admitted: class shorthands `\d`, `\D`, `\w`, `\W`, `\s`, `\S`; word-boundary assertions `\b`, `\B`; text anchors `\A` and `\z`; control escapes `\n`, `\r`, `\t`, `\f`, `\v`, `\0`, `\a` (bell -- portable on both engines); escaped metacharacters (`\.`, `\*`, `\+`, `\?`, `\(`, `\)`, `\[`, `\]`, `\{`, `\}`, `\|`, `\^`, `\$`, `\/`, `\\`, `\-`); and numeric escapes `\xHH` (2-hex), `\uHHHH` (4-hex), and `\UHHHHHHHH` (8-hex). The class shorthands and `\b`/`\B` are admitted as ASCII-portable but carry a non-ASCII semantic residual (explained under "What could go wrong"). Not admitted: `\p`/`\P` (Unicode property classes -- divergent), `\1`--`\9` and `\k`-style backreferences (unsupported by Rust), `\Z` (Python accepts, Rust rejects), the braced forms `\x{..}` and `\u{..}` (Rust accepts, Python rejects), and `\07` octal (Python accepts, Rust rejects).
+- Character classes (`[...]` and `[^...]`). The body is a non-empty sequence of single characters, class escapes, and ranges like `a-z`. Empty classes (`[]` and `[^]`) are rejected -- both engines reject them. Class escapes are a strict subset of top-level escapes: the assertions `\b`/`\B` and anchors `\A`/`\z` are excluded inside a class (because `[\b]` means backspace on Python but is rejected by Rust -- divergent; `[\A]` and `[\z]` are rejected by both engines). A literal `-` is admitted only in unambiguous positions -- leading, trailing, or escaped (`[-a]`, `[a-]`, `[a-z-]`, `[+\-]`, `[-]`). An interior literal `-` between two members (like `[a-z-0]`) is deliberately rejected because it resembles the `--` set-difference operator and Python flags it with a `FutureWarning`. A range endpoint must be a single character or character-valued escape; shorthand endpoints like `[\d-z]` are rejected by both engines. Not admitted inside a class: POSIX form `[:name:]`, set-operation tokens `&&`/`--`, and nested `[`.
+- Anchors: `^` and `$` (plus the `\A`/`\z` anchor escapes, which are top-level only).
+- Quantifiers: `?`, `*`, `+`, and bounded `{m}` / `{m,}` / `{m,n}`, each optionally followed by a lazy `?`.
+- Groups: capturing `(...)`, non-capturing `(?:...)`, and flag-scoped `(?flags:...)`. Group bodies may be empty (`()`, `(?:)` -- both engines accept the empty match). Not admitted: lookaround group prefixes (`(?=`, `(?!`, `(?<=`, `(?<!`), named groups (`(?P<name>`), named references (`(?P=`), and flag-negation forms (`(?-i)`, `(?i-s:)`) -- flag negation diverges because Python rejects `(?-i)` while Rust accepts it.
+- Inline flags: `(?i)`, `(?m)`, `(?s)`, `(?U)`, and combinations. These are portable as syntax; the non-ASCII `(?i)` semantic residual is the documented limit. The verbose/extended flag `(?x)` is excluded: it changes the body semantics (stripping unescaped whitespace, treating `#` as a comment) but the recognizer models the body character-for-character with no flag-sensitive mode switch, so it cannot faithfully recognize a verbose body. Admitting `(?x)` would trust the one inline flag whose body rules differ structurally, with no cross-engine equivalence verified. It is excluded fail-closed; it could be re-admitted only with positive parity coverage and a verbose-aware body model.
+- Alternation: `A|B|...`, including empty branches (`a|`, `|a`, `a||b` -- the empty branch is the empty-match alternative, accepted by both engines).
 
-Each of these excluded constructs is syntactically distinguishable from the portable subset. They are not "almost the same as something portable" -- they have distinct syntactic markers (the `[:` inside a bracket, `\p`, `(?=`, etc.) that the portable grammar simply does not define rules for. So the parser stops when it encounters them, and the pattern is rejected.
+**What the grammar excludes** (rejected because the grammar simply contains no rules for them):
+
+- POSIX character classes (`[[:alpha:]]`, `[[:^digit:]]`, etc.) -- the Rust engine treats them as real POSIX classes; the Python engine treats them as malformed and matches nothing.
+- Unicode property classes (`\p{L}`, `\P{N}`, `\pL`) -- the Rust engine accepts them; the Python engine rejects `\p`/`\P` outright.
+- Set-operation syntax inside character classes (`[a-z&&[^aeiou]]`, `[\w--_]`) -- the Rust engine supports set operations; the Python engine does not.
+- Lookahead and lookbehind (`(?=...)`, `(?!...)`, `(?<=...)`, `(?<!...)`) -- the Rust engine already rejects these at compile time, but excluding them from the grammar surfaces the failure earlier with a uniform error message rather than only under `cargo test`.
+- Backreferences and named groups (`\1`, `(?P=name)`, `(?P<name>x)`) -- same situation as lookahead.
+- Empty classes (`[]`, `[^]`) -- both engines reject these.
+- Class-interior assertions and anchors (`[\b]`, `[\B]`, `[\A]`, `[\z]`) -- `[\b]` means backspace on Python but is rejected by Rust; the others are rejected by both.
+- Range with shorthand endpoint (`[\d-z]`, `[a-\d]`) -- both engines reject these.
+- Bare `{` literal (`a{`, `{`) -- Rust rejects; Python treats as literal.
+- Divergent escapes: `\Z` (Python accepts, Rust rejects), braced `\x{..}`/`\u{..}` (Rust accepts, Python rejects), `\07` octal (Python accepts, Rust rejects).
+- Verbose flag (`(?x)`) -- body semantics unmodeled; excluded fail-closed as described above.
+- Flag negation (`(?-i)a`, `(?i-s:a)`) -- divergent as described above.
+- Interior literal dash (`[a-z-0]`) -- deliberately over-rejected as a `--` look-alike.
+
+Each of these excluded constructs has syntactic markers (the `[:` inside a bracket, the `\p`, the `(?=`, etc.) that the portable grammar simply does not define rules for. The parser stops when it encounters them, and the pattern is rejected.
 
 ### The validator module
 
-A thin Python module wraps the generated parser. It provides one function: given a pattern string, return either nothing (the pattern is portable) or an issue object describing the problem (the pattern is not portable).
+A thin Python module wraps the generated parser. It provides one function: given a pattern string, return either nothing (the pattern is portable) or an issue object describing the problem (the pattern is not portable). The issue object carries the offending pattern, a codepoint offset pointing to where the problem is, and a human-readable description.
 
-The accept/reject decision and the error location are two distinct things. A pattern is accepted if and only if the parser returns a result and that result consumed the entire input (the parser's current position equals the length of the pattern string). Rejection has two shapes: the parser might return nothing at all (it could not even start parsing the pattern), or it might return a partial result (it parsed a prefix and stopped). Both mean "not portable."
+The accept/reject decision and the error location are two distinct things, and the design commits to each separately.
 
-The location reported in the error is not the position where the parser stopped. Instead, it is the "furthest progress" position -- the deepest point any terminal in the parser reached before failing. This is the same error-location metric FLTK's own error-formatting uses for "where did parsing fail," and it gives a more useful location. For example, if the pattern is `[[:alpha:]]`, the parser might stop after the opening `[`, but the furthest-progress tracker points at the position where the inner `[:` stalled the grammar's character-class body rule -- which is where the human wants to look.
+**The accept/reject decision:** A pattern is accepted if and only if the parser returns a result and that result consumed the entire input (the parser's current position equals the length of the pattern string). Rejection has two shapes: the parser might return nothing at all (it could not even start parsing the pattern -- a "hard fail"), or it might return a partial result (it parsed a prefix and stopped -- a "short parse"). Both mean "not portable."
 
-The empty-string case is handled explicitly: an empty pattern is trivially portable (it contains no construct), so the validator returns no issue.
+**The reported offset:** The offset reported in the error is not the position where the parser stopped (`result.pos`). Instead, it is always the "furthest progress" position -- the deepest point any terminal in the parser reached before failing (`error_tracker.longest_parse_len`). This is the same error-location metric FLTK's own error-formatting uses for "where did parsing fail," and it gives a more useful location. For example, if the pattern is `[[:alpha:]]`, the parser might stop after the opening `[`, but the furthest-progress tracker points deeper, at the position where the `[:` stalled the grammar's character-class body rule -- which is where the human wants to look. The `error_tracker` is populated by the runtime on every terminal-consume failure regardless of labels or dispositions, so it works for a pure recognizer. The tests pin this `longest_parse_len` choice specifically, so the design's offset semantics are enforced rather than left to whatever the implementation happens to emit.
+
+The empty-string case is handled explicitly: an empty pattern is trivially portable (it contains no construct), so the validator returns no issue. A hard fail on a non-empty pattern reports offset `longest_parse_len`, which is `0` when no terminal advanced.
 
 ### Where the check is wired in
 
 The check runs inside the Rust parser generator, at the specific point where each grammar-author-written regex term is processed. This placement was chosen carefully.
 
-An alternative would have been to place it inside the regex dedup table -- an internal data structure that assigns an index to each unique regex pattern. The design rejects this because the generator also registers an internal pattern (`\s+`, for matching whitespace) through that same table. This internal pattern is part of the generator's own machinery, not something the grammar author wrote. If the check lived in the dedup table, it would scan that internal pattern on every grammar. Today that is harmless (because `\s+` is in the portable subset), but it would mean the lint's domain is "all patterns the generator ever registers" rather than "patterns the grammar author wrote." Any future change to the grammar or the subset definition that incidentally tripped on an internal pattern would produce an error about a pattern the author never typed. Placing the check at the author-written-term site keeps the contract honest.
+An alternative would have been to place it inside the regex dedup table -- an internal data structure that assigns an index to each unique regex pattern. The design rejects this because the generator also registers an internal pattern (`\s+`, for matching whitespace) through that same table. This internal pattern is part of the generator's own machinery, not something the grammar author wrote. If the check lived in the dedup table, it would scan that internal pattern on every grammar. Today that is harmless (because `\s+` is in the portable subset), but it would mean the lint's domain is "all patterns the generator ever registers" rather than "patterns the grammar author wrote." Any future change to the grammar or the subset definition that incidentally tripped on an internal pattern would produce an error about a pattern the author never typed. Placing the check at the author-written-term site keeps the contract honest and the error messages truthful.
 
-When the check finds a non-portable construct, it raises an error that propagates through the existing error-handling path. No changes to the command-line error handler are needed.
+When the check finds a non-portable construct, it raises an error that propagates through the existing error-handling path. No changes to the command-line error handler are needed. The error message must be self-contained: it names the pattern, the furthest-progress offset and a short detail string, and a one-line pointer to the documented regex boundary.
 
 **The Python generator is deliberately not wired to this check.** The Python backend's regex engine is the existing baseline. Gating Python code generation on the Rust-focused portability check would needlessly reject grammars that work fine on the backend a consumer may currently be using. The constraint exists to protect the Rust target specifically.
+
+### Documentation updates
+
+The design calls for two documentation changes. First, the Rust generator's existing docstring (which currently describes the constraint as merely a compile-time restriction on lookaround) is reworded to describe the engine difference as a hard semantic boundary -- two engines that silently disagree on POSIX classes, Unicode properties, and nested sets -- and to point at the new validator and the `regex_subset.fltkg` grammar.
+
+Second, the existing architecture decision record for the Rust parser codegen is left untouched. That ADR has "Accepted" status, and accepted ADRs are treated as immutable in this project. The permanent-boundary prose belongs to a separate burndown item (`document-scope-boundary`), which can now cite `regex_subset.fltkg` as the executable definition of the boundary.
 
 ### Generating and committing the validator parser
 
 The regex-subset grammar is compiled into a Python parser and CST module using FLTK's existing generation pipeline, and the generated files are committed to the repository -- the same pattern used for the grammar-format parser, the unparser-format parser, and other internal parsers. The generation step is added to the project's `make gencode` target so the committed parser stays in sync with its grammar through the standard regen-format-commit workflow.
+
+The generation produces four files: a CST module, a CST protocol module, a parser module, and a trivia parser module. The non-trivia parser is the one used by the validator; the trivia variant is an unavoidable by-product of the generation command and is harmless.
 
 The generated parser is pure Python with no Rust dependency, so it can run at Rust-parser generation time without requiring the Rust extension to be built first. This avoids a bootstrapping cycle: you do not need a built Rust extension to validate the regexes that go into building the Rust extension.
 
@@ -117,6 +137,12 @@ A generator-level command-line flag was considered and rejected for two reasons.
 
 A grammar that needs a flagged construct still works on the Python backend (the check is Rust-only). For the Rust backend, the author rewrites the regex into the portable subset. If a real consumer later demonstrates a concrete need for a deliberate Rust-only construct, an escape hatch can be designed against that specific case then.
 
+### Parity corpus expansion
+
+The design calls for expanding the existing parity test corpus with portable-but-tricky regex cases. The fixture grammar already used for cross-backend testing is the right home. New rules exercise regexes that are portable and meant to behave identically across backends (ASCII `\d`/`\w`/`\s`, alternation, anchors, quantifiers including bounded `{m,n}`, escaped metacharacters, character ranges, non-capturing groups, ASCII `(?i)`) plus inputs exercising boundary behavior, with assertions that both backends produce identical parse trees.
+
+A constraint on added patterns: each must be non-nullable (it cannot match the empty string) or be placed only in rules that tolerate nullable operands. This is because FLTK's grammar validation tests each pattern against the empty string to determine if it is nullable, and the fixture's quantified rules require non-nullable operands.
+
 ## Feasibility
 
 Every precondition for this approach was checked against the actual codebase.
@@ -125,60 +151,71 @@ Every precondition for this approach was checked against the actual codebase.
 
 **FLTK already self-hosts grammars-of-grammars.** The grammar that describes FLTK's own grammar format is an FLTK grammar, and the parser that reads `.fltkg` files is generated from it. A grammar whose subject language is regex syntax is the same move one level over.
 
-**Regex syntax is comfortably expressible in FLTK's grammar format.** Regex is a textbook language: concatenation, alternation, quantifiers, grouping, character classes, escapes, anchors. The `.fltkg` format provides all of these. The grammar is written without left recursion (the one structural constraint of FLTK's packrat parsing backend), which is straightforward for regex syntax.
+**Regex syntax is comfortably expressible in FLTK's grammar format.** Regex is a textbook language: concatenation, alternation, quantifiers, grouping, character classes, escapes, anchors. The `.fltkg` format provides all of these. FLTK supports left recursion (direct and indirect/mutual) via a packrat seed-growing memoizer, so the grammar can be written in whatever recursion direction reads most naturally -- a left-recursive `alternation`/`concatenation` stratification, exactly the shape FLTK's own grammar-of-grammars uses. The one structural obligation is that any left-recursive rule include a non-left-recursive base-case alternative (so the seed-growing algorithm has a seed to start from), which the regex stratification supplies naturally: the base of `concatenation` is a single `repetition`, the base of `repetition` is an `atom`.
 
 **The validator's own regexes are safe.** The regex-subset grammar's leaf matchers (the patterns that recognize individual characters, escapes, etc.) are themselves FLTK regex terminals. These are simple, fixed, hand-audited patterns like `[a-z0-9]` or `\\.` -- not user-supplied. They run only on the Python `re` engine (the validator is pure Python), so the cross-engine divergence problem does not recurse into the validator.
 
 **The error path already exists.** The Rust generator already raises exceptions for unsupported constructs, and the command-line tool already handles them. The validator plugs into that exact path.
 
-**One honest limit.** The grammar validates syntactic membership in the portable subset. It cannot detect divergences where both engines use identical syntax but produce different results -- like `\d`/`\w`/`\s` and `(?i)` over non-ASCII text, where the difference is driven by Unicode database version. This is a limit of all static checkers, not a deficiency of the grammar approach. A denylist would face the same limit. These constructs are admitted because excluding them would over-reject ASCII-only grammars (which are the common case), and the residual is documented.
+**One honest limit.** The grammar validates syntactic membership in the portable subset. It cannot detect divergences where both engines use identical syntax but produce different results -- like `\d`/`\w`/`\s`, `\b`/`\B`, and `(?i)` over non-ASCII text, where the difference is driven by Unicode database version. This is a limit of all static checkers, not a deficiency of the grammar approach. A denylist would face the same limit. These constructs are admitted because excluding them would over-reject ASCII-only grammars (which are the common case), and the residual is documented.
 
 ## Grammar authoring constraints
 
-Two authoring constraints on the regex-subset grammar itself are worth calling out because they are non-obvious failure modes.
+Several authoring constraints on the regex-subset grammar itself are worth calling out because they are non-obvious failure modes.
+
+**Encode precedence by stratification, and order alternatives most-specific-first.** The grammar is written in the natural textbook regex stratification: `alternation` (the `|` layer) to `concatenation` (sequencing) to `repetition` (quantifiers) to `atom` (groups, classes, escapes, literals). Because FLTK's parsing is PEG ordered first-match with no longest-match arbitration, each rule's alternatives must be ordered most-specific-first. For example, inside the `atom` rule, the multi-character group openers (`(?:`, `(?flags:`, `(?flags)`) must be tried before a bare `(`; a `char_class` or `escape` must be tried before a single literal character. If a shorter admitted alternative appears first, it can shadow a longer valid one, causing a spurious short parse that rejects a portable pattern. (The class negation `^` is handled as an optional prefix inside the character-class rule, so `[` and `[^` need no relative ordering.)
 
 **Escaping `/` in the grammar's own regex terminals.** FLTK's grammar format uses `/` as the delimiter for regex terminals. A bare `/` inside a regex terminal closes the terminal early. The regex-subset grammar needs to recognize `/` as a valid character in the patterns it validates (because grammar authors can write `\/` in their regexes). So every `/` the validator grammar needs to recognize must be written as `\/` inside the grammar's own regex terminals. If this escaping is done wrong, the grammar's leaf rules get silently mis-tokenized -- the regex terminal closes at the wrong place -- producing a subtly broken validator that still compiles. This failure is caught by the test plan's corpus checks (existing in-tree grammars use `\/`, so a mis-tokenized validator would reject them).
 
-**No whitespace skipping.** In a regex pattern, a literal space is a character to be matched, not insignificant whitespace to be skipped. FLTK's generator normally injects a whitespace-skipping rule that fires between tokens separated by whitespace-bearing separators. The regex-subset grammar avoids triggering this by using only no-whitespace separators (`.` in FLTK's grammar syntax) throughout. If any whitespace-bearing separator (`,` or `:`) were used, the generated parser would silently strip spaces from the patterns it validates, corrupting the validation of whitespace-significant patterns.
+**No whitespace skipping.** In a regex pattern, a literal space is a character to be matched, not insignificant whitespace to be skipped. FLTK's generator normally injects a whitespace-skipping ("trivia") rule when none is referenced, and the generated parser invokes it in two places: at the start of a rule whose first separator is whitespace-bearing, and after every whitespace-bearing separator. A no-whitespace separator (`.` in FLTK syntax) emits neither. The regex-subset grammar is authored with no leading separator and only no-whitespace separators throughout. The injected trivia rule is then present but unreferenced and never invoked, so a pattern containing literal whitespace is parsed correctly rather than silently stripped. This is a hard authoring constraint: a whitespace-bearing separator anywhere in this grammar would corrupt validation of whitespace-significant patterns.
+
+**The pattern string is the input.** The validator parses the raw text between the `/` delimiters as already stored by the grammar-loading code. The outer `/` delimiters are not part of the stored value, so the grammar describes regex body syntax, not the delimiters.
 
 ## What could go wrong
 
 **Residual silent divergence (the documented limit).** A set of constructs use identical syntax on both engines but can match differently over non-ASCII text because each engine embeds its own version of the Unicode character database. The full ledger of these admitted-but-potentially-divergent constructs is:
+
 - `\d`, `\D`, `\w`, `\W`, `\s`, `\S` -- the "digit," "word character," and "whitespace" classes may classify different Unicode codepoints differently depending on the engine's Unicode DB version.
 - `(?i)` -- case-folding over non-ASCII characters may differ for the same reason.
-- `\b`, `\B` -- word-boundary assertions are defined in terms of `\w`, so they inherit `\w`'s non-ASCII divergence.
+- `\b`, `\B` -- word-boundary assertions are defined in terms of `\w`, so they inherit `\w`'s non-ASCII divergence. The codebase already treats `\b` as a known blind spot for another static checker (the emptiness checker cannot see past zero-width patterns like `\b`). They are listed here explicitly so the scope-boundary documentation covers them rather than silently omitting them.
 
-These are admitted as ASCII-portable (where both engines agree) because excluding them would reject the vast majority of real grammars that use them only with ASCII text. The divergence is documented as a permanent boundary.
+These are admitted as ASCII-portable (where both engines agree) because excluding them would reject the vast majority of real grammars that use them only with ASCII text. The divergence is documented as a permanent boundary. The documentation and TODO system must name `\b`/`\B` alongside the class shorthands so the deferral is complete.
 
 **Under-admission (false positives).** If the regex-subset grammar accidentally omits a genuinely portable construct, a valid grammar is rejected at Rust generation. This is a loud, fixable build error -- never a silent mis-parse. The test plan pins completeness by requiring every regex in every committed in-tree grammar to pass the check, and by unit-testing the full admitted set. Widening the subset later is a localized grammar edit plus regeneration.
 
 **Over-admission (false negatives).** If the grammar accidentally admits a divergent construct (for example, a too-loose character-class body rule that swallows `[:alpha:]`), a non-portable pattern passes undetected. The test plan pins each verified divergent construct as a must-be-rejected test, so over-admission of the known cases is caught.
 
-**Error message quality.** The error surfaces through a handler that prints just the message text with no stack trace. The message must therefore be self-contained: it names the pattern, reports the furthest-progress offset, gives a short hint about the construct, and points to the documented regex boundary.
+**Error message quality.** The error surfaces through a handler that prints just the message text with no stack trace. The message must therefore be self-contained: it names the pattern, reports the furthest-progress offset, gives a short hint about the construct, and points to the documented regex boundary and the `regex_subset.fltkg` grammar.
 
-**Patterns reused across rules.** The check runs once per regex term the generator reaches. The first non-portable occurrence raises an error. Since portability is a property of the pattern, not the rule, naming the pattern in the error suffices.
+**Patterns reused across rules.** The check runs once per regex term the generator reaches. The first non-portable occurrence raises an error. Since portability is a property of the pattern, not the rule, naming the pattern in the error suffices. The parse is cheap and pure; re-checking a repeated pattern is harmless.
 
 **Validator parser drifting from its grammar.** Like any committed generated file, the validator parser could become stale if someone updates the grammar but forgets to regenerate. Adding the generation step to `make gencode` brings it under the standard regen flow, and a round-trip test in the test plan specifically guards against this drift.
 
-**In-tree grammars with non-portable patterns.** One grammar in the repository (`fltk.fltkg`) uses a negative lookahead in a regex. This grammar is intentionally not a Rust parser target -- the committed Rust parser is generated from a different grammar (`fegen.fltkg`) that uses a lookahead-free equivalent. The completeness test excludes non-Rust-target grammars, so this is not a regression.
+**In-tree grammars with non-portable patterns.** Two grammars in the repository (`fltk.fltkg` and `bootstrap.fltkg`) use a negative lookahead in a regex. Neither is a Rust parser target -- `fltk.fltkg` is intentionally broken, and the committed Rust parser is generated from a different grammar (`fegen.fltkg`) that uses a lookahead-free equivalent. The completeness test excludes non-Rust-target grammars, so this is not a regression.
 
 ## Test plan
 
 The test plan has several layers.
 
-**Unit tests for the portability check.** A dedicated test module exercises the validator directly (pure Python, no Rust build required). Portable patterns (character ranges, digit/word/whitespace classes, alternation, anchors, quantifiers, escaped metacharacters, non-capturing groups, and real in-tree patterns including the tricky `([^\/\n\\]|\\.)+`) must return no issue. Each excluded construct (POSIX classes, Unicode properties, set operations, lookaround, backreferences) must return an issue, and the reported offset must be the furthest-progress value (not the parser's stop position) -- this pins the design's offset choice. False-positive guards verify that patterns resembling excluded constructs but actually being portable (like an escaped bracket `[\[:alpha:]]` or an escaped backslash `\\p`) are correctly accepted. The empty pattern must return no issue.
+**Unit tests for the portability check.** A dedicated test module exercises the validator directly (pure Python, no Rust build required). Portable patterns must return no issue: basic ranges and classes (`[a-z]+`, `[0-9]+`, character ranges with non-ASCII ranges and special characters), shorthand classes (`\d`, `\w`, `\s`), anchors, quantifiers including bounded `{m,n}`, alternation, escaped metacharacters, non-capturing groups, word boundaries (`\bword\b`), and real in-tree patterns including the tricky `([^\/\n\\]|\\.)+`. Edge-case must-accept patterns include: leading/trailing/solo literal dash (`[-a]`, `[a-]`, `[-]`); empty groups and branches (`()`, `(?:)`, `a|`, `|a`, `a||b`); top-level anchor and control escapes (`\A`, `\z`, `\a`, `\U00000041`); bare closer literals (`]`, `}`, `a]b`, `a}b`); non-leading literal caret in a class (`[a^b]`); shorthands as plain class members (`[\d]`, `[\w\s]`); escape-range endpoints (`[\n-\r]`, `[\x41-\x5a]`); and the escaped-bracket class `[\[:alpha:]]` (which is a real character class with a literal `[`, not a POSIX class -- it must be accepted).
 
-**Generator integration tests.** A grammar containing a non-portable regex must cause the Rust generator to raise an error naming the pattern and offset. The same grammar must generate a Python parser without error (testing the deliberate asymmetry). The command-line tool must exit non-zero with the error on stderr. A grammar with only portable regexes must generate Rust code successfully.
+Each excluded construct must return an issue, and the test asserts the reported offset is the `longest_parse_len` value (not `result.pos`): POSIX classes, Unicode properties, set operations, lookaround, backreferences, empty classes, class-interior assertions/anchors, shorthand range endpoints, bare `{`, divergent escapes (`\Z`), verbose flag (`(?x)`), flag negation (`(?-i)`, `(?i-s:`), and interior literal dash (`[a-z-0]`).
+
+False-positive guards verify that patterns resembling excluded constructs but actually being portable (like an escaped bracket `[\[:alpha:]]` or an escaped backslash `\\p`) are correctly accepted. The empty pattern must return no issue.
+
+**Generator integration tests.** A grammar containing a non-portable regex must cause the Rust generator to raise an error naming the pattern and offset. The same grammar must generate a Python parser without error (testing the deliberate asymmetry). The command-line tool must exit non-zero with the error on stderr. A grammar with only portable regexes must generate Rust code successfully with no spurious rejection.
 
 **Parity corpus expansion.** New test cases add portable-but-tricky regex patterns (ASCII `\d`/`\w`/`\s`, bounded quantifiers, escaped metacharacters, non-capturing groups, ASCII `(?i)`) to the existing parity corpus, asserting that both backends produce identical parse trees.
 
-**Whole-tree completeness check.** A test runs the portability check over every regex in every committed in-tree grammar that the Rust parser generator actually processes, and asserts all pass. This guards against under-admission and doubles as a correctness check for the validator grammar's own escape handling. The design identifies exactly which grammars are Rust parser targets (three of them) versus Rust CST-only targets (two others, which happen to be portable but are not covered by the production check). The test labels them accordingly.
-
-The design notes that the list of Rust parser-target grammars is itself a drift surface: hand-copying the list into the test duplicates knowledge that lives in the Makefile. The preferred resolution is to derive the list from a single source that both the Makefile and the test share. If that single-sourcing is deferred, the manual list carries a TODO linking it to the project's broader gencode-drift work.
-
-**Validator round-trip test.** A test pins that the committed validator parser actually came from a clean generation of the grammar, guarding against the committed parser drifting from its source grammar.
-
 **Regression test for the motivating bug.** A test asserting the exact `word := value:/[[:alpha:]]+/` grammar from the original assessment is now rejected at Rust generation time.
+
+**Whole-tree completeness check.** A test runs the portability check over every regex in every committed in-tree grammar that the Rust parser generator actually processes, and asserts all pass. This guards against under-admission and doubles as a correctness check for the validator grammar's own escape handling. The design identifies exactly which grammars are Rust parser targets (three of them: `fegen.fltkg`, `rust_parser_fixture.fltkg`, and `collision_fixture.fltkg`) versus Rust CST-only targets (two others -- `poc_grammar.fltkg` and `phase4_roundtrip.fltkg` -- which happen to be portable but are not covered by the production check because only their CST is generated for Rust, not a Rust parser). The test labels them accordingly: it strictly asserts the parser-target set and may additionally check CST-only grammars as a clearly-marked bonus.
+
+The design notes that the list of Rust parser-target grammars is itself a drift surface. Hand-copying the three grammar paths into the test duplicates knowledge that lives authoritatively in the Makefile -- the exact hand-maintained-per-target-list anti-pattern the broader assessment is burning down elsewhere. A future fixture added to the Rust parser target with a non-portable regex would slip past this test until someone remembered to add it. The preferred resolution is to derive the parser-target list from a single source that both the Makefile and the test share (for example, a committed manifest or a glob both agree on). If single-sourcing is deferred to keep the scope manageable, the manual list stays but carries a TODO linking it to the broader gencode-drift work so it is not a silent drift hole.
+
+**Validator round-trip test.** A test pins that the committed validator parser actually came from a clean generation of the grammar -- for example, by regenerating into a temp directory and comparing, or by verifying that the committed parser re-parses the admitted/excluded test sets identically. This guards against the committed parser drifting from its source grammar.
+
+**Existing tests unchanged.** The existing `all_regex_patterns_compile` emission and all current parity corpora must still pass. The check only adds rejections for patterns already non-portable, so no currently-committed Rust-target grammar should newly fail. (If one does during implementation, that is itself a finding.)
 
 ## What is still open
 
@@ -186,14 +223,14 @@ The design notes that the list of Rust parser-target grammars is itself a drift 
 
 The design places the check only in the Rust generator. A grammar author using the Python backend gets no indication that their regex uses constructs that would not work on the Rust backend.
 
-The alternative is to also surface a warning (not a hard error) on the Python path or at grammar load, so authors learn their grammar is non-portable before they try switching backends. The trade-off is between keeping the Python backend's behavior completely unchanged (no new warnings for grammars that work fine) and giving authors proactive portability feedback. The design recommends Rust-only.
+The alternative is to also surface a warning (not a hard error) on the Python path or at grammar load, so authors learn their grammar is non-portable before they try switching backends. The trade-off is between keeping the Python backend's behavior completely unchanged (no new warnings for grammars that work fine) and giving authors proactive portability feedback. The design recommends Rust-only. This is a user-judgment call.
 
 ### O2: How to handle the non-ASCII residual
 
-The constructs `\d`, `\w`, `\s` (and their negations), `\b`, `\B`, and `(?i)` are admitted as ASCII-portable but carry a documented non-ASCII semantic residual. The design recommends leaving this documented-only as a permanent boundary, because admitting the syntax is correct for the common ASCII case and excluding it would over-reject. The alternative would be to attempt to flag non-ASCII usage, which is hard to do statically and risks a high false-positive rate.
+The constructs `\d`, `\w`, `\s` (and their negations), `\b`, `\B`, and `(?i)` are admitted as ASCII-portable but carry a documented non-ASCII semantic residual (the full ledger described under "What could go wrong"). The design recommends leaving this documented-only as a permanent boundary, because admitting the syntax is correct for the common ASCII case and excluding it would over-reject. The alternative would be to attempt to flag non-ASCII usage, which is hard to do statically and risks a high false-positive rate.
 
 If left as documented-only, the design calls for a TODO entry tracking the known risk, explicitly naming `\b`/`\B` alongside the class shorthands so the deferral is complete. This TODO links to the project's broader scope-boundary documentation work.
 
 ### O3: Should there be an escape hatch?
 
-The design ships with no way to suppress the check for a specific pattern. The reasoning is in the "No escape hatch" section above. The question is whether this posture is acceptable or whether a per-pattern, in-grammar opt-out should be provided now. The design argues for waiting until a real consumer demonstrates a concrete need, and designing the mechanism against that specific case. The practical impact depends on how often real consumers need patterns outside the portable subset.
+The design ships with no way to suppress the check for a specific pattern. The reasoning is in the "No escape hatch" section above. The question is whether this posture is acceptable or whether a per-pattern, in-grammar opt-out should be provided now. The design argues for waiting until a real consumer demonstrates a concrete need, and designing the mechanism against that specific case. If an escape hatch is wanted now, it must be per-pattern and in-grammar (not a build flag), designed against a concrete construct a real consumer needs on the Rust side. The practical impact depends on how often real consumers need patterns outside the portable subset.

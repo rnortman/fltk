@@ -29,8 +29,7 @@ from collections.abc import Sequence
 from pathlib import Path
 
 from fltk.fegen import gsm
-from fltk.fegen.pyrt import terminalsrc
-from fltk.fegen.regex_parser import Parser as RegexParser
+from fltk.fegen.regex_portability import check_regex_portable
 from fltk.plumbing import parse_grammar_file
 
 
@@ -67,20 +66,15 @@ def collect_regexes(grammar: gsm.Grammar) -> list[str]:
 def classify_pattern(pattern: str) -> bool:
     """Return True if *pattern* is accepted by the regex grammar, False otherwise.
 
-    Acceptance means the generated ``regex_parser`` parses *pattern* as the ``regex``
-    start rule and consumes the entire input (``result.pos == len(terminals)``).  This
-    is the same predicate ``parse_text`` uses; we drive the parser directly here so
-    callers can import only this module without also pulling in the full code-generation
-    plumbing that ``fltk.plumbing`` carries.
+    Delegates to ``check_regex_portable`` from ``regex_portability`` -- the canonical
+    single home for the accept/reject predicate.  Returns ``True`` iff
+    ``check_regex_portable`` returns ``None`` (no issue found, pattern is portable).
 
     A returned False means either (a) the parser matched only a prefix (short parse,
     e.g. a non-portable construct stalled the grammar early) or (b) the parser produced
     no result at all.  Both are ``reject`` from the portable-subset perspective.
     """
-    terminals = terminalsrc.TerminalSource(pattern)
-    parser = RegexParser(terminalsrc=terminals)
-    result = parser.apply__parse_regex(0)
-    return result is not None and result.pos == len(terminals.terminals)
+    return check_regex_portable(pattern) is None
 
 
 # ---------------------------------------------------------------------------

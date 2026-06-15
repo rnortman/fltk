@@ -213,14 +213,17 @@ class_range_atom :=
     class_char_escape
   | class_char ;
 
-// Single char inside a class: anything that is not `\`, `]`, `[`, `-`, or newline.
+// Single char inside a class: anything that is not `\`, `]`, `[`, `-`, `&`, or newline.
 // `^` IS allowed (a literal `^` is a valid non-leading class member, e.g. `[a^b]`);
 // the leading-`^` negation is handled by the optional prefix in `char_class`.
 // Excluding `[` is what makes POSIX `[[:alpha:]]` unrecognizable here (the inner `[`
 // has no production), so the parser stalls -> reject. Excluding `-` keeps interior
 // literal dashes (the `--` set-op look-alike) out; leading/trailing `-` go through the
-// `char_class` markers.
-class_char := value:/[^\\\]\[\-\n]/ ;
+// `char_class` markers. Excluding `&` closes the `&&` set-intersection door: Rust
+// `regex-automata` treats `&&` as a real set-intersection operator but Python `re` gives
+// a `FutureWarning`, so `&&` (and any `&`) inside a class is non-portable. `&` is safe
+// as a top-level literal (outside a class) and IS admitted by `literal_char`.
+class_char := value:/[^\\\]\[\-\n&]/ ;
 
 // ---------------------------------------------------------------------------
 // Escapes (inside a character class)
@@ -273,10 +276,14 @@ class_shorthand := value:/[dDwWsS]/ ;
 // Top-level only: inside a class these are non-portable (see `class_escape`).
 assertion := value:/[bB]/ ;
 
-// `\A` (start of text) and `\z` (end of text) -- portable at top level on both engines
-// (verified). `\Z` is EXCLUDED (Python accepts, Rust rejects -- divergent). These are
-// top-level only; inside a class `[\A]`/`[\z]` are rejected by both engines, so they
-// are not in any class escape path.
+// `\A` (start of text, portable on both engines) and `\z` (end of text, Rust-only --
+// Python `re` rejects `\z` as a bad escape). `\Z` is EXCLUDED (Python accepts, Rust
+// rejects -- divergent). `\z` is admitted here because this lint targets the Rust
+// generator only (design.md §5.3): it is Rust-valid and would not cause a silent
+// mis-parse on the Rust path; its Python non-portability is out of scope for a
+// Rust-only check (F3 in spike-outcome-gate.md). These are top-level only; inside a
+// class `[\A]`/`[\z]` are rejected by both engines, so they are not in any class
+// escape path.
 anchor_escape := value:/[Az]/ ;
 
 // A char-valued escape: a control escape, a hex/unicode codepoint escape, or an escaped
@@ -288,8 +295,14 @@ char_escape :=
   | unicode_escape
   | meta_escape ;
 
-// `\n \r \t \f \v \0 \a` -- `\a` (bell) is portable on both engines (verified).
-control_escape := value:/[nrtfv0a]/ ;
+// `\n \r \t \f \v \a` -- `\a` (bell) is portable on both engines (verified).
+// `\0` is EXCLUDED: Python `re` accepts `\0` as NUL, but `regex-automata` (with octal
+// disabled by default) rejects it as an unsupported backreference / bad escape.  This
+// also collapses the entire octal family (`\07`, `\00`, `\012`): the grammar previously
+// admitted `\0` as a control escape and then parsed trailing digits as literal chars,
+// letting `\07` etc. through.  Dropping `0` from this class makes them all reject.
+// Authors who need a NUL match can write `\x00`, which is portable on both engines.
+control_escape := value:/[nrtfva]/ ;
 
 // `\xHH`
 hex_escape := %"x" . digits:/[0-9A-Fa-f][0-9A-Fa-f]/ ;

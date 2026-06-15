@@ -22,43 +22,39 @@ All assertions are accept/reject booleans only; no ``longest_parse_len`` asserti
 
 Findings discovered during authoring are flagged with ``FINDING`` in the rationale.
 
-SCOPE-BOUNDARY GAPS (the spike's deliverable for the downstream regex-portability-lint
-go/no-go). These are cases where the grammar's accept/reject disposition does NOT match the
-Python ``re`` / Rust ``regex-automata`` portable intersection. Each is pinned with a
-``FINDING`` rationale and (where the grammar accepts a Python-invalid pattern)
-``skip_re_check=True``. ALL are *over-admissions* (grammar accepts something at least one
-engine rejects) -- the dangerous direction; no over-rejections of a portable construct were
-found. The grammar fails CLOSED on most divergent shapes probed below (see F6 for the
-one exception: ``&&`` set-intersection look-alikes are over-admitted).
+SCOPE-BOUNDARY GAPS (originally the spike's deliverable for the downstream
+regex-portability-lint go/no-go). These are cases where the grammar's accept/reject
+disposition does NOT match the Python ``re`` / Rust ``regex-automata`` portable
+intersection. Each is pinned with a ``FINDING`` rationale and (where the grammar accepts
+a Python-invalid pattern) ``skip_re_check=True``. ALL remaining gaps are *over-admissions*
+(grammar accepts something at least one engine rejects) -- the dangerous direction; no
+over-rejections of a portable construct were found.
 
-  F1 -- ``\0N`` octal family (``\07``, ``\00``, ``\012`` ...): grammar accepts ``\0`` +
-        literal; Python re reads octal (different meaning); Rust rejects octal. Cannot be
-        fixed without removing ``\0`` from ``control_escape`` or adding a lookahead.
+  F1 -- ``\0N`` octal family (``\07``, ``\00``, ``\012`` ...): FIXED in
+        regex-portability-lint respond round (correctness-1/security-1): removed ``0``
+        from ``control_escape`` so ``\0`` (and the entire octal family) is now correctly
+        REJECTED by the portability grammar.  Authors who need a NUL match can write
+        ``\x00``.  The test cases below have been updated from ACCEPT (FINDING) to REJECT.
   F2 -- ``U`` inline flag (``(?U)``, ``(?iU)``, ``(?U:a)``): grammar admits ``U`` via
         ``flag_chars /[imsU]+/``; Python re rejects ``U`` as an unknown extension/flag.
-        Rust-only flag, admitted by design.
+        Rust-only flag, admitted by design (lint is Rust-only per design.md §5.3).
   F3 -- ``\z`` top-level anchor: grammar admits it via ``anchor_escape /[Az]/``; Rust
-        accepts ``\z`` (end-of-text) but Python re rejects it ('bad escape'). The grammar
-        comment 'verified on both engines' (regex.fltkg:276-280) is wrong for Python >= 3.6.
+        accepts ``\z`` (end-of-text) but Python re rejects it ('bad escape'). The old
+        grammar comment 'verified on both engines' was wrong for Python >= 3.6 and has
+        been updated (regex.fltkg). Admitted by design (Rust-only lint, same as F2).
   F4 -- inverted bound ``a{2,1}`` (min>max): grammar admits it (``bounded`` is purely
         syntactic, no min<=max check); BOTH engines reject. Intrinsic to a context-free
         recognizer -- needs a downstream semantic check.
   F5 -- reversed class range ``[z-a]`` (lo>hi): grammar admits it (``class_range`` is purely
         syntactic, no lo<=hi check); BOTH engines reject. The class-range analogue of F4.
-  F6 -- ``&&`` set-intersection look-alike (``[a-z&&b]``, ``[a&&b]``): ``&`` is an ordinary
-        ``class_char`` (not excluded from ``class_char := /[^\\\]\[\-\n]/``), so ``&&``
-        parses as two literal ``&`` characters inside a class.  Python ``re`` raises
-        ``FutureWarning: Possible set intersection`` on these; Rust ``regex-automata``
-        treats ``&&`` as the actual set-intersection operator (different semantics).  This
-        is the ``&&`` analogue of the ``--`` door -- ``--`` is closed (interior ``-``
-        excluded by class_char), but ``&&`` is open.  The only existing ``&&`` case
-        ``[a-z&&[^aeiou]]`` rejects for an *unrelated* reason (inner ``[`` excluded by
-        class_char), so the ``&&`` gap was previously unpinned.
+  F6 -- FIXED in the regex-portability-lint implementation: ``&`` is now excluded from
+        ``class_char``, so ``&&`` (Rust set-intersection, Python FutureWarning) is
+        correctly rejected.  The two test cases below now expect REJECT.
 
 F1/F2/F3 are the three originally-documented findings; F4/F5 are added by the opus
-corrective pass; F6 is pinned by the respond-round review.  None is fixed here --
-``regex.fltkg`` is unchanged; these feed the downstream lint design's go/no-go (do
-NOT 'fix' the grammar in this spike).
+corrective pass; F6 was pinned by the respond-round review and fixed during the
+regex-portability-lint implementation (``regex.fltkg`` now excludes ``&`` from
+``class_char``).
 """
 
 from __future__ import annotations
@@ -173,15 +169,13 @@ CASES: list[tuple[str, bool, str] | tuple[str, bool, str, bool]] = [
     ),
     (
         "[a-z&&b]",
-        ACCEPT,
-        "FINDING (F6, scope-boundary gap -- grammar over-admits): [a-z&&b] is ACCEPTED. '&' is an ordinary class_char (class_char := /[^\\\\\\]\\[\\-\\n]/ does not exclude '&'), so '&&' parses as two literal '&' class members -> ACCEPT. Python re raises FutureWarning: 'Possible set intersection' on [a-z&&b]; Rust regex-automata treats '&&' as the real set-intersection operator (semantically different from two literal '&' chars). The '&&' door is open: the grammar distinguishes '--' (closed, interior '-' excluded by class_char) from '&&' (open, '&' is a valid class_char). The earlier [a-z&&[^aeiou]] case rejects for an UNRELATED reason (inner '[' excluded). This pins the '&&'-without-inner-bracket form as a documented over-admission for the lint go/no-go.",
-        True,  # skip_re_check: Python re raises FutureWarning (and may error with warnings-as-errors) -- documented over-admission finding
+        REJECT,
+        "F6 fixed: '&' is now excluded from class_char (class_char := /[^\\\\\\]\\[\\-\\n&]/ excludes '&'), so the first '&' in '&&' has no production inside a class -> parser stalls -> REJECT. Rust regex-automata treats '&&' as set-intersection; Python re raises FutureWarning. Excluding '&' from class_char closes the '&&' door the same way '-' was excluded to close the '--' door.",
     ),
     (
         "[a&&b]",
-        ACCEPT,
-        "FINDING (F6 family): [a&&b] is ACCEPTED for the same reason as [a-z&&b] -- '&' is class_char, so '&&' is two ordinary literals -> ACCEPT. Confirms the F6 over-admission is not range-specific: any '&&' inside a class is admitted.",
-        True,  # skip_re_check: Python re warns/errors on [a&&b] -- documented over-admission finding
+        REJECT,
+        "F6 fixed: same reasoning as [a-z&&b] -- '&' excluded from class_char -> any '&&' inside a class rejects. Confirms the fix is not range-specific.",
     ),
 
     # -------------------------------------------------------------------------
@@ -307,23 +301,26 @@ CASES: list[tuple[str, bool, str] | tuple[str, bool, str, bool]] = [
     ),
     (
         r"\07",
-        ACCEPT,
-        r"FINDING (F1, scope-boundary gap -- grammar over-admits relative to BOTH engines): \07 is ACCEPTED. The grammar parses \0 as a control_escape (null, via /[nrtfv0a]/) then '7' as a literal_char -> ACCEPT. Python re treats \07 as octal 7 (BEL=chr(7)), and Rust regex-automata rejects octal sequences entirely. The grammar cannot distinguish \07 (octal) from \0 (null) + 7 (literal) because \0 is a valid control_escape. This over-admits the WHOLE family \0N (any digit/char after \0) -- see the \00, \012, \0a cases below -- treating them as \0 + literal rather than octal. Note re.compile does NOT reject \07 (Python reads it as octal chr(7), a valid pattern), so the ACCEPT cross-check passes here; the divergence is that the two engines assign DIFFERENT MEANINGS to \07 (Python octal-BEL vs the grammar's \0+'7'), and Rust rejects it outright. This is a documented gap fed to the downstream regex-portability-lint go/no-go; fixing it (remove \0 from control_escape, or add a not-a-digit lookahead) is the lint increment's call, not the spike's.",
+        REJECT,
+        r"F1 FIXED (correctness-1): \07 is now correctly REJECTED. The fix removed '0' from control_escape (/[nrtfva]/ vs the old /[nrtfv0a]/), so \0 has no grammar production; the escape_body parse stalls -> REJECT. Rust regex-automata also rejects octal; Python re reads it as octal chr(7). The portability lint now correctly flags this non-portable pattern at Rust-generator time.",
+        True,  # skip_re_check: Python re accepts \07 as octal, but the grammar now REJECTs
     ),
     (
         r"\00",
-        ACCEPT,
-        r"FINDING (F1 family): \00 is ACCEPTED as \0 (control_escape null) + '0' (literal_char). Python re reads \00 as octal chr(0); Rust regex-automata rejects octal. Same \0N over-admission as \07; pinned to show the gap is the general \0-followed-by-octal-digit family, not a single pattern. re.compile accepts \00 (valid Python octal), so the ACCEPT cross-check holds; the gap is the semantic split + Rust rejection.",
+        REJECT,
+        r"F1 FIXED (correctness-1, \00 family): \00 is now correctly REJECTED (same fix: '0' removed from control_escape). Previously accepted as \0 + '0' (literal); now the \0 escape has no production -> REJECT. Rust rejects; Python re reads as octal chr(0).",
+        True,  # skip_re_check: Python re accepts \00 as octal
     ),
     (
         r"\012",
-        ACCEPT,
-        r"FINDING (F1 family): \012 is ACCEPTED as \0 + '1' + '2' (control_escape null then two literal_chars). Python re reads \012 as octal chr(10)=newline; Rust regex-automata rejects octal. Demonstrates the gap extends to multi-digit octal-look sequences. re.compile accepts \012, ACCEPT cross-check holds.",
+        REJECT,
+        r"F1 FIXED (correctness-1, \012 family): \012 is now correctly REJECTED (same fix). Previously accepted as \0 + '1' + '2'; now \0 has no production -> REJECT. Rust rejects; Python re reads as octal chr(10)=newline.",
+        True,  # skip_re_check: Python re accepts \012 as octal
     ),
     (
         r"\0a",
-        ACCEPT,
-        r"\0a is ACCEPTED as \0 (control_escape null) + 'a' (literal_char). This one is genuinely portable: \0 (null) is in control_escape and BOTH engines accept \0, and a following non-digit 'a' is an ordinary literal on both. Pinned alongside the \0N findings to show that \0 + non-digit is the BENIGN case (no octal ambiguity) and the gap is specifically \0 + OCTAL-DIGIT (\00..\07).",
+        REJECT,
+        r"F1 FIXED side-effect: \0a is now REJECTED because '0' was removed from control_escape. The old note claimed this was 'genuinely portable' (\0 null + literal 'a'), but regex-automata ALSO rejects bare \0 (it parses \0 in the octal branch and errors). The fix (drop '0') is therefore correct for \0a too -- authors should use \x00 for NUL, then 'a' as a literal: \x00a.",
     ),
     (
         r"\7",
@@ -581,13 +578,14 @@ CASES: list[tuple[str, bool, str] | tuple[str, bool, str, bool]] = [
     ),
     (
         r"[\07]",
-        ACCEPT,
-        r"FINDING (F1 family -- in-class): [\07] is ACCEPTED via the SAME over-admission as top-level \07. The class_escape_body path (regex.fltkg:234-239) uses char_escape -> control_escape /[nrtfv0a]/ which matches '\0', leaving '7' to be consumed as an ordinary class_char -> ACCEPT. Python re reads [\07] as a class containing octal chr(7); Rust regex-automata rejects octal inside a class too. The F1 finding (control_escape admits \0 + following digit) applies identically in-class and at top-level; this pins the in-class reachable path so the documented gap is complete.",
+        REJECT,
+        r"F1 FIXED in-class (correctness-1): [\07] is now correctly REJECTED. Same fix as top-level \07 -- '0' removed from control_escape, so \0 has no class_escape_body production -> REJECT. Rust rejects octal inside a class too; Python re reads [\07] as a class with octal chr(7).",
+        True,  # skip_re_check: Python re accepts [\07]
     ),
     (
         r"[\0]",
-        ACCEPT,
-        r"In-class \0 (null, no following digit): class_escape_body -> char_escape -> control_escape /[nrtfv0a]/ matches '\0'; no trailing digit -> genuinely portable (\0 = null, both engines accept). Pinned alongside [\07] to show the gap is specifically \0 + octal-digit inside a class, not \0 alone.",
+        REJECT,
+        r"F1 FIXED side-effect in-class: [\0] is now REJECTED because '0' was removed from control_escape. Previously claimed 'genuinely portable', but regex-automata rejects bare \\0 (octal branch, errors). Authors should use [\\x00] for a NUL class match.",
     ),
 
     # =========================================================================

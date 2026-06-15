@@ -106,6 +106,42 @@ _CORPUS = [
     # nest/nest_sum failures: unclosed paren / no leading operand
     ("nest", "(42", FAIL),
     ("nest_sum", "+42", FAIL),
+    # Portable-but-tricky regex parity cases (design §5.6)
+    # digit_seq: ASCII \d shorthand
+    ("digit_seq", "123", SUCCESS),
+    ("digit_seq", "abc", FAIL),
+    # word_seq: ASCII \w shorthand
+    ("word_seq", "hello_42", SUCCESS),
+    ("word_seq", "!!", FAIL),
+    # ws_seq: ASCII \s shorthand
+    ("ws_seq", "   ", SUCCESS),
+    ("ws_seq", "abc", FAIL),
+    # three_to_five_digits: bounded quantifier {3,5}
+    ("three_to_five_digits", "123", SUCCESS),
+    ("three_to_five_digits", "12345", SUCCESS),
+    ("three_to_five_digits", "12", FAIL),
+    ("three_to_five_digits", "123456", PARTIAL(5)),
+    # exactly_two_digits: exact-count bounded {2}
+    ("exactly_two_digits", "42", SUCCESS),
+    ("exactly_two_digits", "4", FAIL),
+    ("exactly_two_digits", "123", PARTIAL(2)),
+    # escaped_metas: literal dot/star/plus
+    ("escaped_metas", ".*+", SUCCESS),
+    ("escaped_metas", "abc", FAIL),
+    # latin_range: non-ASCII range [À-Ö]+
+    ("latin_range", "ÀÁÂ", SUCCESS),
+    ("latin_range", "abc", FAIL),
+    # nc_group_alt: non-capturing group with alternation
+    ("nc_group_alt", "abab", SUCCESS),
+    ("nc_group_alt", "cdcd", SUCCESS),
+    ("nc_group_alt", "efgh", FAIL),
+    # case_insensitive: (?i) flag
+    ("case_insensitive", "hello", SUCCESS),
+    ("case_insensitive", "HELLO", SUCCESS),
+    ("case_insensitive", "123", FAIL),
+    # anchored_word: ^[a-z]+$ anchors
+    ("anchored_word", "hello", SUCCESS),
+    ("anchored_word", "hello123", FAIL),
     # Failures
     ("num", "abc", FAIL),
     ("name", "123", FAIL),
