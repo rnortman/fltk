@@ -6,7 +6,7 @@ build-backend = "maturin"
 name = "fltk"
 dynamic = []
 description = 'Formal Language ToolKit'
-version = "0.1.1"
+version = "0.2.0"
 requires-python = ">=3.10"
 license = "MIT"
 keywords = []

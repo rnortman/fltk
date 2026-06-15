@@ -4,7 +4,7 @@ resolver = "2"
 
 [package]
 name = "fltk-native"
-version = "0.1.0"
+version = "0.2.0"
 edition = "2021"
 # Ships to PyPI via maturin, not crates.io. Guards against accidental `cargo publish`
 # and exempts this crate from cargo-deny license enforcement ([licenses.private]).
