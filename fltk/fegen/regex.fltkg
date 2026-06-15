@@ -1,0 +1,328 @@
+// FLTK grammar for the PORTABLE regex subset.
+//
+// Subject language: the body of a grammar regex term -- the raw text between the
+// outer `/.../` delimiters as already stored in `gsm.Regex.value`
+// (fltk2gsm.visit_regex). The outer slashes are NOT part of the input this grammar
+// sees, so this grammar describes regex *body* syntax only.
+//
+// Purpose: this is an ALLOWLIST. A pattern is "portable" (behaves identically on
+// Python `re` and Rust `regex-automata`) iff this grammar parses it to end of input.
+// Constructs outside the portable subset (POSIX classes `[[:alpha:]]`, Unicode
+// properties `\p{...}`/`\P{...}`, set ops `&&`/`--`, lookaround `(?=` `(?!` `(?<=`
+// `(?<!`, backreferences `\1`/`(?P=...)`) are simply ABSENT and therefore rejected
+// by construction -- the parser stalls short of end-of-input on them.
+//
+// The grammar deliberately FAILS CLOSED: where a construct's cross-engine
+// equivalence is unverified, or where admitting it risks letting a divergent
+// look-alike slip through, the grammar rejects it (a loud, fixable build error)
+// rather than admitting it (a silent mis-parse). Over-rejection of a genuinely
+// portable construct is the safe direction; over-admission of a divergent one is
+// the failure this lint exists to prevent. Every admit/reject decision below was
+// checked by executing BOTH engines (Python `re` and `regex_automata::meta::Regex`
+// 0.4, the version in crates/fltk-parser-core/Cargo.toml).
+//
+// AUTHORING CONSTRAINTS (see design.md sections 4.3, 9 of fltk-grammar-reference.md):
+//
+//  * Whitespace is significant. A regex has no insignificant whitespace: a literal
+//    space/tab in the pattern is a character to match. Therefore EVERY separator in
+//    this grammar is `.` (NO_WS) and there is NO leading separator anywhere. The
+//    auto-injected `_trivia` rule (`[\s]+`) is thus present but never referenced and
+//    never invoked, so whitespace-significant patterns parse correctly.
+//
+//  * `/` and `\` must be escaped inside THIS grammar's own regex terminals. A `.fltkg`
+//    regex terminal body is `([^\/\n\\]|\\.)+`: a bare `/` ends the terminal early, a
+//    bare newline is forbidden, and `\` is special. So to recognize a literal `/` in
+//    the subject pattern we write `\/`, and to recognize a literal `\` we write `\\`.
+//    The portable subset admits `\/` (escaped slash), and the in-tree corpus literally
+//    contains it (`([^\/\n\\]|\\.)+`), so this matters.
+//
+//  * Left recursion is supported (packrat seed-growing). `alternation` and
+//    `concatenation` are written left-recursively for left-associative nesting, each
+//    with a non-left-recursive base-case alternative (the seed). This mirrors how
+//    `fegen.fltkg`'s own `alternatives`/`items` rules are structured.
+//
+//  * Alternation is PEG ordered first-match with no longest-match arbitration, so
+//    every rule lists its most-specific (longest-prefix) alternative first.
+
+// ---------------------------------------------------------------------------
+// Top level
+// ---------------------------------------------------------------------------
+
+// A regex body is one alternation. An empty pattern is handled by the caller
+// (check_regex_portable treats "" as portable), so the start rule need not match empty.
+regex := alternation ;
+
+// `A|B|C`, left-associative. Base case (seed) is a single concatenation.
+//
+// EMPTY BRANCHES ARE ADMITTED. Both engines accept an empty alternation branch
+// (`a|`, `|a`, `a||b`) and an empty group body (`()`, `(?:)`) -- the empty branch is
+// the empty-match alternative -- so the grammar must accept them too (verified both
+// engines). This is why `branch` is `concatenation?`: a branch may be empty.
+//
+// FLTK rejects a repeated nilable item (gsm.py:418-453), so `alternation`/
+// `concatenation` are made nilable carefully: the nilability lives in the OPTIONAL
+// `concatenation?` branch base case, not in a `+`/`*` over a nilable term. The
+// left-recursive growth alternatives are non-nilable (they consume a `|` or a
+// `repetition`), and `repetition` itself is non-nilable (its `atom` is non-nilable),
+// so the validator's no-repeated-nil check is satisfied. (Re-confirm on regen.)
+alternation :=
+    left:alternation . %"|" . right:concatenation?
+  | branch:concatenation? ;
+
+// Juxtaposition of zero or more repetitions. Left-recursive, base case is one
+// repetition; an empty concatenation (the seed via the empty branch above) represents
+// the empty match.
+concatenation :=
+    head:concatenation . tail:repetition
+  | single:repetition ;
+
+// An atom optionally followed by a quantifier (greedy or, with trailing `?`, lazy).
+repetition := atom . quantifier? ;
+
+quantifier :=
+    ( one_or_more:"+" | zero_or_more:"*" | optional:"?" | bound:bounded ) . lazy:"?"? ;
+
+// `{m}`, `{m,}`, `{m,n}`. Most-specific orderings first. A bare `{` that is not a
+// valid bound is NOT a literal here -- it falls through to `literal_char`, which
+// EXCLUDES `{` (so a bare `{` like `a{` is rejected). This is deliberate: Rust
+// `regex-automata` rejects a bare `{` (`a{` -> Err) while Python `re` accepts it as a
+// literal brace, so a bare `{` is non-portable and must be rejected. A bare `}`, by
+// contrast, is portable (both engines treat it as a literal) and IS admitted by
+// `literal_char`.
+bounded :=
+    "{" . min:number . "," . max:number . "}"
+  | "{" . min:number . "," . "}"
+  | "{" . count:number . "}" ;
+
+number := digits:/[0-9]+/ ;
+
+// ---------------------------------------------------------------------------
+// Atoms
+// ---------------------------------------------------------------------------
+//
+// Order matters (PEG first-match): try multi-char openers (groups, classes, escapes,
+// anchors) before bare single-char literals so a longer valid construct is not shadowed
+// by a shorter one.
+atom :=
+    group
+  | char_class
+  | escape
+  | anchor
+  | inline_flags
+  | dot
+  | literal_char ;
+
+// `.` matches any char (portable). It is its own alternative so a literal `.` in a
+// pattern is unambiguously the dot metacharacter.
+dot := value:"." ;
+
+// `^` and `$` line/text anchors (portable). The `\A`/`\z` anchor escapes are handled
+// in `escape_body` (they are portable at top level but NOT inside a class).
+anchor := caret:"^" | dollar:"$" ;
+
+// ---------------------------------------------------------------------------
+// Groups
+// ---------------------------------------------------------------------------
+//
+// Admitted: non-capturing `(?:...)`, capturing `(...)`, and inline-flag-scoped
+// `(?flags:...)`. NOT admitted (absent -> rejected): lookaround `(?=` `(?!` `(?<=`
+// `(?<!`, named group `(?P<name>`/`(?P=name)`, and flag-negation `(?-i)`/`(?i-s:...)`
+// (the `-i` form diverges: Python `re` rejects `(?-i)` while Rust accepts it).
+//
+// `(?:` and `(?flags:` are tried before bare `(` (PEG first-match). Group bodies may be
+// empty (`()`, `(?:)`) because `alternation` admits an empty branch.
+group :=
+    non_capturing
+  | flag_group
+  | capturing ;
+
+non_capturing := %"(?:" . body:alternation . %")" ;
+
+// `(?i:...)`, `(?ms:...)` etc -- flags scoped to a sub-expression.
+flag_group := %"(?" . flags:flag_chars . %":" . body:alternation . %")" ;
+
+capturing := %"(" . body:alternation . %")" ;
+
+// Standalone inline flag toggle, e.g. `(?i)`, `(?ms)`. Portable as ASCII syntax; the
+// non-ASCII `(?i)` semantic residual is documented-only (design.md section 6).
+inline_flags := %"(?" . flags:flag_chars . %")" ;
+
+// Admitted flags: `i` `m` `s` `U`. The `x` (verbose/extended) flag is DELIBERATELY
+// EXCLUDED: `x` changes body semantics (it strips unescaped whitespace and treats `#`
+// as a to-end-of-line comment), but this recognizer models the body char-for-char and
+// has no flag-sensitive mode switch, so it cannot faithfully recognize a verbose-mode
+// body. Admitting `x` would widen the trusted surface for the one inline flag whose
+// body rules differ structurally from non-verbose mode, with no cross-engine
+// equivalence verified for its corners (`#` comments, whitespace in classes). Excluded
+// fail-closed; re-admit only with positive `(?x)` parity coverage (design.md section
+// 5.6) and a verbose-aware body model.
+flag_chars := value:/[imsU]+/ ;
+
+// ---------------------------------------------------------------------------
+// Character classes
+// ---------------------------------------------------------------------------
+//
+// `[...]` and negated `[^...]`. The negation `^` is an OPTIONAL prefix consumed before
+// the body, so it cannot be mis-read as an ordinary class member: `[^]` is `[` + `^`
+// (negation) + an EMPTY body, which fails because the body requires at least one item.
+// Both engines reject `[^]` and `[]` (empty classes) -- so the grammar must too.
+//
+// A leading or trailing literal `-` is admitted via the optional `lead_dash`/
+// `trail_dash` markers (`[-a]`, `[a-]`, `[a-z-]`, `[+\-]` are common portable idioms,
+// verified both engines, no FutureWarning). An INTERIOR literal `-` between two members
+// (`[a-z-0]`) is deliberately NOT admitted: it is the exact shape of the `--`
+// set-difference operator, which Python `re` flags with a FutureWarning (future
+// divergence risk) and which design.md section 4.2 lists as an excluded divergent
+// construct. Rejecting interior literal dashes is a safe over-rejection that keeps the
+// `--` set-op door closed.
+//
+// POSIX `[:name:]`, nested `[`, and set ops `&&`/`--` are NOT admitted: `class_char`
+// excludes `[`, so the inner `[` of `[[:alpha:]]` has no production and the class body
+// parse stalls -> reject (the intended behavior).
+// The body must be non-empty (both engines reject `[]`/`[^]`). It is either a leading
+// literal `-` followed by zero or more items (so `[-]`, `[-a]` are admitted), or one or
+// more items; in both shapes an optional trailing `-` is allowed (`[a-]`, `[a-z-]`).
+char_class :=
+    %"[" . negated:"^"? . class_body . %"]" ;
+
+class_body :=
+    lead_dash:"-" . items:class_item* . trail_dash:"-"?
+  | items:class_item+ . trail_dash:"-"? ;
+
+// Within a class, prefer a range (two chars and a `-`) over a single member.
+class_item :=
+    class_range
+  | class_member ;
+
+// A range `a-z`. Both endpoints must be a single literal/escaped CHARACTER, never a
+// class shorthand or assertion: `[\d-z]` / `[a-\d]` are rejected by BOTH engines (a
+// shorthand cannot be a range endpoint), so the endpoints draw from `class_range_atom`
+// (a char or a char-valued escape), NOT from the full `class_member` set.
+class_range := lo:class_range_atom . %"-" . hi:class_range_atom ;
+
+// A single class member: a class escape, or an ordinary class char. Unlike a range
+// endpoint, a plain member MAY be a class shorthand (`[\d]`, `[\w\s]` are portable).
+class_member :=
+    class_escape
+  | class_char ;
+
+// A range endpoint: a char-valued escape or an ordinary class char. Excludes
+// `class_shorthand`/`assertion` (not valid range endpoints) by drawing only from
+// `class_char_escape`.
+class_range_atom :=
+    class_char_escape
+  | class_char ;
+
+// Single char inside a class: anything that is not `\`, `]`, `[`, `-`, or newline.
+// `^` IS allowed (a literal `^` is a valid non-leading class member, e.g. `[a^b]`);
+// the leading-`^` negation is handled by the optional prefix in `char_class`.
+// Excluding `[` is what makes POSIX `[[:alpha:]]` unrecognizable here (the inner `[`
+// has no production), so the parser stalls -> reject. Excluding `-` keeps interior
+// literal dashes (the `--` set-op look-alike) out; leading/trailing `-` go through the
+// `char_class` markers.
+class_char := value:/[^\\\]\[\-\n]/ ;
+
+// ---------------------------------------------------------------------------
+// Escapes (inside a character class)
+// ---------------------------------------------------------------------------
+//
+// Class escapes are a STRICT SUBSET of top-level escapes. They admit class shorthands
+// and char-valued escapes, but NOT the assertions `\b`/`\B` and NOT the `\A`/`\z`
+// anchors: inside a class, `[\b]` means backspace on Python `re` but is REJECTED by
+// Rust `regex-automata` (divergent), and `[\A]`/`[\z]` are rejected by both. So the
+// class escape path excludes assertions and anchors entirely.
+class_escape :=
+    %"\\" . body:class_escape_body ;
+
+class_escape_body :=
+    class_shorthand
+  | char_escape ;
+
+// A char-valued escape usable as a range endpoint: control escapes, hex, unicode, and
+// escaped metacharacters -- everything that denotes a single CHARACTER. No shorthands,
+// no assertions, no anchors.
+class_char_escape :=
+    %"\\" . body:char_escape ;
+
+// ---------------------------------------------------------------------------
+// Escapes (top level)
+// ---------------------------------------------------------------------------
+//
+// `\` followed by one of: a portable class shorthand, a portable assertion, a portable
+// anchor escape, a char-valued escape, or a numeric escape. NOT admitted: `\p`/`\P`
+// (Unicode property -- divergent), `\1`..`\9`/`\k` (backreferences -- unsupported),
+// `\Z` (Python accepts, Rust rejects), `\x{..}`/`\u{..}` braced (Rust accepts, Python
+// rejects), and `\07` octal (Python accepts, Rust rejects). Those are absent so a
+// `\p...`/`\1`/`\Z` stalls the escape parse -> reject.
+//
+// Note the `.fltkg` self-escaping: a literal backslash in the SUBJECT pattern is written
+// `\\` in these terminals, and a literal slash is written `\/`.
+escape :=
+    %"\\" . body:escape_body ;
+
+escape_body :=
+    class_shorthand
+  | assertion
+  | anchor_escape
+  | char_escape ;
+
+// `\d \D \w \W \s \S` -- ASCII-portable; non-ASCII semantic residual documented (section 6).
+class_shorthand := value:/[dDwWsS]/ ;
+
+// `\b \B` word boundaries -- ASCII-portable; defined in terms of `\w`, same residual.
+// Top-level only: inside a class these are non-portable (see `class_escape`).
+assertion := value:/[bB]/ ;
+
+// `\A` (start of text) and `\z` (end of text) -- portable at top level on both engines
+// (verified). `\Z` is EXCLUDED (Python accepts, Rust rejects -- divergent). These are
+// top-level only; inside a class `[\A]`/`[\z]` are rejected by both engines, so they
+// are not in any class escape path.
+anchor_escape := value:/[Az]/ ;
+
+// A char-valued escape: a control escape, a hex/unicode codepoint escape, or an escaped
+// metacharacter. Shared by the top-level and class paths (a single character is valid
+// in both contexts).
+char_escape :=
+    control_escape
+  | hex_escape
+  | unicode_escape
+  | meta_escape ;
+
+// `\n \r \t \f \v \0 \a` -- `\a` (bell) is portable on both engines (verified).
+control_escape := value:/[nrtfv0a]/ ;
+
+// `\xHH`
+hex_escape := %"x" . digits:/[0-9A-Fa-f][0-9A-Fa-f]/ ;
+
+// `\uHHHH` (4-hex) and `\UHHHHHHHH` (8-hex). Both forms are portable on both engines
+// (verified). The braced `\u{..}`/`\x{..}` forms are EXCLUDED (Rust accepts, Python
+// rejects). `\U` is tried before `\u` is irrelevant (different case), but the 8-hex
+// alternative is listed first so the longer form is preferred.
+unicode_escape :=
+    %"U" . digits:/[0-9A-Fa-f][0-9A-Fa-f][0-9A-Fa-f][0-9A-Fa-f][0-9A-Fa-f][0-9A-Fa-f][0-9A-Fa-f][0-9A-Fa-f]/
+  | %"u" . digits:/[0-9A-Fa-f][0-9A-Fa-f][0-9A-Fa-f][0-9A-Fa-f]/ ;
+
+// Escaped metacharacter: `\. \* \+ \? \( \) \[ \] \{ \} \| \^ \$ \/ \\ \-`.
+// `\/` and `\\` are written here as `\\/` and `\\\\` per the `.fltkg` self-escaping rule
+// (the subject text is one backslash + slash, and one backslash + backslash).
+meta_escape := value:/[.*+?()\[\]{}|^$\/\\\-]/ ;
+
+// ---------------------------------------------------------------------------
+// Ordinary literal characters
+// ---------------------------------------------------------------------------
+//
+// A single ordinary character that is not a structural regex metacharacter. The
+// excluded set is `. * + ? ( ) [ | ^ $ \ {` plus newline -- each of those has its own
+// production above (or, for `{`, is non-portable as a bare literal: Rust rejects `a{`).
+//
+// `]` and `}` ARE admitted as bare literals here: a bare `]` or `}` outside a class is
+// a portable literal on both engines (verified `a]b`, `a}b`, `]`, `}`). Only `[` and
+// `{` (the OPENERS) are structural; the closers `]`/`}` are ordinary when they do not
+// close a construct. This is what lets `[\[:alpha:]]` (a class containing a literal
+// `[`, then a trailing literal `]`) parse to end.
+//
+// `\` is excluded (escapes go through `escape`); `/` is allowed bare here because a bare
+// `/` is a perfectly ordinary literal inside a regex body (it is only the OUTER `/.../`
+// delimiters, stripped before this grammar runs, that are special). It is written `\/`
+// in this terminal per the `.fltkg` self-escaping rule.
+literal_char := value:/[^.*+?()\[|^$\\{\n]/ ;

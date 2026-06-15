@@ -42,6 +42,10 @@ When `Py::new(m.py(), Span::unknown())` fails during `fltk._native` module init,
 
 `_escape_source_name` in `gsm2tree_rs.py` and `_rust_str_lit` in `gsm2parser_rs.py` both serve as escapers for source names placed in Rust `//!` doc-comment backtick spans, but they encode different policies (backtick→apostrophe vs. full Rust string-literal escaping). Additionally, `RustCstGenerator._gen_header` and `RustParserGenerator._gen_header` are structurally identical except for the tool name string. Extract a shared `_escape_source_name` (doc-comment backtick context) and `_format_generated_header(tool_name, source_name)` helper to a common module (`shared_rs.py` or similar) so both generators use one escape policy and one header template. Location: `fltk/fegen/gsm2tree_rs.py` (`_escape_source_name`, `_gen_header`), `fltk/fegen/gsm2parser_rs.py` (`_gen_header`).
 
+## `gsm-for-each-item-public`
+
+`gsm._for_each_item` is a private function used internally by `gsm.py` for validation passes, but `fltk/fegen/regex_corpus.py` is the first cross-module caller. Promote it to a public name (`for_each_item`) in `gsm.py`, or add a public `iter_regexes(grammar)` helper that encapsulates the walk so callers never need to touch the structural walk API. Gives callers a stable, tested contract instead of a private-name dependency that mypy/pyright won't flag across modules. Location: `fltk/fegen/gsm.py` (`_for_each_item`), `fltk/fegen/regex_corpus.py:58` (call site).
+
 ## `extend-children-owned`
 
 `extend_children(&Self)` clones every child Arc even though the donor node is immediately dropped after the call (inline-to-parent sub-expression and `+`/`*` loop paths). A consuming variant `extend_children_owned(other: Self)` using `Vec::append` would avoid the atomic inc+dec pairs per child on the parse hot path. Blocked on `gsm2tree_rs.py` adding the method to the generated CST node API. Location: `fltk/fegen/gsm2parser_rs.py` (`_gen_item_multiple`, `_gen_append_code`), `fltk/fegen/gsm2tree_rs.py` (generated `impl <Node>` blocks). Re-open only with profiling evidence.

@@ -262,6 +262,10 @@ gencode:
 	uv run python -m fltk.fegen.genparser generate \
 		fltk/unparse/unparsefmt.fltkg unparsefmt fltk.unparse.unparsefmt_cst \
 		--output-dir fltk/unparse
+	# Python: regex grammar (regex_cst.py, regex_cst_protocol.py, regex_parser.py, regex_trivia_parser.py)
+	uv run python -m fltk.fegen.genparser generate \
+		fltk/fegen/regex.fltkg regex fltk.fegen.regex_cst \
+		--output-dir fltk/fegen
 	# Rust: src/lib.rs (fltk._native module wiring — span-only runtime, no grammar submodules)
 	uv run python -m fltk.fegen.genparser gen-rust-lib src/lib.rs \
 		--module-name _native --register-span-types --unknown-span-static --no-cst --no-parser
