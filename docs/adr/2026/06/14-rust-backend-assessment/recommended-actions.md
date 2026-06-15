@@ -59,6 +59,7 @@ emission-paydown safe.
 
 ## `cst-generated-header`
 
+- **Status:** DONE — shipped in commit `9f96d43`
 - **Phase:** A (step 3) · **Class:** major
 - **Depends on:** none
 - **Refs:** `a5:no-generated-header-cst` (§4); ASSESSMENT §7 item 3
@@ -138,6 +139,7 @@ self-deadlocked on profiling evidence that is never produced.
 
 ## `remove-dead-duplicate-crate`
 
+- **Status:** DONE — shipped in commit `a4b35b8`
 - **Phase:** C (step 8) · **Class:** cleanup
 - **Depends on:** none
 - **Refs:** `a8-build-release-3`, `a1:dead-duplicate-crate-and-accreted-inventory`; ASSESSMENT §5, §7 item 8
