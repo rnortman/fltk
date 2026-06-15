@@ -5,12 +5,16 @@
 //
 // Python imports: from poc_cst.cst import Identifier, Items, Trivia
 // Span/SourceText are not registered here; use fltk._native.Span / SourceText.
+#![cfg_attr(not(feature = "python"), forbid(unsafe_code))]
 #[cfg(feature = "python")]
 use fltk_cst_core::register_submodule;
 #[cfg(feature = "python")]
 use pyo3::prelude::*;
 
 pub mod cst;
+
+#[cfg(test)]
+mod spike_tests;
 
 #[cfg(feature = "python")]
 #[pymodule]

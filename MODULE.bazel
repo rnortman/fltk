@@ -24,12 +24,8 @@ use_repo(pip, "pypi")
 # Clockwork and other consumers do NOT need a use_repo for this hub.
 #
 # Membership note: `from_cargo` seeds from the workspace root Cargo.toml, whose
-# [workspace] members include ".", "crates/fltk-cst-core", "crates/fltk-cst-spike",
-# and "crates/fltk-parser-core".  fltk-cst-spike IS included as a workspace member
-# and its transitive deps appear in this hub.  The tests/* fixture crates have their
-# own [workspace] declarations and are genuinely excluded.
-# TODO(bazel-cst-spike-hub): if fltk-cst-spike acquires large or conflicting deps,
-# consider excluding it from the workspace root or using a dedicated minimal manifest.
+# [workspace] members include ".", "crates/fltk-cst-core", and "crates/fltk-parser-core".
+# The tests/* fixture crates have their own [workspace] declarations and are excluded.
 crate = use_extension("@rules_rust//crate_universe:extensions.bzl", "crate")
 crate.from_cargo(
     name = "fltk_crates",

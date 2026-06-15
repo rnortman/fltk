@@ -20,7 +20,7 @@ confidence-threshold = 0.8
 
 [licenses.private]
 # Skip license enforcement for our own unpublished crates (publish = false):
-# fltk-native (ships via PyPI/maturin), fltk-cst-spike, and the tests/* fixtures.
+# fltk-native (ships via PyPI/maturin) and the tests/* fixtures.
 ignore = true
 
 [bans]

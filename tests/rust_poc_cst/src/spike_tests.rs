@@ -1,7 +1,9 @@
 /// Pure-Rust spike tests exercising CST construction, traversal, span text,
 /// merge/intersect, and structural equality — no Python linked, no unsafe.
 ///
-/// These tests must pass under `cargo test -p fltk-cst-spike` (python feature off).
+/// These tests must pass under
+/// `cargo test --manifest-path tests/rust_poc_cst/Cargo.toml --no-default-features`
+/// (python feature off).
 ///
 /// Phase 1 API: suffixless names (`new`, `span`, `children`, `push_child`),
 /// `Shared<T>` child ownership (Arc-based reference semantics).

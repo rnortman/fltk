@@ -134,7 +134,6 @@ cargo-clippy:
 # re-enable pyo3 via fltk-native's dependency).
 cargo-test-no-python:
 	cargo test -q -p fltk-cst-core --no-default-features
-	cargo test -q -p fltk-cst-spike
 	cargo test -q -p fltk-parser-core
 	cargo test -q --manifest-path tests/rust_parser_fixture/Cargo.toml
 	cargo test -q --manifest-path crates/fegen-rust/Cargo.toml --no-default-features
@@ -142,21 +141,17 @@ cargo-test-no-python:
 
 cargo-clippy-no-python:
 	cargo clippy -q -p fltk-cst-core --no-default-features -- -D warnings
-	cargo clippy -q -p fltk-cst-spike -- -D warnings
-	cargo clippy -q -p fltk-cst-spike --features python -- -D warnings
 	cargo clippy -q -p fltk-parser-core -- -D warnings
 	cargo clippy -q --manifest-path tests/rust_parser_fixture/Cargo.toml -- -D warnings
 	cargo clippy -q --manifest-path crates/fegen-rust/Cargo.toml --no-default-features -- -D warnings
 	cargo clippy -q --manifest-path tests/rust_poc_cst/Cargo.toml --no-default-features -- -D warnings
+	# python-on clippy for rust_poc_cst is covered by cargo-clippy (default features = extension-module)
 
 # Mechanical check: verify pyo3 is absent from the python-off dependency graphs.
 # Uses a positive control (a crate guaranteed present in that graph) before the negative
 # assertion to prevent false passes when cargo tree fails silently.
 check-no-pyo3:
 	@set -e; \
-	out="$$(cargo tree -p fltk-cst-spike --edges normal,build)"; \
-	echo "$$out" | grep -q fltk-cst-core || { echo "FAIL: check-no-pyo3 broken: cargo tree output lacks fltk-cst-core"; exit 1; }; \
-	! echo "$$out" | grep -q pyo3 || { echo "FAIL: pyo3 present in fltk-cst-spike python-off dependency graph"; exit 1; }; \
 	core="$$(cargo tree -p fltk-cst-core --no-default-features --edges normal,build)"; \
 	echo "$$core" | grep -q fltk-cst-core || { echo "FAIL: check-no-pyo3 broken: cargo tree output lacks fltk-cst-core"; exit 1; }; \
 	! echo "$$core" | grep -q pyo3 || { echo "FAIL: pyo3 present in fltk-cst-core --no-default-features graph"; exit 1; }; \
@@ -288,8 +283,6 @@ gencode:
 	$(MAKE) gen-rust-cst GRAMMAR=fltk/fegen/test_data/collision_fixture.fltkg RS_OUT=tests/rust_parser_fixture/src/collision_cst.rs
 	uv run python -m fltk.fegen.genparser gen-rust-parser --cst-mod-path super::collision_cst \
 		fltk/fegen/test_data/collision_fixture.fltkg tests/rust_parser_fixture/src/collision_parser.rs
-	# Rust: crates/fltk-cst-spike/src/cst.rs — same grammar as rust_poc_cst/src/cst.rs; cp makes identity explicit
-	cp tests/rust_poc_cst/src/cst.rs crates/fltk-cst-spike/src/cst.rs
 	# Normalize formatting. Order matters:
 	# 1. ruff check --fix: upgrades typing.Union[X,Y] → X|Y and similar, so ruff format can then
 	#    wrap the resulting X|Y chains correctly.  Exit code ignored — residuals handled by step 2.

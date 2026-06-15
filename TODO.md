@@ -14,10 +14,6 @@ Implementation in progress — see ADR at `docs/adr/2026/06/13-rust-bazel-packag
 
 At implementation spike time, confirm that `extension-module` is active on the `@fltk_crates//:pyo3` target after `crate_universe` resolution. Run `bazel build //:native` on a clean checkout; if pyo3 links libpython the feature is not activated and a `crate.annotation(crate = "pyo3", crate_features = ["extension-module"])` is needed in `MODULE.bazel`'s `crate.from_cargo` block. Also confirm that dev-dep crates from the root workspace do not leak into the hub. Location: `MODULE.bazel` (`crate.from_cargo` block).
 
-## `bazel-cst-spike-hub`
-
-`fltk-cst-spike` is a workspace member in root `Cargo.toml` and is therefore included in the `@fltk_crates` hub via `from_cargo`. If `fltk-cst-spike` acquires large or conflicting deps, consider excluding it from the workspace root `Cargo.toml` members list or using a dedicated minimal manifest for the Bazel crate hub. Location: `MODULE.bazel` and root `Cargo.toml`.
-
 ## `native-submodule-error-context`
 
 `register_submodule` propagates errors from `register_classes` via `?` with no added context naming which submodule failed. A future improvement: annotate the error with the submodule name before propagating, so an `ImportError` at module import time names `"cst"` or `"parser"` as the culprit. Location: `crates/fltk-cst-core/src/py_module.rs` (`register_submodule` definition, line ~87).
