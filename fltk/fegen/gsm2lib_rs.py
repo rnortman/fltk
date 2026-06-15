@@ -13,9 +13,6 @@ import re
 from dataclasses import dataclass
 
 # Standard Rust identifier: letter or underscore, then alphanumerics or underscores.
-# TODO(rust-ident-dedup): the single-segment pattern here is also hand-written in
-# genparser.py's _CST_MOD_PATH_RE (the repeating unit).  If more gen-* commands need
-# single-segment validation, consider importing _validate_rust_ident from here.
 _RUST_IDENT_RE = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
 
 

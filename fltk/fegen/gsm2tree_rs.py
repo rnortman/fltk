@@ -150,9 +150,6 @@ def _escape_source_name(s: str) -> str:
 
     NOTE: `gsm2parser_rs._gen_header` has a parallel `_gen_header` method and uses
     `_rust_str_lit` (a string-literal escaper) for the same doc-comment context.
-    TODO(cst-header-escape-dedup): extract this function and a shared
-    `_format_generated_header` helper to a common module so both generators use
-    one escape policy and one header template.
     """
     return s.replace("\\", "/").replace("`", "'")
 

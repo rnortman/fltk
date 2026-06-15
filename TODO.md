@@ -30,17 +30,9 @@ When `Py::new(m.py(), Span::unknown())` fails during `fltk._native` module init,
 
 `Submodule.register_fn` is validated for Rust identifier syntax but not for the convention that it should be `register_classes` (the name the codegenned `pub fn register_classes` uses). A caller with a non-standard name gets a Rust compile error rather than a Python-level error. Document or enforce the `register_classes` convention in `Submodule.validate()`. Location: `fltk/fegen/gsm2lib_rs.py` (`Submodule.validate()`).
 
-## `rust-ident-dedup`
-
-`_RUST_IDENT_RE` in `gsm2lib_rs.py` and the single-segment component of `_CST_MOD_PATH_RE` in `genparser.py` express the same Rust identifier character class independently. If more gen-* commands need single-segment validation, consolidate by importing `_validate_rust_ident` from `gsm2lib_rs`. Location: `fltk/fegen/gsm2lib_rs.py` (line ~16), `fltk/fegen/genparser.py` (`_CST_MOD_PATH_RE`).
-
 ## `bazel-lib-rs-no-cst`
 
 `fltk_pyo3_cdylib`'s assembly genrule unconditionally declares `cst.rs` and `parser.rs` as required outputs, even when `lib_rs=None` (auto-generated path). Every current caller is a grammar crate and supplies both files. A future runtime-only (span-only) crate built via this macro would hit the `test -f` guards with a misleading error. At that point, split into grammar and span-only assembly variants. Location: `rust.bzl` (`_assemble_crate` genrule, line ~239).
-
-## `cst-header-escape-dedup`
-
-`_escape_source_name` in `gsm2tree_rs.py` and `_rust_str_lit` in `gsm2parser_rs.py` both serve as escapers for source names placed in Rust `//!` doc-comment backtick spans, but they encode different policies (backtick→apostrophe vs. full Rust string-literal escaping). Additionally, `RustCstGenerator._gen_header` and `RustParserGenerator._gen_header` are structurally identical except for the tool name string. Extract a shared `_escape_source_name` (doc-comment backtick context) and `_format_generated_header(tool_name, source_name)` helper to a common module (`shared_rs.py` or similar) so both generators use one escape policy and one header template. Location: `fltk/fegen/gsm2tree_rs.py` (`_escape_source_name`, `_gen_header`), `fltk/fegen/gsm2parser_rs.py` (`_gen_header`).
 
 ## `gsm-for-each-item-public`
 
