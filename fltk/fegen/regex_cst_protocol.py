@@ -222,11 +222,7 @@ class Alternation(typing.Protocol):
 
     def append(self, child: Alternation | Concatenation, label: Label | None = None) -> None: ...
 
-    def extend(
-        self,
-        children: typing.Iterable[Alternation | Concatenation],
-        label: Label | None = None,
-    ) -> None: ...
+    def extend(self, children: typing.Iterable[Alternation | Concatenation], label: Label | None = None) -> None: ...
 
     def extend_children(self, other: Alternation) -> None: ...
 
@@ -288,11 +284,7 @@ class Concatenation(typing.Protocol):
 
     def append(self, child: Concatenation | Repetition, label: Label | None = None) -> None: ...
 
-    def extend(
-        self,
-        children: typing.Iterable[Concatenation | Repetition],
-        label: Label | None = None,
-    ) -> None: ...
+    def extend(self, children: typing.Iterable[Concatenation | Repetition], label: Label | None = None) -> None: ...
 
     def extend_children(self, other: Concatenation) -> None: ...
 
@@ -407,29 +399,19 @@ class Quantifier(typing.Protocol):
     def append(self, child: Bounded | fltk.fegen.pyrt.span.Span, label: Label | None = None) -> None: ...
 
     def extend(
-        self,
-        children: typing.Iterable[Bounded | fltk.fegen.pyrt.span.Span],
-        label: Label | None = None,
+        self, children: typing.Iterable[Bounded | fltk.fegen.pyrt.span.Span], label: Label | None = None
     ) -> None: ...
 
     def extend_children(self, other: Quantifier) -> None: ...
 
     def child(self) -> tuple[Label | None, Bounded | fltk.fegen.pyrt.span.Span]: ...
 
-    def insert(
-        self,
-        index: int,
-        child: Bounded | fltk.fegen.pyrt.span.Span,
-        label: Label | None = None,
-    ) -> None: ...
+    def insert(self, index: int, child: Bounded | fltk.fegen.pyrt.span.Span, label: Label | None = None) -> None: ...
 
     def remove_at(self, index: int) -> tuple[Label | None, Bounded | fltk.fegen.pyrt.span.Span]: ...
 
     def replace_at(
-        self,
-        index: int,
-        child: Bounded | fltk.fegen.pyrt.span.Span,
-        label: Label | None = None,
+        self, index: int, child: Bounded | fltk.fegen.pyrt.span.Span, label: Label | None = None
     ) -> None: ...
 
     def clear(self) -> None: ...
@@ -604,17 +586,10 @@ class Atom(typing.Protocol):
 
     kind: typing.Literal[NodeKind.ATOM] = NodeKind.ATOM
     span: fltk.fegen.pyrt.terminalsrc.Span | fltk._native.Span
-    children: list[
-        tuple[
-            Label | None,
-            Anchor | CharClass | Dot | Escape | Group | InlineFlags | LiteralChar,
-        ]
-    ]
+    children: list[tuple[Label | None, Anchor | CharClass | Dot | Escape | Group | InlineFlags | LiteralChar]]
 
     def append(
-        self,
-        child: Anchor | CharClass | Dot | Escape | Group | InlineFlags | LiteralChar,
-        label: Label | None = None,
+        self, child: Anchor | CharClass | Dot | Escape | Group | InlineFlags | LiteralChar, label: Label | None = None
     ) -> None: ...
 
     def extend(
@@ -625,12 +600,7 @@ class Atom(typing.Protocol):
 
     def extend_children(self, other: Atom) -> None: ...
 
-    def child(
-        self,
-    ) -> tuple[
-        Label | None,
-        Anchor | CharClass | Dot | Escape | Group | InlineFlags | LiteralChar,
-    ]: ...
+    def child(self) -> tuple[Label | None, Anchor | CharClass | Dot | Escape | Group | InlineFlags | LiteralChar]: ...
 
     def insert(
         self,
@@ -641,10 +611,7 @@ class Atom(typing.Protocol):
 
     def remove_at(
         self, index: int
-    ) -> tuple[
-        Label | None,
-        Anchor | CharClass | Dot | Escape | Group | InlineFlags | LiteralChar,
-    ]: ...
+    ) -> tuple[Label | None, Anchor | CharClass | Dot | Escape | Group | InlineFlags | LiteralChar]: ...
 
     def replace_at(
         self,
@@ -836,29 +803,19 @@ class Group(typing.Protocol):
     def append(self, child: Capturing | FlagGroup | NonCapturing, label: Label | None = None) -> None: ...
 
     def extend(
-        self,
-        children: typing.Iterable[Capturing | FlagGroup | NonCapturing],
-        label: Label | None = None,
+        self, children: typing.Iterable[Capturing | FlagGroup | NonCapturing], label: Label | None = None
     ) -> None: ...
 
     def extend_children(self, other: Group) -> None: ...
 
     def child(self) -> tuple[Label | None, Capturing | FlagGroup | NonCapturing]: ...
 
-    def insert(
-        self,
-        index: int,
-        child: Capturing | FlagGroup | NonCapturing,
-        label: Label | None = None,
-    ) -> None: ...
+    def insert(self, index: int, child: Capturing | FlagGroup | NonCapturing, label: Label | None = None) -> None: ...
 
     def remove_at(self, index: int) -> tuple[Label | None, Capturing | FlagGroup | NonCapturing]: ...
 
     def replace_at(
-        self,
-        index: int,
-        child: Capturing | FlagGroup | NonCapturing,
-        label: Label | None = None,
+        self, index: int, child: Capturing | FlagGroup | NonCapturing, label: Label | None = None
     ) -> None: ...
 
     def clear(self) -> None: ...
@@ -1113,29 +1070,19 @@ class CharClass(typing.Protocol):
     def append(self, child: ClassBody | fltk.fegen.pyrt.span.Span, label: Label | None = None) -> None: ...
 
     def extend(
-        self,
-        children: typing.Iterable[ClassBody | fltk.fegen.pyrt.span.Span],
-        label: Label | None = None,
+        self, children: typing.Iterable[ClassBody | fltk.fegen.pyrt.span.Span], label: Label | None = None
     ) -> None: ...
 
     def extend_children(self, other: CharClass) -> None: ...
 
     def child(self) -> tuple[Label | None, ClassBody | fltk.fegen.pyrt.span.Span]: ...
 
-    def insert(
-        self,
-        index: int,
-        child: ClassBody | fltk.fegen.pyrt.span.Span,
-        label: Label | None = None,
-    ) -> None: ...
+    def insert(self, index: int, child: ClassBody | fltk.fegen.pyrt.span.Span, label: Label | None = None) -> None: ...
 
     def remove_at(self, index: int) -> tuple[Label | None, ClassBody | fltk.fegen.pyrt.span.Span]: ...
 
     def replace_at(
-        self,
-        index: int,
-        child: ClassBody | fltk.fegen.pyrt.span.Span,
-        label: Label | None = None,
+        self, index: int, child: ClassBody | fltk.fegen.pyrt.span.Span, label: Label | None = None
     ) -> None: ...
 
     def clear(self) -> None: ...
@@ -1178,29 +1125,19 @@ class ClassBody(typing.Protocol):
     def append(self, child: ClassItem | fltk.fegen.pyrt.span.Span, label: Label | None = None) -> None: ...
 
     def extend(
-        self,
-        children: typing.Iterable[ClassItem | fltk.fegen.pyrt.span.Span],
-        label: Label | None = None,
+        self, children: typing.Iterable[ClassItem | fltk.fegen.pyrt.span.Span], label: Label | None = None
     ) -> None: ...
 
     def extend_children(self, other: ClassBody) -> None: ...
 
     def child(self) -> tuple[Label | None, ClassItem | fltk.fegen.pyrt.span.Span]: ...
 
-    def insert(
-        self,
-        index: int,
-        child: ClassItem | fltk.fegen.pyrt.span.Span,
-        label: Label | None = None,
-    ) -> None: ...
+    def insert(self, index: int, child: ClassItem | fltk.fegen.pyrt.span.Span, label: Label | None = None) -> None: ...
 
     def remove_at(self, index: int) -> tuple[Label | None, ClassItem | fltk.fegen.pyrt.span.Span]: ...
 
     def replace_at(
-        self,
-        index: int,
-        child: ClassItem | fltk.fegen.pyrt.span.Span,
-        label: Label | None = None,
+        self, index: int, child: ClassItem | fltk.fegen.pyrt.span.Span, label: Label | None = None
     ) -> None: ...
 
     def clear(self) -> None: ...
@@ -1402,11 +1339,7 @@ class ClassRangeAtom(typing.Protocol):
 
     def append(self, child: ClassChar | ClassCharEscape, label: Label | None = None) -> None: ...
 
-    def extend(
-        self,
-        children: typing.Iterable[ClassChar | ClassCharEscape],
-        label: Label | None = None,
-    ) -> None: ...
+    def extend(self, children: typing.Iterable[ClassChar | ClassCharEscape], label: Label | None = None) -> None: ...
 
     def extend_children(self, other: ClassRangeAtom) -> None: ...
 
@@ -1532,11 +1465,7 @@ class ClassEscapeBody(typing.Protocol):
 
     def append(self, child: CharEscape | ClassShorthand, label: Label | None = None) -> None: ...
 
-    def extend(
-        self,
-        children: typing.Iterable[CharEscape | ClassShorthand],
-        label: Label | None = None,
-    ) -> None: ...
+    def extend(self, children: typing.Iterable[CharEscape | ClassShorthand], label: Label | None = None) -> None: ...
 
     def extend_children(self, other: ClassEscapeBody) -> None: ...
 
@@ -1663,9 +1592,7 @@ class EscapeBody(typing.Protocol):
     children: list[tuple[Label | None, AnchorEscape | Assertion | CharEscape | ClassShorthand]]
 
     def append(
-        self,
-        child: AnchorEscape | Assertion | CharEscape | ClassShorthand,
-        label: Label | None = None,
+        self, child: AnchorEscape | Assertion | CharEscape | ClassShorthand, label: Label | None = None
     ) -> None: ...
 
     def extend(
@@ -1676,24 +1603,16 @@ class EscapeBody(typing.Protocol):
 
     def extend_children(self, other: EscapeBody) -> None: ...
 
-    def child(
-        self,
-    ) -> tuple[Label | None, AnchorEscape | Assertion | CharEscape | ClassShorthand]: ...
+    def child(self) -> tuple[Label | None, AnchorEscape | Assertion | CharEscape | ClassShorthand]: ...
 
     def insert(
-        self,
-        index: int,
-        child: AnchorEscape | Assertion | CharEscape | ClassShorthand,
-        label: Label | None = None,
+        self, index: int, child: AnchorEscape | Assertion | CharEscape | ClassShorthand, label: Label | None = None
     ) -> None: ...
 
     def remove_at(self, index: int) -> tuple[Label | None, AnchorEscape | Assertion | CharEscape | ClassShorthand]: ...
 
     def replace_at(
-        self,
-        index: int,
-        child: AnchorEscape | Assertion | CharEscape | ClassShorthand,
-        label: Label | None = None,
+        self, index: int, child: AnchorEscape | Assertion | CharEscape | ClassShorthand, label: Label | None = None
     ) -> None: ...
 
     def clear(self) -> None: ...
@@ -1871,9 +1790,7 @@ class CharEscape(typing.Protocol):
     children: list[tuple[Label | None, ControlEscape | HexEscape | MetaEscape | UnicodeEscape]]
 
     def append(
-        self,
-        child: ControlEscape | HexEscape | MetaEscape | UnicodeEscape,
-        label: Label | None = None,
+        self, child: ControlEscape | HexEscape | MetaEscape | UnicodeEscape, label: Label | None = None
     ) -> None: ...
 
     def extend(
@@ -1884,24 +1801,16 @@ class CharEscape(typing.Protocol):
 
     def extend_children(self, other: CharEscape) -> None: ...
 
-    def child(
-        self,
-    ) -> tuple[Label | None, ControlEscape | HexEscape | MetaEscape | UnicodeEscape]: ...
+    def child(self) -> tuple[Label | None, ControlEscape | HexEscape | MetaEscape | UnicodeEscape]: ...
 
     def insert(
-        self,
-        index: int,
-        child: ControlEscape | HexEscape | MetaEscape | UnicodeEscape,
-        label: Label | None = None,
+        self, index: int, child: ControlEscape | HexEscape | MetaEscape | UnicodeEscape, label: Label | None = None
     ) -> None: ...
 
     def remove_at(self, index: int) -> tuple[Label | None, ControlEscape | HexEscape | MetaEscape | UnicodeEscape]: ...
 
     def replace_at(
-        self,
-        index: int,
-        child: ControlEscape | HexEscape | MetaEscape | UnicodeEscape,
-        label: Label | None = None,
+        self, index: int, child: ControlEscape | HexEscape | MetaEscape | UnicodeEscape, label: Label | None = None
     ) -> None: ...
 
     def clear(self) -> None: ...

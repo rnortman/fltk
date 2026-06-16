@@ -4,23 +4,11 @@
 //! codepoint-to-byte-offset table built once at construction. All external positions
 //! are codepoint indices (`i64`), matching Python's string-indexing semantics.
 
-use fltk_cst_core::{Span, SourceText};
+use fltk_cst_core::{resolve_line_col, Span, SourceText};
+pub use fltk_cst_core::LineColPos;
 use regex_automata::meta::Regex;
 use regex_automata::{Anchored, Input};
 use std::sync::OnceLock;
-
-/// Line-and-column position within a source text.
-///
-/// Mirrors `LineColPos` in `terminalsrc.py`. `line` and `col` are 0-based
-/// codepoint indices; `line_span` covers the entire line (exclusive of the `\n`).
-/// `line_span` is source-bearing (improvement over Python's sourceless span;
-/// equality-compatible because `Span` equality ignores source).
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct LineColPos {
-    pub line: i64,
-    pub col: i64,
-    pub line_span: Span,
-}
 
 /// Terminal source for a packrat parser.
 ///
@@ -47,9 +35,9 @@ pub struct TerminalSource {
 }
 
 impl TerminalSource {
-    /// Construct from a `&str` (copies once into a new `SourceText`).
-    pub fn new(text: &str) -> Self {
-        Self::from_source_text(SourceText::from_str(text))
+    /// Construct from a `&str` with an optional filename (copies once into a new `SourceText`).
+    pub fn new(text: &str, filename: Option<&str>) -> Self {
+        Self::from_source_text(SourceText::from_str(text, filename))
     }
 
     /// Construct from an existing `SourceText` (no copy; borrows text via the §2.2 accessor).
@@ -167,7 +155,7 @@ impl TerminalSource {
 
     /// Map a codepoint position to its line and column, with the line's span.
     ///
-    /// Port of `terminalsrc.py:183-205` bisect logic.
+    /// Thin wrapper over the shared `fltk_cst_core::resolve_line_col` bisect function.
     ///
     /// Domain: `pos ∈ [-1, len]`.
     /// - `pos == len`: decremented to `len - 1` (Python: terminalsrc.py:187-188).
@@ -175,7 +163,8 @@ impl TerminalSource {
     /// - `pos < -1` or `pos > len`: returns `None` (≈ Python's `ValueError`; these are
     ///   unreachable from this runtime's own call sites).
     ///
-    /// `line_ends` is computed lazily on first call and cached.
+    /// `line_ends` is computed lazily on first call and cached (independent of the
+    /// `SourceInner.line_ends` cache — see `TODO(linecol-cache-consolidate)`).
     /// `line_span` is source-bearing (equality-compatible with sourceless spans).
     pub fn pos_to_line_col(&self, pos: i64) -> Option<LineColPos> {
         let len = self.len();
@@ -185,46 +174,14 @@ impl TerminalSource {
         // Apply the end-of-input decrement (terminalsrc.py:187-188).
         let pos = if pos == len { pos - 1 } else { pos };
 
-        // Lazily compute line_ends: codepoint indices of '\n' chars, plus a final
-        // sentinel of len-1 (or -1 for empty input) if not newline-terminated.
-        // Mirrors terminalsrc.py:189-192.
-        let line_ends = self.line_ends.get_or_init(|| {
-            let text = self.text();
-            // chars().enumerate() yields (codepoint_index, char) directly — no byte→codepoint
-            // conversion needed (unlike char_indices which yields byte offsets).
-            let mut ends: Vec<i64> = text
-                .chars()
-                .enumerate()
-                .filter(|(_, c)| *c == '\n')
-                .map(|(cp_idx, _)| cp_idx as i64)
-                .collect();
-            // Add sentinel if the text doesn't end with '\n' (or is empty).
-            if ends.last() != Some(&(len - 1)) {
-                ends.push(len - 1);
-            }
-            ends
-        });
-
-        // bisect_left equivalent: find leftmost index where line_ends[idx] >= pos.
-        let idx = line_ends.partition_point(|&e| e < pos);
-        assert!(idx < line_ends.len(), "bisect invariant: idx must be in range");
-
-        let (col, line_span) = if idx > 0 {
-            let col = pos - line_ends[idx - 1] - 1;
-            let line_start = line_ends[idx - 1] + 1;
-            let line_end = line_ends[idx];
-            (col, Span::new_with_source(line_start, line_end, &self.source))
-        } else {
-            let col = pos;
-            let line_end = line_ends[0];
-            (col, Span::new_with_source(0, line_end, &self.source))
-        };
-
-        Some(LineColPos {
-            line: idx as i64,
-            col,
-            line_span,
-        })
+        // Delegate to the shared bisect algorithm; pass our own line_ends cache.
+        // TODO(linecol-cache-consolidate): self.line_ends is independent of
+        // self.source.inner.line_ends — two caches over the same immutable text.
+        // A future consolidation could pass &self.source.inner.line_ends here.
+        let mut lc = resolve_line_col(self.text(), pos, &self.line_ends)?;
+        // Attach source to the line_span (resolve_line_col returns a sourceless line_span).
+        lc.line_span = Span::new_with_source(lc.line_span.start(), lc.line_span.end(), &self.source);
+        Some(lc)
     }
 }
 
@@ -236,7 +193,7 @@ mod tests {
 
     #[test]
     fn consume_literal_ascii_match() {
-        let ts = TerminalSource::new("hello world");
+        let ts = TerminalSource::new("hello world", None);
         let span = ts.consume_literal(6, "world").unwrap();
         assert_eq!(span.start(), 6);
         assert_eq!(span.end(), 11);
@@ -244,20 +201,20 @@ mod tests {
 
     #[test]
     fn consume_literal_ascii_mismatch() {
-        let ts = TerminalSource::new("hello");
+        let ts = TerminalSource::new("hello", None);
         assert!(ts.consume_literal(0, "world").is_none());
     }
 
     #[test]
     fn consume_literal_exhaustion() {
-        let ts = TerminalSource::new("hi");
+        let ts = TerminalSource::new("hi", None);
         assert!(ts.consume_literal(1, "igo").is_none());
     }
 
     #[test]
     fn consume_literal_empty_literal_mid() {
         // Empty literal always succeeds for valid positions.
-        let ts = TerminalSource::new("abc");
+        let ts = TerminalSource::new("abc", None);
         let span = ts.consume_literal(1, "").unwrap();
         assert_eq!(span.start(), 1);
         assert_eq!(span.end(), 1);
@@ -265,7 +222,7 @@ mod tests {
 
     #[test]
     fn consume_literal_empty_literal_at_len() {
-        let ts = TerminalSource::new("abc");
+        let ts = TerminalSource::new("abc", None);
         let span = ts.consume_literal(3, "").unwrap();
         assert_eq!(span.start(), 3);
         assert_eq!(span.end(), 3);
@@ -274,19 +231,19 @@ mod tests {
     #[test]
     fn consume_literal_pos_eq_len_nonempty() {
         // pos == len with non-empty literal → fail (no chars available).
-        let ts = TerminalSource::new("abc");
+        let ts = TerminalSource::new("abc", None);
         assert!(ts.consume_literal(3, "a").is_none());
     }
 
     #[test]
     fn consume_literal_out_of_range() {
-        let ts = TerminalSource::new("abc");
+        let ts = TerminalSource::new("abc", None);
         assert!(ts.consume_literal(10, "a").is_none());
     }
 
     #[test]
     fn consume_literal_negative_pos() {
-        let ts = TerminalSource::new("abc");
+        let ts = TerminalSource::new("abc", None);
         // Negative positions always fail (deliberate divergence from Python).
         assert!(ts.consume_literal(-1, "a").is_none());
     }
@@ -294,7 +251,7 @@ mod tests {
     #[test]
     fn consume_literal_multibyte_match() {
         // "café" — 4 codepoints, 5 UTF-8 bytes
-        let ts = TerminalSource::new("café latte");
+        let ts = TerminalSource::new("café latte", None);
         let span = ts.consume_literal(0, "café").unwrap();
         assert_eq!(span.start(), 0);
         assert_eq!(span.end(), 4);
@@ -303,7 +260,7 @@ mod tests {
     #[test]
     fn consume_literal_multibyte_at_offset() {
         // Match starting at a codepoint offset after a multibyte character.
-        let ts = TerminalSource::new("café latte");
+        let ts = TerminalSource::new("café latte", None);
         let span = ts.consume_literal(5, "latte").unwrap();
         assert_eq!(span.start(), 5);
         assert_eq!(span.end(), 10);
@@ -311,7 +268,7 @@ mod tests {
 
     #[test]
     fn consume_literal_multibyte_in_literal() {
-        let ts = TerminalSource::new("naïveté");
+        let ts = TerminalSource::new("naïveté", None);
         let span = ts.consume_literal(2, "ïveté").unwrap();
         assert_eq!(span.start(), 2);
         assert_eq!(span.end(), 7);
@@ -321,7 +278,7 @@ mod tests {
 
     #[test]
     fn consume_regex_simple_match() {
-        let ts = TerminalSource::new("hello world");
+        let ts = TerminalSource::new("hello world", None);
         let re = Regex::new(r"\w+").unwrap();
         let span = ts.consume_regex(0, &re).unwrap();
         assert_eq!(span.start(), 0);
@@ -331,7 +288,7 @@ mod tests {
     #[test]
     fn consume_regex_anchor_rejection() {
         // Pattern matches at pos+2 but not at pos → None.
-        let ts = TerminalSource::new("  hello");
+        let ts = TerminalSource::new("  hello", None);
         let re = Regex::new(r"\w+").unwrap();
         assert!(ts.consume_regex(0, &re).is_none());
     }
@@ -339,7 +296,7 @@ mod tests {
     #[test]
     fn consume_regex_word_boundary_accept() {
         // \b at the start of "hello" should match.
-        let ts = TerminalSource::new("hello world");
+        let ts = TerminalSource::new("hello world", None);
         let re = Regex::new(r"\bhello\b").unwrap();
         let span = ts.consume_regex(0, &re).unwrap();
         assert_eq!(span.start(), 0);
@@ -349,7 +306,7 @@ mod tests {
     #[test]
     fn consume_regex_word_boundary_reject_mid_word() {
         // Anchored to position 3 inside "hello" — \b should not match there.
-        let ts = TerminalSource::new("hello world");
+        let ts = TerminalSource::new("hello world", None);
         let re = Regex::new(r"\bhello\b").unwrap();
         // Position 3 is mid-word ("lo"); \b pattern won't match starting here.
         assert!(ts.consume_regex(3, &re).is_none());
@@ -358,7 +315,7 @@ mod tests {
     #[test]
     fn consume_regex_empty_match_at_end() {
         // `a*` matches empty string at end-of-input.
-        let ts = TerminalSource::new("x");
+        let ts = TerminalSource::new("x", None);
         let re = Regex::new(r"a*").unwrap();
         let span = ts.consume_regex(1, &re).unwrap();
         assert_eq!(span.start(), 1);
@@ -370,7 +327,7 @@ mod tests {
         // \B at position 1 inside "hello" requires seeing the 'h' before pos=1.
         // A slice-the-haystack implementation would lose that context and fail.
         // Input::span with full haystack preserves it.
-        let ts = TerminalSource::new("hello");
+        let ts = TerminalSource::new("hello", None);
         let re = Regex::new(r"\Bello").unwrap();
         let span = ts.consume_regex(1, &re).unwrap();
         assert_eq!(span.start(), 1);
@@ -383,7 +340,7 @@ mod tests {
         // The 'h' at pos=0 is a word char, so \b fails and the match returns None.
         // A sliced-haystack implementation would place \b at start-of-string and
         // incorrectly match "ello" — this test catches that regression.
-        let ts = TerminalSource::new("hello");
+        let ts = TerminalSource::new("hello", None);
         let re = Regex::new(r"\bello").unwrap();
         assert!(ts.consume_regex(1, &re).is_none());
     }
@@ -391,7 +348,7 @@ mod tests {
     #[test]
     fn consume_regex_no_match_at_end() {
         // pos == len with a pattern that requires at least one char → None (not a bounds error).
-        let ts = TerminalSource::new("x");
+        let ts = TerminalSource::new("x", None);
         let re = Regex::new(r"\w+").unwrap();
         // pos=1 is valid (len=1) but \w+ can't match at end-of-input.
         assert!(ts.consume_regex(1, &re).is_none());
@@ -399,14 +356,14 @@ mod tests {
 
     #[test]
     fn consume_regex_out_of_range() {
-        let ts = TerminalSource::new("abc");
+        let ts = TerminalSource::new("abc", None);
         let re = Regex::new(r"a*").unwrap();
         assert!(ts.consume_regex(10, &re).is_none());
     }
 
     #[test]
     fn consume_regex_negative_pos() {
-        let ts = TerminalSource::new("abc");
+        let ts = TerminalSource::new("abc", None);
         let re = Regex::new(r"a").unwrap();
         assert!(ts.consume_regex(-1, &re).is_none());
     }
@@ -414,7 +371,7 @@ mod tests {
     #[test]
     fn consume_regex_multibyte_end_offset() {
         // Match ends after a multibyte sequence; byte→codepoint binary search must be exact.
-        let ts = TerminalSource::new("café");
+        let ts = TerminalSource::new("café", None);
         let re = Regex::new(r"café").unwrap();
         let span = ts.consume_regex(0, &re).unwrap();
         assert_eq!(span.start(), 0);
@@ -425,7 +382,7 @@ mod tests {
 
     #[test]
     fn pos_to_line_col_first_line() {
-        let ts = TerminalSource::new("hello\nworld");
+        let ts = TerminalSource::new("hello\nworld", None);
         let lc = ts.pos_to_line_col(1).unwrap();
         assert_eq!(lc.line, 0);
         assert_eq!(lc.col, 1);
@@ -435,17 +392,18 @@ mod tests {
 
     #[test]
     fn pos_to_line_col_second_line() {
-        let ts = TerminalSource::new("hello\nworld");
+        let ts = TerminalSource::new("hello\nworld", None);
         let lc = ts.pos_to_line_col(6).unwrap();
         assert_eq!(lc.line, 1);
         assert_eq!(lc.col, 0);
         assert_eq!(lc.line_span.start(), 6);
-        assert_eq!(lc.line_span.end(), 10);
+        // sentinel = len = 11; line_span covers the full last line.
+        assert_eq!(lc.line_span.end(), 11);
     }
 
     #[test]
     fn pos_to_line_col_last_line() {
-        let ts = TerminalSource::new("hello\nworld");
+        let ts = TerminalSource::new("hello\nworld", None);
         let lc = ts.pos_to_line_col(10).unwrap();
         assert_eq!(lc.line, 1);
         assert_eq!(lc.col, 4);
@@ -454,7 +412,7 @@ mod tests {
     #[test]
     fn pos_to_line_col_pos_eq_len() {
         // pos == len → decremented to len-1
-        let ts = TerminalSource::new("abc");
+        let ts = TerminalSource::new("abc", None);
         let lc = ts.pos_to_line_col(3).unwrap();
         let lc2 = ts.pos_to_line_col(2).unwrap();
         assert_eq!(lc.line, lc2.line);
@@ -464,7 +422,7 @@ mod tests {
     #[test]
     fn pos_to_line_col_trailing_newline() {
         // "abc\n": len=4, ends_with('\n') so no sentinel added; line_ends = [3].
-        let ts = TerminalSource::new("abc\n");
+        let ts = TerminalSource::new("abc\n", None);
         let lc0 = ts.pos_to_line_col(0).unwrap();
         assert_eq!(lc0.line, 0);
         assert_eq!(lc0.col, 0);
@@ -481,7 +439,7 @@ mod tests {
     #[test]
     fn pos_to_line_col_sentinel_minus_one() {
         // -1 is a valid sentinel (initial ErrorTracker.longest_parse_len).
-        let ts = TerminalSource::new("abc");
+        let ts = TerminalSource::new("abc", None);
         let lc = ts.pos_to_line_col(-1).unwrap();
         // -1 is decremented to -2... wait no: -1 is already accepted as valid sentinel.
         // The decrement is only applied for pos==len; -1 is in domain [-1,len].
@@ -494,7 +452,7 @@ mod tests {
 
     #[test]
     fn pos_to_line_col_empty_input() {
-        let ts = TerminalSource::new("");
+        let ts = TerminalSource::new("", None);
         // pos=-1: sentinel for empty input
         let lc = ts.pos_to_line_col(-1).unwrap();
         assert_eq!(lc.line, 0);
@@ -503,7 +461,7 @@ mod tests {
 
     #[test]
     fn pos_to_line_col_out_of_domain() {
-        let ts = TerminalSource::new("abc");
+        let ts = TerminalSource::new("abc", None);
         assert!(ts.pos_to_line_col(-2).is_none());
         assert!(ts.pos_to_line_col(4).is_none());
     }
@@ -511,7 +469,7 @@ mod tests {
     #[test]
     fn pos_to_line_col_multibyte_col() {
         // "café\nworld": 'é' is one codepoint; col counts codepoints, not bytes.
-        let ts = TerminalSource::new("café\nworld");
+        let ts = TerminalSource::new("café\nworld", None);
         let lc = ts.pos_to_line_col(3).unwrap(); // 'é'
         assert_eq!(lc.line, 0);
         assert_eq!(lc.col, 3);

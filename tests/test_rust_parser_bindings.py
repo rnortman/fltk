@@ -29,7 +29,9 @@ def test_constructor_default_capture_trivia():
 
 
 def test_constructor_capture_trivia_positional():
-    p = fegen_rust_cst_parser.Parser("x := y ;", True)
+    # Since the new signature is Parser(text, filename=None, capture_trivia=False, ...),
+    # capture_trivia is no longer the second positional arg. Use keyword form.
+    p = fegen_rust_cst_parser.Parser("x := y ;", capture_trivia=True)
     assert p.capture_trivia is True
 
 

@@ -8,7 +8,7 @@ import pytest
 
 _native_module = pytest.importorskip("fltk._native", reason="Rust extension not available")
 
-from fltk._native import SourceText, Span, UnknownSpan  # noqa: E402
+from fltk._native import LineColPos, SourceText, Span, UnknownSpan  # noqa: E402
 
 pytest.importorskip("fegen_rust_cst", reason="fegen_rust_cst not built; run 'make build-fegen-rust-cst' first")
 from fegen_rust_cst.cst import Grammar  # noqa: E402
@@ -1087,3 +1087,211 @@ except TypeError as e:
         assert "__basicsize__" in msg or "not a genuine SourceText" in msg, (
             f"check_instance_layout did not fire; got: {msg!r}"
         )
+
+
+class TestLineColPos:
+    """Tests for fltk._native.LineColPos class."""
+
+    def test_line_col_pos_importable(self):
+        """LineColPos is importable from fltk._native."""
+        assert LineColPos is not None
+
+    def test_line_col_pos_fields(self):
+        """LineColPos has line, col, line_span fields."""
+        src = SourceText("hello\nworld")
+        span = Span.with_source(6, 7, src)
+        lc = span.line_col()
+        assert lc is not None
+        assert isinstance(lc.line, int)
+        assert isinstance(lc.col, int)
+        # line_span is a Span
+        assert isinstance(lc.line_span, Span)
+
+    def test_line_col_pos_values(self):
+        """LineColPos has correct line=1, col=0 for start of second line."""
+        src = SourceText("hello\nworld")
+        span = Span.with_source(6, 7, src)
+        lc = span.line_col()
+        assert lc is not None
+        assert lc.line == 1
+        assert lc.col == 0
+
+    def test_line_col_pos_line_span_is_source_bearing(self):
+        """line_col().line_span is source-bearing and covers the full line including last char.
+
+        For "hello\nworld" the last line has no trailing newline so the sentinel is `len` (11),
+        giving line_span = Span(6, 11) and text = "world" (all 5 characters).
+        """
+        src = SourceText("hello\nworld")
+        span = Span.with_source(6, 7, src)
+        lc = span.line_col()
+        assert lc is not None
+        assert lc.line_span.has_source()
+        # Sentinel for "world" (no trailing \n): len = 11; line_span = Span(6, 11)
+        assert lc.line_span.start == 6
+        assert lc.line_span.end == 11
+        assert lc.line_span.text() == "world"
+
+
+class TestLineCol:
+    """Tests for Span.line_col / line_col_or_raise on the Rust backend."""
+
+    def test_sourceless_returns_none(self):
+        """Sourceless Rust span: line_col() returns None."""
+        assert Span(0, 5).line_col() is None
+
+    def test_unknown_span_returns_none(self):
+        """UnknownSpan (start=-1): line_col() returns None."""
+        assert UnknownSpan.line_col() is None
+
+    def test_negative_start_with_source_returns_none(self):
+        """Source-bearing span with start=-1: line_col() returns None (guard fires)."""
+        src = SourceText("hello")
+        span = Span.with_source(-1, 0, src)
+        assert span.line_col() is None
+
+    def test_out_of_domain_returns_none(self):
+        """start > len(source): line_col() returns None."""
+        src = SourceText("hello")
+        span = Span.with_source(100, 101, src)
+        assert span.line_col() is None
+
+    def test_first_line_start(self):
+        """line_col at col 0 of first line."""
+        src = SourceText("hello\nworld")
+        span = Span.with_source(0, 1, src)
+        lc = span.line_col()
+        assert lc is not None
+        assert lc.line == 0
+        assert lc.col == 0
+
+    def test_mid_first_line(self):
+        """line_col mid first line."""
+        src = SourceText("hello\nworld")
+        span = Span.with_source(3, 4, src)
+        lc = span.line_col()
+        assert lc is not None
+        assert lc.line == 0
+        assert lc.col == 3
+
+    def test_second_line_start(self):
+        """line_col at start of second line."""
+        src = SourceText("hello\nworld")
+        span = Span.with_source(6, 7, src)
+        lc = span.line_col()
+        assert lc is not None
+        assert lc.line == 1
+        assert lc.col == 0
+
+    def test_eof_clamp(self):
+        """start == len(source): clamped to last codepoint."""
+        text = "abc"
+        src = SourceText(text)
+        span_eof = Span.with_source(3, 3, src)  # start == len
+        span_last = Span.with_source(2, 3, src)  # last char
+        lc_eof = span_eof.line_col()
+        lc_last = span_last.line_col()
+        assert lc_eof is not None
+        assert lc_last is not None
+        assert lc_eof.line == lc_last.line
+        assert lc_eof.col == lc_last.col
+
+    def test_multibyte_column(self):
+        """Multibyte: column counts codepoints, not bytes."""
+        # "café\nrésumé": é in café is codepoint 3
+        src = SourceText("café\nrésumé")
+        span = Span.with_source(3, 4, src)
+        lc = span.line_col()
+        assert lc is not None
+        assert lc.line == 0
+        assert lc.col == 3
+
+    def test_line_span_text_works(self):
+        """line_col().line_span is source-bearing and covers the full line.
+
+        Sentinel for last line without trailing '\\n' is `len` (exclusive), so
+        line_span = Span(6, 11) covers all 5 characters of 'world'.
+        """
+        src = SourceText("hello\nworld")
+        span = Span.with_source(6, 7, src)
+        lc = span.line_col()
+        assert lc is not None
+        assert lc.line_span.has_source()
+        # Sentinel = len = 11 for "world" (no trailing \n)
+        assert lc.line_span.start == 6
+        assert lc.line_span.end == 11
+        assert lc.line_span.text() == "world"
+
+    def test_line_col_or_raise_sourceless_raises(self):
+        """line_col_or_raise() raises ValueError with 'has no source' message."""
+        with pytest.raises(ValueError, match="has no source"):
+            Span(0, 5).line_col_or_raise()
+
+    def test_line_col_or_raise_negative_raises(self):
+        """line_col_or_raise() raises ValueError with 'negative' message for negative start."""
+        src = SourceText("hello")
+        with pytest.raises(ValueError, match="negative"):
+            Span.with_source(-1, 0, src).line_col_or_raise()
+
+    def test_line_col_or_raise_out_of_bounds_raises(self):
+        """line_col_or_raise() raises ValueError with 'out of bounds' message when start > len."""
+        src = SourceText("hello")
+        with pytest.raises(ValueError, match="out of bounds"):
+            Span.with_source(100, 101, src).line_col_or_raise()
+
+    def test_line_col_or_raise_valid(self):
+        """line_col_or_raise() returns LineColPos for valid span."""
+        src = SourceText("hello\nworld")
+        span = Span.with_source(6, 7, src)
+        lc = span.line_col_or_raise()
+        assert lc.line == 1
+        assert lc.col == 0
+
+    def test_negative_start_diverges_from_pos_to_line_col(self):
+        """Rust Span(-1) returns line_col()=None while pos_to_line_col(-1) returns LineColPos.
+
+        Pins the deliberate divergence: the new span-level guard returns None for negative start,
+        while the unguarded legacy pos_to_line_col accepts -1 as a sentinel.
+        This is a cross-backend regression test for the design-3 resolution.
+        """
+        # Import TerminalSource from Python (it's not a pyo3 class, but test via Python wrapper)
+        from fltk.fegen.pyrt.terminalsrc import TerminalSource as PyTS  # noqa: PLC0415
+
+        ts = PyTS("abc")
+        lc_legacy = ts.pos_to_line_col(-1)
+        assert lc_legacy.line == 0
+        assert lc_legacy.col == -1
+
+        src = SourceText("abc")
+        span = Span.with_source(-1, 0, src)
+        assert span.line_col() is None, "Rust span.line_col() should return None for negative start"
+
+
+class TestFilename:
+    """Tests for Span.filename() on the Rust backend."""
+
+    def test_filename_from_source_text(self):
+        """SourceText with filename → span.filename() returns it."""
+        src = SourceText("hello", filename="test.fltkg")  # type: ignore[call-arg]
+        span = Span.with_source(0, 5, src)
+        assert span.filename() == "test.fltkg"
+
+    def test_filename_none_when_not_provided(self):
+        """SourceText without filename → span.filename() == None."""
+        src = SourceText("hello")
+        span = Span.with_source(0, 5, src)
+        assert span.filename() is None
+
+    def test_filename_sourceless_returns_none(self):
+        """Sourceless Rust span → span.filename() == None."""
+        span = Span(0, 5)
+        assert span.filename() is None
+
+    def test_filename_unknown_span_returns_none(self):
+        """UnknownSpan → span.filename() == None."""
+        assert UnknownSpan.filename() is None
+
+    def test_source_text_accepts_filename_kwarg(self):
+        """SourceText(text, filename=...) constructor works."""
+        src = SourceText("hello", filename="foo.fltkg")  # type: ignore[call-arg]
+        assert isinstance(src, SourceText)

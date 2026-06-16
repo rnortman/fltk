@@ -10,7 +10,7 @@ use pyo3::sync::PyOnceLock;
 use pyo3::types::PyType;
 use std::fmt;
 use std::hash::{Hash, Hasher};
-use std::sync::Arc;
+use std::sync::{Arc, OnceLock};
 
 /// Error type for native Span operations that can fail (e.g., merge/intersect across sources).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -45,6 +45,20 @@ static SPAN_KIND_SPAN_CACHE: PyOnceLock<Py<PyAny>> = PyOnceLock::new();
 /// tables) without changing the `Span` struct layout.
 pub struct SourceInner {
     pub(crate) text: String,
+    /// Optional filename associated with this source (e.g. ``"foo.fltkg"``).
+    /// Stored once at construction; never interpreted by the runtime.
+    pub(crate) filename: Option<String>,
+    /// Lazy codepoint count of `text`.  Populated on first `line_col()` call
+    /// (together with `line_ends`) so that warm-cache domain checks are O(1).
+    pub(crate) char_count: OnceLock<i64>,
+    /// Lazy codepoint indices of `\n` chars plus a final sentinel.
+    /// Built on first `line_col()` call; shared across all spans over this `Arc`.
+    /// TODO(linecol-cache-consolidate): TerminalSource also maintains its own
+    /// `line_ends` over the same immutable text — two independent caches over
+    /// identical data. A future consolidation could have TerminalSource read
+    /// source_inner.line_ends instead of maintaining its own field. Out of scope
+    /// for the span-line-col-api change.
+    pub(crate) line_ends: OnceLock<Vec<i64>>,
 }
 
 /// Opaque handle to a shared source string, exposed to Python as ``fltk._native.SourceText``.
@@ -58,14 +72,17 @@ pub struct SourceText {
 }
 
 impl SourceText {
-    /// Construct a ``SourceText`` from a Rust ``&str``.
+    /// Construct a ``SourceText`` from a Rust ``&str`` with an optional filename.
     ///
     /// The string is copied once at this point (→ UTF-8 heap allocation).
     #[allow(clippy::should_implement_trait)] // Intentional: not `FromStr`; construction from &str is the natural API name.
-    pub fn from_str(text: &str) -> Self {
+    pub fn from_str(text: &str, filename: Option<&str>) -> Self {
         SourceText {
             inner: Arc::new(SourceInner {
                 text: text.to_owned(),
+                filename: filename.map(|s| s.to_owned()),
+                char_count: OnceLock::new(),
+                line_ends: OnceLock::new(),
             }),
         }
     }
@@ -81,12 +98,13 @@ impl SourceText {
 #[cfg(feature = "python")]
 #[pymethods]
 impl SourceText {
-    /// Construct a ``SourceText`` from a Python ``str``.
+    /// Construct a ``SourceText`` from a Python ``str`` with an optional filename.
     ///
     /// The string is copied once at this point (Python str → UTF-8 heap allocation).
     #[new]
-    fn new(text: &str) -> Self {
-        SourceText::from_str(text)
+    #[pyo3(signature = (text, filename = None))]
+    fn new(text: &str, filename: Option<&str>) -> Self {
+        SourceText::from_str(text, filename)
     }
 
     /// ABI marker: ``"fltk-cst-core/<version>"`` baked into the rlib at compile time.
@@ -135,6 +153,123 @@ impl SourceText {
 #[cfg(feature = "python")]
 pub(crate) fn source_text_abi_layout_probe() -> usize {
     std::mem::size_of::<<SourceText as pyo3::impl_::pyclass::PyClassImpl>::Layout>()
+}
+
+/// Line-and-column position within a source text.
+///
+/// Mirrors `LineColPos` in `terminalsrc.py` and the former `LineColPos` in
+/// `fltk-parser-core/src/terminalsrc.rs` (now moved here so both `fltk-cst-core`
+/// and `fltk-parser-core` share a single definition).
+///
+/// `line` and `col` are 0-based codepoint indices.
+/// `line_span` covers the entire line (exclusive of the trailing `\n`).
+/// `line_span` is source-bearing when returned from `Span::line_col_inner`;
+/// equality is source-ignoring (``Span`` equality omits the source reference).
+#[cfg_attr(feature = "python", pyclass(frozen, eq, skip_from_py_object))]
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct LineColPos {
+    pub line: i64,
+    pub col: i64,
+    pub line_span: Span,
+}
+
+#[cfg(feature = "python")]
+#[pymethods]
+impl LineColPos {
+    /// 0-based line index.
+    #[getter]
+    fn line(&self) -> i64 {
+        self.line
+    }
+
+    /// 0-based column index (codepoint offset within the line).
+    #[getter]
+    fn col(&self) -> i64 {
+        self.col
+    }
+
+    /// The span covering the entire offending line (exclusive of the trailing `\n`).
+    ///
+    /// Returns an owned clone — the source `Arc` pointer count is bumped (O(1), no string copy).
+    #[getter]
+    fn line_span(&self) -> Span {
+        self.line_span.clone()
+    }
+
+    fn __repr__(&self) -> String {
+        format!("LineColPos(line={}, col={}, line_span=Span(start={}, end={}))",
+            self.line, self.col, self.line_span.start, self.line_span.end)
+    }
+}
+
+/// Shared bisect function: compute line and column for a codepoint position within `text`.
+///
+/// **Preconditions** (caller is responsible):
+/// - `pos >= -1`: `pos = -1` is accepted and produces `LineColPos(line=0, col=-1)`.
+///   This is the intended path for: (a) empty text after the EOF clamp
+///   (`start == len == 0 → pos = start - 1 = -1`), and (b) the `ErrorTracker.longest_parse_len`
+///   initial sentinel on non-empty text (passed through by `TerminalSource::pos_to_line_col`
+///   because the `pos < -1` guard only rejects values below -1).
+///   Values `pos < -1` are not meaningful and will produce incorrect results.
+/// - `pos < text.chars().count()` after any EOF clamp (i.e., the caller must decrement
+///   `start == len` to `len - 1` before calling; the value `len` itself is not accepted).
+///
+/// The `line_ends` cache is built lazily on first call and reused thereafter.
+/// It stores codepoint indices of `\n` characters plus a final sentinel equal to `len`
+/// (exclusive end of the last line) for non-empty text without a trailing `\n`, or `-1`
+/// for empty input (preserving the `col = -1` corner case documented in §3 of the design).
+///
+/// Returns a `LineColPos` with a **sourceless** `line_span`; callers that need a source-bearing
+/// `line_span` (e.g. `Span::line_col_inner`) must attach the source themselves after calling.
+pub fn resolve_line_col(text: &str, pos: i64, line_ends: &OnceLock<Vec<i64>>) -> Option<LineColPos> {
+    let ends = line_ends.get_or_init(|| {
+        // Compute len only inside get_or_init so warm-cache calls skip this O(N) scan.
+        let len = text.chars().count() as i64;
+        let mut ends: Vec<i64> = text
+            .chars()
+            .enumerate()
+            .filter(|(_, c)| *c == '\n')
+            .map(|(cp_idx, _)| cp_idx as i64)
+            .collect();
+        // Add sentinel for the final line if the text doesn't end with '\n' (or is empty).
+        //
+        // The sentinel is the exclusive end of the last line's span:
+        // - Normal text without trailing '\n': sentinel = `len` so that
+        //   `Span(line_start, len)` covers all characters including the last one.
+        // - Empty text (len=0): sentinel = -1, which makes `pos=-1` (from the EOF clamp)
+        //   land in the sentinel entry and yield `col=-1` — the inherited corner case
+        //   documented in the design (§3 "empty-source note").
+        let ends_with_newline = ends.last() == Some(&(len - 1));
+        if !ends_with_newline {
+            // For non-empty text: push `len` (exclusive end past last char).
+            // For empty text (len=0): push `-1` to preserve the col=-1 corner case.
+            ends.push(if len > 0 { len } else { -1 });
+        }
+        ends
+    });
+
+    // bisect_left equivalent: find leftmost index where ends[idx] >= pos.
+    let idx = ends.partition_point(|&e| e < pos);
+    if idx >= ends.len() {
+        return None;
+    }
+
+    let (col, line_start, line_end) = if idx > 0 {
+        let col = pos - ends[idx - 1] - 1;
+        let line_start = ends[idx - 1] + 1;
+        let line_end = ends[idx];
+        (col, line_start, line_end)
+    } else {
+        let col = pos;
+        let line_end = ends[0];
+        (col, 0i64, line_end)
+    };
+
+    Some(LineColPos {
+        line: idx as i64,
+        col,
+        line_span: Span::new_sourceless(line_start, line_end),
+    })
 }
 
 /// Half-open **Unicode-codepoint** index range ``[start, end)`` into a shared UTF-8 source string.
@@ -377,6 +512,48 @@ impl Span {
             source,
         })
     }
+
+    /// Return the line/column position for the span's start, or ``None`` if the span
+    /// is sourceless, has a negative start, or has a start beyond the source length.
+    ///
+    /// Applies the following guards before delegating to `resolve_line_col`:
+    /// - No source attached → `None`.
+    /// - `start < 0` → `None` (negative-index sentinels).
+    /// - `start > len(source)` → `None` (out of domain).
+    /// - `start == len(source)` → EOF clamp: position decremented to `len - 1`.
+    ///
+    /// The returned `LineColPos.line_span` is **source-bearing** (shares the same `Arc`).
+    pub fn line_col_inner(&self) -> Option<LineColPos> {
+        let source = self.source.as_ref()?;
+        if self.start < 0 {
+            return None;
+        }
+        // Obtain the source codepoint length via the `char_count` OnceLock so that
+        // warm-cache calls (after the first `line_col()`) are O(1) rather than O(N).
+        // `char_count` is populated together with `line_ends` on the first call to
+        // `line_col_inner` or `line_col_or_raise`.
+        let len = *source.char_count.get_or_init(|| source.text.chars().count() as i64);
+        if self.start > len {
+            return None;
+        }
+        // EOF clamp: pos == len is valid; decrement to len-1.
+        let pos = if self.start == len { self.start - 1 } else { self.start };
+        let mut lc = resolve_line_col(&source.text, pos, &source.line_ends)?;
+        // Attach source to the line_span (resolve_line_col returns a sourceless line_span).
+        lc.line_span = Span {
+            start: lc.line_span.start,
+            end: lc.line_span.end,
+            source: Some(source.clone()),
+        };
+        Some(lc)
+    }
+
+    /// Return the optional filename associated with this span's source.
+    ///
+    /// Returns ``None`` when the span is sourceless or the source has no filename.
+    pub fn filename_inner(&self) -> Option<&str> {
+        self.source.as_ref()?.filename.as_deref()
+    }
 }
 
 #[cfg(feature = "python")]
@@ -600,6 +777,59 @@ impl Span {
                     })
             })
             .map(|obj| obj.clone_ref(py))
+    }
+
+    /// Return the line/column position for the span's start, or ``None``.
+    ///
+    /// Returns ``None`` when the span is sourceless, has a negative start, or has a
+    /// start that exceeds the source length. Delegates to `line_col_inner`.
+    #[pyo3(name = "line_col")]
+    fn py_line_col(&self, py: Python<'_>) -> PyResult<Option<Py<LineColPos>>> {
+        match self.line_col_inner() {
+            Some(lc) => Ok(Some(Py::new(py, lc)?)),
+            None => Ok(None),
+        }
+    }
+
+    /// Return the line/column position for the span's start, raising ``ValueError`` if
+    /// it cannot be resolved (same conditions as ``line_col()``).
+    fn line_col_or_raise(&self, py: Python<'_>) -> PyResult<Py<LineColPos>> {
+        if self.source.is_none() {
+            return Err(PyValueError::new_err(format!(
+                "Span({}, {}) has no source",
+                self.start, self.end
+            )));
+        }
+        if self.start < 0 {
+            return Err(PyValueError::new_err(format!(
+                "Span({}, {}) has negative indices",
+                self.start, self.end
+            )));
+        }
+        let source = self.source.as_ref()
+            .expect("invariant: source is Some — is_none() guard above returned Err already");
+        // Use the char_count cache for O(1) warm-call domain checks.
+        let len = *source.char_count.get_or_init(|| source.text.chars().count() as i64);
+        if self.start > len {
+            return Err(PyValueError::new_err(format!(
+                "Span({}, {}) is out of bounds for source of length {}",
+                self.start, self.end, len
+            )));
+        }
+        match self.line_col_inner() {
+            Some(lc) => Py::new(py, lc),
+            None => Err(PyValueError::new_err(format!(
+                "Span({}, {}) line_col_inner returned None despite passing all guards — \
+                internal invariant violation; start={}, source_len={}",
+                self.start, self.end, self.start, len
+            ))),
+        }
+    }
+
+    /// Return the optional filename associated with this span's source, or ``None``.
+    #[pyo3(name = "filename")]
+    fn py_filename(&self) -> Option<String> {
+        self.source.as_ref()?.filename.clone()
     }
 }
 

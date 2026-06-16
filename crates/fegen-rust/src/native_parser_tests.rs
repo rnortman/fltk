@@ -5,7 +5,7 @@ mod tests {
     #[test]
     fn test_parse_simple_grammar() {
         let src = "grammar := rule+ ;";
-        let mut parser = Parser::new(src, false);
+        let mut parser = Parser::new(src, None, false);
         let result = parser.apply__parse_grammar(0);
         assert!(result.is_some(), "Failed to parse: {}", parser.error_message());
         let r = result.unwrap();
@@ -15,7 +15,7 @@ mod tests {
     #[test]
     fn test_parse_fegen_fltkg() {
         let src = include_str!(concat!(env!("CARGO_MANIFEST_DIR"), "/../../fltk/fegen/fegen.fltkg"));
-        let mut parser = Parser::new(src, false);
+        let mut parser = Parser::new(src, None, false);
         let result = parser.apply__parse_grammar(0);
         assert!(
             result.is_some(),
@@ -34,7 +34,7 @@ mod tests {
     #[test]
     fn test_error_position_on_failure() {
         let src = "grammar := !!!invalid;";
-        let mut parser = Parser::new(src, false);
+        let mut parser = Parser::new(src, None, false);
         let result = parser.apply__parse_grammar(0);
         assert!(result.is_none(), "Expected parse failure for invalid input");
         assert!(
@@ -46,7 +46,7 @@ mod tests {
     #[test]
     fn test_rule_names_not_empty() {
         let src = "";
-        let parser = Parser::new(src, false);
+        let parser = Parser::new(src, None, false);
         assert!(!parser.rule_names().is_empty());
         assert_eq!(parser.rule_names()[0], "grammar");
     }
@@ -55,7 +55,7 @@ mod tests {
     #[test]
     fn test_parse_fegen_fltkg_with_capture_trivia() {
         let src = include_str!(concat!(env!("CARGO_MANIFEST_DIR"), "/../../fltk/fegen/fegen.fltkg"));
-        let mut parser = Parser::new(src, true);
+        let mut parser = Parser::new(src, None, true);
         let result = parser.apply__parse_grammar(0);
         assert!(
             result.is_some(),
@@ -71,7 +71,7 @@ mod tests {
         );
         // With capture_trivia=true the grammar node must have more children than without,
         // because trivia/whitespace children are included.
-        let mut parser_false = Parser::new(src, false);
+        let mut parser_false = Parser::new(src, None, false);
         let r_false = parser_false.apply__parse_grammar(0).expect("should also parse capture_trivia=false");
         let children_true = r.result.read().children().len();
         let children_false = r_false.result.read().children().len();
@@ -87,7 +87,7 @@ mod tests {
         // A minimal fegen snippet containing a line comment.
         // With capture_trivia=true, the trivia rule captures the comment.
         let src = "// a comment\nrule := /x/ ;";
-        let mut parser = Parser::new(src, true);
+        let mut parser = Parser::new(src, None, true);
         let result = parser.apply__parse_grammar(0);
         assert!(
             result.is_some(),

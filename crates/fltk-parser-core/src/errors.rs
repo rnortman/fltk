@@ -316,7 +316,7 @@ mod tests {
     fn format_error_message_with_controls_in_line() {
         // Failing line contains \x1b[31m and \r; error at col 0.
         use crate::terminalsrc::TerminalSource;
-        let ts = TerminalSource::new("\x1b[31mabc");
+        let ts = TerminalSource::new("\x1b[31mabc", None);
         let mut t = ErrorTracker::default();
         t.fail_literal(0, 0, "x");
         let msg = format_error_message(&t, &ts, &["rule"]);
@@ -333,7 +333,7 @@ mod tests {
         use crate::terminalsrc::TerminalSource;
         // Need a newline so the sentinel quirk doesn't cut the 'c' and 'd'.
         // Use "ab\x1bcd\n" — line_ends=[5], line_span=[0,5)="ab\x1bcd".
-        let ts = TerminalSource::new("ab\x1bcd\n");
+        let ts = TerminalSource::new("ab\x1bcd\n", None);
         let mut t = ErrorTracker::default();
         t.fail_literal(3, 0, "x"); // col=3
         let msg = format_error_message(&t, &ts, &["rule"]);
@@ -352,7 +352,7 @@ mod tests {
         // Prefix = "ab" (2 chars, no controls) → escaped_prefix = "ab" → pad = 2.
         // Escaped line = "ab\\x1bcd"; caret line = "  ^".
         use crate::terminalsrc::TerminalSource;
-        let ts = TerminalSource::new("ab\x1bcd\n");
+        let ts = TerminalSource::new("ab\x1bcd\n", None);
         let mut t = ErrorTracker::default();
         t.fail_literal(2, 0, "x"); // col=2, the ESC
         let msg = format_error_message(&t, &ts, &["rule"]);
@@ -366,7 +366,7 @@ mod tests {
         // Assert no raw codepoint < U+0020 (other than \t, stripped by lines()) and no
         // U+007F, U+0080–U+009F appear in the formatted message when the input has controls.
         use crate::terminalsrc::TerminalSource;
-        let ts = TerminalSource::new("\x00\x01\x1b\r\x7f\u{009b}abc\n");
+        let ts = TerminalSource::new("\x00\x01\x1b\r\x7f\u{009b}abc\n", None);
         let mut t = ErrorTracker::default();
         t.fail_literal(0, 0, "x");
         let msg = format_error_message(&t, &ts, &["rule"]);
@@ -387,7 +387,7 @@ mod tests {
         // formatted message when the input contains one char from every class.
         use crate::terminalsrc::TerminalSource;
         let input = "\x00\x1b\r\x7f\u{009b}\u{061c}\u{200b}\u{200e}\u{2028}\u{202e}\u{2060}\u{2066}\u{feff}abc\n";
-        let ts = TerminalSource::new(input);
+        let ts = TerminalSource::new(input, None);
         let mut t = ErrorTracker::default();
         t.fail_literal(0, 0, "x");
         let msg = format_error_message(&t, &ts, &["rule"]);
@@ -412,7 +412,7 @@ mod tests {
         // Failing line contains U+202E (RLO bidi override); error at col 0.
         // Escaped line = "\\u202e123"; caret at col 0 → no pad.
         use crate::terminalsrc::TerminalSource;
-        let ts = TerminalSource::new("\u{202e}123");
+        let ts = TerminalSource::new("\u{202e}123", None);
         let mut t = ErrorTracker::default();
         t.fail_literal(0, 0, "x");
         let msg = format_error_message(&t, &ts, &["rule"]);
@@ -427,7 +427,7 @@ mod tests {
         // Line: U+202E (RLO) + "abc\n"; error at col 1 (the 'a').
         // Prefix = "\u{202e}" (1 codepoint) → escaped "\\u202e" (6 chars) → pad = 6.
         use crate::terminalsrc::TerminalSource;
-        let ts = TerminalSource::new("\u{202e}abc\n");
+        let ts = TerminalSource::new("\u{202e}abc\n", None);
         let mut t = ErrorTracker::default();
         t.fail_literal(1, 0, "x"); // col=1, the 'a'
         let msg = format_error_message(&t, &ts, &["rule"]);
@@ -442,14 +442,14 @@ mod tests {
     #[test]
     fn format_error_message_basic() {
         use crate::terminalsrc::TerminalSource;
-        // "hello world" (11 chars, no newline): line_ends sentinel = [10], line_span = [0,10] = "hello worl"
-        let ts = TerminalSource::new("hello world");
+        // "hello world" (11 chars, no newline): sentinel = len = 11, line_span = [0,11) = "hello world"
+        let ts = TerminalSource::new("hello world", None);
         let mut t = ErrorTracker::default();
         t.fail_literal(5, 0, "!");
         let msg = format_error_message(&t, &ts, &["expr"]);
         // Golden: Python produces exactly this format.
-        // Line 1, col 6 (pos 5, col+1 = 6). Line text = text[0..10] = "hello worl".
-        let expected = "Syntax error at line 1 col 6:\nhello worl\n     ^\nExpected:\n  From rule \"expr\":\n    LITERAL: '!'\n";
+        // Line 1, col 6 (pos 5, col+1 = 6). Line text = text[0..11] = "hello world".
+        let expected = "Syntax error at line 1 col 6:\nhello world\n     ^\nExpected:\n  From rule \"expr\":\n    LITERAL: '!'\n";
         assert_eq!(msg, expected, "got: {msg:?}");
     }
 
@@ -459,7 +459,7 @@ mod tests {
         // pos_to_line_col(-1) on "abc" → line=0, col=-1.
         // col+1 = 0. spaces = "".repeat(0) = "".
         use crate::terminalsrc::TerminalSource;
-        let ts = TerminalSource::new("abc");
+        let ts = TerminalSource::new("abc", None);
         let t = ErrorTracker::default(); // longest_parse_len = -1
         let msg = format_error_message(&t, &ts, &[]);
         assert!(msg.starts_with("Syntax error at line 1 col 0:\n"), "got: {msg:?}");
@@ -471,7 +471,7 @@ mod tests {
         // Empty input + pos=-1: line 1, col 0, empty line.
         // pos_to_line_col(-1) on "" → line=0, col=-1. line_span = Span(0, -1). text = None → "".
         use crate::terminalsrc::TerminalSource;
-        let ts = TerminalSource::new("");
+        let ts = TerminalSource::new("", None);
         let t = ErrorTracker::default();
         let msg = format_error_message(&t, &ts, &[]);
         assert!(msg.starts_with("Syntax error at line 1 col 0:\n"), "got: {msg:?}");
@@ -482,7 +482,7 @@ mod tests {
     #[test]
     fn format_error_message_regex_token_backslash() {
         use crate::terminalsrc::TerminalSource;
-        let ts = TerminalSource::new("   ");
+        let ts = TerminalSource::new("   ", None);
         let mut t = ErrorTracker::default();
         t.fail_regex(0, 0, r"\s+");
         let msg = format_error_message(&t, &ts, &["ws_rule"]);
@@ -493,7 +493,7 @@ mod tests {
     #[test]
     fn format_error_message_multi_rule() {
         use crate::terminalsrc::TerminalSource;
-        let ts = TerminalSource::new("x");
+        let ts = TerminalSource::new("x", None);
         let mut t = ErrorTracker::default();
         t.fail_literal(0, 0, "a");
         t.fail_literal(0, 1, "b");
@@ -505,7 +505,7 @@ mod tests {
     #[test]
     fn format_error_message_dedup_within_rule() {
         use crate::terminalsrc::TerminalSource;
-        let ts = TerminalSource::new("x");
+        let ts = TerminalSource::new("x", None);
         let mut t = ErrorTracker::default();
         // Same token twice for same rule should appear once.
         t.fail_literal(0, 0, "a");
@@ -518,7 +518,7 @@ mod tests {
     #[test]
     fn format_error_message_unknown_rule_id() {
         use crate::terminalsrc::TerminalSource;
-        let ts = TerminalSource::new("x");
+        let ts = TerminalSource::new("x", None);
         let mut t = ErrorTracker::default();
         t.fail_literal(0, 99, "z"); // rule_id 99 is out of range
         let msg = format_error_message(&t, &ts, &["only_rule"]);
@@ -529,15 +529,15 @@ mod tests {
     fn format_error_message_multiline() {
         use crate::terminalsrc::TerminalSource;
         // "abc\nxyz": pos 4 = 'x', line 1, col 0.
-        let ts = TerminalSource::new("abc\nxyz");
+        let ts = TerminalSource::new("abc\nxyz", None);
         let mut t = ErrorTracker::default();
         t.fail_literal(4, 0, "Q");
         let msg = format_error_message(&t, &ts, &["rule_a"]);
         // line 2 (1-based), col 1 (1-based).
-        // "abc\nxyz": len=7, line_ends=[3, 6] (3=newline, 6=sentinel=len-1).
-        // line_span=[4,6)="xy" (sentinel pos 6='z' is the line_ends entry, not included).
+        // "abc\nxyz": len=7, line_ends=[3, 7] (3=newline, 7=sentinel=len).
+        // line_span=[4,7)="xyz" (full last line).
         let expected =
-            "Syntax error at line 2 col 1:\nxy\n^\nExpected:\n  From rule \"rule_a\":\n    LITERAL: 'Q'\n";
+            "Syntax error at line 2 col 1:\nxyz\n^\nExpected:\n  From rule \"rule_a\":\n    LITERAL: 'Q'\n";
         assert_eq!(msg, expected, "got: {msg:?}");
     }
 }

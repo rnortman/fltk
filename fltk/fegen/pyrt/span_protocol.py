@@ -3,6 +3,7 @@
 from typing import Protocol, runtime_checkable
 
 import fltk.fegen.pyrt.terminalsrc as _pymod
+from fltk.fegen.pyrt.terminalsrc import LineColPos
 
 
 @runtime_checkable
@@ -52,6 +53,27 @@ class SpanProtocol(Protocol):
         (``Span(-1, -1)``) if they are disjoint.
 
         Raises ``ValueError`` if both spans carry different source references.
+        """
+        ...
+
+    def line_col(self) -> "LineColPos | None":
+        """Return the line/column position for the span's start, or ``None``.
+
+        Returns ``None`` when the span is sourceless, has a negative start, or has a
+        start that exceeds the source length. Line and column are 0-based codepoint indices.
+        """
+        ...
+
+    def line_col_or_raise(self) -> "LineColPos":
+        """Return the line/column position for the span's start, raising ``ValueError`` if it
+        cannot be resolved (same conditions as ``line_col()``).
+        """
+        ...
+
+    def filename(self) -> "str | None":
+        """Return the optional filename associated with this span's source, or ``None``.
+
+        Returns ``None`` when the span is sourceless or the source has no filename.
         """
         ...
 

@@ -10,15 +10,18 @@ class SourceText:
     """Immutable wrapper over a source string.
 
     Mirrors the Python-visible surface of the Rust ``SourceText`` class needed
-    for portable span construction.  The only contractually portable operation
-    is construction: ``SourceText(text)``.  The ``_text`` field is intentionally
-    private; cross-backend code must not rely on reading it back.
+    for portable span construction.  The only contractually portable operations
+    are construction: ``SourceText(text)`` or ``SourceText(text, filename=...)``.
+    The ``_text`` and ``_filename`` fields are intentionally private; cross-backend
+    code must not rely on reading them back.
     """
 
     _text: str
+    _filename: str | None
 
-    def __init__(self, text: str) -> None:
+    def __init__(self, text: str, filename: str | None = None) -> None:
         object.__setattr__(self, "_text", text)
+        object.__setattr__(self, "_filename", filename)
 
 
 class SpanKind(enum.Enum):
@@ -53,6 +56,7 @@ class Span:
     end: int
     _source: str | None = field(default=None, repr=False, compare=False, hash=False)
     kind: Literal[SpanKind.SPAN] = field(default=SpanKind.SPAN, repr=False, compare=False, hash=False)
+    _source_filename: str | None = field(default=None, compare=False, hash=False, repr=False)
 
     def text(self) -> str | None:
         """Return the source text slice ``[start, end)``, or ``None`` if no source is attached or indices are
@@ -99,6 +103,80 @@ class Span:
         """Return ``True`` if the span covers no elements (``start >= end``), including sentinel spans."""
         return self.start >= self.end
 
+    def filename(self) -> str | None:
+        """Return the optional filename associated with this span's source, or ``None``.
+
+        Returns ``None`` when the span is sourceless or the source has no filename.
+        """
+        return self._source_filename
+
+    def line_col(self) -> "LineColPos | None":
+        """Return the line/column position for the span's start, or ``None``.
+
+        Returns ``None`` when the span is sourceless, has a negative start, or has a
+        start that exceeds the source length.
+
+        Line and column are 0-based codepoint indices. Tabs count as one codepoint.
+        End-of-input (``start == len(source)``) is clamped to the last codepoint.
+        """
+        if self._source is None:
+            return None
+        if self.start < 0:
+            return None
+        src = self._source
+        src_len = len(src)
+        if self.start > src_len:
+            return None
+        # EOF clamp: pos == len → decrement to len-1
+        pos = self.start - 1 if self.start == src_len else self.start
+        # Build line_ends: codepoint indices of '\n', plus sentinel.
+        # TODO(py-span-linecol-cache): recomputed on every call (O(N) scan). A future
+        # optimization would cache line_ends on SourceText and thread it through
+        # with_source. Out of scope for the span-line-col-api change; error paths
+        # are cold. See docs/adr/2026/06/15-span-line-col-api/design.md §7.
+        line_ends = [idx for idx, c in enumerate(src) if c == "\n"]
+        # Add sentinel for the final line if the text doesn't end with '\n' (or is empty).
+        # The sentinel is the exclusive end of the last line's span:
+        # - Normal text without trailing '\n': sentinel = src_len so that
+        #   Span(line_start, src_len) covers all characters including the last one.
+        # - Empty text (src_len=0): sentinel = -1, which makes pos=-1 (from the EOF clamp)
+        #   yield col=-1 — the inherited corner case documented in the design (§3).
+        ends_with_newline = bool(line_ends) and line_ends[-1] == src_len - 1
+        if not ends_with_newline:
+            line_ends.append(src_len if src_len > 0 else -1)
+        idx = bisect.bisect_left(line_ends, pos)
+        assert idx < len(line_ends), "bisect invariant: idx must be in range"
+        if idx > 0:
+            col = pos - line_ends[idx - 1] - 1
+            line_start = line_ends[idx - 1] + 1
+            line_end = line_ends[idx]
+        else:
+            col = pos
+            line_start = 0
+            line_end = line_ends[0]
+        line_span = Span(line_start, line_end, _source=self._source, _source_filename=self._source_filename)
+        return LineColPos(line=idx, col=col, line_span=line_span)
+
+    def line_col_or_raise(self) -> "LineColPos":
+        """Return the line/column position for the span's start, raising ``ValueError`` if it
+        cannot be resolved (same conditions as ``line_col()``).
+        """
+        if self._source is None:
+            msg = f"Span({self.start}, {self.end}) has no source"
+            raise ValueError(msg)
+        if self.start < 0:
+            msg = f"Span({self.start}, {self.end}) has negative indices"
+            raise ValueError(msg)
+        src_len = len(self._source)
+        if self.start > src_len:
+            msg = f"Span({self.start}, {self.end}) is out of bounds for source of length {src_len}"
+            raise ValueError(msg)
+        result = self.line_col()
+        if result is None:
+            msg = f"Span({self.start}, {self.end}) could not resolve line/col"
+            raise ValueError(msg)
+        return result
+
     def _coerce_source(self, other: "Span") -> "str | None":
         """Return the shared source, or raise if both spans have different sources."""
         if self._source is not None and other._source is not None and self._source != other._source:
@@ -112,7 +190,9 @@ class Span:
         Raises ``ValueError`` if both spans carry different source strings.
         """
         source = self._coerce_source(other)
-        return Span(min(self.start, other.start), max(self.end, other.end), source)
+        # Carry filename from whichever span has one (prefer self).
+        fn = self._source_filename if self._source_filename is not None else other._source_filename
+        return Span(min(self.start, other.start), max(self.end, other.end), source, _source_filename=fn)
 
     def intersect(self, other: "Span") -> "Span":
         """Return the overlapping region of ``self`` and ``other``, or the ``UnknownSpan`` sentinel
@@ -125,7 +205,8 @@ class Span:
         e = min(self.end, other.end)
         if s >= e:
             return UnknownSpan
-        return Span(s, e, source)
+        fn = self._source_filename if self._source_filename is not None else other._source_filename
+        return Span(s, e, source, _source_filename=fn)
 
     @classmethod
     def with_source(cls, start: int, end: int, source: "str | SourceText") -> "Span":
@@ -141,12 +222,14 @@ class Span:
         """
         if isinstance(source, SourceText):
             raw: str = source._text
+            fn: str | None = source._filename
         elif isinstance(source, str):
             raw = source
+            fn = None
         else:
             msg = f"with_source: source must be str or SourceText, got {type(source)!r}"
             raise TypeError(msg)
-        return cls(start=start, end=end, _source=raw)
+        return cls(start=start, end=end, _source=raw, _source_filename=fn)
 
 
 UnknownSpan: Final = Span(-1, -1)
@@ -160,9 +243,10 @@ class LineColPos:
 
 
 class TerminalSource:
-    def __init__(self, terminals: str):
+    def __init__(self, terminals: str, filename: str | None = None):
         self.terminals: Final = terminals
         self.terminals_len: Final = len(terminals)
+        self.filename: Final = filename
         self.line_ends: list[int] = []
 
     def consume_literal(self, pos: int, literal: str) -> Span | None:
@@ -187,9 +271,16 @@ class TerminalSource:
         if pos == len(self.terminals):
             pos -= 1
         if not self.line_ends:
+            terminals_len = len(self.terminals)
             self.line_ends = [idx for idx, c in enumerate(self.terminals) if c == "\n"]
-            if not self.line_ends or self.line_ends[-1] != len(self.terminals) - 1:
-                self.line_ends.append(len(self.terminals) - 1)
+            # Add sentinel for the final line if the text doesn't end with '\n' (or is empty).
+            # The sentinel is the exclusive end of the last line's span:
+            # - Normal text without trailing '\n': sentinel = terminals_len so that
+            #   Span(line_start, terminals_len) covers all characters including the last one.
+            # - Empty text (terminals_len=0): sentinel = -1, preserving col=-1 corner case.
+            ends_with_newline = bool(self.line_ends) and self.line_ends[-1] == terminals_len - 1
+            if not ends_with_newline:
+                self.line_ends.append(terminals_len if terminals_len > 0 else -1)
         idx = bisect.bisect_left(self.line_ends, pos)
         assert idx < len(self.line_ends)
         if idx > 0:

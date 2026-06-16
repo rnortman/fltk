@@ -20,7 +20,7 @@ use crate::cst::{
 // ── helpers ──────────────────────────────────────────────────────────────────
 
 fn make_source() -> SourceText {
-    SourceText::from_str("hello world foo")
+    SourceText::from_str("hello world foo", None)
 }
 
 fn span(start: i64, end: i64, src: &SourceText) -> Span {
@@ -174,8 +174,8 @@ fn merge_same_source_ok() {
 
 #[test]
 fn merge_different_sources_err() {
-    let src1 = SourceText::from_str("hello");
-    let src2 = SourceText::from_str("world");
+    let src1 = SourceText::from_str("hello", None);
+    let src2 = SourceText::from_str("world", None);
     let a = Span::new_with_source(0, 5, &src1);
     let b = Span::new_with_source(0, 5, &src2);
     assert!(matches!(a.merge(&b), Err(SpanError::SourceMismatch)));
@@ -217,8 +217,8 @@ fn intersect_disjoint_returns_unknown_sentinel() {
 
 #[test]
 fn intersect_different_sources_err() {
-    let src1 = SourceText::from_str("hello");
-    let src2 = SourceText::from_str("world");
+    let src1 = SourceText::from_str("hello", None);
+    let src2 = SourceText::from_str("world", None);
     let a = Span::new_with_source(0, 3, &src1);
     let b = Span::new_with_source(1, 4, &src2);
     assert!(matches!(a.intersect(&b), Err(SpanError::SourceMismatch)));

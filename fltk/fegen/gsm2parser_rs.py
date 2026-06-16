@@ -377,8 +377,8 @@ class RustParserGenerator:
 
         # impl Parser constructors and helpers
         lines.append("impl Parser {")
-        lines.append("    pub fn new(text: &str, capture_trivia: bool) -> Self {")
-        lines.append("        Self::from_source_text(SourceText::from_str(text), capture_trivia)")
+        lines.append("    pub fn new(text: &str, filename: Option<&str>, capture_trivia: bool) -> Self {")
+        lines.append("        Self::from_source_text(SourceText::from_str(text, filename), capture_trivia)")
         lines.append("    }")
         lines.append("")
         lines.append("    pub fn from_source_text(source: SourceText, capture_trivia: bool) -> Self {")
@@ -942,9 +942,9 @@ mod python_bindings {
     #[pymethods]
     impl PyParser {
         #[new]
-        #[pyo3(signature = (text, capture_trivia = false, max_depth = None))]
-        fn new(text: &str, capture_trivia: bool, max_depth: Option<u32>) -> Self {
-            let mut inner = Parser::new(text, capture_trivia);
+        #[pyo3(signature = (text, filename = None, capture_trivia = false, max_depth = None))]
+        fn new(text: &str, filename: Option<&str>, capture_trivia: bool, max_depth: Option<u32>) -> Self {
+            let mut inner = Parser::new(text, filename, capture_trivia);
             if let Some(d) = max_depth {
                 inner.set_max_depth(d);
             }

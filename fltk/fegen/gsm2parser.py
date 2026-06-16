@@ -102,18 +102,23 @@ class ParserGenerator:
             init=iir.LiteralSequence([iir.LiteralString(rule.name) for rule in self.grammar.rules]),
         )
 
-        # _source_text init expression: SourceText(text=terminalsrc.terminals)
+        # _source_text init expression: SourceText(text=terminalsrc.terminals, filename=terminalsrc.filename)
         # References the constructor `terminalsrc` param via VarByName.
+        _terminalsrc_var = iir.VarByName(
+            name="terminalsrc",
+            typ=terminalsrc_type,
+            ref_type=iir.RefType.VALUE,
+            mutable=False,
+        )
         _source_text_init = iir.Construct.make(
             self.SourceTextType,
             text=iir.FieldAccess(
                 member_name="terminals",
-                bound_to=iir.VarByName(
-                    name="terminalsrc",
-                    typ=terminalsrc_type,
-                    ref_type=iir.RefType.VALUE,
-                    mutable=False,
-                ),
+                bound_to=_terminalsrc_var,
+            ),
+            filename=iir.FieldAccess(
+                member_name="filename",
+                bound_to=_terminalsrc_var,
             ),
         )
         self.parser_class.def_constructor(

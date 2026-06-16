@@ -548,7 +548,7 @@ mod tests {
     #[test]
     fn span_debug_with_source_has_source_true() {
         use fltk_cst_core::SourceText;
-        let src = SourceText::from_str("hello");
+        let src = SourceText::from_str("hello", None);
         let s = Span::new_with_source(0, 5, &src);
         let dbg = format!("{s:?}");
         assert!(dbg.contains("true"), "source-bearing span → has_source: true");

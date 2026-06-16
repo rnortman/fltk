@@ -268,7 +268,7 @@ _RUST_MAIN_RS = textwrap.dedent("""\
     fn main() {
         // Test 1: "aab" — should return Some(pos=2) after guard fires on empty iteration.
         let src = "aab";
-        let mut p = Parser::new(src, false);
+        let mut p = Parser::new(src, None, false);
         let result = p.apply__parse_rule(0);
         match &result {
             Some(r) => {
@@ -285,7 +285,7 @@ _RUST_MAIN_RS = textwrap.dedent("""\
 
         // Test 2: "b" — first iteration matches empty, guard fires, + check → None.
         let src2 = "b";
-        let mut p2 = Parser::new(src2, false);
+        let mut p2 = Parser::new(src2, None, false);
         let result2 = p2.apply__parse_rule(0);
         match result2 {
             Some(r) => {

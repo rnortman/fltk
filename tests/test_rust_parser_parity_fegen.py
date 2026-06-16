@@ -39,7 +39,7 @@ def _py_parser(text: str, capture_trivia: bool):  # noqa: FBT001
 
 
 def _rust_parser(text: str, capture_trivia: bool):  # noqa: FBT001
-    return fegen_rust_cst.parser.Parser(text, capture_trivia)
+    return fegen_rust_cst.parser.Parser(text, capture_trivia=capture_trivia)
 
 
 # Corpus: (rule_name, input_text, expected_outcome)

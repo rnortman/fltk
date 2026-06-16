@@ -59,3 +59,11 @@ Design §7 specifies a "positive-control round-trip" test that pins the committe
 
 `extend_children(&Self)` clones every child Arc even though the donor node is immediately dropped after the call (inline-to-parent sub-expression and `+`/`*` loop paths). A consuming variant `extend_children_owned(other: Self)` using `Vec::append` would avoid the atomic inc+dec pairs per child on the parse hot path. Blocked on `gsm2tree_rs.py` adding the method to the generated CST node API. Location: `fltk/fegen/gsm2parser_rs.py` (`_gen_item_multiple`, `_gen_append_code`), `fltk/fegen/gsm2tree_rs.py` (generated `impl <Node>` blocks). Re-open only with profiling evidence.
 
+## `linecol-cache-consolidate`
+
+`TerminalSource` carries its own `line_ends: OnceLock<Vec<i64>>` (`crates/fltk-parser-core/src/terminalsrc.rs:46`) while `SourceInner` (the allocation `TerminalSource` is built over) also carries `line_ends: OnceLock<Vec<i64>>` (`crates/fltk-cst-core/src/span.rs`). Both derive deterministically from the same immutable `text`, so they cannot disagree, but they duplicate state. A follow-up could point `TerminalSource::pos_to_line_col` at `&self.source.inner.line_ends` (the shared `resolve_line_col` function already accepts a caller-supplied `OnceLock`) and drop `TerminalSource`'s own field. Location: `crates/fltk-parser-core/src/terminalsrc.rs:46` (`line_ends` field) and the `pos_to_line_col` wrapper (~line 167,178).
+
+## `py-span-linecol-cache`
+
+Python `Span.line_col()` recomputes the O(N) line-ends scan on every call because the frozen-slots Python `Span` carries only a raw `str` and cannot reach a mutable cache. The `SourceText` dataclass already gains a `_filename` field in the span-line-col-api change; a parallel `_line_ends` list on `SourceText` threaded through `with_source` would let the Python span amortize the scan the same way the Rust backend does via `SourceInner.line_ends`. Deferred because error reporting is a cold path and the added `with_source` plumbing is non-trivial. Location: `fltk/fegen/pyrt/terminalsrc.py:133` (`Span.line_col` implementation).
+

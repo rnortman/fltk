@@ -229,11 +229,11 @@ def test_format_error_message_bidi_caret_alignment():
 
 def test_format_error_message_col_minus_one():
     # col == -1: max(col, 0) = 0, empty prefix, pad = 0.
-    # "abc" (3 chars, no newline): sentinel quirk → line_span=[0,2), line_text="ab".
+    # "abc" (3 chars, no newline): sentinel = len = 3, line_span=[0,3), line_text="abc".
     ts = _ts("abc")
     t = ErrorTracker()  # longest_parse_len = -1
     msg = format_error_message(t, ts, _rule_name)
-    expected = "Syntax error at line 1 col 0:\nab\n^\nExpected:\n"
+    expected = "Syntax error at line 1 col 0:\nabc\n^\nExpected:\n"
     assert msg == expected, f"got: {msg!r}"
 
 
@@ -252,6 +252,8 @@ def test_format_error_message_ascii_clean_unchanged():
     t = ErrorTracker()
     t.fail_literal(5, 0, "!")
     msg = format_error_message(t, ts, lambda _rid: "expr")
-    # sentinel quirk: "hello world" (11 chars, no newline) → line_span excludes last char
-    expected = "Syntax error at line 1 col 6:\nhello worl\n     ^\nExpected:\n  From rule \"expr\":\n    LITERAL: '!'\n"
+    # sentinel = len = 11, line_span=[0,11), line_text="hello world" (full line)
+    expected = (
+        "Syntax error at line 1 col 6:\nhello world\n     ^\nExpected:\n  From rule \"expr\":\n    LITERAL: '!'\n"
+    )
     assert msg == expected, f"got: {msg!r}"

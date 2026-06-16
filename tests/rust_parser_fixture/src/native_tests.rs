@@ -158,7 +158,7 @@ mod tests {
             src.push_str("+1");
         }
 
-        let mut parser = Parser::new(&src, false);
+        let mut parser = Parser::new(&src, None, false);
         let result = parser.apply__parse_expr(0);
         assert!(
             result.is_some(),
@@ -280,10 +280,10 @@ mod tests {
             src.push_str("+1");
         }
 
-        let mut p1 = Parser::new(&src, false);
+        let mut p1 = Parser::new(&src, None, false);
         let r1 = p1.apply__parse_expr(0).expect("first parse must succeed");
 
-        let mut p2 = Parser::new(&src, false);
+        let mut p2 = Parser::new(&src, None, false);
         let r2 = p2.apply__parse_expr(0).expect("second parse must succeed");
 
         assert!(
@@ -345,7 +345,7 @@ mod tests {
     #[test]
     fn test_parse_num() {
         let src = "123";
-        let mut parser = Parser::new(src, false);
+        let mut parser = Parser::new(src, None, false);
         let result = parser.apply__parse_num(0);
         assert!(result.is_some(), "Failed to parse num: {}", parser.error_message());
         let r = result.unwrap();
@@ -355,7 +355,7 @@ mod tests {
     #[test]
     fn test_parse_num_fail() {
         let src = "abc";
-        let mut parser = Parser::new(src, false);
+        let mut parser = Parser::new(src, None, false);
         let result = parser.apply__parse_num(0);
         assert!(result.is_none());
     }
@@ -365,7 +365,7 @@ mod tests {
     #[test]
     fn test_parse_name() {
         let src = "hello";
-        let mut parser = Parser::new(src, false);
+        let mut parser = Parser::new(src, None, false);
         let result = parser.apply__parse_name(0);
         assert!(result.is_some(), "Failed to parse name: {}", parser.error_message());
         let r = result.unwrap();
@@ -377,7 +377,7 @@ mod tests {
     #[test]
     fn test_parse_atom_num() {
         let src = "42";
-        let mut parser = Parser::new(src, false);
+        let mut parser = Parser::new(src, None, false);
         let result = parser.apply__parse_atom(0);
         assert!(result.is_some(), "Failed to parse atom as num: {}", parser.error_message());
         let r = result.unwrap();
@@ -387,7 +387,7 @@ mod tests {
     #[test]
     fn test_parse_atom_name() {
         let src = "foo";
-        let mut parser = Parser::new(src, false);
+        let mut parser = Parser::new(src, None, false);
         let result = parser.apply__parse_atom(0);
         assert!(result.is_some(), "Failed to parse atom as name: {}", parser.error_message());
         let r = result.unwrap();
@@ -399,7 +399,7 @@ mod tests {
     #[test]
     fn test_parse_paren_expr() {
         let src = "(42)";
-        let mut parser = Parser::new(src, false);
+        let mut parser = Parser::new(src, None, false);
         let result = parser.apply__parse_paren_expr(0);
         assert!(result.is_some(), "Failed to parse paren_expr: {}", parser.error_message());
         let r = result.unwrap();
@@ -410,7 +410,7 @@ mod tests {
     fn test_parse_paren_expr_with_ws() {
         // WS_ALLOWED separator inside paren_expr
         let src = "( 42 )";
-        let mut parser = Parser::new(src, false);
+        let mut parser = Parser::new(src, None, false);
         let result = parser.apply__parse_paren_expr(0);
         assert!(result.is_some(), "Failed to parse paren_expr with spaces: {}", parser.error_message());
         let r = result.unwrap();
@@ -422,7 +422,7 @@ mod tests {
     #[test]
     fn test_parse_stmt_with_required_ws() {
         let src = "foo = bar";
-        let mut parser = Parser::new(src, false);
+        let mut parser = Parser::new(src, None, false);
         let result = parser.apply__parse_stmt(0);
         assert!(result.is_some(), "Failed to parse stmt: {}", parser.error_message());
         let r = result.unwrap();
@@ -433,7 +433,7 @@ mod tests {
     fn test_parse_stmt_no_ws_fails() {
         // WS_REQUIRED: stmt fails without whitespace around "="
         let src = "foo=bar";
-        let mut parser = Parser::new(src, false);
+        let mut parser = Parser::new(src, None, false);
         let result = parser.apply__parse_stmt(0);
         assert!(result.is_none(), "stmt should fail without whitespace");
         // The error tracker must have recorded a position (test-9: WS_REQUIRED updates tracker).
@@ -448,7 +448,7 @@ mod tests {
     #[test]
     fn test_parse_items_one() {
         let src = "42";
-        let mut parser = Parser::new(src, false);
+        let mut parser = Parser::new(src, None, false);
         let result = parser.apply__parse_items(0);
         assert!(result.is_some(), "Failed to parse items with one atom: {}", parser.error_message());
         let r = result.unwrap();
@@ -460,7 +460,7 @@ mod tests {
         // items := item:atom+ with NO_WS separator: atoms must be adjacent (no whitespace)
         // "42foo7" - three adjacent atoms
         let src = "42foo7";
-        let mut parser = Parser::new(src, false);
+        let mut parser = Parser::new(src, None, false);
         let result = parser.apply__parse_items(0);
         assert!(result.is_some(), "Failed to parse items: {}", parser.error_message());
         let r = result.unwrap();
@@ -470,7 +470,7 @@ mod tests {
     #[test]
     fn test_parse_items_empty_fails() {
         let src = "";
-        let mut parser = Parser::new(src, false);
+        let mut parser = Parser::new(src, None, false);
         let result = parser.apply__parse_items(0);
         assert!(result.is_none(), "items should fail on empty input");
     }
@@ -480,7 +480,7 @@ mod tests {
     #[test]
     fn test_parse_opt_item_present() {
         let src = "42";
-        let mut parser = Parser::new(src, false);
+        let mut parser = Parser::new(src, None, false);
         let result = parser.apply__parse_opt_item(0);
         assert!(result.is_some(), "Failed to parse opt_item: {}", parser.error_message());
         let r = result.unwrap();
@@ -491,7 +491,7 @@ mod tests {
     fn test_parse_opt_item_absent() {
         // opt_item succeeds on empty input (? quantifier = optional)
         let src = "";
-        let mut parser = Parser::new(src, false);
+        let mut parser = Parser::new(src, None, false);
         let result = parser.apply__parse_opt_item(0);
         assert!(result.is_some(), "opt_item should succeed on empty input (? is optional)");
         let r = result.unwrap();
@@ -503,7 +503,7 @@ mod tests {
     #[test]
     fn test_parse_zero_items_empty() {
         let src = "";
-        let mut parser = Parser::new(src, false);
+        let mut parser = Parser::new(src, None, false);
         let result = parser.apply__parse_zero_items(0);
         assert!(result.is_some(), "zero_items should succeed on empty input (* quantifier)");
         let r = result.unwrap();
@@ -514,7 +514,7 @@ mod tests {
     fn test_parse_zero_items_some() {
         // zero_items := item:atom* with NO_WS separator: adjacent atoms
         let src = "123foo";
-        let mut parser = Parser::new(src, false);
+        let mut parser = Parser::new(src, None, false);
         let result = parser.apply__parse_zero_items(0);
         assert!(result.is_some(), "Failed to parse zero_items: {}", parser.error_message());
         let r = result.unwrap();
@@ -526,7 +526,7 @@ mod tests {
     #[test]
     fn test_capture_trivia_false() {
         let src = "foo = bar";
-        let mut parser = Parser::new(src, false);
+        let mut parser = Parser::new(src, None, false);
         assert!(!parser.capture_trivia());
         let result = parser.apply__parse_stmt(0);
         assert!(result.is_some());
@@ -535,7 +535,7 @@ mod tests {
     #[test]
     fn test_capture_trivia_true() {
         let src = "foo = bar";
-        let mut parser = Parser::new(src, true);
+        let mut parser = Parser::new(src, None, true);
         assert!(parser.capture_trivia());
         let result = parser.apply__parse_stmt(0);
         assert!(result.is_some());
@@ -546,7 +546,7 @@ mod tests {
     #[test]
     fn test_error_message_on_failure() {
         let src = "!!!";
-        let mut parser = Parser::new(src, false);
+        let mut parser = Parser::new(src, None, false);
         let result = parser.apply__parse_num(0);
         assert!(result.is_none());
         let msg = parser.error_message();
@@ -556,7 +556,7 @@ mod tests {
     #[test]
     fn test_error_position_on_failure() {
         let src = "!!!";
-        let mut parser = Parser::new(src, false);
+        let mut parser = Parser::new(src, None, false);
         let result = parser.apply__parse_num(0);
         assert!(result.is_none());
         assert!(
@@ -567,7 +567,7 @@ mod tests {
 
     #[test]
     fn test_rule_names() {
-        let parser = Parser::new("", false);
+        let parser = Parser::new("", None, false);
         let names = parser.rule_names();
         assert!(names.contains(&"num"));
         assert!(names.contains(&"name"));
@@ -584,7 +584,7 @@ mod tests {
     fn test_negative_pos_non_nullable_rule_returns_none() {
         // Non-nullable rule at negative pos: should return None (not panic).
         let src = "42";
-        let mut parser = Parser::new(src, false);
+        let mut parser = Parser::new(src, None, false);
         let result = parser.apply__parse_num(-1);
         assert!(result.is_none(), "non-nullable rule at pos -1 should return None");
     }
@@ -593,8 +593,8 @@ mod tests {
     fn test_beyond_end_pos_non_nullable_rule_returns_none() {
         // Non-nullable rule past end: should return None.
         let src = "42";
-        let len = Parser::new(src, false).terminals().len();
-        let mut parser = Parser::new(src, false);
+        let len = Parser::new(src, None, false).terminals().len();
+        let mut parser = Parser::new(src, None, false);
         let result = parser.apply__parse_num(len + 1);
         assert!(result.is_none(), "non-nullable rule at pos > len should return None");
     }
@@ -603,7 +603,7 @@ mod tests {
     fn test_negative_pos_nullable_rule_returns_empty_match() {
         // zero_items (* quantifier) is nullable: at any pos it succeeds with an empty match.
         let src = "42";
-        let mut parser = Parser::new(src, false);
+        let mut parser = Parser::new(src, None, false);
         let result = parser.apply__parse_zero_items(-1);
         assert!(result.is_some(), "nullable rule at pos -1 should return Some (empty match)");
         let r = result.unwrap();
@@ -616,7 +616,7 @@ mod tests {
     fn test_memo_sharing_ptr_eq() {
         // Two apply__ calls at the same (rule, pos) must return the same Arc (ptr_eq).
         let src = "42";
-        let mut parser = Parser::new(src, false);
+        let mut parser = Parser::new(src, None, false);
         let r1 = parser.apply__parse_num(0).expect("should parse");
         let r2 = parser.apply__parse_num(0).expect("should parse from cache");
         assert!(
@@ -632,7 +632,7 @@ mod tests {
         // expr := lhs:expr "+" rhs:atom | atom:atom
         // "42" should parse as atom:42
         let src = "42";
-        let mut parser = Parser::new(src, false);
+        let mut parser = Parser::new(src, None, false);
         let result = parser.apply__parse_expr(0);
         assert!(result.is_some(), "Failed to parse expr: {}", parser.error_message());
         let r = result.unwrap();
@@ -648,7 +648,7 @@ mod tests {
         // "1+2+3" should parse left-recursively: ((1+2)+3)
         // pos 5 = end of "1+2+3" (each char is 1 codepoint)
         let src = "1+2+3";
-        let mut parser = Parser::new(src, false);
+        let mut parser = Parser::new(src, None, false);
         let result = parser.apply__parse_expr(0);
         assert!(result.is_some(), "Failed to parse expr: {}", parser.error_message());
         let r = result.unwrap();
@@ -682,7 +682,7 @@ mod tests {
     fn test_expr_terminates_on_non_recursive_input() {
         // Verify left recursion doesn't loop: parse stops when no progress.
         let src = "foo";
-        let mut parser = Parser::new(src, false);
+        let mut parser = Parser::new(src, None, false);
         let result = parser.apply__parse_expr(0);
         assert!(result.is_some(), "expr should parse a plain name atom");
         let r = result.unwrap();
@@ -696,7 +696,7 @@ mod tests {
         // lval := inner:rval "!" | base:name
         // "foo" should parse as base:name
         let src = "foo";
-        let mut parser = Parser::new(src, false);
+        let mut parser = Parser::new(src, None, false);
         let result = parser.apply__parse_lval(0);
         assert!(result.is_some(), "Failed to parse lval: {}", parser.error_message());
         let r = result.unwrap();
@@ -709,7 +709,7 @@ mod tests {
         // rval := inner:lval "?" | base:num
         // "42" should parse as base:num
         let src = "42";
-        let mut parser = Parser::new(src, false);
+        let mut parser = Parser::new(src, None, false);
         let result = parser.apply__parse_rval(0);
         assert!(result.is_some(), "Failed to parse rval: {}", parser.error_message());
         let r = result.unwrap();
@@ -726,7 +726,7 @@ mod tests {
         // base:num "42" = pos 2.  The "?" is not consumed; that would require lval to match
         // "42" first, which it cannot.  So rval("42?") = base:num at pos 2.
         let src = "42?";
-        let mut parser = Parser::new(src, false);
+        let mut parser = Parser::new(src, None, false);
         let result = parser.apply__parse_rval(0);
         assert!(result.is_some(), "rval '42?' should parse via base:num: {}", parser.error_message());
         let r = result.unwrap();
@@ -748,7 +748,7 @@ mod tests {
         // Next grow: lval tries inner:rval "!" — rval = None → fall to base:name = 3.  No progress.
         // Result: lval("foo!") = base:name at pos 3 (not consuming "!").
         let src = "foo!";
-        let mut parser = Parser::new(src, false);
+        let mut parser = Parser::new(src, None, false);
         let result = parser.apply__parse_lval(0);
         assert!(result.is_some(), "lval 'foo!' should parse via base:name: {}", parser.error_message());
         let r = result.unwrap();
@@ -765,7 +765,7 @@ mod tests {
         //         rval tries inner:lval "?": lval("foo") = 3, "?" at pos 3 = pos 4.
         //         So rval("foo?") = Some(pos=4), inner label set.
         let src = "foo?";
-        let mut parser = Parser::new(src, false);
+        let mut parser = Parser::new(src, None, false);
         let result = parser.apply__parse_rval(0);
         assert!(result.is_some(), "rval 'foo?' should parse: {}", parser.error_message());
         let r = result.unwrap();
@@ -784,7 +784,7 @@ mod tests {
         //        lval tries inner:rval "!": rval("42") = 2, "!" at pos 2 = pos 3.
         //        So lval("42!") = Some(pos=3), inner label set.
         let src = "42!";
-        let mut parser = Parser::new(src, false);
+        let mut parser = Parser::new(src, None, false);
         let result = parser.apply__parse_lval(0);
         assert!(result.is_some(), "lval '42!' should parse: {}", parser.error_message());
         let r = result.unwrap();
@@ -803,7 +803,7 @@ mod tests {
         // Codepoint layout: pos 0 = →, pos 1 = f, pos 2 = o, pos 3 = o
         // NO_WS separator: arrow.target starts immediately after →
         let src = "→foo";
-        let mut parser = Parser::new(src, false);
+        let mut parser = Parser::new(src, None, false);
         let result = parser.apply__parse_arrow(0);
         assert!(result.is_some(), "Failed to parse arrow: {}", parser.error_message());
         let r = result.unwrap();
@@ -818,7 +818,7 @@ mod tests {
         // 'é' (U+00E9) is in À-ÿ range; 'c', 'l', etc. are ASCII and not.
         // "éclair": matches only 'é' (1 codepoint) at pos 0, stops at 'c'.
         let src = "éclair";
-        let mut parser = Parser::new(src, false);
+        let mut parser = Parser::new(src, None, false);
         let result = parser.apply__parse_latin_word(0);
         assert!(result.is_some(), "Failed to parse latin_word: {}", parser.error_message());
         let r = result.unwrap();
@@ -835,7 +835,7 @@ mod tests {
         // "ÀÁÂ" (U+00C0, U+00C1, U+00C2) — all in À-ÿ range, each 2 UTF-8 bytes.
         // Span offsets must be codepoint-based (3), not byte-based (6).
         let src = "ÀÁÂ";
-        let mut parser = Parser::new(src, false);
+        let mut parser = Parser::new(src, None, false);
         let result = parser.apply__parse_latin_word(0);
         assert!(result.is_some(), "Failed to parse latin_word: {}", parser.error_message());
         let r = result.unwrap();
@@ -856,11 +856,11 @@ mod tests {
         // With capture_trivia=true: lhs, trivia, rhs, trivia children (2 labeled + 2 unlabeled).
         let src = "foo = bar";
 
-        let mut p_false = Parser::new(src, false);
+        let mut p_false = Parser::new(src, None, false);
         let r_false = p_false.apply__parse_stmt(0).expect("parse failed (capture_trivia=false)");
         let node_false = r_false.result.read();
 
-        let mut p_true = Parser::new(src, true);
+        let mut p_true = Parser::new(src, None, true);
         let r_true = p_true.apply__parse_stmt(0).expect("parse failed (capture_trivia=true)");
         let node_true = r_true.result.read();
 
@@ -892,7 +892,7 @@ mod tests {
         // Suppressed "(" and ")" must not appear in children.
         // With capture_trivia=false: only inner (1 child).
         let src = "(42)";
-        let mut parser = Parser::new(src, false);
+        let mut parser = Parser::new(src, None, false);
         let result = parser.apply__parse_paren_expr(0).expect("parse failed");
         let node = result.result.read();
 
@@ -915,7 +915,7 @@ mod tests {
         // The same label "item" covers a num node, a name node, and a bare span → union label.
         // "42" parses as item:num (ValChild::Num arm).
         let src = "42";
-        let mut parser = Parser::new(src, false);
+        let mut parser = Parser::new(src, None, false);
         let result = parser.apply__parse_val(0);
         assert!(result.is_some(), "Failed to parse val '42': {}", parser.error_message());
         let r = result.unwrap();
@@ -932,7 +932,7 @@ mod tests {
         // val := item:num | item:name | item:/[!@#$]+/
         // "foo" parses as item:name (ValChild::Name arm).
         let src = "foo";
-        let mut parser = Parser::new(src, false);
+        let mut parser = Parser::new(src, None, false);
         let result = parser.apply__parse_val(0);
         assert!(result.is_some(), "Failed to parse val 'foo': {}", parser.error_message());
         let r = result.unwrap();
@@ -948,7 +948,7 @@ mod tests {
         // "!@#" parses as item:/[!@#$]+/ (ValChild::Span arm — the union-span case).
         // This exercises cst::ValChild::Span, the third append variant in the decision table.
         let src = "!@#";
-        let mut parser = Parser::new(src, false);
+        let mut parser = Parser::new(src, None, false);
         let result = parser.apply__parse_val(0);
         assert!(result.is_some(), "Failed to parse val '!@#': {}", parser.error_message());
         let r = result.unwrap();
@@ -966,7 +966,7 @@ mod tests {
         // The $-included "tag" literal must appear as an unlabeled child (label == None).
         // With capture_trivia=false: 2 children — unlabeled Span("tag") + labeled value.
         let src = "tagfoo";
-        let mut parser = Parser::new(src, false);
+        let mut parser = Parser::new(src, None, false);
         let result = parser.apply__parse_tagged(0).expect("parse failed");
         let node = result.result.read();
 

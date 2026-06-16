@@ -13,7 +13,7 @@ class Parser:
 
     def __init__(self, terminalsrc: fltk.fegen.pyrt.terminalsrc.TerminalSource) -> None:
         self.terminalsrc = terminalsrc
-        self._source_text = fltk.fegen.pyrt.span.SourceText(text=terminalsrc.terminals)
+        self._source_text = fltk.fegen.pyrt.span.SourceText(text=terminalsrc.terminals, filename=terminalsrc.filename)
         self.packrat: fltk.fegen.pyrt.memo.Packrat[int, int] = fltk.fegen.pyrt.memo.Packrat()
         self.error_tracker: fltk.fegen.pyrt.errors.ErrorTracker[int] = fltk.fegen.pyrt.errors.ErrorTracker()
         self.rule_names: typing.Sequence[str] = ["expr", "term", "factor", "number", "_trivia"]
