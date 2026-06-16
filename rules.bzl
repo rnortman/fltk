@@ -1,5 +1,6 @@
 def _genparser_impl(ctx):
     args = ctx.actions.args()
+    args.add("generate")
     args.add_all([ctx.file.src, ctx.attr.base_name, ctx.attr.cst_mod_path])
 
     # Auto-compute output file names based on base_name
