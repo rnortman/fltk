@@ -1,0 +1,21 @@
+Commit reviewed: 1144c7f615093b087550946f4dbe79653821b852
+
+**test-1**
+File: tests/test_span_protocol.py:105–118 (`test_span_protocol_includes_start_end`)
+What's wrong: `hasattr(SpanProtocol, "start")` tests that the attribute name is present on the Protocol class object — it does not verify that `SpanProtocol` functions as a structural type gate for `start`/`end`. A Protocol with `@property def start` always carries that name as a class attribute even before any runtime-checkable isinstance check. The test doesn't verify that a concrete object lacking `start`/`end` is rejected by `isinstance(..., SpanProtocol)`. The existing test in the same class (`test_py_span_exposes_start_end_via_protocol`) does verify that a conforming object passes, but the inverse (a non-conforming object fails) is not tested.
+Consequence: If `SpanProtocol` is accidentally redefined to drop `start`/`end` as structural requirements but keep them as class attributes in some other way, the hasattr check passes while `isinstance` enforcement silently breaks. No regression would be caught.
+Fix: Add a test that constructs a minimal object missing `start` (or `end`) and asserts `not isinstance(obj, SpanProtocol)`. This is the standard pattern for verifying runtime-checkable protocol structural exclusion.
+
+**test-2**
+File: tests/test_span_protocol.py:133–141 (`test_start_end_are_codepoint_indices_cross_backend`)
+What's wrong: The test only verifies that `start == 0` and `end == 4` on both backends for text `"café"` (4 codepoints, 5 bytes). It confirms agreement on the boundary values but does not assert that a span starting inside a multibyte character — e.g. starting at the `é` (codepoint 3, byte 4) — returns the correct codepoint index and not the byte index. A backend returning byte indices would produce `start==3` for codepoint index 3 (same value, no divergence detectable from this test alone), but `start==4` for a span started at `é` would correctly distinguish byte vs codepoint. The test passes trivially for byte-index backends when the span starts at codepoint 0.
+Consequence: The critical invariant — that `start`/`end` are definitely codepoint indices and not byte indices — is not actually exercised for an interior multibyte position. A byte-indexed Rust backend regression would not be caught by this test.
+Fix: Change the span to start at `é`, e.g. `PySpan.with_source(3, 4, ...)` and `_fltk_native.Span.with_source(3, 4, ...)`, and assert `py.start == rs.start == 3`. Since `é` is at byte offset 4 in UTF-8 but codepoint index 3, a byte-indexed backend would return 4 while a codepoint-indexed backend returns 3 — making the cross-backend assertion a real discriminator.
+
+**test-3**
+File: tests/test_span_protocol.py:120–124 (`test_py_span_exposes_start_end_via_protocol`)
+What's wrong: The test is Python-only and does not have a parallel test exercising the selector-module span (`_span_selector.Span`) with `start`/`end`. The Rust-gated `test_rust_span_exposes_start_end_via_protocol` covers `_fltk_native.Span` directly, but `_span_selector.Span` (which may resolve to either backend) is never tested for `start`/`end` presence via the protocol. The `TestBackendSelector` class tests that `_span_selector.Span.satisfies_protocol` via `isinstance`, but does not assert `s.start` and `s.end` values.
+Consequence: If the selector module's Span re-export were broken in a way that stripped `start`/`end` (unlikely but possible through a proxy object or wrapper), it would not be caught. The downstream usage pattern — annotating with `SpanProtocol` and accessing `.start` on a selector-produced span — is the actual downstream consumer pattern, and it is not directly tested.
+Fix: Add a test in `TestBackendSelector` that calls `_span_selector.Span(1, 5)`, confirms `isinstance(s, SpanProtocol)`, and asserts `s.start == 1` and `s.end == 5`. This directly tests the code path real downstream consumers use.
+
+No findings for: the `len()` docstring update (purely documentary), the removal of the stale class docstring rationale, the cross-backend `test_start_end_are_codepoint_indices_cross_backend` agreement check on `text()`, or the existing extensive `TestLineColCrossBackend` suite (those tests are solid and unmodified by this diff).

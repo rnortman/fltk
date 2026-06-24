@@ -11,11 +11,19 @@ class SpanProtocol(Protocol):
     """Structural protocol satisfied by both the pure-Python and Rust Span backends.
 
     Backend-agnostic code should annotate with ``SpanProtocol`` rather than a
-    concrete ``Span`` type.  The protocol intentionally omits ``start``/``end``
-    attributes because their semantics differ between backends (codepoint indices
-    in Python; byte indices in Rust).  All text access must go through the
-    methods below.
+    concrete ``Span`` type.  ``start`` and ``end`` are codepoint indices on both
+    backends.
     """
+
+    @property
+    def start(self) -> int:
+        """Start codepoint index of the half-open range ``[start, end)``."""
+        ...
+
+    @property
+    def end(self) -> int:
+        """End codepoint index (exclusive) of the half-open range ``[start, end)``."""
+        ...
 
     def text(self) -> str | None:
         """Return the source text slice ``[start, end)``, or ``None`` if no source is attached or indices are
@@ -31,7 +39,7 @@ class SpanProtocol(Protocol):
         ...
 
     def len(self) -> int:
-        """Return the span length in backend-specific index units (codepoints for Python, bytes for Rust).
+        """Return the span length in codepoints (``end - start``).
 
         Returns 0 for sentinel/unknown spans with negative indices.
         """

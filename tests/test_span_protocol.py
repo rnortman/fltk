@@ -57,6 +57,15 @@ class TestBackendSelector:
         s = _span_selector.Span(1, 5)
         assert isinstance(s, SpanProtocol)
 
+    def test_selector_span_exposes_start_end(self):
+        # Downstream consumers access .start/.end on selector-produced spans (the backend
+        # resolved at import time). Exercise that path directly rather than only the
+        # backend-specific classes.
+        s = _span_selector.Span(1, 5)
+        assert isinstance(s, SpanProtocol)
+        assert s.start == 1
+        assert s.end == 5
+
     def test_unknown_span_equals_neg1_neg1(self):
         assert _span_selector.UnknownSpan == _span_selector.Span(-1, -1)
 
@@ -101,13 +110,12 @@ class TestSourceTextAndPortableWithSource:
             PySpan.with_source(0, 5, 42)  # type: ignore[arg-type]
 
 
-class TestProtocolHasNoStartEnd:
-    def test_span_protocol_methods_do_not_include_start_end(self):
-        # SpanProtocol must not require start/end. Verify by inspecting protocol members.
-        # Protocol methods are accessible as class attributes but start/end should not be.
-        assert not hasattr(SpanProtocol, "start")
-        assert not hasattr(SpanProtocol, "end")
-        # Expected protocol methods exist on the class.
+class TestProtocolHasStartEnd:
+    def test_span_protocol_includes_start_end(self):
+        # SpanProtocol now exposes start/end as codepoint-index attributes on both backends.
+        assert hasattr(SpanProtocol, "start")
+        assert hasattr(SpanProtocol, "end")
+        # Expected protocol methods still exist on the class.
         assert callable(SpanProtocol.text)
         assert callable(SpanProtocol.len)
         assert callable(SpanProtocol.is_empty)
@@ -117,6 +125,53 @@ class TestProtocolHasNoStartEnd:
         assert callable(SpanProtocol.line_col)
         assert callable(SpanProtocol.line_col_or_raise)
         assert callable(SpanProtocol.filename)
+
+    def test_object_missing_start_end_is_not_protocol(self):
+        # Structural-exclusion guard: a runtime_checkable Protocol that declares start/end
+        # must reject an object that lacks them. This pins start/end as real structural
+        # requirements, not just class attributes that hasattr happens to find.
+        class _NoStartEnd:
+            def text(self) -> str | None:
+                return None
+
+        assert not isinstance(_NoStartEnd(), SpanProtocol)
+
+    def test_py_span_exposes_start_end_via_protocol(self):
+        s = PySpan(1, 5)
+        assert isinstance(s, SpanProtocol)
+        assert s.start == 1
+        assert s.end == 5
+
+    @pytest.mark.skipif(not _rust_available, reason="Rust extension not available")
+    def test_rust_span_exposes_start_end_via_protocol(self):
+        s = _fltk_native.Span(1, 5)
+        assert isinstance(s, SpanProtocol)
+        assert s.start == 1
+        assert s.end == 5
+
+    @pytest.mark.skipif(not _rust_available, reason="Rust extension not available")
+    def test_start_end_are_codepoint_indices_cross_backend(self):
+        # Multibyte source: start/end are codepoint indices on both backends, matching.
+        text = "café"
+        py = PySpan.with_source(0, 4, PySourceText(text))
+        rs = _fltk_native.Span.with_source(0, 4, _fltk_native.SourceText(text))
+        assert py.start == rs.start == 0
+        assert py.end == rs.end == 4
+        assert py.text() == rs.text() == "café"
+
+    @pytest.mark.skipif(not _rust_available, reason="Rust extension not available")
+    def test_start_end_codepoint_indices_interior_multibyte(self):
+        # Discriminator for codepoint- vs byte-indexing: slice the single trailing 'é'.
+        # In "café", 'é' is codepoint index 3 but byte offset 4. A codepoint-indexed
+        # backend resolves Span(3, 4).text() == "é"; a byte-indexed backend would slice
+        # the wrong region. start/end echo the constructor args verbatim, so the real
+        # codepoint-vs-byte discriminator here is text(), which must agree across backends.
+        text = "café"
+        py = PySpan.with_source(3, 4, PySourceText(text))
+        rs = _fltk_native.Span.with_source(3, 4, _fltk_native.SourceText(text))
+        assert py.start == rs.start == 3
+        assert py.end == rs.end == 4
+        assert py.text() == rs.text() == "é"
 
 
 class TestLineColProtocolConformance:
