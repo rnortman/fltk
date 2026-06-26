@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import sys
 from dataclasses import dataclass
 from typing import TYPE_CHECKING
 
@@ -55,3 +56,25 @@ def count_span_newlines(span: Span, terminals: str) -> int:
     Uses extract_span_text to handle both Python and Rust backends.
     """
     return extract_span_text(span, terminals).count("\n")
+
+
+def is_span(obj: object) -> bool:
+    """Return True if obj is a span object from either backend.
+
+    Recognizes the Python-backend ``terminalsrc.Span`` directly and the
+    Rust-backend ``fltk._native.Span`` lazily — only when that module has
+    already been imported (``sys.modules.get``). This keeps ``pyrt`` purely
+    Python-importable (no top-level ``fltk._native`` import) and never fires
+    the ``span.py`` process-wide backend probe, while letting a generated
+    unparser accept whichever span backend the CST it consumes actually
+    carries.
+
+    ``fltk._native`` can be present in ``sys.modules`` as a namespace package
+    without a ``Span`` attribute in a pure-Python build (the package directory
+    ships only a ``.pyi`` stub, no compiled module), so resolve ``Span``
+    defensively with ``getattr`` rather than assuming it exists.
+    """
+    if isinstance(obj, Span):
+        return True
+    native_span = getattr(sys.modules.get("fltk._native"), "Span", None)
+    return native_span is not None and isinstance(obj, native_span)

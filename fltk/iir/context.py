@@ -114,11 +114,14 @@ def _register_builtin_types(registry: TypeRegistry) -> None:
     builtin_types.append(
         pyreg.TypeInfo(
             typ=terminal_span_type,
-            # Use the backend selector so generated code imports the active Span type.
-            # When fltk._native is available, fltk.fegen.pyrt.span.Span is fltk._native.Span;
-            # otherwise it falls back to fltk.fegen.pyrt.terminalsrc.Span.
-            module=pyreg.Module(("fltk", "fegen", "pyrt", "span")),
-            name="Span",
+            # The shared `Span` registry type drives the cross-backend agnostic span surface
+            # (concrete CST span-typed children, protocol span-typed children, and the unparser's
+            # `_count_newlines` span param).  It points at the backend-neutral `SpanProtocol`, which
+            # names neither `fltk._native` nor the `span` selector and resolves identically with or
+            # without the native stub.  Both backends' concrete spans satisfy it (terminalsrc
+            # statically; native by runtime isinstance + `.pyi`).
+            module=pyreg.Module(("fltk", "fegen", "pyrt", "span_protocol")),
+            name="SpanProtocol",
         )
     )
 
@@ -126,7 +129,10 @@ def _register_builtin_types(registry: TypeRegistry) -> None:
     builtin_types.append(
         pyreg.TypeInfo(
             typ=source_text_type,
-            module=pyreg.Module(("fltk", "fegen", "pyrt", "span")),
+            # SourceText is used only by the parser's `_source_text` field, which the generated
+            # parser constructs as a pure-Python `terminalsrc.SourceText`.  Point the registry
+            # entry at the honest concrete type — no selector, no native.
+            module=pyreg.Module(("fltk", "fegen", "pyrt", "terminalsrc")),
             name="SourceText",
         )
     )

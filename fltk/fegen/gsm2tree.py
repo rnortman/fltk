@@ -179,23 +179,22 @@ class CstGenerator:
         ]
         module = pygen.module(module.import_path for module in imports)
         # from __future__ import annotations makes all annotations lazy strings so that
-        # fltk._native (guarded under TYPE_CHECKING below) is NOT needed at runtime.
-        # Without this, 'span: terminalsrc.Span | fltk._native.Span' would evaluate
-        # eagerly and fail with ImportError on any pure-Python install.
+        # span_protocol (guarded under TYPE_CHECKING below) is NOT needed at runtime.
+        # Without this, 'span: fltk.fegen.pyrt.span_protocol.SpanProtocol' would evaluate
+        # eagerly and require the import on any pure-Python install.
         module.body.insert(0, pygen.stmt("from __future__ import annotations"))
-        # Both imports under TYPE_CHECKING: annotations are lazy (from __future__ above),
-        # so these are only needed by pyright for type resolution, not at runtime.
+        # span_protocol under TYPE_CHECKING: annotations are lazy (from __future__ above),
+        # so it is only needed by pyright for type resolution, not at runtime.
         # This mirrors the protocol generator (gen_protocol_module) exactly, keeping
         # concrete CST modules importable in pure-Python environments.
         module.body.append(
             pygen.if_(
                 pygen.expr("typing.TYPE_CHECKING"),
                 [
-                    # Backend-selector span module: pyright resolves fltk.fegen.pyrt.span.Span
-                    # in child/terminal span type annotations.
-                    pygen.stmt("import fltk.fegen.pyrt.span"),
-                    # Rust extension: resolves fltk._native.Span in the span annotation union.
-                    pygen.stmt("import fltk._native"),
+                    # Backend-agnostic span protocol: pyright resolves
+                    # fltk.fegen.pyrt.span_protocol.SpanProtocol in the span field and span-typed
+                    # child annotations. Names neither the span selector nor fltk._native.
+                    pygen.stmt("import fltk.fegen.pyrt.span_protocol"),
                 ],
                 [],
             )
@@ -266,8 +265,7 @@ def _get_native_span_type():
             [
                 pygen.stmt(f"kind: typing.Literal[NodeKind.{kind_member}] = NodeKind.{kind_member}"),
                 pygen.stmt(
-                    "span: fltk.fegen.pyrt.terminalsrc.Span | fltk._native.Span"
-                    " = fltk.fegen.pyrt.terminalsrc.UnknownSpan"
+                    "span: fltk.fegen.pyrt.span_protocol.SpanProtocol = fltk.fegen.pyrt.terminalsrc.UnknownSpan"
                 ),
                 pygen.stmt(
                     f"children: list[tuple[{label_annotation}, {child_annotation}]]"
@@ -726,18 +724,17 @@ class _ProtocolLabelMember:
         module.body.append(pygen.import_(("enum",)))
         module.body.append(pygen.import_(("typing",)))
         module.body.append(pygen.import_(("fltk", "fegen", "pyrt", "terminalsrc")))
-        # Both imports under TYPE_CHECKING so neither pulls in a concrete backend at protocol
+        # span_protocol under TYPE_CHECKING so it does not pull in a concrete backend at protocol
         # module load time (no-runtime-cost constraint; test_protocol_import_does_not_import_concrete_backends).
-        # fltk.fegen.pyrt.span is the backend-selector (may activate fltk._native at import time).
-        # fltk._native is the Rust extension.
-        # With `from __future__ import annotations` all annotations are lazy strings — these imports
-        # are needed only by pyright, not at runtime.
+        # fltk.fegen.pyrt.span_protocol.SpanProtocol is the backend-agnostic span contract; it names
+        # neither the span selector nor fltk._native.
+        # With `from __future__ import annotations` all annotations are lazy strings — this import
+        # is needed only by pyright, not at runtime.
         module.body.append(
             pygen.if_(
                 pygen.expr("typing.TYPE_CHECKING"),
                 [
-                    pygen.stmt("import fltk.fegen.pyrt.span"),
-                    pygen.stmt("import fltk._native"),
+                    pygen.stmt("import fltk.fegen.pyrt.span_protocol"),
                 ],
                 [],
             )
@@ -897,7 +894,7 @@ class _ProtocolLabelMember:
         else:
             klass.body.append(pygen.stmt("kind: object"))
 
-        klass.body.append(pygen.stmt("span: fltk.fegen.pyrt.terminalsrc.Span | fltk._native.Span"))
+        klass.body.append(pygen.stmt("span: fltk.fegen.pyrt.span_protocol.SpanProtocol"))
 
         child_annotation = self.protocol_annotation_for_model_types(model_types=model.types, class_name=class_name)
 

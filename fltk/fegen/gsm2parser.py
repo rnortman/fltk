@@ -45,6 +45,24 @@ class ParserGenerator:
             self.SourceTextType,
         ) = get_parser_types()
 
+        # Parser span annotations use a concrete pure-Python terminalsrc.Span.  The generated
+        # Python parser unconditionally constructs and returns terminalsrc.Span, so its invariant
+        # `ApplyResult[int, Span]` terminal-consume returns are annotated with that concrete type.
+        # Annotating them with the shared agnostic registry `Span` (`get_parser_types()` above,
+        # which now drives the cross-backend CST/protocol span surface as `SpanProtocol`) would be
+        # an invariant mismatch against the constructed terminalsrc.Span and force a `typing.cast`.
+        # A distinct cname yields a distinct registry key, so this never collides with the shared
+        # `Span` entry.
+        terminal_span_concrete_type = iir.Type.make(cname="TerminalSpanConcrete")
+        self.context.python_type_registry.register_type(
+            pyreg.TypeInfo(
+                typ=terminal_span_concrete_type,
+                module=pyreg.Module(("fltk", "fegen", "pyrt", "terminalsrc")),
+                name="Span",
+            )
+        )
+        self.TerminalSpanType = terminal_span_concrete_type
+
         self.parser_class = iir.ClassType.make(
             cname="Parser",
             doc="Parser",
@@ -75,10 +93,15 @@ class ParserGenerator:
 
         # SourceText wraps the input text for portable source-bearing span construction.
         # The type is also used by _make_span_expr to emit Span.with_source(...) calls.
+        # The generated parser always constructs the pure-Python terminalsrc.SourceText, so the
+        # registry entry points at the honest concrete `terminalsrc` module — no selector, no
+        # native.  This re-registration is idempotent with the terminalsrc-keyed entry
+        # create_default_context() already installs; it must NOT point at `span`, or the differing
+        # TypeInfo for the same key raises ValueError("Conflicting type registration").
         self.context.python_type_registry.register_type(
             pyreg.TypeInfo(
                 typ=self.SourceTextType,
-                module=pyreg.Module(("fltk", "fegen", "pyrt", "span")),
+                module=pyreg.Module(("fltk", "fegen", "pyrt", "terminalsrc")),
                 name="SourceText",
             )
         )
@@ -102,7 +125,15 @@ class ParserGenerator:
             init=iir.LiteralSequence([iir.LiteralString(rule.name) for rule in self.grammar.rules]),
         )
 
-        # _source_text init expression: SourceText(text=terminalsrc.terminals, filename=terminalsrc.filename)
+        # _source_text init expression:
+        #   fltk.fegen.pyrt.terminalsrc.SourceText(text=terminalsrc.terminals,
+        #                                          filename=terminalsrc.filename)
+        # The class name is emitted as a fixed module-qualified call (a MethodAccess on the
+        # `terminalsrc` module VarByName), NOT via the type registry: a generated Python parser
+        # always constructs the pure-Python terminalsrc.SourceText.  (The registry's SourceText
+        # entry also points at `terminalsrc` now, but the `_source_text` field carries no
+        # annotation for it to drive — the field is set as a plain init-list assignment — so this
+        # explicit module-qualified call is what fixes the construction target.)
         # References the constructor `terminalsrc` param via VarByName.
         _terminalsrc_var = iir.VarByName(
             name="terminalsrc",
@@ -110,8 +141,19 @@ class ParserGenerator:
             ref_type=iir.RefType.VALUE,
             mutable=False,
         )
-        _source_text_init = iir.Construct.make(
-            self.SourceTextType,
+        _source_text_init = iir.MethodAccess(
+            "SourceText",
+            iir.VarByName(
+                # This VarByName names the `terminalsrc` MODULE (the `SourceText(...)` call is a
+                # MethodAccess on it), so it is typed as a module, matching the module-VarByName
+                # convention used throughout gsm2unparser.py — NOT as the SourceText class it
+                # constructs.
+                name="fltk.fegen.pyrt.terminalsrc",
+                typ=iir.Type.make(cname="module"),
+                ref_type=iir.RefType.VALUE,
+                mutable=False,
+            ),
+        ).call(
             text=iir.FieldAccess(
                 member_name="terminals",
                 bound_to=_terminalsrc_var,
@@ -257,19 +299,18 @@ class ParserGenerator:
             )
 
     def _make_span_expr(self, start_expr: iir.Expr, end_expr: iir.Expr) -> iir.Expr:
-        """Return an IIR expression for a portable source-bearing Span.
+        """Return an IIR expression for a source-bearing pure-Python Span.
 
-        Emits ``<span_module>.Span.with_source(start, end, self._source_text)``,
-        where ``<span_module>`` is derived from the type registry entry for
-        ``self.TerminalSpanType`` — so a future module rename only requires
-        updating the registry, not this call site.
-        On the Python backend this returns a terminalsrc.Span with source; on the Rust
-        backend it returns a fltk._native.Span with source.  Both paths accept the
-        resulting object as a node's span value.
+        Emits ``fltk.fegen.pyrt.terminalsrc.Span.with_source(start, end, self._source_text)``.
+        The class name is a fixed module-qualified reference, decoupled from the type
+        registry: a generated Python parser always constructs the pure-Python
+        ``terminalsrc.Span``.  Its ``typ`` is the parser-local concrete span type
+        (``self.TerminalSpanType`` → ``terminalsrc.Span``), matching both this construction and
+        the parser's ``ApplyResult[int, Span]`` return annotations.  The
+        produced object is a ``terminalsrc.Span`` with source, accepted as a node's span value.
         """
-        span_class_name = self.context.python_type_registry.lookup(self.TerminalSpanType).import_name()
         span_class_ref = iir.VarByName(
-            name=span_class_name,
+            name="fltk.fegen.pyrt.terminalsrc.Span",
             typ=self.TerminalSpanType,
             ref_type=iir.RefType.VALUE,
             mutable=False,

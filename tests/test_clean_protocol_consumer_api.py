@@ -32,7 +32,6 @@ from fltk.fegen import fltk_cst_protocol as proto_cst
 from fltk.fegen import fltk_parser
 from fltk.fegen.pyrt import terminalsrc
 from fltk.fegen.pyrt.terminalsrc import SpanKind
-from fltk.plumbing import generate_parser, parse_grammar_file
 from tests.pyright_test_utils import _diags_for_file, _run_pyright_over_dir, write_pyright_config
 
 # ---------------------------------------------------------------------------
@@ -61,7 +60,6 @@ _FEGEN_RUST_CST_SKIP = pytest.mark.skipif(
 
 FLTK2GSM_PATH = pathlib.Path(__file__).parent.parent / "fltk" / "fegen" / "fltk2gsm.py"
 PROTOCOL_MODULE_PATH = pathlib.Path(__file__).parent.parent / "fltk" / "fegen" / "fltk_cst_protocol.py"
-FEGEN_FLTKG_PATH = pathlib.Path(__file__).parent.parent / "fltk" / "fegen" / "fegen.fltkg"
 
 # A grammar text with Items nodes that have heterogeneous children (Item, Trivia, Span).
 # "hello" separated by a comma (WS_ALLOWED separator) → produces Items with two Items
@@ -158,13 +156,15 @@ def _python_cst_grammar(grammar_text: str):  # type: ignore[return]
 
 
 def _rust_cst_grammar(grammar_text: str):  # type: ignore[return]
-    """Parse grammar_text with the embedded Rust fegen parser; return CST Grammar node (Rust-backed)."""
-    fegen_grammar = parse_grammar_file(FEGEN_FLTKG_PATH)
-    pr = generate_parser(fegen_grammar, capture_trivia=False, rust_cst_module="fegen_rust_cst.cst")
-    tsrc = terminalsrc.TerminalSource(grammar_text)
-    parser = pr.parser_class(terminalsrc=tsrc)
+    """Parse grammar_text with the genuine Rust fegen parser; return CST Grammar node (Rust-backed).
+
+    Drives the real config-2 Rust parser (fegen_rust_cst.parser.Parser) directly — the same API
+    TestRustParserSelfHosting uses — so the produced CST is a genuine Rust-backed
+    fegen_rust_cst.cst.Grammar (separator-child spans are fltk._native.Span).
+    """
+    parser = fegen_rust_cst.parser.Parser(grammar_text, capture_trivia=False)
     result = parser.apply__parse_grammar(0)
-    assert result is not None and result.pos == len(tsrc.terminals)
+    assert result is not None and result.pos == len(grammar_text)
     return result.result
 
 
@@ -343,22 +343,6 @@ def test_protocol_module_no_new_file_level_suppressions() -> None:
     assert file_level_type_ignore == [], (
         f"Protocol module must not contain inline '# type: ignore': {file_level_type_ignore}"
     )
-
-
-# ---------------------------------------------------------------------------
-# §4 item 3 — fltk2gsm.py behavioral equivalence (AC 9)
-# ---------------------------------------------------------------------------
-
-
-@_FEGEN_RUST_CST_SKIP
-def test_fltk2gsm_behavioral_equivalence() -> None:
-    """AC 9: fltk2gsm produces same GSM output as before on same input.
-
-    Exercises the existing fegen self-host round-trip; both backends must produce equal GSMs.
-    """
-    python_gsm = parse_grammar_file(FEGEN_FLTKG_PATH)
-    rust_gsm = parse_grammar_file(FEGEN_FLTKG_PATH, rust_fegen_cst_module="fegen_rust_cst.cst")
-    assert python_gsm == rust_gsm, "fltk2gsm produces different GSM from Python vs Rust backend"
 
 
 # ---------------------------------------------------------------------------
@@ -578,7 +562,7 @@ class TestCrossBackendDualShapeDispatch:
 
     @pytest.fixture(scope="class")
     def rust_items(self):
-        """First Items node from a Rust-backend-parsed grammar (embedded fltk._native.fegen_cst)."""
+        """First Items node from a Rust-backend-parsed grammar (genuine fegen_rust_cst.parser)."""
         tree = _rust_cst_grammar(_SIMPLE_GRAMMAR_TEXT)
         return _get_first_items_node(tree)
 
@@ -676,12 +660,11 @@ class TestCrossBackendDualShapeDispatch:
     def test_span_kind_narrows_rust_backend_span_children(self, rust_items) -> None:
         """Assert that cst.Span.kind matches Span separator children in a Rust-backend Items node.
 
-        The Rust fegen_cst parser (running on top of the Rust CST node classes) still uses
-        Python terminalsrc.Span instances for separator children (the Python parser glue code
-        creates them via Span(start, end)).  The key invariant is that cst.Span.kind correctly
-        identifies them — the match/case dispatch must work regardless of which Span class the
-        runtime provides (Python terminalsrc.Span or Rust fltk._native.Span), since both carry
-        SpanKind.SPAN with the same canonical string.
+        The genuine Rust fegen parser (fegen_rust_cst.parser.Parser) produces a Rust-backed CST
+        whose separator children are fltk._native.Span instances.  The key invariant is that
+        cst.Span.kind correctly identifies them — the match/case dispatch must work regardless of
+        which Span class the runtime provides (Python terminalsrc.Span or Rust fltk._native.Span),
+        since both carry SpanKind.SPAN with the same canonical string.
         """
         span_children = [(label, child) for label, child in rust_items.children if child.kind == proto_cst.Span.kind]
         assert span_children, (

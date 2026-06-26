@@ -99,13 +99,18 @@ def generate_parser(
         pyreg.Module(("typing",)),
         pyreg.Module(("fltk", "fegen", "pyrt", "errors")),
         pyreg.Module(("fltk", "fegen", "pyrt", "memo")),
-        pyreg.Module(("fltk", "fegen", "pyrt", "span")),
         pyreg.Module(("fltk", "fegen", "pyrt", "terminalsrc")),
         cst_module,
     ]
 
     # Generate parser module
     parser_mod = pygen.module(module.import_path for module in imports)
+    # `from __future__ import annotations` keeps the parser's span-typed annotations as lazy
+    # strings.  The parser annotates its terminal spans with the concrete pure-Python
+    # `fltk.fegen.pyrt.terminalsrc.Span` (runtime-imported above for construction) — it names
+    # neither the `fltk.fegen.pyrt.span` selector nor `fltk._native`, so it never touches
+    # span.py's process-wide native-span probe in any environment.
+    parser_mod.body.insert(0, pygen.stmt("from __future__ import annotations"))
     parser_mod.body.append(parser_ast)
 
     # Write parser file

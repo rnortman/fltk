@@ -325,8 +325,14 @@ class UnparserGenerator:
         )
 
         expected_type = self._get_node_type_for_nonsequence_term(item.term)
-        isinstance_check = iir.IsInstance(expr=child_var.load(), typ=expected_type)
-        type_check_condition = iir.LogicalNegation(operand=isinstance_check)
+        if expected_type is self.span_type:
+            # Span children may carry either backend's span object; recognize both
+            # structurally via the dual-backend helper rather than a single
+            # probe-selected isinstance.
+            type_check_condition = iir.LogicalNegation(operand=self._make_is_span_check(child_var.load()))
+        else:
+            isinstance_check = iir.IsInstance(expr=child_var.load(), typ=expected_type)
+            type_check_condition = iir.LogicalNegation(operand=isinstance_check)
         if_wrong_type = method.block.if_(type_check_condition)
         if_wrong_type.block.return_(iir.LiteralNull())
 
@@ -370,6 +376,22 @@ class UnparserGenerator:
             ref_type=iir.RefType.BORROW,
             mutable=False,
         )
+
+    def _make_is_span_check(self, child_expr: iir.Expr) -> iir.Expr:
+        """Build a dual-backend span guard: ``fltk.unparse.pyrt.is_span(child)``.
+
+        The unparser is a backend-agnostic CST consumer: it must accept whichever
+        span backend the CST actually carries (``terminalsrc.Span`` from a Python
+        parser, ``fltk._native.Span`` from a Rust CST) and decide that from the
+        object itself, never through ``span.py``'s process-wide probe.
+        """
+        pyrt_module = iir.VarByName(
+            name="fltk.unparse.pyrt",
+            typ=iir.Type.make(cname="module"),
+            ref_type=iir.RefType.BORROW,
+            mutable=False,
+        )
+        return pyrt_module.method.is_span.call(child_expr)
 
     def _doc_to_combinator_expr(self, doc: Doc) -> iir.Expr:
         """Convert a Doc combinator to an IIR expression."""
@@ -1009,9 +1031,8 @@ class UnparserGenerator:
             index=iir.LiteralInt(typ=iir.IndexInt, value=1),
         )
 
-        # Check if child is a Span
-        span_type = iir.Type.make(cname="Span")
-        is_span = iir.IsInstance(expr=child_value, typ=span_type)
+        # Check if child is a Span (either backend's span object)
+        is_span = self._make_is_span_check(child_value)
 
         if_span = while_loop.block.if_(is_span)
 
@@ -1112,9 +1133,9 @@ class UnparserGenerator:
                 rhs=iir.LiteralNull(),
             )
 
-            # Check if child is a Span
+            # Check if child is a Span (either backend's span object)
             span_type = iir.Type.make(cname="Span")
-            is_span_check = iir.IsInstance(expr=child_value, typ=span_type)
+            is_span_check = self._make_is_span_check(child_value)
 
             is_whitespace_span = iir.LogicalAnd(lhs=is_unlabeled, rhs=is_span_check)
 
@@ -1812,7 +1833,16 @@ def generate_unparser(
     """Generate complete unparser class and imports for a grammar."""
     generator = UnparserGenerator(grammar, context, cst_module, formatter_config)
 
-    imports: list[ast.ImportFrom | ast.Import] = [
+    # `from __future__ import annotations` (imports[0]) makes the generated unparser's span-typed
+    # annotation (`def _count_newlines(self, span: fltk.fegen.pyrt.span_protocol.SpanProtocol)`) a
+    # lazy string, so the agnostic span-contract module fltk.fegen.pyrt.span_protocol (guarded under
+    # TYPE_CHECKING below) is never imported at runtime.  The annotation is the backend-neutral
+    # SpanProtocol (registry-driven) — it names neither fltk._native nor the fltk.fegen.pyrt.span
+    # selector, so evaluating it never fires span.py's native-span probe.  The unparser recognizes
+    # span children of either backend structurally via fltk.unparse.pyrt.is_span, never through that
+    # probe.
+    imports: list[ast.stmt] = [
+        ast.ImportFrom(module="__future__", names=[ast.alias(name="annotations", asname=None)], level=0),
         ast.Import(names=[ast.alias(name="typing", asname=None)]),
         ast.Import(names=[ast.alias(name="fltk.unparse.combinators", asname=None)]),
         ast.Import(names=[ast.alias(name="fltk.unparse.pyrt", asname=None)]),
@@ -1829,5 +1859,21 @@ def generate_unparser(
         module=cst_module, names=[ast.alias(name=class_name, asname=None) for class_name in class_names], level=0
     )
     imports.append(cst_import)
+
+    # span_protocol module under TYPE_CHECKING: pyright resolves the agnostic
+    # fltk.fegen.pyrt.span_protocol.SpanProtocol annotation name (now a never-evaluated lazy string),
+    # but it is never imported at runtime.  `typing` is already imported above, so this guard needs
+    # no new top-level import.
+    imports.append(
+        ast.If(
+            test=ast.Attribute(
+                value=ast.Name(id="typing", ctx=ast.Load()),
+                attr="TYPE_CHECKING",
+                ctx=ast.Load(),
+            ),
+            body=[ast.Import(names=[ast.alias(name="fltk.fegen.pyrt.span_protocol", asname=None)])],
+            orelse=[],
+        )
+    )
 
     return generator.unparser_class, imports

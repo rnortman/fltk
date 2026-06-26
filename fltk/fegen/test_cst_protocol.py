@@ -28,6 +28,7 @@ from tests.pyright_test_utils import _diags_for_file, _run_pyright_over_dir, wri
 
 FEGEN_FLTKG = pathlib.Path(__file__).parent / "fegen.fltkg"
 PROTOCOL_MODULE = pathlib.Path(__file__).parent / "fltk_cst_protocol.py"
+CONCRETE_MODULE = pathlib.Path(__file__).parent / "fltk_cst.py"
 
 # ---------------------------------------------------------------------------
 # Pyright harness
@@ -165,7 +166,7 @@ def test_cst_module_protocol_has_property_per_rule(
 # ---------------------------------------------------------------------------
 #
 # All pyright-invoking tests share two module-scoped batch runs:
-#   - cst_protocol_pyright_diagnostics: positive + known-limitation tests (6 fixture files)
+#   - cst_protocol_pyright_diagnostics: positive + known-limitation tests (4 fixture files)
 #   - cst_protocol_negative_pyright_diagnostics: negative tests (2 fixture files)
 # Each test filters the partitioned results by its own fixture file name.
 
@@ -187,9 +188,7 @@ def cst_protocol_pyright_diagnostics(
     (tmpdir / "wrong_label_value_fixture.py").write_text(_WRONG_LABEL_VALUE_FIXTURE)
     (tmpdir / "member_access_fixture.py").write_text(_MEMBER_ACCESS_FIXTURE)
     (tmpdir / "standin_fixture.py").write_text(_STANDIN_FIXTURE)
-    (tmpdir / "python_backend_consumer.py").write_text(_PYTHON_BACKEND_CONSUMER_FIXTURE)
-    (tmpdir / "rust_backend_consumer.py").write_text(_RUST_BACKEND_CONSUMER_FIXTURE)
-    (tmpdir / "python_backend_uncasted_callsite.py").write_text(_PYTHON_BACKEND_UNCASTED_CALLSITE_FIXTURE)
+    (tmpdir / "agnostic_spanprotocol_consumer.py").write_text(_AGNOSTIC_SPANPROTOCOL_CONSUMER_FIXTURE)
     return _run_pyright_over_dir(tmpdir, pyright_available=pyright_available)
 
 
@@ -484,131 +483,148 @@ def test_fltk2gsm_imports_protocol_not_concrete_at_runtime() -> None:
 
 
 # ---------------------------------------------------------------------------
-# §4 item 8 — Protocol span additive-widening (pyright backward compatibility)
+# Agnostic SpanProtocol consumer surface (delta D3.4 — supersedes §4 item-8 union widening)
 # ---------------------------------------------------------------------------
+#
+# The protocol ``span`` field and span-typed children moved from the explicit union
+# ``terminalsrc.Span | fltk._native.Span`` to the agnostic
+# ``fltk.fegen.pyrt.span_protocol.SpanProtocol`` (delta D3.4).  The old union-widening
+# backward-compat tests are superseded: there is no union to narrow, and the agnostic
+# ``SpanProtocol`` contract IS the swap-ability mechanism.  A consumer that annotates spans with
+# ``SpanProtocol`` reads ``node.span`` with no cast for either backend.  The runtime ``isinstance``
+# conformance of both backends (incl. the Rust span) is pinned by
+# ``pyrt/test_span_protocol_assignability.py`` (delta D5.2), so it is not re-asserted here.
 
-# A Python-backend-only consumer that annotates span as terminalsrc.Span and passes it
-# to a protocol-typed parameter.  After widening, this must still type-check unedited —
-# the union is a strict superset so the old type still satisfies it.
-_PYTHON_BACKEND_CONSUMER_FIXTURE = textwrap.dedent("""\
+# A backend-agnostic consumer annotates spans with the agnostic SpanProtocol, reads node.span with
+# NO cast, and passes it into SpanProtocol-typed parameters.  This must type-check unedited — it is
+# the consumer side of the swap-ability the requirements mandate.
+_AGNOSTIC_SPANPROTOCOL_CONSUMER_FIXTURE = textwrap.dedent("""\
     # ruff: noqa
-    # Simulates a Python-backend-only consumer whose code annotated span as terminalsrc.Span.
-    # This consumer should type-check without edits after the protocol span annotation widens
-    # to terminalsrc.Span | fltk._native.Span (§2.7 additive widening).
     from __future__ import annotations
-    import typing
 
-    import fltk.fegen.pyrt.terminalsrc as _t
+    import fltk.fegen.pyrt.span_protocol as _sp
     from fltk.fegen import fltk_cst_protocol as cstp
 
-    def process_node(node: cstp.Grammar) -> _t.Span:
-        # Python-backend consumer reads span and expects terminalsrc.Span.
-        # After widening the protocol, this assignment is permitted: terminalsrc.Span is
-        # one branch of the union, so it is assignable FROM the widened protocol span type
-        # (pyright narrows the union on known contexts, and the union is a supertype).
-        # The key check: the CONSUMER's annotation of terminalsrc.Span is still accepted
-        # — a function that returns terminalsrc.Span can return node.span under Python backend.
-        span: _t.Span = typing.cast(_t.Span, node.span)  # cast mirrors production usage
+    def read_span(node: cstp.Grammar) -> _sp.SpanProtocol:
+        # node.span is the agnostic SpanProtocol — assignable to a SpanProtocol slot with no cast.
+        span: _sp.SpanProtocol = node.span
         return span
 
-    def accept_python_span(span: _t.Span) -> bool:
-        # Accepts a terminalsrc.Span typed parameter — pre-widening consumer code.
-        return span.start is not None
+    def use_span_api(node: cstp.Grammar) -> int:
+        # The full span API surface is reachable through the agnostic protocol.
+        return node.span.start + node.span.end
 
-    def pass_protocol_span_to_python_consumer(node: cstp.Grammar) -> bool:
-        # Uses the old terminalsrc.Span annotation at call site via cast — mimics
-        # existing consumer code that hasn't changed after the protocol widened.
-        return accept_python_span(typing.cast(_t.Span, node.span))
-""")
+    def accept_span_protocol(span: _sp.SpanProtocol) -> bool:
+        return span.has_source()
 
-# A consumer that uses fltk._native.Span — verifies the Rust-backend span also satisfies
-# the widened protocol annotation.
-_RUST_BACKEND_CONSUMER_FIXTURE = textwrap.dedent("""\
-    # ruff: noqa
-    # Simulates a Rust-backend consumer that annotates span as fltk._native.Span.
-    # The widened union fltk.fegen.pyrt.terminalsrc.Span | fltk._native.Span must accept
-    # a fltk._native.Span assignment, proving the Rust backend satisfies the protocol.
-    from __future__ import annotations
-    import typing
-    import fltk._native
-    from fltk.fegen import fltk_cst_protocol as cstp
-
-    def get_native_span(node: cstp.Grammar) -> fltk._native.Span:
-        # After widening, assigning node.span to fltk._native.Span requires a cast
-        # because the union includes terminalsrc.Span too; cast mirrors production Rust-backend usage.
-        return typing.cast(fltk._native.Span, node.span)
+    def pass_node_span_to_protocol_param(node: cstp.Grammar) -> bool:
+        # node.span flows into a SpanProtocol-typed parameter with no cast.
+        return accept_span_protocol(node.span)
 """)
 
 
-def test_python_backend_consumer_still_type_checks(
+def test_agnostic_consumer_reads_span_as_spanprotocol(
     cst_protocol_pyright_diagnostics: dict[str, list[dict[str, Any]]],
 ) -> None:
-    """§4 item 8: Python-backend-only consumer type-checks unedited after span annotation widening.
+    """A SpanProtocol-annotated consumer reads node.span unedited and cast-free (delta D3.4).
 
-    A consumer that annotates span as terminalsrc.Span (the old, pre-widening type) must still
-    type-check without errors after the protocol widens to terminalsrc.Span | fltk._native.Span.
-    This confirms the widening is additive (backward-compatible) per §2.7.
+    After the protocol span surface moved to fltk.fegen.pyrt.span_protocol.SpanProtocol, node.span
+    IS SpanProtocol, so a backend-agnostic consumer that annotates spans with SpanProtocol
+    type-checks with no cast regardless of which backend produced the CST — the consumer side of
+    the swap-ability the requirements mandate.  Supersedes the old union-widening tests
+    (terminalsrc.Span | fltk._native.Span), whose premise D3.4 removes; the Rust-span runtime
+    conformance they covered is pinned by pyrt/test_span_protocol_assignability.py (delta D5.2).
     """
-    errors = _diags_for_file(cst_protocol_pyright_diagnostics, "python_backend_consumer.py")
+    errors = _diags_for_file(cst_protocol_pyright_diagnostics, "agnostic_spanprotocol_consumer.py")
     assert errors == [], (
-        f"Python-backend consumer broke after protocol span widening — widening is not additive.\nErrors:\n{errors}"
+        f"Agnostic SpanProtocol consumer failed pyright after the span surface moved to SpanProtocol.\n"
+        f"Errors:\n{errors}"
     )
 
 
-def test_rust_backend_span_satisfies_widened_protocol(
-    cst_protocol_pyright_diagnostics: dict[str, list[dict[str, Any]]],
-) -> None:
-    """§4 item 8: fltk._native.Span is a valid branch of the widened protocol span annotation.
+# ---------------------------------------------------------------------------
+# Committed CST/protocol source names neither fltk._native nor the span selector (delta D5.1 / R2)
+# ---------------------------------------------------------------------------
+#
+# The user's R2 requires the Python pipeline to never resolve a span annotation to fltk._native and
+# to type-check identically whether or not the native stub is importable.  For the *generated
+# pipeline* the delta guarantees this structurally (D5.1): a module that names neither fltk._native
+# nor the fltk.fegen.pyrt.span selector cannot produce stub-dependent pyright results for those
+# symbols.  The parser (test_genparser.py), the Rust .pyi (test_gsm2tree_rs.py), and the unparser
+# (test_is_span_guard.py) already pin this at the source level; these two tests complete the
+# coverage for the committed concrete-CST and protocol modules.  This deterministic source-level
+# guarantee supersedes a fragile stub-present-vs-absent differential pyright run (see implementation
+# log, increment 18 deviation): a symbol that is never named is trivially stub-stable.
+#
+# The generator emits all CST/protocol files from one code path, so these checks parameterize over
+# EVERY committed concrete-CST and protocol module (not just the fltk_cst pair) — a generator
+# regression that reintroduced a native/selector reference would otherwise regress the unasserted
+# files silently.
 
-    Confirms the Rust-backend span type appears in the union and pyright accepts a
-    fltk._native.Span-annotated consumer interacting with a protocol-typed node.
+_FEGEN_DIR = pathlib.Path(__file__).parent
+_UNPARSE_DIR = _FEGEN_DIR.parent / "unparse"
+
+ALL_PROTOCOL_MODULES = [
+    _FEGEN_DIR / "bootstrap_cst_protocol.py",
+    _FEGEN_DIR / "fltk_cst_protocol.py",
+    _FEGEN_DIR / "regex_cst_protocol.py",
+    _UNPARSE_DIR / "toy_cst_protocol.py",
+    _UNPARSE_DIR / "unparsefmt_cst_protocol.py",
+]
+
+ALL_CONCRETE_CST_MODULES = [
+    _FEGEN_DIR / "bootstrap_cst.py",
+    _FEGEN_DIR / "fltk_cst.py",
+    _FEGEN_DIR / "regex_cst.py",
+    _UNPARSE_DIR / "toy_cst.py",
+    _UNPARSE_DIR / "unparsefmt_cst.py",
+]
+
+
+@pytest.mark.parametrize("protocol_module", ALL_PROTOCOL_MODULES, ids=lambda p: p.name)
+def test_committed_protocol_source_names_no_native_no_selector(protocol_module: pathlib.Path) -> None:
+    """Every committed protocol module names neither fltk._native nor the span selector (delta D5.1 / R2).
+
+    The protocol's span surface is the agnostic span_protocol.SpanProtocol, imported under
+    TYPE_CHECKING.  Naming neither fltk._native nor fltk.fegen.pyrt.span makes pyright's result on
+    this module identical with or without the native stub.  Protocol modules carry NO fltk._native
+    reference at all (unlike the concrete CST, which has the runtime _get_native_span_type() lookup),
+    so the full-text "appears nowhere" assertion is both correct and the strictest check here — it
+    catches a stray native annotation string as well as an import.
     """
-    errors = _diags_for_file(cst_protocol_pyright_diagnostics, "rust_backend_consumer.py")
-    assert errors == [], f"Rust-backend consumer failed pyright after protocol span widening.\nErrors:\n{errors}"
+    text = protocol_module.read_text()
+    lines = text.splitlines()
+    assert "fltk._native" not in text, (
+        f"{protocol_module.name} must name fltk._native nowhere (no import, no annotation, no string)"
+    )
+    selector = [ln for ln in lines if ln.strip() == "import fltk.fegen.pyrt.span"]
+    assert not selector, f"{protocol_module.name} must not import the fltk.fegen.pyrt.span selector; found {selector}"
+    assert any(ln.strip() == "import fltk.fegen.pyrt.span_protocol" for ln in lines), (
+        f"{protocol_module.name} must import the agnostic span_protocol (under TYPE_CHECKING)"
+    )
 
 
-# Fixture that calls accept_python_span(node.span) WITHOUT a cast.
-# §2.7 claims "existing Python-backend consumers' type-checks must pass unedited".
-# If the widened union (terminalsrc.Span | fltk._native.Span) is not assignable to
-# terminalsrc.Span, pyright will reject the call — revealing annotation churn.
-_PYTHON_BACKEND_UNCASTED_CALLSITE_FIXTURE = textwrap.dedent("""\
-    # ruff: noqa
-    # Tests whether an uncast call site — accept_python_span(node.span) — type-checks
-    # after the protocol span annotation widens to terminalsrc.Span | fltk._native.Span.
-    from __future__ import annotations
-    import fltk.fegen.pyrt.terminalsrc as _t
-    from fltk.fegen import fltk_cst_protocol as cstp
+@pytest.mark.parametrize("cst_module", ALL_CONCRETE_CST_MODULES, ids=lambda p: p.name)
+def test_committed_cst_source_imports_no_native_no_selector(cst_module: pathlib.Path) -> None:
+    """Every committed concrete CST module names fltk._native only in the runtime lookup (delta D5.1 / R2).
 
-    def accept_python_span(span: _t.Span) -> bool:
-        return span.start is not None
-
-    def call_without_cast(node: cstp.Grammar) -> bool:
-        # Passes node.span (widened union) directly to a terminalsrc.Span-typed parameter.
-        # This is the "unedited consumer code" case: the widening should not require adding a cast here.
-        return accept_python_span(node.span)  # type: ignore[arg-type]  # see test comment
-""")
-
-
-def test_python_backend_uncasted_callsite_annotation_churn(
-    cst_protocol_pyright_diagnostics: dict[str, list[dict[str, Any]]],
-) -> None:
-    """§4 item 8 / test-2: document whether uncast call sites require annotation changes after widening.
-
-    The widened union (terminalsrc.Span | fltk._native.Span) is NOT directly assignable to
-    terminalsrc.Span without a narrowing cast, so pyright WILL flag an uncast call site.
-    This test documents that behavior explicitly rather than hiding it behind `typing.cast`.
-
-    The `type: ignore[arg-type]` suppressor in the fixture means this test always passes (it
-    verifies the suppressor works). The intent is to surface the fact that uncast call sites
-    DO require annotation changes after widening — the backward-compatibility claim in §2.7
-    applies to code that uses `typing.cast` (which is the production pattern), not to bare
-    uncast assignments.  This test makes that explicit so future maintainers understand the
-    boundary of the compatibility guarantee.
+    Span annotations are the agnostic span_protocol.SpanProtocol.  The concrete CST legitimately
+    contains exactly one fltk._native reference — the runtime _get_native_span_type() lookup
+    ``sys.modules.get("fltk._native")``, a mutator-validation mechanism independent of the static
+    annotation surface.  Asserting that EVERY fltk._native occurrence is that runtime lookup (rather
+    than only checking for an `import fltk._native` line) catches a stray native annotation string
+    too — under `from __future__ import annotations` a regression could emit `fltk._native.Span` as a
+    lazy-string annotation with no import line, which an import-only check would miss.
     """
-    errors = _diags_for_file(cst_protocol_pyright_diagnostics, "python_backend_uncasted_callsite.py")
-    # The fixture uses `type: ignore[arg-type]` to suppress the expected type error.
-    # If pyright reports errors here, it means the suppressor did not work — unexpected.
-    assert errors == [], (
-        f"Unexpected pyright errors in uncasted-callsite fixture (the type: ignore suppressor failed).\n"
-        f"Errors: {errors}"
+    text = cst_module.read_text()
+    lines = text.splitlines()
+    offending_native = [ln for ln in lines if "fltk._native" in ln and 'sys.modules.get("fltk._native")' not in ln]
+    assert not offending_native, (
+        f"{cst_module.name} must reference fltk._native only via the runtime "
+        f'sys.modules.get("fltk._native") lookup; found {offending_native}'
+    )
+    selector = [ln for ln in lines if ln.strip() == "import fltk.fegen.pyrt.span"]
+    assert not selector, f"{cst_module.name} must not import the fltk.fegen.pyrt.span selector; found {selector}"
+    assert any(ln.strip() == "import fltk.fegen.pyrt.span_protocol" for ln in lines), (
+        f"{cst_module.name} must import the agnostic span_protocol (under TYPE_CHECKING)"
     )

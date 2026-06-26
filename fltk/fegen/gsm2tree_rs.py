@@ -326,9 +326,11 @@ class RustCstGenerator:
         lines.append("# ruff: noqa: N802")
         lines.append("from __future__ import annotations")
         lines.append("import typing")
-        lines.append("import fltk.fegen.pyrt.terminalsrc")
-        lines.append("import fltk.fegen.pyrt.span")
-        lines.append("import fltk._native")
+        # span field and span-typed children annotate the agnostic SpanProtocol:
+        # the stub names neither fltk._native nor the fltk.fegen.pyrt.span selector, so a
+        # consumer can swap config 1 (Python CST) <-> config 2 (Rust CST) without churn.
+        # terminalsrc / span / fltk._native are no longer referenced and are not imported.
+        lines.append("import fltk.fegen.pyrt.span_protocol")
         lines.append(f"import {protocol_module} as _proto")
         lines.append("")
         # NodeKind: runtime is the PyO3 enum; type identity is the protocol's NodeKind.
@@ -354,8 +356,9 @@ class RustCstGenerator:
             node_kind_member = self._node_kind_python_name(rule_name)
             lines.append(f"    kind: typing.Literal[_proto.NodeKind.{node_kind_member}]")
 
-            # span: exact protocol union (invariant attribute; narrower would fail conformance)
-            lines.append("    span: fltk.fegen.pyrt.terminalsrc.Span | fltk._native.Span")
+            # span: agnostic SpanProtocol (invariant attribute, satisfied by both backends' spans;
+            # matches the protocol's span field so the Rust CST stays swap-compatible with the Python CST)
+            lines.append("    span: fltk.fegen.pyrt.span_protocol.SpanProtocol")
 
             # children: proto-qualified element types
             child_ann = self._pyi_annotation_for_model_types(model.types, class_name=class_name)

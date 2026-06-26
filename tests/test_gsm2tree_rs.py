@@ -1146,14 +1146,22 @@ class TestGeneratePyiHeader:
     def test_imports_typing(self, poc_pyi: str) -> None:
         assert "import typing" in poc_pyi
 
-    def test_imports_terminalsrc(self, poc_pyi: str) -> None:
-        assert "import fltk.fegen.pyrt.terminalsrc" in poc_pyi
+    def test_imports_span_protocol(self, poc_pyi: str) -> None:
+        """D3.5: the stub annotates the agnostic SpanProtocol, so it imports span_protocol."""
+        assert "import fltk.fegen.pyrt.span_protocol" in poc_pyi
 
-    def test_imports_span_module(self, poc_pyi: str) -> None:
-        assert "import fltk.fegen.pyrt.span" in poc_pyi
+    def test_no_import_terminalsrc(self, poc_pyi: str) -> None:
+        """D3.5: the concrete terminalsrc.Span no longer appears in the stub's span surface."""
+        assert "fltk.fegen.pyrt.terminalsrc" not in poc_pyi
 
-    def test_imports_fltk_native(self, poc_pyi: str) -> None:
-        assert "import fltk._native" in poc_pyi
+    def test_no_import_span_selector(self, poc_pyi: str) -> None:
+        """D3.5: the stub names neither the fltk.fegen.pyrt.span selector import nor type."""
+        # span_protocol shares the 'fltk.fegen.pyrt.span' prefix, so match the import line exactly.
+        assert "import fltk.fegen.pyrt.span" not in poc_pyi.splitlines()
+
+    def test_no_import_fltk_native(self, poc_pyi: str) -> None:
+        """D3.5: the stub names fltk._native nowhere (no import, no annotation)."""
+        assert "fltk._native" not in poc_pyi
 
     def test_imports_protocol_module_as_proto(self, poc_pyi: str) -> None:
         assert f"import {_PROTO_MODULE} as _proto" in poc_pyi
@@ -1217,9 +1225,9 @@ class TestGeneratePyiClasses:
         assert "kind: typing.Literal[_proto.NodeKind.IDENTIFIER]" in poc_pyi
         assert "kind: typing.Literal[_proto.NodeKind.ITEMS]" in poc_pyi
 
-    def test_span_annotation_exact_protocol_union(self, poc_pyi: str) -> None:
-        """span annotation is the exact protocol union (invariant attribute)."""
-        assert "span: fltk.fegen.pyrt.terminalsrc.Span | fltk._native.Span" in poc_pyi
+    def test_span_annotation_span_protocol(self, poc_pyi: str) -> None:
+        """span annotation is the agnostic SpanProtocol (D3.5; invariant attribute, both backends conform)."""
+        assert "span: fltk.fegen.pyrt.span_protocol.SpanProtocol" in poc_pyi
 
     def test_children_annotation_labelled(self, poc_pyi: str) -> None:
         """Labelled node children: list[tuple[Optional[_proto.<Class>.Label], <child_ann>]]."""

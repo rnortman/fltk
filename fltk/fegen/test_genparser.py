@@ -167,6 +167,90 @@ def test_gsm2parser_extend_children_call_site(tmp_path: pathlib.Path) -> None:
 
 
 # ---------------------------------------------------------------------------
+# test_generated_parser_concrete_terminalsrc_span_annotations  (delta D3.3)
+# ---------------------------------------------------------------------------
+
+
+def test_generated_parser_concrete_terminalsrc_span_annotations(tmp_path: pathlib.Path) -> None:
+    """Generated parsers annotate terminal spans with the concrete pure-Python terminalsrc.Span.
+
+    Delta D3.3: the generated Python parser keeps Concept A — it constructs and returns
+    ``terminalsrc.Span`` — so its terminal-consume ``ApplyResult[int, Span]`` returns are
+    annotated with the concrete ``fltk.fegen.pyrt.terminalsrc.Span`` (no ``typing.cast``, no
+    invariant mismatch).  It references neither the ``fltk.fegen.pyrt.span`` selector (not even
+    under ``TYPE_CHECKING`` — the increment-5 lazy-import is now dead and removed) nor
+    ``fltk._native``; it keeps ``from __future__ import annotations`` (lazy strings) and the
+    runtime ``fltk.fegen.pyrt.terminalsrc`` import (the concrete construction backend).
+    """
+    import ast  # noqa: PLC0415
+
+    grammar_file = tmp_path / "simple.fltkg"
+    grammar_file.write_text(_SIMPLE_GRAMMAR_SRC)
+
+    runner = CliRunner()
+    result = runner.invoke(
+        app,
+        ["generate", str(grammar_file), "simple", "simple_cst", "--output-dir", str(tmp_path), "--no-trivia-only"],
+    )
+    assert result.exit_code == 0, f"generate failed:\n{result.output}\n{result.exception}"
+    parser_py = tmp_path / "simple_parser.py"
+    assert parser_py.exists(), "Expected simple_parser.py was not created"
+
+    source = parser_py.read_text()
+    tree = ast.parse(source)
+
+    # (a) The first statement is `from __future__ import annotations` (lazy annotations).
+    first = tree.body[0]
+    assert (
+        isinstance(first, ast.ImportFrom) and first.module == "__future__" and first.names[0].name == "annotations"
+    ), "Generated parser must start with `from __future__ import annotations`"
+
+    def _imports_span(node: ast.stmt) -> bool:
+        return isinstance(node, ast.Import) and any(alias.name == "fltk.fegen.pyrt.span" for alias in node.names)
+
+    def _imports_terminalsrc(node: ast.stmt) -> bool:
+        return isinstance(node, ast.Import) and any(alias.name == "fltk.fegen.pyrt.terminalsrc" for alias in node.names)
+
+    # (b) The span selector module is NOT imported anywhere — not at module top level, and
+    #     (D3.3) no longer under `if typing.TYPE_CHECKING:` either.
+    type_checking_blocks = [
+        node
+        for node in tree.body
+        if isinstance(node, ast.If) and ast.unparse(node.test) in ("typing.TYPE_CHECKING", "TYPE_CHECKING")
+    ]
+    assert not any(_imports_span(node) for node in tree.body), (
+        "Generated parser must NOT import fltk.fegen.pyrt.span at module top level"
+    )
+    assert not any(_imports_span(stmt) for block in type_checking_blocks for stmt in block.body), (
+        "Generated parser must NOT import fltk.fegen.pyrt.span under `if typing.TYPE_CHECKING:` (D3.3)"
+    )
+    # The parser names neither the span selector nor fltk._native anywhere in its source.
+    assert "fltk.fegen.pyrt.span" not in source, "Generated parser must not reference the span selector module"
+    assert "fltk._native" not in source, "Generated parser must not reference fltk._native"
+
+    # (c) The runtime terminalsrc import (the concrete construction backend) is at module top level.
+    assert any(_imports_terminalsrc(node) for node in tree.body), (
+        "Generated parser must keep the runtime fltk.fegen.pyrt.terminalsrc import"
+    )
+
+    # (d) The terminal-consume helpers return ApplyResult[int, terminalsrc.Span] — the concrete
+    #     Concept-A annotation — and the parser constructs spans without a `typing.cast` wrap.
+    funcs = {n.name: n for n in ast.walk(tree) if isinstance(n, ast.FunctionDef)}
+    for fname in ("consume_literal", "consume_regex"):
+        assert fname in funcs, f"expected {fname} in generated parser"
+        returns = funcs[fname].returns
+        assert returns is not None, f"{fname} must have a return annotation"
+        ret_src = ast.unparse(returns)
+        assert "fltk.fegen.pyrt.terminalsrc.Span" in ret_src, (
+            f"{fname} must return ApplyResult[int, terminalsrc.Span]; got {ret_src}"
+        )
+        assert "fltk.fegen.pyrt.span.Span" not in ret_src, (
+            f"{fname} return annotation must not name the span selector; got {ret_src}"
+        )
+    assert "typing.cast(" not in source, "Generated parser must construct terminal spans without typing.cast (D3.3)"
+
+
+# ---------------------------------------------------------------------------
 # gen-rust-cst --protocol-module / --pyi-output CLI tests
 # ---------------------------------------------------------------------------
 

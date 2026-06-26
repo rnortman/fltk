@@ -1,5 +1,9 @@
 """Tests for SpanProtocol, AnySpan, and the backend selector module."""
 
+import importlib
+import sys
+import warnings
+
 import pytest
 
 import fltk._native as _fltk_native
@@ -10,6 +14,29 @@ from fltk.fegen.pyrt.terminalsrc import Span as PySpan
 from fltk.fegen.pyrt.terminalsrc import TerminalSource, UnknownSpan
 
 _rust_available = hasattr(_fltk_native, "Span")
+
+
+class TestBackendSelectorSilentFallback:
+    """The backend probe falls back to pure-Python silently — no UserWarning."""
+
+    def test_reload_without_native_emits_no_warning(self):
+        # Reload span.py with fltk._native forced absent (and un-importable) so the
+        # probe's except branch runs. It must fall back to the pure-Python backend
+        # without emitting any warning. This pins the original-bug fix: a pure-Python
+        # install printing a noisy warning on parser import.
+        saved = {name: mod for name, mod in sys.modules.items() if name == "fltk._native"}
+        try:
+            sys.modules["fltk._native"] = None  # type: ignore[assignment]  # force ImportError on probe
+            with warnings.catch_warnings():
+                warnings.simplefilter("error")  # any warning becomes an exception
+                reloaded = importlib.reload(_span_selector)
+            # Fallback landed on the pure-Python backend.
+            assert reloaded.Span is PySpan
+            assert reloaded.SourceText is PySourceText
+        finally:
+            sys.modules.pop("fltk._native", None)
+            sys.modules.update(saved)
+            importlib.reload(_span_selector)  # restore the real backend for other tests
 
 
 class TestProtocolConformancePython:

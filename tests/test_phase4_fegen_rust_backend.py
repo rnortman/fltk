@@ -1,4 +1,4 @@
-"""Tier-2 Phase 4 tests: AC8 — real Cst2Gsm on the Rust fegen backend.
+"""Tier-2 Phase 4 tests: the Rust fegen CST backend.
 
 These tests require the fegen_rust_cst extension to be built.
 They are skipped automatically when the module is not importable (run
@@ -8,10 +8,8 @@ is not being built.
 
 Test coverage:
   AC6 (partial) — make build-fegen-rust-cst produces an importable fegen_rust_cst module
-  AC8 — the *real* fltk2gsm.Cst2Gsm runs against the Rust fegen backend via
-         parse_grammar(rust_fegen_cst_module="fegen_rust_cst.cst"); the resulting
-         gsm.Grammar is equal to the Python-backend result on the same input.
-         No hand-written substitute for Cst2Gsm.
+  AC9 — label comparisons are backend-independent
+  Self-hosting — Rust parser → Rust CST → real Cst2Gsm equals the Python path
 """
 
 from __future__ import annotations
@@ -31,12 +29,11 @@ fegen_rust_cst = pytest.importorskip(
     reason="fegen_rust_cst not built; run 'make build-fegen-rust-cst' first",
 )
 
-import fltk.fegen.fltk2gsm as fltk2gsm_mod  # noqa: E402
 from fltk._native import SourceText, Span  # noqa: E402
 from fltk.fegen import fltk2gsm  # noqa: E402
 from fltk.fegen import fltk_cst as py_cst  # noqa: E402
 from fltk.fegen.pyrt import terminalsrc as tsrc  # noqa: E402
-from fltk.plumbing import parse_grammar, parse_grammar_file  # noqa: E402
+from fltk.plumbing import parse_grammar  # noqa: E402
 
 # ── Shared test inputs ─────────────────────────────────────────────────────
 
@@ -51,61 +48,6 @@ id := /[a-z]+/ ;
 """
 
 _FEGEN_FLTKG_PATH = Path(__file__).parent.parent / "fltk" / "fegen" / "fegen.fltkg"
-
-
-# ── AC8: real Cst2Gsm on Rust fegen backend ───────────────────────────────
-
-
-class TestAC8RealCst2GsmRustBackend:
-    """AC8 (binding): real fltk2gsm.Cst2Gsm runs against Rust fegen CST.
-
-    parse_grammar(text, rust_fegen_cst_module="fegen_rust_cst.cst") must produce
-    a gsm.Grammar equal to parse_grammar(text) (Python backend) on the same input.
-    No hand-written Cst2Gsm substitute.
-    """
-
-    def test_simple_grammar_rust_equals_python(self):
-        """Simple single-rule grammar: Rust backend produces the same gsm.Grammar as Python."""
-        python_result = parse_grammar(_SIMPLE_GRAMMAR)
-        rust_result = parse_grammar(_SIMPLE_GRAMMAR, rust_fegen_cst_module="fegen_rust_cst.cst")
-        assert python_result == rust_result
-
-    def test_multi_rule_grammar_rust_equals_python(self):
-        """Multi-rule grammar with alternatives: Rust == Python backend."""
-        python_result = parse_grammar(_MULTI_RULE_GRAMMAR)
-        rust_result = parse_grammar(_MULTI_RULE_GRAMMAR, rust_fegen_cst_module="fegen_rust_cst.cst")
-        assert python_result == rust_result
-
-    def test_fegen_grammar_itself_rust_equals_python(self):
-        """Parse fegen.fltkg itself with both backends; results must be equal.
-
-        This is the strongest AC8 check: the actual fegen grammar (used to parse
-        all user grammars) produces the same gsm.Grammar regardless of CST backend.
-        """
-        python_result = parse_grammar_file(_FEGEN_FLTKG_PATH)
-        rust_result = parse_grammar_file(_FEGEN_FLTKG_PATH, rust_fegen_cst_module="fegen_rust_cst.cst")
-        assert python_result == rust_result
-
-    def test_rust_backend_uses_real_cst2gsm(self):
-        """Verify the Rust path calls Cst2Gsm (not a hand-written substitute).
-
-        Monkeypatches Cst2Gsm.__init__ to confirm it is called exactly once
-        by parse_grammar with the Rust backend.
-        """
-        captured: list[object] = []
-        original_init = fltk2gsm_mod.Cst2Gsm.__init__
-
-        def recording_init(self, terminals):
-            captured.append(terminals)
-            return original_init(self, terminals)
-
-        fltk2gsm_mod.Cst2Gsm.__init__ = recording_init
-        try:
-            parse_grammar(_SIMPLE_GRAMMAR, rust_fegen_cst_module="fegen_rust_cst.cst")
-        finally:
-            fltk2gsm_mod.Cst2Gsm.__init__ = original_init
-
-        assert len(captured) == 1, "Cst2Gsm.__init__ not called exactly once"
 
 
 # ── Child accessor contract: span roundtrip and type pins ─────────────────

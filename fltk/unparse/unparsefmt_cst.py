@@ -9,8 +9,7 @@ import typing
 import fltk.fegen.pyrt.terminalsrc
 
 if typing.TYPE_CHECKING:
-    import fltk._native
-    import fltk.fegen.pyrt.span
+    import fltk.fegen.pyrt.span_protocol
 
 
 class NodeKind(enum.Enum):
@@ -119,7 +118,7 @@ class Formatter:
             return hash(self._fltk_canonical_name)
 
     kind: typing.Literal[NodeKind.FORMATTER] = NodeKind.FORMATTER
-    span: fltk.fegen.pyrt.terminalsrc.Span | fltk._native.Span = fltk.fegen.pyrt.terminalsrc.UnknownSpan
+    span: fltk.fegen.pyrt.span_protocol.SpanProtocol = fltk.fegen.pyrt.terminalsrc.UnknownSpan
     children: list[tuple[Label | None, Statement | Trivia]] = dataclasses.field(default_factory=list)
 
     def append(self, child: Statement | Trivia, label: Label | None = None) -> None:
@@ -241,7 +240,7 @@ class Statement:
             return hash(self._fltk_canonical_name)
 
     kind: typing.Literal[NodeKind.STATEMENT] = NodeKind.STATEMENT
-    span: fltk.fegen.pyrt.terminalsrc.Span | fltk._native.Span = fltk.fegen.pyrt.terminalsrc.UnknownSpan
+    span: fltk.fegen.pyrt.span_protocol.SpanProtocol = fltk.fegen.pyrt.terminalsrc.UnknownSpan
     children: list[
         tuple[
             Label | None,
@@ -714,23 +713,27 @@ class Default:
             return hash(self._fltk_canonical_name)
 
     kind: typing.Literal[NodeKind.DEFAULT] = NodeKind.DEFAULT
-    span: fltk.fegen.pyrt.terminalsrc.Span | fltk._native.Span = fltk.fegen.pyrt.terminalsrc.UnknownSpan
-    children: list[tuple[Label | None, Spacing | Trivia | fltk.fegen.pyrt.span.Span]] = dataclasses.field(
-        default_factory=list
+    span: fltk.fegen.pyrt.span_protocol.SpanProtocol = fltk.fegen.pyrt.terminalsrc.UnknownSpan
+    children: list[tuple[Label | None, Spacing | Trivia | fltk.fegen.pyrt.span_protocol.SpanProtocol]] = (
+        dataclasses.field(default_factory=list)
     )
 
-    def append(self, child: Spacing | Trivia | fltk.fegen.pyrt.span.Span, label: Label | None = None) -> None:
+    def append(
+        self, child: Spacing | Trivia | fltk.fegen.pyrt.span_protocol.SpanProtocol, label: Label | None = None
+    ) -> None:
         self.children.append((label, child))
 
     def extend(
-        self, children: typing.Iterable[Spacing | Trivia | fltk.fegen.pyrt.span.Span], label: Label | None = None
+        self,
+        children: typing.Iterable[Spacing | Trivia | fltk.fegen.pyrt.span_protocol.SpanProtocol],
+        label: Label | None = None,
     ) -> None:
         self.children.extend((label, child) for child in children)
 
     def extend_children(self, other: Default) -> None:
         self.children.extend(other.children)
 
-    def child(self) -> tuple[Label | None, Spacing | Trivia | fltk.fegen.pyrt.span.Span]:
+    def child(self) -> tuple[Label | None, Spacing | Trivia | fltk.fegen.pyrt.span_protocol.SpanProtocol]:
         if (n := len(self.children)) != 1:
             msg = f"Expected one child but have {n}"
             raise ValueError(msg)
@@ -738,7 +741,9 @@ class Default:
 
     _MUTATOR_ALLOWED_CHILD_TYPES = None
 
-    def _check_child_type_for_mutators(self, child: Spacing | Trivia | fltk.fegen.pyrt.span.Span) -> None:
+    def _check_child_type_for_mutators(
+        self, child: Spacing | Trivia | fltk.fegen.pyrt.span_protocol.SpanProtocol
+    ) -> None:
         _allowed = Default._MUTATOR_ALLOWED_CHILD_TYPES
         if _allowed is None:
             _allowed = (Spacing, Trivia, fltk.fegen.pyrt.terminalsrc.Span)
@@ -758,7 +763,10 @@ class Default:
             raise TypeError(msg)
 
     def insert(
-        self, index: int, child: Spacing | Trivia | fltk.fegen.pyrt.span.Span, label: Label | None = None
+        self,
+        index: int,
+        child: Spacing | Trivia | fltk.fegen.pyrt.span_protocol.SpanProtocol,
+        label: Label | None = None,
     ) -> None:
         self._check_child_type_for_mutators(child)
         self._check_label_type_for_mutators(label, "insert")
@@ -770,7 +778,9 @@ class Default:
             idx = min(idx, n)
         self.children.insert(idx, (label, child))
 
-    def remove_at(self, index: int) -> tuple[Label | None, Spacing | Trivia | fltk.fegen.pyrt.span.Span]:
+    def remove_at(
+        self, index: int
+    ) -> tuple[Label | None, Spacing | Trivia | fltk.fegen.pyrt.span_protocol.SpanProtocol]:
         idx = operator.index(index)
         n = len(self.children)
         norm = idx + n if idx < 0 else idx
@@ -780,7 +790,10 @@ class Default:
         return self.children.pop(norm)
 
     def replace_at(
-        self, index: int, child: Spacing | Trivia | fltk.fegen.pyrt.span.Span, label: Label | None = None
+        self,
+        index: int,
+        child: Spacing | Trivia | fltk.fegen.pyrt.span_protocol.SpanProtocol,
+        label: Label | None = None,
     ) -> None:
         self._check_child_type_for_mutators(child)
         self._check_label_type_for_mutators(label, "replace_at")
@@ -818,54 +831,54 @@ class Default:
             raise ValueError(msg)
         return children[0] if children else None
 
-    def append_ws_allowed(self, child: fltk.fegen.pyrt.span.Span) -> None:
+    def append_ws_allowed(self, child: fltk.fegen.pyrt.span_protocol.SpanProtocol) -> None:
         self.children.append((Default.Label.WS_ALLOWED, child))
 
-    def extend_ws_allowed(self, children: typing.Iterable[fltk.fegen.pyrt.span.Span]) -> None:
+    def extend_ws_allowed(self, children: typing.Iterable[fltk.fegen.pyrt.span_protocol.SpanProtocol]) -> None:
         self.children.extend((Default.Label.WS_ALLOWED, child) for child in children)
 
-    def children_ws_allowed(self) -> typing.Iterator[fltk.fegen.pyrt.span.Span]:
+    def children_ws_allowed(self) -> typing.Iterator[fltk.fegen.pyrt.span_protocol.SpanProtocol]:
         return (
-            typing.cast("fltk.fegen.pyrt.span.Span", child)
+            typing.cast("fltk.fegen.pyrt.span_protocol.SpanProtocol", child)
             for (label, child) in self.children
             if label == Default.Label.WS_ALLOWED
         )
 
-    def child_ws_allowed(self) -> fltk.fegen.pyrt.span.Span:
+    def child_ws_allowed(self) -> fltk.fegen.pyrt.span_protocol.SpanProtocol:
         children = list(self.children_ws_allowed())
         if (n := len(children)) != 1:
             msg = f"Expected one ws_allowed child but have {n}"
             raise ValueError(msg)
         return children[0]
 
-    def maybe_ws_allowed(self) -> fltk.fegen.pyrt.span.Span | None:
+    def maybe_ws_allowed(self) -> fltk.fegen.pyrt.span_protocol.SpanProtocol | None:
         children = list(self.children_ws_allowed())
         if (n := len(children)) > 1:
             msg = f"Expected at most one ws_allowed child but have {n}"
             raise ValueError(msg)
         return children[0] if children else None
 
-    def append_ws_required(self, child: fltk.fegen.pyrt.span.Span) -> None:
+    def append_ws_required(self, child: fltk.fegen.pyrt.span_protocol.SpanProtocol) -> None:
         self.children.append((Default.Label.WS_REQUIRED, child))
 
-    def extend_ws_required(self, children: typing.Iterable[fltk.fegen.pyrt.span.Span]) -> None:
+    def extend_ws_required(self, children: typing.Iterable[fltk.fegen.pyrt.span_protocol.SpanProtocol]) -> None:
         self.children.extend((Default.Label.WS_REQUIRED, child) for child in children)
 
-    def children_ws_required(self) -> typing.Iterator[fltk.fegen.pyrt.span.Span]:
+    def children_ws_required(self) -> typing.Iterator[fltk.fegen.pyrt.span_protocol.SpanProtocol]:
         return (
-            typing.cast("fltk.fegen.pyrt.span.Span", child)
+            typing.cast("fltk.fegen.pyrt.span_protocol.SpanProtocol", child)
             for (label, child) in self.children
             if label == Default.Label.WS_REQUIRED
         )
 
-    def child_ws_required(self) -> fltk.fegen.pyrt.span.Span:
+    def child_ws_required(self) -> fltk.fegen.pyrt.span_protocol.SpanProtocol:
         children = list(self.children_ws_required())
         if (n := len(children)) != 1:
             msg = f"Expected one ws_required child but have {n}"
             raise ValueError(msg)
         return children[0]
 
-    def maybe_ws_required(self) -> fltk.fegen.pyrt.span.Span | None:
+    def maybe_ws_required(self) -> fltk.fegen.pyrt.span_protocol.SpanProtocol | None:
         children = list(self.children_ws_required())
         if (n := len(children)) > 1:
             msg = f"Expected at most one ws_required child but have {n}"
@@ -899,7 +912,7 @@ class RuleConfig:
             return hash(self._fltk_canonical_name)
 
     kind: typing.Literal[NodeKind.RULECONFIG] = NodeKind.RULECONFIG
-    span: fltk.fegen.pyrt.terminalsrc.Span | fltk._native.Span = fltk.fegen.pyrt.terminalsrc.UnknownSpan
+    span: fltk.fegen.pyrt.span_protocol.SpanProtocol = fltk.fegen.pyrt.terminalsrc.UnknownSpan
     children: list[tuple[Label | None, Identifier | RuleStatement | Trivia]] = dataclasses.field(default_factory=list)
 
     def append(self, child: Identifier | RuleStatement | Trivia, label: Label | None = None) -> None:
@@ -1049,7 +1062,7 @@ class RuleStatement:
             return hash(self._fltk_canonical_name)
 
     kind: typing.Literal[NodeKind.RULESTATEMENT] = NodeKind.RULESTATEMENT
-    span: fltk.fegen.pyrt.terminalsrc.Span | fltk._native.Span = fltk.fegen.pyrt.terminalsrc.UnknownSpan
+    span: fltk.fegen.pyrt.span_protocol.SpanProtocol = fltk.fegen.pyrt.terminalsrc.UnknownSpan
     children: list[
         tuple[Label | None, After | Before | Default | Group | Join | Nest | Omit | PreserveBlanks | Render]
     ] = dataclasses.field(default_factory=list)
@@ -1384,7 +1397,7 @@ class Group:
             return hash(self._fltk_canonical_name)
 
     kind: typing.Literal[NodeKind.GROUP] = NodeKind.GROUP
-    span: fltk.fegen.pyrt.terminalsrc.Span | fltk._native.Span = fltk.fegen.pyrt.terminalsrc.UnknownSpan
+    span: fltk.fegen.pyrt.span_protocol.SpanProtocol = fltk.fegen.pyrt.terminalsrc.UnknownSpan
     children: list[tuple[Label | None, FromSpec | ToSpec | Trivia]] = dataclasses.field(default_factory=list)
 
     def append(self, child: FromSpec | ToSpec | Trivia, label: Label | None = None) -> None:
@@ -1520,7 +1533,7 @@ class Nest:
             return hash(self._fltk_canonical_name)
 
     kind: typing.Literal[NodeKind.NEST] = NodeKind.NEST
-    span: fltk.fegen.pyrt.terminalsrc.Span | fltk._native.Span = fltk.fegen.pyrt.terminalsrc.UnknownSpan
+    span: fltk.fegen.pyrt.span_protocol.SpanProtocol = fltk.fegen.pyrt.terminalsrc.UnknownSpan
     children: list[tuple[Label | None, FromSpec | Integer | ToSpec | Trivia]] = dataclasses.field(default_factory=list)
 
     def append(self, child: FromSpec | Integer | ToSpec | Trivia, label: Label | None = None) -> None:
@@ -1682,7 +1695,7 @@ class Join:
             return hash(self._fltk_canonical_name)
 
     kind: typing.Literal[NodeKind.JOIN] = NodeKind.JOIN
-    span: fltk.fegen.pyrt.terminalsrc.Span | fltk._native.Span = fltk.fegen.pyrt.terminalsrc.UnknownSpan
+    span: fltk.fegen.pyrt.span_protocol.SpanProtocol = fltk.fegen.pyrt.terminalsrc.UnknownSpan
     children: list[tuple[Label | None, DocLiteral | FromSpec | ToSpec | Trivia]] = dataclasses.field(
         default_factory=list
     )
@@ -1847,23 +1860,27 @@ class FromSpec:
             return hash(self._fltk_canonical_name)
 
     kind: typing.Literal[NodeKind.FROMSPEC] = NodeKind.FROMSPEC
-    span: fltk.fegen.pyrt.terminalsrc.Span | fltk._native.Span = fltk.fegen.pyrt.terminalsrc.UnknownSpan
-    children: list[tuple[Label | None, Anchor | Trivia | fltk.fegen.pyrt.span.Span]] = dataclasses.field(
-        default_factory=list
+    span: fltk.fegen.pyrt.span_protocol.SpanProtocol = fltk.fegen.pyrt.terminalsrc.UnknownSpan
+    children: list[tuple[Label | None, Anchor | Trivia | fltk.fegen.pyrt.span_protocol.SpanProtocol]] = (
+        dataclasses.field(default_factory=list)
     )
 
-    def append(self, child: Anchor | Trivia | fltk.fegen.pyrt.span.Span, label: Label | None = None) -> None:
+    def append(
+        self, child: Anchor | Trivia | fltk.fegen.pyrt.span_protocol.SpanProtocol, label: Label | None = None
+    ) -> None:
         self.children.append((label, child))
 
     def extend(
-        self, children: typing.Iterable[Anchor | Trivia | fltk.fegen.pyrt.span.Span], label: Label | None = None
+        self,
+        children: typing.Iterable[Anchor | Trivia | fltk.fegen.pyrt.span_protocol.SpanProtocol],
+        label: Label | None = None,
     ) -> None:
         self.children.extend((label, child) for child in children)
 
     def extend_children(self, other: FromSpec) -> None:
         self.children.extend(other.children)
 
-    def child(self) -> tuple[Label | None, Anchor | Trivia | fltk.fegen.pyrt.span.Span]:
+    def child(self) -> tuple[Label | None, Anchor | Trivia | fltk.fegen.pyrt.span_protocol.SpanProtocol]:
         if (n := len(self.children)) != 1:
             msg = f"Expected one child but have {n}"
             raise ValueError(msg)
@@ -1871,7 +1888,9 @@ class FromSpec:
 
     _MUTATOR_ALLOWED_CHILD_TYPES = None
 
-    def _check_child_type_for_mutators(self, child: Anchor | Trivia | fltk.fegen.pyrt.span.Span) -> None:
+    def _check_child_type_for_mutators(
+        self, child: Anchor | Trivia | fltk.fegen.pyrt.span_protocol.SpanProtocol
+    ) -> None:
         _allowed = FromSpec._MUTATOR_ALLOWED_CHILD_TYPES
         if _allowed is None:
             _allowed = (Anchor, Trivia, fltk.fegen.pyrt.terminalsrc.Span)
@@ -1891,7 +1910,10 @@ class FromSpec:
             raise TypeError(msg)
 
     def insert(
-        self, index: int, child: Anchor | Trivia | fltk.fegen.pyrt.span.Span, label: Label | None = None
+        self,
+        index: int,
+        child: Anchor | Trivia | fltk.fegen.pyrt.span_protocol.SpanProtocol,
+        label: Label | None = None,
     ) -> None:
         self._check_child_type_for_mutators(child)
         self._check_label_type_for_mutators(label, "insert")
@@ -1903,7 +1925,9 @@ class FromSpec:
             idx = min(idx, n)
         self.children.insert(idx, (label, child))
 
-    def remove_at(self, index: int) -> tuple[Label | None, Anchor | Trivia | fltk.fegen.pyrt.span.Span]:
+    def remove_at(
+        self, index: int
+    ) -> tuple[Label | None, Anchor | Trivia | fltk.fegen.pyrt.span_protocol.SpanProtocol]:
         idx = operator.index(index)
         n = len(self.children)
         norm = idx + n if idx < 0 else idx
@@ -1913,7 +1937,10 @@ class FromSpec:
         return self.children.pop(norm)
 
     def replace_at(
-        self, index: int, child: Anchor | Trivia | fltk.fegen.pyrt.span.Span, label: Label | None = None
+        self,
+        index: int,
+        child: Anchor | Trivia | fltk.fegen.pyrt.span_protocol.SpanProtocol,
+        label: Label | None = None,
     ) -> None:
         self._check_child_type_for_mutators(child)
         self._check_label_type_for_mutators(label, "replace_at")
@@ -1928,27 +1955,27 @@ class FromSpec:
     def clear(self) -> None:
         self.children.clear()
 
-    def append_after(self, child: fltk.fegen.pyrt.span.Span) -> None:
+    def append_after(self, child: fltk.fegen.pyrt.span_protocol.SpanProtocol) -> None:
         self.children.append((FromSpec.Label.AFTER, child))
 
-    def extend_after(self, children: typing.Iterable[fltk.fegen.pyrt.span.Span]) -> None:
+    def extend_after(self, children: typing.Iterable[fltk.fegen.pyrt.span_protocol.SpanProtocol]) -> None:
         self.children.extend((FromSpec.Label.AFTER, child) for child in children)
 
-    def children_after(self) -> typing.Iterator[fltk.fegen.pyrt.span.Span]:
+    def children_after(self) -> typing.Iterator[fltk.fegen.pyrt.span_protocol.SpanProtocol]:
         return (
-            typing.cast("fltk.fegen.pyrt.span.Span", child)
+            typing.cast("fltk.fegen.pyrt.span_protocol.SpanProtocol", child)
             for (label, child) in self.children
             if label == FromSpec.Label.AFTER
         )
 
-    def child_after(self) -> fltk.fegen.pyrt.span.Span:
+    def child_after(self) -> fltk.fegen.pyrt.span_protocol.SpanProtocol:
         children = list(self.children_after())
         if (n := len(children)) != 1:
             msg = f"Expected one after child but have {n}"
             raise ValueError(msg)
         return children[0]
 
-    def maybe_after(self) -> fltk.fegen.pyrt.span.Span | None:
+    def maybe_after(self) -> fltk.fegen.pyrt.span_protocol.SpanProtocol | None:
         children = list(self.children_after())
         if (n := len(children)) > 1:
             msg = f"Expected at most one after child but have {n}"
@@ -2004,23 +2031,27 @@ class ToSpec:
             return hash(self._fltk_canonical_name)
 
     kind: typing.Literal[NodeKind.TOSPEC] = NodeKind.TOSPEC
-    span: fltk.fegen.pyrt.terminalsrc.Span | fltk._native.Span = fltk.fegen.pyrt.terminalsrc.UnknownSpan
-    children: list[tuple[Label | None, Anchor | Trivia | fltk.fegen.pyrt.span.Span]] = dataclasses.field(
-        default_factory=list
+    span: fltk.fegen.pyrt.span_protocol.SpanProtocol = fltk.fegen.pyrt.terminalsrc.UnknownSpan
+    children: list[tuple[Label | None, Anchor | Trivia | fltk.fegen.pyrt.span_protocol.SpanProtocol]] = (
+        dataclasses.field(default_factory=list)
     )
 
-    def append(self, child: Anchor | Trivia | fltk.fegen.pyrt.span.Span, label: Label | None = None) -> None:
+    def append(
+        self, child: Anchor | Trivia | fltk.fegen.pyrt.span_protocol.SpanProtocol, label: Label | None = None
+    ) -> None:
         self.children.append((label, child))
 
     def extend(
-        self, children: typing.Iterable[Anchor | Trivia | fltk.fegen.pyrt.span.Span], label: Label | None = None
+        self,
+        children: typing.Iterable[Anchor | Trivia | fltk.fegen.pyrt.span_protocol.SpanProtocol],
+        label: Label | None = None,
     ) -> None:
         self.children.extend((label, child) for child in children)
 
     def extend_children(self, other: ToSpec) -> None:
         self.children.extend(other.children)
 
-    def child(self) -> tuple[Label | None, Anchor | Trivia | fltk.fegen.pyrt.span.Span]:
+    def child(self) -> tuple[Label | None, Anchor | Trivia | fltk.fegen.pyrt.span_protocol.SpanProtocol]:
         if (n := len(self.children)) != 1:
             msg = f"Expected one child but have {n}"
             raise ValueError(msg)
@@ -2028,7 +2059,9 @@ class ToSpec:
 
     _MUTATOR_ALLOWED_CHILD_TYPES = None
 
-    def _check_child_type_for_mutators(self, child: Anchor | Trivia | fltk.fegen.pyrt.span.Span) -> None:
+    def _check_child_type_for_mutators(
+        self, child: Anchor | Trivia | fltk.fegen.pyrt.span_protocol.SpanProtocol
+    ) -> None:
         _allowed = ToSpec._MUTATOR_ALLOWED_CHILD_TYPES
         if _allowed is None:
             _allowed = (Anchor, Trivia, fltk.fegen.pyrt.terminalsrc.Span)
@@ -2048,7 +2081,10 @@ class ToSpec:
             raise TypeError(msg)
 
     def insert(
-        self, index: int, child: Anchor | Trivia | fltk.fegen.pyrt.span.Span, label: Label | None = None
+        self,
+        index: int,
+        child: Anchor | Trivia | fltk.fegen.pyrt.span_protocol.SpanProtocol,
+        label: Label | None = None,
     ) -> None:
         self._check_child_type_for_mutators(child)
         self._check_label_type_for_mutators(label, "insert")
@@ -2060,7 +2096,9 @@ class ToSpec:
             idx = min(idx, n)
         self.children.insert(idx, (label, child))
 
-    def remove_at(self, index: int) -> tuple[Label | None, Anchor | Trivia | fltk.fegen.pyrt.span.Span]:
+    def remove_at(
+        self, index: int
+    ) -> tuple[Label | None, Anchor | Trivia | fltk.fegen.pyrt.span_protocol.SpanProtocol]:
         idx = operator.index(index)
         n = len(self.children)
         norm = idx + n if idx < 0 else idx
@@ -2070,7 +2108,10 @@ class ToSpec:
         return self.children.pop(norm)
 
     def replace_at(
-        self, index: int, child: Anchor | Trivia | fltk.fegen.pyrt.span.Span, label: Label | None = None
+        self,
+        index: int,
+        child: Anchor | Trivia | fltk.fegen.pyrt.span_protocol.SpanProtocol,
+        label: Label | None = None,
     ) -> None:
         self._check_child_type_for_mutators(child)
         self._check_label_type_for_mutators(label, "replace_at")
@@ -2085,27 +2126,27 @@ class ToSpec:
     def clear(self) -> None:
         self.children.clear()
 
-    def append_before(self, child: fltk.fegen.pyrt.span.Span) -> None:
+    def append_before(self, child: fltk.fegen.pyrt.span_protocol.SpanProtocol) -> None:
         self.children.append((ToSpec.Label.BEFORE, child))
 
-    def extend_before(self, children: typing.Iterable[fltk.fegen.pyrt.span.Span]) -> None:
+    def extend_before(self, children: typing.Iterable[fltk.fegen.pyrt.span_protocol.SpanProtocol]) -> None:
         self.children.extend((ToSpec.Label.BEFORE, child) for child in children)
 
-    def children_before(self) -> typing.Iterator[fltk.fegen.pyrt.span.Span]:
+    def children_before(self) -> typing.Iterator[fltk.fegen.pyrt.span_protocol.SpanProtocol]:
         return (
-            typing.cast("fltk.fegen.pyrt.span.Span", child)
+            typing.cast("fltk.fegen.pyrt.span_protocol.SpanProtocol", child)
             for (label, child) in self.children
             if label == ToSpec.Label.BEFORE
         )
 
-    def child_before(self) -> fltk.fegen.pyrt.span.Span:
+    def child_before(self) -> fltk.fegen.pyrt.span_protocol.SpanProtocol:
         children = list(self.children_before())
         if (n := len(children)) != 1:
             msg = f"Expected one before child but have {n}"
             raise ValueError(msg)
         return children[0]
 
-    def maybe_before(self) -> fltk.fegen.pyrt.span.Span | None:
+    def maybe_before(self) -> fltk.fegen.pyrt.span_protocol.SpanProtocol | None:
         children = list(self.children_before())
         if (n := len(children)) > 1:
             msg = f"Expected at most one before child but have {n}"
@@ -2161,7 +2202,7 @@ class Anchor:
             return hash(self._fltk_canonical_name)
 
     kind: typing.Literal[NodeKind.ANCHOR] = NodeKind.ANCHOR
-    span: fltk.fegen.pyrt.terminalsrc.Span | fltk._native.Span = fltk.fegen.pyrt.terminalsrc.UnknownSpan
+    span: fltk.fegen.pyrt.span_protocol.SpanProtocol = fltk.fegen.pyrt.terminalsrc.UnknownSpan
     children: list[tuple[Label | None, Identifier | Literal]] = dataclasses.field(default_factory=list)
 
     def append(self, child: Identifier | Literal, label: Label | None = None) -> None:
@@ -2296,7 +2337,7 @@ class After:
             return hash(self._fltk_canonical_name)
 
     kind: typing.Literal[NodeKind.AFTER] = NodeKind.AFTER
-    span: fltk.fegen.pyrt.terminalsrc.Span | fltk._native.Span = fltk.fegen.pyrt.terminalsrc.UnknownSpan
+    span: fltk.fegen.pyrt.span_protocol.SpanProtocol = fltk.fegen.pyrt.terminalsrc.UnknownSpan
     children: list[tuple[Label | None, Anchor | PositionSpecStatement | Trivia]] = dataclasses.field(
         default_factory=list
     )
@@ -2441,7 +2482,7 @@ class Before:
             return hash(self._fltk_canonical_name)
 
     kind: typing.Literal[NodeKind.BEFORE] = NodeKind.BEFORE
-    span: fltk.fegen.pyrt.terminalsrc.Span | fltk._native.Span = fltk.fegen.pyrt.terminalsrc.UnknownSpan
+    span: fltk.fegen.pyrt.span_protocol.SpanProtocol = fltk.fegen.pyrt.terminalsrc.UnknownSpan
     children: list[tuple[Label | None, Anchor | PositionSpecStatement | Trivia]] = dataclasses.field(
         default_factory=list
     )
@@ -2585,7 +2626,7 @@ class Omit:
             return hash(self._fltk_canonical_name)
 
     kind: typing.Literal[NodeKind.OMIT] = NodeKind.OMIT
-    span: fltk.fegen.pyrt.terminalsrc.Span | fltk._native.Span = fltk.fegen.pyrt.terminalsrc.UnknownSpan
+    span: fltk.fegen.pyrt.span_protocol.SpanProtocol = fltk.fegen.pyrt.terminalsrc.UnknownSpan
     children: list[tuple[Label | None, Anchor | Trivia]] = dataclasses.field(default_factory=list)
 
     def append(self, child: Anchor | Trivia, label: Label | None = None) -> None:
@@ -2696,7 +2737,7 @@ class Render:
             return hash(self._fltk_canonical_name)
 
     kind: typing.Literal[NodeKind.RENDER] = NodeKind.RENDER
-    span: fltk.fegen.pyrt.terminalsrc.Span | fltk._native.Span = fltk.fegen.pyrt.terminalsrc.UnknownSpan
+    span: fltk.fegen.pyrt.span_protocol.SpanProtocol = fltk.fegen.pyrt.terminalsrc.UnknownSpan
     children: list[tuple[Label | None, Anchor | Spacing | Trivia]] = dataclasses.field(default_factory=list)
 
     def append(self, child: Anchor | Spacing | Trivia, label: Label | None = None) -> None:
@@ -2831,7 +2872,7 @@ class PositionSpecStatement:
             return hash(self._fltk_canonical_name)
 
     kind: typing.Literal[NodeKind.POSITIONSPECSTATEMENT] = NodeKind.POSITIONSPECSTATEMENT
-    span: fltk.fegen.pyrt.terminalsrc.Span | fltk._native.Span = fltk.fegen.pyrt.terminalsrc.UnknownSpan
+    span: fltk.fegen.pyrt.span_protocol.SpanProtocol = fltk.fegen.pyrt.terminalsrc.UnknownSpan
     children: list[tuple[Label | None, PreserveBlanks | Spacing | Trivia]] = dataclasses.field(default_factory=list)
 
     def append(self, child: PreserveBlanks | Spacing | Trivia, label: Label | None = None) -> None:
@@ -2979,23 +3020,27 @@ class Spacing:
             return hash(self._fltk_canonical_name)
 
     kind: typing.Literal[NodeKind.SPACING] = NodeKind.SPACING
-    span: fltk.fegen.pyrt.terminalsrc.Span | fltk._native.Span = fltk.fegen.pyrt.terminalsrc.UnknownSpan
-    children: list[tuple[Label | None, Integer | Trivia | fltk.fegen.pyrt.span.Span]] = dataclasses.field(
-        default_factory=list
+    span: fltk.fegen.pyrt.span_protocol.SpanProtocol = fltk.fegen.pyrt.terminalsrc.UnknownSpan
+    children: list[tuple[Label | None, Integer | Trivia | fltk.fegen.pyrt.span_protocol.SpanProtocol]] = (
+        dataclasses.field(default_factory=list)
     )
 
-    def append(self, child: Integer | Trivia | fltk.fegen.pyrt.span.Span, label: Label | None = None) -> None:
+    def append(
+        self, child: Integer | Trivia | fltk.fegen.pyrt.span_protocol.SpanProtocol, label: Label | None = None
+    ) -> None:
         self.children.append((label, child))
 
     def extend(
-        self, children: typing.Iterable[Integer | Trivia | fltk.fegen.pyrt.span.Span], label: Label | None = None
+        self,
+        children: typing.Iterable[Integer | Trivia | fltk.fegen.pyrt.span_protocol.SpanProtocol],
+        label: Label | None = None,
     ) -> None:
         self.children.extend((label, child) for child in children)
 
     def extend_children(self, other: Spacing) -> None:
         self.children.extend(other.children)
 
-    def child(self) -> tuple[Label | None, Integer | Trivia | fltk.fegen.pyrt.span.Span]:
+    def child(self) -> tuple[Label | None, Integer | Trivia | fltk.fegen.pyrt.span_protocol.SpanProtocol]:
         if (n := len(self.children)) != 1:
             msg = f"Expected one child but have {n}"
             raise ValueError(msg)
@@ -3003,7 +3048,9 @@ class Spacing:
 
     _MUTATOR_ALLOWED_CHILD_TYPES = None
 
-    def _check_child_type_for_mutators(self, child: Integer | Trivia | fltk.fegen.pyrt.span.Span) -> None:
+    def _check_child_type_for_mutators(
+        self, child: Integer | Trivia | fltk.fegen.pyrt.span_protocol.SpanProtocol
+    ) -> None:
         _allowed = Spacing._MUTATOR_ALLOWED_CHILD_TYPES
         if _allowed is None:
             _allowed = (Integer, Trivia, fltk.fegen.pyrt.terminalsrc.Span)
@@ -3023,7 +3070,10 @@ class Spacing:
             raise TypeError(msg)
 
     def insert(
-        self, index: int, child: Integer | Trivia | fltk.fegen.pyrt.span.Span, label: Label | None = None
+        self,
+        index: int,
+        child: Integer | Trivia | fltk.fegen.pyrt.span_protocol.SpanProtocol,
+        label: Label | None = None,
     ) -> None:
         self._check_child_type_for_mutators(child)
         self._check_label_type_for_mutators(label, "insert")
@@ -3035,7 +3085,9 @@ class Spacing:
             idx = min(idx, n)
         self.children.insert(idx, (label, child))
 
-    def remove_at(self, index: int) -> tuple[Label | None, Integer | Trivia | fltk.fegen.pyrt.span.Span]:
+    def remove_at(
+        self, index: int
+    ) -> tuple[Label | None, Integer | Trivia | fltk.fegen.pyrt.span_protocol.SpanProtocol]:
         idx = operator.index(index)
         n = len(self.children)
         norm = idx + n if idx < 0 else idx
@@ -3045,7 +3097,10 @@ class Spacing:
         return self.children.pop(norm)
 
     def replace_at(
-        self, index: int, child: Integer | Trivia | fltk.fegen.pyrt.span.Span, label: Label | None = None
+        self,
+        index: int,
+        child: Integer | Trivia | fltk.fegen.pyrt.span_protocol.SpanProtocol,
+        label: Label | None = None,
     ) -> None:
         self._check_child_type_for_mutators(child)
         self._check_label_type_for_mutators(label, "replace_at")
@@ -3060,135 +3115,135 @@ class Spacing:
     def clear(self) -> None:
         self.children.clear()
 
-    def append_blank(self, child: fltk.fegen.pyrt.span.Span) -> None:
+    def append_blank(self, child: fltk.fegen.pyrt.span_protocol.SpanProtocol) -> None:
         self.children.append((Spacing.Label.BLANK, child))
 
-    def extend_blank(self, children: typing.Iterable[fltk.fegen.pyrt.span.Span]) -> None:
+    def extend_blank(self, children: typing.Iterable[fltk.fegen.pyrt.span_protocol.SpanProtocol]) -> None:
         self.children.extend((Spacing.Label.BLANK, child) for child in children)
 
-    def children_blank(self) -> typing.Iterator[fltk.fegen.pyrt.span.Span]:
+    def children_blank(self) -> typing.Iterator[fltk.fegen.pyrt.span_protocol.SpanProtocol]:
         return (
-            typing.cast("fltk.fegen.pyrt.span.Span", child)
+            typing.cast("fltk.fegen.pyrt.span_protocol.SpanProtocol", child)
             for (label, child) in self.children
             if label == Spacing.Label.BLANK
         )
 
-    def child_blank(self) -> fltk.fegen.pyrt.span.Span:
+    def child_blank(self) -> fltk.fegen.pyrt.span_protocol.SpanProtocol:
         children = list(self.children_blank())
         if (n := len(children)) != 1:
             msg = f"Expected one blank child but have {n}"
             raise ValueError(msg)
         return children[0]
 
-    def maybe_blank(self) -> fltk.fegen.pyrt.span.Span | None:
+    def maybe_blank(self) -> fltk.fegen.pyrt.span_protocol.SpanProtocol | None:
         children = list(self.children_blank())
         if (n := len(children)) > 1:
             msg = f"Expected at most one blank child but have {n}"
             raise ValueError(msg)
         return children[0] if children else None
 
-    def append_bsp(self, child: fltk.fegen.pyrt.span.Span) -> None:
+    def append_bsp(self, child: fltk.fegen.pyrt.span_protocol.SpanProtocol) -> None:
         self.children.append((Spacing.Label.BSP, child))
 
-    def extend_bsp(self, children: typing.Iterable[fltk.fegen.pyrt.span.Span]) -> None:
+    def extend_bsp(self, children: typing.Iterable[fltk.fegen.pyrt.span_protocol.SpanProtocol]) -> None:
         self.children.extend((Spacing.Label.BSP, child) for child in children)
 
-    def children_bsp(self) -> typing.Iterator[fltk.fegen.pyrt.span.Span]:
+    def children_bsp(self) -> typing.Iterator[fltk.fegen.pyrt.span_protocol.SpanProtocol]:
         return (
-            typing.cast("fltk.fegen.pyrt.span.Span", child)
+            typing.cast("fltk.fegen.pyrt.span_protocol.SpanProtocol", child)
             for (label, child) in self.children
             if label == Spacing.Label.BSP
         )
 
-    def child_bsp(self) -> fltk.fegen.pyrt.span.Span:
+    def child_bsp(self) -> fltk.fegen.pyrt.span_protocol.SpanProtocol:
         children = list(self.children_bsp())
         if (n := len(children)) != 1:
             msg = f"Expected one bsp child but have {n}"
             raise ValueError(msg)
         return children[0]
 
-    def maybe_bsp(self) -> fltk.fegen.pyrt.span.Span | None:
+    def maybe_bsp(self) -> fltk.fegen.pyrt.span_protocol.SpanProtocol | None:
         children = list(self.children_bsp())
         if (n := len(children)) > 1:
             msg = f"Expected at most one bsp child but have {n}"
             raise ValueError(msg)
         return children[0] if children else None
 
-    def append_hard(self, child: fltk.fegen.pyrt.span.Span) -> None:
+    def append_hard(self, child: fltk.fegen.pyrt.span_protocol.SpanProtocol) -> None:
         self.children.append((Spacing.Label.HARD, child))
 
-    def extend_hard(self, children: typing.Iterable[fltk.fegen.pyrt.span.Span]) -> None:
+    def extend_hard(self, children: typing.Iterable[fltk.fegen.pyrt.span_protocol.SpanProtocol]) -> None:
         self.children.extend((Spacing.Label.HARD, child) for child in children)
 
-    def children_hard(self) -> typing.Iterator[fltk.fegen.pyrt.span.Span]:
+    def children_hard(self) -> typing.Iterator[fltk.fegen.pyrt.span_protocol.SpanProtocol]:
         return (
-            typing.cast("fltk.fegen.pyrt.span.Span", child)
+            typing.cast("fltk.fegen.pyrt.span_protocol.SpanProtocol", child)
             for (label, child) in self.children
             if label == Spacing.Label.HARD
         )
 
-    def child_hard(self) -> fltk.fegen.pyrt.span.Span:
+    def child_hard(self) -> fltk.fegen.pyrt.span_protocol.SpanProtocol:
         children = list(self.children_hard())
         if (n := len(children)) != 1:
             msg = f"Expected one hard child but have {n}"
             raise ValueError(msg)
         return children[0]
 
-    def maybe_hard(self) -> fltk.fegen.pyrt.span.Span | None:
+    def maybe_hard(self) -> fltk.fegen.pyrt.span_protocol.SpanProtocol | None:
         children = list(self.children_hard())
         if (n := len(children)) > 1:
             msg = f"Expected at most one hard child but have {n}"
             raise ValueError(msg)
         return children[0] if children else None
 
-    def append_nbsp(self, child: fltk.fegen.pyrt.span.Span) -> None:
+    def append_nbsp(self, child: fltk.fegen.pyrt.span_protocol.SpanProtocol) -> None:
         self.children.append((Spacing.Label.NBSP, child))
 
-    def extend_nbsp(self, children: typing.Iterable[fltk.fegen.pyrt.span.Span]) -> None:
+    def extend_nbsp(self, children: typing.Iterable[fltk.fegen.pyrt.span_protocol.SpanProtocol]) -> None:
         self.children.extend((Spacing.Label.NBSP, child) for child in children)
 
-    def children_nbsp(self) -> typing.Iterator[fltk.fegen.pyrt.span.Span]:
+    def children_nbsp(self) -> typing.Iterator[fltk.fegen.pyrt.span_protocol.SpanProtocol]:
         return (
-            typing.cast("fltk.fegen.pyrt.span.Span", child)
+            typing.cast("fltk.fegen.pyrt.span_protocol.SpanProtocol", child)
             for (label, child) in self.children
             if label == Spacing.Label.NBSP
         )
 
-    def child_nbsp(self) -> fltk.fegen.pyrt.span.Span:
+    def child_nbsp(self) -> fltk.fegen.pyrt.span_protocol.SpanProtocol:
         children = list(self.children_nbsp())
         if (n := len(children)) != 1:
             msg = f"Expected one nbsp child but have {n}"
             raise ValueError(msg)
         return children[0]
 
-    def maybe_nbsp(self) -> fltk.fegen.pyrt.span.Span | None:
+    def maybe_nbsp(self) -> fltk.fegen.pyrt.span_protocol.SpanProtocol | None:
         children = list(self.children_nbsp())
         if (n := len(children)) > 1:
             msg = f"Expected at most one nbsp child but have {n}"
             raise ValueError(msg)
         return children[0] if children else None
 
-    def append_nil(self, child: fltk.fegen.pyrt.span.Span) -> None:
+    def append_nil(self, child: fltk.fegen.pyrt.span_protocol.SpanProtocol) -> None:
         self.children.append((Spacing.Label.NIL, child))
 
-    def extend_nil(self, children: typing.Iterable[fltk.fegen.pyrt.span.Span]) -> None:
+    def extend_nil(self, children: typing.Iterable[fltk.fegen.pyrt.span_protocol.SpanProtocol]) -> None:
         self.children.extend((Spacing.Label.NIL, child) for child in children)
 
-    def children_nil(self) -> typing.Iterator[fltk.fegen.pyrt.span.Span]:
+    def children_nil(self) -> typing.Iterator[fltk.fegen.pyrt.span_protocol.SpanProtocol]:
         return (
-            typing.cast("fltk.fegen.pyrt.span.Span", child)
+            typing.cast("fltk.fegen.pyrt.span_protocol.SpanProtocol", child)
             for (label, child) in self.children
             if label == Spacing.Label.NIL
         )
 
-    def child_nil(self) -> fltk.fegen.pyrt.span.Span:
+    def child_nil(self) -> fltk.fegen.pyrt.span_protocol.SpanProtocol:
         children = list(self.children_nil())
         if (n := len(children)) != 1:
             msg = f"Expected one nil child but have {n}"
             raise ValueError(msg)
         return children[0]
 
-    def maybe_nil(self) -> fltk.fegen.pyrt.span.Span | None:
+    def maybe_nil(self) -> fltk.fegen.pyrt.span_protocol.SpanProtocol | None:
         children = list(self.children_nil())
         if (n := len(children)) > 1:
             msg = f"Expected at most one nil child but have {n}"
@@ -3218,27 +3273,27 @@ class Spacing:
             raise ValueError(msg)
         return children[0] if children else None
 
-    def append_soft(self, child: fltk.fegen.pyrt.span.Span) -> None:
+    def append_soft(self, child: fltk.fegen.pyrt.span_protocol.SpanProtocol) -> None:
         self.children.append((Spacing.Label.SOFT, child))
 
-    def extend_soft(self, children: typing.Iterable[fltk.fegen.pyrt.span.Span]) -> None:
+    def extend_soft(self, children: typing.Iterable[fltk.fegen.pyrt.span_protocol.SpanProtocol]) -> None:
         self.children.extend((Spacing.Label.SOFT, child) for child in children)
 
-    def children_soft(self) -> typing.Iterator[fltk.fegen.pyrt.span.Span]:
+    def children_soft(self) -> typing.Iterator[fltk.fegen.pyrt.span_protocol.SpanProtocol]:
         return (
-            typing.cast("fltk.fegen.pyrt.span.Span", child)
+            typing.cast("fltk.fegen.pyrt.span_protocol.SpanProtocol", child)
             for (label, child) in self.children
             if label == Spacing.Label.SOFT
         )
 
-    def child_soft(self) -> fltk.fegen.pyrt.span.Span:
+    def child_soft(self) -> fltk.fegen.pyrt.span_protocol.SpanProtocol:
         children = list(self.children_soft())
         if (n := len(children)) != 1:
             msg = f"Expected one soft child but have {n}"
             raise ValueError(msg)
         return children[0]
 
-    def maybe_soft(self) -> fltk.fegen.pyrt.span.Span | None:
+    def maybe_soft(self) -> fltk.fegen.pyrt.span_protocol.SpanProtocol | None:
         children = list(self.children_soft())
         if (n := len(children)) > 1:
             msg = f"Expected at most one soft child but have {n}"
@@ -3279,7 +3334,7 @@ class DocLiteral:
             return hash(self._fltk_canonical_name)
 
     kind: typing.Literal[NodeKind.DOCLITERAL] = NodeKind.DOCLITERAL
-    span: fltk.fegen.pyrt.terminalsrc.Span | fltk._native.Span = fltk.fegen.pyrt.terminalsrc.UnknownSpan
+    span: fltk.fegen.pyrt.span_protocol.SpanProtocol = fltk.fegen.pyrt.terminalsrc.UnknownSpan
     children: list[tuple[Label | None, CompoundLiteral | ConcatLiteral | JoinLiteral | Spacing | TextLiteral]] = (
         dataclasses.field(default_factory=list)
     )
@@ -3523,7 +3578,7 @@ class TextLiteral:
             return hash(self._fltk_canonical_name)
 
     kind: typing.Literal[NodeKind.TEXTLITERAL] = NodeKind.TEXTLITERAL
-    span: fltk.fegen.pyrt.terminalsrc.Span | fltk._native.Span = fltk.fegen.pyrt.terminalsrc.UnknownSpan
+    span: fltk.fegen.pyrt.span_protocol.SpanProtocol = fltk.fegen.pyrt.terminalsrc.UnknownSpan
     children: list[tuple[Label | None, Literal | Trivia]] = dataclasses.field(default_factory=list)
 
     def append(self, child: Literal | Trivia, label: Label | None = None) -> None:
@@ -3633,7 +3688,7 @@ class ConcatLiteral:
             return hash(self._fltk_canonical_name)
 
     kind: typing.Literal[NodeKind.CONCATLITERAL] = NodeKind.CONCATLITERAL
-    span: fltk.fegen.pyrt.terminalsrc.Span | fltk._native.Span = fltk.fegen.pyrt.terminalsrc.UnknownSpan
+    span: fltk.fegen.pyrt.span_protocol.SpanProtocol = fltk.fegen.pyrt.terminalsrc.UnknownSpan
     children: list[tuple[Label | None, DocListLiteral | Trivia]] = dataclasses.field(default_factory=list)
 
     def append(self, child: DocListLiteral | Trivia, label: Label | None = None) -> None:
@@ -3748,7 +3803,7 @@ class JoinLiteral:
             return hash(self._fltk_canonical_name)
 
     kind: typing.Literal[NodeKind.JOINLITERAL] = NodeKind.JOINLITERAL
-    span: fltk.fegen.pyrt.terminalsrc.Span | fltk._native.Span = fltk.fegen.pyrt.terminalsrc.UnknownSpan
+    span: fltk.fegen.pyrt.span_protocol.SpanProtocol = fltk.fegen.pyrt.terminalsrc.UnknownSpan
     children: list[tuple[Label | None, DocListLiteral | DocLiteral | Trivia]] = dataclasses.field(default_factory=list)
 
     def append(self, child: DocListLiteral | DocLiteral | Trivia, label: Label | None = None) -> None:
@@ -3890,7 +3945,7 @@ class DocListLiteral:
             return hash(self._fltk_canonical_name)
 
     kind: typing.Literal[NodeKind.DOCLISTLITERAL] = NodeKind.DOCLISTLITERAL
-    span: fltk.fegen.pyrt.terminalsrc.Span | fltk._native.Span = fltk.fegen.pyrt.terminalsrc.UnknownSpan
+    span: fltk.fegen.pyrt.span_protocol.SpanProtocol = fltk.fegen.pyrt.terminalsrc.UnknownSpan
     children: list[tuple[Label | None, DocLiteral | Trivia]] = dataclasses.field(default_factory=list)
 
     def append(self, child: DocLiteral | Trivia, label: Label | None = None) -> None:
@@ -4006,23 +4061,27 @@ class CompoundLiteral:
             return hash(self._fltk_canonical_name)
 
     kind: typing.Literal[NodeKind.COMPOUNDLITERAL] = NodeKind.COMPOUNDLITERAL
-    span: fltk.fegen.pyrt.terminalsrc.Span | fltk._native.Span = fltk.fegen.pyrt.terminalsrc.UnknownSpan
-    children: list[tuple[Label | None, DocLiteral | Trivia | fltk.fegen.pyrt.span.Span]] = dataclasses.field(
-        default_factory=list
+    span: fltk.fegen.pyrt.span_protocol.SpanProtocol = fltk.fegen.pyrt.terminalsrc.UnknownSpan
+    children: list[tuple[Label | None, DocLiteral | Trivia | fltk.fegen.pyrt.span_protocol.SpanProtocol]] = (
+        dataclasses.field(default_factory=list)
     )
 
-    def append(self, child: DocLiteral | Trivia | fltk.fegen.pyrt.span.Span, label: Label | None = None) -> None:
+    def append(
+        self, child: DocLiteral | Trivia | fltk.fegen.pyrt.span_protocol.SpanProtocol, label: Label | None = None
+    ) -> None:
         self.children.append((label, child))
 
     def extend(
-        self, children: typing.Iterable[DocLiteral | Trivia | fltk.fegen.pyrt.span.Span], label: Label | None = None
+        self,
+        children: typing.Iterable[DocLiteral | Trivia | fltk.fegen.pyrt.span_protocol.SpanProtocol],
+        label: Label | None = None,
     ) -> None:
         self.children.extend((label, child) for child in children)
 
     def extend_children(self, other: CompoundLiteral) -> None:
         self.children.extend(other.children)
 
-    def child(self) -> tuple[Label | None, DocLiteral | Trivia | fltk.fegen.pyrt.span.Span]:
+    def child(self) -> tuple[Label | None, DocLiteral | Trivia | fltk.fegen.pyrt.span_protocol.SpanProtocol]:
         if (n := len(self.children)) != 1:
             msg = f"Expected one child but have {n}"
             raise ValueError(msg)
@@ -4030,7 +4089,9 @@ class CompoundLiteral:
 
     _MUTATOR_ALLOWED_CHILD_TYPES = None
 
-    def _check_child_type_for_mutators(self, child: DocLiteral | Trivia | fltk.fegen.pyrt.span.Span) -> None:
+    def _check_child_type_for_mutators(
+        self, child: DocLiteral | Trivia | fltk.fegen.pyrt.span_protocol.SpanProtocol
+    ) -> None:
         _allowed = CompoundLiteral._MUTATOR_ALLOWED_CHILD_TYPES
         if _allowed is None:
             _allowed = (DocLiteral, Trivia, fltk.fegen.pyrt.terminalsrc.Span)
@@ -4050,7 +4111,10 @@ class CompoundLiteral:
             raise TypeError(msg)
 
     def insert(
-        self, index: int, child: DocLiteral | Trivia | fltk.fegen.pyrt.span.Span, label: Label | None = None
+        self,
+        index: int,
+        child: DocLiteral | Trivia | fltk.fegen.pyrt.span_protocol.SpanProtocol,
+        label: Label | None = None,
     ) -> None:
         self._check_child_type_for_mutators(child)
         self._check_label_type_for_mutators(label, "insert")
@@ -4062,7 +4126,9 @@ class CompoundLiteral:
             idx = min(idx, n)
         self.children.insert(idx, (label, child))
 
-    def remove_at(self, index: int) -> tuple[Label | None, DocLiteral | Trivia | fltk.fegen.pyrt.span.Span]:
+    def remove_at(
+        self, index: int
+    ) -> tuple[Label | None, DocLiteral | Trivia | fltk.fegen.pyrt.span_protocol.SpanProtocol]:
         idx = operator.index(index)
         n = len(self.children)
         norm = idx + n if idx < 0 else idx
@@ -4072,7 +4138,10 @@ class CompoundLiteral:
         return self.children.pop(norm)
 
     def replace_at(
-        self, index: int, child: DocLiteral | Trivia | fltk.fegen.pyrt.span.Span, label: Label | None = None
+        self,
+        index: int,
+        child: DocLiteral | Trivia | fltk.fegen.pyrt.span_protocol.SpanProtocol,
+        label: Label | None = None,
     ) -> None:
         self._check_child_type_for_mutators(child)
         self._check_label_type_for_mutators(label, "replace_at")
@@ -4114,54 +4183,54 @@ class CompoundLiteral:
             raise ValueError(msg)
         return children[0] if children else None
 
-    def append_group(self, child: fltk.fegen.pyrt.span.Span) -> None:
+    def append_group(self, child: fltk.fegen.pyrt.span_protocol.SpanProtocol) -> None:
         self.children.append((CompoundLiteral.Label.GROUP, child))
 
-    def extend_group(self, children: typing.Iterable[fltk.fegen.pyrt.span.Span]) -> None:
+    def extend_group(self, children: typing.Iterable[fltk.fegen.pyrt.span_protocol.SpanProtocol]) -> None:
         self.children.extend((CompoundLiteral.Label.GROUP, child) for child in children)
 
-    def children_group(self) -> typing.Iterator[fltk.fegen.pyrt.span.Span]:
+    def children_group(self) -> typing.Iterator[fltk.fegen.pyrt.span_protocol.SpanProtocol]:
         return (
-            typing.cast("fltk.fegen.pyrt.span.Span", child)
+            typing.cast("fltk.fegen.pyrt.span_protocol.SpanProtocol", child)
             for (label, child) in self.children
             if label == CompoundLiteral.Label.GROUP
         )
 
-    def child_group(self) -> fltk.fegen.pyrt.span.Span:
+    def child_group(self) -> fltk.fegen.pyrt.span_protocol.SpanProtocol:
         children = list(self.children_group())
         if (n := len(children)) != 1:
             msg = f"Expected one group child but have {n}"
             raise ValueError(msg)
         return children[0]
 
-    def maybe_group(self) -> fltk.fegen.pyrt.span.Span | None:
+    def maybe_group(self) -> fltk.fegen.pyrt.span_protocol.SpanProtocol | None:
         children = list(self.children_group())
         if (n := len(children)) > 1:
             msg = f"Expected at most one group child but have {n}"
             raise ValueError(msg)
         return children[0] if children else None
 
-    def append_nest(self, child: fltk.fegen.pyrt.span.Span) -> None:
+    def append_nest(self, child: fltk.fegen.pyrt.span_protocol.SpanProtocol) -> None:
         self.children.append((CompoundLiteral.Label.NEST, child))
 
-    def extend_nest(self, children: typing.Iterable[fltk.fegen.pyrt.span.Span]) -> None:
+    def extend_nest(self, children: typing.Iterable[fltk.fegen.pyrt.span_protocol.SpanProtocol]) -> None:
         self.children.extend((CompoundLiteral.Label.NEST, child) for child in children)
 
-    def children_nest(self) -> typing.Iterator[fltk.fegen.pyrt.span.Span]:
+    def children_nest(self) -> typing.Iterator[fltk.fegen.pyrt.span_protocol.SpanProtocol]:
         return (
-            typing.cast("fltk.fegen.pyrt.span.Span", child)
+            typing.cast("fltk.fegen.pyrt.span_protocol.SpanProtocol", child)
             for (label, child) in self.children
             if label == CompoundLiteral.Label.NEST
         )
 
-    def child_nest(self) -> fltk.fegen.pyrt.span.Span:
+    def child_nest(self) -> fltk.fegen.pyrt.span_protocol.SpanProtocol:
         children = list(self.children_nest())
         if (n := len(children)) != 1:
             msg = f"Expected one nest child but have {n}"
             raise ValueError(msg)
         return children[0]
 
-    def maybe_nest(self) -> fltk.fegen.pyrt.span.Span | None:
+    def maybe_nest(self) -> fltk.fegen.pyrt.span_protocol.SpanProtocol | None:
         children = list(self.children_nest())
         if (n := len(children)) > 1:
             msg = f"Expected at most one nest child but have {n}"
@@ -4194,7 +4263,7 @@ class TriviaPreserve:
             return hash(self._fltk_canonical_name)
 
     kind: typing.Literal[NodeKind.TRIVIAPRESERVE] = NodeKind.TRIVIAPRESERVE
-    span: fltk.fegen.pyrt.terminalsrc.Span | fltk._native.Span = fltk.fegen.pyrt.terminalsrc.UnknownSpan
+    span: fltk.fegen.pyrt.span_protocol.SpanProtocol = fltk.fegen.pyrt.terminalsrc.UnknownSpan
     children: list[tuple[Label | None, Trivia | TriviaNodeList]] = dataclasses.field(default_factory=list)
 
     def append(self, child: Trivia | TriviaNodeList, label: Label | None = None) -> None:
@@ -4308,7 +4377,7 @@ class TriviaNodeList:
             return hash(self._fltk_canonical_name)
 
     kind: typing.Literal[NodeKind.TRIVIANODELIST] = NodeKind.TRIVIANODELIST
-    span: fltk.fegen.pyrt.terminalsrc.Span | fltk._native.Span = fltk.fegen.pyrt.terminalsrc.UnknownSpan
+    span: fltk.fegen.pyrt.span_protocol.SpanProtocol = fltk.fegen.pyrt.terminalsrc.UnknownSpan
     children: list[tuple[Label | None, Identifier | Trivia]] = dataclasses.field(default_factory=list)
 
     def append(self, child: Identifier | Trivia, label: Label | None = None) -> None:
@@ -4422,7 +4491,7 @@ class PreserveBlanks:
             return hash(self._fltk_canonical_name)
 
     kind: typing.Literal[NodeKind.PRESERVEBLANKS] = NodeKind.PRESERVEBLANKS
-    span: fltk.fegen.pyrt.terminalsrc.Span | fltk._native.Span = fltk.fegen.pyrt.terminalsrc.UnknownSpan
+    span: fltk.fegen.pyrt.span_protocol.SpanProtocol = fltk.fegen.pyrt.terminalsrc.UnknownSpan
     children: list[tuple[Label | None, Integer | Trivia]] = dataclasses.field(default_factory=list)
 
     def append(self, child: Integer | Trivia, label: Label | None = None) -> None:
@@ -4534,19 +4603,23 @@ class Identifier:
             return hash(self._fltk_canonical_name)
 
     kind: typing.Literal[NodeKind.IDENTIFIER] = NodeKind.IDENTIFIER
-    span: fltk.fegen.pyrt.terminalsrc.Span | fltk._native.Span = fltk.fegen.pyrt.terminalsrc.UnknownSpan
-    children: list[tuple[Label | None, fltk.fegen.pyrt.span.Span]] = dataclasses.field(default_factory=list)
+    span: fltk.fegen.pyrt.span_protocol.SpanProtocol = fltk.fegen.pyrt.terminalsrc.UnknownSpan
+    children: list[tuple[Label | None, fltk.fegen.pyrt.span_protocol.SpanProtocol]] = dataclasses.field(
+        default_factory=list
+    )
 
-    def append(self, child: fltk.fegen.pyrt.span.Span, label: Label | None = None) -> None:
+    def append(self, child: fltk.fegen.pyrt.span_protocol.SpanProtocol, label: Label | None = None) -> None:
         self.children.append((label, child))
 
-    def extend(self, children: typing.Iterable[fltk.fegen.pyrt.span.Span], label: Label | None = None) -> None:
+    def extend(
+        self, children: typing.Iterable[fltk.fegen.pyrt.span_protocol.SpanProtocol], label: Label | None = None
+    ) -> None:
         self.children.extend((label, child) for child in children)
 
     def extend_children(self, other: Identifier) -> None:
         self.children.extend(other.children)
 
-    def child(self) -> tuple[Label | None, fltk.fegen.pyrt.span.Span]:
+    def child(self) -> tuple[Label | None, fltk.fegen.pyrt.span_protocol.SpanProtocol]:
         if (n := len(self.children)) != 1:
             msg = f"Expected one child but have {n}"
             raise ValueError(msg)
@@ -4554,7 +4627,7 @@ class Identifier:
 
     _MUTATOR_ALLOWED_CHILD_TYPES = None
 
-    def _check_child_type_for_mutators(self, child: fltk.fegen.pyrt.span.Span) -> None:
+    def _check_child_type_for_mutators(self, child: fltk.fegen.pyrt.span_protocol.SpanProtocol) -> None:
         _allowed = Identifier._MUTATOR_ALLOWED_CHILD_TYPES
         if _allowed is None:
             _allowed = (fltk.fegen.pyrt.terminalsrc.Span,)
@@ -4573,7 +4646,7 @@ class Identifier:
             msg = f"{_cn}.{method}: label argument is not a {_cn}_Label; got {type(label).__name__}"
             raise TypeError(msg)
 
-    def insert(self, index: int, child: fltk.fegen.pyrt.span.Span, label: Label | None = None) -> None:
+    def insert(self, index: int, child: fltk.fegen.pyrt.span_protocol.SpanProtocol, label: Label | None = None) -> None:
         self._check_child_type_for_mutators(child)
         self._check_label_type_for_mutators(label, "insert")
         idx = operator.index(index)
@@ -4584,7 +4657,7 @@ class Identifier:
             idx = min(idx, n)
         self.children.insert(idx, (label, child))
 
-    def remove_at(self, index: int) -> tuple[Label | None, fltk.fegen.pyrt.span.Span]:
+    def remove_at(self, index: int) -> tuple[Label | None, fltk.fegen.pyrt.span_protocol.SpanProtocol]:
         idx = operator.index(index)
         n = len(self.children)
         norm = idx + n if idx < 0 else idx
@@ -4593,7 +4666,9 @@ class Identifier:
             raise IndexError(msg)
         return self.children.pop(norm)
 
-    def replace_at(self, index: int, child: fltk.fegen.pyrt.span.Span, label: Label | None = None) -> None:
+    def replace_at(
+        self, index: int, child: fltk.fegen.pyrt.span_protocol.SpanProtocol, label: Label | None = None
+    ) -> None:
         self._check_child_type_for_mutators(child)
         self._check_label_type_for_mutators(label, "replace_at")
         idx = operator.index(index)
@@ -4607,23 +4682,23 @@ class Identifier:
     def clear(self) -> None:
         self.children.clear()
 
-    def append_name(self, child: fltk.fegen.pyrt.span.Span) -> None:
+    def append_name(self, child: fltk.fegen.pyrt.span_protocol.SpanProtocol) -> None:
         self.children.append((Identifier.Label.NAME, child))
 
-    def extend_name(self, children: typing.Iterable[fltk.fegen.pyrt.span.Span]) -> None:
+    def extend_name(self, children: typing.Iterable[fltk.fegen.pyrt.span_protocol.SpanProtocol]) -> None:
         self.children.extend((Identifier.Label.NAME, child) for child in children)
 
-    def children_name(self) -> typing.Iterator[fltk.fegen.pyrt.span.Span]:
+    def children_name(self) -> typing.Iterator[fltk.fegen.pyrt.span_protocol.SpanProtocol]:
         return (child for (label, child) in self.children if label == Identifier.Label.NAME)
 
-    def child_name(self) -> fltk.fegen.pyrt.span.Span:
+    def child_name(self) -> fltk.fegen.pyrt.span_protocol.SpanProtocol:
         children = list(self.children_name())
         if (n := len(children)) != 1:
             msg = f"Expected one name child but have {n}"
             raise ValueError(msg)
         return children[0]
 
-    def maybe_name(self) -> fltk.fegen.pyrt.span.Span | None:
+    def maybe_name(self) -> fltk.fegen.pyrt.span_protocol.SpanProtocol | None:
         children = list(self.children_name())
         if (n := len(children)) > 1:
             msg = f"Expected at most one name child but have {n}"
@@ -4654,19 +4729,23 @@ class Literal:
             return hash(self._fltk_canonical_name)
 
     kind: typing.Literal[NodeKind.LITERAL] = NodeKind.LITERAL
-    span: fltk.fegen.pyrt.terminalsrc.Span | fltk._native.Span = fltk.fegen.pyrt.terminalsrc.UnknownSpan
-    children: list[tuple[Label | None, fltk.fegen.pyrt.span.Span]] = dataclasses.field(default_factory=list)
+    span: fltk.fegen.pyrt.span_protocol.SpanProtocol = fltk.fegen.pyrt.terminalsrc.UnknownSpan
+    children: list[tuple[Label | None, fltk.fegen.pyrt.span_protocol.SpanProtocol]] = dataclasses.field(
+        default_factory=list
+    )
 
-    def append(self, child: fltk.fegen.pyrt.span.Span, label: Label | None = None) -> None:
+    def append(self, child: fltk.fegen.pyrt.span_protocol.SpanProtocol, label: Label | None = None) -> None:
         self.children.append((label, child))
 
-    def extend(self, children: typing.Iterable[fltk.fegen.pyrt.span.Span], label: Label | None = None) -> None:
+    def extend(
+        self, children: typing.Iterable[fltk.fegen.pyrt.span_protocol.SpanProtocol], label: Label | None = None
+    ) -> None:
         self.children.extend((label, child) for child in children)
 
     def extend_children(self, other: Literal) -> None:
         self.children.extend(other.children)
 
-    def child(self) -> tuple[Label | None, fltk.fegen.pyrt.span.Span]:
+    def child(self) -> tuple[Label | None, fltk.fegen.pyrt.span_protocol.SpanProtocol]:
         if (n := len(self.children)) != 1:
             msg = f"Expected one child but have {n}"
             raise ValueError(msg)
@@ -4674,7 +4753,7 @@ class Literal:
 
     _MUTATOR_ALLOWED_CHILD_TYPES = None
 
-    def _check_child_type_for_mutators(self, child: fltk.fegen.pyrt.span.Span) -> None:
+    def _check_child_type_for_mutators(self, child: fltk.fegen.pyrt.span_protocol.SpanProtocol) -> None:
         _allowed = Literal._MUTATOR_ALLOWED_CHILD_TYPES
         if _allowed is None:
             _allowed = (fltk.fegen.pyrt.terminalsrc.Span,)
@@ -4693,7 +4772,7 @@ class Literal:
             msg = f"{_cn}.{method}: label argument is not a {_cn}_Label; got {type(label).__name__}"
             raise TypeError(msg)
 
-    def insert(self, index: int, child: fltk.fegen.pyrt.span.Span, label: Label | None = None) -> None:
+    def insert(self, index: int, child: fltk.fegen.pyrt.span_protocol.SpanProtocol, label: Label | None = None) -> None:
         self._check_child_type_for_mutators(child)
         self._check_label_type_for_mutators(label, "insert")
         idx = operator.index(index)
@@ -4704,7 +4783,7 @@ class Literal:
             idx = min(idx, n)
         self.children.insert(idx, (label, child))
 
-    def remove_at(self, index: int) -> tuple[Label | None, fltk.fegen.pyrt.span.Span]:
+    def remove_at(self, index: int) -> tuple[Label | None, fltk.fegen.pyrt.span_protocol.SpanProtocol]:
         idx = operator.index(index)
         n = len(self.children)
         norm = idx + n if idx < 0 else idx
@@ -4713,7 +4792,9 @@ class Literal:
             raise IndexError(msg)
         return self.children.pop(norm)
 
-    def replace_at(self, index: int, child: fltk.fegen.pyrt.span.Span, label: Label | None = None) -> None:
+    def replace_at(
+        self, index: int, child: fltk.fegen.pyrt.span_protocol.SpanProtocol, label: Label | None = None
+    ) -> None:
         self._check_child_type_for_mutators(child)
         self._check_label_type_for_mutators(label, "replace_at")
         idx = operator.index(index)
@@ -4727,23 +4808,23 @@ class Literal:
     def clear(self) -> None:
         self.children.clear()
 
-    def append_value(self, child: fltk.fegen.pyrt.span.Span) -> None:
+    def append_value(self, child: fltk.fegen.pyrt.span_protocol.SpanProtocol) -> None:
         self.children.append((Literal.Label.VALUE, child))
 
-    def extend_value(self, children: typing.Iterable[fltk.fegen.pyrt.span.Span]) -> None:
+    def extend_value(self, children: typing.Iterable[fltk.fegen.pyrt.span_protocol.SpanProtocol]) -> None:
         self.children.extend((Literal.Label.VALUE, child) for child in children)
 
-    def children_value(self) -> typing.Iterator[fltk.fegen.pyrt.span.Span]:
+    def children_value(self) -> typing.Iterator[fltk.fegen.pyrt.span_protocol.SpanProtocol]:
         return (child for (label, child) in self.children if label == Literal.Label.VALUE)
 
-    def child_value(self) -> fltk.fegen.pyrt.span.Span:
+    def child_value(self) -> fltk.fegen.pyrt.span_protocol.SpanProtocol:
         children = list(self.children_value())
         if (n := len(children)) != 1:
             msg = f"Expected one value child but have {n}"
             raise ValueError(msg)
         return children[0]
 
-    def maybe_value(self) -> fltk.fegen.pyrt.span.Span | None:
+    def maybe_value(self) -> fltk.fegen.pyrt.span_protocol.SpanProtocol | None:
         children = list(self.children_value())
         if (n := len(children)) > 1:
             msg = f"Expected at most one value child but have {n}"
@@ -4774,19 +4855,23 @@ class Integer:
             return hash(self._fltk_canonical_name)
 
     kind: typing.Literal[NodeKind.INTEGER] = NodeKind.INTEGER
-    span: fltk.fegen.pyrt.terminalsrc.Span | fltk._native.Span = fltk.fegen.pyrt.terminalsrc.UnknownSpan
-    children: list[tuple[Label | None, fltk.fegen.pyrt.span.Span]] = dataclasses.field(default_factory=list)
+    span: fltk.fegen.pyrt.span_protocol.SpanProtocol = fltk.fegen.pyrt.terminalsrc.UnknownSpan
+    children: list[tuple[Label | None, fltk.fegen.pyrt.span_protocol.SpanProtocol]] = dataclasses.field(
+        default_factory=list
+    )
 
-    def append(self, child: fltk.fegen.pyrt.span.Span, label: Label | None = None) -> None:
+    def append(self, child: fltk.fegen.pyrt.span_protocol.SpanProtocol, label: Label | None = None) -> None:
         self.children.append((label, child))
 
-    def extend(self, children: typing.Iterable[fltk.fegen.pyrt.span.Span], label: Label | None = None) -> None:
+    def extend(
+        self, children: typing.Iterable[fltk.fegen.pyrt.span_protocol.SpanProtocol], label: Label | None = None
+    ) -> None:
         self.children.extend((label, child) for child in children)
 
     def extend_children(self, other: Integer) -> None:
         self.children.extend(other.children)
 
-    def child(self) -> tuple[Label | None, fltk.fegen.pyrt.span.Span]:
+    def child(self) -> tuple[Label | None, fltk.fegen.pyrt.span_protocol.SpanProtocol]:
         if (n := len(self.children)) != 1:
             msg = f"Expected one child but have {n}"
             raise ValueError(msg)
@@ -4794,7 +4879,7 @@ class Integer:
 
     _MUTATOR_ALLOWED_CHILD_TYPES = None
 
-    def _check_child_type_for_mutators(self, child: fltk.fegen.pyrt.span.Span) -> None:
+    def _check_child_type_for_mutators(self, child: fltk.fegen.pyrt.span_protocol.SpanProtocol) -> None:
         _allowed = Integer._MUTATOR_ALLOWED_CHILD_TYPES
         if _allowed is None:
             _allowed = (fltk.fegen.pyrt.terminalsrc.Span,)
@@ -4813,7 +4898,7 @@ class Integer:
             msg = f"{_cn}.{method}: label argument is not a {_cn}_Label; got {type(label).__name__}"
             raise TypeError(msg)
 
-    def insert(self, index: int, child: fltk.fegen.pyrt.span.Span, label: Label | None = None) -> None:
+    def insert(self, index: int, child: fltk.fegen.pyrt.span_protocol.SpanProtocol, label: Label | None = None) -> None:
         self._check_child_type_for_mutators(child)
         self._check_label_type_for_mutators(label, "insert")
         idx = operator.index(index)
@@ -4824,7 +4909,7 @@ class Integer:
             idx = min(idx, n)
         self.children.insert(idx, (label, child))
 
-    def remove_at(self, index: int) -> tuple[Label | None, fltk.fegen.pyrt.span.Span]:
+    def remove_at(self, index: int) -> tuple[Label | None, fltk.fegen.pyrt.span_protocol.SpanProtocol]:
         idx = operator.index(index)
         n = len(self.children)
         norm = idx + n if idx < 0 else idx
@@ -4833,7 +4918,9 @@ class Integer:
             raise IndexError(msg)
         return self.children.pop(norm)
 
-    def replace_at(self, index: int, child: fltk.fegen.pyrt.span.Span, label: Label | None = None) -> None:
+    def replace_at(
+        self, index: int, child: fltk.fegen.pyrt.span_protocol.SpanProtocol, label: Label | None = None
+    ) -> None:
         self._check_child_type_for_mutators(child)
         self._check_label_type_for_mutators(label, "replace_at")
         idx = operator.index(index)
@@ -4847,23 +4934,23 @@ class Integer:
     def clear(self) -> None:
         self.children.clear()
 
-    def append_value(self, child: fltk.fegen.pyrt.span.Span) -> None:
+    def append_value(self, child: fltk.fegen.pyrt.span_protocol.SpanProtocol) -> None:
         self.children.append((Integer.Label.VALUE, child))
 
-    def extend_value(self, children: typing.Iterable[fltk.fegen.pyrt.span.Span]) -> None:
+    def extend_value(self, children: typing.Iterable[fltk.fegen.pyrt.span_protocol.SpanProtocol]) -> None:
         self.children.extend((Integer.Label.VALUE, child) for child in children)
 
-    def children_value(self) -> typing.Iterator[fltk.fegen.pyrt.span.Span]:
+    def children_value(self) -> typing.Iterator[fltk.fegen.pyrt.span_protocol.SpanProtocol]:
         return (child for (label, child) in self.children if label == Integer.Label.VALUE)
 
-    def child_value(self) -> fltk.fegen.pyrt.span.Span:
+    def child_value(self) -> fltk.fegen.pyrt.span_protocol.SpanProtocol:
         children = list(self.children_value())
         if (n := len(children)) != 1:
             msg = f"Expected one value child but have {n}"
             raise ValueError(msg)
         return children[0]
 
-    def maybe_value(self) -> fltk.fegen.pyrt.span.Span | None:
+    def maybe_value(self) -> fltk.fegen.pyrt.span_protocol.SpanProtocol | None:
         children = list(self.children_value())
         if (n := len(children)) > 1:
             msg = f"Expected at most one value child but have {n}"
@@ -4894,23 +4981,27 @@ class Trivia:
             return hash(self._fltk_canonical_name)
 
     kind: typing.Literal[NodeKind.TRIVIA] = NodeKind.TRIVIA
-    span: fltk.fegen.pyrt.terminalsrc.Span | fltk._native.Span = fltk.fegen.pyrt.terminalsrc.UnknownSpan
-    children: list[tuple[Label | None, LineComment | fltk.fegen.pyrt.span.Span]] = dataclasses.field(
+    span: fltk.fegen.pyrt.span_protocol.SpanProtocol = fltk.fegen.pyrt.terminalsrc.UnknownSpan
+    children: list[tuple[Label | None, LineComment | fltk.fegen.pyrt.span_protocol.SpanProtocol]] = dataclasses.field(
         default_factory=list
     )
 
-    def append(self, child: LineComment | fltk.fegen.pyrt.span.Span, label: Label | None = None) -> None:
+    def append(
+        self, child: LineComment | fltk.fegen.pyrt.span_protocol.SpanProtocol, label: Label | None = None
+    ) -> None:
         self.children.append((label, child))
 
     def extend(
-        self, children: typing.Iterable[LineComment | fltk.fegen.pyrt.span.Span], label: Label | None = None
+        self,
+        children: typing.Iterable[LineComment | fltk.fegen.pyrt.span_protocol.SpanProtocol],
+        label: Label | None = None,
     ) -> None:
         self.children.extend((label, child) for child in children)
 
     def extend_children(self, other: Trivia) -> None:
         self.children.extend(other.children)
 
-    def child(self) -> tuple[Label | None, LineComment | fltk.fegen.pyrt.span.Span]:
+    def child(self) -> tuple[Label | None, LineComment | fltk.fegen.pyrt.span_protocol.SpanProtocol]:
         if (n := len(self.children)) != 1:
             msg = f"Expected one child but have {n}"
             raise ValueError(msg)
@@ -4918,7 +5009,7 @@ class Trivia:
 
     _MUTATOR_ALLOWED_CHILD_TYPES = None
 
-    def _check_child_type_for_mutators(self, child: LineComment | fltk.fegen.pyrt.span.Span) -> None:
+    def _check_child_type_for_mutators(self, child: LineComment | fltk.fegen.pyrt.span_protocol.SpanProtocol) -> None:
         _allowed = Trivia._MUTATOR_ALLOWED_CHILD_TYPES
         if _allowed is None:
             _allowed = (LineComment, fltk.fegen.pyrt.terminalsrc.Span)
@@ -4937,7 +5028,9 @@ class Trivia:
             msg = f"{_cn}.{method}: label argument is not a {_cn}_Label; got {type(label).__name__}"
             raise TypeError(msg)
 
-    def insert(self, index: int, child: LineComment | fltk.fegen.pyrt.span.Span, label: Label | None = None) -> None:
+    def insert(
+        self, index: int, child: LineComment | fltk.fegen.pyrt.span_protocol.SpanProtocol, label: Label | None = None
+    ) -> None:
         self._check_child_type_for_mutators(child)
         self._check_label_type_for_mutators(label, "insert")
         idx = operator.index(index)
@@ -4948,7 +5041,7 @@ class Trivia:
             idx = min(idx, n)
         self.children.insert(idx, (label, child))
 
-    def remove_at(self, index: int) -> tuple[Label | None, LineComment | fltk.fegen.pyrt.span.Span]:
+    def remove_at(self, index: int) -> tuple[Label | None, LineComment | fltk.fegen.pyrt.span_protocol.SpanProtocol]:
         idx = operator.index(index)
         n = len(self.children)
         norm = idx + n if idx < 0 else idx
@@ -4958,7 +5051,7 @@ class Trivia:
         return self.children.pop(norm)
 
     def replace_at(
-        self, index: int, child: LineComment | fltk.fegen.pyrt.span.Span, label: Label | None = None
+        self, index: int, child: LineComment | fltk.fegen.pyrt.span_protocol.SpanProtocol, label: Label | None = None
     ) -> None:
         self._check_child_type_for_mutators(child)
         self._check_label_type_for_mutators(label, "replace_at")
@@ -5024,19 +5117,23 @@ class LineComment:
             return hash(self._fltk_canonical_name)
 
     kind: typing.Literal[NodeKind.LINECOMMENT] = NodeKind.LINECOMMENT
-    span: fltk.fegen.pyrt.terminalsrc.Span | fltk._native.Span = fltk.fegen.pyrt.terminalsrc.UnknownSpan
-    children: list[tuple[Label | None, fltk.fegen.pyrt.span.Span]] = dataclasses.field(default_factory=list)
+    span: fltk.fegen.pyrt.span_protocol.SpanProtocol = fltk.fegen.pyrt.terminalsrc.UnknownSpan
+    children: list[tuple[Label | None, fltk.fegen.pyrt.span_protocol.SpanProtocol]] = dataclasses.field(
+        default_factory=list
+    )
 
-    def append(self, child: fltk.fegen.pyrt.span.Span, label: Label | None = None) -> None:
+    def append(self, child: fltk.fegen.pyrt.span_protocol.SpanProtocol, label: Label | None = None) -> None:
         self.children.append((label, child))
 
-    def extend(self, children: typing.Iterable[fltk.fegen.pyrt.span.Span], label: Label | None = None) -> None:
+    def extend(
+        self, children: typing.Iterable[fltk.fegen.pyrt.span_protocol.SpanProtocol], label: Label | None = None
+    ) -> None:
         self.children.extend((label, child) for child in children)
 
     def extend_children(self, other: LineComment) -> None:
         self.children.extend(other.children)
 
-    def child(self) -> tuple[Label | None, fltk.fegen.pyrt.span.Span]:
+    def child(self) -> tuple[Label | None, fltk.fegen.pyrt.span_protocol.SpanProtocol]:
         if (n := len(self.children)) != 1:
             msg = f"Expected one child but have {n}"
             raise ValueError(msg)
@@ -5044,7 +5141,7 @@ class LineComment:
 
     _MUTATOR_ALLOWED_CHILD_TYPES = None
 
-    def _check_child_type_for_mutators(self, child: fltk.fegen.pyrt.span.Span) -> None:
+    def _check_child_type_for_mutators(self, child: fltk.fegen.pyrt.span_protocol.SpanProtocol) -> None:
         _allowed = LineComment._MUTATOR_ALLOWED_CHILD_TYPES
         if _allowed is None:
             _allowed = (fltk.fegen.pyrt.terminalsrc.Span,)
@@ -5063,7 +5160,7 @@ class LineComment:
             msg = f"{_cn}.{method}: label argument is not a {_cn}_Label; got {type(label).__name__}"
             raise TypeError(msg)
 
-    def insert(self, index: int, child: fltk.fegen.pyrt.span.Span, label: Label | None = None) -> None:
+    def insert(self, index: int, child: fltk.fegen.pyrt.span_protocol.SpanProtocol, label: Label | None = None) -> None:
         self._check_child_type_for_mutators(child)
         self._check_label_type_for_mutators(label, "insert")
         idx = operator.index(index)
@@ -5074,7 +5171,7 @@ class LineComment:
             idx = min(idx, n)
         self.children.insert(idx, (label, child))
 
-    def remove_at(self, index: int) -> tuple[Label | None, fltk.fegen.pyrt.span.Span]:
+    def remove_at(self, index: int) -> tuple[Label | None, fltk.fegen.pyrt.span_protocol.SpanProtocol]:
         idx = operator.index(index)
         n = len(self.children)
         norm = idx + n if idx < 0 else idx
@@ -5083,7 +5180,9 @@ class LineComment:
             raise IndexError(msg)
         return self.children.pop(norm)
 
-    def replace_at(self, index: int, child: fltk.fegen.pyrt.span.Span, label: Label | None = None) -> None:
+    def replace_at(
+        self, index: int, child: fltk.fegen.pyrt.span_protocol.SpanProtocol, label: Label | None = None
+    ) -> None:
         self._check_child_type_for_mutators(child)
         self._check_label_type_for_mutators(label, "replace_at")
         idx = operator.index(index)
@@ -5097,69 +5196,69 @@ class LineComment:
     def clear(self) -> None:
         self.children.clear()
 
-    def append_content(self, child: fltk.fegen.pyrt.span.Span) -> None:
+    def append_content(self, child: fltk.fegen.pyrt.span_protocol.SpanProtocol) -> None:
         self.children.append((LineComment.Label.CONTENT, child))
 
-    def extend_content(self, children: typing.Iterable[fltk.fegen.pyrt.span.Span]) -> None:
+    def extend_content(self, children: typing.Iterable[fltk.fegen.pyrt.span_protocol.SpanProtocol]) -> None:
         self.children.extend((LineComment.Label.CONTENT, child) for child in children)
 
-    def children_content(self) -> typing.Iterator[fltk.fegen.pyrt.span.Span]:
+    def children_content(self) -> typing.Iterator[fltk.fegen.pyrt.span_protocol.SpanProtocol]:
         return (child for (label, child) in self.children if label == LineComment.Label.CONTENT)
 
-    def child_content(self) -> fltk.fegen.pyrt.span.Span:
+    def child_content(self) -> fltk.fegen.pyrt.span_protocol.SpanProtocol:
         children = list(self.children_content())
         if (n := len(children)) != 1:
             msg = f"Expected one content child but have {n}"
             raise ValueError(msg)
         return children[0]
 
-    def maybe_content(self) -> fltk.fegen.pyrt.span.Span | None:
+    def maybe_content(self) -> fltk.fegen.pyrt.span_protocol.SpanProtocol | None:
         children = list(self.children_content())
         if (n := len(children)) > 1:
             msg = f"Expected at most one content child but have {n}"
             raise ValueError(msg)
         return children[0] if children else None
 
-    def append_newline(self, child: fltk.fegen.pyrt.span.Span) -> None:
+    def append_newline(self, child: fltk.fegen.pyrt.span_protocol.SpanProtocol) -> None:
         self.children.append((LineComment.Label.NEWLINE, child))
 
-    def extend_newline(self, children: typing.Iterable[fltk.fegen.pyrt.span.Span]) -> None:
+    def extend_newline(self, children: typing.Iterable[fltk.fegen.pyrt.span_protocol.SpanProtocol]) -> None:
         self.children.extend((LineComment.Label.NEWLINE, child) for child in children)
 
-    def children_newline(self) -> typing.Iterator[fltk.fegen.pyrt.span.Span]:
+    def children_newline(self) -> typing.Iterator[fltk.fegen.pyrt.span_protocol.SpanProtocol]:
         return (child for (label, child) in self.children if label == LineComment.Label.NEWLINE)
 
-    def child_newline(self) -> fltk.fegen.pyrt.span.Span:
+    def child_newline(self) -> fltk.fegen.pyrt.span_protocol.SpanProtocol:
         children = list(self.children_newline())
         if (n := len(children)) != 1:
             msg = f"Expected one newline child but have {n}"
             raise ValueError(msg)
         return children[0]
 
-    def maybe_newline(self) -> fltk.fegen.pyrt.span.Span | None:
+    def maybe_newline(self) -> fltk.fegen.pyrt.span_protocol.SpanProtocol | None:
         children = list(self.children_newline())
         if (n := len(children)) > 1:
             msg = f"Expected at most one newline child but have {n}"
             raise ValueError(msg)
         return children[0] if children else None
 
-    def append_prefix(self, child: fltk.fegen.pyrt.span.Span) -> None:
+    def append_prefix(self, child: fltk.fegen.pyrt.span_protocol.SpanProtocol) -> None:
         self.children.append((LineComment.Label.PREFIX, child))
 
-    def extend_prefix(self, children: typing.Iterable[fltk.fegen.pyrt.span.Span]) -> None:
+    def extend_prefix(self, children: typing.Iterable[fltk.fegen.pyrt.span_protocol.SpanProtocol]) -> None:
         self.children.extend((LineComment.Label.PREFIX, child) for child in children)
 
-    def children_prefix(self) -> typing.Iterator[fltk.fegen.pyrt.span.Span]:
+    def children_prefix(self) -> typing.Iterator[fltk.fegen.pyrt.span_protocol.SpanProtocol]:
         return (child for (label, child) in self.children if label == LineComment.Label.PREFIX)
 
-    def child_prefix(self) -> fltk.fegen.pyrt.span.Span:
+    def child_prefix(self) -> fltk.fegen.pyrt.span_protocol.SpanProtocol:
         children = list(self.children_prefix())
         if (n := len(children)) != 1:
             msg = f"Expected one prefix child but have {n}"
             raise ValueError(msg)
         return children[0]
 
-    def maybe_prefix(self) -> fltk.fegen.pyrt.span.Span | None:
+    def maybe_prefix(self) -> fltk.fegen.pyrt.span_protocol.SpanProtocol | None:
         children = list(self.children_prefix())
         if (n := len(children)) > 1:
             msg = f"Expected at most one prefix child but have {n}"
