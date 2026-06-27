@@ -138,6 +138,7 @@ cargo-test-no-python:
 	cargo test -q --manifest-path tests/rust_parser_fixture/Cargo.toml
 	cargo test -q --manifest-path crates/fegen-rust/Cargo.toml --no-default-features
 	cargo test -q --manifest-path tests/rust_poc_cst/Cargo.toml --no-default-features
+	cargo test -q --manifest-path crates/fltkfmt/Cargo.toml
 
 cargo-clippy-no-python:
 	cargo clippy -q -p fltk-cst-core --no-default-features -- -D warnings
@@ -145,6 +146,7 @@ cargo-clippy-no-python:
 	cargo clippy -q --manifest-path tests/rust_parser_fixture/Cargo.toml -- -D warnings
 	cargo clippy -q --manifest-path crates/fegen-rust/Cargo.toml --no-default-features -- -D warnings
 	cargo clippy -q --manifest-path tests/rust_poc_cst/Cargo.toml --no-default-features -- -D warnings
+	cargo clippy -q --manifest-path crates/fltkfmt/Cargo.toml --all-targets -- -D warnings
 	# python-on clippy for rust_poc_cst is covered by cargo-clippy (default features = extension-module)
 
 # Mechanical check: verify pyo3 is absent from the python-off dependency graphs.
@@ -167,6 +169,9 @@ check-no-pyo3:
 	poc="$$(cargo tree --manifest-path tests/rust_poc_cst/Cargo.toml --no-default-features --edges normal,build)"; \
 	echo "$$poc" | grep -q fltk-cst-core || { echo "FAIL: check-no-pyo3 broken: cargo tree output lacks fltk-cst-core"; exit 1; }; \
 	! echo "$$poc" | grep -q pyo3 || { echo "FAIL: pyo3 present in rust_poc_cst --no-default-features graph"; exit 1; }; \
+	fltkfmt="$$(cargo tree --manifest-path crates/fltkfmt/Cargo.toml --edges normal,build)"; \
+	echo "$$fltkfmt" | grep -q fltk-parser-core || { echo "FAIL: check-no-pyo3 broken: cargo tree output lacks fltk-parser-core"; exit 1; }; \
+	! echo "$$fltkfmt" | grep -q pyo3 || { echo "FAIL: pyo3 present in fltkfmt dependency graph"; exit 1; }; \
 	echo "check-no-pyo3: pyo3 absent from python-off graphs"
 
 # Supply-chain gate: RustSec advisories, license allow-list, banned/duplicate crates,
@@ -179,6 +184,7 @@ cargo-deny:
 	cargo deny --manifest-path tests/rust_cst_fixture/Cargo.toml check --config deny.toml
 	cargo deny --manifest-path tests/rust_parser_fixture/Cargo.toml check --config deny.toml
 	cargo deny --manifest-path tests/rust_poc_cst/Cargo.toml check --config deny.toml
+	cargo deny --manifest-path crates/fltkfmt/Cargo.toml check --config deny.toml
 
 # ── FLTK-internal Rust artifact targets ──────────────────────────────────────
 # These build FLTK's own test/dogfooding Rust artifacts.
@@ -279,6 +285,13 @@ gencode:
 		EXTRA_ARGS="--protocol-module fltk.fegen.fltk_cst_protocol --pyi-output fltk/_stubs/fegen_rust_cst/cst.pyi"
 	# Rust: crates/fegen-rust/src/parser.rs (fegen.fltkg) — generated Rust parser.
 	$(MAKE) build-fegen-rust-parser
+	# Rust: crates/fegen-rust/src/unparser.rs (fegen.fltkg, fegen.fltkfmt-baked) +
+	# fltk/_stubs/fegen_rust_cst/unparser.pyi stub.  Powers the pure-Rust fltkfmt binary.
+	$(MAKE) gen-rust-unparser GRAMMAR=fltk/fegen/fegen.fltkg \
+		RS_OUT=crates/fegen-rust/src/unparser.rs \
+		EXTRA_ARGS="--format-config fltk/fegen/fegen.fltkfmt \
+		            --protocol-module fltk.fegen.fltk_cst_protocol \
+		            --pyi-output fltk/_stubs/fegen_rust_cst/unparser.pyi"
 	# Rust: tests/rust_parser_fixture/src/cst.rs, parser.rs, and unparser.rs (rust_parser_fixture.fltkg)
 	$(MAKE) gen-rust-cst GRAMMAR=fltk/fegen/test_data/rust_parser_fixture.fltkg RS_OUT=tests/rust_parser_fixture/src/cst.rs
 	$(MAKE) gen-rust-parser GRAMMAR=fltk/fegen/test_data/rust_parser_fixture.fltkg RS_OUT=tests/rust_parser_fixture/src/parser.rs

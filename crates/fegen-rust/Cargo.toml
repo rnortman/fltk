@@ -22,3 +22,4 @@ test-introspection = ["python", "fltk-cst-core/test-introspection"]
 pyo3 = { version = "0.29", features = ["abi3-py310"], optional = true }
 fltk-cst-core = { path = "../fltk-cst-core", default-features = false }
 fltk-parser-core = { path = "../fltk-parser-core" }
+fltk-unparser-core = { path = "../fltk-unparser-core" }

@@ -1,0 +1,26 @@
+# Standalone crate intentionally excluded from the root workspace: it depends on
+# `fegen-rust-cst`, whose default features pull in pyo3, so it keeps its own `[workspace]`
+# (like `fegen-rust` and the test fixtures) and is gated into `make check` via explicit
+# `--manifest-path` lines rather than root workspace membership.
+[workspace]
+
+[package]
+name = "fltkfmt"
+version = "0.1.0"
+edition = "2021"
+publish = false
+
+[[bin]]
+name = "fltkfmt"
+path = "src/main.rs"
+
+[dependencies]
+# Pure-Rust generated parser + unparser for `fegen.fltkg` (no pyo3 with default features
+# disabled). `fltk-cst-core` / `fltk-parser-core` / `fltk-unparser-core` come in transitively
+# (the binary's single `fltk_formatter_main!` invocation names none of them directly; the
+# render types reach the macro through `fltk-fmt-cli`'s re-exports). This is the minimal
+# template for a new formatter binary: the grammar CST crate plus the CLI scaffolding.
+fegen-rust-cst = { path = "../fegen-rust", default-features = false }
+# Reusable CLI scaffolding: the `fltk_formatter_main!` macro, `run_main`, and the
+# `RendererConfig`/`Renderer`/`resolve_spacing_specs` re-exports the macro names.
+fltk-fmt-cli = { path = "../fltk-fmt-cli" }

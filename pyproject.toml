@@ -117,6 +117,9 @@ ban-relative-imports = "all"
 "**/test_*.py" = ["PLR2004", "S101", "TID252"]
 # CLI files can use boolean arguments as they are command-line options
 "genparser.py" = ["FBT002"]
+# Generated type stubs keep each method on one `...`-bodied line (typeshed/stub
+# convention; ruff's formatter does not wrap these), so long signatures are expected.
+"*.pyi" = ["E501"]
 
 [tool.coverage.run]
 source_pkgs = ["fltk"]

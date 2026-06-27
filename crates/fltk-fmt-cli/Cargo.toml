@@ -1,0 +1,16 @@
+[package]
+name = "fltk-fmt-cli"
+version = "0.2.0"
+edition = "2021"
+license = "MIT"
+
+[lib]
+name = "fltk_fmt_cli"
+crate-type = ["rlib"]
+
+# No `python` feature and no pyo3: this is pure-Rust CLI scaffolding for standalone
+# formatter binaries. It never links pyo3.
+
+[dependencies]
+clap = { version = "4", features = ["derive"] }
+fltk-unparser-core = { path = "../fltk-unparser-core" }

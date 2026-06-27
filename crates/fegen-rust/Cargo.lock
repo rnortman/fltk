@@ -17,6 +17,7 @@ version = "0.1.0"
 dependencies = [
  "fltk-cst-core",
  "fltk-parser-core",
+ "fltk-unparser-core",
  "pyo3",
 ]
 
@@ -34,6 +35,10 @@ dependencies = [
  "fltk-cst-core",
  "regex-automata",
 ]
+
+[[package]]
+name = "fltk-unparser-core"
+version = "0.2.0"
 
 [[package]]
 name = "heck"

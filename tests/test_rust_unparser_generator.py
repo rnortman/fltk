@@ -1965,20 +1965,23 @@ def test_count_newlines_in_trivia_helper_emitted() -> None:
     assert "_ => {}" not in body
 
 
-def test_count_newlines_in_trivia_multi_variant_emits_catchall() -> None:
-    """A multi-variant ``TriviaChild`` enum forces the ``_ => {}`` catch-all (else non-exhaustive).
+def test_count_newlines_in_trivia_multi_variant_uses_if_let() -> None:
+    """A multi-variant ``TriviaChild`` enum selects the ``Span`` arm with ``if let`` (no catch-all).
 
     ``_trivia := ws:/[ ]+/ : comment ; comment := text:/[#][a-z]*/`` gives ``TriviaChild`` both a
-    ``Span`` and a node-typed ``Comment`` variant; the newline counter matches only ``Span`` and
-    needs the catch-all to stay exhaustive. A dropped ``num_variants > 1`` guard would be a Rust
-    ``non-exhaustive patterns`` compile error -- undetected by the single-variant test above.
+    ``Span`` and a node-typed ``Comment`` variant; the newline counter only cares about ``Span``.
+    Selecting it with ``if let cst::TriviaChild::Span(span) = &child.1`` keeps the code clippy-clean
+    (a single-arm ``match`` plus ``_ => {}`` catch-all would trip ``single_match``) while still
+    ignoring the other variant(s). A dropped ``num_variants > 1`` guard would emit a bare
+    ``match span`` over the multi-variant enum -- a Rust ``non-exhaustive patterns`` compile error --
+    so this pins the ``if let`` shape that the single-variant test above does not cover.
     """
     grammar = 'doc := a:"x" : b:"y" ; _trivia := ws:/[ ]+/ : comment ; comment := text:/[#][a-z]*/ ;'
     src = RustUnparserGenerator(parse_grammar(grammar)).generate()
     body = _method_body(src, "_count_newlines_in_trivia")
-    assert "cst::TriviaChild::Span(span) => {" in body
-    # Multi-variant trivia child enum: the catch-all keeps the match exhaustive.
-    assert "_ => {}" in body
+    assert "if let cst::TriviaChild::Span(span) = &child.1 {" in body
+    # The `if let` form ignores the other variant(s) without a catch-all arm.
+    assert "_ => {}" not in body
 
 
 def test_default_separator_uses_per_rule_spacing_override() -> None:
@@ -2038,8 +2041,10 @@ def test_has_preservable_trivia_matches_configured_node_types() -> None:
     ``_trivia := ws:/[ ]+/ : comment ; comment := text:/[#][a-z]*/`` gives ``TriviaChild`` a
     node-typed ``Comment`` variant; ``preserve_node_names={"Comment"}`` makes
     ``_has_preservable_trivia`` loop the children and ``return true`` on a ``cst::TriviaChild::Comment``.
-    (``comment``'s regex is labeled so the rule is unparseable -- a bare regex would default to
-    SUPPRESS and make ``unparse_comment`` unreconstructable.)
+    The match is emitted as ``if let cst::TriviaChild::Comment(_) = &child.1 { return true; }``
+    (clippy-clean for a multi-variant enum; a single-arm ``match`` plus ``_ => {}`` catch-all would
+    trip ``single_match``). (``comment``'s regex is labeled so the rule is unparseable -- a bare
+    regex would default to SUPPRESS and make ``unparse_comment`` unreconstructable.)
     """
     grammar = 'doc := a:"x" : b:"y" ; _trivia := ws:/[ ]+/ : comment ; comment := text:/[#][a-z]*/ ;'
     cfg = FormatterConfig(trivia_config=TriviaConfig(preserve_node_names={"Comment"}))
@@ -2047,9 +2052,10 @@ def test_has_preservable_trivia_matches_configured_node_types() -> None:
     body = _method_body(src, "_has_preservable_trivia")
     assert "fn _has_preservable_trivia(&self, trivia_node: &cst::Trivia) -> bool {" in body
     assert "for child in trivia_node.children() {" in body
-    assert "cst::TriviaChild::Comment(_) => return true," in body
-    # A non-comment child (e.g. the whitespace Span) falls through.
-    assert "_ => {}" in body
+    assert "if let cst::TriviaChild::Comment(_) = &child.1 {" in body
+    assert "return true;" in body
+    # A non-comment child (e.g. the whitespace Span) falls through; the `if let` needs no catch-all.
+    assert "_ => {}" not in body
 
 
 # ---------------------------------------------------------------------------

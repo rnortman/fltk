@@ -16,9 +16,19 @@ from fltk.plumbing import render_doc, unparse_cst
 from fltk.unparse.renderer import RendererConfig
 
 if TYPE_CHECKING:
+    from collections.abc import Iterable
     from typing import Any
 
     from fltk.plumbing_types import UnparserResult
+
+
+def render_config_ids(configs: Iterable[tuple[int, int]]) -> list[str]:
+    """pytest parametrize IDs for (max_width, indent_width) render configs.
+
+    Shared so the ID format string lives in one place; the parity test modules hold
+    their own `_CONFIGS` (which differ) but derive stable IDs through this helper.
+    """
+    return [f"w{w}i{i}" for (w, i) in configs]
 
 
 def unparse_python(

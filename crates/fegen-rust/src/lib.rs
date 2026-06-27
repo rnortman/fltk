@@ -13,6 +13,7 @@ use pyo3::prelude::*;
 
 mod cst;
 pub mod parser;
+pub mod unparser;
 #[cfg(test)]
 mod native_parser_tests;
 
@@ -21,5 +22,6 @@ mod native_parser_tests;
 fn fegen_rust_cst(m: &Bound<'_, PyModule>) -> PyResult<()> {
     register_submodule(m, "cst", cst::register_classes)?;
     register_submodule(m, "parser", parser::register_classes)?;
+    register_submodule(m, "unparser", unparser::register_classes)?;
     Ok(())
 }

@@ -38,7 +38,7 @@ from fltk.plumbing import (  # noqa: E402
     parse_grammar_file,
     parse_text,
 )
-from tests.unparser_parity import assert_unparse_parity  # noqa: E402
+from tests.unparser_parity import assert_unparse_parity, render_config_ids  # noqa: E402
 
 _FIXTURE_DIR = Path(__file__).parent.parent / "fltk" / "fegen" / "test_data"
 _FIXTURE_FLTKG = _FIXTURE_DIR / "rust_parser_fixture.fltkg"
@@ -165,7 +165,7 @@ _CORPUS_IDS = [f"{rule}-{n}" for n, (rule, _) in enumerate(_CORPUS)]
 # Render at a wide width (everything flat) and a narrow width (groups break),
 # so the Wadler-Lindig flat-vs-break decisions are exercised cross-backend.
 _CONFIGS = [(80, 4), (8, 2)]
-_CONFIG_IDS = [f"w{w}i{i}" for (w, i) in _CONFIGS]
+_CONFIG_IDS = render_config_ids(_CONFIGS)
 
 # Each baked Rust unparser module is paired with the Python unparser generated from
 # the matching FormatterConfig. Rust class refs are wrapped in lambdas because

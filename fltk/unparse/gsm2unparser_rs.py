@@ -130,6 +130,11 @@ class RustUnparserGenerator:
         # `Doc`: the resolved-document handle. It is the unparser extension's own
         # class -- there is no protocol for it -- so the `unparse_*_doc` return annotations below
         # reference it by its stub-local name (resolved lazily via the future-annotations import).
+        # TODO(unparser-pyi-doc-stub-shared): this `Doc` stub block is grammar-independent yet
+        # emitted verbatim into every per-grammar `unparser.pyi`, so a `Doc.render` signature
+        # change would have to be applied to each committed stub. Factor it into one shared stub
+        # (e.g. `fltk/_stubs/fltk_unparser_doc.pyi`) that each per-grammar stub imports, the way
+        # the CST side shares `CstModule`.
         lines.append("class Doc:")
         lines.append("    def render(self, max_width: int = ..., indent_width: int = ...) -> str: ...")
         lines.append("    def __repr__(self) -> str: ...")
@@ -575,14 +580,23 @@ class RustUnparserGenerator:
         run the spacing through ``_doc_to_combinator_expr`` and so reject a Group/Nest/Join
         spacing identically.
         """
-        # `position` is `Literal["before", "after"]`, so this if/elif is exhaustive: Pyright
-        # enforces it at every call site, and no else/runtime guard is needed.
+        # `position` is `Literal["before", "after"]`, so this if/elif is exhaustive at the type
+        # level (Pyright enforces it at every call site). The `Literal` is erased at runtime,
+        # though, so a subclass or untyped caller passing any other value would otherwise reach
+        # the `spacing`/`ctor` reads below with both names unbound -- surfacing as an
+        # `UnboundLocalError` that names neither the rule nor the bad position. The explicit
+        # `else` raise makes the contract violation diagnosable, mirroring the explicit-raise
+        # routing guards elsewhere in this file (e.g. `_item_disposition_success_lines`).
         if position == "before":
             spacing = self._formatter_config.get_before_spacing(rule_name, item)
             ctor = "before_spec"
         elif position == "after":
             spacing = self._formatter_config.get_after_spacing(rule_name, item)
             ctor = "after_spec"
+        else:
+            item_id = f"label={item.label!r}" if item.label else f"term={type(item.term).__name__}"
+            msg = f"Internal error: unexpected position {position!r} for rule {rule_name!r} item {item_id}"
+            raise ValueError(msg)
         if spacing is None:
             return []
         # `_doc_to_rust_expr` rejects Group/Nest/Join/Comment spacing (parity with the Python
@@ -1074,6 +1088,11 @@ class RustUnparserGenerator:
             # Single-variant child enum: irrefutable destructure via `let` (clippy
             # ::infallible_destructuring_match rejects a single-arm match here).
             lines.append(f"        let cst::{child_enum}::Span(span) = &child_tuple.1;")
+        # TODO(unparser-none-path-diagnostics): a `None` from `span.text()` (a sourceless/sentinel
+        # span) propagates up via `?` to the public `unparse_*` entry point with no record of which
+        # labeled span lacked source. In the fltkfmt pipeline spans always carry source, so this is
+        # an invariant-violation path; if/when diagnostics are added, log the failing label here
+        # before returning None, and keep the Python backend in lockstep for parity.
         lines.append("        let text = span.text()?;")
         lines.append("        let acc = acc.add_non_trivia(fltk_unparser_core::text(text));")
         lines.append("        Some(UnparseResult::new(acc, pos + 1))")
@@ -1343,6 +1362,12 @@ class RustUnparserGenerator:
         lines.append(f"{i4}let trivia_node = trivia_shared.read();")
         lines.append(f"{i4}if self._has_preservable_trivia(&trivia_node) {{")
         # Preservable trivia: render it and wrap in a SeparatorSpec carrying the preserved Doc.
+        # TODO(unparser-none-path-diagnostics): there is no `else` arm here, so when
+        # `_has_preservable_trivia` confirmed comments exist but `unparse__trivia` returns None
+        # (a label mismatch or a sourceless content span), the None is silently discarded and the
+        # comment is dropped from the formatted output with zero diagnostic signal. Decide a
+        # cross-backend policy (log-and-continue / debug_assert / halt), emit a matching
+        # diagnostic in the `else`, and mirror it in the Python backend to preserve parity.
         lines.append(f"{i5}if let Some(trivia_result) = self.unparse__trivia(&trivia_node) {{")
         lines.extend(
             self._add_separator_spec_lines(
@@ -1443,11 +1468,13 @@ class RustUnparserGenerator:
             else:
                 param = "trivia_node"
                 arms = " | ".join(f"cst::{trivia_child_enum}::{n}(_)" for n in filtered)
+                # `if let` (rather than a single-arm `match` with a `_ => {}` catch-all) keeps the
+                # generated helper clippy-clean (`single_match`) regardless of how many trivia
+                # child variants exist; or-patterns in `if let` are stable.
                 body = [
                     "        for child in trivia_node.children() {",
-                    "            match &child.1 {",
-                    f"                {arms} => return true,",
-                    "                _ => {}",
+                    f"            if let {arms} = &child.1 {{",
+                    "                return true;",
                     "            }",
                     "        }",
                     "        false",
@@ -1469,9 +1496,11 @@ class RustUnparserGenerator:
 
         Sums the newline count of every ``Span`` child of a ``Trivia`` node, using the same
         inline ``span.text().map(...)`` form as the trivia-rule branch (the
-        ``_count_newlines`` substitute).  The ``_ => {}`` arm is emitted only when the trivia
-        child enum has more than one variant (a ``Span``-only trivia rule needs no catch-all);
-        the ``Span`` variant always exists because a trivia rule always captures whitespace.
+        ``_count_newlines`` substitute).  When the trivia child enum has more than one variant
+        the ``Span`` child is selected with ``if let`` (not a single-arm ``match`` plus a
+        ``_ => {}`` catch-all, which clippy flags as ``single_match``); a ``Span``-only trivia
+        rule keeps an exhaustive single-arm ``match`` (no wildcard, already clippy-clean).  The
+        ``Span`` variant always exists because a trivia rule always captures whitespace.
         """
         trivia_class = self._cst.class_name_for_rule(gsm.TRIVIA_RULE_NAME)
         trivia_child_enum = self._cst.child_enum_name(trivia_class)
@@ -1484,17 +1513,29 @@ class RustUnparserGenerator:
             f"    fn _count_newlines_in_trivia(&self, trivia: &cst::{trivia_class}) -> usize {{",
             "        let mut count = 0usize;",
             "        for child in trivia.children() {",
-            "            match &child.1 {",
-            f"                cst::{trivia_child_enum}::Span(span) => {{",
-            # Borrowing accessor (no per-Span String allocation); the slice is only scanned.
-            "                    count += span.text_str().map(|t| t.matches('\\n').count()).unwrap_or(0);",
-            "                }",
         ]
+        # Borrowing accessor (no per-Span String allocation); the slice is only scanned.
+        count_stmt = "                count += span.text_str().map(|t| t.matches('\\n').count()).unwrap_or(0);"
         if num_variants > 1:
-            lines.append("                _ => {}")
+            lines.extend(
+                [
+                    f"            if let cst::{trivia_child_enum}::Span(span) = &child.1 {{",
+                    count_stmt,
+                    "            }",
+                ]
+            )
+        else:
+            lines.extend(
+                [
+                    "            match &child.1 {",
+                    f"                cst::{trivia_child_enum}::Span(span) => {{",
+                    "    " + count_stmt,
+                    "                }",
+                    "            }",
+                ]
+            )
         lines.extend(
             [
-                "            }",
                 "        }",
                 "        count",
                 "    }",
@@ -1692,6 +1733,26 @@ class RustUnparserGenerator:
     # PyO3 wrapper block
     # ------------------------------------------------------------------
 
+    @staticmethod
+    def _gen_py_unparse_prelude_lines(rule_name: str) -> list[str]:
+        """Return the shared opening lines of a per-rule PyO3 ``unparse_{rule}*`` method body.
+
+        Both the string-returning ``unparse_{rule}`` and the Doc-returning
+        ``unparse_{rule}_doc`` method bodies (emitted in :meth:`_gen_python_bindings`) begin
+        identically: read-lock the CST handle, call the inner unparser (``None`` -> ``Ok(None)``),
+        and resolve the accumulator's spacing specs.  They diverge only afterward (render to a
+        ``String`` vs. wrap the resolved ``Doc`` in a ``PyDoc``).  Single-sourcing the prelude
+        here keeps a future change (e.g. a depth-exceeded guard before the ``let Some(r)`` line)
+        from having to be mirrored across both method generators.
+        """
+        return [
+            "            let guard = node.shared().read();",
+            f"            let Some(r) = self.inner.unparse_{rule_name}(&guard) else {{",
+            "                return Ok(None);",
+            "            };",
+            "            let resolved = resolve_spacing_specs(r.accumulator.doc());",
+        ]
+
     def _gen_python_bindings(self) -> str:
         """Generate the ``python``-gated PyO3 wrapper block for the unparser.
 
@@ -1801,11 +1862,7 @@ class RustUnparserGenerator:
                 f"(&self, node: PyRef<'_, cst::Py{class_name}>, max_width: usize, indent_width: usize) "
                 "-> PyResult<Option<String>> {"
             )
-            lines.append("            let guard = node.shared().read();")
-            lines.append(f"            let Some(r) = self.inner.unparse_{rule.name}(&guard) else {{")
-            lines.append("                return Ok(None);")
-            lines.append("            };")
-            lines.append("            let resolved = resolve_spacing_specs(r.accumulator.doc());")
+            lines.extend(self._gen_py_unparse_prelude_lines(rule.name))
             lines.append("            let cfg = RendererConfig { indent_width, max_width };")
             lines.append("            Ok(Some(Renderer::new(cfg).render(&resolved)))")
             lines.append("        }")
@@ -1817,11 +1874,7 @@ class RustUnparserGenerator:
                 f"        fn unparse_{rule.name}_doc"
                 f"(&self, node: PyRef<'_, cst::Py{class_name}>) -> PyResult<Option<PyDoc>> {{"
             )
-            lines.append("            let guard = node.shared().read();")
-            lines.append(f"            let Some(r) = self.inner.unparse_{rule.name}(&guard) else {{")
-            lines.append("                return Ok(None);")
-            lines.append("            };")
-            lines.append("            let resolved = resolve_spacing_specs(r.accumulator.doc());")
+            lines.extend(self._gen_py_unparse_prelude_lines(rule.name))
             lines.append("            Ok(Some(PyDoc { resolved }))")
             lines.append("        }")
         lines.append("    }")
