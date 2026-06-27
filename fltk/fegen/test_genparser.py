@@ -251,6 +251,97 @@ def test_generated_parser_concrete_terminalsrc_span_annotations(tmp_path: pathli
 
 
 # ---------------------------------------------------------------------------
+# generate --protocol-only CLI tests
+# ---------------------------------------------------------------------------
+
+
+def test_generate_protocol_only_emits_only_protocol(simple_grammar_file: pathlib.Path, tmp_path: pathlib.Path) -> None:
+    """generate --protocol-only writes only <base>_cst_protocol.py — no CST module, no parsers.
+
+    The gencode recipe uses this to produce the fixture protocol typing source without the
+    redundant CST/parser codegen the Rust backend supplies.
+    """
+    runner = CliRunner()
+    result = runner.invoke(
+        app,
+        [
+            "generate",
+            "--protocol-only",
+            str(simple_grammar_file),
+            "simple",
+            "simple_cst",
+            "--output-dir",
+            str(tmp_path),
+        ],
+    )
+
+    assert result.exit_code == 0, f"generate --protocol-only failed:\n{result.output}\n{result.exception}"
+    protocol_py = tmp_path / "simple_cst_protocol.py"
+    assert protocol_py.exists(), "Expected simple_cst_protocol.py was not created"
+    # The CST module and both parsers must NOT be written.
+    assert not (tmp_path / "simple_cst.py").exists(), "--protocol-only must not write the shared CST module"
+    assert not (tmp_path / "simple_parser.py").exists(), "--protocol-only must not write the non-trivia parser"
+    assert not (tmp_path / "simple_trivia_parser.py").exists(), "--protocol-only must not write the trivia parser"
+
+
+def test_generate_protocol_only_matches_full_run(simple_grammar_file: pathlib.Path, tmp_path: pathlib.Path) -> None:
+    """--protocol-only emits a byte-identical protocol module to a full `generate` run.
+
+    Guards the equivalence the gencode rewire relies on: dropping the temp-dir + full-suite
+    dance must not change the committed protocol output.
+    """
+    full_dir = tmp_path / "full"
+    only_dir = tmp_path / "only"
+    full_dir.mkdir()
+    only_dir.mkdir()
+
+    runner = CliRunner()
+    result_full = runner.invoke(
+        app, ["generate", str(simple_grammar_file), "simple", "simple_cst", "--output-dir", str(full_dir)]
+    )
+    assert result_full.exit_code == 0, f"generate (full) failed:\n{result_full.output}"
+    result_only = runner.invoke(
+        app,
+        [
+            "generate",
+            "--protocol-only",
+            str(simple_grammar_file),
+            "simple",
+            "simple_cst",
+            "--output-dir",
+            str(only_dir),
+        ],
+    )
+    assert result_only.exit_code == 0, f"generate --protocol-only failed:\n{result_only.output}"
+
+    assert (only_dir / "simple_cst_protocol.py").read_text() == (full_dir / "simple_cst_protocol.py").read_text(), (
+        "--protocol-only must emit the same protocol module as a full generate run"
+    )
+
+
+def test_generate_protocol_only_rejects_trivia_flags(simple_grammar_file: pathlib.Path, tmp_path: pathlib.Path) -> None:
+    """--protocol-only combined with --trivia-only/--no-trivia-only is rejected, writing nothing."""
+    runner = CliRunner()
+    result = runner.invoke(
+        app,
+        [
+            "generate",
+            "--protocol-only",
+            "--trivia-only",
+            str(simple_grammar_file),
+            "simple",
+            "simple_cst",
+            "--output-dir",
+            str(tmp_path),
+        ],
+    )
+
+    assert result.exit_code != 0, "Expected non-zero exit for --protocol-only with --trivia-only"
+    assert "--protocol-only cannot be combined with" in result.output
+    assert not (tmp_path / "simple_cst_protocol.py").exists(), "No protocol module should be written on rejection"
+
+
+# ---------------------------------------------------------------------------
 # gen-rust-cst --protocol-module / --pyi-output CLI tests
 # ---------------------------------------------------------------------------
 
@@ -357,6 +448,21 @@ def test_gen_rust_cst_rs_unchanged_with_protocol_module(
     )
 
 
+def test_gen_rust_cst_invalid_protocol_module(simple_grammar_file: pathlib.Path, tmp_path: pathlib.Path) -> None:
+    """gen-rust-cst rejects a malformed --protocol-module before writing anything."""
+    output_rs = tmp_path / "simple_cst.rs"
+    runner = CliRunner()
+    result = runner.invoke(
+        app,
+        ["gen-rust-cst", str(simple_grammar_file), str(output_rs), "--protocol-module", "bad name"],
+    )
+
+    assert result.exit_code != 0, "Expected non-zero exit for invalid --protocol-module"
+    assert "is not a valid Python module path" in result.output
+    assert not output_rs.exists(), "No .rs should be written when --protocol-module is invalid"
+    assert not output_rs.with_suffix(".pyi").exists(), "No .pyi should be written when --protocol-module is invalid"
+
+
 # ---------------------------------------------------------------------------
 # gen-rust-parser CLI tests  (design §4 item 2)
 # ---------------------------------------------------------------------------
@@ -428,6 +534,286 @@ def test_gen_rust_parser_custom_cst_mod_path(simple_grammar_file: pathlib.Path, 
 
 
 # ---------------------------------------------------------------------------
+# gen-rust-unparser CLI tests  (design §2.5 / §4)
+# ---------------------------------------------------------------------------
+
+
+def test_gen_rust_unparser_happy_path(simple_grammar_file: pathlib.Path, tmp_path: pathlib.Path) -> None:
+    """gen-rust-unparser happy path: writes the output file, exits 0, and emits valid content."""
+    output_rs = tmp_path / "unparser.rs"
+    runner = CliRunner()
+    result = runner.invoke(app, ["gen-rust-unparser", str(simple_grammar_file), str(output_rs)])
+
+    assert result.exit_code == 0, f"gen-rust-unparser failed:\n{result.output}\n{result.exception}"
+    assert output_rs.exists(), "Expected .rs output file was not created"
+
+    src = output_rs.read_text()
+    assert "pub fn unparse_word(" in src
+    assert "use fltk_unparser_core::" in src
+    assert "use super::cst;" in src
+
+
+def test_gen_rust_unparser_missing_grammar_file(tmp_path: pathlib.Path) -> None:
+    """gen-rust-unparser with a non-existent grammar file exits 1."""
+    missing = tmp_path / "no_such.fltkg"
+    output_rs = tmp_path / "unparser.rs"
+    runner = CliRunner()
+    result = runner.invoke(app, ["gen-rust-unparser", str(missing), str(output_rs)])
+
+    assert result.exit_code != 0, "Expected non-zero exit for missing grammar file"
+    assert not output_rs.exists(), "No output file should be created on error"
+
+
+def test_gen_rust_unparser_generation_error_no_partial_file(tmp_path: pathlib.Path) -> None:
+    """gen-rust-unparser exits 1 on generation error and leaves no partial output file."""
+    # A required-suppressed regex cannot be reconstructed from the CST; the generator raises.
+    bad_grammar = tmp_path / "bad.fltkg"
+    bad_grammar.write_text('parent := %/[a-z]+/ , "x" ;\n')
+    output_rs = tmp_path / "unparser.rs"
+    runner = CliRunner()
+    result = runner.invoke(app, ["gen-rust-unparser", str(bad_grammar), str(output_rs)])
+
+    assert result.exit_code != 0, "Expected non-zero exit for required-suppressed regex"
+    assert not output_rs.exists(), "No partial output file should be created on generation error"
+
+
+def test_gen_rust_unparser_invalid_cst_mod_path(simple_grammar_file: pathlib.Path, tmp_path: pathlib.Path) -> None:
+    """gen-rust-unparser rejects invalid --cst-mod-path with exit 1 and no output file."""
+    output_rs = tmp_path / "unparser.rs"
+    runner = CliRunner()
+    result = runner.invoke(
+        app,
+        ["gen-rust-unparser", str(simple_grammar_file), str(output_rs), "--cst-mod-path", "123bad"],
+    )
+
+    assert result.exit_code != 0, "Expected non-zero exit for invalid --cst-mod-path"
+    assert not output_rs.exists(), "No output file should be created when --cst-mod-path is invalid"
+
+
+def test_gen_rust_unparser_custom_cst_mod_path(simple_grammar_file: pathlib.Path, tmp_path: pathlib.Path) -> None:
+    """gen-rust-unparser --cst-mod-path propagates to the generated use statement."""
+    output_rs = tmp_path / "unparser.rs"
+    runner = CliRunner()
+    result = runner.invoke(
+        app,
+        ["gen-rust-unparser", str(simple_grammar_file), str(output_rs), "--cst-mod-path", "my::cst"],
+    )
+
+    assert result.exit_code == 0, f"gen-rust-unparser failed:\n{result.output}"
+    src = output_rs.read_text()
+    assert "use my::cst;" in src
+
+
+def test_gen_rust_unparser_format_config_is_applied(tmp_path: pathlib.Path) -> None:
+    """gen-rust-unparser --format-config bakes the formatter config into the output.
+
+    A grammar with a WS-allowed (``,``) separator emits a default separator spacing
+    spec.  With the default config that spacing is ``Doc::Nil``; a ``ws_allowed: nbsp;``
+    config rewrites it to ``Doc::Nbsp``.  Generating the same grammar with and without
+    the config and comparing the two outputs proves the config actually reaches and
+    changes the generated separator spacing -- not merely that the --format-config path
+    parses without error.
+    """
+    grammar_file = tmp_path / "pair.fltkg"
+    grammar_file.write_text("pair := first:/[a-z]+/ , second:/[a-z]+/ ;\n")
+    fmt_file = tmp_path / "fmt.fltkfmt"
+    fmt_file.write_text("ws_allowed: nbsp;\n")
+
+    runner = CliRunner()
+
+    default_rs = tmp_path / "default_unparser.rs"
+    result_default = runner.invoke(app, ["gen-rust-unparser", str(grammar_file), str(default_rs)])
+    assert result_default.exit_code == 0, (
+        f"gen-rust-unparser (no config) failed:\n{result_default.output}\n{result_default.exception}"
+    )
+    default_src = default_rs.read_text()
+
+    config_rs = tmp_path / "config_unparser.rs"
+    result_config = runner.invoke(
+        app,
+        ["gen-rust-unparser", str(grammar_file), str(config_rs), "--format-config", str(fmt_file)],
+    )
+    assert result_config.exit_code == 0, (
+        f"gen-rust-unparser (with config) failed:\n{result_config.output}\n{result_config.exception}"
+    )
+    config_src = config_rs.read_text()
+
+    assert "pub fn unparse_pair(" in config_src
+    # The default WS-allowed separator spacing is Doc::Nil; the config rewrites it to Doc::Nbsp.
+    assert "Doc::Nbsp" in config_src, "ws_allowed: nbsp; config must bake Doc::Nbsp separator spacing into the output"
+    assert "Doc::Nbsp" not in default_src, "default config must not emit Doc::Nbsp for a WS-allowed separator"
+    assert config_src != default_src, "--format-config must change the generated output"
+
+
+def test_gen_rust_unparser_missing_fmt_config(simple_grammar_file: pathlib.Path, tmp_path: pathlib.Path) -> None:
+    """gen-rust-unparser with a non-existent --format-config file exits 1 and writes nothing."""
+    output_rs = tmp_path / "unparser.rs"
+    runner = CliRunner()
+    result = runner.invoke(
+        app,
+        [
+            "gen-rust-unparser",
+            str(simple_grammar_file),
+            str(output_rs),
+            "--format-config",
+            str(tmp_path / "no_such.fltkfmt"),
+        ],
+    )
+
+    assert result.exit_code != 0, "Expected non-zero exit for missing format-config file"
+    assert not output_rs.exists(), "No output file should be created when --format-config is missing"
+
+
+def test_gen_rust_unparser_no_protocol_module_no_pyi(simple_grammar_file: pathlib.Path, tmp_path: pathlib.Path) -> None:
+    """Without --protocol-module no .pyi is emitted (backward compatible)."""
+    output_rs = tmp_path / "unparser.rs"
+    runner = CliRunner()
+    result = runner.invoke(app, ["gen-rust-unparser", str(simple_grammar_file), str(output_rs)])
+
+    assert result.exit_code == 0, f"gen-rust-unparser failed:\n{result.output}"
+    assert not output_rs.with_suffix(".pyi").exists(), "No .pyi should be emitted without --protocol-module"
+
+
+def test_gen_rust_unparser_protocol_module_emits_pyi(simple_grammar_file: pathlib.Path, tmp_path: pathlib.Path) -> None:
+    """With --protocol-module the .pyi is written next to the .rs, describing the Unparser surface."""
+    import ast  # noqa: PLC0415
+
+    output_rs = tmp_path / "unparser.rs"
+    runner = CliRunner()
+    result = runner.invoke(
+        app,
+        ["gen-rust-unparser", str(simple_grammar_file), str(output_rs), "--protocol-module", "mylang.cst_protocol"],
+    )
+
+    assert result.exit_code == 0, f"gen-rust-unparser failed:\n{result.output}"
+    assert output_rs.exists(), ".rs file must still be written"
+    pyi = tmp_path / "unparser.pyi"
+    assert pyi.exists(), ".pyi should be emitted when --protocol-module is given"
+    pyi_text = pyi.read_text()
+    assert "import mylang.cst_protocol as _proto" in pyi_text
+    assert "class Unparser:" in pyi_text
+    assert "class Doc:" in pyi_text
+    assert "def unparse_word(self, node: _proto.Word, " in pyi_text
+    ast.parse(pyi_text)  # raises SyntaxError if the stub text is malformed
+
+
+def test_gen_rust_unparser_pyi_output_override(simple_grammar_file: pathlib.Path, tmp_path: pathlib.Path) -> None:
+    """--pyi-output overrides the default .pyi path."""
+    output_rs = tmp_path / "unparser.rs"
+    pyi_override = tmp_path / "stubs" / "mylang_unparser.pyi"
+    pyi_override.parent.mkdir()
+    runner = CliRunner()
+    result = runner.invoke(
+        app,
+        [
+            "gen-rust-unparser",
+            str(simple_grammar_file),
+            str(output_rs),
+            "--protocol-module",
+            "mylang.cst_protocol",
+            "--pyi-output",
+            str(pyi_override),
+        ],
+    )
+
+    assert result.exit_code == 0, f"gen-rust-unparser failed:\n{result.output}"
+    assert not output_rs.with_suffix(".pyi").exists(), "Default .pyi path must not exist when --pyi-output given"
+    assert pyi_override.exists(), "--pyi-output path must be written"
+    assert "class Unparser:" in pyi_override.read_text()
+
+
+def test_gen_rust_unparser_pyi_output_requires_protocol_module(
+    simple_grammar_file: pathlib.Path, tmp_path: pathlib.Path
+) -> None:
+    """--pyi-output without --protocol-module is rejected, and nothing is written."""
+    output_rs = tmp_path / "unparser.rs"
+    runner = CliRunner()
+    result = runner.invoke(
+        app,
+        ["gen-rust-unparser", str(simple_grammar_file), str(output_rs), "--pyi-output", str(tmp_path / "out.pyi")],
+    )
+
+    assert result.exit_code != 0, "Expected non-zero exit for --pyi-output without --protocol-module"
+    assert not output_rs.exists(), "No .rs should be written when the option combination is rejected"
+    assert not (tmp_path / "out.pyi").exists(), "No .pyi should be written when the option combination is rejected"
+
+
+def test_gen_rust_unparser_rs_unchanged_with_protocol_module(
+    simple_grammar_file: pathlib.Path, tmp_path: pathlib.Path
+) -> None:
+    """Adding --protocol-module does not change the .rs output (the .pyi is purely additive)."""
+    rs_without = tmp_path / "without" / "unparser.rs"
+    rs_with = tmp_path / "with" / "unparser.rs"
+    rs_without.parent.mkdir()
+    rs_with.parent.mkdir()
+
+    runner = CliRunner()
+    result1 = runner.invoke(app, ["gen-rust-unparser", str(simple_grammar_file), str(rs_without)])
+    assert result1.exit_code == 0, f"gen-rust-unparser (no --protocol-module) failed:\n{result1.output}"
+    result2 = runner.invoke(
+        app,
+        ["gen-rust-unparser", str(simple_grammar_file), str(rs_with), "--protocol-module", "mylang.cst_protocol"],
+    )
+    assert result2.exit_code == 0, f"gen-rust-unparser (with --protocol-module) failed:\n{result2.output}"
+
+    assert rs_without.read_text() == rs_with.read_text(), "--protocol-module must not change .rs output"
+
+
+def test_gen_rust_unparser_invalid_protocol_module(simple_grammar_file: pathlib.Path, tmp_path: pathlib.Path) -> None:
+    """gen-rust-unparser rejects a malformed --protocol-module before writing anything.
+
+    An unvalidated value is interpolated verbatim into the stub's ``import ... as _proto`` line,
+    so a value with spaces / a leading dot would otherwise produce a syntactically invalid .pyi
+    with exit 0.  The guard turns it into an immediate CLI error with no artifacts on disk.
+    """
+    output_rs = tmp_path / "unparser.rs"
+    runner = CliRunner()
+    result = runner.invoke(
+        app,
+        ["gen-rust-unparser", str(simple_grammar_file), str(output_rs), "--protocol-module", "bad name"],
+    )
+
+    assert result.exit_code != 0, "Expected non-zero exit for invalid --protocol-module"
+    assert "is not a valid Python module path" in result.output
+    assert not output_rs.exists(), "No .rs should be written when --protocol-module is invalid"
+    assert not output_rs.with_suffix(".pyi").exists(), "No .pyi should be written when --protocol-module is invalid"
+
+
+def test_gen_rust_unparser_pyi_write_failure_exits_cleanly(
+    simple_grammar_file: pathlib.Path, tmp_path: pathlib.Path
+) -> None:
+    """A .pyi write failure (after the .rs is written) exits 1 cleanly and leaves the .rs in place.
+
+    Pointing --pyi-output at an existing directory makes ``Path.write_text`` raise
+    IsADirectoryError.  The handler must surface the clean ``Error: …`` / exit 1 (not a raw
+    traceback); the already-written .rs is documented to remain on disk (partial-artifact state).
+    """
+    output_rs = tmp_path / "unparser.rs"
+    pyi_dir = tmp_path / "pyi_is_a_dir"
+    pyi_dir.mkdir()
+    runner = CliRunner()
+    result = runner.invoke(
+        app,
+        [
+            "gen-rust-unparser",
+            str(simple_grammar_file),
+            str(output_rs),
+            "--protocol-module",
+            "mylang.cst_protocol",
+            "--pyi-output",
+            str(pyi_dir),
+        ],
+    )
+
+    assert result.exit_code != 0, "Expected non-zero exit when the .pyi destination is unwritable"
+    assert isinstance(result.exception, SystemExit), "Must exit via typer.Exit, not an uncaught traceback"
+    assert "Error:" in result.output
+    assert ".pyi stub" in result.output, "Error message should name the .pyi stub artifact"
+    # The .rs is written before the .pyi, so it remains on disk (partial-artifact state).
+    assert output_rs.exists(), ".rs is written before the .pyi and is not cleaned up on a .pyi write failure"
+
+
+# ---------------------------------------------------------------------------
 # gen-rust-lib CLI tests  (design §2.3 / §4)
 # ---------------------------------------------------------------------------
 
@@ -475,6 +861,51 @@ def test_gen_rust_lib_no_parser(tmp_path: pathlib.Path) -> None:
     assert 'register_submodule(m, "cst", cst::register_classes)' in src
 
     # Parser must be absent
+    assert "mod parser;" not in src
+    assert '"parser"' not in src
+
+
+def test_gen_rust_lib_unparser(tmp_path: pathlib.Path) -> None:
+    """gen-rust-lib --unparser adds mod unparser; and its registration alongside cst + parser."""
+    output_rs = tmp_path / "lib.rs"
+    runner = CliRunner()
+    result = runner.invoke(app, ["gen-rust-lib", str(output_rs), "--module-name", "my_module", "--unparser"])
+
+    assert result.exit_code == 0, f"gen-rust-lib --unparser failed:\n{result.output}"
+    src = output_rs.read_text()
+
+    assert "mod cst;" in src
+    assert "mod parser;" in src
+    assert "mod unparser;" in src
+    assert 'register_submodule(m, "unparser", unparser::register_classes)' in src
+
+
+def test_gen_rust_lib_default_omits_unparser(tmp_path: pathlib.Path) -> None:
+    """gen-rust-lib without --unparser omits the unparser submodule."""
+    output_rs = tmp_path / "lib.rs"
+    runner = CliRunner()
+    result = runner.invoke(app, ["gen-rust-lib", str(output_rs), "--module-name", "my_module"])
+
+    assert result.exit_code == 0, f"gen-rust-lib failed:\n{result.output}"
+    src = output_rs.read_text()
+
+    assert "mod unparser;" not in src
+    assert '"unparser"' not in src
+
+
+def test_gen_rust_lib_no_parser_with_unparser(tmp_path: pathlib.Path) -> None:
+    """gen-rust-lib --no-parser --unparser emits cst + unparser, no parser."""
+    output_rs = tmp_path / "lib.rs"
+    runner = CliRunner()
+    result = runner.invoke(
+        app, ["gen-rust-lib", str(output_rs), "--module-name", "my_module", "--no-parser", "--unparser"]
+    )
+
+    assert result.exit_code == 0, f"gen-rust-lib --no-parser --unparser failed:\n{result.output}"
+    src = output_rs.read_text()
+
+    assert "mod cst;" in src
+    assert "mod unparser;" in src
     assert "mod parser;" not in src
     assert '"parser"' not in src
 

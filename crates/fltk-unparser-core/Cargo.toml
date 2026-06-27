@@ -1,0 +1,19 @@
+[package]
+name = "fltk-unparser-core"
+version = "0.2.0"
+edition = "2021"
+license = "MIT"
+
+[lib]
+name = "fltk_unparser_core"
+crate-type = ["rlib"]
+
+# No `python` feature: pyo3-freedom is structural absence, not a disabled feature.
+# The generated unparser's Python surface lives in the generated file and uses
+# fltk-cst-core's python-gated machinery. This crate never links pyo3.
+#
+# No `fltk-cst-core` dependency either: this runtime operates on `Doc`, not on CST
+# spans. Terminal text is extracted in the generated code (which depends on
+# fltk-cst-core) and handed in as `Doc::Text(String)`.
+
+[dependencies]

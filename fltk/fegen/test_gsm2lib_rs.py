@@ -98,6 +98,61 @@ def test_no_parser_keeps_cst() -> None:
 
 
 # ---------------------------------------------------------------------------
+# with_unparser  — design §2.5 LibSpec wiring
+# ---------------------------------------------------------------------------
+
+
+def test_default_omits_unparser() -> None:
+    """with_unparser defaults to False: no mod unparser; or registration."""
+    spec = LibSpec.standard("my_module")
+    src = RustLibGenerator(spec).generate()
+
+    assert "mod unparser;" not in src
+    assert '"unparser"' not in src
+
+
+def test_with_unparser_emits_unparser_mod_and_registration() -> None:
+    """with_unparser=True emits mod unparser; and its register_submodule call."""
+    spec = LibSpec.standard("my_module", with_unparser=True)
+    src = RustLibGenerator(spec).generate()
+
+    assert "mod unparser;" in src
+    assert 'register_submodule(m, "unparser", unparser::register_classes)' in src
+
+
+def test_with_unparser_keeps_cst_and_parser() -> None:
+    """with_unparser=True (parser default True) emits all three submodules."""
+    spec = LibSpec.standard("my_module", with_unparser=True)
+    src = RustLibGenerator(spec).generate()
+
+    assert "mod cst;" in src
+    assert "mod parser;" in src
+    assert "mod unparser;" in src
+
+
+def test_with_unparser_no_parser() -> None:
+    """with_parser=False, with_unparser=True emits cst + unparser, no parser."""
+    spec = LibSpec.standard("my_module", with_parser=False, with_unparser=True)
+    src = RustLibGenerator(spec).generate()
+
+    assert "mod cst;" in src
+    assert "mod unparser;" in src
+    assert "mod parser;" not in src
+    assert '"parser"' not in src
+
+
+def test_with_unparser_registration_order() -> None:
+    """Submodule registrations are emitted cst, parser, unparser in order."""
+    spec = LibSpec.standard("my_module", with_unparser=True)
+    src = RustLibGenerator(spec).generate()
+
+    cst_pos = src.index('register_submodule(m, "cst"')
+    parser_pos = src.index('register_submodule(m, "parser"')
+    unparser_pos = src.index('register_submodule(m, "unparser"')
+    assert cst_pos < parser_pos < unparser_pos
+
+
+# ---------------------------------------------------------------------------
 # Validation — design §4 "Unit" items
 # ---------------------------------------------------------------------------
 

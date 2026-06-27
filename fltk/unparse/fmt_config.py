@@ -353,6 +353,33 @@ class FormatterConfig:
 
         return anchor_config.disposition
 
+    def get_item_anchor_config(self, rule_name: str, item: gsm.Item, position: str) -> AnchorConfig | None:
+        """Resolve the item-level anchor configuration for an item at ``position``.
+
+        ``position`` is ``"before"`` or ``"after"``.  The LABEL/LITERAL selector resolution is
+        position-dependent, and the asymmetry is load-bearing for the unparser backends:
+
+        - ``before``: a labeled item is matched by its LABEL selector; if that yields nothing
+          and the term is a literal, the LITERAL selector is tried as a fallback (so a labeled
+          literal can still pick up a literal-keyed anchor).
+        - ``after``: a labeled item is matched by its LABEL selector *only* (no literal
+          fallback); an unlabeled literal item is matched by its LITERAL selector.
+
+        Returns the resolved :class:`AnchorConfig`, or ``None`` when no anchor is configured.
+        """
+        if position == "before":
+            anchor_config: AnchorConfig | None = None
+            if item.label:
+                anchor_config = self.get_anchor_config(rule_name, "before", ItemSelector.LABEL, item.label)
+            if anchor_config is None and isinstance(item.term, gsm.Literal):
+                anchor_config = self.get_anchor_config(rule_name, "before", ItemSelector.LITERAL, item.term.value)
+            return anchor_config
+        if item.label:
+            return self.get_anchor_config(rule_name, "after", ItemSelector.LABEL, item.label)
+        if isinstance(item.term, gsm.Literal):
+            return self.get_anchor_config(rule_name, "after", ItemSelector.LITERAL, item.term.value)
+        return None
+
 
 def _spacing_cst_to_doc(spacing: fmt_cst.Spacing, terminal_src: TerminalSource) -> Doc:
     """Convert a Spacing CST node to a Doc combinator."""

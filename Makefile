@@ -220,6 +220,11 @@ gen-rust-cst:
 gen-rust-parser:
 	uv run python -m fltk.fegen.genparser gen-rust-parser $(GRAMMAR) $(RS_OUT)
 
+# Emit Rust unparser source from a grammar (no compilation).
+# Usage: make gen-rust-unparser GRAMMAR=path/to/grammar.fltkg RS_OUT=path/to/output.rs [EXTRA_ARGS=...]
+gen-rust-unparser:
+	uv run python -m fltk.fegen.genparser gen-rust-unparser $(GRAMMAR) $(RS_OUT) $(EXTRA_ARGS)
+
 # Regenerate the parser for the fegen grammar into the fegen-rust crate.
 build-fegen-rust-parser:
 	uv run python -m fltk.fegen.genparser gen-rust-parser \
@@ -274,9 +279,21 @@ gencode:
 		EXTRA_ARGS="--protocol-module fltk.fegen.fltk_cst_protocol --pyi-output fltk/_stubs/fegen_rust_cst/cst.pyi"
 	# Rust: crates/fegen-rust/src/parser.rs (fegen.fltkg) — generated Rust parser.
 	$(MAKE) build-fegen-rust-parser
-	# Rust: tests/rust_parser_fixture/src/cst.rs and parser.rs (rust_parser_fixture.fltkg)
+	# Rust: tests/rust_parser_fixture/src/cst.rs, parser.rs, and unparser.rs (rust_parser_fixture.fltkg)
 	$(MAKE) gen-rust-cst GRAMMAR=fltk/fegen/test_data/rust_parser_fixture.fltkg RS_OUT=tests/rust_parser_fixture/src/cst.rs
 	$(MAKE) gen-rust-parser GRAMMAR=fltk/fegen/test_data/rust_parser_fixture.fltkg RS_OUT=tests/rust_parser_fixture/src/parser.rs
+	# Fixture CST protocol module: the Python typing source the committed unparser .pyi (OQ-3) types
+	# `node` params against.  The Rust backend supplies cst/parser; only the protocol is needed for
+	# typing, so --protocol-only emits just rust_parser_fixture_cst_protocol.py (no CST, no parsers).
+	uv run python -m fltk.fegen.genparser generate --protocol-only \
+		fltk/fegen/test_data/rust_parser_fixture.fltkg rust_parser_fixture rust_parser_fixture_cst \
+		--output-dir tests
+	# unparser.rs (.fltkfmt-baked) + the committed fixture unparser .pyi stub (OQ-3, pyright-checked
+	# via fltk/_stubs).  --pyi-output names the stub by the compiled submodule's import name.
+	$(MAKE) gen-rust-unparser GRAMMAR=fltk/fegen/test_data/rust_parser_fixture.fltkg RS_OUT=tests/rust_parser_fixture/src/unparser.rs \
+		EXTRA_ARGS="--format-config fltk/fegen/test_data/rust_parser_fixture.fltkfmt --protocol-module tests.rust_parser_fixture_cst_protocol --pyi-output fltk/_stubs/rust_parser_fixture/unparser.pyi"
+	# Default-FormatterConfig variant (no --format-config) for default-config cross-backend parity (§4).
+	$(MAKE) gen-rust-unparser GRAMMAR=fltk/fegen/test_data/rust_parser_fixture.fltkg RS_OUT=tests/rust_parser_fixture/src/unparser_default.rs
 	# Rust: tests/rust_parser_fixture/src/collision_cst.rs and collision_parser.rs (collision_fixture.fltkg)
 	# Demonstrates that a cdylib can host multiple grammars; proves Parser/ApplyResult CST
 	# classes and the parser machinery coexist without collision after the cst/parser split.

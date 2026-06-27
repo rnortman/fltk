@@ -526,7 +526,7 @@ class UnparserGenerator:
         else:
             msg = (
                 f"Cannot generate unparser: required suppressed term of type {type(item.term).__name__} "
-                "cannot be recreated from CST. Consider adding a lable or removing the suppression."
+                "cannot be recreated from CST. Consider adding a label or removing the suppression."
             )
             raise RuntimeError(msg)
 

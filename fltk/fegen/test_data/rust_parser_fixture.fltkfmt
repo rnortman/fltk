@@ -1,0 +1,45 @@
+// Format config for the Rust unparser backend test fixture.
+//
+// Exercises the non-default generated-Rust paths the default config never reaches:
+//   - spacing defaults (ws_allowed / ws_required)
+//   - before/after anchors (literal- and label-selected)
+//   - rule-level group / nest / join (RULE_START/RULE_END push/pop)
+//   - item-level group / nest / join ranges (per-item push/pop), both
+//     label-anchored and literal-anchored (with from-after / to-before modifiers)
+//
+// Separators stay primitive (nbsp/bsp/soft): a group/nest/join Doc separator is
+// rejected by both the Python and Rust backends, so join here uses a plain `bsp`.
+
+ws_allowed: bsp;
+ws_required: nbsp;
+
+before "+" { nbsp; }
+after "+" { nbsp; }
+
+// rule-level group + item-level nest range (label-anchored) + label-anchored after-spacing
+rule expr {
+  group;
+  nest from lhs to rhs;
+  after lhs { nbsp; }
+}
+
+// item-level group range (label-anchored), WS_REQUIRED default, literal anchors
+rule stmt {
+  group from lhs to rhs;
+  before "=" { nbsp; }
+  after "=" { nbsp; }
+}
+
+// rule-level join with a primitive separator + label-anchored after-spacing on a quantified item
+rule items {
+  join bsp;
+  after item { bsp; }
+}
+
+// rule-level nest + item-level group range (literal-anchored, from-after / to-before)
+rule paren_expr {
+  nest;
+  group from after "(" to before ")";
+  after "(" { soft; }
+  before ")" { soft; }
+}

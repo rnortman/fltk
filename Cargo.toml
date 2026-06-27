@@ -1,5 +1,5 @@
 [workspace]
-members = [".", "crates/fltk-cst-core", "crates/fltk-parser-core"]
+members = [".", "crates/fltk-cst-core", "crates/fltk-parser-core", "crates/fltk-unparser-core"]
 resolver = "2"
 
 [package]

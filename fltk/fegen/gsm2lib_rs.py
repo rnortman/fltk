@@ -67,17 +67,25 @@ class LibSpec:
     """If True, emit the UNKNOWN_SPAN static declaration and once-init."""
 
     @staticmethod
-    def standard(module_name: str, *, with_parser: bool = True) -> LibSpec:
-        """Convenience constructor for the standard one-CST [+ one-parser] layout.
+    def standard(module_name: str, *, with_parser: bool = True, with_unparser: bool = False) -> LibSpec:
+        """Convenience constructor for the standard one-CST [+ parser] [+ unparser] layout.
 
         Args:
             module_name: The #[pymodule] function name / importable module name.
-            with_parser: If True (default), include cst + parser submodules.
-                         If False, include only the cst submodule.
+            with_parser: If True (default), include the parser submodule.
+                         If False, omit it.
+            with_unparser: If True, also include the unparser submodule.
+                           If False (default), omit it.
+
+        The cst submodule is always included.  The unparser uses the same
+        register_classes entry point as cst/parser (existing two-submodule
+        convention).
         """
         submodules: list[Submodule] = [Submodule("cst", "cst")]
         if with_parser:
             submodules.append(Submodule("parser", "parser"))
+        if with_unparser:
+            submodules.append(Submodule("unparser", "unparser"))
         return LibSpec(module_name=module_name, submodules=tuple(submodules))
 
     def validate(self) -> None:

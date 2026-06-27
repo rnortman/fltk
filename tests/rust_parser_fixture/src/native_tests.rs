@@ -983,4 +983,143 @@ mod tests {
         let (first_label, _) = &node.children()[0];
         assert!(first_label.is_none(), "first child of tagged must be unlabeled ($-included literal)");
     }
+
+    // ── native (GIL-free) unparser tests (design §4) ──────────────────────
+    //
+    // Build a CST via the native Rust parser API (spans carry their own source),
+    // then run the pure-Rust `Unparser` + `resolve_spacing_specs` + `Renderer`
+    // with no `python` feature and no GIL, asserting the rendered string. This
+    // proves the `fltk-unparser-core` runtime and the generated pure-Rust
+    // `Unparser` link and run with no Python runtime.
+    //
+    // The committed `unparser.rs` is baked with the fixture `.fltkfmt` config
+    // (increment 27), so the expected strings are that config's output. They are
+    // the parity-validated Python-backend reference (every (rule, text) here is in
+    // the corpus of tests/test_rust_unparser_parity_fixture.py, which asserts the
+    // two backends render byte-equal at these exact configs).
+
+    use crate::unparser::Unparser;
+    use fltk_unparser_core::{resolve_spacing_specs, Renderer, RendererConfig};
+
+    /// Parse `$src` with the native parser method `$parse`, unparse the resulting
+    /// CST node with `$unparse`, then resolve spacing and render at
+    /// `(max_width, indent_width)`. Returns the rendered `String`. Runs entirely
+    /// in pure Rust — no `python` feature, no GIL.
+    macro_rules! render_native {
+        ($src:expr, $parse:ident, $unparse:ident, $max_width:expr, $indent_width:expr) => {{
+            let src: &str = $src;
+            // capture_trivia=true matches the parity corpus
+            // (tests/test_rust_unparser_parity_fixture.py), so the expected
+            // literals below are exactly the strings the cross-backend parity
+            // test validates byte-equal at these configs.
+            let mut parser = Parser::new(src, None, true);
+            let parsed = parser
+                .$parse(0)
+                .unwrap_or_else(|| panic!("native parse failed for {src:?}: {}", parser.error_message()));
+            assert_eq!(
+                parsed.pos,
+                src.chars().count() as i64,
+                "parser must consume all of {src:?}"
+            );
+            let guard = parsed.result.read();
+            let unparsed = Unparser::new().$unparse(&*guard).unwrap_or_else(|| {
+                panic!(
+                    "native unparse failed for {src:?} (method {}): returned None",
+                    stringify!($unparse)
+                )
+            });
+            let resolved = resolve_spacing_specs(unparsed.doc());
+            Renderer::new(RendererConfig {
+                indent_width: $indent_width,
+                max_width: $max_width,
+            })
+            .render(&resolved)
+        }};
+    }
+
+    /// Plain single-token rules: the captured span text is re-emitted verbatim.
+    #[test]
+    fn native_unparse_simple_tokens() {
+        assert_eq!(render_native!("123", apply__parse_num, unparse_num, 80, 4), "123");
+        assert_eq!(render_native!("hello", apply__parse_name, unparse_name, 80, 4), "hello");
+        assert_eq!(render_native!("world", apply__parse_atom, unparse_atom, 80, 4), "world");
+    }
+
+    /// The default-config unparser module (`unparser_default.rs`) is otherwise only
+    /// reached through the `python` feature. This native test proves it also links
+    /// and runs against `fltk-unparser-core` with no `python` feature and no GIL
+    /// (design §4), independent of the fltkfmt-baked `unparser` module the macro
+    /// above uses. `num "123"` renders verbatim under default spacing.
+    #[test]
+    fn native_unparse_default_config_links() {
+        let src = "123";
+        let mut parser = Parser::new(src, None, true);
+        let parsed = parser
+            .apply__parse_num(0)
+            .unwrap_or_else(|| panic!("native parse failed for {src:?}: {}", parser.error_message()));
+        assert_eq!(parsed.pos, src.chars().count() as i64, "parser must consume all of {src:?}");
+        let guard = parsed.result.read();
+        let unparsed = crate::unparser_default::Unparser::new()
+            .unparse_num(&*guard)
+            .unwrap_or_else(|| panic!("native default-config unparse failed for {src:?}: returned None"));
+        let resolved = resolve_spacing_specs(unparsed.doc());
+        let rendered = Renderer::new(RendererConfig {
+            indent_width: 4,
+            max_width: 80,
+        })
+        .render(&resolved);
+        assert_eq!(rendered, "123");
+    }
+
+    /// WS_REQUIRED separators + item-level `group from lhs to rhs` + before/after "=".
+    #[test]
+    fn native_unparse_stmt_ws_required_group() {
+        assert_eq!(render_native!("x = y", apply__parse_stmt, unparse_stmt, 80, 4), "x = y");
+    }
+
+    /// Rule-level `join bsp` + after-item spacing over a quantified (`+`) item.
+    #[test]
+    fn native_unparse_items_join() {
+        assert_eq!(render_native!("1a2b", apply__parse_items, unparse_items, 80, 4), "1 a 2 b");
+    }
+
+    /// Rule-level group + `nest from lhs to rhs` + after-lhs spacing. Wide renders
+    /// flat; narrow breaks the group, changing the nest indentation — exercising the
+    /// Wadler-Lindig flat-vs-break decision and nest rendering in the pure-Rust core.
+    #[test]
+    fn native_unparse_expr_nest_flat_vs_break() {
+        assert_eq!(render_native!("1+2+3", apply__parse_expr, unparse_expr, 80, 4), "        1+2+3");
+        assert_eq!(render_native!("1+2+3", apply__parse_expr, unparse_expr, 8, 2), "    1+2+3");
+    }
+
+    /// Rule-level nest + item-level `group from after "(" to before ")"` + soft anchors.
+    #[test]
+    fn native_unparse_paren_expr_item_group() {
+        assert_eq!(render_native!("(42)", apply__parse_paren_expr, unparse_paren_expr, 80, 4), "    (42)");
+        assert_eq!(render_native!("(42)", apply__parse_paren_expr, unparse_paren_expr, 8, 2), "  (42)");
+    }
+
+    /// Multibyte literal "→" (3 UTF-8 bytes) re-emitted; codepoint-indexed spans.
+    #[test]
+    fn native_unparse_arrow_multibyte() {
+        assert_eq!(render_native!("→x", apply__parse_arrow, unparse_arrow, 80, 4), "→x");
+    }
+
+    /// Bounded-depth right-recursive nesting (recursive `unparse_nest` calls).
+    #[test]
+    fn native_unparse_nest_recursion() {
+        assert_eq!(render_native!("(((42)))", apply__parse_nest, unparse_nest, 80, 4), "(((42)))");
+    }
+
+    /// Union label, span (regex) arm: `val := item:num | item:name | item:/[!@#$]+/`.
+    #[test]
+    fn native_unparse_val_union_span_arm() {
+        assert_eq!(render_native!("!@#", apply__parse_val, unparse_val, 80, 4), "!@#");
+    }
+
+    /// Zero-or-more quantifier matching nothing -> empty Doc -> empty string.
+    #[test]
+    fn native_unparse_zero_items_empty() {
+        assert_eq!(render_native!("", apply__parse_zero_items, unparse_zero_items, 80, 4), "");
+    }
 }

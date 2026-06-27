@@ -419,6 +419,18 @@ impl Span {
     /// ``start`` and ``end`` are codepoint (Unicode character) indices, matching Python's
     /// string indexing semantics (same as ``source[start:end]`` in Python).
     pub fn text(&self) -> Option<String> {
+        self.text_str().map(str::to_owned)
+    }
+
+    /// Return the source text slice ``[start, end)`` as a borrowed ``&str``, or ``None`` under
+    /// the same conditions as [`text`](Self::text).
+    ///
+    /// This is the allocation-free analogue of [`text`](Self::text) (which is implemented in terms
+    /// of it): the returned reference borrows directly from the attached source rather than copying
+    /// into an owned `String`. Use it where the slice is only inspected and immediately dropped
+    /// (e.g. counting newlines in inter-token trivia); use [`text`](Self::text) where an owned
+    /// `String` is retained. The reference borrows from `&self`, which holds the source `Arc` alive.
+    pub fn text_str(&self) -> Option<&str> {
         let inner = self.source.as_ref()?;
         if self.start < 0 || self.end < 0 {
             return None;
@@ -453,10 +465,10 @@ impl Span {
         }
         // Handle start == 0 on an empty source string (char_count stays 0, byte_start not set).
         if byte_start.is_none() && start == 0 && end == 0 {
-            return Some(String::new());
+            return Some("");
         }
         match (byte_start, byte_end) {
-            (Some(bs), Some(be)) => Some(src[bs..be].to_owned()),
+            (Some(bs), Some(be)) => Some(&src[bs..be]),
             _ => None,
         }
     }
@@ -838,4 +850,57 @@ impl Span {
 #[cfg(feature = "python")]
 pub(crate) fn span_abi_layout_probe() -> usize {
     std::mem::size_of::<<Span as pyo3::impl_::pyclass::PyClassImpl>::Layout>()
+}
+
+#[cfg(test)]
+mod text_str_tests {
+    use super::*;
+
+    #[test]
+    fn text_str_matches_text_for_ascii() {
+        let src = SourceText::from_str("hello world", None);
+        let span = Span::new_with_source(0, 5, &src);
+        assert_eq!(span.text_str(), Some("hello"));
+        // text() is now defined in terms of text_str(): same content, owned.
+        assert_eq!(span.text(), Some("hello".to_owned()));
+    }
+
+    #[test]
+    fn text_str_uses_codepoint_indices_for_multibyte() {
+        // "héllo": 'é' is two UTF-8 bytes, so a codepoint slice [0,2) ("hé") differs from a byte
+        // slice [0,2) ("h" + a partial 'é'); this confirms text_str uses codepoint indexing.
+        let src = SourceText::from_str("héllo", None);
+        let span = Span::new_with_source(0, 2, &src);
+        assert_eq!(span.text_str(), Some("hé"));
+        assert_eq!(span.text(), Some("hé".to_owned()));
+    }
+
+    #[test]
+    fn text_str_slices_to_end_of_source() {
+        let src = SourceText::from_str("abc", None);
+        let span = Span::new_with_source(1, 3, &src);
+        assert_eq!(span.text_str(), Some("bc"));
+    }
+
+    #[test]
+    fn text_str_empty_span_on_empty_source() {
+        let src = SourceText::from_str("", None);
+        let span = Span::new_with_source(0, 0, &src);
+        assert_eq!(span.text_str(), Some(""));
+    }
+
+    #[test]
+    fn text_str_none_for_sourceless_span() {
+        let span = Span::new_sourceless(0, 3);
+        assert_eq!(span.text_str(), None);
+        assert_eq!(span.text(), None);
+    }
+
+    #[test]
+    fn text_str_counts_newlines_without_allocating() {
+        let src = SourceText::from_str(" \n\n ", None);
+        let span = Span::new_with_source(0, 4, &src);
+        let count = span.text_str().map(|t| t.matches('\n').count()).unwrap_or(0);
+        assert_eq!(count, 2);
+    }
 }

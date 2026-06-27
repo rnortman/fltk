@@ -5,7 +5,7 @@ from __future__ import annotations
 import pytest
 
 from fltk.fegen import gsm
-from fltk.fegen.gsm2parser_rs import RustParserGenerator, _rust_str_lit
+from fltk.fegen.gsm2parser_rs import RustParserGenerator, rust_str_lit
 
 # ---------------------------------------------------------------------------
 # Helper: build minimal test grammars
@@ -142,37 +142,37 @@ def _make_ws_grammar() -> gsm.Grammar:
 
 
 # ---------------------------------------------------------------------------
-# _rust_str_lit tests
+# rust_str_lit tests
 # ---------------------------------------------------------------------------
 
 
 def test_rust_str_lit_plain() -> None:
-    assert _rust_str_lit("hello") == "hello"
+    assert rust_str_lit("hello") == "hello"
 
 
 def test_rust_str_lit_backslash() -> None:
-    assert _rust_str_lit("a\\b") == "a\\\\b"
+    assert rust_str_lit("a\\b") == "a\\\\b"
 
 
 def test_rust_str_lit_double_quote() -> None:
-    assert _rust_str_lit('say "hi"') == 'say \\"hi\\"'
+    assert rust_str_lit('say "hi"') == 'say \\"hi\\"'
 
 
 def test_rust_str_lit_control_chars() -> None:
     # Null byte (0x00)
-    assert _rust_str_lit("\x00") == "\\u{00}"
+    assert rust_str_lit("\x00") == "\\u{00}"
     # Tab (0x09)
-    assert _rust_str_lit("\t") == "\\u{09}"
+    assert rust_str_lit("\t") == "\\u{09}"
     # Newline (0x0a)
-    assert _rust_str_lit("\n") == "\\u{0a}"
+    assert rust_str_lit("\n") == "\\u{0a}"
     # DEL (0x7f)
-    assert _rust_str_lit("\x7f") == "\\u{7f}"
+    assert rust_str_lit("\x7f") == "\\u{7f}"
 
 
 def test_rust_str_lit_multibyte() -> None:
     # Non-ASCII chars pass through verbatim
-    assert _rust_str_lit("café") == "café"
-    assert _rust_str_lit("αβγ") == "αβγ"
+    assert rust_str_lit("café") == "café"
+    assert rust_str_lit("αβγ") == "αβγ"
 
 
 # ---------------------------------------------------------------------------

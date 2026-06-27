@@ -18,4 +18,5 @@ test-introspection = ["python", "fltk-cst-core/test-introspection"]
 [dependencies]
 fltk-cst-core = { path = "../../crates/fltk-cst-core", default-features = false }
 fltk-parser-core = { path = "../../crates/fltk-parser-core" }
+fltk-unparser-core = { path = "../../crates/fltk-unparser-core" }
 pyo3 = { version = "0.29", features = ["abi3-py310"], optional = true }

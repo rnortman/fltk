@@ -149,7 +149,7 @@ def _escape_source_name(s: str) -> str:
     the emitted ``//! ... `{name}` ...`` comment line stays well-formed.
 
     NOTE: `gsm2parser_rs._gen_header` has a parallel `_gen_header` method and uses
-    `_rust_str_lit` (a string-literal escaper) for the same doc-comment context.
+    `rust_str_lit` (a string-literal escaper) for the same doc-comment context.
     """
     return s.replace("\\", "/").replace("`", "'")
 
@@ -182,6 +182,9 @@ class RustCstGenerator:
         self.grammar = grammar_with_trivia
         # None means "omit the 'from <source_name>' clause" in the header.
         self._source_name: str | None = source_name
+
+        # Memoizes _child_variants_for_rule (pure function of the immutable rule model).
+        self._child_variants_cache: dict[str, tuple[list[str], bool]] = {}
 
         # Validate all rule names and item labels before any emission.
         # rule.name and item.label are interpolated directly into Rust identifiers
@@ -296,6 +299,9 @@ class RustCstGenerator:
         sorted_child_class_names: class names of referenced rule nodes (e.g. ["Identifier", "Trivia"]).
         has_span_child: True if the model includes a Span (terminal/literal/regex) child type.
         """
+        cached = self._child_variants_cache.get(rule_name)
+        if cached is not None:
+            return cached
         model = self._py_gen.rule_models[rule_name]
         child_class_names: list[str] = []
         has_span = False
@@ -305,7 +311,12 @@ class RustCstGenerator:
             else:
                 # TypeKey — must be the Span key
                 has_span = True
-        return sorted(child_class_names), has_span
+        # Pure function of the immutable rule model, so memoize: callers (here and in the
+        # unparser generator via num_child_variants) re-request the same rule's variants
+        # repeatedly. Callers treat the list as read-only.
+        result = (sorted(child_class_names), has_span)
+        self._child_variants_cache[rule_name] = result
+        return result
 
     def generate_pyi(self, protocol_module: str) -> str:
         """Return a complete .pyi stub for the generated Rust extension as a string.
@@ -793,6 +804,28 @@ class RustCstGenerator:
         model = self._py_gen.rule_models[rule_name]
         return bool(model.labels)
 
+    def num_child_variants(self, rule_name: str) -> int:
+        """Return the number of variants in a rule's <Name>Child enum.
+
+        Counts the rule-node child variants plus one for the Span variant when the rule
+        has any terminal (literal/regex) child. A return value greater than 1 means the
+        child enum needs a discriminating match arm; a value of 1 means the single variant
+        is statically guaranteed. Public wrapper so callers need not duplicate the
+        len(child_classes) + has_span arithmetic over _child_variants_for_rule.
+        """
+        child_classes, has_span = self._child_variants_for_rule(rule_name)
+        return len(child_classes) + (1 if has_span else 0)
+
+    def child_class_names_for_rule(self, rule_name: str) -> list[str]:
+        """Return the node-typed child class names in a rule's <Name>Child enum.
+
+        Public wrapper around _child_variants_for_rule's first element, parallel to
+        num_child_variants: lets callers (e.g. the unparser generator's preservable-trivia
+        filtering) obtain the child class names without reaching into the private helper.
+        """
+        child_classes, _has_span = self._child_variants_for_rule(rule_name)
+        return child_classes
+
     def _child_enum_block(self, class_name: str, rule_name: str, child_union: list[str] | None = None) -> str:
         """Emit the per-node child value enum (<Name>Child) + Clone/PartialEq impls.
 
@@ -824,7 +857,7 @@ class RustCstGenerator:
         # Shared::eq short-circuits on ptr_eq (handles x==x and DAG), then deep-compares.
         # Only emit `_ => false` when there are multiple variants; with a single variant the
         # wildcard arm would be unreachable and trigger a clippy/rustc warning.
-        num_variants = (1 if has_span else 0) + len(child_classes)
+        num_variants = self.num_child_variants(rule_name)
         lines.append(f"impl PartialEq for {enum_name} {{")
         lines.append("    fn eq(&self, other: &Self) -> bool {")
         lines.append("        match (self, other) {")
@@ -1748,8 +1781,7 @@ class RustCstGenerator:
         """
         model = self._py_gen.rule_models[rule_name]
         label_types = model.labels[label]
-        child_class_names, has_span = self._child_variants_for_rule(rule_name)
-        total_enum_variants = len(child_class_names) + (1 if has_span else 0)
+        total_enum_variants = self.num_child_variants(rule_name)
         enum_name = self.child_enum_name(self._py_gen.class_name_for_rule_node(rule_name))
 
         if len(label_types) == 1:
