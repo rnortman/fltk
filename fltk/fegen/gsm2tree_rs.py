@@ -423,6 +423,35 @@ class RustCstGenerator:
 
         return "\n".join(lines)
 
+    def generate_protocol(self) -> str:
+        """Return the protocol-module source text for this grammar.
+
+        The returned text is byte-identical to the Python ``generate --protocol`` output for
+        the same grammar (genparser.py), including the ``# ruff: noqa: N802`` file-level prefix.
+        The protocol module is backend-agnostic — it describes the structural CST API via
+        ``typing.Protocol`` classes plus a runtime ``NodeKind`` enum and is equally valid as a
+        type contract for the Python-backed and Rust-backed CSTs (design §2.2).
+
+        Implementation note (design §1.2): ``CstGenerator.gen_protocol_module`` gates the per-rule
+        ``kind: typing.Literal[NodeKind.*]`` discriminant on ``py_module.import_path`` being truthy,
+        falling back to the degraded ``kind: object`` form otherwise.  The existing ``self._py_gen``
+        is built with ``pyreg.Builtins`` (an empty, falsy ``import_path``) and backs ``.rs`` / ``.pyi``
+        generation, so it is NOT reused here.  Instead a dedicated ``CstGenerator`` is constructed with
+        a non-empty placeholder ``py_module`` so the ``Literal`` discriminant is emitted.  The
+        ``import_path`` value never appears in protocol output — only its truthiness gates the
+        discriminant — so any non-empty placeholder yields identical bytes and the caller need not
+        supply a CST module name.
+        """
+        protocol_gen = CstGenerator(
+            grammar=self.grammar,
+            py_module=pyreg.Module(["_protocol"]),
+            context=create_default_context(),
+        )
+        # Render through the shared CstGenerator.gen_protocol_module_text helper so this path and
+        # the Python `generate --protocol` path emit byte-identical protocol text from one code
+        # path (design §2.2; the cross-path byte-identity test is the guardrail).
+        return protocol_gen.gen_protocol_module_text()
+
     def _pyi_annotation_for_model_types(self, model_types: Iterable[ModelType], *, class_name: str = "") -> str:
         """Return a proto-qualified annotation string for use in the .pyi stub.
 

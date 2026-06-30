@@ -112,9 +112,22 @@ def _generate_rust_parser_impl(ctx):
     """
     grammar = ctx.file.src
 
+    protocol_module = ctx.attr.protocol_module
+    generate_protocol = ctx.attr.generate_protocol
+
+    # Mirror the CLI's `--protocol-output requires --protocol-module` check,
+    # surfacing the misconfiguration at analysis time (§2.5).
+    if generate_protocol and not protocol_module:
+        fail("generate_rust_parser: generate_protocol = True requires a non-empty protocol_module.")
+
     # Declare the two output files in a subdirectory named after the rule.
     cst_out = ctx.actions.declare_file(ctx.attr.name + "/cst.rs")
     parser_out = ctx.actions.declare_file(ctx.attr.name + "/parser.rs")
+
+    # cst_out is always produced by the gen-rust-cst action; the .pyi / marker /
+    # protocol outputs are appended below when protocol_module (and optionally
+    # generate_protocol) are set.
+    cst_outputs = [cst_out]
 
     # --- Action 1: gen-rust-cst ---
     cst_args = ctx.actions.args()
@@ -122,9 +135,37 @@ def _generate_rust_parser_impl(ctx):
     cst_args.add(grammar)
     cst_args.add(cst_out)
 
+    if protocol_module:
+        # Expose the .pyi stub plus the stub-package __init__.pyi marker through
+        # the same gen-rust-cst action, so <name>/ is a complete stub package in
+        # the Bazel output tree (§2.5-§2.6).  The marker is generator-produced via
+        # --init-pyi-output (not a ctx.actions.write fixed body), keeping it on the
+        # same dogfooded path as the in-tree markers (§2.2).
+        cst_pyi = ctx.actions.declare_file(ctx.attr.name + "/cst.pyi")
+        init_pyi = ctx.actions.declare_file(ctx.attr.name + "/__init__.pyi")
+        cst_args.add("--protocol-module")
+        cst_args.add(protocol_module)
+        cst_args.add("--pyi-output")
+        cst_args.add(cst_pyi)
+        cst_args.add("--init-pyi-output")
+        cst_args.add(init_pyi)
+        cst_args.add("--extension-name")
+        cst_args.add(ctx.attr.name)
+        cst_args.add("--submodules")
+        cst_args.add("cst,parser")
+        cst_outputs.append(cst_pyi)
+        cst_outputs.append(init_pyi)
+
+        if generate_protocol:
+            # Opt-in protocol .py output (Change 1, Rust side).
+            protocol_out = ctx.actions.declare_file(ctx.attr.name + "/cst_protocol.py")
+            cst_args.add("--protocol-output")
+            cst_args.add(protocol_out)
+            cst_outputs.append(protocol_out)
+
     ctx.actions.run(
         inputs = [grammar],
-        outputs = [cst_out],
+        outputs = cst_outputs,
         arguments = [cst_args],
         executable = ctx.executable._gen_tool,
         progress_message = "Generating Rust CST for grammar %s" % grammar.short_path,
@@ -146,7 +187,7 @@ def _generate_rust_parser_impl(ctx):
         progress_message = "Generating Rust parser for grammar %s" % grammar.short_path,
     )
 
-    return [DefaultInfo(files = depset([cst_out, parser_out]))]
+    return [DefaultInfo(files = depset(cst_outputs + [parser_out]))]
 
 generate_rust_parser = rule(
     implementation = _generate_rust_parser_impl,
@@ -166,6 +207,26 @@ generate_rust_parser = rule(
                 "module hierarchy."
             ),
         ),
+        "protocol_module": attr.string(
+            default = "",
+            doc = (
+                "Dotted Python import path of the protocol module (e.g. " +
+                "'my.pkg.grammar_cst_protocol'). When non-empty, the gen-rust-cst " +
+                "action also emits the .pyi type stub (<name>/cst.pyi) and the " +
+                "stub-package marker (<name>/__init__.pyi, with --extension-name " +
+                "<name> --submodules cst,parser), declaring both as outputs so " +
+                "<name>/ is a complete stub package. When empty, no .pyi is produced."
+            ),
+        ),
+        "generate_protocol": attr.bool(
+            default = False,
+            doc = (
+                "When True, the gen-rust-cst action also writes the protocol .py " +
+                "module (<name>/cst_protocol.py), declared as an output. Requires " +
+                "protocol_module to be non-empty (the rule fails at analysis time " +
+                "otherwise). Off by default."
+            ),
+        ),
         "_gen_tool": attr.label(
             default = Label("//:genparser"),
             executable = True,
@@ -175,9 +236,17 @@ generate_rust_parser = rule(
     },
     doc = """Generate Rust CST and parser sources from an FLTK grammar file.
 
-Emits two action outputs:
+Always emits two action outputs:
   <name>/cst.rs    — generated CST node classes (PyO3 Rust)
   <name>/parser.rs — generated parser (PyO3 Rust)
+
+When `protocol_module` is non-empty, the gen-rust-cst action additionally emits
+and declares:
+  <name>/cst.pyi       — type stub for the compiled extension
+  <name>/__init__.pyi  — stub-package marker (extension <name>; submodules cst,parser)
+
+When `generate_protocol = True` (requires `protocol_module`), it also emits:
+  <name>/cst_protocol.py — the backend-agnostic protocol module
 
 These files are designed to be consumed by fltk_pyo3_cdylib, which assembles
 them alongside a consumer-authored lib.rs into a single crate directory and
@@ -191,6 +260,8 @@ Example:
         name = "clockwork_rs_srcs",
         src  = "clockwork.fltkg",
         cst_mod_path = "super::cst",  # default; can omit
+        # protocol_module = "clockwork.clockwork_cst_protocol",  # opt-in .pyi
+        # generate_protocol = True,                              # opt-in protocol .py
     )
 """,
 )

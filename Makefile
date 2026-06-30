@@ -253,23 +253,23 @@ test-rust-parser-fixture:
 gencode:
 	# Python: fegen grammar → fltk_cst.py, fltk_cst_protocol.py, fltk_parser.py, fltk_trivia_parser.py
 	# (fltk.fltkg is intentionally broken; fltk_cst.py is generated from fegen.fltkg)
-	uv run python -m fltk.fegen.genparser generate \
+	uv run python -m fltk.fegen.genparser generate --protocol \
 		fltk/fegen/fegen.fltkg fltk fltk.fegen.fltk_cst \
 		--output-dir fltk/fegen
 	# Python: bootstrap grammar → bootstrap_cst.py, bootstrap_cst_protocol.py, bootstrap_parser.py, bootstrap_trivia_parser.py
-	uv run python -m fltk.fegen.genparser generate \
+	uv run python -m fltk.fegen.genparser generate --protocol \
 		fltk/fegen/bootstrap.fltkg bootstrap fltk.fegen.bootstrap_cst \
 		--output-dir fltk/fegen
 	# Python: toy grammar (toy_cst.py, toy_cst_protocol.py, toy_parser.py, toy_trivia_parser.py)
-	uv run python -m fltk.fegen.genparser generate \
+	uv run python -m fltk.fegen.genparser generate --protocol \
 		fltk/unparse/toy.fltkg toy fltk.unparse.toy_cst \
 		--output-dir fltk/unparse
 	# Python: unparsefmt grammar (unparsefmt_cst.py, unparsefmt_cst_protocol.py, unparsefmt_parser.py, unparsefmt_trivia_parser.py)
-	uv run python -m fltk.fegen.genparser generate \
+	uv run python -m fltk.fegen.genparser generate --protocol \
 		fltk/unparse/unparsefmt.fltkg unparsefmt fltk.unparse.unparsefmt_cst \
 		--output-dir fltk/unparse
 	# Python: regex grammar (regex_cst.py, regex_cst_protocol.py, regex_parser.py, regex_trivia_parser.py)
-	uv run python -m fltk.fegen.genparser generate \
+	uv run python -m fltk.fegen.genparser generate --protocol \
 		fltk/fegen/regex.fltkg regex fltk.fegen.regex_cst \
 		--output-dir fltk/fegen
 	# Rust: src/lib.rs (fltk._native module wiring — span-only runtime, no grammar submodules)
@@ -280,9 +280,11 @@ gencode:
 		fltk/fegen/test_data/poc_grammar.fltkg tests/rust_poc_cst/src/cst.rs
 	# Rust: tests/rust_cst_fixture/src/cst.rs (phase4_roundtrip.fltkg)
 	$(MAKE) gen-rust-cst GRAMMAR=fltk/fegen/test_data/phase4_roundtrip.fltkg RS_OUT=tests/rust_cst_fixture/src/cst.rs
-	# Rust: crates/fegen-rust/src/cst.rs (fegen.fltkg) + fltk/_stubs/fegen_rust_cst/cst.pyi stub
+	# Rust: crates/fegen-rust/src/cst.rs (fegen.fltkg) + fltk/_stubs/fegen_rust_cst/cst.pyi stub +
+	# fltk/_stubs/fegen_rust_cst/__init__.pyi stub-package marker (dogfooded via --init-pyi-output)
 	$(MAKE) gen-rust-cst GRAMMAR=fltk/fegen/fegen.fltkg RS_OUT=crates/fegen-rust/src/cst.rs \
-		EXTRA_ARGS="--protocol-module fltk.fegen.fltk_cst_protocol --pyi-output fltk/_stubs/fegen_rust_cst/cst.pyi"
+		EXTRA_ARGS="--protocol-module fltk.fegen.fltk_cst_protocol --pyi-output fltk/_stubs/fegen_rust_cst/cst.pyi \
+		            --init-pyi-output fltk/_stubs/fegen_rust_cst/__init__.pyi --extension-name fegen_rust_cst --submodules cst,parser,unparser"
 	# Rust: crates/fegen-rust/src/parser.rs (fegen.fltkg) — generated Rust parser.
 	$(MAKE) build-fegen-rust-parser
 	# Rust: crates/fegen-rust/src/unparser.rs (fegen.fltkg, fegen.fltkfmt-baked) +
@@ -302,9 +304,12 @@ gencode:
 		fltk/fegen/test_data/rust_parser_fixture.fltkg rust_parser_fixture rust_parser_fixture_cst \
 		--output-dir tests
 	# unparser.rs (.fltkfmt-baked) + the committed fixture unparser .pyi stub (OQ-3, pyright-checked
-	# via fltk/_stubs).  --pyi-output names the stub by the compiled submodule's import name.
+	# via fltk/_stubs) + fltk/_stubs/rust_parser_fixture/__init__.pyi stub-package marker (dogfooded
+	# via --init-pyi-output; the fixture's gen-rust-cst writes no cst.pyi, so the marker rides the
+	# unparser path).  --pyi-output names the stub by the compiled submodule's import name.
 	$(MAKE) gen-rust-unparser GRAMMAR=fltk/fegen/test_data/rust_parser_fixture.fltkg RS_OUT=tests/rust_parser_fixture/src/unparser.rs \
-		EXTRA_ARGS="--format-config fltk/fegen/test_data/rust_parser_fixture.fltkfmt --protocol-module tests.rust_parser_fixture_cst_protocol --pyi-output fltk/_stubs/rust_parser_fixture/unparser.pyi"
+		EXTRA_ARGS="--format-config fltk/fegen/test_data/rust_parser_fixture.fltkfmt --protocol-module tests.rust_parser_fixture_cst_protocol --pyi-output fltk/_stubs/rust_parser_fixture/unparser.pyi \
+		            --init-pyi-output fltk/_stubs/rust_parser_fixture/__init__.pyi --extension-name rust_parser_fixture --submodules cst,parser,unparser,unparser_default,collision_cst,collision_parser"
 	# Default-FormatterConfig variant (no --format-config) for default-config cross-backend parity (§4).
 	$(MAKE) gen-rust-unparser GRAMMAR=fltk/fegen/test_data/rust_parser_fixture.fltkg RS_OUT=tests/rust_parser_fixture/src/unparser_default.rs
 	# Rust: tests/rust_parser_fixture/src/collision_cst.rs and collision_parser.rs (collision_fixture.fltkg)

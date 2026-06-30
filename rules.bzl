@@ -26,6 +26,12 @@ def _genparser_impl(ctx):
         trivia_parser_file = ctx.actions.declare_file(ctx.attr.base_name + "_trivia_parser.py")
         outputs.append(trivia_parser_file)
 
+    # Opt-in protocol module (off by default).
+    if ctx.attr.protocol:
+        args.add("--protocol")
+        protocol_file = ctx.actions.declare_file(ctx.attr.base_name + "_cst_protocol.py")
+        outputs.append(protocol_file)
+
     # Action to call the script.
     ctx.actions.run(
         inputs = ctx.files.src,
@@ -61,6 +67,10 @@ generate_parser = rule(
         "no_trivia_only": attr.bool(
             default = False,
             doc = "Generate only the non-trivia parser",
+        ),
+        "protocol": attr.bool(
+            default = False,
+            doc = "Also generate the protocol module ({base_name}_cst_protocol.py)",
         ),
         "_gen_tool": attr.label(
             default = Label(":genparser"),

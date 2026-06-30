@@ -1,0 +1,6 @@
+# User notes — design gate (chat directives, verbatim)
+
+1. Yes we should generate the __init__.pyi
+2. yes it's fine to switch to requiring the protocol import path to be specified separately
+
+3. Dogfood the generated `__init__.pyi` rather than keeping the in-tree markers hand-authored. Route marker generation through the generator/CLI path (emit the `__init__.pyi` alongside the `cst.pyi`/`unparser.pyi` it already produces), and have the Bazel rule use that same generator path instead of a separate `ctx.actions.write`. Content is GENERATOR-DERIVED: the marker carries the extension name and the submodule list the generator is producing (e.g. cst/parser/unparser), preserving the informative per-extension comments the current in-tree markers have. `make gencode` must regenerate the in-tree marker files (`fltk/_stubs/fegen_rust_cst/__init__.pyi`, `fltk/_stubs/rust_parser_fixture/__init__.pyi`) so they are dogfooded like every other stub. This refines decision #1 and supersedes the design's prior §2.7 "in-tree markers remain hand-authored / generation scoped to the Bazel rule only" decision. Out of scope: `fltk/_native/__init__.pyi` is a substantive hand-written type stub, not a package marker — leave it untouched.

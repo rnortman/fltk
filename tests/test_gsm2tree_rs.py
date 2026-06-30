@@ -1107,6 +1107,46 @@ class TestPhase1HandleStructure:
 _PROTO_MODULE = "fltk.fegen.fltk_cst_protocol"
 
 
+# ---------------------------------------------------------------------------
+# generate_protocol: protocol-module emission (§2.2 of design)
+# ---------------------------------------------------------------------------
+
+
+class TestGenerateProtocol:
+    """RustCstGenerator.generate_protocol emits backend-agnostic protocol source (§2.2)."""
+
+    def test_ruff_noqa_header(self) -> None:
+        """Protocol text begins with the same '# ruff: noqa: N802' prefix as the Python path."""
+        gen = RustCstGenerator(_make_poc_grammar())
+        assert gen.generate_protocol().startswith("# ruff: noqa: N802\n")
+
+    def test_parses_as_valid_python(self) -> None:
+        """Protocol text is syntactically valid Python."""
+        import ast as _ast  # noqa: PLC0415
+
+        gen = RustCstGenerator(_make_poc_grammar())
+        # Raises SyntaxError if the emitted text is not parseable.
+        _ast.parse(gen.generate_protocol())
+
+    def test_kind_uses_literal_discriminant_not_degraded(self) -> None:
+        """Per §1.2: the non-degraded 'kind: typing.Literal[NodeKind.*]' form is emitted.
+
+        The degraded 'kind: object' form (produced when py_module.import_path is falsy, e.g. the
+        pyreg.Builtins-backed self._py_gen) must NOT appear — generate_protocol uses a non-empty
+        py_module precisely to emit the Literal discriminant.
+        """
+        gen = RustCstGenerator(_make_poc_grammar())
+        protocol = gen.generate_protocol()
+        assert "kind: typing.Literal[NodeKind.IDENTIFIER]" in protocol
+        assert "kind: typing.Literal[NodeKind.ITEMS]" in protocol
+        assert "kind: object" not in protocol
+
+    def test_deterministic_across_instances(self) -> None:
+        """Two generator instances over the same grammar produce identical protocol text."""
+        grammar = _make_poc_grammar()
+        assert RustCstGenerator(grammar).generate_protocol() == RustCstGenerator(grammar).generate_protocol()
+
+
 @pytest.fixture(scope="module")
 def poc_pyi() -> str:
     """Generated .pyi stub for the PoC 2-rule grammar."""

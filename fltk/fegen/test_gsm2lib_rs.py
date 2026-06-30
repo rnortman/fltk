@@ -2,9 +2,11 @@
 
 from __future__ import annotations
 
+import ast
+
 import pytest
 
-from fltk.fegen.gsm2lib_rs import LibSpec, RustLibGenerator, Submodule
+from fltk.fegen.gsm2lib_rs import LibSpec, RustLibGenerator, Submodule, render_stub_package_init
 
 # ---------------------------------------------------------------------------
 # Standard output — design §4 "Unit (string output)" items
@@ -353,3 +355,59 @@ def test_span_types_without_unknown_span_still_registers_submodules() -> None:
 
     assert "register_submodule" in src
     assert 'register_submodule(m, "cst", cst::register_classes)' in src
+
+
+# ---------------------------------------------------------------------------
+# render_stub_package_init — stub-package __init__.pyi marker (design §2.2, §5)
+# ---------------------------------------------------------------------------
+
+
+def test_render_stub_package_init_names_extension_and_submodules() -> None:
+    """Marker text names the extension and each submodule."""
+    text = render_stub_package_init("myext", ["alpha", "beta", "gamma"])
+
+    assert "myext" in text
+    assert "alpha" in text
+    assert "beta" in text
+    assert "gamma" in text
+
+
+def test_render_stub_package_init_is_comment_only_empty_module() -> None:
+    """Marker is comment-only: every non-blank line is a comment and it parses as an empty module."""
+    text = render_stub_package_init("fegen_rust_cst", ["cst", "parser", "unparser"])
+
+    for line in text.splitlines():
+        assert line == "" or line.lstrip().startswith("#")
+    assert ast.parse(text).body == []
+
+
+def test_render_stub_package_init_ends_with_newline() -> None:
+    """Marker ends with a trailing newline (ruff-stable)."""
+    text = render_stub_package_init("fegen_rust_cst", ["cst", "parser"])
+
+    assert text.endswith("\n")
+
+
+def test_render_stub_package_init_is_idempotent() -> None:
+    """Re-rendering with the same inputs yields byte-identical text."""
+    args = ("rust_parser_fixture", ["cst", "parser", "unparser"])
+
+    assert render_stub_package_init(*args) == render_stub_package_init(*args)
+
+
+def test_render_stub_package_init_rejects_bad_extension_name() -> None:
+    """Invalid extension name raises ValueError naming the field."""
+    with pytest.raises(ValueError, match="extension_name"):
+        render_stub_package_init("1bad", ["cst"])
+
+
+def test_render_stub_package_init_rejects_bad_submodule() -> None:
+    """A non-identifier submodule entry raises ValueError."""
+    with pytest.raises(ValueError, match="submodule"):
+        render_stub_package_init("ext", ["cst", "has-hyphen"])
+
+
+def test_render_stub_package_init_rejects_empty_submodules() -> None:
+    """Empty submodule list raises ValueError."""
+    with pytest.raises(ValueError, match="submodule"):
+        render_stub_package_init("ext", [])

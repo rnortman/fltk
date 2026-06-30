@@ -797,6 +797,25 @@ class _ProtocolLabelMember:
 
         return module
 
+    def gen_protocol_module_text(self) -> str:
+        """Return the protocol-module source text, with the file-level ruff suppression prefix.
+
+        Single home for the protocol-text rendering formula shared by the Python ``generate
+        --protocol`` path (genparser.py) and the Rust ``RustCstGenerator.generate_protocol``
+        path (gsm2tree_rs.py), so the two render byte-identical bytes through one code path
+        (design §2.2; the cross-path byte-identity test is the guardrail).
+
+        File-level ruff suppressions:
+        - N802: CstModule @property methods have PascalCase names matching module attributes
+          (intentional).
+        - E501 is NOT added: ``make fix`` reformats the generated file so no line exceeds the
+          limit, and including E501 causes RUF100 (unused noqa) after ``make fix``.
+        - F821 is NOT added: nested Label references resolve via ``from __future__ import
+          annotations`` and ruff does not raise F821 for them; including F821 causes RUF100
+          (unused noqa) after ``make fix``.
+        """
+        return "# ruff: noqa: N802\n" + ast.unparse(self.gen_protocol_module())
+
     def _protocol_class_for_model_with_assignments(
         self, class_name: str, model: ItemsModel, rule_name: str
     ) -> list[ast.stmt]:
@@ -888,6 +907,11 @@ class _ProtocolLabelMember:
         # kind discriminant: emit Literal[NodeKind.X] with runtime default value.
         # The protocol-local NodeKind is now a real runtime enum, so the default is readable as
         # cst.<Node>.kind on the class object, enabling native .kind narrowing (probe D4).
+        # TODO(protocol-module-truthiness-gate): this gates the Literal discriminant on
+        # py_module.import_path truthiness, dual-using py_module as both the concrete-CST module
+        # path and a truthiness sentinel.  A Builtins-backed CstGenerator (empty import_path) silently
+        # emits the degraded `kind: object` form; RustCstGenerator.generate_protocol works around this
+        # with a non-empty placeholder py_module.  Replace with an explicit flag so callers opt in.
         if rule_name and self.py_module.import_path:
             member = self.node_kind_member_name(rule_name)
             klass.body.append(pygen.stmt(f"kind: typing.Literal[NodeKind.{member}] = NodeKind.{member}"))

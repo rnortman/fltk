@@ -251,6 +251,73 @@ def test_generated_parser_concrete_terminalsrc_span_annotations(tmp_path: pathli
 
 
 # ---------------------------------------------------------------------------
+# generate --protocol opt-in CLI tests (§2.1)
+# ---------------------------------------------------------------------------
+
+
+def test_generate_no_protocol_by_default(simple_grammar_file: pathlib.Path, tmp_path: pathlib.Path) -> None:
+    """A bare `generate` writes the CST and both parsers but NOT the protocol module (new default)."""
+    runner = CliRunner()
+    result = runner.invoke(
+        app, ["generate", str(simple_grammar_file), "simple", "simple_cst", "--output-dir", str(tmp_path)]
+    )
+
+    assert result.exit_code == 0, f"generate failed:\n{result.output}\n{result.exception}"
+    assert (tmp_path / "simple_cst.py").exists(), "generate must write the shared CST module"
+    assert (tmp_path / "simple_parser.py").exists(), "generate must write the non-trivia parser"
+    assert (tmp_path / "simple_trivia_parser.py").exists(), "generate must write the trivia parser"
+    assert not (tmp_path / "simple_cst_protocol.py").exists(), (
+        "generate must NOT write the protocol module without --protocol (new opt-in default)"
+    )
+
+
+def test_generate_protocol_writes_protocol_alongside(simple_grammar_file: pathlib.Path, tmp_path: pathlib.Path) -> None:
+    """`generate --protocol` writes the CST, both parsers, and the protocol module."""
+    runner = CliRunner()
+    result = runner.invoke(
+        app, ["generate", "--protocol", str(simple_grammar_file), "simple", "simple_cst", "--output-dir", str(tmp_path)]
+    )
+
+    assert result.exit_code == 0, f"generate --protocol failed:\n{result.output}\n{result.exception}"
+    assert (tmp_path / "simple_cst.py").exists(), "generate --protocol must write the shared CST module"
+    assert (tmp_path / "simple_parser.py").exists(), "generate --protocol must write the non-trivia parser"
+    assert (tmp_path / "simple_trivia_parser.py").exists(), "generate --protocol must write the trivia parser"
+    assert (tmp_path / "simple_cst_protocol.py").exists(), "generate --protocol must write the protocol module"
+
+
+def test_generate_protocol_matches_protocol_only(simple_grammar_file: pathlib.Path, tmp_path: pathlib.Path) -> None:
+    """`generate --protocol` emits a byte-identical protocol module to `generate --protocol-only`."""
+    full_dir = tmp_path / "full"
+    only_dir = tmp_path / "only"
+    full_dir.mkdir()
+    only_dir.mkdir()
+
+    runner = CliRunner()
+    result_full = runner.invoke(
+        app,
+        ["generate", "--protocol", str(simple_grammar_file), "simple", "simple_cst", "--output-dir", str(full_dir)],
+    )
+    assert result_full.exit_code == 0, f"generate --protocol failed:\n{result_full.output}"
+    result_only = runner.invoke(
+        app,
+        [
+            "generate",
+            "--protocol-only",
+            str(simple_grammar_file),
+            "simple",
+            "simple_cst",
+            "--output-dir",
+            str(only_dir),
+        ],
+    )
+    assert result_only.exit_code == 0, f"generate --protocol-only failed:\n{result_only.output}"
+
+    assert (full_dir / "simple_cst_protocol.py").read_text() == (only_dir / "simple_cst_protocol.py").read_text(), (
+        "--protocol must emit the same protocol module as --protocol-only"
+    )
+
+
+# ---------------------------------------------------------------------------
 # generate --protocol-only CLI tests
 # ---------------------------------------------------------------------------
 
@@ -297,7 +364,8 @@ def test_generate_protocol_only_matches_full_run(simple_grammar_file: pathlib.Pa
 
     runner = CliRunner()
     result_full = runner.invoke(
-        app, ["generate", str(simple_grammar_file), "simple", "simple_cst", "--output-dir", str(full_dir)]
+        app,
+        ["generate", "--protocol", str(simple_grammar_file), "simple", "simple_cst", "--output-dir", str(full_dir)],
     )
     assert result_full.exit_code == 0, f"generate (full) failed:\n{result_full.output}"
     result_only = runner.invoke(
@@ -461,6 +529,322 @@ def test_gen_rust_cst_invalid_protocol_module(simple_grammar_file: pathlib.Path,
     assert "is not a valid Python module path" in result.output
     assert not output_rs.exists(), "No .rs should be written when --protocol-module is invalid"
     assert not output_rs.with_suffix(".pyi").exists(), "No .pyi should be written when --protocol-module is invalid"
+
+
+# ---------------------------------------------------------------------------
+# gen-rust-cst --protocol-output CLI tests (§2.2)
+# ---------------------------------------------------------------------------
+
+
+def test_gen_rust_cst_protocol_output_requires_protocol_module(
+    simple_grammar_file: pathlib.Path, tmp_path: pathlib.Path
+) -> None:
+    """--protocol-output without --protocol-module is rejected, and nothing is written."""
+    output_rs = tmp_path / "simple_cst.rs"
+    protocol_py = tmp_path / "simple_cst_protocol.py"
+    runner = CliRunner()
+    result = runner.invoke(
+        app,
+        ["gen-rust-cst", str(simple_grammar_file), str(output_rs), "--protocol-output", str(protocol_py)],
+    )
+
+    assert result.exit_code != 0, "Expected non-zero exit for --protocol-output without --protocol-module"
+    assert "--protocol-output requires --protocol-module" in result.output
+    assert not output_rs.exists(), "No .rs should be written when the option combination is rejected"
+    assert not protocol_py.exists(), "No protocol .py should be written when the option combination is rejected"
+    assert not output_rs.with_suffix(".pyi").exists(), "No .pyi should be written when the combination is rejected"
+
+
+def test_gen_rust_cst_protocol_output_writes_protocol_pyi_and_rs(
+    simple_grammar_file: pathlib.Path, tmp_path: pathlib.Path
+) -> None:
+    """--protocol-module X --protocol-output P writes the protocol .py, the .pyi, and the .rs."""
+    import ast  # noqa: PLC0415
+
+    output_rs = tmp_path / "simple_cst.rs"
+    protocol_py = tmp_path / "simple_cst_protocol.py"
+    runner = CliRunner()
+    result = runner.invoke(
+        app,
+        [
+            "gen-rust-cst",
+            str(simple_grammar_file),
+            str(output_rs),
+            "--protocol-module",
+            "fltk.fegen.fltk_cst_protocol",
+            "--protocol-output",
+            str(protocol_py),
+        ],
+    )
+
+    assert result.exit_code == 0, f"gen-rust-cst --protocol-output failed:\n{result.output}\n{result.exception}"
+    assert output_rs.exists(), ".rs file must still be written"
+    assert protocol_py.exists(), "protocol .py must be written to --protocol-output"
+    assert output_rs.with_suffix(".pyi").exists(), ".pyi must be emitted (protocol .py + .pyi are a matched pair)"
+
+    protocol_text = protocol_py.read_text()
+    # Protocol module shape: ruff prefix, NodeKind enum, and a Word protocol class for the `word` rule.
+    assert protocol_text.startswith("# ruff: noqa: N802\n")
+    assert "class NodeKind" in protocol_text
+    assert "class Word" in protocol_text
+    ast.parse(protocol_text)  # raises SyntaxError if the protocol module is malformed
+
+
+def test_gen_rust_cst_protocol_output_matches_python_protocol(
+    simple_grammar_file: pathlib.Path, tmp_path: pathlib.Path
+) -> None:
+    """Cross-path byte-identity: gen-rust-cst --protocol-output equals generate --protocol (§1.2/§2.2).
+
+    The protocol module is backend-agnostic; the Rust path must produce a protocol .py
+    byte-identical to the Python `generate --protocol` (and `--protocol-only`) output for
+    the same grammar, including the per-rule `kind: typing.Literal[NodeKind.*]` discriminant.
+    """
+    rust_dir = tmp_path / "rust"
+    py_dir = tmp_path / "py"
+    rust_dir.mkdir()
+    py_dir.mkdir()
+
+    runner = CliRunner()
+    result_rust = runner.invoke(
+        app,
+        [
+            "gen-rust-cst",
+            str(simple_grammar_file),
+            str(rust_dir / "simple_cst.rs"),
+            "--protocol-module",
+            "simple_cst_protocol",
+            "--protocol-output",
+            str(rust_dir / "simple_cst_protocol.py"),
+        ],
+    )
+    assert result_rust.exit_code == 0, f"gen-rust-cst --protocol-output failed:\n{result_rust.output}"
+
+    result_py = runner.invoke(
+        app,
+        ["generate", "--protocol", str(simple_grammar_file), "simple", "simple_cst", "--output-dir", str(py_dir)],
+    )
+    assert result_py.exit_code == 0, f"generate --protocol failed:\n{result_py.output}"
+
+    rust_protocol = (rust_dir / "simple_cst_protocol.py").read_text()
+    py_protocol = (py_dir / "simple_cst_protocol.py").read_text()
+    assert rust_protocol == py_protocol, (
+        "Rust --protocol-output must be byte-identical to Python generate --protocol for the same grammar"
+    )
+    # Guard the discriminant form (§1.2): the Literal kind, not the degraded `kind: object`.
+    assert "typing.Literal[NodeKind." in rust_protocol
+    assert "kind: object" not in rust_protocol
+
+
+def test_gen_rust_cst_rs_unchanged_with_protocol_output(
+    simple_grammar_file: pathlib.Path, tmp_path: pathlib.Path
+) -> None:
+    """Adding --protocol-output does not change the .rs output (additive, §2.3)."""
+    rs_plain = tmp_path / "plain" / "cst.rs"
+    rs_with = tmp_path / "with" / "cst.rs"
+    rs_plain.parent.mkdir()
+    rs_with.parent.mkdir()
+
+    runner = CliRunner()
+    result1 = runner.invoke(app, ["gen-rust-cst", str(simple_grammar_file), str(rs_plain)])
+    assert result1.exit_code == 0, f"gen-rust-cst (plain) failed:\n{result1.output}"
+    result2 = runner.invoke(
+        app,
+        [
+            "gen-rust-cst",
+            str(simple_grammar_file),
+            str(rs_with),
+            "--protocol-module",
+            "fltk.fegen.fltk_cst_protocol",
+            "--protocol-output",
+            str(rs_with.parent / "cst_protocol.py"),
+        ],
+    )
+    assert result2.exit_code == 0, f"gen-rust-cst (--protocol-output) failed:\n{result2.output}"
+
+    assert rs_plain.read_text() == rs_with.read_text(), "--protocol-output must not change .rs output"
+
+
+# ---------------------------------------------------------------------------
+# gen-rust-cst --init-pyi-output stub-package marker CLI tests (§2.2)
+# ---------------------------------------------------------------------------
+
+
+def test_gen_rust_cst_init_pyi_writes_marker(simple_grammar_file: pathlib.Path, tmp_path: pathlib.Path) -> None:
+    """--init-pyi-output writes a comment-only __init__.pyi naming the extension + submodules."""
+    import ast  # noqa: PLC0415
+
+    output_rs = tmp_path / "cst.rs"
+    init_pyi = tmp_path / "__init__.pyi"
+    runner = CliRunner()
+    result = runner.invoke(
+        app,
+        [
+            "gen-rust-cst",
+            str(simple_grammar_file),
+            str(output_rs),
+            "--init-pyi-output",
+            str(init_pyi),
+            "--extension-name",
+            "mylang_cst",
+            "--submodules",
+            "cst,parser",
+        ],
+    )
+
+    assert result.exit_code == 0, f"gen-rust-cst --init-pyi-output failed:\n{result.output}\n{result.exception}"
+    assert output_rs.exists(), ".rs must still be written"
+    assert init_pyi.exists(), "stub-package __init__.pyi must be written to --init-pyi-output"
+    marker = init_pyi.read_text()
+    assert "mylang_cst" in marker, "marker must name the extension"
+    assert "cst, parser" in marker, "marker must list the submodules"
+    # Comment-only: parses as an empty Python module (no statements).
+    assert ast.parse(marker).body == [], "marker must be comment-only"
+    # Independent of --protocol-module: no .pyi emitted here.
+    assert not output_rs.with_suffix(".pyi").exists(), "no .pyi without --protocol-module"
+
+
+def test_gen_rust_cst_init_pyi_with_protocol_module_writes_both(
+    simple_grammar_file: pathlib.Path, tmp_path: pathlib.Path
+) -> None:
+    """--init-pyi-output alongside --protocol-module writes both the marker and the cst .pyi."""
+    output_rs = tmp_path / "cst.rs"
+    init_pyi = tmp_path / "__init__.pyi"
+    cst_pyi = tmp_path / "cst.pyi"
+    runner = CliRunner()
+    result = runner.invoke(
+        app,
+        [
+            "gen-rust-cst",
+            str(simple_grammar_file),
+            str(output_rs),
+            "--protocol-module",
+            "fltk.fegen.fltk_cst_protocol",
+            "--pyi-output",
+            str(cst_pyi),
+            "--init-pyi-output",
+            str(init_pyi),
+            "--extension-name",
+            "mylang_cst",
+            "--submodules",
+            "cst,parser",
+        ],
+    )
+
+    assert result.exit_code == 0, f"gen-rust-cst failed:\n{result.output}"
+    assert init_pyi.exists(), "marker must be written"
+    assert cst_pyi.exists(), "cst .pyi must be written when --protocol-module is given"
+    assert "class Word:" in cst_pyi.read_text()
+
+
+def test_gen_rust_cst_init_pyi_requires_submodules(simple_grammar_file: pathlib.Path, tmp_path: pathlib.Path) -> None:
+    """--init-pyi-output without --submodules is rejected, and nothing is written."""
+    output_rs = tmp_path / "cst.rs"
+    init_pyi = tmp_path / "__init__.pyi"
+    runner = CliRunner()
+    result = runner.invoke(
+        app,
+        [
+            "gen-rust-cst",
+            str(simple_grammar_file),
+            str(output_rs),
+            "--init-pyi-output",
+            str(init_pyi),
+            "--extension-name",
+            "mylang_cst",
+        ],
+    )
+
+    assert result.exit_code != 0, "Expected non-zero exit for --init-pyi-output without --submodules"
+    assert "--init-pyi-output requires --extension-name and --submodules" in result.output
+    assert not output_rs.exists(), "no .rs should be written on rejection"
+    assert not init_pyi.exists(), "no marker should be written on rejection"
+
+
+def test_gen_rust_cst_init_pyi_requires_extension_name(
+    simple_grammar_file: pathlib.Path, tmp_path: pathlib.Path
+) -> None:
+    """--init-pyi-output without --extension-name is rejected, and nothing is written.
+
+    Exercises the extension_name-missing branch of the _render_init_pyi guard (the
+    submodules-present, extension-name-absent case), the mirror of the requires-submodules test.
+    """
+    output_rs = tmp_path / "cst.rs"
+    init_pyi = tmp_path / "__init__.pyi"
+    runner = CliRunner()
+    result = runner.invoke(
+        app,
+        [
+            "gen-rust-cst",
+            str(simple_grammar_file),
+            str(output_rs),
+            "--init-pyi-output",
+            str(init_pyi),
+            "--submodules",
+            "cst,parser",
+        ],
+    )
+
+    assert result.exit_code != 0, "Expected non-zero exit for --init-pyi-output without --extension-name"
+    assert "--init-pyi-output requires --extension-name and --submodules" in result.output
+    assert not output_rs.exists(), "no .rs should be written on rejection"
+    assert not init_pyi.exists(), "no marker should be written on rejection"
+
+
+def test_gen_rust_cst_init_pyi_rejects_malformed_submodule(
+    simple_grammar_file: pathlib.Path, tmp_path: pathlib.Path
+) -> None:
+    """A non-identifier --submodules entry is rejected before any write."""
+    output_rs = tmp_path / "cst.rs"
+    init_pyi = tmp_path / "__init__.pyi"
+    runner = CliRunner()
+    result = runner.invoke(
+        app,
+        [
+            "gen-rust-cst",
+            str(simple_grammar_file),
+            str(output_rs),
+            "--init-pyi-output",
+            str(init_pyi),
+            "--extension-name",
+            "mylang_cst",
+            "--submodules",
+            "cst,bad name",
+        ],
+    )
+
+    assert result.exit_code != 0, "Expected non-zero exit for a malformed submodule entry"
+    assert not output_rs.exists(), "no .rs should be written when an identifier is malformed"
+    assert not init_pyi.exists(), "no marker should be written when an identifier is malformed"
+
+
+def test_gen_rust_cst_init_pyi_rejects_malformed_extension_name(
+    simple_grammar_file: pathlib.Path, tmp_path: pathlib.Path
+) -> None:
+    """A non-identifier --extension-name is rejected before any write.
+
+    Exercises the ValueError -> typer.Exit wiring in _render_init_pyi for the extension-name
+    identifier check (the parallel of the malformed-submodule path)."""
+    output_rs = tmp_path / "cst.rs"
+    init_pyi = tmp_path / "__init__.pyi"
+    runner = CliRunner()
+    result = runner.invoke(
+        app,
+        [
+            "gen-rust-cst",
+            str(simple_grammar_file),
+            str(output_rs),
+            "--init-pyi-output",
+            str(init_pyi),
+            "--extension-name",
+            "bad-ext",
+            "--submodules",
+            "cst,parser",
+        ],
+    )
+
+    assert result.exit_code != 0, "Expected non-zero exit for a malformed extension name"
+    assert not output_rs.exists(), "no .rs should be written when the extension name is malformed"
+    assert not init_pyi.exists(), "no marker should be written when the extension name is malformed"
 
 
 # ---------------------------------------------------------------------------
@@ -811,6 +1195,193 @@ def test_gen_rust_unparser_pyi_write_failure_exits_cleanly(
     assert ".pyi stub" in result.output, "Error message should name the .pyi stub artifact"
     # The .rs is written before the .pyi, so it remains on disk (partial-artifact state).
     assert output_rs.exists(), ".rs is written before the .pyi and is not cleaned up on a .pyi write failure"
+
+
+# ---------------------------------------------------------------------------
+# gen-rust-unparser --init-pyi-output stub-package marker CLI tests (§2.2 / §2.7)
+# ---------------------------------------------------------------------------
+
+
+def test_gen_rust_unparser_init_pyi_writes_marker(simple_grammar_file: pathlib.Path, tmp_path: pathlib.Path) -> None:
+    """--init-pyi-output on gen-rust-unparser writes a comment-only marker alongside the .rs.
+
+    Mirrors the gen-rust-cst marker path: this is the routing the rust_parser_fixture uses (§2.7),
+    where the package's only .pyi comes from the unparser invocation, not the CST one.
+    """
+    import ast  # noqa: PLC0415
+
+    output_rs = tmp_path / "unparser.rs"
+    init_pyi = tmp_path / "__init__.pyi"
+    runner = CliRunner()
+    result = runner.invoke(
+        app,
+        [
+            "gen-rust-unparser",
+            str(simple_grammar_file),
+            str(output_rs),
+            "--init-pyi-output",
+            str(init_pyi),
+            "--extension-name",
+            "rust_parser_fixture",
+            "--submodules",
+            "cst,parser,unparser",
+        ],
+    )
+
+    assert result.exit_code == 0, f"gen-rust-unparser --init-pyi-output failed:\n{result.output}\n{result.exception}"
+    assert output_rs.exists(), ".rs must still be written"
+    assert init_pyi.exists(), "stub-package __init__.pyi must be written to --init-pyi-output"
+    marker = init_pyi.read_text()
+    assert "rust_parser_fixture" in marker, "marker must name the extension"
+    assert "cst, parser, unparser" in marker, "marker must list the submodules"
+    # Comment-only: parses as an empty Python module (no statements).
+    assert ast.parse(marker).body == [], "marker must be comment-only"
+    # Independent of --protocol-module: no .pyi emitted here.
+    assert not output_rs.with_suffix(".pyi").exists(), "no .pyi without --protocol-module"
+
+
+def test_gen_rust_unparser_init_pyi_with_protocol_module_writes_both(
+    simple_grammar_file: pathlib.Path, tmp_path: pathlib.Path
+) -> None:
+    """--init-pyi-output alongside --protocol-module writes both the marker and the unparser .pyi."""
+    output_rs = tmp_path / "unparser.rs"
+    init_pyi = tmp_path / "__init__.pyi"
+    unparser_pyi = tmp_path / "unparser.pyi"
+    runner = CliRunner()
+    result = runner.invoke(
+        app,
+        [
+            "gen-rust-unparser",
+            str(simple_grammar_file),
+            str(output_rs),
+            "--protocol-module",
+            "mylang.cst_protocol",
+            "--pyi-output",
+            str(unparser_pyi),
+            "--init-pyi-output",
+            str(init_pyi),
+            "--extension-name",
+            "rust_parser_fixture",
+            "--submodules",
+            "cst,parser,unparser",
+        ],
+    )
+
+    assert result.exit_code == 0, f"gen-rust-unparser failed:\n{result.output}"
+    assert init_pyi.exists(), "marker must be written"
+    assert unparser_pyi.exists(), "unparser .pyi must be written when --protocol-module is given"
+
+
+def test_gen_rust_unparser_init_pyi_requires_submodules(
+    simple_grammar_file: pathlib.Path, tmp_path: pathlib.Path
+) -> None:
+    """--init-pyi-output without --submodules is rejected, and nothing is written."""
+    output_rs = tmp_path / "unparser.rs"
+    init_pyi = tmp_path / "__init__.pyi"
+    runner = CliRunner()
+    result = runner.invoke(
+        app,
+        [
+            "gen-rust-unparser",
+            str(simple_grammar_file),
+            str(output_rs),
+            "--init-pyi-output",
+            str(init_pyi),
+            "--extension-name",
+            "rust_parser_fixture",
+        ],
+    )
+
+    assert result.exit_code != 0, "Expected non-zero exit for --init-pyi-output without --submodules"
+    assert "--init-pyi-output requires --extension-name and --submodules" in result.output
+    assert not output_rs.exists(), "no .rs should be written on rejection"
+    assert not init_pyi.exists(), "no marker should be written on rejection"
+
+
+def test_gen_rust_unparser_init_pyi_requires_extension_name(
+    simple_grammar_file: pathlib.Path, tmp_path: pathlib.Path
+) -> None:
+    """--init-pyi-output without --extension-name is rejected, and nothing is written.
+
+    Exercises the extension_name-missing branch of the _render_init_pyi guard on the unparser
+    subcommand (submodules present, extension-name absent)."""
+    output_rs = tmp_path / "unparser.rs"
+    init_pyi = tmp_path / "__init__.pyi"
+    runner = CliRunner()
+    result = runner.invoke(
+        app,
+        [
+            "gen-rust-unparser",
+            str(simple_grammar_file),
+            str(output_rs),
+            "--init-pyi-output",
+            str(init_pyi),
+            "--submodules",
+            "cst,parser,unparser",
+        ],
+    )
+
+    assert result.exit_code != 0, "Expected non-zero exit for --init-pyi-output without --extension-name"
+    assert "--init-pyi-output requires --extension-name and --submodules" in result.output
+    assert not output_rs.exists(), "no .rs should be written on rejection"
+    assert not init_pyi.exists(), "no marker should be written on rejection"
+
+
+def test_gen_rust_unparser_init_pyi_rejects_malformed_submodule(
+    simple_grammar_file: pathlib.Path, tmp_path: pathlib.Path
+) -> None:
+    """A non-identifier --submodules entry is rejected before any write."""
+    output_rs = tmp_path / "unparser.rs"
+    init_pyi = tmp_path / "__init__.pyi"
+    runner = CliRunner()
+    result = runner.invoke(
+        app,
+        [
+            "gen-rust-unparser",
+            str(simple_grammar_file),
+            str(output_rs),
+            "--init-pyi-output",
+            str(init_pyi),
+            "--extension-name",
+            "rust_parser_fixture",
+            "--submodules",
+            "cst,bad name",
+        ],
+    )
+
+    assert result.exit_code != 0, "Expected non-zero exit for a malformed submodule entry"
+    assert not output_rs.exists(), "no .rs should be written when an identifier is malformed"
+    assert not init_pyi.exists(), "no marker should be written when an identifier is malformed"
+
+
+def test_gen_rust_unparser_init_pyi_rejects_malformed_extension_name(
+    simple_grammar_file: pathlib.Path, tmp_path: pathlib.Path
+) -> None:
+    """A non-identifier --extension-name is rejected before any write.
+
+    Exercises the ValueError -> typer.Exit wiring in _render_init_pyi for the extension-name
+    identifier check on the unparser subcommand."""
+    output_rs = tmp_path / "unparser.rs"
+    init_pyi = tmp_path / "__init__.pyi"
+    runner = CliRunner()
+    result = runner.invoke(
+        app,
+        [
+            "gen-rust-unparser",
+            str(simple_grammar_file),
+            str(output_rs),
+            "--init-pyi-output",
+            str(init_pyi),
+            "--extension-name",
+            "bad-ext",
+            "--submodules",
+            "cst,parser,unparser",
+        ],
+    )
+
+    assert result.exit_code != 0, "Expected non-zero exit for a malformed extension name"
+    assert not output_rs.exists(), "no .rs should be written when the extension name is malformed"
+    assert not init_pyi.exists(), "no marker should be written when the extension name is malformed"
 
 
 # ---------------------------------------------------------------------------
