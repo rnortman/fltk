@@ -2,7 +2,7 @@ load("@rules_python//python:defs.bzl", "py_binary", "py_library")
 load("@rules_python//python/uv:lock.bzl", "lock")
 load("@rules_rust//rust:defs.bzl", "rust_shared_library")
 load("//:rules.bzl", "generate_parser")
-load("//:rust.bzl", "fltk_pyo3_cdylib", "generate_rust_parser")
+load("//:rust.bzl", "generate_rust_parser")
 
 lock(
     name = "requirements",
@@ -105,22 +105,38 @@ generate_parser(
     cst_mod_path = "fegen_test.cst",
 )
 
-# Smoke test for generate_rust_parser rule: verifies FLTK's own Bazel surface
-# for Rust codegen works against a fixture grammar (analogous to the generate_parser
-# smoke targets above). This covers FLTK CI independent of Clockwork (design §5.4).
+# Pure-Rust smoke target for the generate_rust_parser macro (python_extension =
+# False): verifies FLTK's own Bazel surface for Rust codegen works against a
+# fixture grammar, emitting only bootstrap_rust_srcs/cst.rs and
+# bootstrap_rust_srcs/parser.rs (no cdylib, no .pyi). Covers FLTK CI independent
+# of Clockwork. Uses rust_parser_fixture.fltkg (fully within the Rust backend's
+# portable subset) so `bazel build //:bootstrap_rust_srcs` succeeds end-to-end.
 generate_rust_parser(
     name = "bootstrap_rust_srcs",
-    src = "fltk/fegen/bootstrap.fltkg",
-    # default cst_mod_path = "super::cst" is correct for fltk_pyo3_cdylib usage
+    src = "fltk/fegen/test_data/rust_parser_fixture.fltkg",
+    # default cst_mod_path = "super::cst"; python_extension defaults to False
 )
 
-# Smoke target for fltk_pyo3_cdylib without a hand-written lib_rs: verifies the
-# no-lib_rs branch of the macro (generate_rust_lib rule + crate assembly + cdylib
-# compilation + abi3 rename + py_library) independent of Clockwork.
-# Uses bootstrap_rust_srcs so no extra grammar file is needed.
-fltk_pyo3_cdylib(
+# Python-extension smoke target for the generate_rust_parser macro
+# (python_extension = True) exercising the full Python path — crate assembly +
+# rust_shared_library cdylib + abi3 rename + py_library — AND stub-package
+# emission (protocol_module + protocol), which no other in-tree target does. This
+# is the active regression guard for the stub-dir naming bug: the stub package
+# must materialize at bootstrap_native/cst.pyi and bootstrap_native/__init__.pyi
+# (named after the macro `name`, i.e. the compiled module). lib_rs omitted: the
+# macro generates lib.rs from name="bootstrap_native" via generate_rust_lib.
+# Uses rust_parser_fixture.fltkg (fully Rust-compilable) so the full target
+# builds end-to-end, not just the stub half.
+generate_rust_parser(
     name = "bootstrap_native",
-    rs_srcs = ":bootstrap_rust_srcs",
-    # lib_rs omitted: the macro generates lib.rs from name="bootstrap_native"
-    # via generate_rust_lib --module-name bootstrap_native.
+    src = "fltk/fegen/test_data/rust_parser_fixture.fltkg",
+    python_extension = True,
+    protocol_module = "bootstrap_native.cst_protocol",
+    protocol = True,
 )
+
+# TODO(bazel-neg-test-harness): the generate_rust_parser macro's six pure-Rust
+# misconfiguration fail() guards (and the protocol/protocol_module coupling) are
+# only verified manually today (no bazel_skylib analysistest dep in MODULE.bazel).
+# Intentionally-failing targets cannot live here — they would break `bazel build
+# //...`. Add an analysistest harness that asserts analysis failure per guard.

@@ -1,0 +1,12 @@
+# Deep reuse review — workflow-bazel-protocol
+
+Base: 3c244d1 · HEAD: 224344d844feeefa7acdb8f4eaa285322a70634d
+
+## reuse-1
+
+- File: `/home/rnortman/src/fltk/rust.bzl:123-124` and `/home/rnortman/src/fltk/rust.bzl:583-584`
+- What's duplicated: the misconfiguration check `if protocol and not protocol_module: fail("generate_rust_parser: protocol = True requires a non-empty protocol_module.")` is hand-copied verbatim (identical condition and identical message string) into two places — the internal `_generate_rust_srcs_impl` rule implementation (which the macro always instantiates in both modes, `python_extension = True` at rust.bzl:606-613 and, implicitly, guarded-out in `False` mode) and the new public `generate_rust_parser` macro's top-level body. The macro's `python_extension = True` branch is guaranteed to reach `_generate_rust_srcs`, whose own guard already fires this exact check at analysis time.
+- Existing function/utility: `_generate_rust_srcs_impl`'s guard at `rust.bzl:123-124` is the pre-existing (pre-diff, just relocated) check the macro-level copy re-implements instead of relying on/factoring into one place (e.g. a shared `_check_protocol_requires_module(protocol, protocol_module)` Starlark helper, or simply letting the rule's own guard surface the error since it always runs).
+- Consequence: the two copies can drift — a future edit to the condition, the coupling rule, or the message text in one location (e.g. loosening the protocol/protocol_module coupling, or improving the error text) is easily made in only one of the two spots, silently reintroducing an unguarded path in the other or leaving two different messages for the same misconfiguration. The design doc (`docs/workflow-bazel-protocol/design.md` "Edge cases") calls this out as deliberate ("the macro may additionally fail() early for a clearer message"), but the implementation achieves it via copy-paste rather than a shared check, so the maintenance cost is real even though the duplication itself was intentional.
+
+No other reuse findings — the remaining diff (renames, `OutputGroupInfo`/output-group routing, `extension_name` fallback, macro folding `fltk_pyo3_cdylib` into `_build_pyo3_cdylib`) does not reimplement functionality available elsewhere in the repo; the codebase has no `bazel_skylib` dependency or existing output-group/filegroup-routing helper this diff could have reused instead of writing the two `native.filegroup` calls inline.

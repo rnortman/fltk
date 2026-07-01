@@ -1,16 +1,19 @@
 """FLTK Rust Bazel rules.
 
 This file provides:
-  - generate_rust_parser: a rule that runs FLTK's Rust codegen on a grammar file
-    and emits cst.rs + parser.rs as Bazel action outputs.
-  - fltk_pyo3_cdylib: a macro that compiles those generated sources + a
-    consumer-authored lib.rs into a PyO3 cdylib (rust_shared_library with
-    extension-module), wrapped in a py_library that places the resulting .so on
-    the correct import path and carries @fltk//:native_py so that
-    `import fltk._native` resolves in the test sandbox.
+  - generate_rust_parser: the public macro consumers call. In its default
+    (pure-Rust) mode it runs FLTK's Rust codegen on a grammar file and emits
+    cst.rs + parser.rs as Bazel action outputs. With python_extension = True it
+    additionally assembles the crate, compiles the PyO3 cdylib, generates the
+    .pyi stub package, and wraps the result in a py_library.
+  - _build_pyo3_cdylib: an internal helper (not part of the public surface) that
+    compiles those generated sources + a consumer-authored lib.rs into a PyO3
+    cdylib (rust_shared_library with extension-module), wrapped in a py_library
+    that places the resulting .so on the correct import path and carries
+    @fltk//:native_py so that `import fltk._native` resolves in the test sandbox.
 
 Load this file to use the Rust-backend Bazel integration:
-    load("@fltk//:rust.bzl", "generate_rust_parser", "fltk_pyo3_cdylib")
+    load("@fltk//:rust.bzl", "generate_rust_parser")
 
 This file is intentionally separate from rules.bzl so that a pure-Python Bazel
 consumer that never loads rust.bzl does not transitively require rules_rust to be
@@ -20,6 +23,23 @@ registered.
 load("@rules_rust//rust:defs.bzl", "rust_shared_library")
 load("@rules_python//python:defs.bzl", "py_library")
 
+# Default recursion_limit injected into the assembled PyO3 crate root. Single
+# owner shared by the _build_pyo3_cdylib / generate_rust_parser signatures and the
+# pure-Rust "left at default?" misconfiguration guard, so the guard tracks the
+# default automatically instead of comparing against a hardcoded literal.
+_DEFAULT_RECURSION_LIMIT = 512
+
+def _require_protocol_module(protocol, protocol_module):
+    """Enforce the protocol → protocol_module coupling in one place.
+
+    `protocol = True` requires a non-empty `protocol_module`. This single check
+    (condition + message) is shared by the public macro (fired early for a clear
+    message) and the internal _generate_rust_srcs rule's analysis-time guard, so
+    the two cannot drift.
+    """
+    if protocol and not protocol_module:
+        fail("generate_rust_parser: protocol = True requires a non-empty protocol_module.")
+
 # ---- generate_rust_lib ----------------------------------------------------------
 
 def _generate_rust_lib_impl(ctx):
@@ -28,7 +48,7 @@ def _generate_rust_lib_impl(ctx):
     Runs: genparser gen-rust-lib <out> --module-name <name> [flags...]
 
     The output file is always named "lib.rs" in a subdirectory named after the
-    rule, so that fltk_pyo3_cdylib's assembly genrule can reference it via a
+    rule, so that _build_pyo3_cdylib's assembly genrule can reference it via a
     single-file depset.
     """
     lib_out = ctx.actions.declare_file(ctx.attr.name + "/lib.rs")
@@ -86,7 +106,7 @@ generate_rust_lib = rule(
 Emits one action output:
   <name>/lib.rs — generated crate root declaring mod cst; mod parser; and #[pymodule].
 
-Designed to be consumed by fltk_pyo3_cdylib (via the auto-generated lib_rs path)
+Designed to be consumed by _build_pyo3_cdylib (via the auto-generated lib_rs path)
 or used standalone when a hand-authored lib.rs is not required.
 
 Example:
@@ -97,10 +117,10 @@ Example:
 """,
 )
 
-# ---- generate_rust_parser -------------------------------------------------------
+# ---- _generate_rust_srcs --------------------------------------------------------
 
-def _generate_rust_parser_impl(ctx):
-    """Implementation for generate_rust_parser rule.
+def _generate_rust_srcs_impl(ctx):
+    """Implementation for the _generate_rust_srcs rule.
 
     Runs two separate genparser actions:
       1. gen-rust-cst  <grammar> <cst_out>
@@ -113,21 +133,34 @@ def _generate_rust_parser_impl(ctx):
     grammar = ctx.file.src
 
     protocol_module = ctx.attr.protocol_module
-    generate_protocol = ctx.attr.generate_protocol
+    protocol = ctx.attr.protocol
 
     # Mirror the CLI's `--protocol-output requires --protocol-module` check,
     # surfacing the misconfiguration at analysis time (§2.5).
-    if generate_protocol and not protocol_module:
-        fail("generate_rust_parser: generate_protocol = True requires a non-empty protocol_module.")
+    _require_protocol_module(protocol, protocol_module)
 
-    # Declare the two output files in a subdirectory named after the rule.
-    cst_out = ctx.actions.declare_file(ctx.attr.name + "/cst.rs")
-    parser_out = ctx.actions.declare_file(ctx.attr.name + "/parser.rs")
+    # The output subdirectory and the --extension-name CLI flag are both driven
+    # by extension_name when it is set, and fall back to the rule's own target
+    # name when it is empty (preserving today's pure-Rust behavior).  This
+    # decouples the stub-package directory / extension name from the rule's
+    # target name: the wrapping macro sets extension_name to the single owner
+    # module name so the stub package is named after the compiled module (§2).
+    out_subdir = ctx.attr.extension_name or ctx.attr.name
+
+    # Declare the two output files in the output subdirectory.
+    cst_out = ctx.actions.declare_file(out_subdir + "/cst.rs")
+    parser_out = ctx.actions.declare_file(out_subdir + "/parser.rs")
 
     # cst_out is always produced by the gen-rust-cst action; the .pyi / marker /
     # protocol outputs are appended below when protocol_module (and optionally
-    # generate_protocol) are set.
+    # protocol) are set.
     cst_outputs = [cst_out]
+
+    # stub_outputs collects the files that ride along on the compiled Python
+    # module (the .pyi stub package and, when protocol = True, the protocol .py).
+    # It stays empty when protocol_module is empty; it feeds the stub_srcs output
+    # group returned below (§2 "Output routing").
+    stub_outputs = []
 
     # --- Action 1: gen-rust-cst ---
     cst_args = ctx.actions.args()
@@ -141,8 +174,8 @@ def _generate_rust_parser_impl(ctx):
         # the Bazel output tree (§2.5-§2.6).  The marker is generator-produced via
         # --init-pyi-output (not a ctx.actions.write fixed body), keeping it on the
         # same dogfooded path as the in-tree markers (§2.2).
-        cst_pyi = ctx.actions.declare_file(ctx.attr.name + "/cst.pyi")
-        init_pyi = ctx.actions.declare_file(ctx.attr.name + "/__init__.pyi")
+        cst_pyi = ctx.actions.declare_file(out_subdir + "/cst.pyi")
+        init_pyi = ctx.actions.declare_file(out_subdir + "/__init__.pyi")
         cst_args.add("--protocol-module")
         cst_args.add(protocol_module)
         cst_args.add("--pyi-output")
@@ -150,18 +183,21 @@ def _generate_rust_parser_impl(ctx):
         cst_args.add("--init-pyi-output")
         cst_args.add(init_pyi)
         cst_args.add("--extension-name")
-        cst_args.add(ctx.attr.name)
+        cst_args.add(out_subdir)
         cst_args.add("--submodules")
         cst_args.add("cst,parser")
         cst_outputs.append(cst_pyi)
         cst_outputs.append(init_pyi)
+        stub_outputs.append(cst_pyi)
+        stub_outputs.append(init_pyi)
 
-        if generate_protocol:
+        if protocol:
             # Opt-in protocol .py output (Change 1, Rust side).
-            protocol_out = ctx.actions.declare_file(ctx.attr.name + "/cst_protocol.py")
+            protocol_out = ctx.actions.declare_file(out_subdir + "/cst_protocol.py")
             cst_args.add("--protocol-output")
             cst_args.add(protocol_out)
             cst_outputs.append(protocol_out)
+            stub_outputs.append(protocol_out)
 
     ctx.actions.run(
         inputs = [grammar],
@@ -187,10 +223,22 @@ def _generate_rust_parser_impl(ctx):
         progress_message = "Generating Rust parser for grammar %s" % grammar.short_path,
     )
 
-    return [DefaultInfo(files = depset(cst_outputs + [parser_out]))]
+    # Expose outputs both as DefaultInfo (all declared files) and as two named
+    # output groups so the wrapping macro can route heterogeneous outputs without
+    # addressing individual declared files by label (§2 "Output routing"):
+    #   rust_srcs — always the two .rs files (fed to crate assembly).
+    #   stub_srcs — the .pyi stub package + optional protocol .py (fed to
+    #               py_library.data); an empty depset when protocol_module is empty.
+    return [
+        DefaultInfo(files = depset(cst_outputs + [parser_out])),
+        OutputGroupInfo(
+            rust_srcs = depset([cst_out, parser_out]),
+            stub_srcs = depset(stub_outputs),
+        ),
+    ]
 
-generate_rust_parser = rule(
-    implementation = _generate_rust_parser_impl,
+_generate_rust_srcs = rule(
+    implementation = _generate_rust_srcs_impl,
     attrs = {
         "src": attr.label(
             allow_single_file = True,
@@ -202,7 +250,7 @@ generate_rust_parser = rule(
             doc = (
                 "Rust module path passed to gen-rust-parser as --cst-mod-path. " +
                 "Defaults to 'super::cst', which works when cst.rs and parser.rs " +
-                "are siblings under the same crate root (the fltk_pyo3_cdylib macro " +
+                "are siblings under the same crate root (the _build_pyo3_cdylib helper " +
                 "assembles exactly this layout). Override when you use a different " +
                 "module hierarchy."
             ),
@@ -218,13 +266,24 @@ generate_rust_parser = rule(
                 "<name>/ is a complete stub package. When empty, no .pyi is produced."
             ),
         ),
-        "generate_protocol": attr.bool(
+        "protocol": attr.bool(
             default = False,
             doc = (
                 "When True, the gen-rust-cst action also writes the protocol .py " +
                 "module (<name>/cst_protocol.py), declared as an output. Requires " +
                 "protocol_module to be non-empty (the rule fails at analysis time " +
                 "otherwise). Off by default."
+            ),
+        ),
+        "extension_name": attr.string(
+            default = "",
+            doc = (
+                "When non-empty, used as BOTH the --extension-name CLI argument and " +
+                "the output subdirectory that holds the generated files. When empty, " +
+                "the subdirectory falls back to the rule's own target name. The " +
+                "wrapping macro sets this to the single owner module name so the " +
+                "stub package directory and the extension name match the compiled " +
+                "Python module (the structural stub-dir/extension-name fix)."
             ),
         ),
         "_gen_tool": attr.label(
@@ -245,37 +304,41 @@ and declares:
   <name>/cst.pyi       — type stub for the compiled extension
   <name>/__init__.pyi  — stub-package marker (extension <name>; submodules cst,parser)
 
-When `generate_protocol = True` (requires `protocol_module`), it also emits:
+When `protocol = True` (requires `protocol_module`), it also emits:
   <name>/cst_protocol.py — the backend-agnostic protocol module
 
-These files are designed to be consumed by fltk_pyo3_cdylib, which assembles
+These files are designed to be consumed by _build_pyo3_cdylib, which assembles
 them alongside a consumer-authored lib.rs into a single crate directory and
 compiles the result into a PyO3 cdylib.
 
 The fixed basenames (cst.rs / parser.rs) are load-bearing: a consumer lib.rs
 that contains `mod cst;` and `mod parser;` relies on these exact names.
 
-Example:
-    generate_rust_parser(
+This is an internal rule wrapped by the public generate_rust_parser macro; it is
+not loaded or instantiated directly by consumers.
+
+Example (internal instantiation by the macro):
+    _generate_rust_srcs(
         name = "clockwork_rs_srcs",
         src  = "clockwork.fltkg",
         cst_mod_path = "super::cst",  # default; can omit
         # protocol_module = "clockwork.clockwork_cst_protocol",  # opt-in .pyi
-        # generate_protocol = True,                              # opt-in protocol .py
+        # protocol = True,                                       # opt-in protocol .py
     )
 """,
 )
 
-# ---- fltk_pyo3_cdylib -----------------------------------------------------------
+# ---- _build_pyo3_cdylib ---------------------------------------------------------
 
-def fltk_pyo3_cdylib(
+def _build_pyo3_cdylib(
         name,
         rs_srcs,
         lib_rs = None,
         deps = [],
         crate_features = [],
-        recursion_limit = 512,
+        recursion_limit = _DEFAULT_RECURSION_LIMIT,
         visibility = None,
+        data = [],
         **kwargs):
     """Compile generated Rust CST/parser sources + a consumer lib.rs into a PyO3 cdylib.
 
@@ -322,15 +385,18 @@ def fltk_pyo3_cdylib(
               the importable module name (e.g. "clockwork_native"). This becomes
               the crate name and the .so stem. Invariant: the `#[pymodule]` fn
               in lib_rs must have exactly this name.
-        rs_srcs: Label of a generate_rust_parser target that provides cst.rs
-                 and parser.rs as outputs (e.g. ":clockwork_rs_srcs").
-                 WARNING: the assembly step copies every file from rs_srcs into
-                 the crate gendir by basename AFTER writing lib.rs.  If rs_srcs
-                 emits a file whose basename is "lib.rs" it will silently
-                 overwrite the assembled crate root (losing the injected
-                 recursion_limit and the consumer lib_rs content).  Always
-                 pass a generate_rust_parser target here; do not pass a label
-                 whose outputs include "lib.rs".
+        rs_srcs: Label providing cst.rs and parser.rs as outputs. As an internal
+                 helper, _build_pyo3_cdylib is always fed the wrapping macro's own
+                 codegen target (its rust_srcs output group), so the hazard below
+                 is no longer consumer-reachable and is retained as an internal
+                 invariant rather than a caller-facing warning.
+                 INTERNAL INVARIANT: the assembly step copies every file from
+                 rs_srcs into the crate gendir by basename AFTER writing lib.rs.
+                 If rs_srcs emitted a file whose basename is "lib.rs" it would
+                 silently overwrite the assembled crate root (losing the injected
+                 recursion_limit and the lib_rs content).  The codegen rule the
+                 macro feeds here only ever emits cst.rs / parser.rs, upholding
+                 this invariant.
         lib_rs: Label or file of the consumer-authored lib.rs that declares
                 `mod cst;`, `mod parser;`, and the `#[pymodule]` entry point.
                 When omitted (default None), the macro generates lib.rs from
@@ -349,6 +415,10 @@ def fltk_pyo3_cdylib(
                          a limit is E0275 "overflow evaluating `Shared<X>: Send".
         visibility: Visibility for the resulting py_library target (name). The
                     intermediate targets are package-private.
+        data: Extra data targets appended to the py_library's data (alongside the
+              cdylib .abi3.so). The wrapping macro feeds the codegen rule's
+              stub_srcs output group here so the PEP 561 stub package rides along
+              on the public py_library. Empty by default.
         **kwargs: Forwarded to rust_shared_library (e.g. rustc_flags).
     """
 
@@ -369,7 +439,7 @@ def fltk_pyo3_cdylib(
     # bare `mod cst;` / `mod parser;` in lib.rs find their siblings.
     #
     # lib.rs is a consumer source file (or a generated label); cst.rs and
-    # parser.rs are outputs of generate_rust_parser (in <rs_srcs_name>/cst.rs,
+    # parser.rs are outputs of _generate_rust_srcs (in <rs_srcs_name>/cst.rs,
     # <rs_srcs_name>/parser.rs relative to the package gendir).
     #
     # Strategy: a single genrule that receives all three inputs and copies them
@@ -381,7 +451,7 @@ def fltk_pyo3_cdylib(
 
     # TODO(bazel-lib-rs-no-cst): the assembly genrule unconditionally requires cst.rs and
     # parser.rs in rs_srcs, even when lib_rs=None (auto-generated span-only path).  Currently
-    # every fltk_pyo3_cdylib caller is a grammar crate and always provides both files.  If a
+    # every _build_pyo3_cdylib caller is a grammar crate and always provides both files.  If a
     # runtime-only (span-only) crate is ever built via this macro, the test -f guards will fail
     # misleadingly.  At that point, split into grammar and span-only assembly variants.
     native.genrule(
@@ -455,8 +525,152 @@ def fltk_pyo3_cdylib(
     #   runtime; without native_py in the sandbox the pure-Python fallback fires).
     py_library(
         name = name,
-        data = [":" + name + "_so"],
+        data = [":" + name + "_so"] + data,
         deps = [Label("@fltk//:native_py")],
         imports = ["."],
         visibility = visibility,
+    )
+
+# ---- generate_rust_parser (public macro) ----------------------------------------
+
+def generate_rust_parser(
+        name,
+        src,
+        cst_mod_path = "super::cst",
+        python_extension = False,
+        protocol_module = "",
+        protocol = False,
+        lib_rs = None,
+        deps = [],
+        crate_features = [],
+        recursion_limit = _DEFAULT_RECURSION_LIMIT,
+        visibility = None,
+        **kwargs):
+    """Generate a Rust-backed parser from an FLTK grammar file.
+
+    This is the single public entry point consumers call. It has two modes,
+    selected by `python_extension`:
+
+    **python_extension = False (default — pure Rust).**
+    Instantiates only the internal codegen rule as the public `:name` target,
+    emitting `<name>/cst.rs` and `<name>/parser.rs`. No cdylib, no .pyi, no
+    protocol module. The consumer drops the .rs files into their own crate.
+    The Python-extension-only knobs (`protocol_module`, `protocol`, `lib_rs`,
+    `deps`, `crate_features`, a non-default `recursion_limit`) must be left at
+    their defaults; setting any of them is a misconfiguration and fails fast.
+
+    **python_extension = True (full Python extension).**
+    Instantiates the internal codegen rule as `<name>_srcs` with
+    `extension_name = name` (the single owner module name — this is the
+    structural fix for the stub-dir / --extension-name naming bug), then folds in
+    the four cdylib-build steps (crate assembly → rust_shared_library → abi3
+    rename → py_library) with the public `py_library` named `name`. Crate
+    assembly consumes ONLY the codegen rule's `rust_srcs` output group (the .rs
+    files), so the .pyi / .py outputs never enter the flat crate root. The
+    `stub_srcs` output group (the .pyi stub package, plus `cst_protocol.py` when
+    `protocol = True`) is added to the public py_library as `data`; it is an empty
+    depset exactly when `protocol_module` is empty, so this routing self-gates.
+
+    Args:
+        name: The public target name. In python_extension = True mode this is the
+              compiled Python module name (the crate name, the #[pymodule] fn
+              name, --extension-name, and the stub-package directory all derive
+              from it).
+        src: The FLTK grammar file (.fltkg).
+        cst_mod_path: Rust module path passed to gen-rust-parser as
+                      --cst-mod-path. Defaults to "super::cst".
+        python_extension: When True, build the Python extension (cdylib + stubs +
+                          py_library). When False (default), emit only .rs files.
+        protocol_module: Dotted Python import path of the protocol module; when
+                         non-empty (python_extension = True only) triggers .pyi
+                         stub-package emission.
+        protocol: When True (requires protocol_module), also emit the protocol
+                  .py module. python_extension = True only.
+        lib_rs: Optional consumer-authored lib.rs label; when omitted the macro
+                generates one. python_extension = True only.
+        deps: Extra rust_library deps linked into the cdylib. python_extension =
+              True only.
+        crate_features: Extra crate features. python_extension = True only.
+        recursion_limit: recursion_limit injected into the assembled crate root.
+                         python_extension = True only.
+        visibility: Visibility for the public target.
+        **kwargs: In python_extension = True mode, forwarded to rust_shared_library
+                  (e.g. rustc_flags). In pure-Rust mode, forwarded to the internal
+                  _generate_rust_srcs rule; an unrecognized attribute there (e.g. a
+                  rust_shared_library passthrough set by mistake) surfaces a generic
+                  Bazel "no such attribute" error naming that internal rule rather
+                  than the curated python_extension guidance the named knobs give.
+    """
+    _require_protocol_module(protocol, protocol_module)
+
+    if not python_extension:
+        # Pure-Rust mode: the Python-extension-only knobs must be at defaults.
+        # Fail fast rather than silently ignore a value that has no effect here.
+        # Each entry pairs the attribute name with "was it set away from its
+        # default?"; normalizing on that boolean lets one loop + one message
+        # template cover all six knobs (truthy defaults and sentinel defaults
+        # alike), so a new python-extension-only knob just adds one tuple.
+        python_only_knobs = [
+            ("protocol_module", bool(protocol_module)),
+            ("protocol", bool(protocol)),
+            ("lib_rs", lib_rs != None),
+            ("deps", bool(deps)),
+            ("crate_features", bool(crate_features)),
+            ("recursion_limit", recursion_limit != _DEFAULT_RECURSION_LIMIT),
+        ]
+        for attr_name, is_set in python_only_knobs:
+            if is_set:
+                fail("generate_rust_parser: {} is only valid with python_extension = True.".format(attr_name))
+
+        # The internal codegen rule IS the public target; extension_name stays
+        # empty (no stub emission, subdir irrelevant to type resolution).
+        _generate_rust_srcs(
+            name = name,
+            src = src,
+            cst_mod_path = cst_mod_path,
+            visibility = visibility,
+            **kwargs
+        )
+        return
+
+    # Python-extension mode.
+    #
+    # The codegen rule is <name>_srcs with extension_name = name, so its outputs
+    # land under <name>/ and the stub package (when protocol_module is set) is
+    # named after the compiled module. The public py_library is <name>.
+    _generate_rust_srcs(
+        name = name + "_srcs",
+        src = src,
+        cst_mod_path = cst_mod_path,
+        extension_name = name,
+        protocol_module = protocol_module,
+        protocol = protocol,
+    )
+
+    # A macro cannot address an individual declare_file output by label, so route
+    # the codegen rule's output groups through filegroups: crate assembly draws
+    # only rust_srcs (the .rs files), and the py_library carries stub_srcs (the
+    # .pyi stub package + optional cst_protocol.py). stub_srcs is an empty depset
+    # when protocol_module is empty, so its filegroup contributes nothing.
+    native.filegroup(
+        name = name + "_rust_srcs",
+        srcs = [":" + name + "_srcs"],
+        output_group = "rust_srcs",
+    )
+    native.filegroup(
+        name = name + "_stub_srcs",
+        srcs = [":" + name + "_srcs"],
+        output_group = "stub_srcs",
+    )
+
+    _build_pyo3_cdylib(
+        name = name,
+        rs_srcs = ":" + name + "_rust_srcs",
+        lib_rs = lib_rs,
+        deps = deps,
+        crate_features = crate_features,
+        recursion_limit = recursion_limit,
+        visibility = visibility,
+        data = [":" + name + "_stub_srcs"],
+        **kwargs
     )
