@@ -10,10 +10,6 @@
 //! `Unparser` types and its start-rule (`grammar`) parse/unparse methods. Producing a
 //! formatter for any other FLTK grammar is the same one invocation with different names.
 
-// TODO(fltkfmt-integration-tests): add the design §4 end-to-end tests under
-// `crates/fltkfmt/tests/` (idempotency, golden, trailing-newline, parse-error) — they also
-// cover the `fltk_formatter_main!` partial-parse and unparse-None error branches, which need
-// a real consumer like this binary. Landing with the §2.3 `make check` gating increment.
 fltk_fmt_cli::fltk_formatter_main! {
     about: "Format FLTK grammar (.fltkg) files.",
     parser: fegen_rust_cst::parser::Parser,

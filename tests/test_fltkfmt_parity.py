@@ -39,6 +39,8 @@ _FLTKFMT_BINARY = _REPO_ROOT / "crates" / "fltkfmt" / "target" / "debug" / "fltk
 # Corpus: every real `.fltkg` in the tree (the canonical grammars plus the test-data
 # grammars). Each is parsed and re-rendered by both backends; pinned explicitly so the
 # coverage set is visible and a non-parsing addition can't silently widen it.
+# Mirrored by hand in `crates/fltkfmt/tests/cli.rs` (`CORPUS`); additions here must be
+# added there too or the Rust idempotency sweep silently stops covering the new grammar.
 _CORPUS = [
     _REPO_ROOT / "fltk" / "fegen" / "bootstrap.fltkg",
     _REPO_ROOT / "fltk" / "fegen" / "fegen.fltkg",
