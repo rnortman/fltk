@@ -13,12 +13,14 @@ from fltk.fegen.pyrt import terminalsrc as _terminalsrc
 from fltk.plumbing import (
     generate_parser,
     generate_unparser,
+    generate_unparser_source,
     parse_format_config,
     parse_grammar,
     parse_text,
     render_doc,
     unparse_cst,
 )
+from fltk.plumbing_types import UnparserResult
 from fltk.unparse.combinators import HARDLINE, LINE, NBSP, NIL, SOFTLINE, Concat, Line, Nbsp, Text
 from fltk.unparse.fmt_config import FormatterConfig, TriviaConfig
 from fltk.unparse.renderer import RendererConfig
@@ -236,6 +238,79 @@ class TestUnparserGeneration:
         unparser_result = generate_unparser(grammar, parser_result.cst_module_name, formatter_config=formatter_config)
 
         assert unparser_result.trivia_config is trivia_config
+
+
+class TestUnparserSource:
+    """Test the source-returning unparser helper (single-sources the assembly pipeline)."""
+
+    def test_source_defines_unparser_class_when_exec(self):
+        """generate_unparser_source returns source that, exec'd, defines an Unparser class."""
+        grammar = parse_grammar('expr := value:"hello";')
+        parser_result = generate_parser(grammar, capture_trivia=True)
+
+        source = generate_unparser_source(grammar, parser_result.cst_module_name)
+
+        assert isinstance(source, str)
+        exec_globals: dict = {}
+        exec(source, exec_globals)  # noqa: S102
+        assert "Unparser" in exec_globals
+        assert hasattr(exec_globals["Unparser"], "unparse_expr")
+
+    def test_generate_unparser_matches_source_output(self):
+        """generate_unparser execs exactly what generate_unparser_source returns.
+
+        Cross-checks both public entry points on the same inputs: the unparser exec'd
+        from generate_unparser_source's string must render identically to the one
+        generate_unparser produces. This pins the single-source contract — if
+        generate_unparser stopped routing through _assemble_unparser_module (or the two
+        entry points diverged), this test would catch it.
+        """
+        grammar_text = """
+        expr := hello:"hello" , world:"world";
+        """
+        grammar = parse_grammar(grammar_text)
+        parser_result = generate_parser(grammar, capture_trivia=True)
+        parse_result = parse_text(parser_result, "helloworld", "expr")
+
+        # Exec path (generate_unparser).
+        unparser_result = generate_unparser(grammar, parser_result.cst_module_name)
+        expected = render_doc(unparse_cst(unparser_result, parse_result.cst, parse_result.terminals, "expr"))
+
+        # Source path (generate_unparser_source): exec the returned string and drive the same CST.
+        source = generate_unparser_source(grammar, parser_result.cst_module_name)
+        exec_globals: dict = {}
+        exec(source, exec_globals)  # noqa: S102
+        source_result = UnparserResult(
+            unparser_class=exec_globals["Unparser"],
+            grammar=unparser_result.grammar,
+            formatter_config=unparser_result.formatter_config,
+            trivia_config=unparser_result.trivia_config,
+        )
+        actual = render_doc(unparse_cst(source_result, parse_result.cst, parse_result.terminals, "expr"))
+
+        assert actual == expected == "helloworld"
+
+    def test_source_reflects_formatter_config(self):
+        """A non-default formatter_config is threaded through into the emitted source."""
+        grammar = parse_grammar('expr := a:"a" , b:"b";')
+        parser_result = generate_parser(grammar, capture_trivia=True)
+        parse_result = parse_text(parser_result, "ab", "expr")
+
+        formatter_config = FormatterConfig()
+        formatter_config.global_ws_allowed = Nbsp()
+
+        source = generate_unparser_source(grammar, parser_result.cst_module_name, formatter_config=formatter_config)
+        exec_globals: dict = {}
+        exec(source, exec_globals)  # noqa: S102
+        source_result = UnparserResult(
+            unparser_class=exec_globals["Unparser"],
+            grammar=parser_result.grammar,
+            formatter_config=formatter_config,
+            trivia_config=TriviaConfig(),
+        )
+        # With ws_allowed=Nbsp the "," separator renders as a space; default (NIL) would render "ab".
+        rendered = render_doc(unparse_cst(source_result, parse_result.cst, parse_result.terminals, "expr"))
+        assert rendered == "a b"
 
 
 class TestUnparsing:

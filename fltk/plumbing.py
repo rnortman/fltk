@@ -254,6 +254,61 @@ def parse_format_config_file(config_path: Path) -> FormatterConfig:
     return parse_format_config(config_text)
 
 
+def _assemble_unparser_module(
+    grammar: gsm.Grammar,
+    cst_module_name: str,
+    formatter_config: FormatterConfig | None,
+) -> tuple[str, gsm.Grammar, FormatterConfig]:
+    """Run the unparser assembly pipeline; return (source, grammar_with_trivia, formatter_config).
+
+    Single source of truth for the unparser assembly steps shared by generate_unparser
+    (which exec's the returned source) and generate_unparser_source (which returns it).
+    """
+    context = create_default_context(capture_trivia=True)
+    formatter_config = formatter_config or FormatterConfig()
+
+    grammar_with_trivia = gsm.add_trivia_rule_to_grammar(grammar, context)
+    grammar_with_trivia = gsm.classify_trivia_rules(grammar_with_trivia)
+
+    unparser_class, imports = gsm2unparser.generate_unparser(
+        grammar_with_trivia,
+        context,
+        cst_module_name,
+        formatter_config=formatter_config,
+    )
+
+    unparser_ast = compiler.compile_class(unparser_class, context)
+    module = ast.fix_missing_locations(ast.Module(body=[*imports, unparser_ast], type_ignores=[]))
+
+    return ast.unparse(module), grammar_with_trivia, formatter_config
+
+
+def generate_unparser_source(
+    grammar: gsm.Grammar,
+    cst_module_name: str,
+    formatter_config: FormatterConfig | None = None,
+) -> str:
+    """Generate the unparser module source from grammar without executing it.
+
+    Note: The parser must have been generated with capture_trivia=True
+    for the unparser to work correctly.
+
+    generate_unparser exec's exactly this source.
+
+    Args:
+        grammar: The grammar to generate unparser for
+        cst_module_name: Name of the CST module (from ParserResult)
+        formatter_config: Optional formatter configuration
+
+    Returns:
+        The generated unparser module source as a string
+    """
+    source, _grammar_with_trivia, _formatter_config = _assemble_unparser_module(
+        grammar, cst_module_name, formatter_config
+    )
+    return source
+
+
 def generate_unparser(
     grammar: gsm.Grammar,
     cst_module_name: str,
@@ -272,24 +327,12 @@ def generate_unparser(
     Returns:
         UnparserResult containing the generated unparser class
     """
-    context = create_default_context(capture_trivia=True)
-    formatter_config = formatter_config or FormatterConfig()
-
-    grammar_with_trivia = gsm.add_trivia_rule_to_grammar(grammar, context)
-    grammar_with_trivia = gsm.classify_trivia_rules(grammar_with_trivia)
-
-    unparser_class, imports = gsm2unparser.generate_unparser(
-        grammar_with_trivia,
-        context,
-        cst_module_name,
-        formatter_config=formatter_config,
+    source, grammar_with_trivia, formatter_config = _assemble_unparser_module(
+        grammar, cst_module_name, formatter_config
     )
 
-    unparser_ast = compiler.compile_class(unparser_class, context)
-    module = ast.fix_missing_locations(ast.Module(body=[*imports, unparser_ast], type_ignores=[]))
-
     exec_globals = {}
-    exec(ast.unparse(module), exec_globals)  # noqa: S102
+    exec(source, exec_globals)  # noqa: S102
 
     return UnparserResult(
         unparser_class=exec_globals["Unparser"],

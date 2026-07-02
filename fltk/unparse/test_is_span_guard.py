@@ -15,13 +15,9 @@ from pathlib import Path
 
 import pytest
 
-from fltk.fegen import gsm
 from fltk.fegen.pyrt import terminalsrc
-from fltk.iir.context import create_default_context
-from fltk.iir.py import compiler
-from fltk.plumbing import generate_parser, parse_grammar_file
-from fltk.unparse import gsm2unparser, pyrt
-from fltk.unparse.fmt_config import FormatterConfig
+from fltk.plumbing import generate_parser, generate_unparser_source, parse_grammar_file
+from fltk.unparse import pyrt
 
 TOY_GRAMMAR = Path(__file__).parent / "toy.fltkg"
 
@@ -56,30 +52,13 @@ class TestIsSpanHelper:
 def _generate_unparser_source(grammar_path: Path) -> str:
     """Generate the in-memory unparser module source for a grammar file.
 
-    Mirrors plumbing.generate_unparser up to ast.unparse, without exec'ing,
-    so the emitted span guards can be inspected.
-
-    TODO(unparser-source-helper): this re-implements plumbing.generate_unparser's 7-step
-    assembly pipeline (called 4x in this file) because plumbing exposes no way to retrieve the
-    generated source before exec'ing it. Expose a source-returning helper (e.g.
-    plumbing.generate_unparser_source, with generate_unparser exec'ing its output) and call it
-    here so the assembly pipeline lives in one place and cannot drift.
+    Wraps plumbing.generate_unparser_source for a grammar file path so the emitted
+    span guards can be inspected.
     """
     grammar = parse_grammar_file(grammar_path)
     parser_result = generate_parser(grammar, capture_trivia=True)
     try:
-        context = create_default_context(capture_trivia=True)
-        grammar_with_trivia = gsm.add_trivia_rule_to_grammar(parser_result.grammar, context)
-        grammar_with_trivia = gsm.classify_trivia_rules(grammar_with_trivia)
-        unparser_class, imports = gsm2unparser.generate_unparser(
-            grammar_with_trivia,
-            context,
-            parser_result.cst_module_name,
-            formatter_config=FormatterConfig(),
-        )
-        unparser_ast = compiler.compile_class(unparser_class, context)
-        module = ast.fix_missing_locations(ast.Module(body=[*imports, unparser_ast], type_ignores=[]))
-        return ast.unparse(module)
+        return generate_unparser_source(parser_result.grammar, parser_result.cst_module_name)
     finally:
         sys.modules.pop(parser_result.cst_module_name, None)
 
