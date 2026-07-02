@@ -64,7 +64,9 @@ impl Unparser {
             return None;
         }
         let cst::NumChild::Span(span) = &child_tuple.1;
-        let text = span.text()?;
+        let Some(text) = span.text() else {
+            panic!("unparse_num: cannot extract text for regex term label `value` at child position {}: span.text() returned None for {:?}", pos, span);
+        };
         let acc = acc.add_non_trivia(fltk_unparser_core::text(text));
         Some(UnparseResult::new(acc, pos + 1))
     }
@@ -95,7 +97,9 @@ impl Unparser {
             return None;
         }
         let cst::NameChild::Span(span) = &child_tuple.1;
-        let text = span.text()?;
+        let Some(text) = span.text() else {
+            panic!("unparse_name: cannot extract text for regex term label `value` at child position {}: span.text() returned None for {:?}", pos, span);
+        };
         let acc = acc.add_non_trivia(fltk_unparser_core::text(text));
         Some(UnparseResult::new(acc, pos + 1))
     }
@@ -191,6 +195,8 @@ impl Unparser {
                         if self._has_preservable_trivia(&trivia_node) {
                             if let Some(trivia_result) = self.unparse__trivia(&trivia_node) {
                                 acc = acc.add_trivia(fltk_unparser_core::separator_spec(None, Some(trivia_result.accumulator.doc()), false));
+                            } else {
+                                panic!("unparse_paren_expr: trivia at child position {} has preservable comments but unparse__trivia returned None; refusing to silently drop comments", pos);
                             }
                         } else {
                             acc = acc.add_trivia(fltk_unparser_core::separator_spec(Some(Doc::Line), None, false));
@@ -216,6 +222,8 @@ impl Unparser {
                         if self._has_preservable_trivia(&trivia_node) {
                             if let Some(trivia_result) = self.unparse__trivia(&trivia_node) {
                                 acc = acc.add_trivia(fltk_unparser_core::separator_spec(None, Some(trivia_result.accumulator.doc()), false));
+                            } else {
+                                panic!("unparse_paren_expr: trivia at child position {} has preservable comments but unparse__trivia returned None; refusing to silently drop comments", pos);
                             }
                         } else {
                             acc = acc.add_trivia(fltk_unparser_core::separator_spec(Some(Doc::Line), None, false));
@@ -289,6 +297,8 @@ impl Unparser {
                         if self._has_preservable_trivia(&trivia_node) {
                             if let Some(trivia_result) = self.unparse__trivia(&trivia_node) {
                                 acc = acc.add_trivia(fltk_unparser_core::separator_spec(None, Some(trivia_result.accumulator.doc()), true));
+                            } else {
+                                panic!("unparse_stmt: trivia at child position {} has preservable comments but unparse__trivia returned None; refusing to silently drop comments", pos);
                             }
                         } else {
                             acc = acc.add_trivia(fltk_unparser_core::separator_spec(Some(Doc::Nbsp), None, true));
@@ -316,6 +326,8 @@ impl Unparser {
                         if self._has_preservable_trivia(&trivia_node) {
                             if let Some(trivia_result) = self.unparse__trivia(&trivia_node) {
                                 acc = acc.add_trivia(fltk_unparser_core::separator_spec(None, Some(trivia_result.accumulator.doc()), true));
+                            } else {
+                                panic!("unparse_stmt: trivia at child position {} has preservable comments but unparse__trivia returned None; refusing to silently drop comments", pos);
                             }
                         } else {
                             acc = acc.add_trivia(fltk_unparser_core::separator_spec(Some(Doc::Nbsp), None, true));
@@ -830,7 +842,9 @@ impl Unparser {
             return None;
         }
         let cst::LatinWordChild::Span(span) = &child_tuple.1;
-        let text = span.text()?;
+        let Some(text) = span.text() else {
+            panic!("unparse_latin_word: cannot extract text for regex term label `value` at child position {}: span.text() returned None for {:?}", pos, span);
+        };
         let acc = acc.add_non_trivia(fltk_unparser_core::text(text));
         Some(UnparseResult::new(acc, pos + 1))
     }
@@ -873,7 +887,9 @@ impl Unparser {
             return None;
         }
         let cst::TaggedChild::Span(span) = &child_tuple.1;
-        let text = span.text()?;
+        let Some(text) = span.text() else {
+            panic!("unparse_tagged: cannot extract text for regex term label `value` at child position {}: span.text() returned None for {:?}", pos, span);
+        };
         let acc = acc.add_non_trivia(fltk_unparser_core::text(text));
         Some(UnparseResult::new(acc, pos + 1))
     }
@@ -969,7 +985,9 @@ impl Unparser {
             cst::ValChild::Span(span) => span,
             _ => return None,
         };
-        let text = span.text()?;
+        let Some(text) = span.text() else {
+            panic!("unparse_val: cannot extract text for regex term label `item` at child position {}: span.text() returned None for {:?}", pos, span);
+        };
         let acc = acc.add_non_trivia(fltk_unparser_core::text(text));
         Some(UnparseResult::new(acc, pos + 1))
     }
@@ -992,6 +1010,8 @@ impl Unparser {
                         if self._has_preservable_trivia(&trivia_node) {
                             if let Some(trivia_result) = self.unparse__trivia(&trivia_node) {
                                 acc = acc.add_trivia(fltk_unparser_core::separator_spec(None, Some(trivia_result.accumulator.doc()), false));
+                            } else {
+                                panic!("unparse_leading_ws: trivia at child position {} has preservable comments but unparse__trivia returned None; refusing to silently drop comments", pos);
                             }
                         } else {
                             acc = acc.add_trivia(fltk_unparser_core::separator_spec(Some(Doc::Line), None, false));
@@ -1052,6 +1072,8 @@ impl Unparser {
                         if self._has_preservable_trivia(&trivia_node) {
                             if let Some(trivia_result) = self.unparse__trivia(&trivia_node) {
                                 acc = acc.add_trivia(fltk_unparser_core::separator_spec(None, Some(trivia_result.accumulator.doc()), false));
+                            } else {
+                                panic!("unparse_grouped: trivia at child position {} has preservable comments but unparse__trivia returned None; refusing to silently drop comments", pos);
                             }
                         } else {
                             acc = acc.add_trivia(fltk_unparser_core::separator_spec(Some(Doc::Line), None, false));
@@ -1077,6 +1099,8 @@ impl Unparser {
                         if self._has_preservable_trivia(&trivia_node) {
                             if let Some(trivia_result) = self.unparse__trivia(&trivia_node) {
                                 acc = acc.add_trivia(fltk_unparser_core::separator_spec(None, Some(trivia_result.accumulator.doc()), false));
+                            } else {
+                                panic!("unparse_grouped: trivia at child position {} has preservable comments but unparse__trivia returned None; refusing to silently drop comments", pos);
                             }
                         } else {
                             acc = acc.add_trivia(fltk_unparser_core::separator_spec(Some(Doc::Line), None, false));
@@ -1501,7 +1525,9 @@ impl Unparser {
             return None;
         }
         let cst::DigitSeqChild::Span(span) = &child_tuple.1;
-        let text = span.text()?;
+        let Some(text) = span.text() else {
+            panic!("unparse_digit_seq: cannot extract text for regex term label `value` at child position {}: span.text() returned None for {:?}", pos, span);
+        };
         let acc = acc.add_non_trivia(fltk_unparser_core::text(text));
         Some(UnparseResult::new(acc, pos + 1))
     }
@@ -1532,7 +1558,9 @@ impl Unparser {
             return None;
         }
         let cst::WordSeqChild::Span(span) = &child_tuple.1;
-        let text = span.text()?;
+        let Some(text) = span.text() else {
+            panic!("unparse_word_seq: cannot extract text for regex term label `value` at child position {}: span.text() returned None for {:?}", pos, span);
+        };
         let acc = acc.add_non_trivia(fltk_unparser_core::text(text));
         Some(UnparseResult::new(acc, pos + 1))
     }
@@ -1563,7 +1591,9 @@ impl Unparser {
             return None;
         }
         let cst::WsSeqChild::Span(span) = &child_tuple.1;
-        let text = span.text()?;
+        let Some(text) = span.text() else {
+            panic!("unparse_ws_seq: cannot extract text for regex term label `value` at child position {}: span.text() returned None for {:?}", pos, span);
+        };
         let acc = acc.add_non_trivia(fltk_unparser_core::text(text));
         Some(UnparseResult::new(acc, pos + 1))
     }
@@ -1594,7 +1624,9 @@ impl Unparser {
             return None;
         }
         let cst::ThreeToFiveDigitsChild::Span(span) = &child_tuple.1;
-        let text = span.text()?;
+        let Some(text) = span.text() else {
+            panic!("unparse_three_to_five_digits: cannot extract text for regex term label `value` at child position {}: span.text() returned None for {:?}", pos, span);
+        };
         let acc = acc.add_non_trivia(fltk_unparser_core::text(text));
         Some(UnparseResult::new(acc, pos + 1))
     }
@@ -1625,7 +1657,9 @@ impl Unparser {
             return None;
         }
         let cst::ExactlyTwoDigitsChild::Span(span) = &child_tuple.1;
-        let text = span.text()?;
+        let Some(text) = span.text() else {
+            panic!("unparse_exactly_two_digits: cannot extract text for regex term label `value` at child position {}: span.text() returned None for {:?}", pos, span);
+        };
         let acc = acc.add_non_trivia(fltk_unparser_core::text(text));
         Some(UnparseResult::new(acc, pos + 1))
     }
@@ -1656,7 +1690,9 @@ impl Unparser {
             return None;
         }
         let cst::EscapedMetasChild::Span(span) = &child_tuple.1;
-        let text = span.text()?;
+        let Some(text) = span.text() else {
+            panic!("unparse_escaped_metas: cannot extract text for regex term label `value` at child position {}: span.text() returned None for {:?}", pos, span);
+        };
         let acc = acc.add_non_trivia(fltk_unparser_core::text(text));
         Some(UnparseResult::new(acc, pos + 1))
     }
@@ -1687,7 +1723,9 @@ impl Unparser {
             return None;
         }
         let cst::LatinRangeChild::Span(span) = &child_tuple.1;
-        let text = span.text()?;
+        let Some(text) = span.text() else {
+            panic!("unparse_latin_range: cannot extract text for regex term label `value` at child position {}: span.text() returned None for {:?}", pos, span);
+        };
         let acc = acc.add_non_trivia(fltk_unparser_core::text(text));
         Some(UnparseResult::new(acc, pos + 1))
     }
@@ -1718,7 +1756,9 @@ impl Unparser {
             return None;
         }
         let cst::NcGroupAltChild::Span(span) = &child_tuple.1;
-        let text = span.text()?;
+        let Some(text) = span.text() else {
+            panic!("unparse_nc_group_alt: cannot extract text for regex term label `value` at child position {}: span.text() returned None for {:?}", pos, span);
+        };
         let acc = acc.add_non_trivia(fltk_unparser_core::text(text));
         Some(UnparseResult::new(acc, pos + 1))
     }
@@ -1749,7 +1789,9 @@ impl Unparser {
             return None;
         }
         let cst::CaseInsensitiveChild::Span(span) = &child_tuple.1;
-        let text = span.text()?;
+        let Some(text) = span.text() else {
+            panic!("unparse_case_insensitive: cannot extract text for regex term label `value` at child position {}: span.text() returned None for {:?}", pos, span);
+        };
         let acc = acc.add_non_trivia(fltk_unparser_core::text(text));
         Some(UnparseResult::new(acc, pos + 1))
     }
@@ -1780,7 +1822,9 @@ impl Unparser {
             return None;
         }
         let cst::AnchoredWordChild::Span(span) = &child_tuple.1;
-        let text = span.text()?;
+        let Some(text) = span.text() else {
+            panic!("unparse_anchored_word: cannot extract text for regex term label `value` at child position {}: span.text() returned None for {:?}", pos, span);
+        };
         let acc = acc.add_non_trivia(fltk_unparser_core::text(text));
         Some(UnparseResult::new(acc, pos + 1))
     }
@@ -1811,7 +1855,9 @@ impl Unparser {
             return None;
         }
         let cst::TriviaChild::Span(span) = &child_tuple.1;
-        let text = span.text()?;
+        let Some(text) = span.text() else {
+            panic!("unparse__trivia: cannot extract text for regex term label `content` at child position {}: span.text() returned None for {:?}", pos, span);
+        };
         let acc = acc.add_non_trivia(fltk_unparser_core::text(text));
         Some(UnparseResult::new(acc, pos + 1))
     }

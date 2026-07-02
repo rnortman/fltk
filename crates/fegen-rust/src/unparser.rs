@@ -59,6 +59,8 @@ impl Unparser {
                         if self._has_preservable_trivia(&trivia_node) {
                             if let Some(trivia_result) = self.unparse__trivia(&trivia_node) {
                                 acc = acc.add_trivia(fltk_unparser_core::separator_spec(None, Some(trivia_result.accumulator.doc()), false));
+                            } else {
+                                panic!("unparse_grammar: trivia at child position {} has preservable comments but unparse__trivia returned None; refusing to silently drop comments", pos);
                             }
                         } else {
                             let newline_count = self._count_newlines_in_trivia(&trivia_node);
@@ -147,6 +149,8 @@ impl Unparser {
                         if self._has_preservable_trivia(&trivia_node) {
                             if let Some(trivia_result) = self.unparse__trivia(&trivia_node) {
                                 acc = acc.add_trivia(fltk_unparser_core::separator_spec(None, Some(trivia_result.accumulator.doc()), false));
+                            } else {
+                                panic!("unparse_rule: trivia at child position {} has preservable comments but unparse__trivia returned None; refusing to silently drop comments", pos);
                             }
                         } else {
                             let newline_count = self._count_newlines_in_trivia(&trivia_node);
@@ -182,6 +186,8 @@ impl Unparser {
                         if self._has_preservable_trivia(&trivia_node) {
                             if let Some(trivia_result) = self.unparse__trivia(&trivia_node) {
                                 acc = acc.add_trivia(fltk_unparser_core::separator_spec(None, Some(trivia_result.accumulator.doc()), false));
+                            } else {
+                                panic!("unparse_rule: trivia at child position {} has preservable comments but unparse__trivia returned None; refusing to silently drop comments", pos);
                             }
                         } else {
                             let newline_count = self._count_newlines_in_trivia(&trivia_node);
@@ -214,6 +220,8 @@ impl Unparser {
                         if self._has_preservable_trivia(&trivia_node) {
                             if let Some(trivia_result) = self.unparse__trivia(&trivia_node) {
                                 acc = acc.add_trivia(fltk_unparser_core::separator_spec(None, Some(trivia_result.accumulator.doc()), false));
+                            } else {
+                                panic!("unparse_rule: trivia at child position {} has preservable comments but unparse__trivia returned None; refusing to silently drop comments", pos);
                             }
                         } else {
                             let newline_count = self._count_newlines_in_trivia(&trivia_node);
@@ -250,6 +258,8 @@ impl Unparser {
                         if self._has_preservable_trivia(&trivia_node) {
                             if let Some(trivia_result) = self.unparse__trivia(&trivia_node) {
                                 acc = acc.add_trivia(fltk_unparser_core::separator_spec(None, Some(trivia_result.accumulator.doc()), false));
+                            } else {
+                                panic!("unparse_rule: trivia at child position {} has preservable comments but unparse__trivia returned None; refusing to silently drop comments", pos);
                             }
                         } else {
                             let newline_count = self._count_newlines_in_trivia(&trivia_node);
@@ -345,6 +355,8 @@ impl Unparser {
                         if self._has_preservable_trivia(&trivia_node) {
                             if let Some(trivia_result) = self.unparse__trivia(&trivia_node) {
                                 acc = acc.add_trivia(fltk_unparser_core::separator_spec(None, Some(trivia_result.accumulator.doc()), false));
+                            } else {
+                                panic!("unparse_alternatives: trivia at child position {} has preservable comments but unparse__trivia returned None; refusing to silently drop comments", pos);
                             }
                         } else {
                             let newline_count = self._count_newlines_in_trivia(&trivia_node);
@@ -432,6 +444,8 @@ impl Unparser {
                         if self._has_preservable_trivia(&trivia_node) {
                             if let Some(trivia_result) = self.unparse__trivia(&trivia_node) {
                                 acc = acc.add_trivia(fltk_unparser_core::separator_spec(None, Some(trivia_result.accumulator.doc()), false));
+                            } else {
+                                panic!("unparse_alternatives: trivia at child position {} has preservable comments but unparse__trivia returned None; refusing to silently drop comments", pos);
                             }
                         } else {
                             let newline_count = self._count_newlines_in_trivia(&trivia_node);
@@ -464,6 +478,8 @@ impl Unparser {
                         if self._has_preservable_trivia(&trivia_node) {
                             if let Some(trivia_result) = self.unparse__trivia(&trivia_node) {
                                 acc = acc.add_trivia(fltk_unparser_core::separator_spec(None, Some(trivia_result.accumulator.doc()), false));
+                            } else {
+                                panic!("unparse_alternatives: trivia at child position {} has preservable comments but unparse__trivia returned None; refusing to silently drop comments", pos);
                             }
                         } else {
                             let newline_count = self._count_newlines_in_trivia(&trivia_node);
@@ -536,6 +552,8 @@ impl Unparser {
                         if self._has_preservable_trivia(&trivia_node) {
                             if let Some(trivia_result) = self.unparse__trivia(&trivia_node) {
                                 acc = acc.add_trivia(fltk_unparser_core::separator_spec(None, Some(trivia_result.accumulator.doc()), false));
+                            } else {
+                                panic!("unparse_items: trivia at child position {} has preservable comments but unparse__trivia returned None; refusing to silently drop comments", pos);
                             }
                         } else {
                             let newline_count = self._count_newlines_in_trivia(&trivia_node);
@@ -569,6 +587,8 @@ impl Unparser {
                         if self._has_preservable_trivia(&trivia_node) {
                             if let Some(trivia_result) = self.unparse__trivia(&trivia_node) {
                                 acc = acc.add_trivia(fltk_unparser_core::separator_spec(None, Some(trivia_result.accumulator.doc()), false));
+                            } else {
+                                panic!("unparse_items: trivia at child position {} has preservable comments but unparse__trivia returned None; refusing to silently drop comments", pos);
                             }
                         } else {
                             let newline_count = self._count_newlines_in_trivia(&trivia_node);
@@ -602,6 +622,8 @@ impl Unparser {
                         if self._has_preservable_trivia(&trivia_node) {
                             if let Some(trivia_result) = self.unparse__trivia(&trivia_node) {
                                 acc = acc.add_trivia(fltk_unparser_core::separator_spec(None, Some(trivia_result.accumulator.doc()), false));
+                            } else {
+                                panic!("unparse_items: trivia at child position {} has preservable comments but unparse__trivia returned None; refusing to silently drop comments", pos);
                             }
                         } else {
                             let newline_count = self._count_newlines_in_trivia(&trivia_node);
@@ -635,6 +657,8 @@ impl Unparser {
                         if self._has_preservable_trivia(&trivia_node) {
                             if let Some(trivia_result) = self.unparse__trivia(&trivia_node) {
                                 acc = acc.add_trivia(fltk_unparser_core::separator_spec(None, Some(trivia_result.accumulator.doc()), false));
+                            } else {
+                                panic!("unparse_items: trivia at child position {} has preservable comments but unparse__trivia returned None; refusing to silently drop comments", pos);
                             }
                         } else {
                             let newline_count = self._count_newlines_in_trivia(&trivia_node);
@@ -817,6 +841,8 @@ impl Unparser {
                         if self._has_preservable_trivia(&trivia_node) {
                             if let Some(trivia_result) = self.unparse__trivia(&trivia_node) {
                                 acc = acc.add_trivia(fltk_unparser_core::separator_spec(None, Some(trivia_result.accumulator.doc()), false));
+                            } else {
+                                panic!("unparse_items: trivia at child position {} has preservable comments but unparse__trivia returned None; refusing to silently drop comments", pos);
                             }
                         } else {
                             let newline_count = self._count_newlines_in_trivia(&trivia_node);
@@ -850,6 +876,8 @@ impl Unparser {
                         if self._has_preservable_trivia(&trivia_node) {
                             if let Some(trivia_result) = self.unparse__trivia(&trivia_node) {
                                 acc = acc.add_trivia(fltk_unparser_core::separator_spec(None, Some(trivia_result.accumulator.doc()), false));
+                            } else {
+                                panic!("unparse_items: trivia at child position {} has preservable comments but unparse__trivia returned None; refusing to silently drop comments", pos);
                             }
                         } else {
                             let newline_count = self._count_newlines_in_trivia(&trivia_node);
@@ -1128,6 +1156,8 @@ impl Unparser {
                         if self._has_preservable_trivia(&trivia_node) {
                             if let Some(trivia_result) = self.unparse__trivia(&trivia_node) {
                                 acc = acc.add_trivia(fltk_unparser_core::separator_spec(None, Some(trivia_result.accumulator.doc()), false));
+                            } else {
+                                panic!("unparse_item: trivia at child position {} has preservable comments but unparse__trivia returned None; refusing to silently drop comments", pos);
                             }
                         } else {
                             let newline_count = self._count_newlines_in_trivia(&trivia_node);
@@ -1399,6 +1429,8 @@ impl Unparser {
                         if self._has_preservable_trivia(&trivia_node) {
                             if let Some(trivia_result) = self.unparse__trivia(&trivia_node) {
                                 acc = acc.add_trivia(fltk_unparser_core::separator_spec(None, Some(trivia_result.accumulator.doc()), false));
+                            } else {
+                                panic!("unparse_term: trivia at child position {} has preservable comments but unparse__trivia returned None; refusing to silently drop comments", pos);
                             }
                         } else {
                             let newline_count = self._count_newlines_in_trivia(&trivia_node);
@@ -1431,6 +1463,8 @@ impl Unparser {
                         if self._has_preservable_trivia(&trivia_node) {
                             if let Some(trivia_result) = self.unparse__trivia(&trivia_node) {
                                 acc = acc.add_trivia(fltk_unparser_core::separator_spec(None, Some(trivia_result.accumulator.doc()), false));
+                            } else {
+                                panic!("unparse_term: trivia at child position {} has preservable comments but unparse__trivia returned None; refusing to silently drop comments", pos);
                             }
                         } else {
                             let newline_count = self._count_newlines_in_trivia(&trivia_node);
@@ -1673,7 +1707,9 @@ impl Unparser {
             return None;
         }
         let cst::IdentifierChild::Span(span) = &child_tuple.1;
-        let text = span.text()?;
+        let Some(text) = span.text() else {
+            panic!("unparse_identifier: cannot extract text for regex term label `name` at child position {}: span.text() returned None for {:?}", pos, span);
+        };
         let acc = acc.add_non_trivia(fltk_unparser_core::text(text));
         Some(UnparseResult::new(acc, pos + 1))
     }
@@ -1704,7 +1740,9 @@ impl Unparser {
             return None;
         }
         let cst::RawStringChild::Span(span) = &child_tuple.1;
-        let text = span.text()?;
+        let Some(text) = span.text() else {
+            panic!("unparse_raw_string: cannot extract text for regex term label `value` at child position {}: span.text() returned None for {:?}", pos, span);
+        };
         let acc = acc.add_non_trivia(fltk_unparser_core::text(text));
         Some(UnparseResult::new(acc, pos + 1))
     }
@@ -1735,7 +1773,9 @@ impl Unparser {
             return None;
         }
         let cst::LiteralChild::Span(span) = &child_tuple.1;
-        let text = span.text()?;
+        let Some(text) = span.text() else {
+            panic!("unparse_literal: cannot extract text for regex term label `value` at child position {}: span.text() returned None for {:?}", pos, span);
+        };
         let acc = acc.add_non_trivia(fltk_unparser_core::text(text));
         Some(UnparseResult::new(acc, pos + 1))
     }
@@ -1938,7 +1978,9 @@ impl Unparser {
             return None;
         }
         let cst::LineCommentChild::Span(span) = &child_tuple.1;
-        let text = span.text()?;
+        let Some(text) = span.text() else {
+            panic!("unparse_line_comment: cannot extract text for regex term label `content` at child position {}: span.text() returned None for {:?}", pos, span);
+        };
         let acc = acc.add_non_trivia(fltk_unparser_core::text(text));
         Some(UnparseResult::new(acc, pos + 1))
     }
@@ -1993,7 +2035,9 @@ impl Unparser {
             return None;
         }
         let cst::BlockCommentChild::Span(span) = &child_tuple.1;
-        let text = span.text()?;
+        let Some(text) = span.text() else {
+            panic!("unparse_block_comment: cannot extract text for regex term label `content` at child position {}: span.text() returned None for {:?}", pos, span);
+        };
         let acc = acc.add_non_trivia(fltk_unparser_core::text(text));
         Some(UnparseResult::new(acc, pos + 1))
     }
@@ -2008,7 +2052,9 @@ impl Unparser {
             return None;
         }
         let cst::BlockCommentChild::Span(span) = &child_tuple.1;
-        let text = span.text()?;
+        let Some(text) = span.text() else {
+            panic!("unparse_block_comment: cannot extract text for regex term label `end` at child position {}: span.text() returned None for {:?}", pos, span);
+        };
         let acc = acc.add_non_trivia(fltk_unparser_core::text(text));
         Some(UnparseResult::new(acc, pos + 1))
     }

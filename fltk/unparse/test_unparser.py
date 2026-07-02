@@ -6,6 +6,7 @@ from typing import Any
 
 import pytest
 
+from fltk.fegen.pyrt import terminalsrc
 from fltk.plumbing import (
     generate_parser,
     generate_unparser,
@@ -643,6 +644,55 @@ def test_whitespace_not_preserved_by_default(comment_unparser):
     # We expect extra whitespace to be replaced with minimal whitespace
     expected_doc = Concat((Text("1"), Text("+"), Text("2")))
     assert doc == expected_doc, f"Expected minimal whitespace combinator, got: {doc}"
+
+
+# Grammar for the preserved-trivia-None diagnostic (site 1 of unparser-none-path-diagnostics).
+_PRESERVED_TRIVIA_NONE_GRAMMAR = """
+doc := a:"a" , b:"b";
+_trivia := (whitespace | comment)+;
+whitespace := content:/\\s+/;
+comment := prefix:"#" . content:/[^\\n]*/;
+"""
+
+
+def test_preserved_trivia_unparse_none_raises():
+    """A confirmed-preservable comment whose unparse__trivia returns None halts with a ValueError.
+
+    Site 1 of unparser-none-path-diagnostics: ``_has_preservable_trivia`` sees the ``Comment``
+    child and returns True, but the ``Comment`` node has no children so ``unparse_comment`` (and
+    therefore ``unparse__trivia``) returns None. Rather than silently dropping the comment from
+    the output, the generated Python unparser must raise (parity with the Rust backend's panic).
+    """
+    parser_result = None
+    try:
+        grammar = parse_grammar(_PRESERVED_TRIVIA_NONE_GRAMMAR)
+        parser_result = generate_parser(grammar, capture_trivia=True)
+        formatter_config = FormatterConfig()
+        formatter_config.trivia_config = TriviaConfig(preserve_node_names={"Comment"})
+        unparser_result = generate_unparser(
+            parser_result.grammar, parser_result.cst_module_name, formatter_config=formatter_config
+        )
+        mod = sys.modules[parser_result.cst_module_name]
+
+        # A Trivia node carrying an empty (childless) Comment: preservable per
+        # _has_preservable_trivia, but unparse_comment returns None (its required prefix child
+        # is missing), so unparse__trivia returns None.
+        comment = mod.Comment()
+        trivia = mod.Trivia()
+        trivia.append_comment(comment)
+        doc = mod.Doc()
+        doc.append_a(terminalsrc.Span(0, 1))
+        doc.append(trivia, None)
+        doc.append_b(terminalsrc.Span(4, 5))
+
+        with pytest.raises(ValueError, match="refusing to silently drop comments") as exc_info:
+            unparse_cst(unparser_result, doc, "a #\nb", "doc")
+        msg = str(exc_info.value)
+        assert "'doc'" in msg
+        assert "child position 1" in msg
+    finally:
+        if parser_result and parser_result.cst_module_name in sys.modules:
+            del sys.modules[parser_result.cst_module_name]
 
 
 # Test trivia unparsing with simple whitespace trivia

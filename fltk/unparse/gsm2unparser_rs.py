@@ -1039,9 +1039,12 @@ class RustUnparserGenerator:
         ``INLINE``-must-be-``Identifier`` assert (``gsm2tree.py:630``) is stripped.
 
         Because the Rust CST carries no ``terminals`` fallback, a ``None`` from
-        ``span.text()`` (a sourceless span) makes the enclosing rule ``return None`` via
-        ``?`` -- a deliberate failure mode, rather than silently emitting empty
-        text.
+        ``span.text()`` (a sourceless span, or a source-bearing span with invalid codepoint
+        offsets) is an invariant violation: the emitted code ``panic!``\\s with a message
+        naming the rule, the item, the child position, and the span's ``Debug`` form rather
+        than silently returning ``None`` (which would delete the term's text from the output
+        with no record of which span failed).  This halts loudly, matching the Python
+        backend's ``extract_span_text`` raise-with-context policy (``pyrt.py:48``).
 
         The catch-all ``_ => return None`` arm on the ``Span``-binding ``match`` is emitted
         only when the child enum has more than one variant (matching the span/identifier
@@ -1083,12 +1086,14 @@ class RustUnparserGenerator:
             # Single-variant child enum: irrefutable destructure via `let` (clippy
             # ::infallible_destructuring_match rejects a single-arm match here).
             lines.append(f"        let cst::{child_enum}::Span(span) = &child_tuple.1;")
-        # TODO(unparser-none-path-diagnostics): a `None` from `span.text()` (a sourceless/sentinel
-        # span) propagates up via `?` to the public `unparse_*` entry point with no record of which
-        # labeled span lacked source. In the fltkfmt pipeline spans always carry source, so this is
-        # an invariant-violation path; if/when diagnostics are added, log the failing label here
-        # before returning None, and keep the Python backend in lockstep for parity.
-        lines.append("        let text = span.text()?;")
+        rule_lit = rust_str_lit(rule_name)
+        item_desc = f"label `{rust_str_lit(item.label)}`" if item.label else "(unlabeled)"
+        lines.append("        let Some(text) = span.text() else {")
+        lines.append(
+            f'            panic!("unparse_{rule_lit}: cannot extract text for regex term '
+            f'{item_desc} at child position {{}}: span.text() returned None for {{:?}}", pos, span);'
+        )
+        lines.append("        };")
         lines.append("        let acc = acc.add_non_trivia(fltk_unparser_core::text(text));")
         lines.append("        Some(UnparseResult::new(acc, pos + 1))")
         return lines
@@ -1305,9 +1310,11 @@ class RustUnparserGenerator:
           ``unparse__trivia`` and, on success, wraps the trivia's own ``Doc`` in a
           ``SeparatorSpec`` (``spacing=None``, ``preserved_trivia=Some(...)``) so trivia
           preservation takes precedence over default spacing.  On failure
-          (``unparse__trivia`` returns ``None``) no separator spec is emitted — a faithful
-          port of Python's ``if_trivia_success`` having no ``orelse`` (``gsm2unparser.py:1321``);
-          ``pos`` advances past the ``Trivia`` child either way.
+          (``unparse__trivia`` returns ``None``) the emitted ``else`` arm ``panic!``s
+          (refusing to silently drop comments), mirroring the Python backend's
+          ``raise_preserved_trivia_failure`` in ``if_trivia_success.orelse``
+          (``gsm2unparser.py:1336-1351``); ``pos`` advances past the ``Trivia`` child only
+          on success (the ``panic!`` aborts before the advance on failure).
         - **no preservable content**: with ``preserve_blanks > 0`` it counts the trivia's newlines
           (``_count_newlines_in_trivia``) and emits a blank-line / single-newline / default
           ``SeparatorSpec`` (as the trivia-rule branch does). With ``preserve_blanks == 0`` it emits
@@ -1318,7 +1325,8 @@ class RustUnparserGenerator:
           ``HardLine`` for comments. The shared :meth:`_gen_newline_separator_ladder` encodes the
           difference via ``preserve_line_at_zero``.
 
-        ``pos`` always advances past the ``Trivia`` child (Python ``:1402``).  When the child at
+        The ``pos`` advance past the ``Trivia`` child is emitted unconditionally (Python ``:1402``),
+        i.e. it runs on every path that is not the preservable-trivia failure ``panic!`` above.  When the child at
         ``pos`` is not a ``Trivia`` node, or ``pos`` is out of bounds, the default separator
         spacing is emitted — regardless of ``WS_REQUIRED`` vs ``WS_ALLOWED`` (the non-trivia branch
         never ``return None``s, unlike the trivia-rule branch).
@@ -1357,12 +1365,10 @@ class RustUnparserGenerator:
         lines.append(f"{i4}let trivia_node = trivia_shared.read();")
         lines.append(f"{i4}if self._has_preservable_trivia(&trivia_node) {{")
         # Preservable trivia: render it and wrap in a SeparatorSpec carrying the preserved Doc.
-        # TODO(unparser-none-path-diagnostics): there is no `else` arm here, so when
-        # `_has_preservable_trivia` confirmed comments exist but `unparse__trivia` returns None
-        # (a label mismatch or a sourceless content span), the None is silently discarded and the
-        # comment is dropped from the formatted output with zero diagnostic signal. Decide a
-        # cross-backend policy (log-and-continue / debug_assert / halt), emit a matching
-        # diagnostic in the `else`, and mirror it in the Python backend to preserve parity.
+        # When `_has_preservable_trivia` confirmed comments exist but `unparse__trivia` returns
+        # None (a label mismatch or a sourceless content span), halt with a diagnostic in the
+        # `else` rather than silently dropping the comment from the formatted output. This mirrors
+        # the Python backend's `raise_preserved_trivia_failure` for cross-backend parity.
         lines.append(f"{i5}if let Some(trivia_result) = self.unparse__trivia(&trivia_node) {{")
         lines.extend(
             self._add_separator_spec_lines(
@@ -1373,6 +1379,12 @@ class RustUnparserGenerator:
                 indent=i6,
                 context="preserved trivia spacing",
             )
+        )
+        lines.append(f"{i5}}} else {{")
+        rule_lit = rust_str_lit(rule_name)
+        lines.append(
+            f'{i6}panic!("unparse_{rule_lit}: trivia at child position {{}} has preservable '
+            f'comments but unparse__trivia returned None; refusing to silently drop comments", pos);'
         )
         lines.append(f"{i5}}}")
         lines.append(f"{i4}}} else {{")

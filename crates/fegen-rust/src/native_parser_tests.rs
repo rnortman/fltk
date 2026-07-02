@@ -104,4 +104,38 @@ mod tests {
             "Grammar node must have unlabeled trivia children when capture_trivia=true and input has comments"
         );
     }
+
+    // Site 1 of unparser-none-path-diagnostics: a confirmed-preservable comment whose
+    // unparse__trivia returns None must panic (refusing to silently drop the comment) rather
+    // than discard it. The fegen unparser preserves LineComment/BlockComment, so a Trivia
+    // carrying a childless LineComment is preservable but fails to unparse.
+    #[test]
+    #[should_panic(expected = "refusing to silently drop comments")]
+    fn test_preservable_trivia_unparse_none_panics() {
+        use crate::cst::{Identifier, LineComment, Rule, RuleChild, Trivia};
+        use crate::unparser::Unparser;
+        use fltk_cst_core::{SourceText, Span};
+
+        // A valid `name` identifier: its regex `name` child is source-bearing so span.text()
+        // succeeds (otherwise site 2 would panic first, before the trivia is reached).
+        let source = SourceText::from_str("x", None);
+        let mut identifier = Identifier::new(Span::new_sourceless(0, 1));
+        identifier.append_name(Span::new_with_source(0, 1, &source));
+
+        // A Trivia carrying a childless LineComment: preservable per _has_preservable_trivia,
+        // but unparse_line_comment returns None (its required prefix child is missing), so
+        // unparse__trivia returns None.
+        let line_comment = LineComment::new(Span::new_sourceless(0, 0));
+        let mut trivia = Trivia::new(Span::new_sourceless(0, 0));
+        trivia.append_line_comment(line_comment);
+
+        // rule := name:identifier , ... — the `,` gap after `name` captures the Trivia child,
+        // so unparse_rule reaches the trivia-preservation site right after unparsing `name`.
+        let mut rule = Rule::new(Span::new_sourceless(0, 0));
+        rule.append_name(identifier);
+        rule.push_child(None, RuleChild::Trivia(trivia.into()));
+
+        let unparser = Unparser::new();
+        let _ = unparser.unparse_rule(&rule);
+    }
 }

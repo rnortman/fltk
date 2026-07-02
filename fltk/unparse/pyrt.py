@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import sys
 from dataclasses import dataclass
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, NoReturn
 
 from fltk.fegen.pyrt.terminalsrc import Span
 
@@ -48,6 +48,25 @@ def extract_span_text(span: Span, terminals: str) -> str:
         msg = f"span.text() returned None for source-bearing span {span!r}; codepoint offsets may be out of range"
         raise ValueError(msg)
     return terminals[span.start : span.end]
+
+
+def raise_preserved_trivia_failure(rule_name: str, pos: int) -> NoReturn:
+    """Halt with a diagnostic when confirmed-preservable trivia fails to unparse.
+
+    Called from the generated Python unparser's trivia-processing site when
+    ``_has_preservable_trivia`` confirmed a trivia node carries preservable
+    comments but ``unparse__trivia`` returned ``None``. Silently dropping the
+    comment is the failure this refuses to commit; raise instead, naming the
+    rule and child position. Message wording is aligned with the Rust backend's
+    equivalent ``panic!`` (no node/span contents, matching the Rust ``Span``
+    ``Debug`` convention of eliding source text).
+    """
+    msg = (
+        f"unparse rule {rule_name!r}: trivia at child position {pos} has "
+        f"preservable comments but unparse__trivia returned None; "
+        f"refusing to silently drop comments"
+    )
+    raise ValueError(msg)
 
 
 def count_span_newlines(span: Span, terminals: str) -> int:

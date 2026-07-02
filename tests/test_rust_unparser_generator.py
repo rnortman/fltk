@@ -57,6 +57,19 @@ def _method_body(src: str, fn_name: str) -> str:
     return rest[:end]
 
 
+def _expected_span_text_panic(rule: str, item_desc: str) -> str:
+    """The site-2 (regex text extraction) panic literal the generator emits for a given item.
+
+    Single source of the expected diagnostic wording so a future rewording is a one-line edit
+    here rather than a coordinated change across every regex-body test. ``item_desc`` is the
+    baked-in item descriptor (e.g. ``label `foo` `` or ``(unlabeled)``).
+    """
+    return (
+        f'panic!("unparse_{rule}: cannot extract text for regex term {item_desc} at child position {{}}: '
+        'span.text() returned None for {:?}", pos, span);'
+    )
+
+
 def test_generate_emits_header_and_struct() -> None:
     """A minimal grammar produces the unparser-core import, cst import, and struct."""
     grammar = parse_grammar(_SIMPLE_GRAMMAR)
@@ -796,7 +809,11 @@ def test_regex_single_variant_reads_span_text_and_advances() -> None:
     # Bind the captured Span (single variant => irrefutable `let`, no match/catch-all) and read text.
     assert "let cst::RChild::Span(span) = &child_tuple.1;" in src
     assert "let span = match &child_tuple.1 {" not in src
-    assert "let text = span.text()?;" in src
+    # A sourceless/bad-offset span is an invariant violation: panic naming rule/item/pos/span
+    # rather than silently propagating None via `?`.
+    assert "let Some(text) = span.text() else {" in src
+    assert _expected_span_text_panic("r", "label `foo`") in src
+    assert "span.text()?;" not in _method_body(src, "unparse_r__alt0__item0")
     # Regex text comes from the span, re-emitted via the free-function text constructor.
     assert "let acc = acc.add_non_trivia(fltk_unparser_core::text(text));" in src
     assert "Some(UnparseResult::new(acc, pos + 1))" in src
@@ -817,7 +834,8 @@ def test_regex_multi_variant_emits_span_match_with_catchall() -> None:
     assert "let span = match &child_tuple.1 {" in src
     assert "cst::RChild::Span(span) => span," in src
     assert "_ => return None," in src
-    assert "let text = span.text()?;" in src
+    assert "let Some(text) = span.text() else {" in src
+    assert _expected_span_text_panic("r", "label `bar`") in src
     assert "let acc = acc.add_non_trivia(fltk_unparser_core::text(text));" in src
 
 
@@ -840,7 +858,8 @@ def test_regex_unlabeled_single_variant_emits_bounds_and_bind() -> None:
     assert "let cst::RChild::Span(span) = &child_tuple.1;" in body
     assert "match &child_tuple.1 {" not in body
     assert "_ => return None," not in body
-    assert "let text = span.text()?;" in body
+    assert "let Some(text) = span.text() else {" in body
+    assert _expected_span_text_panic("r", "(unlabeled)") in body
     assert "Some(UnparseResult::new(acc, pos + 1))" in body
 
 
@@ -850,7 +869,9 @@ def test_regex_term_body_unit_single_variant() -> None:
     item = gsm.Item(label="foo", disposition=gsm.Disposition.INCLUDE, term=gsm.Regex("[0-9]+"), quantifier=gsm.REQUIRED)
     body = "\n".join(gen._gen_regex_term_body("r", "R", item))
     assert "let cst::RChild::Span(span) = &child_tuple.1;" in body
-    assert "let text = span.text()?;" in body
+    assert "let Some(text) = span.text() else {" in body
+    assert _expected_span_text_panic("r", "label `foo`") in body
+    assert "span.text()?;" not in body
     assert "let acc = acc.add_non_trivia(fltk_unparser_core::text(text));" in body
     assert "Some(UnparseResult::new(acc, pos + 1))" in body
     # Single variant => irrefutable `let` bind, no match and no catch-all.
@@ -1155,7 +1176,10 @@ def test_quantified_regex_inner_reads_span_text() -> None:
     assert "if child_tuple.0 != Some(cst::RLabel::Foo) {" in inner
     # Single-variant child enum => irrefutable `let` bind (no single-arm match).
     assert "let cst::RChild::Span(span) = &child_tuple.1;" in inner
-    assert "let text = span.text()?;" in inner
+    # A sourceless/bad-offset span is an invariant violation: panic rather than propagate None.
+    assert "let Some(text) = span.text() else {" in inner
+    assert _expected_span_text_panic("r", "label `foo`") in inner
+    assert "span.text()?;" not in inner
     assert "let acc = acc.add_non_trivia(fltk_unparser_core::text(text));" in inner
     assert "Some(UnparseResult::new(acc, pos + 1))" in inner
 
@@ -1896,6 +1920,21 @@ def test_non_trivia_rule_emits_trivia_preservation_branch() -> None:
     assert "_ => {" in body
     # The non-trivia branch never fails the alternative (unlike the trivia-rule WS_REQUIRED branch).
     assert "return None;" not in body
+
+
+def test_non_trivia_rule_preservable_trivia_none_panics() -> None:
+    """When ``_has_preservable_trivia`` confirmed comments but ``unparse__trivia`` returns None,
+    the ``if let Some(trivia_result)`` gains an ``else`` arm that panics rather than silently
+    dropping the comment from the output (site 1 of unparser-none-path-diagnostics; parity with
+    the Python backend's ``raise_preserved_trivia_failure``).
+    """
+    src = RustUnparserGenerator(parse_grammar('r := a:"x" : b:"y" ;')).generate()
+    body = _method_body(src, "unparse_r__alt0")
+    assert "if let Some(trivia_result) = self.unparse__trivia(&trivia_node) {" in body
+    assert (
+        'panic!("unparse_r: trivia at child position {} has preservable comments but '
+        'unparse__trivia returned None; refusing to silently drop comments", pos);'
+    ) in body
 
 
 def test_non_trivia_rule_ws_allowed_uses_required_false_and_nil_default() -> None:

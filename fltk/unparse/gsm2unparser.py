@@ -377,6 +377,15 @@ class UnparserGenerator:
             mutable=False,
         )
 
+    def _get_pyrt_module(self) -> iir.VarByName:
+        """Get the ``fltk.unparse.pyrt`` runtime module variable."""
+        return iir.VarByName(
+            name="fltk.unparse.pyrt",
+            typ=iir.Type.make(cname="module"),
+            ref_type=iir.RefType.BORROW,
+            mutable=False,
+        )
+
     def _make_is_span_check(self, child_expr: iir.Expr) -> iir.Expr:
         """Build a dual-backend span guard: ``fltk.unparse.pyrt.is_span(child)``.
 
@@ -385,12 +394,7 @@ class UnparserGenerator:
         parser, ``fltk._native.Span`` from a Rust CST) and decide that from the
         object itself, never through ``span.py``'s process-wide probe.
         """
-        pyrt_module = iir.VarByName(
-            name="fltk.unparse.pyrt",
-            typ=iir.Type.make(cname="module"),
-            ref_type=iir.RefType.BORROW,
-            mutable=False,
-        )
+        pyrt_module = self._get_pyrt_module()
         return pyrt_module.method.is_span.call(child_expr)
 
     def _doc_to_combinator_expr(self, doc: Doc) -> iir.Expr:
@@ -955,12 +959,7 @@ class UnparserGenerator:
         span_param = method.get_param("span")
         terminals_field = iir.SelfExpr().fld.terminals.load()
 
-        pyrt_module = iir.VarByName(
-            name="fltk.unparse.pyrt",
-            typ=iir.Type.make(cname="module"),
-            ref_type=iir.RefType.BORROW,
-            mutable=False,
-        )
+        pyrt_module = self._get_pyrt_module()
         newline_count = pyrt_module.method.count_span_newlines.call(
             span_param.load(),
             terminals_field,
@@ -1318,7 +1317,7 @@ class UnparserGenerator:
         )
 
         # If trivia unparsing succeeded, use it
-        if_trivia_success = if_has_preservable.block.if_(trivia_result_var.load())
+        if_trivia_success = if_has_preservable.block.if_(trivia_result_var.load(), orelse=True)
 
         # Extract the accumulated doc from trivia result
         trivia_accumulator = self._extract_result_accumulator(trivia_result_var)
@@ -1331,6 +1330,18 @@ class UnparserGenerator:
             spacing=None,
             preserved_trivia=trivia_doc,
             required=(separator == gsm.Separator.WS_REQUIRED),
+        )
+
+        # _has_preservable_trivia confirmed comments exist but unparse__trivia returned None:
+        # halt with a diagnostic rather than silently dropping the comment from the output
+        # (parity with the Rust backend's panic at the equivalent site).
+        assert isinstance(if_trivia_success.orelse, iir.Block)
+        pyrt_module = self._get_pyrt_module()
+        if_trivia_success.orelse.expr_stmt(
+            pyrt_module.method.raise_preserved_trivia_failure.call(
+                iir.LiteralString(value=rule_name),
+                current_pos_var.load(),
+            )
         )
 
         # Else: no preservable content, but check for blank lines
@@ -1755,12 +1766,7 @@ class UnparserGenerator:
 
             child_var = self._extract_and_validate_nonsequence_child(method, node_var, pos_var, item, rule_name)
 
-            pyrt_module = iir.VarByName(
-                name="fltk.unparse.pyrt",
-                typ=iir.Type.make(cname="module"),
-                ref_type=iir.RefType.BORROW,
-                mutable=False,
-            )
+            pyrt_module = self._get_pyrt_module()
             span_text = pyrt_module.method.extract_span_text.call(
                 child_var.load(),
                 iir.SelfExpr().fld.terminals.load(),
