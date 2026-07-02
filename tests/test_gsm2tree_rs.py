@@ -1129,11 +1129,11 @@ class TestGenerateProtocol:
         _ast.parse(gen.generate_protocol())
 
     def test_kind_uses_literal_discriminant_not_degraded(self) -> None:
-        """Per §1.2: the non-degraded 'kind: typing.Literal[NodeKind.*]' form is emitted.
+        """The non-degraded 'kind: typing.Literal[NodeKind.*]' form is emitted.
 
-        The degraded 'kind: object' form (produced when py_module.import_path is falsy, e.g. the
-        pyreg.Builtins-backed self._py_gen) must NOT appear — generate_protocol uses a non-empty
-        py_module precisely to emit the Literal discriminant.
+        generate_protocol reuses self._py_gen (Builtins-backed) and calls gen_protocol_module_text()
+        with the default emit_kind_literal=True, so the precise Literal discriminant is emitted.
+        The degraded 'kind: object' form must NOT appear.
         """
         gen = RustCstGenerator(_make_poc_grammar())
         protocol = gen.generate_protocol()
@@ -1145,6 +1145,21 @@ class TestGenerateProtocol:
         """Two generator instances over the same grammar produce identical protocol text."""
         grammar = _make_poc_grammar()
         assert RustCstGenerator(grammar).generate_protocol() == RustCstGenerator(grammar).generate_protocol()
+
+    def test_same_instance_py_gen_reuse_is_stable(self) -> None:
+        """Same-instance _py_gen reuse: repeated generate_protocol() on one instance is stable.
+
+        generate_protocol shares self._py_gen (which also backs .rs/.pyi emission).  Call
+        generate_protocol() twice, interleaved with a generate_pyi() call, and assert both protocol
+        outputs are byte-identical — pinning that protocol emission neither mutates nor is affected
+        by the shared _py_gen/context state.  The existing cross-instance test cannot catch this
+        (it builds a fresh generator each call).
+        """
+        gen = RustCstGenerator(_make_poc_grammar())
+        first = gen.generate_protocol()
+        gen.generate_pyi(_PROTO_MODULE)
+        second = gen.generate_protocol()
+        assert first == second
 
 
 @pytest.fixture(scope="module")

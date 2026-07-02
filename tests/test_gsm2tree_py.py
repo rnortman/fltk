@@ -493,7 +493,7 @@ class TestMutatorsEmittedPyProtocol:
         gen = _make_generator(_make_labeled_grammar())
         model = gen.rule_models["bar"]
         # _protocol_class_for_model returns the ClassDef directly.
-        return gen._protocol_class_for_model("Bar", model, "bar")
+        return gen._protocol_class_for_model("Bar", model, "bar", emit_kind_literal=True)
 
     def test_insert_present_protocol(self, protocol_klass: ast.ClassDef) -> None:
         fn = _find_function(protocol_klass, "insert")

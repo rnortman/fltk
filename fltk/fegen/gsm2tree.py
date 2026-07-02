@@ -716,8 +716,14 @@ class _ProtocolLabelMember:
         ).body
         return stmts  # type: ignore[return-value]
 
-    def gen_protocol_module(self) -> ast.Module:
-        """Generate a *_cst_protocol.py module with Protocol classes describing the CST module surface."""
+    def gen_protocol_module(self, *, emit_kind_literal: bool = True) -> ast.Module:
+        """Generate a *_cst_protocol.py module with Protocol classes describing the CST module surface.
+
+        emit_kind_literal controls the per-node ``kind`` discriminant. Default True
+        emits the precise ``kind: typing.Literal[NodeKind.X]`` form, which is always valid protocol
+        output (the module-level NodeKind enum is emitted unconditionally). Passing False emits the
+        degraded ``kind: object`` form. py_module plays no role in protocol output.
+        """
         module = ast.parse("")
         assert isinstance(module, ast.Module)
         module.body.append(pygen.stmt("from __future__ import annotations"))
@@ -753,7 +759,9 @@ class _ProtocolLabelMember:
         for rule in self.rule_models:
             model = self.rule_models[rule]
             class_name = self.protocol_node_name(rule)
-            stmts = self._protocol_class_for_model_with_assignments(class_name, model, rule)
+            stmts = self._protocol_class_for_model_with_assignments(
+                class_name, model, rule, emit_kind_literal=emit_kind_literal
+            )
             module.body.extend(stmts)
 
         module.body.append(self._protocol_span_class())
@@ -797,7 +805,7 @@ class _ProtocolLabelMember:
 
         return module
 
-    def gen_protocol_module_text(self) -> str:
+    def gen_protocol_module_text(self, *, emit_kind_literal: bool = True) -> str:
         """Return the protocol-module source text, with the file-level ruff suppression prefix.
 
         Single home for the protocol-text rendering formula shared by the Python ``generate
@@ -814,16 +822,16 @@ class _ProtocolLabelMember:
           annotations`` and ruff does not raise F821 for them; including F821 causes RUF100
           (unused noqa) after ``make fix``.
         """
-        return "# ruff: noqa: N802\n" + ast.unparse(self.gen_protocol_module())
+        return "# ruff: noqa: N802\n" + ast.unparse(self.gen_protocol_module(emit_kind_literal=emit_kind_literal))
 
     def _protocol_class_for_model_with_assignments(
-        self, class_name: str, model: ItemsModel, rule_name: str
+        self, class_name: str, model: ItemsModel, rule_name: str, *, emit_kind_literal: bool
     ) -> list[ast.stmt]:
         """Generate a Protocol class plus post-class Label member sentinel assignments.
 
         Returns a list: [ClassDef, assignment-stmts...].
         """
-        klass = self._protocol_class_for_model(class_name, model, rule_name)
+        klass = self._protocol_class_for_model(class_name, model, rule_name, emit_kind_literal=emit_kind_literal)
         stmts: list[ast.stmt] = [klass]
         # Emit post-class sentinel assignments for each Label member.
         labels = sorted(model.labels.keys())
@@ -882,10 +890,13 @@ class _ProtocolLabelMember:
 
         return fns
 
-    def _protocol_class_for_model(self, class_name: str, model: ItemsModel, rule_name: str) -> ast.ClassDef:
+    def _protocol_class_for_model(
+        self, class_name: str, model: ItemsModel, rule_name: str, *, emit_kind_literal: bool
+    ) -> ast.ClassDef:
         """Generate a Protocol class for a single CST node.
 
         rule_name is required to emit the correct kind discriminant.
+        emit_kind_literal selects the discriminant form (see gen_protocol_module).
         """
         klass = pygen.klass(name=class_name, bases=["typing.Protocol"])
 
@@ -907,12 +918,10 @@ class _ProtocolLabelMember:
         # kind discriminant: emit Literal[NodeKind.X] with runtime default value.
         # The protocol-local NodeKind is now a real runtime enum, so the default is readable as
         # cst.<Node>.kind on the class object, enabling native .kind narrowing (probe D4).
-        # TODO(protocol-module-truthiness-gate): this gates the Literal discriminant on
-        # py_module.import_path truthiness, dual-using py_module as both the concrete-CST module
-        # path and a truthiness sentinel.  A Builtins-backed CstGenerator (empty import_path) silently
-        # emits the degraded `kind: object` form; RustCstGenerator.generate_protocol works around this
-        # with a non-empty placeholder py_module.  Replace with an explicit flag so callers opt in.
-        if rule_name and self.py_module.import_path:
+        # The discriminant form is controlled by the explicit emit_kind_literal parameter;
+        # py_module plays no role in protocol output.  emit_kind_literal=False yields the
+        # degraded `kind: object` form as a documented opt-out.
+        if rule_name and emit_kind_literal:
             member = self.node_kind_member_name(rule_name)
             klass.body.append(pygen.stmt(f"kind: typing.Literal[NodeKind.{member}] = NodeKind.{member}"))
         else:

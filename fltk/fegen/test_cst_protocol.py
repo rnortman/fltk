@@ -55,12 +55,50 @@ def pyright_available() -> bool:
 # ---------------------------------------------------------------------------
 
 
-def _build_cst_generator() -> gsm2tree.CstGenerator:
-    """Build a CstGenerator from the fegen grammar."""
+def _build_cst_generator(py_module: pyreg.Module | None = None) -> gsm2tree.CstGenerator:
+    """Build a CstGenerator from the fegen grammar.
+
+    Defaults to a real module path; pass ``pyreg.Builtins`` for a Builtins-backed
+    (empty, falsy import_path) generator.
+    """
+    if py_module is None:
+        py_module = pyreg.Module(["fltk", "fegen", "fltk_cst"])
     grammar = _parse_grammar_raw(FEGEN_FLTKG)
     grammar = gsm.add_trivia_rule_to_grammar(grammar, create_default_context())
-    cst_module = pyreg.Module(["fltk", "fegen", "fltk_cst"])
-    return gsm2tree.CstGenerator(grammar=grammar, py_module=cst_module, context=create_default_context())
+    return gsm2tree.CstGenerator(grammar=grammar, py_module=py_module, context=create_default_context())
+
+
+# ---------------------------------------------------------------------------
+# emit_kind_literal parameter
+# ---------------------------------------------------------------------------
+
+
+def test_builtins_backed_generator_emits_literal_kind_by_default() -> None:
+    """A Builtins-backed generator emits the precise Literal discriminant by default.
+
+    py_module does not gate the discriminant: even a Builtins-backed generator (empty, falsy
+    import_path) emits `kind: typing.Literal[NodeKind.*]` rather than the degraded `kind: object`.
+    """
+    text = _build_cst_generator(pyreg.Builtins).gen_protocol_module_text()
+    assert "kind: typing.Literal[NodeKind." in text
+    assert "kind: object" not in text
+
+
+def test_protocol_text_independent_of_py_module() -> None:
+    """py_module independence: protocol text is byte-identical regardless of the backing py_module.
+
+    Pins the invariant that py_module plays no role in protocol output.
+    """
+    builtins_text = _build_cst_generator(pyreg.Builtins).gen_protocol_module_text()
+    real_module_text = _build_cst_generator().gen_protocol_module_text()
+    assert builtins_text == real_module_text
+
+
+def test_emit_kind_literal_false_produces_degraded_form() -> None:
+    """Explicit opt-out: emit_kind_literal=False emits `kind: object` and no Literal discriminant."""
+    text = _build_cst_generator().gen_protocol_module_text(emit_kind_literal=False)
+    assert "kind: object" in text
+    assert "Literal[NodeKind." not in text
 
 
 @pytest.fixture(scope="module")
