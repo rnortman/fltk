@@ -4,10 +4,6 @@
 
 This is a placeholder entry. Leave it here so the file is never empty. It is not a real TODO. You would reference it in code with `// TODO(example-placeholder)` comments. This is the basic TODO system design: An entry here with a slug used to join to code comments. Add real TODOs below this one in this format.
 
-## `native-span-init-error-context`
-
-When `Py::new(m.py(), Span::unknown())` fails during `fltk._native` module init, the Python import raises a generic pyo3 `RuntimeError` with no indication the failure was in UnknownSpan sentinel creation. Wrap with a structured message so on-call can distinguish this from submodule registration failures. Location: `fltk/fegen/gsm2lib_rs.py` (`RustLibGenerator.generate()`, body for `unknown_span_static`).
-
 ## `forged-abi-extract-span-uniformity`
 
 `check_instance_layout` is generic and could be applied to `extract_span` for uniformity.

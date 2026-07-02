@@ -96,7 +96,7 @@ class LibSpec:
     """Submodules to declare and register."""
 
     register_span_types: bool = False
-    """If True, emit Span/SourceText class registration and span module import."""
+    """If True, emit Span/SourceText/LineColPos class registration and span module import."""
 
     unknown_span_static: bool = False
     """If True, emit the UNKNOWN_SPAN static declaration and once-init."""
@@ -169,7 +169,7 @@ class RustLibGenerator:
 
         # --- extra use for span types ---
         if spec.register_span_types:
-            lines.append("use span::{SourceText, Span};")
+            lines.append("use span::{LineColPos, SourceText, Span};")
             lines.append("")
 
         # --- UNKNOWN_SPAN static ---
@@ -191,15 +191,21 @@ class RustLibGenerator:
         body: list[str] = []
 
         if spec.register_span_types:
-            body.append("    // Canonical Span/SourceText/UnknownSpan live at the top level.")
+            body.append("    // Canonical Span/SourceText/LineColPos/UnknownSpan live at the top level.")
             body.append("    m.add_class::<Span>()?;")
             body.append("    m.add_class::<SourceText>()?;")
+            body.append("    m.add_class::<LineColPos>()?;")
 
         if spec.unknown_span_static:
-            # TODO(native-span-init-error-context): Py::new failure here surfaces as a generic
-            # pyo3 RuntimeError with no indication that it occurred during UnknownSpan sentinel
-            # creation.  Wrap with a structured message for on-call clarity.
-            body.append("    let unknown_span_obj = Py::new(m.py(), Span::unknown())?.into_any();")
+            body.append("    let unknown_span_obj = Py::new(m.py(), Span::unknown())")
+            body.append("        .map_err(|e| {")
+            body.append("            pyo3::exceptions::PyRuntimeError::new_err(format!(")
+            body.append(
+                f'                "{spec.module_name} module init: failed to create UnknownSpan sentinel: {{e}}"'
+            )
+            body.append("            ))")
+            body.append("        })?")
+            body.append("        .into_any();")
             body.append('    m.add("UnknownSpan", unknown_span_obj.clone_ref(m.py()))?;')
             body.append("    UNKNOWN_SPAN")
             body.append("        .set(m.py(), unknown_span_obj)")

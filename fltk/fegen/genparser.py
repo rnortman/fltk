@@ -786,7 +786,11 @@ def gen_rust_lib(
     ] = False,
     register_span_types: Annotated[
         bool,
-        typer.Option("--register-span-types", help="Emit Span/SourceText class registration and span module import."),
+        typer.Option(
+            "--register-span-types",
+            help="Emit Span/SourceText/LineColPos class registration and span module import "
+            "(the consumer's `mod span;` must export LineColPos, e.g. by re-exporting from fltk-cst-core).",
+        ),
     ] = False,
     unknown_span_static: Annotated[
         bool,

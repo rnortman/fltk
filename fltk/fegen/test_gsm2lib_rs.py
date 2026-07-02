@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import ast
+from pathlib import Path
 
 import pytest
 
@@ -65,12 +66,13 @@ def test_standard_output_no_recursion_limit() -> None:
 
 
 def test_standard_output_no_span_types() -> None:
-    """Standard lib.rs must NOT register Span/SourceText/UnknownSpan."""
+    """Standard lib.rs must NOT register Span/SourceText/LineColPos/UnknownSpan."""
     spec = LibSpec.standard("clockwork_native")
     src = RustLibGenerator(spec).generate()
 
     assert "Span" not in src
     assert "SourceText" not in src
+    assert "LineColPos" not in src
     assert "UnknownSpan" not in src
     assert "UNKNOWN_SPAN" not in src
 
@@ -209,11 +211,44 @@ def _span_only_spec() -> LibSpec:
 
 
 def test_span_only_contains_span_module() -> None:
-    """Span-only lib.rs contains mod span; and use span::{SourceText, Span}."""
+    """Span-only lib.rs contains mod span; and use span::{LineColPos, SourceText, Span}."""
     src = RustLibGenerator(_span_only_spec()).generate()
 
     assert "mod span;" in src
-    assert "use span::{SourceText, Span};" in src
+    assert "use span::{LineColPos, SourceText, Span};" in src
+
+
+def test_span_only_registers_line_col_pos() -> None:
+    """Span-only lib.rs registers LineColPos as a Python class (drift fix)."""
+    src = RustLibGenerator(_span_only_spec()).generate()
+
+    assert "m.add_class::<LineColPos>()" in src
+
+
+def test_span_only_wraps_unknown_span_creation_error() -> None:
+    """Span-only lib.rs wraps Py::new sentinel creation with a structured RuntimeError."""
+    src = RustLibGenerator(_span_only_spec()).generate()
+
+    assert "pyo3::exceptions::PyRuntimeError::new_err" in src
+    assert "_native module init: failed to create UnknownSpan sentinel: {e}" in src
+    assert "Span::unknown())?.into_any()" not in src
+
+
+def test_unknown_span_creation_error_message_interpolates_module_name() -> None:
+    """The sentinel-creation error message uses spec.module_name, not a hardcoded literal.
+
+    Guards against a regression that bakes in "_native" instead of interpolating.
+    """
+    spec = LibSpec(
+        module_name="my_ext",
+        submodules=(),
+        register_span_types=True,
+        unknown_span_static=True,
+    )
+    src = RustLibGenerator(spec).generate()
+
+    assert "my_ext module init: failed to create UnknownSpan sentinel: {e}" in src
+    assert "_native module init: failed to create UnknownSpan sentinel: {e}" not in src
 
 
 def test_span_only_contains_py_once_lock() -> None:
@@ -282,6 +317,26 @@ def test_span_only_output_ends_with_newline() -> None:
     assert src.endswith("\n")
 
 
+def test_committed_lib_rs_matches_generator() -> None:
+    """Drift pin: committed src/lib.rs is byte-for-byte what the generator produces.
+
+    The spec here duplicates the Makefile `gen-rust-lib` invocation
+    (--module-name _native --register-span-types --unknown-span-static --no-cst --no-parser);
+    if the Makefile invocation changes, this test must change with it.
+    """
+    repo_root = Path(__file__).parents[2]
+    if not (repo_root / "pyproject.toml").exists():
+        pytest.skip(f"not a repo checkout: {repo_root}")
+
+    lib_rs = repo_root / "src" / "lib.rs"
+    assert lib_rs.exists(), (
+        f"committed lib.rs missing at {lib_rs} — the drift pin must move with it (see Makefile gen-rust-lib)"
+    )
+
+    expected = RustLibGenerator(_span_only_spec()).generate()
+    assert lib_rs.read_text() == expected
+
+
 # ---------------------------------------------------------------------------
 # Submodule.validate() — direct field validation
 # ---------------------------------------------------------------------------
@@ -336,9 +391,10 @@ def test_span_types_without_unknown_span_emits_span_module_and_classes() -> None
     src = RustLibGenerator(_span_types_no_unknown_span_spec()).generate()
 
     assert "mod span;" in src
-    assert "use span::{SourceText, Span};" in src
+    assert "use span::{LineColPos, SourceText, Span};" in src
     assert "m.add_class::<Span>()" in src
     assert "m.add_class::<SourceText>()" in src
+    assert "m.add_class::<LineColPos>()" in src
 
 
 def test_span_types_without_unknown_span_omits_unknown_span_static() -> None:

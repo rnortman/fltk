@@ -1414,6 +1414,7 @@ def test_gen_rust_lib_standard_output(tmp_path: pathlib.Path) -> None:
     assert "recursion_limit" not in src
     assert "Span" not in src
     assert "SourceText" not in src
+    assert "LineColPos" not in src
     assert "UnknownSpan" not in src
     assert "UNKNOWN_SPAN" not in src
 
@@ -1560,12 +1561,13 @@ def test_gen_rust_lib_span_only_output(tmp_path: pathlib.Path) -> None:
 
     src = output_rs.read_text()
 
-    # Span/SourceText/UnknownSpan registrations
+    # Span/SourceText/LineColPos/UnknownSpan registrations
     assert "mod span;" in src
-    assert "use span::{SourceText, Span};" in src
+    assert "use span::{LineColPos, SourceText, Span};" in src
     assert "pyo3::sync::PyOnceLock" in src
     assert "m.add_class::<Span>()" in src
     assert "m.add_class::<SourceText>()" in src
+    assert "m.add_class::<LineColPos>()" in src
     assert 'm.add("UnknownSpan"' in src
 
     # UNKNOWN_SPAN static and once-init
