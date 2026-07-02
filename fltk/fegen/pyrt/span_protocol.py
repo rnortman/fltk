@@ -120,5 +120,8 @@ try:
     from fltk._native import Span as _RustSpan
 
     AnySpan = _pymod.Span | _RustSpan
-except Exception:
+except ImportError:
+    # In lockstep with span.py: `ImportError` means the native backend is absent
+    # (pure-Python install) and the fallback is intentionally silent; any other exception
+    # means a present-but-broken extension and propagates.
     AnySpan = _pymod.Span  # type: ignore[assignment,misc]

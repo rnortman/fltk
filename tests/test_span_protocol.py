@@ -1,19 +1,48 @@
 """Tests for SpanProtocol, AnySpan, and the backend selector module."""
 
+import contextlib
 import importlib
 import sys
+import types
 import warnings
 
 import pytest
 
 import fltk._native as _fltk_native
 import fltk.fegen.pyrt.span as _span_selector
+import fltk.fegen.pyrt.span_protocol as _span_protocol
 from fltk.fegen.pyrt.span_protocol import AnySpan, SpanProtocol
 from fltk.fegen.pyrt.terminalsrc import SourceText as PySourceText
 from fltk.fegen.pyrt.terminalsrc import Span as PySpan
 from fltk.fegen.pyrt.terminalsrc import TerminalSource, UnknownSpan
 
 _rust_available = hasattr(_fltk_native, "Span")
+
+
+@contextlib.contextmanager
+def _native_replaced(fake: object, module_to_reload: types.ModuleType):
+    """Install ``fake`` at ``sys.modules["fltk._native"]`` for the block, then restore.
+
+    Cleanup restores the *saved original module object* before the restorative reload —
+    it never delete-and-reimports. The PyO3 native extension must NEVER be re-imported
+    fresh in-process: a second genuine init panics with a ``BaseException``-derived
+    ``PanicException`` (``UNKNOWN_SPAN already set; module initialized twice``) that
+    escapes ``except Exception`` and poisons the rest of the pytest session. This
+    invariant is why every backend-selector reload test funnels through this helper.
+
+    ``fake`` may be ``None`` (forces ``ImportError`` on the probe) or a stand-in object
+    such as ``_BrokenNative``.
+    """
+    saved = sys.modules.get("fltk._native")
+    try:
+        sys.modules["fltk._native"] = fake  # type: ignore[assignment]
+        yield
+    finally:
+        if saved is not None:
+            sys.modules["fltk._native"] = saved
+        else:
+            sys.modules.pop("fltk._native", None)
+        importlib.reload(module_to_reload)  # restore real bindings for other tests
 
 
 class TestBackendSelectorSilentFallback:
@@ -24,19 +53,52 @@ class TestBackendSelectorSilentFallback:
         # probe's except branch runs. It must fall back to the pure-Python backend
         # without emitting any warning. This pins the original-bug fix: a pure-Python
         # install printing a noisy warning on parser import.
-        saved = {name: mod for name, mod in sys.modules.items() if name == "fltk._native"}
-        try:
-            sys.modules["fltk._native"] = None  # type: ignore[assignment]  # force ImportError on probe
+        with _native_replaced(None, _span_selector):
             with warnings.catch_warnings():
                 warnings.simplefilter("error")  # any warning becomes an exception
                 reloaded = importlib.reload(_span_selector)
             # Fallback landed on the pure-Python backend.
             assert reloaded.Span is PySpan
             assert reloaded.SourceText is PySourceText
-        finally:
-            sys.modules.pop("fltk._native", None)
-            sys.modules.update(saved)
-            importlib.reload(_span_selector)  # restore the real backend for other tests
+
+
+class _BrokenNative:
+    """Fake present-but-broken native extension: attribute access raises OSError.
+
+    The ``from ... import`` machinery only swallows ``AttributeError`` while resolving
+    names, so the ``OSError`` propagates out of ``from fltk._native import ...``,
+    faithfully simulating a corrupted/ABI-mismatched extension (C-level init crash).
+    """
+
+    def __getattr__(self, name: str) -> object:
+        msg = "simulated broken native extension"
+        raise OSError(msg)
+
+
+class TestBackendSelectorBrokenNative:
+    """A present-but-broken native extension must propagate loudly, not fall back silently."""
+
+    def test_span_selector_broken_native_propagates(self):
+        # With a fake broken native installed, reloading the span selector must raise the
+        # underlying OSError rather than silently degrading to the pure-Python backend.
+        with _native_replaced(_BrokenNative(), _span_selector), pytest.raises(OSError):
+            importlib.reload(_span_selector)
+
+    def test_span_protocol_broken_native_propagates(self):
+        # Lockstep site: the AnySpan block in span_protocol.py must also propagate a
+        # broken-native OSError rather than silently building a Python-only AnySpan.
+        with _native_replaced(_BrokenNative(), _span_protocol), pytest.raises(OSError):
+            importlib.reload(_span_protocol)
+
+    def test_span_protocol_absent_native_falls_back_silently(self):
+        # Absent native (ModuleNotFoundError, an ImportError subclass): the AnySpan block
+        # must fall back silently (no warning) to the pure-Python Span. This is the AnySpan
+        # analog of test_reload_without_native_emits_no_warning.
+        with _native_replaced(None, _span_protocol):
+            with warnings.catch_warnings():
+                warnings.simplefilter("error")  # any warning becomes an exception
+                reloaded = importlib.reload(_span_protocol)
+            assert reloaded.AnySpan is PySpan
 
 
 class TestProtocolConformancePython:
