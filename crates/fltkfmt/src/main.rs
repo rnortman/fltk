@@ -15,6 +15,7 @@
 // cover the `fltk_formatter_main!` partial-parse and unparse-None error branches, which need
 // a real consumer like this binary. Landing with the §2.3 `make check` gating increment.
 fltk_fmt_cli::fltk_formatter_main! {
+    about: "Format FLTK grammar (.fltkg) files.",
     parser: fegen_rust_cst::parser::Parser,
     unparser: fegen_rust_cst::unparser::Unparser,
     parse: apply__parse_grammar,

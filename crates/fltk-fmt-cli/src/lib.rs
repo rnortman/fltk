@@ -11,7 +11,7 @@ use std::io::{self, Read, Write};
 use std::path::{Path, PathBuf};
 use std::process::ExitCode;
 
-use clap::Parser;
+use clap::{FromArgMatches, Parser};
 
 // `RendererConfig` appears in the public `run_main`/`format_fn` signature, so it is part of
 // this crate's public API.
@@ -31,11 +31,19 @@ pub use fltk_unparser_core::{resolve_spacing_specs, Renderer};
 /// this struct only carries the runtime knobs: which files to format, the output mode
 /// (stdout / `--output` / `--in-place` / `--check`), and the render dimensions
 /// (`--width`, `--indent`). clap supplies `--help`/`--version` automatically.
-// TODO(fmt-cli-per-consumer-about): the grammar-specific `--help` `about` text belongs to the
-// consuming binary, not this shared crate. When `run_main`/`fltk_formatter_main!` land, thread a
-// per-consumer `about: &'static str` so each formatter supplies its own description (built via
-// `FmtArgs::command().about(..)`), rather than baking one grammar's wording into the scaffolding.
+///
+/// The per-consumer `--help` `about` text is not baked in here; it is threaded through
+/// `run_main` (see `command_with_about`) so each formatter binary describes the language it
+/// actually formats rather than inheriting one grammar's wording from this shared crate.
 #[derive(Parser, Debug)]
+// TODO(fmt-cli-per-consumer-version): `#[command(version)]` expands `CARGO_PKG_VERSION` where
+// `FmtArgs` is defined, so every consumer binary reports this scaffolding crate's version rather
+// than its own. Thread `version` (and possibly `name`) through `run_main`/`fltk_formatter_main!`
+// so `<consumer> --version` prints the consumer's own version. Do NOT add a second bare
+// `&'static str` positional next to `about` on `run_main` — two adjacent indistinguishable
+// string params can be swapped silently (version rendered as the description). Introduce an
+// identity struct (e.g. `FormatterInfo::new(about).version(..)`) so this and any later knob are
+// non-breaking additions.
 #[command(version)]
 pub struct FmtArgs {
     /// Input files to format. With none (or a `-`), read from stdin.
@@ -226,6 +234,22 @@ fn write_atomic(path: &Path, content: &str, stderr: &mut dyn Write) -> io::Resul
     Ok(())
 }
 
+/// Build the clap `Command` for `FmtArgs` with a per-consumer `about` description.
+///
+/// clap's derive maps the first paragraph of the `FmtArgs` doc comment to `about` and the
+/// full multi-paragraph comment to `long_about`; `--help` prefers `long_about` while `-h`
+/// prefers `about`. Overriding only `.about(..)` would leave `--help` (the form users
+/// actually read) showing the generic scaffolding prose, so `.long_about(None)` resets it —
+/// making both `-h` and `--help` show the consumer's text.
+///
+/// Private on purpose: consumers go through `run_main`. It exists so unit tests can assert on
+/// rendered help without spawning a process or letting clap exit.
+fn command_with_about(about: &'static str) -> clap::Command {
+    <FmtArgs as clap::CommandFactory>::command()
+        .about(about)
+        .long_about(None)
+}
+
 /// Entry point for a formatter binary: parse `FmtArgs` from the process environment, run
 /// the format pipeline over every input, and return the process exit code.
 ///
@@ -238,11 +262,20 @@ fn write_atomic(path: &Path, content: &str, stderr: &mut dyn Write) -> io::Resul
 /// All grammar-independent behavior — flag validation, file/stdin I/O, the output modes
 /// (stdout / `--output` / `--in-place` / `--check`), error-path filename prefixing, and
 /// exit codes — lives here.
-pub fn run_main<F>(format_fn: F) -> ExitCode
+///
+/// `about` is the one-line description shown by `-h`/`--help` (e.g. "Format FLTK grammar
+/// (.fltkg) files."); each consumer binary supplies its own so the help text describes the
+/// language it formats rather than this shared scaffolding.
+pub fn run_main<F>(about: &'static str, format_fn: F) -> ExitCode
 where
     F: Fn(&str, Option<&str>, RendererConfig) -> Result<String, String>,
 {
-    let args = FmtArgs::parse();
+    // `get_matches()` preserves `FmtArgs::parse()`'s UX: prints help/version and exits 0 on
+    // `-h`/`--help`/`--version`, prints a usage error and exits 2 on bad flags. After a
+    // successful `get_matches` on a command built from `FmtArgs` itself, `from_arg_matches`
+    // cannot realistically fail; `e.exit()` covers it identically to `parse()`.
+    let matches = command_with_about(about).get_matches();
+    let args = FmtArgs::from_arg_matches(&matches).unwrap_or_else(|e| e.exit());
     let mut stdin = io::stdin().lock();
     let mut stdout = io::stdout().lock();
     let mut stderr = io::stderr().lock();
@@ -259,6 +292,7 @@ where
 ///
 /// ```ignore
 /// fltk_fmt_cli::fltk_formatter_main! {
+///     about:    "Format FLTK grammar (.fltkg) files.",
 ///     parser:   fegen_rust_cst::parser::Parser,
 ///     unparser: fegen_rust_cst::unparser::Unparser,
 ///     parse:    apply__parse_grammar,
@@ -282,6 +316,7 @@ where
 #[macro_export]
 macro_rules! fltk_formatter_main {
     (
+        about: $about:expr,
         parser: $parser:path,
         unparser: $unparser:path,
         parse: $parse:ident,
@@ -289,6 +324,7 @@ macro_rules! fltk_formatter_main {
     ) => {
         fn main() -> ::std::process::ExitCode {
             $crate::run_main(
+                $about,
                 |src: &str,
                  filename: ::core::option::Option<&str>,
                  cfg: $crate::RendererConfig|
@@ -568,6 +604,63 @@ mod tests {
     #[test]
     fn fmt_args_rejects_unknown_flag() {
         assert!(FmtArgs::try_parse_from(["fltkfmt", "--nope"]).is_err());
+    }
+
+    // --- per-consumer `about` help text (command_with_about) ---
+
+    #[test]
+    fn long_help_shows_consumer_about() {
+        // `--help` renders `long_about`; the `.long_about(None)` reset must make it fall back
+        // to the consumer's `about`, not the generic scaffolding doc comment. Pin the reset
+        // directly (so this can't rot if the doc comment is reworded), then confirm the
+        // rendered long help shows the consumer text and none of the derived scaffolding
+        // long_about. The forbidden string is derived from the `FmtArgs` derive rather than
+        // hard-coded, so rewording the doc comment updates the assertion automatically.
+        assert!(<FmtArgs as clap::CommandFactory>::command()
+            .long_about(None)
+            .get_long_about()
+            .is_none());
+        let default_long_about = <FmtArgs as clap::CommandFactory>::command()
+            .get_long_about()
+            .expect("FmtArgs doc comment supplies a long_about")
+            .to_string();
+        let help = command_with_about("Format Foo files.")
+            .render_long_help()
+            .to_string();
+        assert!(help.contains("Format Foo files."));
+        assert!(!help.contains(&default_long_about));
+    }
+
+    #[test]
+    fn short_help_shows_consumer_about() {
+        // `-h` renders `about` directly. The forbidden scaffolding string is derived from the
+        // `FmtArgs` derive rather than hard-coded, so it tracks any doc-comment rewording.
+        let default_about = <FmtArgs as clap::CommandFactory>::command()
+            .get_about()
+            .expect("FmtArgs doc comment supplies an about")
+            .to_string();
+        let help = command_with_about("Format Foo files.")
+            .render_help()
+            .to_string();
+        assert!(help.contains("Format Foo files."));
+        assert!(!help.contains(&default_about));
+    }
+
+    #[test]
+    fn command_with_about_parses_args_unchanged() {
+        // Mutating the `Command`'s about/long_about must not disturb argument definitions or
+        // defaults: parsing through `command_with_about` yields the same field values the
+        // `fmt_args_*` tests check.
+        let matches = command_with_about("Format Foo files.")
+            .try_get_matches_from(["fltkfmt", "--check", "-w", "100", "in.fltkg"])
+            .unwrap();
+        let args = FmtArgs::from_arg_matches(&matches).unwrap();
+        assert!(args.check);
+        assert!(!args.in_place);
+        assert_eq!(args.width, 100);
+        assert_eq!(args.indent, 2);
+        assert!(args.output.is_none());
+        assert_eq!(args.files, vec![PathBuf::from("in.fltkg")]);
     }
 
     // --- run_inner integration tests (driven with stub format_fns, no parser) ---
