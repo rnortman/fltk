@@ -3,7 +3,15 @@
 from typing import TYPE_CHECKING, Literal, Protocol, runtime_checkable
 
 import fltk.fegen.pyrt.terminalsrc as _pymod
-from fltk.fegen.pyrt.terminalsrc import LineColPos, SpanKind
+
+# ``LineColPos`` is re-exported for backward compatibility: ``span_protocol.LineColPos`` is an
+# importable public name and out-of-tree consumers may import it from here. It is not named by
+# any annotation in this module (the protocols use ``LineColPosProtocol``), so ``# noqa: F401`` marks
+# it a deliberate re-export rather than an accidental unused import.
+from fltk.fegen.pyrt.terminalsrc import (
+    LineColPos,  # noqa: F401  (re-export; see comment above)
+    SpanKind,
+)
 
 if TYPE_CHECKING:
     # `Self` types ``merge``/``intersect`` so a concrete span value is statically assignable to
@@ -11,6 +19,38 @@ if TYPE_CHECKING:
     # *presence*, never signatures, so ``Self`` is never needed at runtime and this adds no runtime
     # dependency on ``typing_extensions``. Project targets 3.10, so not ``typing.Self``.
     from typing_extensions import Self
+
+
+@runtime_checkable
+class LineColPosProtocol(Protocol):
+    """Structural protocol satisfied by both backends' ``LineColPos`` return types.
+
+    Bridges the two nominally distinct ``LineColPos`` classes (the pure-Python
+    ``terminalsrc.LineColPos`` dataclass and the native ``fltk._native.LineColPos``) the same way
+    ``SpanProtocol`` bridges the two ``Span`` types, so ``SpanProtocol.line_col`` can be annotated
+    backend-agnostically. All three members are 0-based codepoint semantics shared by both backends.
+
+    Members are **read-only properties**: a plain protocol attribute is invariant and would reject
+    the covariant ``line_span`` return (``terminalsrc.Span`` on the Python side); a read-only
+    property permits the covariant match. Being ``runtime_checkable``, ``isinstance`` against this
+    protocol verifies member *presence* only, never signatures — the same limitation ``SpanProtocol``
+    documents for itself.
+    """
+
+    @property
+    def line(self) -> int:
+        """0-based codepoint line index of the position."""
+        ...
+
+    @property
+    def col(self) -> int:
+        """0-based codepoint column index of the position."""
+        ...
+
+    @property
+    def line_span(self) -> "SpanProtocol":
+        """Span covering the entire line, exclusive of the trailing ``\\n``."""
+        ...
 
 
 @runtime_checkable
@@ -84,17 +124,7 @@ class SpanProtocol(Protocol):
         """
         ...
 
-    # TODO(spanprotocol-native-linecol): line_col/line_col_or_raise are typed to return
-    # terminalsrc.LineColPos, so fltk._native.Span (whose line_col returns the native LineColPos, a
-    # distinct nominal class) is NOT statically assignable to SpanProtocol — native conforms only by
-    # runtime isinstance + .pyi declaration. Unifying LineColPos across backends closes the gap.
-    # CONSTRAINT when closing this: the generated pipeline (parser/CST/protocol/unparser) imports
-    # SpanProtocol, and its R2 stub-stability is guaranteed structurally only because SpanProtocol's
-    # own definition names no fltk._native symbol (D5.1). If a fix introduces a native reference into
-    # SpanProtocol's structural surface, that stub-stability becomes transitive and the source-level
-    # "names no native" tests (test_cst_protocol.py etc.) would NOT catch a regression — add a
-    # differential/structural stub-stability guard for the generated pipeline at that time.
-    def line_col(self) -> "LineColPos | None":
+    def line_col(self) -> "LineColPosProtocol | None":
         """Return the line/column position for the span's start, or ``None``.
 
         Returns ``None`` when the span is sourceless, has a negative start, or has a
@@ -102,7 +132,7 @@ class SpanProtocol(Protocol):
         """
         ...
 
-    def line_col_or_raise(self) -> "LineColPos":
+    def line_col_or_raise(self) -> "LineColPosProtocol":
         """Return the line/column position for the span's start, raising ``ValueError`` if it
         cannot be resolved (same conditions as ``line_col()``).
         """
