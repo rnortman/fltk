@@ -411,35 +411,42 @@ pub(crate) static FLTK_NATIVE_SPAN_TYPE: PyOnceLock<Py<PyType>> = PyOnceLock::ne
 /// Extract a native `Span` from a Python object, accepting any span registered
 /// either in this cdylib or in `fltk._native` (cross-cdylib compatibility).
 ///
-/// The ABI gate in `get_span_type` (called below) ensures that version skew fails once,
-/// on first use, with a clear `TypeError` — before any `cast_unchecked`.
-///
-/// TODO(forged-abi-extract-span-uniformity): `check_instance_layout` could be applied here
-/// for uniformity with `extract_source_text`.  Currently adds no rejection power: this path
-/// is gated by `is_instance` against the non-subclassable canonical `Span` type (plus
-/// `check_abi_pair::<Span>` in `get_span_type`), so no forged object can reach its
-/// `cast_unchecked`.  Revisit if this path ever becomes reachable by non-canonical types.
+/// The two-gate check in `get_span_type` (called below) ensures that the returned reference
+/// type has passed both `check_abi_pair::<Span>` (version/layout-skew diagnostic) AND
+/// `check_instance_layout::<Span>` (`tp_basicsize` genuineness), failing once, on first use,
+/// with a clear `TypeError` — before any `cast_unchecked`. This is the same dual-gate invariant
+/// established for `extract_source_text`.
 pub fn extract_span(py: Python<'_>, obj: &Bound<'_, PyAny>) -> PyResult<Span> {
     // Fast path: locally-registered Span type (succeeds when caller uses the same cdylib's Span).
     if let Ok(span_ref) = obj.extract::<Span>() {
         return Ok(span_ref);
     }
     // Slow path: check against fltk._native.Span (cross-cdylib: fltk._native Span
-    // registered there, not here).  `get_span_type` has already verified the ABI string and
-    // layout match (or will fail with TypeError on first call under version skew) — so
-    // is_instance + cast_unchecked is sound given the invariant that both cdylibs link
-    // the same fltk-cst-core rlib with the same pyo3 version.
+    // registered there, not here).  `get_span_type` has already dual-gated the canonical type
+    // (or will fail with TypeError on first call under skew/forgery) — so is_instance +
+    // cast_unchecked is sound given the invariant that both cdylibs link the same fltk-cst-core
+    // rlib with the same pyo3 version.
     let native_span_type = get_span_type(py)?;
     if obj.is_instance(&native_span_type)? {
-        // SAFETY: `get_span_type` called `check_abi_pair::<Span>`, which verified
-        // `_fltk_cst_core_abi == FLTK_CST_CORE_ABI` and `_fltk_cst_core_abi_layout` matches
-        // `size_of::<<Span as PyClassImpl>::Layout>()` on the canonical type. These checks are
-        // consistent with both cdylibs linking the same fltk-cst-core rlib at the same pyo3
-        // version, but do not prove it — size equality does not imply field-layout equality. The
-        // probe narrows — not closes — the skew window. Accepted risk: for frozen pyo3 types
-        // without dict/weakref, PyClassImpl::Layout (PyStaticClassObject<T>) reduces to
-        // {ffi::PyObject, T} (repr(C)); a size-preserving internal reorder is not constructible
-        // without changing ffi::PyObject.
+        // SAFETY: `get_span_type` ran BOTH gates on the returned type before caching it:
+        // `check_abi_pair::<Span>` (verified `_fltk_cst_core_abi == FLTK_CST_CORE_ABI` and
+        // `_fltk_cst_core_abi_layout == size_of::<<Span as PyClassImpl>::Layout>()`) and
+        // `check_instance_layout::<Span>` (verified the type's `tp_basicsize` matches that same
+        // layout size via the immutable `type.__basicsize__` descriptor). `Span` is not
+        // Python-subclassable (`#[pyclass(frozen)]`, no `subclass`), so a passing `is_instance`
+        // means the object's type IS that dual-gated reference type. These checks are consistent
+        // with both cdylibs linking the same fltk-cst-core rlib at the same pyo3 version, but do
+        // not prove it — size equality does not imply field-layout equality. The gates narrow —
+        // not close — the skew window. Accepted risk: for frozen pyo3 types without dict/weakref,
+        // PyClassImpl::Layout (PyStaticClassObject<T>) reduces to {ffi::PyObject, T} (repr(C)); a
+        // size-preserving internal reorder is not constructible without changing ffi::PyObject.
+        // Residual: a `__slots__`-padded plain-Python forge whose `tp_basicsize` matches and
+        // whose metaclass is `type` passes both gates; instances of such a forge (and of an
+        // un-padded subclass of it, which also satisfies `is_instance`) reach this
+        // `cast_unchecked` and are still UB. Mounting that attack requires building the padded
+        // forge anyway, so validating the reference type (rather than the object's own type)
+        // adds no attacker power. Identical in kind to the residual accepted for
+        // `extract_source_text`.
         let span = unsafe { obj.cast_unchecked::<Span>() };
         return Ok(span.borrow().clone());
     }
@@ -451,13 +458,32 @@ pub fn extract_span(py: Python<'_>, obj: &Bound<'_, PyAny>) -> PyResult<Span> {
 
 /// Return the `fltk._native.Span` Python type object, loading it once on first call.
 ///
-/// ABI gate: on the first call, checks `_fltk_cst_core_abi` and `_fltk_cst_core_abi_layout`
-/// on the canonical `Span` type. Version skew fails here — once, on first use — with a clear
-/// `TypeError` naming both ABI strings/layouts, instead of proceeding silently to
-/// `cast_unchecked` UB in `extract_span`.
+/// Two-gate check on the first call (both run inside the `PyOnceLock` init):
+///
+/// 1. `check_abi_pair::<Span>` — `_fltk_cst_core_abi` string + `_fltk_cst_core_abi_layout`
+///    attribute pair; version/layout-skew diagnostic.
+/// 2. `check_instance_layout::<Span>` — `tp_basicsize` of the resolved type (via the immutable
+///    `type.__basicsize__` descriptor, after a metaclass guard). Rejects a pure-Python
+///    forged-marker class that copies the two ABI attributes but whose CPython allocation is
+///    not a genuine `PyStaticClassObject<Span>`.
+///
+/// **Ordering is load-bearing** (same as the `SourceText` path): `check_abi_pair` runs first so
+/// its pinned diagnostic messages continue to fire for ABI-string/layout-attr mismatch inputs
+/// (the existing subprocess tests that pin `check_abi_pair` error messages); the basicsize gate
+/// then narrows the forgery window further. Because both gates run before `get_or_try_init` seeds
+/// the cell, `FLTK_NATIVE_SPAN_TYPE` can only ever hold a type that passed BOTH gates — mirroring
+/// the documented `FLTK_FOREIGN_SOURCE_TEXT_TYPE` invariant. Every consumer of this function
+/// (`extract_span`, `span_to_pyobject`, and the generated `cst.rs` call sites) therefore
+/// receives an already-dual-gated reference type.
+///
+/// `Span` is not Python-subclassable (`#[pyclass(frozen)]`, no `subclass` flag), so an
+/// `is_instance` pass against the returned type means the object's type IS that dual-gated type.
 ///
 /// When this cdylib IS `fltk._native`, the check compares the canonical type against itself
-/// (same classattrs); it always passes and is O(1) beyond the `PyOnceLock` hit.
+/// (same classattrs, genuine layout); it always passes and is O(1) beyond the `PyOnceLock` hit.
+///
+/// The padded-forge residual (accepted, not closed) is documented at its canonical homes:
+/// `check_instance_layout`'s doc comment and the SAFETY comment in `extract_span`.
 pub fn get_span_type(py: Python<'_>) -> PyResult<Bound<'_, PyType>> {
     FLTK_NATIVE_SPAN_TYPE
         .get_or_try_init(py, || {
@@ -472,6 +498,7 @@ pub fn get_span_type(py: Python<'_>) -> PyResult<Bound<'_, PyType>> {
                     ))
                 })?;
             check_abi_pair::<Span>(&span_type, "Span", || "fltk._native.Span".to_string())?;
+            check_instance_layout::<Span>(&span_type, "Span")?;
             Ok(span_type.unbind())
         })
         .map(|t| t.bind(py).clone())

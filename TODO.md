@@ -4,15 +4,6 @@
 
 This is a placeholder entry. Leave it here so the file is never empty. It is not a real TODO. You would reference it in code with `// TODO(example-placeholder)` comments. This is the basic TODO system design: An entry here with a slug used to join to code comments. Add real TODOs below this one in this format.
 
-## `forged-abi-extract-span-uniformity`
-
-`check_instance_layout` is generic and could be applied to `extract_span` for uniformity.
-Currently `extract_span` is not reachable by forged objects (it is gated by `is_instance`
-against the non-subclassable canonical `fltk._native.Span` type, plus `check_abi_pair::<Span>`
-in `get_span_type`), so adding `check_instance_layout` there would add no rejection power.
-Revisit only if a future change makes `extract_span` reachable by non-canonical types.
-Location: `crates/fltk-cst-core/src/cross_cdylib.rs` (`extract_span`).
-
 ## `extend-children-owned`
 
 `extend_children(&Self)` clones every child Arc even though the donor node is immediately dropped after the call (inline-to-parent sub-expression and `+`/`*` loop paths). A consuming variant `extend_children_owned(other: Self)` using `Vec::append` would avoid the atomic inc+dec pairs per child on the parse hot path. Blocked on `gsm2tree_rs.py` adding the method to the generated CST node API. Location: `fltk/fegen/gsm2parser_rs.py` (`_gen_item_multiple`, `_gen_append_code`), `fltk/fegen/gsm2tree_rs.py` (generated `impl <Node>` blocks). Re-open only with profiling evidence.

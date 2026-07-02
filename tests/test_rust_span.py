@@ -25,6 +25,26 @@ def _run_script(script: str) -> subprocess.CompletedProcess[str]:
     )
 
 
+def _assert_forge_rejected_cleanly(result: subprocess.CompletedProcess[str], context: str) -> None:
+    """Assert a forged-ABI subprocess was rejected cleanly with no UB/SIGSEGV.
+
+    The safety contract shared by every forge-rejection test: the forge must be rejected
+    with a TypeError (the subprocess prints "OK" and exits 0), never reaching `cast_unchecked`
+    and segfaulting (returncode -11 / 139).
+    """
+    assert result.returncode != -11, (
+        f"SIGSEGV recurrence ({context}): subprocess exited with signal 11 — forged-ABI UB regression\n"
+        f"stdout: {result.stdout}\nstderr: {result.stderr}"
+    )
+    assert result.returncode == 0, (
+        f"subprocess crashed ({context}, returncode {result.returncode}) — possible segfault regression\n"
+        f"stdout: {result.stdout}\nstderr: {result.stderr}"
+    )
+    assert "OK" in result.stdout, (
+        f"expected 'OK' in stdout ({context}); got: {result.stdout!r}\nstderr: {result.stderr}"
+    )
+
+
 class TestConstruction:
     def test_positional(self):
         s = Span(1, 5)
@@ -496,11 +516,6 @@ class TestSpanPathAbiGate:
     success last).  Each scenario has its own subprocess for isolation and readability.
     """
 
-    @staticmethod
-    def _run_script(script: str) -> subprocess.CompletedProcess[str]:
-        """Run a Python script in a subprocess, return the completed process."""
-        return _run_script(script)
-
     def test_control_no_patch_passes(self):
         """Control: without patching, a node span read from the consumer cdylib succeeds."""
         phase4 = pytest.importorskip(
@@ -521,7 +536,7 @@ s = node.span
 assert repr(s) == "Span(start=0, end=5)", f"unexpected span: {s!r}"
 print("OK")
 """
-        result = self._run_script(script)
+        result = _run_script(script)
         assert result.returncode == 0, f"subprocess failed: {result.stderr}"
         assert "OK" in result.stdout
 
@@ -556,7 +571,7 @@ except TypeError as e:
     assert "fltk-cst-core/" in msg, f"missing expected version in: {msg!r}"
     print("OK")
 """
-        result = self._run_script(script)
+        result = _run_script(script)
         assert result.returncode == 0, f"subprocess failed:\nstdout: {result.stdout}\nstderr: {result.stderr}"
         assert "OK" in result.stdout
 
@@ -594,7 +609,7 @@ except TypeError as e:
     assert str(real_layout) in msg, f"missing expected layout in: {msg!r}"
     print("OK")
 """
-        result = self._run_script(script)
+        result = _run_script(script)
         assert result.returncode == 0, f"subprocess failed:\nstdout: {result.stdout}\nstderr: {result.stderr}"
         assert "OK" in result.stdout
 
@@ -633,7 +648,7 @@ except TypeError as e:
     assert "fltk-cst-core/" in msg, f"missing expected version in: {msg!r}"
     print("OK")
 """
-        result = self._run_script(script)
+        result = _run_script(script)
         assert result.returncode == 0, f"subprocess failed:\nstdout: {result.stdout}\nstderr: {result.stderr}"
         assert "OK" in result.stdout
 
@@ -673,7 +688,7 @@ except TypeError as e:
     assert "fltk._native.Span" in msg, f"missing type name in: {msg!r}"
     print("OK")
 """
-        result = self._run_script(script)
+        result = _run_script(script)
         assert result.returncode == 0, f"subprocess failed:\nstdout: {result.stdout}\nstderr: {result.stderr}"
         assert "OK" in result.stdout
 
@@ -713,7 +728,7 @@ except TypeError as e:
     assert "not str" in msg, f"missing 'not str' in: {msg!r}"
     print("OK")
 """
-        result = self._run_script(script)
+        result = _run_script(script)
         assert result.returncode == 0, f"subprocess failed:\nstdout: {result.stdout}\nstderr: {result.stderr}"
         assert "OK" in result.stdout
 
@@ -753,7 +768,7 @@ except TypeError as e:
     assert "not int" in msg, f"missing 'not int' in: {msg!r}"
     print("OK")
 """
-        result = self._run_script(script)
+        result = _run_script(script)
         assert result.returncode == 0, f"subprocess failed:\nstdout: {result.stdout}\nstderr: {result.stderr}"
         assert "OK" in result.stdout
 
@@ -878,11 +893,6 @@ class TestForgedSourceTextRejected:
     isolation so that a regression (segfault) does not take down the test suite.
     """
 
-    @staticmethod
-    def _run_script(script: str) -> subprocess.CompletedProcess[str]:
-        """Run a Python script in a subprocess; return the completed process."""
-        return _run_script(script)
-
     def test_forged_source_text_raises_type_error(self):
         """Trivial forge (copied attrs, default object layout) raises TypeError, not SIGSEGV.
 
@@ -905,16 +915,8 @@ try:
 except TypeError:
     print("OK")
 """
-        result = self._run_script(script)
-        assert result.returncode != -11, (
-            f"SIGSEGV recurrence: subprocess exited with signal 11 — forged-ABI segfault regression\n"
-            f"stdout: {result.stdout}\nstderr: {result.stderr}"
-        )
-        assert result.returncode == 0, (
-            f"subprocess crashed (returncode {result.returncode}) — "
-            f"possible segfault regression\nstdout: {result.stdout}\nstderr: {result.stderr}"
-        )
-        assert "OK" in result.stdout, f"expected 'OK' in stdout; got: {result.stdout!r}\nstderr: {result.stderr}"
+        result = _run_script(script)
+        _assert_forge_rejected_cleanly(result, "trivial SourceText forge")
 
     def test_forged_source_text_message_is_diagnostic(self):
         """TypeError message for a trivial forge names the layout/basicsize mismatch.
@@ -1045,15 +1047,8 @@ except TypeError as e:
     else:
         print(f"FAIL: unexpected message: {msg}")
 """
-        result = self._run_script(script)
-        assert result.returncode != -11, (
-            f"SIGSEGV recurrence: metaclass-property forge bypassed gate and segfaulted\n"
-            f"stdout: {result.stdout}\nstderr: {result.stderr}"
-        )
-        assert result.returncode == 0, (
-            f"subprocess crashed (returncode {result.returncode})\nstdout: {result.stdout}\nstderr: {result.stderr}"
-        )
-        assert "OK" in result.stdout, f"expected 'OK' in stdout; got: {result.stdout!r}\nstderr: {result.stderr}"
+        result = _run_script(script)
+        _assert_forge_rejected_cleanly(result, "metaclass-property SourceText forge")
 
     def test_exotic_type_no_basicsize_raises_type_error(self):
         """An object whose type raises on tp_basicsize access surfaces a TypeError, not a panic.
@@ -1086,6 +1081,141 @@ except TypeError as e:
         # The basicsize gate fires; the message names __basicsize__ or "not a genuine SourceText".
         assert "__basicsize__" in msg or "not a genuine SourceText" in msg, (
             f"check_instance_layout did not fire; got: {msg!r}"
+        )
+
+
+class TestForgedSpanRejected:
+    """Regression tests for forged-ABI on the Span path.
+
+    Mirrors TestForgedSourceTextRejected, but for extract_span / get_span_type.  A pure-Python
+    class copying both `_fltk_cst_core_abi` and `_fltk_cst_core_abi_layout` from a genuine Span,
+    installed as `fltk._native.Span` before the first span boundary crossing, previously passed
+    `check_abi_pair::<Span>` in get_span_type and reached `cast_unchecked` in extract_span —
+    reinterpreting a plain Python object's memory as a Rust Span (UB / SIGSEGV).  The
+    `check_instance_layout::<Span>` gate added to get_span_type rejects it with a TypeError.
+
+    All forge tests run in subprocesses (`_run_script`) so a regression segfaults the child,
+    not the suite.  They drive the gate via `fegen_rust_cst`, a module-level import-or-skip of
+    this file.
+    """
+
+    def test_forged_span_via_reassignment_raises_type_error(self):
+        """Correct-attrs forge installed as fltk._native.Span raises TypeError, not SIGSEGV.
+
+        The end-to-end forge scenario: FakeSpan copies both ABI attributes (so
+        check_abi_pair passes) but has a plain-object CPython layout (so check_instance_layout
+        rejects it via __basicsize__).  Before the gate, get_span_type cached FakeSpan and
+        extract_span's cast_unchecked reinterpreted a plain Python object as a Rust Span (UB).
+        """
+        script = """
+import fltk._native as native
+
+class FakeSpan:
+    _fltk_cst_core_abi = native.Span._fltk_cst_core_abi
+    _fltk_cst_core_abi_layout = native.Span._fltk_cst_core_abi_layout
+    def __init__(self, *a, **kw): pass
+
+native.Span = FakeSpan  # patch before first span boundary crossing
+assert native.Span is FakeSpan, "patch did not take effect"
+
+import fegen_rust_cst.cst as cst
+try:
+    node = cst.Grammar(span=FakeSpan())
+    print(f"FAIL: no error, got {node!r}")
+except TypeError as e:
+    msg = str(e)
+    assert "__basicsize__" in msg or "not a genuine Span" in msg, (
+        f"error message does not name the basicsize gate: {msg!r}"
+    )
+    print("OK")
+"""
+        result = _run_script(script)
+        _assert_forge_rejected_cleanly(result, "reassignment Span forge")
+
+    def test_forged_span_metaclass_property_raises_type_error(self):
+        """Metaclass-property forge on the Span path is rejected by the metaclass guard.
+
+        A metaclass whose __basicsize__ property returns the expected size would fool a bare
+        getattr; the metaclass guard in check_instance_layout rejects any type whose metaclass
+        is not exactly the built-in `type` before __basicsize__ is read.  Mirrors
+        test_metaclass_property_forge_raises_type_error on the SourceText path.
+        """
+        script = """
+import fltk._native as native
+
+class Meta(type):
+    @property
+    def __basicsize__(cls):
+        return native.Span._fltk_cst_core_abi_layout  # forged value; real allocation differs
+
+class FakeSpan(metaclass=Meta):
+    _fltk_cst_core_abi = native.Span._fltk_cst_core_abi
+    _fltk_cst_core_abi_layout = native.Span._fltk_cst_core_abi_layout
+    def __init__(self, *a, **kw): pass
+
+native.Span = FakeSpan
+assert native.Span is FakeSpan, "patch did not take effect"
+
+import fegen_rust_cst.cst as cst
+try:
+    node = cst.Grammar(span=FakeSpan())
+    print(f"FAIL: no error, got {node!r}")
+except TypeError as e:
+    msg = str(e)
+    if "metaclass" in msg or "Meta" in msg:
+        print("OK")
+    else:
+        print(f"FAIL: unexpected message: {msg}")
+"""
+        result = _run_script(script)
+        _assert_forge_rejected_cleanly(result, "metaclass-property Span forge")
+
+    def test_genuine_native_span_accepted_cross_cdylib(self):
+        """No false rejection: a genuine fltk._native.Span passes the new gate on the slow path.
+
+        Subprocess (fresh interpreter) so get_span_type's PyOnceLock init — and therefore the
+        new check_instance_layout accept branch — provably runs inside this test; in-process the
+        cache would already be seeded by earlier tests, degrading this to a cache-hit test.
+        Grammar's constructor extract::<Span> fast path fails on the foreign fltk._native.Span,
+        so this exercises extract_span's slow path with the genuine canonical type.
+        """
+        script = """
+import fltk._native as native
+import fegen_rust_cst.cst as cst
+node = cst.Grammar(span=native.Span(0, 5))
+s = node.span
+assert repr(s) == "Span(start=0, end=5)", f"unexpected span: {s!r}"
+print("OK")
+"""
+        result = _run_script(script)
+        assert result.returncode == 0, (
+            f"subprocess failed (returncode {result.returncode})\nstdout: {result.stdout}\nstderr: {result.stderr}"
+        )
+        assert "OK" in result.stdout, f"expected 'OK' in stdout; got: {result.stdout!r}\nstderr: {result.stderr}"
+
+    def test_span_basicsize_matches_layout_attr(self):
+        """Accept-branch precondition: Span.__basicsize__ == Span._fltk_cst_core_abi_layout.
+
+        If this equality ever breaks, the check_instance_layout gate would reject genuine
+        spans.  Analogous to test_foreign_source_text_basicsize_matches_native_layout.
+        """
+        assert Span.__basicsize__ == Span._fltk_cst_core_abi_layout, (  # type: ignore[attr-defined]
+            f"native Span __basicsize__ ({Span.__basicsize__}) != "
+            f"Span._fltk_cst_core_abi_layout ({Span._fltk_cst_core_abi_layout}); "  # type: ignore[attr-defined]
+            "the new basicsize gate would reject genuine spans"
+        )
+        phase4 = pytest.importorskip(
+            "phase4_roundtrip_cst",
+            reason=(
+                "phase4_roundtrip_cst not built; run 'make build-test-user-ext' first — "
+                "skipping leaves the foreign-Span accept-branch precondition unverified"
+            ),
+        )
+        foreign_basicsize = phase4.Span.__basicsize__  # type: ignore[attr-defined]
+        assert foreign_basicsize == Span._fltk_cst_core_abi_layout, (  # type: ignore[attr-defined]
+            f"foreign Span __basicsize__ ({foreign_basicsize}) != "
+            f"native Span._fltk_cst_core_abi_layout ({Span._fltk_cst_core_abi_layout}); "  # type: ignore[attr-defined]
+            "cross-cdylib basicsize gate would reject genuine foreign Span"
         )
 
 

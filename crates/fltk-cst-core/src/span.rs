@@ -570,8 +570,9 @@ impl Span {
 impl Span {
     /// ABI marker for ``Span``: identical value to ``SourceText._fltk_cst_core_abi``.
     ///
-    /// Checked once in ``get_span_type``'s ``PyOnceLock`` init (``cross_cdylib.rs``) so that
-    /// version skew on the ``Span`` path fails with a clear ``TypeError`` naming both ABI
+    /// Checked once in ``get_span_type``'s ``PyOnceLock`` init (``cross_cdylib.rs``) as the first
+    /// of two gates (``check_abi_pair`` then ``check_instance_layout``'s ``__basicsize__`` gate)
+    /// so that version skew on the ``Span`` path fails with a clear ``TypeError`` naming both ABI
     /// strings instead of proceeding to ``cast_unchecked`` UB in ``extract_span``.
     #[classattr]
     fn _fltk_cst_core_abi() -> &'static str {
@@ -581,7 +582,9 @@ impl Span {
     /// Layout probe for ``Span``: ``size_of::<<Span as pyo3::impl_::pyclass::PyClassImpl>::Layout>()``
     /// baked at compile time.
     ///
-    /// Checked numerically alongside ``_fltk_cst_core_abi`` in ``get_span_type``'s init.
+    /// Checked numerically alongside ``_fltk_cst_core_abi`` in ``get_span_type``'s init, and used
+    /// as the expected value for the companion ``check_instance_layout`` ``__basicsize__`` gate
+    /// (which rejects pure-Python forged-marker classes copying these attributes).
     /// A pyo3 version bump that changes the allocation layout will typically produce a
     /// different integer here, catching pyo3-resolution skew that the version string alone
     /// cannot detect.
