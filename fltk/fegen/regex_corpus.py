@@ -41,7 +41,7 @@ def collect_regexes(grammar: gsm.Grammar) -> list[str]:
     Duplicates are removed (a pattern that appears in multiple rules is returned
     once); the first-encountered order is preserved.
 
-    The walk uses ``gsm._for_each_item`` which recurses into ``Sequence[Items]``
+    The walk uses ``gsm.for_each_item`` which recurses into ``Sequence[Items]``
     sub-expressions, so regexes nested inside parenthesised alternatives are also
     collected.
     """
@@ -51,10 +51,10 @@ def collect_regexes(grammar: gsm.Grammar) -> list[str]:
         def _visit(_idx: int, item: gsm.Item) -> None:
             if isinstance(item.term, gsm.Regex):
                 seen[item.term.value] = None
-            # gsm._for_each_item recurses into Sequence[Items] terms, so sub-expressions
+            # gsm.for_each_item recurses into Sequence[Items] terms, so sub-expressions
             # are handled by the same visitor without extra recursion here.
 
-        gsm._for_each_item(items, _visit)  # TODO(gsm-for-each-item-public): promote to public API
+        gsm.for_each_item(items, _visit)
 
     for rule in grammar.rules:
         for alternative in rule.alternatives:

@@ -288,7 +288,7 @@ class Var:
     init_value: str | None
 
 
-def _for_each_item(items: "Items", visitor: "Callable[[int, Item], None]") -> None:
+def for_each_item(items: "Items", visitor: "Callable[[int, Item], None]") -> None:
     """Walk every Item in an Items sequence, recursing into Sequence[Items] sub-expressions.
 
     Calls visitor(idx, item) for each Item in depth-first order, where idx is the item's
@@ -299,7 +299,7 @@ def _for_each_item(items: "Items", visitor: "Callable[[int, Item], None]") -> No
         visitor(idx, item)
         if isinstance(item.term, Sequence):
             for alt in item.term:
-                _for_each_item(alt, visitor)
+                for_each_item(alt, visitor)
 
 
 def _collect_underscore_only_label_errors(
@@ -317,7 +317,7 @@ def _collect_underscore_only_label_errors(
                 f"produce an empty name. Rename the label (labels like '_foo' are fine)."
             )
 
-    _for_each_item(items, visit)
+    for_each_item(items, visit)
 
 
 def validate_no_underscore_only_names(grammar: Grammar) -> None:
@@ -427,7 +427,7 @@ def _collect_repeated_nil_errors(items: "Items", grammar: "Grammar", rule_name: 
                     f"Consider making the item required or restructuring the grammar."
                 )
 
-    _for_each_item(items, visit)
+    for_each_item(items, visit)
 
 
 def validate_no_repeated_nil_items(grammar: Grammar) -> None:

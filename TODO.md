@@ -8,10 +8,6 @@ This is a placeholder entry. Leave it here so the file is never empty. It is not
 
 When `Py::new(m.py(), Span::unknown())` fails during `fltk._native` module init, the Python import raises a generic pyo3 `RuntimeError` with no indication the failure was in UnknownSpan sentinel creation. Wrap with a structured message so on-call can distinguish this from submodule registration failures. Location: `fltk/fegen/gsm2lib_rs.py` (`RustLibGenerator.generate()`, body for `unknown_span_static`).
 
-## `gsm-for-each-item-public`
-
-`gsm._for_each_item` is a private function used internally by `gsm.py` for validation passes, but `fltk/fegen/regex_corpus.py` is the first cross-module caller. Promote it to a public name (`for_each_item`) in `gsm.py`, or add a public `iter_regexes(grammar)` helper that encapsulates the walk so callers never need to touch the structural walk API. Gives callers a stable, tested contract instead of a private-name dependency that mypy/pyright won't flag across modules. Location: `fltk/fegen/gsm.py` (`_for_each_item`), `fltk/fegen/regex_corpus.py:58` (call site).
-
 ## `forged-abi-extract-span-uniformity`
 
 `check_instance_layout` is generic and could be applied to `extract_span` for uniformity.
