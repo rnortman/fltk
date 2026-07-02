@@ -29,16 +29,58 @@ load("@rules_python//python:defs.bzl", "py_library")
 # default automatically instead of comparing against a hardcoded literal.
 _DEFAULT_RECURSION_LIMIT = 512
 
-def _require_protocol_module(protocol, protocol_module):
-    """Enforce the protocol → protocol_module coupling in one place.
+def _protocol_module_violation(protocol, protocol_module):
+    """Return the protocol → protocol_module coupling failure message, or None.
 
     `protocol = True` requires a non-empty `protocol_module`. This single check
     (condition + message) is shared by the public macro (fired early for a clear
     message) and the internal _generate_rust_srcs rule's analysis-time guard, so
-    the two cannot drift.
+    the two cannot drift. Returning the message (instead of failing directly)
+    lets the logic be unit-tested without triggering fail();
+    `_require_protocol_module` wraps it in `if msg != None: fail(msg)` for both
+    production call sites.
     """
     if protocol and not protocol_module:
-        fail("generate_rust_parser: protocol = True requires a non-empty protocol_module.")
+        return "generate_rust_parser: protocol = True requires a non-empty protocol_module."
+    return None
+
+def _require_protocol_module(protocol, protocol_module):
+    """Fire the protocol → protocol_module coupling guard (fail on violation)."""
+    msg = _protocol_module_violation(protocol, protocol_module)
+    if msg != None:
+        fail(msg)
+
+def _pure_rust_mode_violation(
+        protocol_module,
+        protocol,
+        lib_rs,
+        deps,
+        crate_features,
+        recursion_limit):
+    """Return the pure-Rust-mode misconfiguration message, or None.
+
+    In pure-Rust mode (python_extension = False) the Python-extension-only knobs
+    must be left at their defaults; setting any of them has no effect and is a
+    misconfiguration. Each entry pairs the attribute name with "was it set away
+    from its default?"; normalizing on that boolean lets one loop + one message
+    template cover all six knobs (truthy defaults and sentinel defaults alike),
+    so a new python-extension-only knob just adds one tuple. recursion_limit is
+    compared against _DEFAULT_RECURSION_LIMIT here, preserving that constant as
+    the single owner of the default. Returns the message for the first offending
+    knob, or None; the macro wraps it in `if msg != None: fail(msg)`.
+    """
+    python_only_knobs = [
+        ("protocol_module", bool(protocol_module)),
+        ("protocol", bool(protocol)),
+        ("lib_rs", lib_rs != None),
+        ("deps", bool(deps)),
+        ("crate_features", bool(crate_features)),
+        ("recursion_limit", recursion_limit != _DEFAULT_RECURSION_LIMIT),
+    ]
+    for attr_name, is_set in python_only_knobs:
+        if is_set:
+            return "generate_rust_parser: {} is only valid with python_extension = True.".format(attr_name)
+    return None
 
 # ---- generate_rust_lib ----------------------------------------------------------
 
@@ -605,21 +647,16 @@ def generate_rust_parser(
     if not python_extension:
         # Pure-Rust mode: the Python-extension-only knobs must be at defaults.
         # Fail fast rather than silently ignore a value that has no effect here.
-        # Each entry pairs the attribute name with "was it set away from its
-        # default?"; normalizing on that boolean lets one loop + one message
-        # template cover all six knobs (truthy defaults and sentinel defaults
-        # alike), so a new python-extension-only knob just adds one tuple.
-        python_only_knobs = [
-            ("protocol_module", bool(protocol_module)),
-            ("protocol", bool(protocol)),
-            ("lib_rs", lib_rs != None),
-            ("deps", bool(deps)),
-            ("crate_features", bool(crate_features)),
-            ("recursion_limit", recursion_limit != _DEFAULT_RECURSION_LIMIT),
-        ]
-        for attr_name, is_set in python_only_knobs:
-            if is_set:
-                fail("generate_rust_parser: {} is only valid with python_extension = True.".format(attr_name))
+        msg = _pure_rust_mode_violation(
+            protocol_module = protocol_module,
+            protocol = protocol,
+            lib_rs = lib_rs,
+            deps = deps,
+            crate_features = crate_features,
+            recursion_limit = recursion_limit,
+        )
+        if msg != None:
+            fail(msg)
 
         # The internal codegen rule IS the public target; extension_name stays
         # empty (no stub emission, subdir irrelevant to type resolution).
@@ -673,3 +710,12 @@ def generate_rust_parser(
         data = [":" + name + "_stub_srcs"],
         **kwargs
     )
+
+# Not public API. Exported solely for //tests/bazel_rules. Downstream consumers
+# must not load this symbol; it may change without notice.
+rust_bzl_internals = struct(
+    pure_rust_mode_violation = _pure_rust_mode_violation,
+    protocol_module_violation = _protocol_module_violation,
+    generate_rust_srcs = _generate_rust_srcs,
+    default_recursion_limit = _DEFAULT_RECURSION_LIMIT,
+)

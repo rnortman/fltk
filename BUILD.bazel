@@ -134,9 +134,3 @@ generate_rust_parser(
     protocol_module = "bootstrap_native.cst_protocol",
     protocol = True,
 )
-
-# TODO(bazel-neg-test-harness): the generate_rust_parser macro's six pure-Rust
-# misconfiguration fail() guards (and the protocol/protocol_module coupling) are
-# only verified manually today (no bazel_skylib analysistest dep in MODULE.bazel).
-# Intentionally-failing targets cannot live here — they would break `bazel build
-# //...`. Add an analysistest harness that asserts analysis failure per guard.

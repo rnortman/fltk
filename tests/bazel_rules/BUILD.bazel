@@ -1,0 +1,20 @@
+load("//:rust.bzl", "rust_bzl_internals")
+load(":rust_bzl_tests.bzl", "rust_bzl_test_suite")
+
+# Target-under-test for the analysistest: instantiates the internal codegen rule
+# directly (the only way the analysis-time coupling guard fires; via the public
+# macro it is shadowed by the loading-time check) with protocol = True and an
+# empty protocol_module, so _generate_rust_srcs_impl fails at analysis time.
+#
+# The "manual" tag is the standard skylib expect_failure pattern: wildcard
+# patterns (//...) skip this intentionally-failing target, while the analysistest
+# still analyzes it and captures the failure.
+rust_bzl_internals.generate_rust_srcs(
+    name = "neg_protocol_without_module",
+    src = "dummy.fltkg",
+    protocol = True,
+    protocol_module = "",
+    tags = ["manual"],
+)
+
+rust_bzl_test_suite(name = "rust_bzl_tests")

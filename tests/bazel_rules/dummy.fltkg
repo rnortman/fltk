@@ -1,0 +1,5 @@
+// Minimal one-rule fixture grammar for the analysistest target-under-test's
+// mandatory `src` attribute. The target-under-test (neg_protocol_without_module)
+// fails at analysis time before any action runs, so this grammar is never
+// actually parsed; it exists only so the fixture is self-explanatory.
+word := value:/[a-z]+/ ;

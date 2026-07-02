@@ -5,6 +5,12 @@ module(
 bazel_dep(name = "rules_python", version = "1.5.0")
 bazel_dep(name = "rules_rust", version = "0.70.0")
 
+# Test-only: the skylib unittest/analysistest harness backs //tests/bazel_rules'
+# regression coverage of generate_rust_parser's misconfiguration guards.
+# dev_dependency = True keeps skylib out of downstream consumers' module graphs;
+# rust.bzl / rules.bzl (the files consumers load) must never load skylib.
+bazel_dep(name = "bazel_skylib", version = "1.8.2", dev_dependency = True)
+
 python = use_extension("@rules_python//python/extensions:python.bzl", "python")
 python.toolchain(
     is_default = True,
