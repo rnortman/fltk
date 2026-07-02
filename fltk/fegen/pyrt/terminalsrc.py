@@ -130,10 +130,6 @@ class Span:
         # EOF clamp: pos == len → decrement to len-1
         pos = self.start - 1 if self.start == src_len else self.start
         # Build line_ends: codepoint indices of '\n', plus sentinel.
-        # TODO(py-span-linecol-cache): recomputed on every call (O(N) scan). A future
-        # optimization would cache line_ends on SourceText and thread it through
-        # with_source. Out of scope for the span-line-col-api change; error paths
-        # are cold. See docs/adr/2026/06/15-span-line-col-api/design.md §7.
         line_ends = [idx for idx, c in enumerate(src) if c == "\n"]
         # Add sentinel for the final line if the text doesn't end with '\n' (or is empty).
         # The sentinel is the exclusive end of the last line's span:

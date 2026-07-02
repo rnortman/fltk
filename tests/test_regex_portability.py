@@ -482,12 +482,6 @@ def test_genparser_cli_exits_nonzero_on_non_portable_grammar() -> None:
     assert "[[:alpha:]]" in result.stderr, f"Expected the pattern '[[:alpha:]]' in stderr but got: {result.stderr!r}"
 
 
-# TODO(regex-portability-roundtrip-test): add a round-trip gate that pins the
-# committed regex_parser.py as having been generated from a clean regex.fltkg,
-# e.g. regenerate into a temp dir and byte-compare, or run all _PORTABLE_PATTERNS /
-# _NON_PORTABLE_PATTERNS through both the committed parser and a freshly generated one.
-# See design §7 "positive-control round-trip" and TODO.md.
-
 # ===========================================================================
 # Whole-tree completeness check (design §7 -- under-admission guard)
 # ===========================================================================
@@ -502,11 +496,9 @@ def test_genparser_cli_exits_nonzero_on_non_portable_grammar() -> None:
 # against them in production.  Their regexes happen to be portable but they are
 # listed as CST-only in the comment below.
 #
-# TODO(regex-portability-target-list-drift): this list is hand-copied from
-# Makefile's gencode recipe.  If a new grammar is added to gen-rust-parser in the
-# Makefile without being added here, the whole-tree completeness test will silently
-# fail to cover it.  See design §7 for discussion; tie this to the gencode-drift-gate
-# family if/when that item is burned down.
+# Note: this list is hand-copied from Makefile's gencode recipe.  If a new grammar is
+# added to gen-rust-parser in the Makefile without being added here, the whole-tree
+# completeness test will silently fail to cover it.
 
 
 _RUST_PARSER_TARGET_GRAMMARS = [

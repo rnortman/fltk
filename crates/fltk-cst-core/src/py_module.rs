@@ -83,10 +83,6 @@ pub(crate) fn user_facing_name(raw_name: &str) -> &str {
 /// no entry is left for this submodule in `sys.modules`. Registration failures are
 /// deterministic build bugs, not data-dependent conditions; no cleanup of earlier
 /// entries is performed if a later submodule fails.
-// TODO(native-submodule-error-context): register_submodule propagates errors from
-// register_classes via `?` with no added context naming which submodule failed.
-// A future improvement: annotate the error with the submodule name before propagating,
-// so an ImportError at module initialization names "cst" or "parser" as the culprit.
 #[cfg(feature = "python")]
 pub fn register_submodule<'py>(
     parent: &pyo3::Bound<'py, pyo3::types::PyModule>,

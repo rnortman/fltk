@@ -121,11 +121,10 @@ fn expand_joins(doc: &Rc<Doc>) -> Rc<Doc> {
                 let is_after_before =
                     matches!(&**d, Doc::AfterSpec { .. } | Doc::BeforeSpec { .. });
                 if need_sep && !is_after_before {
-                    // TODO(unparser-join-sep-resolve): every gap stores a clone of the same
-                    // `separator` Rc as preserved_trivia, so resolution re-runs the full
-                    // pipeline on the identical separator subtree once per gap (M-1 times for
-                    // an M-element join). Resolve the separator once and reuse it (e.g. cache
-                    // keyed on `Rc::as_ptr`); output is unchanged since each run is identical.
+                    // Note: every gap stores a clone of the same `separator` Rc as
+                    // preserved_trivia, so resolution re-runs the pipeline on the identical
+                    // separator subtree once per gap. Separators are restricted to simple docs,
+                    // so each redundant run is small and the output is identical every time.
                     expanded.push(Rc::new(Doc::SeparatorSpec {
                         spacing: None,
                         preserved_trivia: Some(separator.clone()),

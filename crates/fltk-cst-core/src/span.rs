@@ -53,11 +53,8 @@ pub struct SourceInner {
     pub(crate) char_count: OnceLock<i64>,
     /// Lazy codepoint indices of `\n` chars plus a final sentinel.
     /// Built on first `line_col()` call; shared across all spans over this `Arc`.
-    /// TODO(linecol-cache-consolidate): TerminalSource also maintains its own
-    /// `line_ends` over the same immutable text — two independent caches over
-    /// identical data. A future consolidation could have TerminalSource read
-    /// source_inner.line_ends instead of maintaining its own field. Out of scope
-    /// for the span-line-col-api change.
+    /// Note: `TerminalSource` maintains its own independent `line_ends` cache over the
+    /// same immutable text; the two caches derive from identical data and cannot disagree.
     pub(crate) line_ends: OnceLock<Vec<i64>>,
 }
 

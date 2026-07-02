@@ -35,12 +35,5 @@ crate.from_cargo(
         "//crates/fltk-cst-core:Cargo.toml",
         "//crates/fltk-parser-core:Cargo.toml",
     ],
-    # TODO(verify-pyo3-ext-module): confirm that the `extension-module` feature is
-    # active on the @fltk_crates//:pyo3 target after crate_universe resolution.
-    # In crate_universe `from_cargo`, pyo3's extension-module feature should be
-    # activated via fltk-native's `default = ["extension-module"]` in root Cargo.toml.
-    # Verify empirically at spike time with `bazel build //:native`; if pyo3 links
-    # libpython the feature is missing and a `crate.annotation(crate = "pyo3",
-    # crate_features = ["extension-module"])` annotation is needed here.
 )
 use_repo(crate, "fltk_crates")

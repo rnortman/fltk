@@ -449,11 +449,10 @@ def _build_pyo3_cdylib(
     crate_cst_rs = name + "_crate_root/cst.rs"
     crate_parser_rs = name + "_crate_root/parser.rs"
 
-    # TODO(bazel-lib-rs-no-cst): the assembly genrule unconditionally requires cst.rs and
-    # parser.rs in rs_srcs, even when lib_rs=None (auto-generated span-only path).  Currently
-    # every _build_pyo3_cdylib caller is a grammar crate and always provides both files.  If a
+    # Note: the assembly genrule unconditionally requires cst.rs and parser.rs in rs_srcs.
+    # Every current caller is a grammar crate and always provides both files.  If a
     # runtime-only (span-only) crate is ever built via this macro, the test -f guards will fail
-    # misleadingly.  At that point, split into grammar and span-only assembly variants.
+    # misleadingly; at that point, split into grammar and span-only assembly variants.
     native.genrule(
         name = name + "_assemble_crate",
         srcs = [lib_rs, rs_srcs],

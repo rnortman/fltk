@@ -79,8 +79,6 @@ class Submodule:
         Note: validation is limited to Rust identifier syntax.  A register_fn that is a
         valid identifier but not a reachable function in the Rust crate will produce a
         Rust compile error rather than a Python-level error here.
-        # TODO(submodule-register-fn-convention): document or enforce the convention that
-        # register_fn should be 'register_classes' to match the codegenned crate shape.
         """
         _validate_rust_ident(self.mod_name, "mod_name")
         _validate_rust_ident(self.submodule_name, "submodule_name")

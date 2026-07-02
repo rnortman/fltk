@@ -130,11 +130,6 @@ class RustUnparserGenerator:
         # `Doc`: the resolved-document handle. It is the unparser extension's own
         # class -- there is no protocol for it -- so the `unparse_*_doc` return annotations below
         # reference it by its stub-local name (resolved lazily via the future-annotations import).
-        # TODO(unparser-pyi-doc-stub-shared): this `Doc` stub block is grammar-independent yet
-        # emitted verbatim into every per-grammar `unparser.pyi`, so a `Doc.render` signature
-        # change would have to be applied to each committed stub. Factor it into one shared stub
-        # (e.g. `fltk/_stubs/fltk_unparser_doc.pyi`) that each per-grammar stub imports, the way
-        # the CST side shares `CstModule`.
         lines.append("class Doc:")
         lines.append("    def render(self, max_width: int = ..., indent_width: int = ...) -> str: ...")
         lines.append("    def __repr__(self) -> str: ...")

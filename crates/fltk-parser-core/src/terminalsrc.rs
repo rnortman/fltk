@@ -164,7 +164,7 @@ impl TerminalSource {
     ///   unreachable from this runtime's own call sites).
     ///
     /// `line_ends` is computed lazily on first call and cached (independent of the
-    /// `SourceInner.line_ends` cache — see `TODO(linecol-cache-consolidate)`).
+    /// `SourceInner.line_ends` cache over the same immutable text).
     /// `line_span` is source-bearing (equality-compatible with sourceless spans).
     pub fn pos_to_line_col(&self, pos: i64) -> Option<LineColPos> {
         let len = self.len();
@@ -175,9 +175,6 @@ impl TerminalSource {
         let pos = if pos == len { pos - 1 } else { pos };
 
         // Delegate to the shared bisect algorithm; pass our own line_ends cache.
-        // TODO(linecol-cache-consolidate): self.line_ends is independent of
-        // self.source.inner.line_ends — two caches over the same immutable text.
-        // A future consolidation could pass &self.source.inner.line_ends here.
         let mut lc = resolve_line_col(self.text(), pos, &self.line_ends)?;
         // Attach source to the line_span (resolve_line_col returns a sourceless line_span).
         lc.line_span = Span::new_with_source(lc.line_span.start(), lc.line_span.end(), &self.source);

@@ -4,31 +4,9 @@
 
 This is a placeholder entry. Leave it here so the file is never empty. It is not a real TODO. You would reference it in code with `// TODO(example-placeholder)` comments. This is the basic TODO system design: An entry here with a slug used to join to code comments. Add real TODOs below this one in this format.
 
-## `bazel-rules-rust`
-
-Add `rules_rust` to `MODULE.bazel` so that the PyO3 native extension (`fltk._native`) is buildable via Bazel. Currently, Bazel builds do not include the Rust extension. Deferred from Phase 0 because Bazel Rust support is orthogonal to the Python/maturin build path. Location: `MODULE.bazel`.
-
-Implementation in progress — see ADR at `docs/adr/2026/06/13-rust-bazel-packaging/`.
-
-## `verify-pyo3-ext-module`
-
-At implementation spike time, confirm that `extension-module` is active on the `@fltk_crates//:pyo3` target after `crate_universe` resolution. Run `bazel build //:native` on a clean checkout; if pyo3 links libpython the feature is not activated and a `crate.annotation(crate = "pyo3", crate_features = ["extension-module"])` is needed in `MODULE.bazel`'s `crate.from_cargo` block. Also confirm that dev-dep crates from the root workspace do not leak into the hub. Location: `MODULE.bazel` (`crate.from_cargo` block).
-
-## `native-submodule-error-context`
-
-`register_submodule` propagates errors from `register_classes` via `?` with no added context naming which submodule failed. A future improvement: annotate the error with the submodule name before propagating, so an `ImportError` at module import time names `"cst"` or `"parser"` as the culprit. Location: `crates/fltk-cst-core/src/py_module.rs` (`register_submodule` definition, line ~87).
-
 ## `native-span-init-error-context`
 
 When `Py::new(m.py(), Span::unknown())` fails during `fltk._native` module init, the Python import raises a generic pyo3 `RuntimeError` with no indication the failure was in UnknownSpan sentinel creation. Wrap with a structured message so on-call can distinguish this from submodule registration failures. Location: `fltk/fegen/gsm2lib_rs.py` (`RustLibGenerator.generate()`, body for `unknown_span_static`).
-
-## `submodule-register-fn-convention`
-
-`Submodule.register_fn` is validated for Rust identifier syntax but not for the convention that it should be `register_classes` (the name the codegenned `pub fn register_classes` uses). A caller with a non-standard name gets a Rust compile error rather than a Python-level error. Document or enforce the `register_classes` convention in `Submodule.validate()`. Location: `fltk/fegen/gsm2lib_rs.py` (`Submodule.validate()`).
-
-## `bazel-lib-rs-no-cst`
-
-`fltk_pyo3_cdylib`'s assembly genrule unconditionally declares `cst.rs` and `parser.rs` as required outputs, even when `lib_rs=None` (auto-generated path). Every current caller is a grammar crate and supplies both files. A future runtime-only (span-only) crate built via this macro would hit the `test -f` guards with a misleading error. At that point, split into grammar and span-only assembly variants. Location: `rust.bzl` (`_assemble_crate` genrule, line ~239).
 
 ## `gsm-for-each-item-public`
 
@@ -43,29 +21,9 @@ in `get_span_type`), so adding `check_instance_layout` there would add no reject
 Revisit only if a future change makes `extract_span` reachable by non-canonical types.
 Location: `crates/fltk-cst-core/src/cross_cdylib.rs` (`extract_span`).
 
-## `regex-unicode-class-divergence`
-
-The regex portability lint admits `\d`/`\w`/`\s` (and negations), `\b`/`\B` word boundaries, and `(?i)` as ASCII-portable constructs. However, these constructs have a non-ASCII semantic residual: the Unicode-class tables and case-folding tables differ between Python `re` and `regex-automata` by Unicode DB version. A grammar using these constructs with non-ASCII input may get different parse results on the two backends without any error. This is documented as a permanent limit of any static approach (both engines agree on syntax but differ on semantics for non-ASCII). Tracking here to ensure the `document-scope-boundary` burndown item covers the full ledger: `\d`/`\D`/`\w`/`\W`/`\s`/`\S`, `\b`/`\B`, and `(?i)` over non-ASCII. Location: `fltk/fegen/regex_portability.py` (module-level docstring), `fltk/fegen/regex.fltkg` (comments on `class_shorthand`, `assertion`, `anchor_escape`, `flag_chars`).
-
-## `regex-portability-target-list-drift`
-
-`tests/test_regex_portability.py:test_committed_rust_target_grammar_regex_is_portable` hand-copies the list of Rust-parser-target grammars from the `make gencode` recipe (Makefile lines ~276, 279, 284-285). If a new grammar is added to `gen-rust-parser` in the Makefile without being added to `_RUST_PARSER_TARGET_GRAMMARS` in the test, the completeness check silently fails to cover it. Single-source this list — e.g. a small manifest or glob that both `make gencode` and the test read — to close the drift hole. Tie this to the `gencode-drift-gate` family when that item is burned down. Location: `tests/test_regex_portability.py` (`_RUST_PARSER_TARGET_GRAMMARS` list), `Makefile` (`gencode` recipe).
-
-## `regex-portability-roundtrip-test`
-
-Design §7 specifies a "positive-control round-trip" test that pins the committed `regex_parser.py` as having been generated from a clean `regex.fltkg` — either by regenerating into a temp dir and comparing, or by asserting the committed parser re-classifies all admitted/excluded test cases identically. The whole-tree completeness test partially discharges this (grammar drift that changes classification on in-tree patterns surfaces there), but it does not catch drift that reclassifies no currently-committed pattern. Add a round-trip gate, e.g. a test that generates the parser into a temp dir and byte-compares it to the committed `regex_parser.py`, or extends the completeness test to include all unit-test `_PORTABLE_PATTERNS` / `_NON_PORTABLE_PATTERNS` cases as an oracle. Location: `tests/test_regex_portability.py` (new test function), `fltk/fegen/regex_parser.py` (committed artifact being guarded).
-
 ## `extend-children-owned`
 
 `extend_children(&Self)` clones every child Arc even though the donor node is immediately dropped after the call (inline-to-parent sub-expression and `+`/`*` loop paths). A consuming variant `extend_children_owned(other: Self)` using `Vec::append` would avoid the atomic inc+dec pairs per child on the parse hot path. Blocked on `gsm2tree_rs.py` adding the method to the generated CST node API. Location: `fltk/fegen/gsm2parser_rs.py` (`_gen_item_multiple`, `_gen_append_code`), `fltk/fegen/gsm2tree_rs.py` (generated `impl <Node>` blocks). Re-open only with profiling evidence.
-
-## `linecol-cache-consolidate`
-
-`TerminalSource` carries its own `line_ends: OnceLock<Vec<i64>>` (`crates/fltk-parser-core/src/terminalsrc.rs:46`) while `SourceInner` (the allocation `TerminalSource` is built over) also carries `line_ends: OnceLock<Vec<i64>>` (`crates/fltk-cst-core/src/span.rs`). Both derive deterministically from the same immutable `text`, so they cannot disagree, but they duplicate state. A follow-up could point `TerminalSource::pos_to_line_col` at `&self.source.inner.line_ends` (the shared `resolve_line_col` function already accepts a caller-supplied `OnceLock`) and drop `TerminalSource`'s own field. Location: `crates/fltk-parser-core/src/terminalsrc.rs:46` (`line_ends` field) and the `pos_to_line_col` wrapper (~line 167,178).
-
-## `py-span-linecol-cache`
-
-Python `Span.line_col()` recomputes the O(N) line-ends scan on every call because the frozen-slots Python `Span` carries only a raw `str` and cannot reach a mutable cache. The `SourceText` dataclass already gains a `_filename` field in the span-line-col-api change; a parallel `_line_ends` list on `SourceText` threaded through `with_source` would let the Python span amortize the scan the same way the Rust backend does via `SourceInner.line_ends`. Deferred because error reporting is a cold path and the added `with_source` plumbing is non-trivial. Location: `fltk/fegen/pyrt/terminalsrc.py:133` (`Span.line_col` implementation).
 
 ## `spanprotocol-native-linecol`
 
@@ -94,17 +52,9 @@ The generated Rust unparser has two `None`-return paths that surface no diagnost
 
 Design §4 specifies four `crates/fltkfmt/tests/` integration tests that need the real Rust parser + unparser end-to-end: idempotency (`format(format(x)) == format(x)` over a `.fltkg` corpus incl. `fegen.fltkg`), golden/canonical (formatting `fltk/fegen/fegen.fltkg` at width 80 / indent 2 is stable), trailing-newline robustness, and the parse-error path (malformed input ⇒ non-zero exit + a message naming the synthetic filename with line/col). These also exercise the `fltk_formatter_main!` macro's two error branches (`fully_consumed`-false partial parse → `Err(error_message())`; `unparse` → `None` → internal-error string), which cannot be unit-tested in `fltk-fmt-cli` (the macro requires a real consumer with concrete `Parser`/`Unparser`). Deferred to the planned §2.3 increment that also wires `crates/fltkfmt/` into `make check`; this test increment is a hard prerequisite before the binary is check-gated. Location: `crates/fltkfmt/tests/` (new), `crates/fltkfmt/src/main.rs`.
 
-## `unparser-join-sep-resolve`
-
-`resolve_spacing_specs` re-resolves a `Join`'s separator once per gap. `expand_joins` turns an M-element `Join` into M-1 `SeparatorSpec`s that each hold a clone of the same `separator` `Rc` in `preserved_trivia`, and resolution runs the full 4-pass pipeline on that identical subtree once per spec (M-1 times). The results are byte-identical every time, so the repeats are pure waste; cost scales with join length (e.g. a `join from … to …` over thousands of statements). Resolve the separator once and reuse it — resolve it in `expand_joins` and store the resolved form, or memoize `resolve_rc` on `Rc::as_ptr`. Output is unchanged because each repeat yields the same value today. Deferred: separators are restricted to simple docs (the generator rejects group/nest/join separators), so each redundant run is small. Location: `crates/fltk-unparser-core/src/resolve.rs` (`expand_joins`, the `Some(separator.clone())` site).
-
 ## `protocol-module-truthiness-gate`
 
 `CstGenerator.gen_protocol_module` gates the per-rule `kind: typing.Literal[NodeKind.*]` discriminant on `self.py_module.import_path` truthiness, dual-using `py_module` as both the concrete-CST module path (annotation emission) and a truthiness sentinel for the protocol's `kind` discriminant. A `Builtins`-backed `CstGenerator` (empty `import_path`) silently emits the degraded `kind: object` form; `RustCstGenerator.generate_protocol` works around this by constructing a throwaway generator with a non-empty placeholder `py_module`. Replace the truthiness gate with an explicit parameter (e.g. `emit_kind_literal: bool`) so callers opt in deliberately and the trap is no longer rediscovered per caller. Location: `fltk/fegen/gsm2tree.py` (`_protocol_class_for_model_with_assignments`, the `if rule_name and self.py_module.import_path:` gate), `fltk/fegen/gsm2tree_rs.py` (`generate_protocol` placeholder workaround).
-
-## `unparser-pyi-doc-stub-shared`
-
-`RustUnparserGenerator.generate_pyi` emits the grammar-independent `Doc` class stub (`render` + `__repr__`) verbatim into every per-grammar `unparser.pyi`. The `Doc` surface does not vary by grammar, so the block is duplicated across all committed unparser stubs (currently `fltk/_stubs/fegen_rust_cst/unparser.pyi` and `fltk/_stubs/rust_parser_fixture/unparser.pyi`), growing linearly with grammar count; a `Doc.render` signature change must be mirrored into each one. Factor the block into a single shared stub (e.g. `fltk/_stubs/fltk_unparser_doc.pyi`) that each per-grammar stub imports, mirroring how the CST side shares `CstModule`. Deferred because it changes the structure of the generated `.pyi` public surface (each downstream consumer's stub would import the shared `Doc`), so it is a deliberate public-API decision rather than an incidental refactor, and the current duplication is two copies of three lines. Location: `fltk/unparse/gsm2unparser_rs.py` (`generate_pyi`, the `class Doc:` emission), the committed per-grammar `unparser.pyi` stubs.
 
 ## `bazel-neg-test-harness`
 

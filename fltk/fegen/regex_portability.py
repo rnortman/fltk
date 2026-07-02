@@ -26,7 +26,6 @@ residual):
   ``\\b``/``\\B`` word boundaries -- defined in terms of ``\\w``, same residual.
 These are admitted as ASCII-portable; the divergence is documented-only and cannot
 be caught by a static syntax checker (any static approach shares this limit).
-TODO(regex-unicode-class-divergence): track the full non-ASCII residual ledger.
 """
 
 from __future__ import annotations
