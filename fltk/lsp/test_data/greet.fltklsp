@@ -1,0 +1,6 @@
+rule greeting {
+  scope name: type;
+}
+rule note {
+  scope text: string;
+}

@@ -1,0 +1,10 @@
+document := , item* ;
+item := greeting | note ;
+greeting := greet:"greet" : name:name . "." , ;
+note := marker:"note" : text:string . "." , ;
+name := value:/[a-z]+/ ;
+string := open:"\"" . body:/[^"]*/ . close:"\"" ;
+block_comment := open:"/*" . body:/(?:[^*]|\*[^\/])*/ . close:"*/" ;
+line_comment := prefix:"//" . text:/[^\n]*/ . nl:"\n" ;
+_trivia := (ws | block_comment | line_comment)+ ;
+ws := chars:/\s+/ ;

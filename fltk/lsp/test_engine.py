@@ -7,15 +7,14 @@ import pytest
 from fltk import plumbing
 from fltk.lsp.conftest import HELLO_GRAMMAR as _GRAMMAR
 from fltk.lsp.conftest import HELLO_LSP as _LSP
+from fltk.lsp.conftest import build_hello_engine
 from fltk.lsp.conftest import token_type_at as _type_of
 from fltk.lsp.engine import AnalysisEngine
 from fltk.lsp.lsp_config import load_lsp_config
 
 
 def _engine(config_text: str = "", *, start_rule: str | None = "top") -> AnalysisEngine:
-    grammar = plumbing.parse_grammar(_GRAMMAR)
-    resolved = load_lsp_config(config_text, grammar)
-    return AnalysisEngine(grammar, resolved, start_rule=start_rule)
+    return build_hello_engine(config_text, start_rule=start_rule)[0]
 
 
 def test_highlight_defaults_only() -> None:

@@ -1,0 +1,6 @@
+trivia_preserve: BlockComment, LineComment;
+preserve_blanks: 1;
+ws_allowed: bsp;
+after "." { hard; }
+after "greet" { nbsp; }
+after "note" { nbsp; }

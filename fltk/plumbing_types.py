@@ -30,6 +30,9 @@ class ParseResult:
     terminals: str
     success: bool
     error_message: str | None = None
+    error_pos: int | None = None
+    """Codepoint offset of the furthest parse failure; None when there is no source position
+    (e.g. an unknown start rule)."""
 
 
 @dataclass

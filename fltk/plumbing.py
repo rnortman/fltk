@@ -196,7 +196,14 @@ def parse_text(parser_result: ParserResult, text: str, rule_name: str | None = N
             terminals,
             lambda rule_id: parser.rule_names[rule_id],
         )
-        return ParseResult(None, text, False, error_msg)
+        tracker_pos = parser.error_tracker.longest_parse_len
+        if tracker_pos >= 0:
+            error_pos = tracker_pos
+        elif result:
+            error_pos = result.pos
+        else:
+            error_pos = 0
+        return ParseResult(None, text, False, error_msg, error_pos=error_pos)
 
     return ParseResult(result.result, text, True)
 

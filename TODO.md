@@ -39,6 +39,31 @@ interim shared helper. Location: `fltk/lsp/test_lsp_config.py`, `fltk/lsp/test_l
 
 The formatter is not idempotent on grouped alternations at narrow widths: `fltk/fegen/test_data/rust_parser_fixture.fltkg` formatted at width 40 / indent 4 changes between pass 1 and pass 2 (a grouped alternation `( inner:rec_via_sub . "+" | inner:atom ) .` re-breaks into a multi-line `(` … `)` block on the second pass), converging only at pass 2. Single-pass cross-backend parity holds, so this is a shared formatter-layout bug present in both the Python and Rust backends, not a backend divergence. Fixing it is a formatter behavior change to both backends and was out of scope for the pure test addition that discovered it (`fltkfmt` integration tests). The idempotency integration test (`crates/fltkfmt/tests/cli.rs`, `format_format_is_format`) carves this one case out explicitly, pinning current behavior (`out2 != out1`, `out3 == out2`); when the formatter is fixed that carve-out's `assert_ne!` trips, forcing its removal alongside this entry. Location: `crates/fltkfmt/tests/cli.rs` (the `TODO(formatter-group-idempotency)` carve-out in `format_format_is_format`); the layout logic lives in the shared unparser/renderer (`fltk/unparse/` and the generated Rust unparser).
 
+## `lsp-analysis-watchdog`
+
+`fltk/lsp/server.py`'s analysis runs on a single-worker `ThreadPoolExecutor`, and Python worker
+threads cannot be preempted. The engine already catches `RecursionError` and reports it as a normal
+parse-failure diagnostic, but a truly non-terminating parse — catastrophic regex backtracking or an
+unbounded grammar recursion that never hits the interpreter's recursion limit — starves every later
+analysis for that server process: the protocol loop stays responsive (it is never blocked on the
+worker) but that document, and every document analyzed after it, stops updating. Honoring the
+engine's wall-clock promise fully needs either process isolation (run each analysis in a killable
+subprocess) or a parser-level step/time budget threaded down into the generated parser — real design
+work that would dominate this round. Deferred with the stale-token policy covering the degraded mode
+meanwhile. Location: `fltk/lsp/server.py` (`FltkLanguageServer._analyze_blocking`).
+
+## `lsp-start-rule-dedup`
+
+`fltk/lsp/server.py` threads `start_rule` as a `create_server` / `FltkLanguageServer` parameter used
+for the formatting parses, while `AnalysisEngine` already stores the same value (`self._start_rule`)
+for the analysis parses. The two must agree; nothing ties them together except the CLI passing the
+same variable twice, so a second `create_server` caller can pass a mismatched pair. Expose a
+read-only `start_rule` property on `AnalysisEngine` and read `engine.start_rule` in the server,
+dropping the parameter. Deferred out of respond-mode because it changes the (design-specified)
+`create_server` signature, which is a deliberate surface decision better made explicitly than as an
+incidental respond-mode edit. Location: `fltk/lsp/server.py` (`FltkLanguageServer.__init__`,
+`create_server`), `fltk/lsp/engine.py`.
+
 ## `lsp-classify-hotpath`
 
 `fltk/lsp/classify.py`'s `classify` / `default_tokens` are the per-document hot path the M2
