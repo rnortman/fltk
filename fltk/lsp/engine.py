@@ -13,7 +13,7 @@ import dataclasses
 from typing import TYPE_CHECKING, Any
 
 from fltk import plumbing
-from fltk.lsp import classify
+from fltk.lsp import classify, symbols
 from fltk.lsp.analysis import prepare_analysis_grammar
 from fltk.lsp.lsp_config import ResolvedLspConfig, load_lsp_config
 
@@ -52,16 +52,18 @@ class ParseErrorInfo:
 class DocumentAnalysis:
     """The full outcome of analyzing one document.
 
-    On success ``tree`` and ``tokens`` are populated and ``error`` is ``None``; on failure
-    ``tree`` and ``tokens`` are ``None`` and ``error`` carries the structured failure. The
+    On success ``tree``, ``tokens``, and ``symbols`` are populated and ``error`` is ``None``;
+    on failure all three are ``None`` and ``error`` carries the structured failure. The
     ``tree`` is the analysis-grammar CST root, typed ``Any`` because analysis CSTs are
     per-grammar exec'd classes with no shared base -- consumers walk them structurally via
-    ``kind``/``span``/``children``.
+    ``kind``/``span``/``children``. ``symbols`` is the per-document symbol table the navigation
+    and rename features consume.
     """
 
     tree: Any | None
     tokens: list[classify.Token] | None
     error: ParseErrorInfo | None
+    symbols: symbols.SymbolTable | None = None
 
 
 class AnalysisEngine:
@@ -147,8 +149,14 @@ class AnalysisEngine:
                     tokens=None,
                     error=ParseErrorInfo(message=parsed.error_message or "", offset=parsed.error_pos),
                 )
+            symbol_table = symbols.extract(parsed.cst, self._tables, self._resolved_config, text)
             tokens = classify.classify(
-                parsed.cst, self._parser_result.grammar, self._resolved_config, text, tables=self._tables
+                parsed.cst,
+                self._parser_result.grammar,
+                self._resolved_config,
+                text,
+                tables=self._tables,
+                symbol_table=symbol_table,
             )
         except RecursionError:
             return DocumentAnalysis(
@@ -159,7 +167,7 @@ class AnalysisEngine:
                     offset=None,
                 ),
             )
-        return DocumentAnalysis(tree=parsed.cst, tokens=tokens, error=None)
+        return DocumentAnalysis(tree=parsed.cst, tokens=tokens, error=None, symbols=symbol_table)
 
     def highlight(self, text: str) -> HighlightResult:
         """Classify ``text`` into semantic tokens, or report a parse failure.

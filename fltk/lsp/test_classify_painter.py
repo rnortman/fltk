@@ -5,7 +5,8 @@ from __future__ import annotations
 import itertools
 
 from fltk import plumbing
-from fltk.lsp import lsp_config
+from fltk.lsp import classify as classify_module
+from fltk.lsp import lsp_config, symbols
 from fltk.lsp.analysis import prepare_analysis_grammar
 from fltk.lsp.classify import Token, classify
 from fltk.lsp.conftest import token_for as _token_for
@@ -148,3 +149,147 @@ def test_token_stream_invariants() -> None:
         assert not (prev.end == nxt.start and prev.token_type == nxt.token_type and prev.modifiers == nxt.modifiers)
     # The `none`-scoped `hello` keyword emits no token.
     assert all(text[t.start : t.end] != "hello" for t in tokens)
+
+
+# --- Ref-site paint (§4.4) ------------------------------------------------------------------------
+
+# A def/ref language: `let NAME ;` declares, `use NAME ;` references. Default paint for the `word`
+# regex is `variable`; a resolved ref inherits its defining kind's token.
+_REF_GRAMMAR = r"""
+program := , stmt* ;
+stmt := decl | use ;
+decl := kw:"let" , name:word , semi:";" , ;
+use := kw:"use" , target:word , semi:";" , ;
+word := /[a-z]+/ ;
+_trivia := ( line_comment | line_comment? : )+ ;
+line_comment := prefix:"//" . content:/[^\n]*/ . newline:"\n" ;
+"""
+
+# A nesting variant so ref depth and explicit-paint depth can be crossed: `use` wraps its target in
+# an `inner` node, so a ref anchored on the `inner` node child is shallower than a scope on the
+# `target` span inside `inner` (and vice versa).
+_NEST_GRAMMAR = r"""
+program := , stmt* ;
+stmt := decl | use ;
+decl := kw:"let" , name:word , semi:";" , ;
+use := kw:"use" , inner , semi:";" , ;
+inner := target:word ;
+word := /[a-z]+/ ;
+_trivia := ( line_comment | line_comment? : )+ ;
+line_comment := prefix:"//" . content:/[^\n]*/ . newline:"\n" ;
+"""
+
+
+def _classify_syms(grammar_text: str, config_text: str, text: str) -> list[Token]:
+    """Classify with a symbol table so resolved references paint their defining kind."""
+    grammar = plumbing.parse_grammar(grammar_text)
+    resolved = lsp_config.load_lsp_config(config_text, grammar)
+    parser = plumbing.generate_parser(prepare_analysis_grammar(grammar))
+    parsed = plumbing.parse_text(parser, text, "program")
+    assert parsed.success, parsed.error_message
+    tables = classify_module.build_grammar_tables(parser.grammar)
+    table = symbols.extract(parsed.cst, tables, resolved, text)
+    return classify(parsed.cst, parser.grammar, resolved, text, tables=tables, symbol_table=table)
+
+
+def test_resolved_ref_paints_defining_kind() -> None:
+    text = "let x ;\nuse x ;\n"
+    config = "rule decl {\n  def name: type;\n}\nrule use {\n  ref target: type;\n}\n"
+    tokens = _classify_syms(_REF_GRAMMAR, config, text)
+    # The `x` in `use x` inherits the defining kind's token; the default would be `variable`.
+    ref_x = text.index("use x") + 4
+    (cover,) = [t for t in tokens if t.start == ref_x and t.token_type]
+    assert cover.token_type == "type"
+    assert cover.modifiers == ()  # ref paint carries no declaration modifier
+    # The declaration site keeps its def-paint (declaration modifier).
+    decl_x = text.index("let x") + 4
+    (decl,) = [t for t in tokens if t.start == decl_x]
+    assert decl.token_type == "type"
+    assert decl.modifiers == ("declaration",)
+
+
+def test_explicit_scope_beats_ref_paint_at_same_node() -> None:
+    text = "let x ;\nuse x ;\n"
+    config = "rule decl {\n  def name: type;\n}\nrule use {\n  ref target: type;\n  scope target: string;\n}\n"
+    tokens = _classify_syms(_REF_GRAMMAR, config, text)
+    ref_x = text.index("use x") + 4
+    (cover,) = [t for t in tokens if t.start == ref_x]
+    assert cover.token_type == "string"  # explicit scope (rank 2) beats ref paint (rank 1)
+
+
+def test_deeper_explicit_beats_shallower_ref() -> None:
+    # Ref anchored on the `inner` node child of `use` (shallow); a scope on the `target` span inside
+    # `inner` is deeper and wins over their shared span.
+    text = "let x ;\nuse x ;\n"
+    config = (
+        "rule decl {\n  def name: type;\n}\n"
+        "rule use {\n  ref rule:inner: type;\n}\n"
+        "rule inner {\n  scope target: string;\n}\n"
+    )
+    tokens = _classify_syms(_NEST_GRAMMAR, config, text)
+    ref_x = text.index("use x") + 4
+    (cover,) = [t for t in tokens if t.start == ref_x]
+    assert cover.token_type == "string"
+
+
+def test_deeper_ref_beats_shallower_explicit() -> None:
+    # A whole-node scope on `inner` (shallow) vs a ref on the `target` span inside it (deeper).
+    text = "let x ;\nuse x ;\n"
+    config = "rule decl {\n  def name: type;\n}\nscope rule:inner: string;\nrule inner {\n  ref target: type;\n}\n"
+    tokens = _classify_syms(_NEST_GRAMMAR, config, text)
+    ref_x = text.index("use x") + 4
+    (cover,) = [t for t in tokens if t.start == ref_x]
+    assert cover.token_type == "type"
+
+
+def test_unresolved_ref_falls_through_to_default() -> None:
+    text = "use y ;\n"  # no `let y`, so the reference does not resolve
+    config = "rule decl {\n  def name: type;\n}\nrule use {\n  ref target: type;\n}\n"
+    tokens = _classify_syms(_REF_GRAMMAR, config, text)
+    ref_y = text.index("use y") + 4
+    (cover,) = [t for t in tokens if t.start == ref_y]
+    assert cover.token_type == "variable"  # the built-in default for a `word` regex
+
+
+def test_out_of_legend_kind_ref_gets_no_paint() -> None:
+    text = "let x ;\nuse x ;\n"
+    # `widget` is not a legend token, so the resolved ref contributes no paint.
+    config = "rule decl {\n  def name: widget.thing;\n}\nrule use {\n  ref target: *;\n}\n"
+    tokens = _classify_syms(_REF_GRAMMAR, config, text)
+    ref_x = text.index("use x") + 4
+    (cover,) = [t for t in tokens if t.start == ref_x]
+    assert cover.token_type == "variable"  # default, not repainted
+
+
+def test_none_scope_occludes_ref_paint() -> None:
+    text = "let x ;\nuse x ;\n"
+    config = "rule decl {\n  def name: type;\n}\nrule use {\n  ref target: type;\n  scope target: none;\n}\n"
+    tokens = _classify_syms(_REF_GRAMMAR, config, text)
+    ref_x = text.index("use x") + 4
+    assert [t for t in tokens if t.start <= ref_x < t.end] == []  # none suppresses the ref paint
+
+
+def test_classify_without_symbol_table_leaves_ref_as_default() -> None:
+    # Regression pin: omitting the symbol table reproduces the reference-free (round-2) output.
+    text = "let x ;\nuse x ;\n"
+    config = "rule decl {\n  def name: type;\n}\nrule use {\n  ref target: type;\n}\n"
+    grammar = plumbing.parse_grammar(_REF_GRAMMAR)
+    resolved = lsp_config.load_lsp_config(config, grammar)
+    parser = plumbing.generate_parser(prepare_analysis_grammar(grammar))
+    parsed = plumbing.parse_text(parser, text, "program")
+    assert parsed.success, parsed.error_message
+    without = classify(parsed.cst, parser.grammar, resolved, text)
+    ref_x = text.index("use x") + 4
+    (cover,) = [t for t in without if t.start == ref_x]
+    assert cover.token_type == "variable"
+
+
+def test_ref_paint_preserves_token_stream_invariants() -> None:
+    text = "let x ;\nuse x ;\nuse x ;\n"
+    config = "rule decl {\n  def name: type;\n}\nrule use {\n  ref target: type;\n}\n"
+    tokens = _classify_syms(_REF_GRAMMAR, config, text)
+    assert tokens == sorted(tokens, key=lambda t: (t.start, t.end))
+    for prev, nxt in itertools.pairwise(tokens):
+        assert prev.end <= nxt.start
+    for t in tokens:
+        assert 0 <= t.start < t.end <= len(text)

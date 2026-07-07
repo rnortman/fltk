@@ -21,6 +21,7 @@ if TYPE_CHECKING:
 
     from fltk.lsp import classify
     from fltk.lsp.positions import LineIndex, PositionEncoding
+    from fltk.lsp.symbols import Symbol, SymbolTable
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -168,6 +169,217 @@ def folding_ranges(tree: Any, trivia_kind_names: frozenset[str], line_index: Lin
         kind = lsp.FoldingRangeKind.Comment if node.kind.name in trivia_kind_names else None
         out.append(lsp.FoldingRange(start_line=start_line, end_line=end_line, kind=kind))
     return out
+
+
+# --- Symbol navigation, outline, and rename -------------------------------------------------------
+
+# The fixed kind-first-segment -> LSP SymbolKind table (spec-defined). The def/ref kind vocabulary
+# stays open; a first segment with no entry renders as ``Object`` but is still an exact-match ref
+# target. Extending the table later is additive.
+SYMBOL_KINDS: dict[str, lsp.SymbolKind] = {
+    "type": lsp.SymbolKind.Class,
+    "function": lsp.SymbolKind.Function,
+    "variable": lsp.SymbolKind.Variable,
+    "constant": lsp.SymbolKind.Constant,
+    "field": lsp.SymbolKind.Field,
+    "enumMember": lsp.SymbolKind.EnumMember,
+    "namespace": lsp.SymbolKind.Namespace,
+    "property": lsp.SymbolKind.Property,
+    "enum": lsp.SymbolKind.Enum,
+    "struct": lsp.SymbolKind.Struct,
+    "interface": lsp.SymbolKind.Interface,
+    "module": lsp.SymbolKind.Module,
+    "method": lsp.SymbolKind.Method,
+}
+
+
+def _symbol_kind(kind: tuple[str, ...]) -> lsp.SymbolKind:
+    """Map a dotted kind's first segment to an LSP ``SymbolKind`` (``Object`` fallback)."""
+    first = kind[0] if kind else ""
+    return SYMBOL_KINDS.get(first, lsp.SymbolKind.Object)
+
+
+def _strictly_contains(outer: Symbol, inner: Symbol) -> bool:
+    """Whether ``outer``'s declaration range strictly encloses ``inner``'s (equal ranges are siblings)."""
+    return (
+        outer.range_start <= inner.range_start
+        and inner.range_end <= outer.range_end
+        and (outer.range_start, outer.range_end) != (inner.range_start, inner.range_end)
+    )
+
+
+def document_symbols(table: SymbolTable, line_index: LineIndex, enc: PositionEncoding) -> list[lsp.DocumentSymbol]:
+    """The hierarchical document outline: one :class:`DocumentSymbol` per definition, nested by containment.
+
+    Nesting is by declaration-range containment via a stack over symbols sorted by
+    ``(range_start, -range_end)`` -- not name-start order, so a container whose name child trails its
+    members still parents them. ``range`` is the declaration range, ``selection_range`` the name span
+    (contained in ``range`` by construction). Equal ranges are siblings.
+    """
+    ordered = sorted(table.symbols, key=lambda s: (s.range_start, -s.range_end))
+    roots: list[lsp.DocumentSymbol] = []
+    stack: list[tuple[Symbol, list[lsp.DocumentSymbol]]] = []
+    for symbol in ordered:
+        children: list[lsp.DocumentSymbol] = []
+        node = lsp.DocumentSymbol(
+            name=symbol.name,
+            detail=".".join(symbol.kind),
+            kind=_symbol_kind(symbol.kind),
+            range=_render_range(symbol.range_start, symbol.range_end, line_index, enc),
+            selection_range=_render_range(symbol.name_start, symbol.name_end, line_index, enc),
+            children=children,
+        )
+        while stack and not _strictly_contains(stack[-1][0], symbol):
+            stack.pop()
+        if stack:
+            stack[-1][1].append(node)
+        else:
+            roots.append(node)
+        stack.append((symbol, children))
+    return roots
+
+
+def document_symbols_flat(
+    table: SymbolTable, uri: str, line_index: LineIndex, enc: PositionEncoding
+) -> list[lsp.SymbolInformation]:
+    """The flat document outline, for clients without hierarchical-symbol support.
+
+    One :class:`SymbolInformation` per definition in document order, located at its declaration range.
+    """
+    return [
+        lsp.SymbolInformation(
+            name=symbol.name,
+            kind=_symbol_kind(symbol.kind),
+            location=lsp.Location(uri=uri, range=_render_range(symbol.range_start, symbol.range_end, line_index, enc)),
+        )
+        for symbol in table.symbols
+    ]
+
+
+def target_span(table: SymbolTable, offset: int) -> tuple[Symbol, tuple[int, int]] | None:
+    """The addressed symbol and the exact span under the cursor, or ``None``.
+
+    The span is the definition name span when a definition is under the cursor, else the
+    reference span when a resolved reference is. An unresolved reference (or empty space)
+    yields ``None``.
+    """
+    symbol = table.symbol_at(offset)
+    if symbol is not None:
+        return symbol, (symbol.name_start, symbol.name_end)
+    reference = table.reference_at(offset)
+    if reference is not None and reference.symbol is not None:
+        return reference.symbol, (reference.start, reference.end)
+    return None
+
+
+def symbol_target(table: SymbolTable, offset: int) -> Symbol | None:
+    """The symbol the cursor addresses: the definition under it, else a reference's resolved symbol."""
+    result = target_span(table, offset)
+    return result[0] if result is not None else None
+
+
+def definition_location(
+    table: SymbolTable, offset: int, uri: str, line_index: LineIndex, enc: PositionEncoding
+) -> lsp.Location | None:
+    """The target symbol's name span (go-to-def on the definition itself returns itself), else ``None``."""
+    symbol = symbol_target(table, offset)
+    if symbol is None:
+        return None
+    return lsp.Location(uri=uri, range=_render_range(symbol.name_start, symbol.name_end, line_index, enc))
+
+
+def reference_locations(
+    table: SymbolTable,
+    offset: int,
+    uri: str,
+    line_index: LineIndex,
+    enc: PositionEncoding,
+    *,
+    include_declaration: bool,
+) -> list[lsp.Location] | None:
+    """Every occurrence of the target symbol; the declaration span is included per ``include_declaration``."""
+    symbol = symbol_target(table, offset)
+    if symbol is None:
+        return None
+    declaration = (symbol.name_start, symbol.name_end)
+    locations: list[lsp.Location] = []
+    for start, end in table.occurrences(symbol):
+        if not include_declaration and (start, end) == declaration:
+            continue
+        locations.append(lsp.Location(uri=uri, range=_render_range(start, end, line_index, enc)))
+    return locations
+
+
+def document_highlights(
+    table: SymbolTable, offset: int, line_index: LineIndex, enc: PositionEncoding
+) -> list[lsp.DocumentHighlight] | None:
+    """Highlight every occurrence of the target symbol: ``Write`` on the declaration, ``Read`` on references."""
+    symbol = symbol_target(table, offset)
+    if symbol is None:
+        return None
+    declaration = (symbol.name_start, symbol.name_end)
+    highlights: list[lsp.DocumentHighlight] = []
+    for start, end in table.occurrences(symbol):
+        kind = lsp.DocumentHighlightKind.Write if (start, end) == declaration else lsp.DocumentHighlightKind.Read
+        highlights.append(lsp.DocumentHighlight(range=_render_range(start, end, line_index, enc), kind=kind))
+    return highlights
+
+
+def prepare_rename(table: SymbolTable, offset: int, line_index: LineIndex, enc: PositionEncoding) -> lsp.Range | None:
+    """The exact renamable span under the cursor (name span or ref span), or ``None`` when nothing resolves."""
+    result = target_span(table, offset)
+    if result is None:
+        return None
+    _symbol, (start, end) = result
+    return _render_range(start, end, line_index, enc)
+
+
+def rename_occurrences(table: SymbolTable, offset: int) -> tuple[Symbol, list[tuple[int, int]]] | None:
+    """The target symbol and its raw codepoint occurrence set, or ``None`` when nothing resolves.
+
+    The server (not this module) renders the :class:`WorkspaceEdit`, because its verify-reparse guard
+    needs the raw offsets to apply the edits in memory before committing them.
+    """
+    symbol = symbol_target(table, offset)
+    if symbol is None:
+        return None
+    return symbol, table.occurrences(symbol)
+
+
+def rename_edits(
+    uri: str,
+    version: int | None,
+    occurrences: Sequence[tuple[int, int]],
+    new_name: str,
+    line_index: LineIndex,
+    enc: PositionEncoding,
+    *,
+    document_changes: bool,
+) -> lsp.WorkspaceEdit:
+    """Render a :class:`WorkspaceEdit` renaming every occurrence to ``new_name``.
+
+    Occurrences are non-overlapping (deduped upstream), so the edits are well-formed. When
+    ``document_changes`` (the client advertised ``workspace.workspaceEdit.documentChanges``), the
+    edit is versioned against the analyzed document so a conforming client refuses a stale apply;
+    otherwise the plain ``changes`` fallback is returned.
+    """
+    if document_changes:
+        edits: list[lsp.TextEdit | lsp.AnnotatedTextEdit] = [
+            lsp.TextEdit(range=_render_range(start, end, line_index, enc), new_text=new_name)
+            for start, end in occurrences
+        ]
+        return lsp.WorkspaceEdit(
+            document_changes=[
+                lsp.TextDocumentEdit(
+                    text_document=lsp.OptionalVersionedTextDocumentIdentifier(uri=uri, version=version),
+                    edits=edits,
+                )
+            ]
+        )
+    changes = [
+        lsp.TextEdit(range=_render_range(start, end, line_index, enc), new_text=new_name) for start, end in occurrences
+    ]
+    return lsp.WorkspaceEdit(changes={uri: changes})
 
 
 def _spans_containing(node: Any, offset: int) -> list[tuple[int, int]]:

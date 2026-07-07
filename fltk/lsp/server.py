@@ -18,11 +18,14 @@ import bisect
 import dataclasses
 import importlib.metadata
 import logging
+import traceback
 from concurrent.futures import ThreadPoolExecutor
 from typing import TYPE_CHECKING, Any
 
 import pygls.capabilities as _pygls_capabilities
 from lsprotocol import types as lsp
+from pygls.capabilities import get_capability
+from pygls.exceptions import JsonRpcException
 from pygls.lsp.server import LanguageServer
 
 from fltk import plumbing
@@ -30,7 +33,7 @@ from fltk.lsp import features
 from fltk.lsp.positions import LineIndex, PositionEncoding
 
 if TYPE_CHECKING:
-    from fltk.lsp import classify
+    from fltk.lsp import classify, symbols
     from fltk.lsp.engine import AnalysisEngine, DocumentAnalysis
     from fltk.plumbing_types import ParserResult, UnparserResult
     from fltk.unparse.fmt_config import FormatterConfig
@@ -97,6 +100,7 @@ class _GoodAnalysis:
     tree: Any
     tokens: list[classify.Token]
     encoded_tokens: list[int]
+    symbols: symbols.SymbolTable
 
 
 @dataclasses.dataclass
@@ -213,13 +217,19 @@ class FltkLanguageServer(LanguageServer):
         state.analyzed_version = version
         state.analysis = analysis
         state.line_index = line_index
-        if analysis.error is None and analysis.tree is not None and analysis.tokens is not None:
+        if (
+            analysis.error is None
+            and analysis.tree is not None
+            and analysis.tokens is not None
+            and analysis.symbols is not None
+        ):
             state.last_good = _GoodAnalysis(
                 version=version,
                 line_index=line_index,
                 tree=analysis.tree,
                 tokens=analysis.tokens,
                 encoded_tokens=encoded_tokens or [],
+                symbols=analysis.symbols,
             )
         return state
 
@@ -308,12 +318,15 @@ class FltkLanguageServer(LanguageServer):
         document = self.workspace.get_text_document(uri)
         try:
             await self.analyze_and_publish(uri, document.version, document.source)
-        except Exception as exc:
+        except Exception:
             # This task is not awaited by anyone, so an unreported exception would surface only as
-            # asyncio GC noise on stderr -- invisible in the client's server log. Log it there.
+            # asyncio GC noise on stderr -- invisible in the client's server log. Log it there with
+            # a full traceback: parse, extraction, and classification failures all land here, and the
+            # stack is the only way to tell which stage broke from the client's server log alone.
             self.window_log_message(
                 lsp.LogMessageParams(
-                    type=lsp.MessageType.Error, message=f"fltk-lsp: analysis failed for {uri}: {exc!r}"
+                    type=lsp.MessageType.Error,
+                    message=f"fltk-lsp: analysis failed for {uri}:\n{traceback.format_exc()}",
                 )
             )
 
@@ -341,6 +354,99 @@ class FltkLanguageServer(LanguageServer):
     def _serveable(self, state: _DocState) -> _GoodAnalysis | None:
         """The analysis to serve pull features from: current version's, else last-good, else none."""
         return state.last_good
+
+    async def _serveable_for(self, uri: str) -> tuple[_GoodAnalysis, PositionEncoding] | None:
+        """Fetch, ensure-analyzed, and return the serveable analysis plus encoding, or ``None``.
+
+        The shared preamble of the read-only pull handlers: document fetch, current-version
+        analysis, last-good fallback, and encoding lookup, in one place so the serving policy has a
+        single owner.
+        """
+        document = self.workspace.get_text_document(uri)
+        state = await self._ensure_analyzed(uri, document.version, document.source)
+        good = self._serveable(state)
+        if good is None:
+            return None
+        return good, self._encoding()
+
+    # -- client-capability accessors --------------------------------------------------------
+
+    def _hierarchical_symbols(self) -> bool:
+        """Whether the client advertised hierarchical ``documentSymbol`` support.
+
+        Read back from the capabilities captured at ``initialize``; these do not change within a
+        session, so reading them per request is equivalent to caching them.
+        """
+        return get_capability(
+            self.client_capabilities,
+            "text_document.document_symbol.hierarchical_document_symbol_support",
+            False,
+        )
+
+    def _document_changes(self) -> bool:
+        """Whether the client advertised ``workspace.workspaceEdit.documentChanges`` support."""
+        return get_capability(self.client_capabilities, "workspace.workspace_edit.document_changes", False)
+
+    # -- rename -----------------------------------------------------------------------------
+
+    async def rename_document(self, uri: str, position: lsp.Position, new_name: str) -> lsp.WorkspaceEdit | None:
+        """Rename the symbol under ``position`` to ``new_name``, or ``None`` when nothing resolves.
+
+        Unlike the read-only features, rename edits the document and so refuses to run against a
+        stale tree: it requires a successful analysis of the *current* version, then verifies the
+        renamed text reparses before returning any edits. A ``JsonRpcException`` is raised (surfaced
+        to the user as an error) when the document has parse errors or the new name would break it.
+        """
+        document = self.workspace.get_text_document(uri)
+        version = document.version
+        # Snapshot the text once, up front: `document` is pygls's live buffer, so re-reading
+        # `.source` after an await could splice this version's offsets into newer text.
+        text = document.source
+        if version is None:
+            # A URI the client never opened is disk-backed: it has no version to guard a concurrent
+            # on-disk rewrite, and every `.source` read re-reads the file. Rename must only touch a
+            # document the client has opened and is syncing.
+            msg = "cannot rename a document that is not open in the editor"
+            raise JsonRpcException(msg, code=lsp.LSPErrorCodes.RequestFailed)
+        state = await self._ensure_analyzed(uri, version, text)
+        if self.workspace.get_text_document(uri).version != version:
+            # A didChange landed on the loop during the analysis await; this version's offsets no
+            # longer describe the live text, so applying them would corrupt it.
+            msg = "document changed during rename; retry"
+            raise JsonRpcException(msg, code=lsp.LSPErrorCodes.RequestFailed)
+        analysis = state.analysis
+        if analysis is None or state.line_index is None:
+            msg = "cannot rename: no analysis is available for the current document"
+            raise JsonRpcException(msg, code=lsp.LSPErrorCodes.RequestFailed)
+        if analysis.error is not None:
+            msg = "cannot rename while the document has parse errors"
+            raise JsonRpcException(msg, code=lsp.LSPErrorCodes.RequestFailed)
+        if analysis.symbols is None:
+            msg = "cannot rename: internal error, the analysis produced no symbol table"
+            raise JsonRpcException(msg, code=lsp.LSPErrorCodes.RequestFailed)
+        enc = self._encoding()
+        offset = state.line_index.position_to_offset(position.line, position.character, enc)
+        found = features.rename_occurrences(analysis.symbols, offset)
+        if found is None:
+            return None
+        symbol, occurrences = found
+        document_changes = self._document_changes()
+        if new_name == symbol.name:
+            return features.rename_edits(
+                uri, version, [], new_name, state.line_index, enc, document_changes=document_changes
+            )
+        renamed = _apply_edits(text, occurrences, new_name)
+        loop = asyncio.get_running_loop()
+        verify = await loop.run_in_executor(self._executor, self._engine.analyze, renamed)
+        if verify.error is not None:
+            msg = "cannot rename: the new name would leave the document unparseable"
+            raise JsonRpcException(msg, code=lsp.LSPErrorCodes.RequestFailed)
+        if self.workspace.get_text_document(uri).version != version:
+            msg = "document changed during rename; retry"
+            raise JsonRpcException(msg, code=lsp.LSPErrorCodes.RequestFailed)
+        return features.rename_edits(
+            uri, version, occurrences, new_name, state.line_index, enc, document_changes=document_changes
+        )
 
     # -- formatting pipeline ----------------------------------------------------------------
 
@@ -426,6 +532,17 @@ class FltkLanguageServer(LanguageServer):
         return edits
 
 
+def _apply_edits(text: str, occurrences: list[tuple[int, int]], new_name: str) -> str:
+    """Replace every ``(start, end)`` codepoint span in ``text`` with ``new_name``.
+
+    Occurrences are non-overlapping; applying them back-to-front keeps earlier offsets valid.
+    """
+    result = text
+    for start, end in sorted(occurrences, reverse=True):
+        result = result[:start] + new_name + result[end:]
+    return result
+
+
 def create_server(
     engine: AnalysisEngine,
     formatter_config: FormatterConfig | None,
@@ -484,28 +601,80 @@ def create_server(
 
     @server.feature(lsp.TEXT_DOCUMENT_FOLDING_RANGE)
     async def folding_range(params: lsp.FoldingRangeParams) -> list[lsp.FoldingRange] | None:
-        uri = params.text_document.uri
-        document = server.workspace.get_text_document(uri)
-        state = await server._ensure_analyzed(uri, document.version, document.source)
-        good = server._serveable(state)
-        if good is None:
+        ready = await server._serveable_for(params.text_document.uri)
+        if ready is None:
             return None
+        good, _enc = ready
         return features.folding_ranges(good.tree, engine.trivia_kind_names, good.line_index)
 
     @server.feature(lsp.TEXT_DOCUMENT_SELECTION_RANGE)
     async def selection_range(params: lsp.SelectionRangeParams) -> list[lsp.SelectionRange] | None:
-        uri = params.text_document.uri
-        document = server.workspace.get_text_document(uri)
-        state = await server._ensure_analyzed(uri, document.version, document.source)
-        good = server._serveable(state)
-        if good is None:
+        ready = await server._serveable_for(params.text_document.uri)
+        if ready is None:
             return None
-        enc = server._encoding()
+        good, enc = ready
         offsets = [good.line_index.position_to_offset(pos.line, pos.character, enc) for pos in params.positions]
         return features.selection_ranges(good.tree, offsets, good.line_index, enc)
 
     @server.feature(lsp.TEXT_DOCUMENT_FORMATTING)
     async def formatting(params: lsp.DocumentFormattingParams) -> list[lsp.TextEdit] | None:
         return await server.format_document(params.text_document.uri)
+
+    @server.feature(lsp.TEXT_DOCUMENT_DOCUMENT_SYMBOL)
+    async def document_symbol(
+        params: lsp.DocumentSymbolParams,
+    ) -> list[lsp.DocumentSymbol] | list[lsp.SymbolInformation] | None:
+        uri = params.text_document.uri
+        ready = await server._serveable_for(uri)
+        if ready is None:
+            return None
+        good, enc = ready
+        if server._hierarchical_symbols():
+            return features.document_symbols(good.symbols, good.line_index, enc)
+        return features.document_symbols_flat(good.symbols, uri, good.line_index, enc)
+
+    @server.feature(lsp.TEXT_DOCUMENT_DEFINITION)
+    async def definition(params: lsp.DefinitionParams) -> lsp.Location | None:
+        uri = params.text_document.uri
+        ready = await server._serveable_for(uri)
+        if ready is None:
+            return None
+        good, enc = ready
+        offset = good.line_index.position_to_offset(params.position.line, params.position.character, enc)
+        return features.definition_location(good.symbols, offset, uri, good.line_index, enc)
+
+    @server.feature(lsp.TEXT_DOCUMENT_REFERENCES)
+    async def references(params: lsp.ReferenceParams) -> list[lsp.Location] | None:
+        uri = params.text_document.uri
+        ready = await server._serveable_for(uri)
+        if ready is None:
+            return None
+        good, enc = ready
+        offset = good.line_index.position_to_offset(params.position.line, params.position.character, enc)
+        return features.reference_locations(
+            good.symbols, offset, uri, good.line_index, enc, include_declaration=params.context.include_declaration
+        )
+
+    @server.feature(lsp.TEXT_DOCUMENT_DOCUMENT_HIGHLIGHT)
+    async def document_highlight(params: lsp.DocumentHighlightParams) -> list[lsp.DocumentHighlight] | None:
+        ready = await server._serveable_for(params.text_document.uri)
+        if ready is None:
+            return None
+        good, enc = ready
+        offset = good.line_index.position_to_offset(params.position.line, params.position.character, enc)
+        return features.document_highlights(good.symbols, offset, good.line_index, enc)
+
+    @server.feature(lsp.TEXT_DOCUMENT_PREPARE_RENAME)
+    async def prepare_rename(params: lsp.PrepareRenameParams) -> lsp.Range | None:
+        ready = await server._serveable_for(params.text_document.uri)
+        if ready is None:
+            return None
+        good, enc = ready
+        offset = good.line_index.position_to_offset(params.position.line, params.position.character, enc)
+        return features.prepare_rename(good.symbols, offset, good.line_index, enc)
+
+    @server.feature(lsp.TEXT_DOCUMENT_RENAME, lsp.RenameOptions(prepare_provider=True))
+    async def rename(params: lsp.RenameParams) -> lsp.WorkspaceEdit | None:
+        return await server.rename_document(params.text_document.uri, params.position, params.new_name)
 
     return server

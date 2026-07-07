@@ -12,17 +12,19 @@ from __future__ import annotations
 import asyncio
 import contextlib
 import sys
+import types
 from pathlib import Path
 
 import pytest
 import pytest_lsp
 from lsprotocol import types as t
+from pygls.exceptions import JsonRpcException
 from pytest_lsp import ClientServerConfig, LanguageClient
 
 from fltk import plumbing
 from fltk.lsp.engine import AnalysisEngine
-from fltk.lsp.positions import PositionEncoding
-from fltk.lsp.server import create_server
+from fltk.lsp.positions import LineIndex, PositionEncoding
+from fltk.lsp.server import _DocState, create_server
 from fltk.unparse.renderer import RendererConfig
 
 _DATA = Path(__file__).parent / "test_data"
@@ -52,14 +54,42 @@ _BROKEN = "greet 123."  # `name` is /[a-z]+/, so a digit fails to parse
 _ASTRAL = 'note "h\U0001f600i".'
 _PUBLISH = t.TEXT_DOCUMENT_PUBLISH_DIAGNOSTICS
 
+# A document exercising def/ref/namespace: `module outer` opens a namespace whose name hoists to
+# the root scope; `def alpha` inside defines a member; `use alpha` inside references it; `use outer`
+# at the root references the hoisted module name.
+_SYM = "module outer {\n  def alpha.\n  use alpha.\n}\nuse outer."
 
-def _init_params(encodings: list[t.PositionEncodingKind]) -> t.InitializeParams:
+
+def _init_params(
+    encodings: list[t.PositionEncodingKind], *, hierarchical: bool = False, document_changes: bool = False
+) -> t.InitializeParams:
+    text_document = (
+        t.TextDocumentClientCapabilities(
+            document_symbol=t.DocumentSymbolClientCapabilities(hierarchical_document_symbol_support=True)
+        )
+        if hierarchical
+        else None
+    )
+    workspace = (
+        t.WorkspaceClientCapabilities(workspace_edit=t.WorkspaceEditClientCapabilities(document_changes=True))
+        if document_changes
+        else None
+    )
     return t.InitializeParams(
         capabilities=t.ClientCapabilities(
             general=t.GeneralClientCapabilities(position_encodings=encodings),
+            text_document=text_document,
+            workspace=workspace,
         ),
         root_uri=None,
     )
+
+
+def _line_col(text: str, offset: int, enc: t.PositionEncodingKind) -> t.Position:
+    """The LSP ``Position`` of a codepoint ``offset`` in ``text``, via the same ``LineIndex`` math the server uses."""
+    encoding = PositionEncoding.UTF32 if enc == t.PositionEncodingKind.Utf32 else PositionEncoding.UTF16
+    line, character = LineIndex(text).offset_to_position(offset, encoding)
+    return t.Position(line=line, character=character)
 
 
 async def _open(client: LanguageClient, text: str, *, version: int = 1) -> None:
@@ -246,6 +276,245 @@ async def test_close_then_reopen(client: LanguageClient) -> None:
     await _open(client, _CLEAN, version=2)
     assert not client.diagnostics[_URI]
     assert len(await _tokens(client)) > 0
+
+
+_ASTRAL_SYM = 'note "h\U0001f600i". def alpha. use alpha.'
+
+
+@pytest.mark.asyncio
+async def test_document_symbol_hierarchical_nests_members(client: LanguageClient) -> None:
+    await client.initialize_session(_init_params([t.PositionEncodingKind.Utf32], hierarchical=True))
+    await _open(client, _SYM)
+    result = await client.text_document_document_symbol_async(
+        t.DocumentSymbolParams(text_document=t.TextDocumentIdentifier(uri=_URI))
+    )
+    assert result is not None
+    assert all(isinstance(sym, t.DocumentSymbol) for sym in result)
+    roots = {sym.name: sym for sym in result if isinstance(sym, t.DocumentSymbol)}
+    assert set(roots) == {"outer"}
+    outer = roots["outer"]
+    assert outer.kind == t.SymbolKind.Namespace
+    assert outer.detail == "namespace"
+    children = list(outer.children or [])
+    assert [child.name for child in children] == ["alpha"]
+    alpha = children[0]
+    assert alpha.kind == t.SymbolKind.Variable
+    # selection range is the name span, contained in the (wider) declaration range.
+    assert alpha.selection_range.start == _line_col(_SYM, _SYM.index("alpha"), t.PositionEncodingKind.Utf32)
+
+
+@pytest.mark.asyncio
+async def test_document_symbol_flat_for_client_without_hierarchy(client: LanguageClient) -> None:
+    await client.initialize_session(_init_params([t.PositionEncodingKind.Utf32]))
+    await _open(client, _SYM)
+    result = await client.text_document_document_symbol_async(
+        t.DocumentSymbolParams(text_document=t.TextDocumentIdentifier(uri=_URI))
+    )
+    assert result is not None
+    assert all(isinstance(sym, t.SymbolInformation) for sym in result)
+    assert {sym.name for sym in result} == {"outer", "alpha"}
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("encoding", [t.PositionEncodingKind.Utf16, t.PositionEncodingKind.Utf32])
+async def test_definition_from_reference_over_astral_text(
+    client: LanguageClient, encoding: t.PositionEncodingKind
+) -> None:
+    await client.initialize_session(_init_params([encoding]))
+    await _open(client, _ASTRAL_SYM)
+    use_at = _ASTRAL_SYM.rindex("alpha")
+    result = await client.text_document_definition_async(
+        t.DefinitionParams(
+            text_document=t.TextDocumentIdentifier(uri=_URI),
+            position=_line_col(_ASTRAL_SYM, use_at + 1, encoding),
+        )
+    )
+    assert isinstance(result, t.Location)
+    def_at = _ASTRAL_SYM.index("alpha")
+    assert result.range.start == _line_col(_ASTRAL_SYM, def_at, encoding)
+    assert result.range.end == _line_col(_ASTRAL_SYM, def_at + len("alpha"), encoding)
+
+
+@pytest.mark.asyncio
+async def test_references_and_highlights(client: LanguageClient) -> None:
+    await client.initialize_session(_init_params([t.PositionEncodingKind.Utf32]))
+    await _open(client, _SYM)
+    enc = t.PositionEncodingKind.Utf32
+    def_pos = _line_col(_SYM, _SYM.index("alpha") + 1, enc)
+
+    with_decl = await client.text_document_references_async(
+        t.ReferenceParams(
+            text_document=t.TextDocumentIdentifier(uri=_URI),
+            position=def_pos,
+            context=t.ReferenceContext(include_declaration=True),
+        )
+    )
+    assert with_decl is not None
+    assert len(with_decl) == 2  # def alpha + use alpha
+
+    without_decl = await client.text_document_references_async(
+        t.ReferenceParams(
+            text_document=t.TextDocumentIdentifier(uri=_URI),
+            position=def_pos,
+            context=t.ReferenceContext(include_declaration=False),
+        )
+    )
+    assert without_decl is not None
+    assert len(without_decl) == 1  # only the use site
+
+    highlights = await client.text_document_document_highlight_async(
+        t.DocumentHighlightParams(text_document=t.TextDocumentIdentifier(uri=_URI), position=def_pos)
+    )
+    assert highlights is not None
+    kinds = {h.kind for h in highlights}
+    assert t.DocumentHighlightKind.Write in kinds  # the declaration
+    assert t.DocumentHighlightKind.Read in kinds  # the reference
+
+
+@pytest.mark.asyncio
+async def test_rename_returns_versioned_document_changes(client: LanguageClient) -> None:
+    await client.initialize_session(_init_params([t.PositionEncodingKind.Utf32], document_changes=True))
+    await _open(client, _SYM)
+    result = await client.text_document_rename_async(
+        t.RenameParams(
+            text_document=t.TextDocumentIdentifier(uri=_URI),
+            position=_line_col(_SYM, _SYM.index("alpha") + 1, t.PositionEncodingKind.Utf32),
+            new_name="beta",
+        )
+    )
+    assert result is not None
+    assert result.changes is None
+    assert result.document_changes is not None
+    edit = result.document_changes[0]
+    assert isinstance(edit, t.TextDocumentEdit)
+    assert edit.text_document.version == 1  # versioned against the analyzed document
+    assert all(isinstance(e, t.TextEdit) for e in edit.edits)
+    assert {e.new_text for e in edit.edits if isinstance(e, t.TextEdit)} == {"beta"}
+    assert len(edit.edits) == 2  # both occurrences
+
+
+@pytest.mark.asyncio
+async def test_rename_returns_plain_changes_without_capability(client: LanguageClient) -> None:
+    await client.initialize_session(_init_params([t.PositionEncodingKind.Utf32]))
+    await _open(client, _SYM)
+    result = await client.text_document_rename_async(
+        t.RenameParams(
+            text_document=t.TextDocumentIdentifier(uri=_URI),
+            position=_line_col(_SYM, _SYM.index("alpha") + 1, t.PositionEncodingKind.Utf32),
+            new_name="beta",
+        )
+    )
+    assert result is not None
+    assert result.document_changes is None
+    assert result.changes is not None
+    assert len(result.changes[_URI]) == 2
+
+
+@pytest.mark.asyncio
+async def test_rename_to_same_name_returns_empty_edit(client: LanguageClient) -> None:
+    # A no-op rename (new name == old name) returns an empty edit and skips the verify-reparse.
+    await client.initialize_session(_init_params([t.PositionEncodingKind.Utf32], document_changes=True))
+    await _open(client, _SYM)
+    result = await client.text_document_rename_async(
+        t.RenameParams(
+            text_document=t.TextDocumentIdentifier(uri=_URI),
+            position=_line_col(_SYM, _SYM.index("alpha") + 1, t.PositionEncodingKind.Utf32),
+            new_name="alpha",
+        )
+    )
+    assert result is not None
+    assert result.document_changes is not None
+    edit = result.document_changes[0]
+    assert isinstance(edit, t.TextDocumentEdit)
+    assert list(edit.edits) == []
+
+
+@pytest.mark.asyncio
+async def test_rename_refuses_when_version_advances_during_analysis(monkeypatch: pytest.MonkeyPatch) -> None:
+    # The version-race guard: a didChange bumping the live document during the analysis await must
+    # abort the rename rather than splice this version's offsets into newer text.
+    server = _fixture_server()
+    docs = [types.SimpleNamespace(version=1, source=_SYM), types.SimpleNamespace(version=2, source=_SYM)]
+    seen = {"n": 0}
+
+    def _get(_uri: str) -> types.SimpleNamespace:
+        doc = docs[min(seen["n"], len(docs) - 1)]
+        seen["n"] += 1
+        return doc
+
+    fake_ws = types.SimpleNamespace(get_text_document=_get)
+    monkeypatch.setattr(type(server), "workspace", property(lambda _self: fake_ws))
+
+    async def _ensure(_uri: str, version: int | None, _text: str) -> _DocState:
+        return _DocState(analyzed_version=version)
+
+    monkeypatch.setattr(server, "_ensure_analyzed", _ensure)
+    with pytest.raises(JsonRpcException, match="changed during rename"):
+        await server.rename_document(_URI, t.Position(line=0, character=0), "beta")
+
+
+@pytest.mark.asyncio
+async def test_rename_on_broken_document_errors(client: LanguageClient) -> None:
+    await client.initialize_session(_init_params([t.PositionEncodingKind.Utf32]))
+    await _open(client, _BROKEN)
+    with pytest.raises(Exception):  # noqa: B017 -- server returns a response error
+        await client.text_document_rename_async(
+            t.RenameParams(
+                text_document=t.TextDocumentIdentifier(uri=_URI),
+                position=t.Position(line=0, character=0),
+                new_name="whatever",
+            )
+        )
+
+
+@pytest.mark.asyncio
+async def test_rename_to_parse_breaking_name_errors(client: LanguageClient) -> None:
+    await client.initialize_session(_init_params([t.PositionEncodingKind.Utf32]))
+    await _open(client, _SYM)
+    with pytest.raises(Exception):  # noqa: B017 -- verify-reparse rejects the edit
+        await client.text_document_rename_async(
+            t.RenameParams(
+                text_document=t.TextDocumentIdentifier(uri=_URI),
+                position=_line_col(_SYM, _SYM.index("alpha") + 1, t.PositionEncodingKind.Utf32),
+                new_name="beta1",  # `name` is /[a-z]+/, so the trailing digit derails the parse
+            )
+        )
+
+
+@pytest.mark.asyncio
+async def test_prepare_rename_on_keyword_is_null(client: LanguageClient) -> None:
+    await client.initialize_session(_init_params([t.PositionEncodingKind.Utf32]))
+    await _open(client, _SYM)
+    on_keyword = await client.text_document_prepare_rename_async(
+        t.PrepareRenameParams(
+            text_document=t.TextDocumentIdentifier(uri=_URI),
+            position=_line_col(_SYM, _SYM.index("def") + 1, t.PositionEncodingKind.Utf32),
+        )
+    )
+    assert on_keyword is None
+    on_name = await client.text_document_prepare_rename_async(
+        t.PrepareRenameParams(
+            text_document=t.TextDocumentIdentifier(uri=_URI),
+            position=_line_col(_SYM, _SYM.index("alpha") + 1, t.PositionEncodingKind.Utf32),
+        )
+    )
+    assert on_name is not None
+
+
+@pytest.mark.asyncio
+async def test_navigation_served_from_last_good_after_break(client: LanguageClient) -> None:
+    await client.initialize_session(_init_params([t.PositionEncodingKind.Utf32]))
+    await _open(client, _SYM)
+    await _change(client, _BROKEN, version=2)
+    # The current version has parse errors; navigation still serves the last good analysis.
+    result = await client.text_document_definition_async(
+        t.DefinitionParams(
+            text_document=t.TextDocumentIdentifier(uri=_URI),
+            position=_line_col(_SYM, _SYM.rindex("alpha") + 1, t.PositionEncodingKind.Utf32),
+        )
+    )
+    assert isinstance(result, t.Location)
+    assert result.range.start == _line_col(_SYM, _SYM.index("alpha"), t.PositionEncodingKind.Utf32)
 
 
 def _fixture_server():

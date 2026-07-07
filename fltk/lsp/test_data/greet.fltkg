@@ -1,7 +1,10 @@
 document := , item* ;
-item := greeting | note ;
+item := greeting | note | definition | usage | module ;
 greeting := greet:"greet" : name:name . "." , ;
 note := marker:"note" : text:string . "." , ;
+definition := kw:"def" : name:name . "." , ;
+usage := kw:"use" : name:name . "." , ;
+module := kw:"module" : name:name : "{" , item* , "}" , ;
 name := value:/[a-z]+/ ;
 string := open:"\"" . body:/[^"]*/ . close:"\"" ;
 block_comment := open:"/*" . body:/(?:[^*]|\*[^\/])*/ . close:"*/" ;

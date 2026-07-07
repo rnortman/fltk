@@ -4,3 +4,13 @@ rule greeting {
 rule note {
   scope text: string;
 }
+rule definition {
+  def name: variable;
+}
+rule usage {
+  ref name: *;
+}
+rule module {
+  def name: namespace;
+  namespace;
+}

@@ -18,6 +18,20 @@ _HERE = pathlib.Path(__file__).parent
 _GRAMMAR_PATH = _HERE / "fltklsp.fltkg"
 _SPEC_PATH = _HERE / "fltklsp.fltklsp"
 
+# The committed `fltklsp.fltklsp` carries only `scope` statements; a good def/ref/namespace
+# vocabulary for the `.fltklsp` language is its own design question, so semantics dogfooding uses
+# this test-local spec instead: `rule` blocks define their rule name into a namespace scope, and an
+# anchor identifier is a reference resolving to that name.
+_SEMANTIC_SPEC = """
+rule rule_config {
+  def rule_name: type;
+  namespace;
+}
+rule anchor {
+  ref name: type;
+}
+"""
+
 
 def test_dogfood_spec_loads_against_its_own_grammar() -> None:
     grammar = plumbing.parse_grammar_file(_GRAMMAR_PATH)
@@ -74,3 +88,21 @@ def test_dogfood_highlights_def_ref_namespace_and_qualifier() -> None:
     assert any(t.start == q and t.end == q + len("rule") and t.token_type == "keyword" for t in result.tokens)
     # A global literal anchor paints the statement `;` punctuation.
     assert _token_type(result.tokens, sample, ";") == "punctuation"
+
+
+def test_dogfood_semantics_extract_and_resolve_over_real_grammar() -> None:
+    grammar = plumbing.parse_grammar_file(_GRAMMAR_PATH)
+    resolved = load_lsp_config(_SEMANTIC_SPEC, grammar)
+    engine = AnalysisEngine(grammar, resolved)
+    # `rule widget { scope widget: keyword; }` -- the block defines `widget` (type), and the
+    # `scope` anchor `widget` is a reference that resolves back to that definition.
+    sample = "rule widget {\n  scope widget: keyword;\n}\n"
+    analysis = engine.analyze(sample)
+    assert analysis.error is None
+    assert analysis.symbols is not None
+
+    definitions = {(s.name, s.kind) for s in analysis.symbols.symbols}
+    assert ("widget", ("type",)) in definitions
+
+    resolved_refs = [r for r in analysis.symbols.references if r.symbol is not None]
+    assert any(r.name == "widget" and r.symbol is not None and r.symbol.kind == ("type",) for r in resolved_refs)

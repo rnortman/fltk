@@ -7,15 +7,22 @@ hand-built CST-shaped trees so spans, kinds, and nesting are fully controlled.
 
 from __future__ import annotations
 
-from lsprotocol.types import FoldingRangeKind, SelectionRange
+from lsprotocol.types import (
+    DocumentHighlightKind,
+    FoldingRangeKind,
+    SelectionRange,
+    SymbolKind,
+    TextDocumentEdit,
+    TextEdit,
+)
 
 from fltk import plumbing
 from fltk.fegen.pyrt.span_protocol import SpanKind
-from fltk.lsp import features
+from fltk.lsp import features, symbols
 from fltk.lsp.classify import Token
 from fltk.lsp.conftest import HELLO_GRAMMAR
 from fltk.lsp.engine import AnalysisEngine
-from fltk.lsp.lsp_config import LSP_STANDARD_MODIFIERS, TOKEN_LEGEND, load_lsp_config
+from fltk.lsp.lsp_config import LSP_STANDARD_MODIFIERS, SOURCE_RANK_REF, TOKEN_LEGEND, Tier, load_lsp_config
 from fltk.lsp.positions import LineIndex, PositionEncoding
 
 UTF16 = PositionEncoding.UTF16
@@ -250,3 +257,202 @@ def test_selection_multiple_offsets_return_one_chain_each() -> None:
     assert (ranges[0].range.start.character, ranges[0].range.end.character) == (0, 5)
     # offset 7 -> "world" [6,11)
     assert (ranges[1].range.start.character, ranges[1].range.end.character) == (6, 11)
+
+
+# --- Symbol navigation, outline, and rename -------------------------------------------------------
+
+URI = "file:///doc"
+IDX = LineIndex("x" * 60)  # single line, so utf-32 character == codepoint offset
+
+
+def _sym(name: str, kind: tuple[str, ...], name_span: tuple[int, int], range_span: tuple[int, int]) -> symbols.Symbol:
+    return symbols.Symbol(
+        name=name,
+        kind=kind,
+        name_start=name_span[0],
+        name_end=name_span[1],
+        range_start=range_span[0],
+        range_end=range_span[1],
+    )
+
+
+def _table(symbol_list: list[symbols.Symbol], references: tuple[symbols.Reference, ...] = ()) -> symbols.SymbolTable:
+    root = symbols.Scope(start=0, end=60, parent=None, children=[], symbols=list(symbol_list))
+    return symbols.SymbolTable(root=root, symbols=tuple(symbol_list), references=references)
+
+
+def _ref(name: str, span: tuple[int, int], symbol: symbols.Symbol | None) -> symbols.Reference:
+    return symbols.Reference(
+        name=name,
+        start=span[0],
+        end=span[1],
+        depth=1,
+        kinds="*",
+        tier=Tier(SOURCE_RANK_REF, 1, 1, 0),
+        symbol=symbol,
+    )
+
+
+def test_symbol_kinds_table_and_object_fallback() -> None:
+    assert features._symbol_kind(("type", "cog")) is SymbolKind.Class
+    assert features._symbol_kind(("function",)) is SymbolKind.Function
+    assert features._symbol_kind(("namespace",)) is SymbolKind.Namespace
+    # An open-vocabulary first segment renders as Object.
+    assert features._symbol_kind(("widget", "thing")) is SymbolKind.Object
+    assert features._symbol_kind(()) is SymbolKind.Object
+
+
+def test_document_symbols_nest_by_declaration_range_containment() -> None:
+    # Container name child trails its members: its name_start (25) is later than the members', so a
+    # name-start-ordered stack would mis-nest; range-sort keeps the members inside.
+    outer = _sym("Outer", ("type",), (25, 30), (0, 30))
+    a = _sym("a", ("variable",), (2, 7), (2, 10))
+    b = _sym("b", ("variable",), (12, 17), (12, 20))
+    roots = features.document_symbols(_table([a, b, outer]), IDX, UTF32)
+    assert [r.name for r in roots] == ["Outer"]
+    assert roots[0].children is not None
+    assert [c.name for c in roots[0].children] == ["a", "b"]
+
+
+def test_document_symbols_equal_ranges_are_siblings() -> None:
+    s1 = _sym("s1", ("type",), (0, 3), (0, 10))
+    s2 = _sym("s2", ("type",), (4, 7), (0, 10))
+    roots = features.document_symbols(_table([s1, s2]), IDX, UTF32)
+    assert [r.name for r in roots] == ["s1", "s2"]
+    assert roots[0].children == []
+
+
+def test_document_symbols_fields() -> None:
+    sym = _sym("x", ("type", "cog"), (4, 5), (0, 7))
+    (node,) = features.document_symbols(_table([sym]), IDX, UTF32)
+    assert node.name == "x"
+    assert node.detail == "type.cog"
+    assert node.kind is SymbolKind.Class
+    assert (node.range.start.character, node.range.end.character) == (0, 7)
+    assert (node.selection_range.start.character, node.selection_range.end.character) == (4, 5)
+
+
+def test_document_symbols_flat_shape() -> None:
+    a = _sym("a", ("variable",), (4, 5), (0, 7))
+    b = _sym("b", ("type",), (12, 13), (8, 15))
+    infos = features.document_symbols_flat(_table([a, b]), URI, IDX, UTF32)
+    assert [i.name for i in infos] == ["a", "b"]
+    assert infos[0].kind is SymbolKind.Variable
+    assert infos[0].location.uri == URI
+    assert (infos[0].location.range.start.character, infos[0].location.range.end.character) == (0, 7)
+
+
+def _nav_table() -> tuple[symbols.SymbolTable, symbols.Symbol]:
+    sym = _sym("x", ("variable",), (4, 5), (0, 7))
+    refs = (_ref("x", (12, 13), sym), _ref("x", (20, 21), sym), _ref("y", (30, 31), None))
+    return _table([sym], refs), sym
+
+
+def test_definition_on_reference_returns_the_declaration_name_span() -> None:
+    table, sym = _nav_table()
+    loc = features.definition_location(table, 12, URI, IDX, UTF32)  # cursor on the first ref
+    assert loc is not None
+    assert (loc.range.start.character, loc.range.end.character) == (sym.name_start, sym.name_end)
+
+
+def test_definition_on_the_definition_returns_itself() -> None:
+    table, sym = _nav_table()
+    loc = features.definition_location(table, 4, URI, IDX, UTF32)  # cursor on the def name
+    assert loc is not None
+    assert (loc.range.start.character, loc.range.end.character) == (sym.name_start, sym.name_end)
+
+
+def test_definition_on_nothing_and_on_unresolved_ref_is_none() -> None:
+    table, _ = _nav_table()
+    assert features.definition_location(table, 50, URI, IDX, UTF32) is None  # empty region
+    assert features.definition_location(table, 30, URI, IDX, UTF32) is None  # unresolved ref `y`
+
+
+def test_references_with_and_without_declaration() -> None:
+    table, _ = _nav_table()
+    with_decl = features.reference_locations(table, 12, URI, IDX, UTF32, include_declaration=True)
+    assert with_decl is not None
+    starts = sorted(loc.range.start.character for loc in with_decl)
+    assert starts == [4, 12, 20]  # the def name plus both references
+    without = features.reference_locations(table, 12, URI, IDX, UTF32, include_declaration=False)
+    assert without is not None
+    assert sorted(loc.range.start.character for loc in without) == [12, 20]
+
+
+def test_document_highlights_write_on_declaration_read_on_references() -> None:
+    table, _ = _nav_table()
+    highlights = features.document_highlights(table, 4, IDX, UTF32)
+    assert highlights is not None
+    by_start = {h.range.start.character: h.kind for h in highlights}
+    assert by_start[4] is DocumentHighlightKind.Write
+    assert by_start[12] is DocumentHighlightKind.Read
+    assert by_start[20] is DocumentHighlightKind.Read
+
+
+def test_prepare_rename_range_on_target_and_none_otherwise() -> None:
+    table, _ = _nav_table()
+    # On the def name: the name span.
+    on_def = features.prepare_rename(table, 4, IDX, UTF32)
+    assert on_def is not None
+    assert (on_def.start.character, on_def.end.character) == (4, 5)
+    # On a resolved reference: the reference span.
+    on_ref = features.prepare_rename(table, 12, IDX, UTF32)
+    assert on_ref is not None
+    assert (on_ref.start.character, on_ref.end.character) == (12, 13)
+    # On an unresolved reference and on empty space: None.
+    assert features.prepare_rename(table, 30, IDX, UTF32) is None
+    assert features.prepare_rename(table, 50, IDX, UTF32) is None
+
+
+def test_rename_occurrences_returns_symbol_and_deduped_spans() -> None:
+    table, sym = _nav_table()
+    result = features.rename_occurrences(table, 12)
+    assert result is not None
+    got_symbol, occ = result
+    assert got_symbol is sym
+    assert sorted(occ) == [(4, 5), (12, 13), (20, 21)]
+    assert features.rename_occurrences(table, 30) is None  # unresolved ref
+
+
+def test_rename_edits_versioned_document_changes() -> None:
+    _, sym = _nav_table()
+    occ = [(4, 5), (12, 13), (20, 21)]
+    edit = features.rename_edits(URI, 7, occ, "z", IDX, UTF32, document_changes=True)
+    assert edit.changes is None
+    assert edit.document_changes is not None
+    (text_document_edit,) = edit.document_changes
+    assert isinstance(text_document_edit, TextDocumentEdit)
+    assert text_document_edit.text_document.uri == URI
+    assert text_document_edit.text_document.version == 7
+    new_texts: list[str] = []
+    for e in text_document_edit.edits:
+        assert isinstance(e, TextEdit)
+        new_texts.append(e.new_text)
+    assert new_texts == ["z", "z", "z"]
+
+
+def test_rename_edits_plain_changes_fallback() -> None:
+    occ = [(4, 5), (12, 13)]
+    edit = features.rename_edits(URI, 7, occ, "z", IDX, UTF32, document_changes=False)
+    assert edit.document_changes is None
+    assert edit.changes is not None
+    edits = edit.changes[URI]
+    assert [e.new_text for e in edits] == ["z", "z"]
+    assert (edits[0].range.start.character, edits[0].range.end.character) == (4, 5)
+
+
+def test_rename_edits_empty_occurrences_document_changes() -> None:
+    # A no-op rename renders a well-formed edit carrying zero TextEdits.
+    edit = features.rename_edits(URI, 7, [], "z", IDX, UTF32, document_changes=True)
+    assert edit.changes is None
+    assert edit.document_changes is not None
+    (text_document_edit,) = edit.document_changes
+    assert isinstance(text_document_edit, TextDocumentEdit)
+    assert list(text_document_edit.edits) == []
+
+
+def test_rename_edits_empty_occurrences_plain_changes() -> None:
+    edit = features.rename_edits(URI, 7, [], "z", IDX, UTF32, document_changes=False)
+    assert edit.document_changes is None
+    assert edit.changes is not None
+    assert edit.changes[URI] == []

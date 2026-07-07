@@ -102,11 +102,55 @@ def test_def_paint_kind_not_in_legend_emits_nothing() -> None:
     assert resolved.child_matchers == {}
 
 
-def test_ref_and_namespace_are_inert() -> None:
-    resolved = _resolve("rule greeting {\n  ref name: *;\n  namespace;\n}\n")
-    assert resolved.node_paints == {}
-    assert resolved.child_matchers == {}
-    assert resolved.global_child_matchers == ()
+def test_def_emits_def_matcher_with_kind_and_tier() -> None:
+    # A def whose kind is out of the legend still contributes a semantic matcher (no paint).
+    resolved = _resolve("rule greeting {\n  def name: symbol.function;\n}\n")
+    assert resolved.child_matchers == {}  # out-of-legend -> no paint
+    (dm,) = resolved.def_matchers["greeting"]
+    assert dm.match == lsp_config.ByLabel("name")
+    assert dm.kind == ("symbol", "function")
+    assert dm.tier.source_rank == lsp_config.SOURCE_RANK_DEF
+
+
+def test_ref_emits_ref_matcher_with_kinds_and_tier() -> None:
+    resolved = _resolve("rule greeting {\n  ref name: type.cog, function;\n}\n")
+    (rm,) = resolved.ref_matchers["greeting"]
+    assert rm.match == lsp_config.ByLabel("name")
+    assert rm.kinds == (("type", "cog"), ("function",))
+    assert rm.tier.source_rank == lsp_config.SOURCE_RANK_REF
+
+
+def test_ref_wildcard_kinds_preserved() -> None:
+    resolved = _resolve("rule greeting {\n  ref name: *;\n}\n")
+    (rm,) = resolved.ref_matchers["greeting"]
+    assert rm.kinds == "*"
+
+
+def test_unqualified_def_anchor_unions_label_and_rule() -> None:
+    # `name` labels the `word` invocation; `word` is the invoked rule name. An unqualified def
+    # on `word` would union, but here we anchor on the rule name to exercise both readings.
+    grammar_text = 'greeting := kw:"hi" , word ;\nword := /[a-z]+/ ;\n'
+    resolved = lsp_config.load_lsp_config(
+        "rule greeting {\n  def word: type;\n}\n", plumbing.parse_grammar(grammar_text)
+    )
+    matches = {dm.match for dm in resolved.def_matchers["greeting"]}
+    assert lsp_config.ByLabel("word") in matches
+    assert lsp_config.ByChildRule("word") in matches
+
+
+def test_namespace_flag_accumulates_across_blocks() -> None:
+    resolved = _resolve("rule greeting {\n  ref name: *;\n}\nrule greeting {\n  namespace;\n}\n")
+    assert resolved.namespace_rules == frozenset({"greeting"})
+    # The ref from the first block survives even though neither block produced a paint matcher.
+    assert "greeting" in resolved.ref_matchers
+    assert "greeting" not in resolved.child_matchers
+
+
+def test_no_semantic_statements_leaves_tables_empty() -> None:
+    resolved = _resolve("rule greeting {\n  scope name: type;\n}\n")
+    assert resolved.def_matchers == {}
+    assert resolved.ref_matchers == {}
+    assert resolved.namespace_rules == frozenset()
 
 
 def test_none_token_paint_preserved() -> None:

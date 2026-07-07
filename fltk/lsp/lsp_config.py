@@ -470,6 +470,27 @@ class ByChildRule:
 Match = ByLabel | ByLiteralText | ByChildRule
 
 
+def match_applies(
+    match: Match,
+    label_name: str | None,
+    child_text: str | None,
+    child_rule_name: str | None,
+) -> bool:
+    """Whether a resolved matcher applies to one child of a CST node.
+
+    ``label_name`` is the uppercased label the parent rule assigned the child (``None`` when
+    unlabeled). ``child_text`` is the source text of a span child (``None`` for a node child);
+    ``child_rule_name`` is the rule name of a node child (``None`` for a span child). The
+    classifier and the symbol extractor share this predicate.
+    """
+    if isinstance(match, ByLabel):
+        return label_name is not None and label_name == match.name_upper
+    if isinstance(match, ByLiteralText):
+        return child_text == match.text
+    # ByChildRule: a node child produced by an invocation of the named rule.
+    return child_rule_name is not None and child_rule_name == match.name
+
+
 @dataclasses.dataclass(frozen=True)
 class Paint:
     """A resolved paint: a legend token (or the ``none`` pseudo-token) plus modifiers."""
@@ -485,6 +506,7 @@ class Paint:
 # statements win ties.
 SOURCE_RANK_SCOPE = 2
 SOURCE_RANK_DEF = 1
+SOURCE_RANK_REF = 1  # == SOURCE_RANK_DEF; explicit scope (2) beats both in ref-site paint
 ANCHOR_RANK_LABEL_LITERAL = 1
 ANCHOR_RANK_RULE_NAME = 0
 BLOCK_RANK_RULE = 1
@@ -519,18 +541,71 @@ class ChildMatcher:
 
 
 @dataclasses.dataclass(frozen=True)
+class DefMatcher:
+    """A ``def`` statement's semantic matcher: which child it defines and the symbol's kind.
+
+    Distinct from the def's *paint* matcher (a ``ChildMatcher`` in ``child_matchers``): this
+    drives symbol extraction, keyed by the block's rule name. ``tier`` picks one winner per
+    child when several defs match, matching the painter's precedence.
+    """
+
+    match: Match
+    kind: tuple[str, ...]
+    tier: Tier
+
+
+@dataclasses.dataclass(frozen=True)
+class RefMatcher:
+    """A ``ref`` statement's matcher: which child is a reference and which kinds it may resolve to."""
+
+    match: Match
+    kinds: tuple[tuple[str, ...], ...] | typing.Literal["*"]
+    tier: Tier
+
+
+@dataclasses.dataclass(frozen=True)
 class ResolvedLspConfig:
-    """The classifier's precomputed matcher tables.
+    """The classifier's precomputed matcher tables plus the semantic def/ref/namespace tables.
 
     ``node_paints`` maps a grammar rule name to whole-node paints (from global rule-name
     anchors). ``child_matchers`` maps a *parent* rule name to the matchers to try against its
     children (from anchors inside that rule's block). ``global_child_matchers`` are label/literal
     matchers from global scopes; they apply to any parent's children.
+
+    ``def_matchers``/``ref_matchers`` map a *parent* rule name to the semantic matchers the
+    symbol extractor tries against that rule's children (``def``/``ref`` are grammar-restricted
+    to rule blocks, so there is no global variant). ``namespace_rules`` is the set of rule names
+    whose nodes open a lexical scope.
     """
 
     node_paints: Mapping[str, tuple[NodePaint, ...]]
     child_matchers: Mapping[str, tuple[ChildMatcher, ...]]
     global_child_matchers: tuple[ChildMatcher, ...]
+    def_matchers: Mapping[str, tuple[DefMatcher, ...]] = dataclasses.field(default_factory=dict)
+    ref_matchers: Mapping[str, tuple[RefMatcher, ...]] = dataclasses.field(default_factory=dict)
+    namespace_rules: frozenset[str] = frozenset()
+
+
+def _local_anchor_matches(anchor: Anchor, rule_index: RuleIndex) -> list[tuple[Match, int]]:
+    """Expand a local anchor into its ``(match, anchor_rank)`` readings.
+
+    An unqualified identifier that is both a label and an invoked rule name resolves to the
+    union of both readings (two matches), matching validation's union semantics.
+    """
+    if anchor.literal is not None:
+        return [(ByLiteralText(anchor.literal), ANCHOR_RANK_LABEL_LITERAL)]
+    name = anchor.name
+    assert name is not None, "identifier anchor has no name"
+    if anchor.qualifier == "label":
+        return [(ByLabel(name), ANCHOR_RANK_LABEL_LITERAL)]
+    if anchor.qualifier == "rule":
+        return [(ByChildRule(name), ANCHOR_RANK_RULE_NAME)]
+    out: list[tuple[Match, int]] = []
+    if name in rule_index.labels:
+        out.append((ByLabel(name), ANCHOR_RANK_LABEL_LITERAL))
+    if name in rule_index.invoked_rules:
+        out.append((ByChildRule(name), ANCHOR_RANK_RULE_NAME))
+    return out
 
 
 def _resolve_local_anchor(
@@ -541,27 +616,9 @@ def _resolve_local_anchor(
     rule_index: RuleIndex,
     out: list[ChildMatcher],
 ) -> None:
-    """Emit the child matcher(s) for an anchor inside a ``rule X`` block.
-
-    An unqualified identifier that is both a label and an invoked rule name resolves to the
-    union of both readings (two matchers), matching validation's union semantics.
-    """
-    label_tier = Tier(source_rank, ANCHOR_RANK_LABEL_LITERAL, BLOCK_RANK_RULE, stmt_index)
-    rule_tier = Tier(source_rank, ANCHOR_RANK_RULE_NAME, BLOCK_RANK_RULE, stmt_index)
-    if anchor.literal is not None:
-        out.append(ChildMatcher(ByLiteralText(anchor.literal), paint, label_tier))
-        return
-    name = anchor.name
-    assert name is not None, "identifier anchor has no name"
-    if anchor.qualifier == "label":
-        out.append(ChildMatcher(ByLabel(name), paint, label_tier))
-    elif anchor.qualifier == "rule":
-        out.append(ChildMatcher(ByChildRule(name), paint, rule_tier))
-    else:
-        if name in rule_index.labels:
-            out.append(ChildMatcher(ByLabel(name), paint, label_tier))
-        if name in rule_index.invoked_rules:
-            out.append(ChildMatcher(ByChildRule(name), paint, rule_tier))
+    """Emit the child matcher(s) for an anchor inside a ``rule X`` block."""
+    for match, anchor_rank in _local_anchor_matches(anchor, rule_index):
+        out.append(ChildMatcher(match, paint, Tier(source_rank, anchor_rank, BLOCK_RANK_RULE, stmt_index)))
 
 
 def _resolve_global_anchor(
@@ -600,13 +657,17 @@ def resolve_config(config: LspConfig, index: GrammarIndex) -> ResolvedLspConfig:
     """Resolve a validated ``LspConfig`` into the classifier's matcher tables.
 
     Assumes ``config`` already passed :func:`validate_config` against ``index``; membership
-    checks here only pick the reading(s) of union-eligible anchors. ``ref`` and ``namespace``
-    are inert in round 1 and contribute no matchers; ``def`` contributes a declaration-site
-    paint when its kind's first segment is a legend token.
+    checks here only pick the reading(s) of union-eligible anchors. ``def`` contributes both a
+    declaration-site paint (when its kind's first segment is a legend token) and a semantic
+    :class:`DefMatcher`; ``ref`` contributes a :class:`RefMatcher`; a namespace rule block adds
+    its rule name to ``namespace_rules``.
     """
     node_paints: dict[str, list[NodePaint]] = {}
     child_matchers: dict[str, list[ChildMatcher]] = {}
     global_child_matchers: list[ChildMatcher] = []
+    def_matchers: dict[str, list[DefMatcher]] = {}
+    ref_matchers: dict[str, list[RefMatcher]] = {}
+    namespace_rules: set[str] = set()
 
     for scope in config.global_scopes:
         paint = Paint(token=scope.token, modifiers=scope.modifiers)
@@ -623,9 +684,25 @@ def resolve_config(config: LspConfig, index: GrammarIndex) -> ResolvedLspConfig:
             for anchor in scope.anchors:
                 _resolve_local_anchor(anchor, paint, SOURCE_RANK_SCOPE, scope.index, rule_index, out)
         for def_stmt in block.defs:
-            if def_stmt.kind and def_stmt.kind[0] in TOKEN_LEGEND:
-                paint = Paint(token=def_stmt.kind[0], modifiers=("declaration",))
-                _resolve_local_anchor(def_stmt.anchor, paint, SOURCE_RANK_DEF, def_stmt.index, rule_index, out)
+            # One expansion of the anchor builds each match's tier once, then emits both the
+            # declaration-site paint (when the kind's first segment is a legend token) and the
+            # semantic DefMatcher from it, so the two share an identical precedence key.
+            paint = (
+                Paint(token=def_stmt.kind[0], modifiers=("declaration",))
+                if def_stmt.kind and def_stmt.kind[0] in TOKEN_LEGEND
+                else None
+            )
+            for match, anchor_rank in _local_anchor_matches(def_stmt.anchor, rule_index):
+                tier = Tier(SOURCE_RANK_DEF, anchor_rank, BLOCK_RANK_RULE, def_stmt.index)
+                if paint is not None:
+                    out.append(ChildMatcher(match, paint, tier))
+                def_matchers.setdefault(block.rule_name, []).append(DefMatcher(match, def_stmt.kind, tier))
+        for ref_stmt in block.refs:
+            for match, anchor_rank in _local_anchor_matches(ref_stmt.anchor, rule_index):
+                tier = Tier(SOURCE_RANK_REF, anchor_rank, BLOCK_RANK_RULE, ref_stmt.index)
+                ref_matchers.setdefault(block.rule_name, []).append(RefMatcher(match, ref_stmt.kinds, tier))
+        if block.is_namespace:
+            namespace_rules.add(block.rule_name)
         if not out:
             del child_matchers[block.rule_name]
 
@@ -633,6 +710,9 @@ def resolve_config(config: LspConfig, index: GrammarIndex) -> ResolvedLspConfig:
         node_paints={name: tuple(paints) for name, paints in node_paints.items()},
         child_matchers={name: tuple(matchers) for name, matchers in child_matchers.items()},
         global_child_matchers=tuple(global_child_matchers),
+        def_matchers={name: tuple(matchers) for name, matchers in def_matchers.items()},
+        ref_matchers={name: tuple(matchers) for name, matchers in ref_matchers.items()},
+        namespace_rules=frozenset(namespace_rules),
     )
 
 

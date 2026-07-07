@@ -21,6 +21,8 @@ from fltk.lsp import lsp_config
 if typing.TYPE_CHECKING:
     from collections.abc import Iterator, Mapping
 
+    from fltk.lsp.symbols import SymbolTable
+
 
 @dataclasses.dataclass(frozen=True, order=True)
 class Token:
@@ -61,7 +63,7 @@ class _TerminalTable:
 
 
 @dataclasses.dataclass(frozen=True)
-class _GrammarTables:
+class GrammarTables:
     """Precomputed per-rule terminal tables plus the CST-kind-to-rule map."""
 
     tables: Mapping[str, _TerminalTable]
@@ -98,7 +100,7 @@ def _build_terminal_table(rule: gsm.Rule) -> _TerminalTable:
     )
 
 
-def build_grammar_tables(grammar: gsm.Grammar) -> _GrammarTables:
+def build_grammar_tables(grammar: gsm.Grammar) -> GrammarTables:
     """Precompute every rule's terminal table and the map from CST node kind name to rule.
 
     ``grammar`` must already be trivia-classified (``generate_parser`` returns such a grammar as
@@ -108,7 +110,7 @@ def build_grammar_tables(grammar: gsm.Grammar) -> _GrammarTables:
     """
     tables = {rule.name: _build_terminal_table(rule) for rule in grammar.rules}
     kind_to_rule = {naming.snake_to_upper_camel(rule.name).upper(): rule for rule in grammar.rules}
-    return _GrammarTables(tables=tables, kind_to_rule=kind_to_rule)
+    return GrammarTables(tables=tables, kind_to_rule=kind_to_rule)
 
 
 def _classify_literal_text(text: str) -> str:
@@ -159,7 +161,7 @@ def _classify_span_text(
     return None
 
 
-def _rule_for_node(node: typing.Any, tables: _GrammarTables) -> gsm.Rule:
+def rule_for_node(node: typing.Any, tables: GrammarTables) -> gsm.Rule:
     """Resolve the grammar rule of a CST node kind; a miss is an invariant violation.
 
     Every non-span CST node's ``kind.name`` is by construction the uppercased UpperCamel name of a
@@ -173,14 +175,40 @@ def _rule_for_node(node: typing.Any, tables: _GrammarTables) -> gsm.Rule:
     return rule
 
 
-def _default_intervals(node: typing.Any, tables: _GrammarTables, text: str) -> Iterator[tuple[int, int, str]]:
+def child_surface(
+    label: typing.Any,
+    child: typing.Any,
+    text: str,
+    tables: GrammarTables,
+) -> tuple[bool, int, int, str | None, str | None, str | None]:
+    """Decode one ``(label, child)`` pair into the fields matcher dispatch needs.
+
+    Returns ``(is_span, start, end, child_text, child_rule_name, label_name)``: for a span child
+    ``child_text`` is its source slice and ``child_rule_name`` is ``None``; for a node child the
+    reverse. The paint walk and the symbol-extraction walk share this so both decode a child
+    identically before calling :func:`~fltk.lsp.lsp_config.match_applies`.
+    """
+    is_span = child.kind == SpanKind.SPAN
+    if is_span:
+        cstart, cend = child.start, child.end
+        child_text: str | None = text[cstart:cend]
+        child_rule_name: str | None = None
+    else:
+        cstart, cend = child.span.start, child.span.end
+        child_text = None
+        child_rule_name = rule_for_node(child, tables).name
+    label_name = label.name if label is not None else None
+    return is_span, cstart, cend, child_text, child_rule_name, label_name
+
+
+def _default_intervals(node: typing.Any, tables: GrammarTables, text: str) -> Iterator[tuple[int, int, str]]:
     """Yield ``(start, end, token_type)`` default intervals for a CST node, depth-first.
 
     A trivia node emits at most one ``comment`` interval over its whole span and is not descended
     into (so terminals inside a comment never repaint). Every other node classifies its own
     terminal (span) children and recurses into its node children.
     """
-    rule = _rule_for_node(node, tables)
+    rule = rule_for_node(node, tables)
     if rule.is_trivia_rule:
         start, end = node.span.start, node.span.end
         if text[start:end].strip():
@@ -202,7 +230,7 @@ def _default_intervals(node: typing.Any, tables: _GrammarTables, text: str) -> I
 
 
 def default_tokens(
-    tree: typing.Any, grammar: gsm.Grammar, text: str, *, tables: _GrammarTables | None = None
+    tree: typing.Any, grammar: gsm.Grammar, text: str, *, tables: GrammarTables | None = None
 ) -> list[Token]:
     """Classify ``tree`` using only the built-in default table (the ``.fltklsp``-free baseline).
 
@@ -226,29 +254,10 @@ _Key: typing.TypeAlias = "tuple[int, lsp_config.Tier]"
 _Interval: typing.TypeAlias = "tuple[int, int, lsp_config.Paint, _Key]"
 
 
-def _matches(
-    match: lsp_config.Match,
-    label_name: str | None,
-    child_text: str | None,
-    child_rule: gsm.Rule | None,
-) -> bool:
-    """Whether a resolved matcher applies to one child of a CST node.
-
-    ``child_text`` is the source text of a span child (``None`` for a node child); ``child_rule``
-    is the rule of a node child (``None`` for a span child).
-    """
-    if isinstance(match, lsp_config.ByLabel):
-        return label_name is not None and label_name == match.name_upper
-    if isinstance(match, lsp_config.ByLiteralText):
-        return child_text == match.text
-    # ByChildRule: a node child produced by an invocation of the named rule.
-    return child_rule is not None and child_rule.name == match.name
-
-
 def _explicit_intervals(
     node: typing.Any,
     depth: int,
-    tables: _GrammarTables,
+    tables: GrammarTables,
     resolved: lsp_config.ResolvedLspConfig,
     text: str,
     out: list[_Interval],
@@ -259,28 +268,36 @@ def _explicit_intervals(
     child match (from a rule-block or global label/literal/rule anchor) is recorded at the child's
     depth (``depth + 1``), so a deeper match outranks a shallower one over their overlap.
     """
-    rule = _rule_for_node(node, tables)
+    rule = rule_for_node(node, tables)
     for node_paint in resolved.node_paints.get(rule.name, ()):
         out.append((node.span.start, node.span.end, node_paint.paint, (depth, node_paint.tier)))
     matchers = resolved.child_matchers.get(rule.name, ())
 
     child_depth = depth + 1
     for label, child in node.children:
-        is_span = child.kind == SpanKind.SPAN
-        if is_span:
-            cstart, cend = child.start, child.end
-            child_text: str | None = text[cstart:cend]
-            child_rule = None
-        else:
-            cstart, cend = child.span.start, child.span.end
-            child_text = None
-            child_rule = _rule_for_node(child, tables)
-        label_name = label.name if label is not None else None
+        is_span, cstart, cend, child_text, child_rule_name, label_name = child_surface(label, child, text, tables)
         for matcher in itertools.chain(matchers, resolved.global_child_matchers):
-            if _matches(matcher.match, label_name, child_text, child_rule):
+            if lsp_config.match_applies(matcher.match, label_name, child_text, child_rule_name):
                 out.append((cstart, cend, matcher.paint, (child_depth, matcher.tier)))
         if not is_span:
             _explicit_intervals(child, child_depth, tables, resolved, text, out)
+
+
+def _ref_intervals(symbol_table: SymbolTable, out: list[_Interval]) -> None:
+    """Append one explicit-layer interval per resolved, in-legend reference to ``out``.
+
+    A resolved reference inherits its defining kind's first segment as its token; the extractor
+    already carried the reference's ``depth`` and ``tier`` so the painter never re-matches. A
+    reference enters at ``SOURCE_RANK_REF`` (below ``SOURCE_RANK_SCOPE``), so an explicit ``scope``
+    on the same element always wins. Unresolved references and out-of-legend kinds contribute
+    nothing and fall through to the defaults.
+    """
+    for ref in symbol_table.references:
+        symbol = ref.symbol
+        if symbol is None or not symbol.kind or symbol.kind[0] not in lsp_config.TOKEN_LEGEND:
+            continue
+        paint = lsp_config.Paint(token=symbol.kind[0], modifiers=())
+        out.append((ref.start, ref.end, paint, (ref.depth, ref.tier)))
 
 
 def _winner_segments(intervals: list[_Interval]) -> list[tuple[int, int, lsp_config.Paint]]:
@@ -366,23 +383,29 @@ def classify(
     resolved_config: lsp_config.ResolvedLspConfig,
     text: str,
     *,
-    tables: _GrammarTables | None = None,
+    tables: GrammarTables | None = None,
+    symbol_table: SymbolTable | None = None,
 ) -> list[Token]:
     """Classify ``tree`` under an ``.fltklsp`` spec, layering explicit paints over the defaults.
 
     ``grammar`` must be the trivia-classified analysis grammar the parser was generated from
     (``ParserResult.grammar``). Pass ``tables`` (from :func:`build_grammar_tables`) to reuse a
     precomputed grammar table across calls -- the hot-path caller (``AnalysisEngine``) builds it
-    once per grammar; when omitted it is built from ``grammar``. Explicit paints win over defaults
-    across their whole span (a ``none`` paint suppresses both defaults and losing paints but emits
-    no token); positions no explicit paint covers fall back to the built-in defaults. Returns a
-    sorted, non-overlapping, adjacent-merged token stream, all within ``[0, len(text))``.
+    once per grammar; when omitted it is built from ``grammar``. Pass ``symbol_table`` (from
+    :func:`~fltk.lsp.symbols.extract`) to paint resolved references with their defining kind's
+    token; omitting it (the default) reproduces the reference-free output exactly. Explicit paints
+    win over defaults across their whole span (a ``none`` paint suppresses both defaults and losing
+    paints but emits no token); positions no explicit paint covers fall back to the built-in
+    defaults. Returns a sorted, non-overlapping, adjacent-merged token stream, all within
+    ``[0, len(text))``.
     """
     if tables is None:
         tables = build_grammar_tables(grammar)
 
     explicit: list[_Interval] = []
     _explicit_intervals(tree, 0, tables, resolved_config, text, explicit)
+    if symbol_table is not None:
+        _ref_intervals(symbol_table, explicit)
     covered = _merge_ranges([(start, end) for start, end, _, _ in explicit])
 
     tokens: list[Token] = []
@@ -391,7 +414,8 @@ def classify(
             tokens.append(Token(start, end, paint.token, paint.modifiers))
 
     # TODO(lsp-classify-hotpath): second full tree traversal; fold default emission into the
-    # explicit walk above.
+    # explicit walk above. With symbol extraction (symbols.extract) this is the third O(tree)
+    # walk per analysis (extraction, explicit paints, defaults); the same unification folds it in.
     for start, end, token_type in _default_intervals(tree, tables, text):
         for dstart, dend in _subtract((start, end), covered):
             tokens.append(Token(dstart, dend, token_type, ()))
