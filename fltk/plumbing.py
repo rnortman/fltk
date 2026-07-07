@@ -19,6 +19,7 @@ from fltk.fegen.pyrt import errors, memo, terminalsrc
 from fltk.iir.context import create_default_context
 from fltk.iir.py import compiler
 from fltk.iir.py import reg as pyreg
+from fltk.lsp.lsp_config import ResolvedLspConfig, load_lsp_config
 from fltk.plumbing_types import ParseResult, ParserResult, UnparserResult
 from fltk.unparse import gsm2unparser
 from fltk.unparse.combinators import Doc
@@ -252,6 +253,48 @@ def parse_format_config_file(config_path: Path) -> FormatterConfig:
         config_text = f.read()
 
     return parse_format_config(config_text)
+
+
+def parse_lsp_config(config_text: str, grammar: gsm.Grammar) -> ResolvedLspConfig:
+    """Parse .fltklsp text into a resolved config against ``grammar``.
+
+    Args:
+        config_text: Editor-tooling spec text
+        grammar: The target grammar the anchors resolve against
+
+    Returns:
+        The resolved LSP config (empty for empty/whitespace-only text)
+
+    Raises:
+        LspConfigError: If parsing or validation fails
+    """
+    return load_lsp_config(config_text, grammar)
+
+
+def parse_lsp_config_file(config_path: Path, grammar: gsm.Grammar) -> ResolvedLspConfig:
+    """Parse .fltklsp file into a resolved config against ``grammar``.
+
+    Args:
+        config_path: Path to the editor-tooling spec file
+        grammar: The target grammar the anchors resolve against
+
+    Returns:
+        The resolved LSP config
+
+    Raises:
+        LspConfigError: If parsing or validation fails
+        FileNotFoundError: If the config file doesn't exist
+        OSError: If the file cannot be read (e.g. permissions)
+        UnicodeDecodeError: If the file is not valid text in the default encoding
+    """
+    if not config_path.exists():
+        msg = f"LSP config file not found: {config_path}"
+        raise FileNotFoundError(msg)
+
+    with config_path.open() as f:
+        config_text = f.read()
+
+    return parse_lsp_config(config_text, grammar)
 
 
 def _assemble_unparser_module(

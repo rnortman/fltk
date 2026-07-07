@@ -1,0 +1,25 @@
+// fltklsp.fltkg — grammar for .fltklsp editor-tooling spec files
+lsp_spec := , statement* ;
+
+statement := scope_stmt | rule_config ;
+
+rule_config := "rule" : rule_name:identifier , "{" , ( rule_statement , )* , "}" , ;
+rule_statement := scope_stmt | def_stmt | ref_stmt | namespace_stmt ;
+
+scope_stmt := "scope" : anchor_list , ":" , scope:dotted_name , ";" , ;
+def_stmt   := "def" : anchor , ":" , kind:dotted_name , ";" , ;
+ref_stmt   := "ref" : anchor , ":" , kind_list , ";" , ;
+namespace_stmt := "namespace" , ";" , ;
+
+anchor_list := anchor , ( "," , anchor , )* ;
+anchor := ( qualifier . ":" )? . name:identifier | literal ;
+qualifier := label:"label" | rule:"rule" ;
+
+kind_list := wildcard:"*" | kind:dotted_name , ( "," , kind:dotted_name , )* ;
+dotted_name := part:identifier . ( "." . part:identifier )* ;
+
+identifier := name:/[a-zA-Z_][a-zA-Z0-9_]*/ ;
+literal := value:/("([^"\n\\]|\\.)+"|'([^'\n\\]|\\.)+')/ ;
+
+_trivia := ( line_comment | line_comment? : )+ ;
+line_comment := prefix:"//" . content:/[^\n]*/ . newline:"\n" ;

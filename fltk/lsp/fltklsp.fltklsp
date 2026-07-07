@@ -1,0 +1,28 @@
+// fltklsp.fltklsp -- an editor-tooling spec for the .fltklsp language itself.
+// Dogfoods the .fltklsp addressing surface against its own grammar (fltklsp.fltkg):
+// every anchor below resolves against a rule, label, or literal that fltklsp.fltkg defines.
+
+// Global literal anchors: the shared statement/anchor punctuation.
+scope ";", ":": punctuation;
+
+// Statement-introducing keywords, and the rule name a `rule` block addresses.
+rule rule_config {
+  scope "rule": keyword;
+  scope rule_name: type;
+}
+rule scope_stmt     { scope "scope": keyword; }
+rule def_stmt       { scope "def": keyword; }
+rule ref_stmt       { scope "ref": keyword; }
+rule namespace_stmt { scope "namespace": keyword; }
+
+// Anchor qualifiers are contextual keywords.
+rule qualifier {
+  scope "label": keyword;
+  scope "rule": keyword;
+}
+
+// Dotted scope/kind segments and quoted literal anchors. Bare identifier names are left to
+// the default classifier, which already paints them `variable`; a blanket `rule identifier`
+// paint would sit deeper than these context anchors and override them.
+rule dotted_name { scope part: property; }
+rule literal     { scope value: string; }

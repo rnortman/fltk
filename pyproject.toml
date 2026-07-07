@@ -24,6 +24,9 @@ classifiers = [
 ]
 dependencies = ["astor", "typer"]
 
+[project.scripts]
+fltk-highlight = "fltk.lsp.highlight_cli:app"
+
 [tool.maturin]
 python-packages = ["fltk"]
 module-name = "fltk._native"
