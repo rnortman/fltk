@@ -60,6 +60,22 @@ def test_unknown_rule_lists_valid_rules() -> None:
     assert "greeting" in result.output
 
 
+def test_invalid_resolver_spec_exits_1() -> None:
+    # A --resolver that will not load is a startup error (ResolverError is a ValueError), reported
+    # on stderr with exit 1 before any protocol I/O, matching the grammar/.fltklsp/.fltkfmt policy.
+    result = runner.invoke(server_cli.app, ["--grammar", _GRAMMAR, "--resolver", "no.such.module:create_resolver"])
+    assert result.exit_code == 1
+    assert "resolver" in result.output.lower()
+
+
+def test_resolver_missing_attr_exits_1(tmp_path: Path) -> None:
+    mod = tmp_path / "res.py"
+    mod.write_text("x = 1\n")
+    result = runner.invoke(server_cli.app, ["--grammar", _GRAMMAR, "--resolver", f"{mod}:create_resolver"])
+    assert result.exit_code == 1
+    assert "create_resolver" in result.output
+
+
 def test_missing_pygls_prints_install_hint(monkeypatch: pytest.MonkeyPatch) -> None:
     real_import = builtins.__import__
 

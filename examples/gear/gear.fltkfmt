@@ -1,0 +1,29 @@
+// gear.fltkfmt — formatting for the gear demo language.
+// Statements end on their own line; shape/fn block bodies break and indent one level. Tokens
+// within a statement are separated by single spaces, so Format Document visibly normalizes
+// stray whitespace without reflowing structure.
+
+ws_allowed: nbsp;
+ws_required: nbsp;
+preserve_blanks: 1;
+trivia_preserve: LineComment;
+
+before "," { nil; }
+before ";" { nil; }
+after "(" { nil; }
+before ")" { nil; }
+after ";" { hard; }
+
+rule shape_def {
+  after "{" { hard; }
+  before "}" { hard; }
+  after "}" { hard; }
+  nest from after "{" to before "}";
+}
+
+rule fn_def {
+  after "{" { hard; }
+  before "}" { hard; }
+  after "}" { hard; }
+  nest from after "{" to before "}";
+}

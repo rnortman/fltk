@@ -1,0 +1,52 @@
+// gear.fltklsp — editor tooling (highlighting + def/ref) for the gear demo language.
+//
+// Highlighting: line comments and numbers fall out of the built-in defaults; strings,
+// numbers, and type positions are scoped explicitly. Def/ref/namespace drive same-file
+// go-to-def/find-refs; cross-file resolution is the resolver plugin's job (gear_resolver.py).
+
+scope string: string;
+scope number: number;
+scope ty: type;
+
+rule import_item {
+  def name: import;
+  def alias: import;
+}
+
+rule shape_def {
+  def name: type;
+  namespace;
+}
+
+rule field {
+  def name: field;
+  ref ty: type, import;
+}
+
+rule const_def {
+  def name: constant;
+  ref ty: type, import;
+}
+
+rule fn_def {
+  def name: function;
+  ref ty: type, import;
+  namespace;
+}
+
+rule param {
+  def name: parameter;
+  ref ty: type, import;
+}
+
+rule let_stmt {
+  def name: variable;
+}
+
+rule name_ref {
+  ref name: *;
+}
+
+rule call {
+  ref callee: function, import;
+}

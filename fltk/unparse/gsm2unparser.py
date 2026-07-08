@@ -968,10 +968,12 @@ class UnparserGenerator:
         return method
 
     def _gen_count_newlines_in_trivia_method(self) -> iir.Method:
-        """Generate a method that counts newlines in a Trivia node's Span children.
+        """Generate a method that counts newlines across a Trivia node's children.
 
         This is used to detect blank lines in trivia when there are no preservable comments.
-        Returns the total count of newlines across all Span children.
+        Each child contributes newlines when it is a direct Span or a whitespace-only node
+        (grammars that wrap whitespace in a named trivia rule); comment nodes and empty spans
+        contribute nothing. Returns the total count.
         """
         trivia_type = self._get_trivia_type()
         method = self.unparser_class.def_method(
@@ -1030,21 +1032,22 @@ class UnparserGenerator:
             index=iir.LiteralInt(typ=iir.IndexInt, value=1),
         )
 
-        # Check if child is a Span (either backend's span object)
-        is_span = self._make_is_span_check(child_value)
+        # A child contributes newlines when it is a direct Span or a whitespace-only node
+        # (e.g. a grammar that wraps whitespace in a named trivia rule); the runtime helper
+        # decides from the child's own span text, so no is_span conditional is emitted here.
+        terminals_field = iir.SelfExpr().fld.terminals.load()
+        pyrt_module = self._get_pyrt_module()
+        newlines_in_child = pyrt_module.method.count_whitespace_newlines.call(
+            child_value,
+            terminals_field,
+        )
 
-        if_span = while_loop.block.if_(is_span)
-
-        # Count newlines in this span
-        newlines_in_span = iir.SelfExpr().method._count_newlines.call(child_value)
-
-        # Add to total count
-        if_span.block.assign(
+        while_loop.block.assign(
             count_var.store(),
             iir.BinOp(
                 lhs=count_var.load(),
                 op="+",
-                rhs=newlines_in_span,
+                rhs=newlines_in_child,
             ),
         )
 
@@ -1164,6 +1167,8 @@ class UnparserGenerator:
             newline_count = iir.SelfExpr().method._count_newlines.call(span_var.load())
 
             # Get preserve_blanks from config (generation-time constant)
+            # TODO(rule-preserve-blanks): read the rule-aware get_preserve_blanks(rule_name)
+            # instead of the global field so per-rule preserve_blanks is honored.
             preserve_blanks = 0
             if self.formatter_config.trivia_config:
                 preserve_blanks = self.formatter_config.trivia_config.preserve_blanks
@@ -1349,6 +1354,8 @@ class UnparserGenerator:
         no_preserve_block = if_has_preservable.orelse
 
         # Get preserve_blanks from config (generation-time constant)
+        # TODO(rule-preserve-blanks): read the rule-aware get_preserve_blanks(rule_name)
+        # instead of the global field so per-rule preserve_blanks is honored.
         preserve_blanks = 0
         if self.formatter_config.trivia_config:
             preserve_blanks = self.formatter_config.trivia_config.preserve_blanks

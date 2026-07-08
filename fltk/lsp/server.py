@@ -18,6 +18,7 @@ import bisect
 import dataclasses
 import importlib.metadata
 import logging
+import pathlib
 import traceback
 from concurrent.futures import ThreadPoolExecutor
 from typing import TYPE_CHECKING, Any
@@ -31,17 +32,21 @@ from pygls.lsp.server import LanguageServer
 from fltk import plumbing
 from fltk.lsp import features
 from fltk.lsp.positions import LineIndex, PositionEncoding
+from fltk.lsp.project import Hazard, ProjectHost, ProjectNavigator, canonical_uri, uri_to_path
+from fltk.lsp.resolver import ResolvedDocument
 
 if TYPE_CHECKING:
     from fltk.lsp import symbols
     from fltk.lsp.engine import AnalysisEngine, DocumentAnalysis
+    from fltk.lsp.resolver import Resolver
+    from fltk.lsp.symbols import Symbol
     from fltk.plumbing_types import ParserResult, UnparserResult
     from fltk.unparse.fmt_config import FormatterConfig
     from fltk.unparse.renderer import RendererConfig
 
-    # Worker output: the analysis, its line index, and the served tokens (absolute segments plus
-    # their delta encoding), or ``None`` when the analysis produced no tokens.
-    _AnalysisResult = tuple[DocumentAnalysis, LineIndex, "_ServedTokens | None"]
+    # Worker output: the analysis, its line index, the served tokens (absolute segments plus their
+    # delta encoding, or ``None`` when the analysis produced no tokens), and the analyzed text.
+    _AnalysisResult = tuple[DocumentAnalysis, LineIndex, "_ServedTokens | None", str]
 
 
 _LOGGER = logging.getLogger(__name__)
@@ -94,10 +99,12 @@ _constrain_pygls_encodings()
 class _GoodAnalysis:
     """A snapshot of the last complete analysis, self-consistent across one document version.
 
-    The line index, tree, segments, and symbols are all computed against the *same* document text,
-    so serving any of them for a stale version can never mix coordinates from two versions. Its
-    ``segments`` are the fresh absolute segments of that complete analysis -- the stale input a later
-    partial analysis merges its fresh prefix with.
+    The text, line index, tree, segments, and symbols are all computed against the *same* document
+    version, so serving any of them for a stale version can never mix coordinates from two versions.
+    Its ``segments`` are the fresh absolute segments of that complete analysis -- the stale input a
+    later partial analysis merges its fresh prefix with. ``text`` is the analyzed source, so a
+    cross-file resolver query can build a self-consistent ``ResolvedDocument`` (text + tree +
+    symbols + line index all from one version) rather than pairing the live buffer with a stale tree.
     """
 
     version: int | None
@@ -105,6 +112,12 @@ class _GoodAnalysis:
     tree: Any
     segments: list[features.TokenSegment]
     symbols: symbols.SymbolTable
+    text: str
+
+    def resolved_document(self, uri: str) -> ResolvedDocument:
+        """A :class:`ResolvedDocument` view of this snapshot -- text, tree, and symbols all from the
+        one analyzed version, never the live buffer paired with a stale tree."""
+        return ResolvedDocument(uri=uri, text=self.text, tree=self.tree, symbols=self.symbols)
 
 
 @dataclasses.dataclass(frozen=True)
@@ -146,6 +159,8 @@ class FltkLanguageServer(LanguageServer):
         engine: AnalysisEngine,
         formatter_config: FormatterConfig | None,
         renderer_config: RendererConfig,
+        *,
+        resolver: Resolver | None = None,
     ) -> None:
         super().__init__(
             name=_SERVER_NAME,
@@ -155,6 +170,9 @@ class FltkLanguageServer(LanguageServer):
         self._engine = engine
         self._formatter_config = formatter_config
         self._renderer_config = renderer_config
+        # Cross-file resolver, or None. When None the definition/references/rename paths keep their
+        # same-file-only shape exactly; server behavior is bit-identical to a resolver-free build.
+        self._resolver = resolver
         # The engine owns the start rule; reading it here keeps the formatting parses and the
         # analysis parses from ever disagreeing on which rule the document starts with.
         self._start_rule = engine.start_rule
@@ -171,6 +189,9 @@ class FltkLanguageServer(LanguageServer):
         # (its inputs -- grammar and .fltkfmt -- are fixed at startup).
         self._fmt_pipeline: tuple[ParserResult, UnparserResult] | None = None
         self._fmt_failed = False
+        # Emitted at most once: a resolver is configured but the client gave no workspace root, so
+        # cross-file navigation is limited to open buffers and same-file results.
+        self._warned_no_root = False
 
     # -- encoding ---------------------------------------------------------------------------
 
@@ -223,7 +244,7 @@ class FltkLanguageServer(LanguageServer):
                 stale_segments = stale.segments if stale is not None else []
                 segments = features.merge_stale_segments(fresh, stale_segments, boundary)
             served = _ServedTokens(segments=segments, encoded=features.delta_encode_segments(segments))
-        return analysis, line_index, served
+        return analysis, line_index, served, text
 
     def _store(
         self,
@@ -232,6 +253,7 @@ class FltkLanguageServer(LanguageServer):
         analysis: DocumentAnalysis,
         line_index: LineIndex,
         served: _ServedTokens | None,
+        text: str,
         epoch: int,
     ) -> _DocState:
         """Record an analysis result, advancing state only for the current-or-newer version.
@@ -261,6 +283,7 @@ class FltkLanguageServer(LanguageServer):
                     tree=analysis.tree,
                     segments=served.segments,
                     symbols=analysis.symbols,
+                    text=text,
                 )
         return state
 
@@ -273,7 +296,7 @@ class FltkLanguageServer(LanguageServer):
         epoch = self._epochs.get(uri, 0)
         inflight = self._inflight.get(uri)
         if inflight is not None and inflight[0] == version:
-            analysis, line_index, served = await inflight[1]
+            analysis, line_index, served, analyzed_text = await inflight[1]
         else:
             loop = asyncio.get_running_loop()
             # Snapshot last_good on the loop thread at submit time; only _store (also on the loop
@@ -283,11 +306,11 @@ class FltkLanguageServer(LanguageServer):
             future = loop.run_in_executor(self._executor, self._analyze_blocking, text, stale)
             self._inflight[uri] = (version, future)
             try:
-                analysis, line_index, served = await future
+                analysis, line_index, served, analyzed_text = await future
             finally:
                 if self._inflight.get(uri) is not None and self._inflight[uri][1] is future:
                     del self._inflight[uri]
-        return self._store(uri, version, analysis, line_index, served, epoch)
+        return self._store(uri, version, analysis, line_index, served, analyzed_text, epoch)
 
     async def _ensure_analyzed(self, uri: str, version: int | None, text: str) -> _DocState:
         """Return state whose analysis matches ``version``, analyzing if necessary."""
@@ -422,6 +445,223 @@ class FltkLanguageServer(LanguageServer):
         """Whether the client advertised ``workspace.workspaceEdit.documentChanges`` support."""
         return get_capability(self.client_capabilities, "workspace.workspace_edit.document_changes", False)
 
+    # -- cross-file project layer -----------------------------------------------------------
+
+    def _workspace_root(self) -> pathlib.Path | None:
+        """The workspace root: the first workspace folder, else ``root_uri``, else ``None``.
+
+        Read back from the pygls workspace populated at ``initialize`` (which does not change within
+        a session), mirroring the lazy capability accessors above.
+        """
+        folders = self.workspace.folders
+        if folders:
+            first = next(iter(folders.values()))
+            path = uri_to_path(first.uri)
+            if path is not None:
+                return path
+        root_uri = self.workspace.root_uri
+        if root_uri:
+            return uri_to_path(root_uri)
+        return None
+
+    def _maybe_warn_no_root(self, root: pathlib.Path | None) -> None:
+        """Log once when a resolver-path request runs with no workspace root, so a user whose editor
+        opened a bare file (not a folder) sees why cross-file navigation is limited rather than
+        silently absent."""
+        if root is not None or self._warned_no_root:
+            return
+        self._warned_no_root = True
+        self.window_log_message(
+            lsp.LogMessageParams(
+                type=lsp.MessageType.Info,
+                message="fltk-lsp: no workspace root; cross-file navigation limited to open buffers and same-file",
+            )
+        )
+
+    def _open_docs_snapshot(self) -> dict[str, tuple[int, str]]:
+        """A point-in-time ``uri -> (version, text)`` copy of every open document.
+
+        Taken on the loop thread at request-submit time and handed to a worker-side ``ProjectHost``,
+        so ``document()`` reads a race-free snapshot rather than the live pygls workspace that
+        ``didChange`` mutates on the loop thread concurrently.
+        """
+        snapshot: dict[str, tuple[int, str]] = {}
+        for uri, document in self.workspace.text_documents.items():
+            version = document.version
+            snapshot[uri] = (version if version is not None else 0, document.source)
+        return snapshot
+
+    def _project(
+        self, open_docs: dict[str, tuple[int, str]], root: pathlib.Path | None
+    ) -> tuple[ProjectHost, ProjectNavigator]:
+        """A worker-side ``(host, navigator)`` over a fresh ``ProjectHost`` for this request's snapshot.
+
+        A resolver is present whenever this is called (the handlers gate on ``self._resolver``).
+        """
+        assert self._resolver is not None
+        host = ProjectHost(self._engine, self._resolver, root_path=root, open_docs=open_docs)
+        return host, ProjectNavigator(host, self._resolver)
+
+    def _definition_blocking(
+        self,
+        doc: ResolvedDocument,
+        offset: int,
+        requesting_line_index: LineIndex,
+        enc: PositionEncoding,
+        open_docs: dict[str, tuple[int, str]],
+        root: pathlib.Path | None,
+    ) -> tuple[lsp.Location | None, bool, list[tuple[lsp.MessageType, str]]]:
+        """Cross-file definition on the worker: ``(location, degraded, logs)``.
+
+        ``degraded`` signals a resolver failure the caller must answer same-file; ``location`` is
+        the rendered target (``None`` when the cursor addresses nothing resolvable). The requesting
+        document's own offsets render against ``requesting_line_index`` (the stale-served snapshot);
+        other files render against their own line tables.
+        """
+        logs: list[tuple[lsp.MessageType, str]] = []
+        host, navigator = self._project(open_docs, root)
+        try:
+            target = navigator.definition(doc, offset)
+        except Exception:
+            logs.append(
+                (
+                    lsp.MessageType.Error,
+                    f"fltk-lsp: resolver failed during definition; using same-file:\n{traceback.format_exc()}",
+                )
+            )
+            _drain(host, logs)
+            return None, True, logs
+        _drain(host, logs)
+        if target is None:
+            return None, False, logs
+        line_index = requesting_line_index if target.uri == doc.uri else host.line_index(target.uri)
+        if line_index is None:
+            return None, False, logs
+        return features.location(target.uri, target.name_start, target.name_end, line_index, enc), False, logs
+
+    def _references_blocking(
+        self,
+        doc: ResolvedDocument,
+        offset: int,
+        *,
+        include_declaration: bool,
+        requesting_line_index: LineIndex,
+        enc: PositionEncoding,
+        open_docs: dict[str, tuple[int, str]],
+        root: pathlib.Path | None,
+    ) -> tuple[list[lsp.Location] | None, bool, list[tuple[lsp.MessageType, str]]]:
+        """Cross-file references on the worker: ``(locations, degraded, logs)``.
+
+        Every occurrence is rendered against its own document's line table; ``degraded`` signals a
+        resolver failure the caller answers same-file. ``locations`` is ``None`` when the cursor
+        addresses nothing resolvable.
+        """
+        logs: list[tuple[lsp.MessageType, str]] = []
+        host, navigator = self._project(open_docs, root)
+        try:
+            occurrences = navigator.references(doc, offset, include_declaration=include_declaration)
+        except Exception:
+            logs.append(
+                (
+                    lsp.MessageType.Error,
+                    f"fltk-lsp: resolver failed during references; using same-file:\n{traceback.format_exc()}",
+                )
+            )
+            _drain(host, logs)
+            return None, True, logs
+        _drain(host, logs)
+        if occurrences is None:
+            return None, False, logs
+        locations: list[lsp.Location] = []
+        for occ_uri, start, end in occurrences:
+            line_index = requesting_line_index if occ_uri == doc.uri else host.line_index(occ_uri)
+            if line_index is None:
+                continue
+            locations.append(features.location(occ_uri, start, end, line_index, enc))
+        return locations, False, logs
+
+    def _rename_guard_blocking(
+        self,
+        doc: ResolvedDocument,
+        symbol: Symbol,
+        offset: int,
+        open_docs: dict[str, tuple[int, str]],
+        root: pathlib.Path | None,
+    ) -> tuple[Hazard | None, list[tuple[lsp.MessageType, str]]]:
+        """The cross-file rename hazard on the worker; fails closed.
+
+        Returns the :class:`Hazard`, or ``None`` when the global query raised (a buggy or
+        transiently-failing resolver refuses rather than degrading). Only ``Hazard.NONE`` lets the
+        caller proceed -- every other value, and ``None``, refuses.
+        """
+        logs: list[tuple[lsp.MessageType, str]] = []
+        host, navigator = self._project(open_docs, root)
+        try:
+            hazard = navigator.rename_hazard(doc, symbol, offset)
+        except Exception:
+            logs.append(
+                (lsp.MessageType.Error, f"fltk-lsp: rename guard query failed; refusing:\n{traceback.format_exc()}")
+            )
+            _drain(host, logs)
+            return None, logs
+        _drain(host, logs)
+        return hazard, logs
+
+    async def definition_crossfile(self, uri: str, position: lsp.Position) -> lsp.Location | None:
+        """Resolver-path go-to-definition: cross-file target, degrading to same-file on failure."""
+        ready = await self._serveable_for(uri)
+        if ready is None:
+            return None
+        good, enc = ready
+        offset = good.line_index.position_to_offset(position.line, position.character, enc)
+        doc = good.resolved_document(canonical_uri(uri))
+        open_docs = self._open_docs_snapshot()
+        root = self._workspace_root()
+        self._maybe_warn_no_root(root)
+        loop = asyncio.get_running_loop()
+        location, degraded, logs = await loop.run_in_executor(
+            self._executor, self._definition_blocking, doc, offset, good.line_index, enc, open_docs, root
+        )
+        for level, message in logs:
+            self.window_log_message(lsp.LogMessageParams(type=level, message=message))
+        if degraded:
+            return features.definition_location(good.symbols, offset, uri, good.line_index, enc)
+        return location
+
+    async def references_crossfile(
+        self, uri: str, position: lsp.Position, *, include_declaration: bool
+    ) -> list[lsp.Location] | None:
+        """Resolver-path find-references: workspace-wide occurrences, degrading to same-file on failure."""
+        ready = await self._serveable_for(uri)
+        if ready is None:
+            return None
+        good, enc = ready
+        offset = good.line_index.position_to_offset(position.line, position.character, enc)
+        doc = good.resolved_document(canonical_uri(uri))
+        open_docs = self._open_docs_snapshot()
+        root = self._workspace_root()
+        self._maybe_warn_no_root(root)
+        loop = asyncio.get_running_loop()
+        locations, degraded, logs = await loop.run_in_executor(
+            self._executor,
+            lambda: self._references_blocking(
+                doc,
+                offset,
+                include_declaration=include_declaration,
+                requesting_line_index=good.line_index,
+                enc=enc,
+                open_docs=open_docs,
+                root=root,
+            ),
+        )
+        for level, message in logs:
+            self.window_log_message(lsp.LogMessageParams(type=level, message=message))
+        if degraded:
+            return features.reference_locations(
+                good.symbols, offset, uri, good.line_index, enc, include_declaration=include_declaration
+            )
+        return locations
+
     # -- rename -----------------------------------------------------------------------------
 
     async def rename_document(self, uri: str, position: lsp.Position, new_name: str) -> lsp.WorkspaceEdit | None:
@@ -470,6 +710,29 @@ class FltkLanguageServer(LanguageServer):
             return features.rename_edits(
                 uri, version, [], new_name, state.line_index, enc, document_changes=document_changes
             )
+        if self._resolver is not None:
+            # Cross-file refusal guard: a same-file rename of a symbol other files reference (or an
+            # import binding) would silently corrupt the project. Fails closed -- any query failure
+            # refuses rather than degrading, so a transient resolver fault cannot reopen the hazard.
+            doc = ResolvedDocument(uri=canonical_uri(uri), text=text, tree=analysis.tree, symbols=analysis.symbols)
+            open_docs = self._open_docs_snapshot()
+            root = self._workspace_root()
+            self._maybe_warn_no_root(root)
+            guard_loop = asyncio.get_running_loop()
+            hazard, guard_logs = await guard_loop.run_in_executor(
+                self._executor, self._rename_guard_blocking, doc, symbol, offset, open_docs, root
+            )
+            for level, message in guard_logs:
+                self.window_log_message(lsp.LogMessageParams(type=level, message=message))
+            # Fail-closed: only Hazard.NONE proceeds; every other hazard (and None, a query failure)
+            # refuses, so a resolver fault or a future hazard value cannot silently permit the rename.
+            refusal = _RENAME_REFUSALS.get(hazard)
+            if refusal is not None:
+                raise JsonRpcException(refusal, code=lsp.LSPErrorCodes.RequestFailed)
+            if self.workspace.get_text_document(uri).version != version:
+                # The guard's global query awaited on the worker; a didChange may have landed since.
+                msg = "document changed during rename; retry"
+                raise JsonRpcException(msg, code=lsp.LSPErrorCodes.RequestFailed)
         renamed = _apply_edits(text, occurrences, new_name)
         loop = asyncio.get_running_loop()
         verify = await loop.run_in_executor(self._executor, self._engine.analyze, renamed)
@@ -567,6 +830,21 @@ class FltkLanguageServer(LanguageServer):
         return edits
 
 
+# Fail-closed rename verdicts: a hazard not in this map (only ``Hazard.NONE``) permits the rename.
+# ``None`` is the query-failure sentinel and must refuse.
+_RENAME_REFUSALS: dict[Hazard | None, str] = {
+    Hazard.CROSS_FILE: "cannot rename: symbol is referenced in other files",
+    Hazard.IMPORT_BINDING: "cannot rename: symbol is an import binding",
+    None: "cannot rename: could not verify cross-file references",
+}
+
+
+def _drain(host: ProjectHost, logs: list[tuple[lsp.MessageType, str]]) -> None:
+    """Move a project host's accumulated client-surfacable warnings onto a worker's log list, so an
+    unreadable workspace file or a scan error reaches the editor as ``window/logMessage``."""
+    logs.extend((lsp.MessageType.Warning, message) for message in host.drain_warnings())
+
+
 def _apply_edits(text: str, occurrences: list[tuple[int, int]], new_name: str) -> str:
     """Replace every ``(start, end)`` codepoint span in ``text`` with ``new_name``.
 
@@ -582,13 +860,17 @@ def create_server(
     engine: AnalysisEngine,
     formatter_config: FormatterConfig | None,
     renderer_config: RendererConfig,
+    *,
+    resolver: Resolver | None = None,
 ) -> FltkLanguageServer:
     """Build and wire an :class:`FltkLanguageServer`; the caller runs ``start_io``.
 
     Kept separate from the CLI so the server can be constructed and driven in-process by tests. The
-    start rule comes from ``engine``; there is no separate parameter to keep in sync with it.
+    start rule comes from ``engine``; there is no separate parameter to keep in sync with it. An
+    optional ``resolver`` turns on the cross-file definition/references paths and the rename guard;
+    without one, every handler keeps its same-file-only behavior.
     """
-    server = FltkLanguageServer(engine, formatter_config, renderer_config)
+    server = FltkLanguageServer(engine, formatter_config, renderer_config, resolver=resolver)
     legend = lsp.SemanticTokensLegend(
         token_types=list(features.SEMANTIC_TOKEN_TYPES),
         token_modifiers=list(features.SEMANTIC_TOKEN_MODIFIERS),
@@ -671,6 +953,8 @@ def create_server(
     @server.feature(lsp.TEXT_DOCUMENT_DEFINITION)
     async def definition(params: lsp.DefinitionParams) -> lsp.Location | None:
         uri = params.text_document.uri
+        if server._resolver is not None:
+            return await server.definition_crossfile(uri, params.position)
         ready = await server._serveable_for(uri)
         if ready is None:
             return None
@@ -681,6 +965,10 @@ def create_server(
     @server.feature(lsp.TEXT_DOCUMENT_REFERENCES)
     async def references(params: lsp.ReferenceParams) -> list[lsp.Location] | None:
         uri = params.text_document.uri
+        if server._resolver is not None:
+            return await server.references_crossfile(
+                uri, params.position, include_declaration=params.context.include_declaration
+            )
         ready = await server._serveable_for(uri)
         if ready is None:
             return None

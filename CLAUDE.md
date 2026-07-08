@@ -159,3 +159,4 @@ Slugs are the join key. Adding a TODO requires both an entry in `TODO.md` and a 
 Always read the entire file when reading a source file.
 Trying to read only a few lines at a time usually leads to misunderstandings.
 Don't search for specific lines and try to read only those; just read the whole file.
+The precommit hook can take a long time to run. Use a 5-minute timeout when running commits.

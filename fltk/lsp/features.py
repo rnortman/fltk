@@ -354,6 +354,16 @@ def symbol_target(table: SymbolTable, offset: int) -> Symbol | None:
     return result[0] if result is not None else None
 
 
+def location(uri: str, start: int, end: int, line_index: LineIndex, enc: PositionEncoding) -> lsp.Location:
+    """A neutral ``(uri, start, end)`` codepoint triple rendered to an :class:`lsp.Location`.
+
+    Positions are computed against ``line_index`` -- the line table of *that* document -- in ``enc``
+    units, so a cross-file target's span is rendered against its own file's line table, not the
+    requesting document's. Used by the resolver-path definition/references handlers.
+    """
+    return lsp.Location(uri=uri, range=_render_range(start, end, line_index, enc))
+
+
 def definition_location(
     table: SymbolTable, offset: int, uri: str, line_index: LineIndex, enc: PositionEncoding
 ) -> lsp.Location | None:

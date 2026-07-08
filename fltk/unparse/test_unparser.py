@@ -1154,5 +1154,117 @@ rule2 := "b" ;
             del sys.modules[parser_result.cst_module_name]
 
 
+# Custom-trivia grammar (gear-style): whitespace is captured as a named ``Ws`` *node* child of
+# ``Trivia``, not a direct Span, so it exercises the whitespace-aware newline counting.
+_CUSTOM_TRIVIA_GRAMMAR = """
+doc := stmt* ;
+stmt := name:/[a-z]+/ . ";" , ;
+_trivia := ( ws | line_comment )+ ;
+ws := chars:/\\s+/ ;
+line_comment := prefix:"//" . text:/[^\\n]*/ . nl:"\\n" ;
+"""
+
+
+def test_preserve_blanks_parsed_config_clobbering_order_direct_span():
+    """Blank lines survive when the FormatterConfig comes from parsed clobbering-order text.
+
+    Uses a direct-span-trivia grammar (fegen), so the newline counter is not exercised and only
+    the config-parsing path matters: ``preserve_blanks: 1`` listed before ``trivia_preserve`` must
+    not be discarded by the later directive. Closes the parse-path hole the direct-override tests
+    leave open.
+    """
+    script_dir = Path(__file__).parent.parent / "fegen"
+    grammar = parse_grammar_file(script_dir / "fegen.fltkg")
+    parser_result = generate_parser(grammar, capture_trivia=True)
+    try:
+        fmt_config = parse_format_config(
+            "preserve_blanks: 1;\ntrivia_preserve: LineComment, BlockComment;\nws_allowed: nil;\n"
+            'ws_required: bsp;\nafter ";" { hard; }\n'
+        )
+        unparser_result = generate_unparser(
+            parser_result.grammar, parser_result.cst_module_name, formatter_config=fmt_config
+        )
+
+        test_input = 'rule1 := "a" ;\n\n\nrule2 := "b" ;\n'
+        parse_result = parse_text(parser_result, test_input, "grammar")
+        assert parse_result.success, f"Failed to parse: {parse_result.error_message}"
+
+        doc = unparse_cst(unparser_result, parse_result.cst, test_input, "grammar")
+        output = render_doc(doc, RendererConfig(max_width=80))
+
+        blank_count = sum(1 for line in output.strip().split("\n") if line.strip() == "")
+        assert blank_count == 1, f"Expected exactly 1 blank line from parsed clobbering-order config:\n{output}"
+    finally:
+        if parser_result.cst_module_name in sys.modules:
+            del sys.modules[parser_result.cst_module_name]
+
+
+def test_preserve_blanks_custom_trivia_node_whitespace_survives():
+    """Blank lines survive on a custom-trivia grammar where whitespace is a ``Ws`` node child.
+
+    Pins the whitespace-aware newline counting: the counter must see newlines inside node-wrapped
+    whitespace, not only in direct-span trivia children. The non-clobbering statement order keeps
+    the config-parsing path out of it, so this isolates the counting behavior.
+    """
+    grammar = parse_grammar(_CUSTOM_TRIVIA_GRAMMAR)
+    parser_result = generate_parser(grammar, capture_trivia=True)
+    try:
+        fmt_config = parse_format_config(
+            "trivia_preserve: LineComment;\npreserve_blanks: 1;\nws_allowed: nil;\n"
+            'ws_required: nil;\nafter ";" { hard; }\n'
+        )
+        unparser_result = generate_unparser(
+            parser_result.grammar, parser_result.cst_module_name, formatter_config=fmt_config
+        )
+
+        test_input = "foo;\n\nbar;\n"
+        parse_result = parse_text(parser_result, test_input, "doc")
+        assert parse_result.success, f"Failed to parse: {parse_result.error_message}"
+
+        doc = unparse_cst(unparser_result, parse_result.cst, test_input, "doc")
+        output = render_doc(doc, RendererConfig(max_width=80))
+
+        blank_count = sum(1 for line in output.strip().split("\n") if line.strip() == "")
+        assert blank_count == 1, f"Expected the blank line between items to survive:\n{output}"
+    finally:
+        if parser_result.cst_module_name in sys.modules:
+            del sys.modules[parser_result.cst_module_name]
+
+
+def test_preserve_blanks_custom_trivia_comment_terminator_not_counted():
+    """Comment-terminator newlines are not miscounted as blank lines when the node holds a comment.
+
+    On the custom-trivia grammar, a gap holding two consecutive unpreserved ``//`` line comments
+    and no source blank line must render with no blank line: each comment node's ``\\n`` terminator
+    is not whitespace-only, so it contributes nothing to the newline count. Two comments are used
+    (not one) so that dropping the whitespace-only check would mis-count their two terminators to 2,
+    crossing the ``>= 2`` blank-line threshold -- the input actually discriminates the whitespace
+    guard from its absence.
+    """
+    grammar = parse_grammar(_CUSTOM_TRIVIA_GRAMMAR)
+    parser_result = generate_parser(grammar, capture_trivia=True)
+    try:
+        # Comments are NOT preserved here, so the gap routes through the no-preservable newline count.
+        fmt_config = parse_format_config(
+            'preserve_blanks: 1;\nws_allowed: nil;\nws_required: nil;\nafter ";" { hard; }\n'
+        )
+        unparser_result = generate_unparser(
+            parser_result.grammar, parser_result.cst_module_name, formatter_config=fmt_config
+        )
+
+        test_input = "foo; // c1\n// c2\nbar;\n"
+        parse_result = parse_text(parser_result, test_input, "doc")
+        assert parse_result.success, f"Failed to parse: {parse_result.error_message}"
+
+        doc = unparse_cst(unparser_result, parse_result.cst, test_input, "doc")
+        output = render_doc(doc, RendererConfig(max_width=80))
+
+        blank_count = sum(1 for line in output.strip().split("\n") if line.strip() == "")
+        assert blank_count == 0, f"Comment-terminator newline must not create a blank line:\n{output}"
+    finally:
+        if parser_result.cst_module_name in sys.modules:
+            del sys.modules[parser_result.cst_module_name]
+
+
 if __name__ == "__main__":
     pytest.main([__file__, "-v"])

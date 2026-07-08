@@ -1,0 +1,8 @@
+// shapes — geometry primitives for the gear demo. Not a real language.
+shape Circle {
+  radius: Float;
+}
+
+shape Square {
+  side: Float;
+}

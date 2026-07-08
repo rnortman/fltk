@@ -25,6 +25,7 @@ from fltk.unparse.fmt_config import (
     OperationType,
     RenderAs,
     RuleConfig,
+    TriviaConfig,
 )
 
 
@@ -1629,3 +1630,28 @@ rule foo {
         # Operations should be in proper unwinding order: JOIN_END first, then NEST_END
         assert merged_before.operations[0].operation_type == OperationType.JOIN_END
         assert merged_before.operations[1].operation_type == OperationType.NEST_END
+
+
+class TestTriviaConfigDirectiveOwnership:
+    """`preserve_blanks` and `trivia_preserve` each own their trivia_config field, order-free.
+
+    Each directive sets only its own field; statement order between the two is irrelevant, and a
+    repeated directive is last-wins per field without disturbing the other field.
+    """
+
+    def test_preserve_blanks_before_trivia_preserve_survives(self):
+        # The clobbering order (preserve_blanks first) must not lose preserve_blanks.
+        config = parse_format_config("preserve_blanks: 1;\ntrivia_preserve: LineComment;\n")
+        assert config.trivia_config == TriviaConfig(preserve_node_names={"LineComment"}, preserve_blanks=1)
+
+    def test_trivia_preserve_before_preserve_blanks_survives(self):
+        # Reverse order yields the identical config: order-independence, not accident.
+        config = parse_format_config("trivia_preserve: LineComment;\npreserve_blanks: 1;\n")
+        assert config.trivia_config == TriviaConfig(preserve_node_names={"LineComment"}, preserve_blanks=1)
+
+    def test_repeated_trivia_preserve_last_wins_preserve_blanks_survives(self):
+        # Repeated trivia_preserve: last node set wins; a preceding preserve_blanks still survives.
+        config = parse_format_config(
+            "preserve_blanks: 2;\ntrivia_preserve: LineComment;\ntrivia_preserve: BlockComment;\n"
+        )
+        assert config.trivia_config == TriviaConfig(preserve_node_names={"BlockComment"}, preserve_blanks=2)

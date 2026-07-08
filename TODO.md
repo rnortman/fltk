@@ -4,6 +4,17 @@
 
 This is a placeholder entry. Leave it here so the file is never empty. It is not a real TODO. You would reference it in code with `// TODO(example-placeholder)` comments. This is the basic TODO system design: An entry here with a slug used to join to code comments. Add real TODOs below this one in this format.
 
+## `rule-preserve-blanks`
+
+Rule-level `preserve_blanks` is parsed and stored but never consumed. `RuleConfig.preserve_blanks`
+(`fltk/unparse/fmt_config.py`) and `FormatterConfig.get_preserve_blanks(rule_name)` exist, but both
+unparser generators read the *global* `trivia_config.preserve_blanks` as a generation-time constant
+rather than calling the rule-aware method, so a per-rule `preserve_blanks` directive has no effect.
+Pre-existing feature gap, orthogonal to the blank-line-preservation bug fix. To close it, thread the
+rule name to the newline-spacing emission and read `get_preserve_blanks(rule_name)`. Location:
+`fltk/unparse/gsm2unparser.py` (both `# Get preserve_blanks from config` sites in
+`_gen_trivia_processing`), `fltk/unparse/gsm2unparser_rs.py` (`_get_preserve_blanks`).
+
 ## `extend-children-owned`
 
 `extend_children(&Self)` clones every child Arc even though the donor node is immediately dropped after the call (inline-to-parent sub-expression and `+`/`*` loop paths). A consuming variant `extend_children_owned(other: Self)` using `Vec::append` would avoid the atomic inc+dec pairs per child on the parse hot path. Blocked on `gsm2tree_rs.py` adding the method to the generated CST node API. Location: `fltk/fegen/gsm2parser_rs.py` (`_gen_item_multiple`, `_gen_append_code`), `fltk/fegen/gsm2tree_rs.py` (generated `impl <Node>` blocks). Re-open only with profiling evidence.
@@ -38,6 +49,36 @@ interim shared helper. Location: `fltk/lsp/test_lsp_config.py`, `fltk/lsp/test_l
 ## `formatter-group-idempotency`
 
 The formatter is not idempotent on grouped alternations at narrow widths: `fltk/fegen/test_data/rust_parser_fixture.fltkg` formatted at width 40 / indent 4 changes between pass 1 and pass 2 (a grouped alternation `( inner:rec_via_sub . "+" | inner:atom ) .` re-breaks into a multi-line `(` … `)` block on the second pass), converging only at pass 2. Single-pass cross-backend parity holds, so this is a shared formatter-layout bug present in both the Python and Rust backends, not a backend divergence. Fixing it is a formatter behavior change to both backends and was out of scope for the pure test addition that discovered it (`fltkfmt` integration tests). The idempotency integration test (`crates/fltkfmt/tests/cli.rs`, `format_format_is_format`) carves this one case out explicitly, pinning current behavior (`out2 != out1`, `out3 == out2`); when the formatter is fixed that carve-out's `assert_ne!` trips, forcing its removal alongside this entry. Location: `crates/fltkfmt/tests/cli.rs` (the `TODO(formatter-group-idempotency)` carve-out in `format_format_is_format`); the layout logic lives in the shared unparser/renderer (`fltk/unparse/` and the generated Rust unparser).
+
+## `resolver-spec-file-recognition`
+
+`fltk/lsp/resolver.py`'s `_looks_like_path` treats a `--resolver` spec head as a file whenever
+`pathlib.Path(head).is_file()` — a cwd-relative check — even for a head that reads as a plain
+module (no `.py`, no separator). So whether `--resolver mylang.resolvers:create_resolver` imports
+the installed module `mylang.resolvers` or `exec`s a file literally named `mylang.resolvers`
+depends on the server's cwd contents. Editors commonly spawn LSP servers with cwd = workspace
+root, so a hostile project that plants a file matching a known resolver module name could get
+arbitrary Python exec'd at startup for a user who configured a bare-module resolver spec. No
+shipped config is affected (the gear demo and README use explicit `.py` paths). The fix — drop the
+bare `is_file()` recognition, keeping only the unambiguous `.py`/separator signals — contradicts
+the frozen step5 design §4.3 ("a path is recognized by an existing file"), so it requires a design
+delta before landing; do it there, not by editing the frozen doc. Location: `fltk/lsp/resolver.py`
+(`_looks_like_path`).
+
+## `rename-guard-incomplete-scan`
+
+`ProjectNavigator.rename_hazard` (`fltk/lsp/project.py`) decides whether a same-file rename is safe
+by scanning the workspace for cross-file references. When that scan is incomplete -- a directory
+`os.walk` error (surfaced only as an advisory `window/logMessage` warning), or a neighbor file that
+is unreadable/unparseable and therefore dropped by `host.document()` -- the guard still returns
+`Hazard.NONE` and permits the rename, so a cross-file reference hiding in the skipped file goes
+undetected and the rename can silently break another file. This is the one fail-closed path (frozen
+step5 design §4.6) meeting the read path's deliberate silent-degradation policy (§5:
+transiently-broken neighbors are the normal state of live editing); the design did not resolve the
+tension. Refusing on any imperfect scan would make rename nearly unusable during editing; permitting
+weakens the guard. Reconciling requires a design delta (e.g. refuse only on walk/IO errors while
+tolerating unparseable neighbors, or track scan completeness explicitly), not a respond-mode patch.
+Location: `fltk/lsp/project.py` (`ProjectNavigator.rename_hazard`).
 
 ## `lsp-analysis-watchdog`
 

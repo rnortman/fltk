@@ -845,6 +845,16 @@ class RustCstGenerator:
         child_classes, _has_span = self._child_variants_for_rule(rule_name)
         return child_classes
 
+    def has_span_child(self, rule_name: str) -> bool:
+        """Return True if the rule's <Name>Child enum has a Span variant.
+
+        Public wrapper around _child_variants_for_rule's second element, parallel to
+        child_class_names_for_rule: lets callers ask whether the enum carries a Span arm
+        without re-deriving it from num_child_variants minus the node-class count.
+        """
+        _child_classes, has_span = self._child_variants_for_rule(rule_name)
+        return has_span
+
     def _child_enum_block(self, class_name: str, rule_name: str, child_union: list[str] | None = None) -> str:
         """Emit the per-node child value enum (<Name>Child) + Clone/PartialEq impls.
 

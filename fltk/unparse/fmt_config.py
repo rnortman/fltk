@@ -505,7 +505,11 @@ def _process_trivia_preserve_statement(
         node_name = _extract_identifier_text(identifier, terminal_src)
         node_names.add(node_name)
 
-    config.trivia_config = TriviaConfig(preserve_node_names=node_names)
+    # Mutate in place so a preserve_blanks directive parsed earlier survives; each directive
+    # owns its own trivia_config field and statement order between them is irrelevant.
+    if config.trivia_config is None:
+        config.trivia_config = TriviaConfig()
+    config.trivia_config.preserve_node_names = node_names
 
 
 def _process_preserve_blanks_statement(

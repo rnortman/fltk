@@ -56,3 +56,15 @@ def token_for(tokens: Sequence[Token], text: str, substr: str) -> Token:
 def token_type_at(tokens: Sequence[Token], text: str, substr: str) -> str:
     """Return the ``token_type`` of the single token exactly covering ``substr`` in ``text``."""
     return token_for(tokens, text, substr).token_type
+
+
+def nth_offset(text: str, needle: str, occurrence: int = 0) -> int:
+    """The codepoint offset of the ``occurrence``-th (0-based) ``needle`` in ``text``.
+
+    Shared by the cross-file/project/gear test modules, which repeatedly need to point a cursor at a
+    specific occurrence of an identifier.
+    """
+    index = -1
+    for _ in range(occurrence + 1):
+        index = text.index(needle, index + 1)
+    return index

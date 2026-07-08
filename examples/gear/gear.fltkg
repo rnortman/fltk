@@ -1,0 +1,47 @@
+// gear.fltkg — grammar for the `gear` demo language. Not a real language.
+// A tiny FLTK language with multi-file `use` imports, shape/fn/const items, and
+// arithmetic expressions, built to exercise fltk-lsp end to end (highlighting,
+// formatting, and cross-file go-to-def/find-refs via the resolver plugin).
+
+file := , use_stmt* , item* ;
+
+use_stmt := "use" : path:module_path , "{" , import_list , "}" . ";" , ;
+module_path := seg:identifier . "::" . ( seg:identifier . "::" )* ;
+import_list := import_item , ( "," , import_item , )* ;
+import_item := name:identifier , ( "as" : alias:identifier )? ;
+
+item := shape_def | fn_def | const_def ;
+
+shape_def := "shape" : name:identifier , "{" , field* , "}" , ;
+field := name:identifier . ":" , ty:type_ref . ";" , ;
+
+const_def := "const" : name:identifier . ":" , ty:type_ref , "=" , value:expr . ";" , ;
+
+fn_def := "fn" : name:identifier . "(" , params? , ")" , "->" , ty:type_ref , "{" , stmt* , "}" , ;
+params := param , ( "," , param , )* ;
+param := name:identifier . ":" , ty:type_ref ;
+
+stmt := let_stmt | return_stmt ;
+let_stmt := "let" : name:identifier , "=" , value:expr . ";" , ;
+return_stmt := "return" : value:expr . ";" , ;
+
+expr := head:operand , ( op:operator , rest:operand , )* ;
+operand := number | string | ref_chain ;
+ref_chain := base:atom . ( "." . field:identifier )* ;
+atom := call | name_ref | group_expr ;
+group_expr := "(" , inner:expr , ")" ;
+call := callee:identifier . "(" , call_args? , ")" ;
+call_args := expr , ( "," , expr , )* ;
+name_ref := name:identifier ;
+operator := plus:"+" | minus:"-" | star:"*" | slash:"/" ;
+
+type_ref := name:identifier ;
+
+number := value:/[0-9]+(\.[0-9]+)?/ ;
+string := open:"\"" . body:/[^"\n]*/ . close:"\"" ;
+
+identifier := value:/[A-Za-z_][A-Za-z0-9_]*/ ;
+
+_trivia := ( ws | line_comment )+ ;
+ws := chars:/\s+/ ;
+line_comment := prefix:"//" . text:/[^\n]*/ . nl:"\n" ;

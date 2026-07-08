@@ -14,7 +14,7 @@ from typer.testing import CliRunner
 
 from fltk.fegen import gsm
 from fltk.fegen.genparser import app
-from fltk.plumbing import parse_grammar
+from fltk.plumbing import parse_format_config, parse_grammar
 from fltk.unparse import combinators as comb
 from fltk.unparse.fmt_config import (
     NORMAL,
@@ -2002,25 +2002,81 @@ def test_count_newlines_in_trivia_helper_emitted() -> None:
     assert r"count += span.text_str().map(|t| t.matches('\n').count()).unwrap_or(0);" in body
     # Span-only trivia child enum: exhaustive single-arm match, no catch-all.
     assert "_ => {}" not in body
+    # No node-typed variants, so the node-delegation helper is not emitted (would be dead code).
+    assert "fn _whitespace_node_newlines(" not in src
 
 
-def test_count_newlines_in_trivia_multi_variant_uses_if_let() -> None:
-    """A multi-variant ``TriviaChild`` enum selects the ``Span`` arm with ``if let`` (no catch-all).
+def test_count_newlines_in_trivia_node_variant_whitespace_arm() -> None:
+    """A node-typed trivia child gets a whitespace-only counting arm; the ``Span`` arm is unchanged.
 
-    ``_trivia := ws:/[ ]+/ : comment ; comment := text:/[#][a-z]*/`` gives ``TriviaChild`` both a
-    ``Span`` and a node-typed ``Comment`` variant; the newline counter only cares about ``Span``.
-    Selecting it with ``if let cst::TriviaChild::Span(span) = &child.1`` keeps the code clippy-clean
-    (a single-arm ``match`` plus ``_ => {}`` catch-all would trip ``single_match``) while still
-    ignoring the other variant(s). A dropped ``num_variants > 1`` guard would emit a bare
-    ``match span`` over the multi-variant enum -- a Rust ``non-exhaustive patterns`` compile error --
-    so this pins the ``if let`` shape that the single-variant test above does not cover.
+    ``_trivia := ( sp:/[ ]+/ | ws )+ ; ws := chars:/\\t+/`` gives ``TriviaChild`` both a ``Span``
+    variant (from the labeled ``sp`` regex) and a node-typed ``Ws`` variant. The ``Span`` arm keeps
+    the inline borrowing count; the ``Ws`` node arm delegates to the shared
+    ``_whitespace_node_newlines`` helper, which counts the child's newlines only when the span text
+    is non-empty and entirely whitespace -- the runtime whitespace test that mirrors
+    ``pyrt.count_whitespace_newlines``. The exhaustive ``match`` (one arm per variant) has no ``_``
+    catch-all.
     """
-    grammar = 'doc := a:"x" : b:"y" ; _trivia := ws:/[ ]+/ : comment ; comment := text:/[#][a-z]*/ ;'
+    grammar = 'doc := a:"x" : b:"y" ; _trivia := ( sp:/[ ]+/ | ws )+ ; ws := chars:/\\t+/ ;'
     src = RustUnparserGenerator(parse_grammar(grammar)).generate()
     body = _method_body(src, "_count_newlines_in_trivia")
-    assert "if let cst::TriviaChild::Span(span) = &child.1 {" in body
-    # The `if let` form ignores the other variant(s) without a catch-all arm.
+    assert "match &child.1 {" in body
+    # Span arm unchanged.
+    assert "cst::TriviaChild::Span(span) => {" in body
+    assert r"count += span.text_str().map(|t| t.matches('\n').count()).unwrap_or(0);" in body
+    # Ws node arm delegates to the shared whitespace-counting helper.
+    assert "cst::TriviaChild::Ws(node) => {" in body
+    assert "count += Self::_whitespace_node_newlines(node.read().span().text_str());" in body
+    # Exhaustive match over every variant: no wildcard catch-all.
     assert "_ => {}" not in body
+    assert "_ => {" not in body
+    # The whitespace-only test lives once in the helper, not repeated per node arm.
+    helper = _method_body(src, "_whitespace_node_newlines")
+    assert "fn _whitespace_node_newlines(t: Option<&str>) -> usize {" in helper
+    assert "if !t.is_empty() && t.chars().all(char::is_whitespace) {" in helper
+    assert r"return t.matches('\n').count();" in helper
+
+
+def test_count_newlines_in_trivia_all_node_variants_no_span_arm() -> None:
+    """A trivia rule whose children are all nodes (gear-style) emits node arms and no ``Span`` arm.
+
+    ``_trivia := ( ws | line_comment )+ ; ws := chars:/\\s+/`` captures whitespace as a ``Ws`` node
+    (not a direct Span), so ``TriviaChild`` has no ``Span`` variant. Both node variants delegate to
+    the shared whitespace-counting helper; the match stays exhaustive with no ``Span`` arm and no
+    catch-all. This is the gear-style scenario where whitespace is a node child rather than a direct
+    span.
+    """
+    grammar = (
+        'doc := a:"x" : b:"y" ; _trivia := ( ws | line_comment )+ ; '
+        "ws := chars:/\\s+/ ; line_comment := text:/[#][a-z]*/ ;"
+    )
+    src = RustUnparserGenerator(parse_grammar(grammar)).generate()
+    body = _method_body(src, "_count_newlines_in_trivia")
+    assert "cst::TriviaChild::Span(span) => {" not in body
+    assert "cst::TriviaChild::Ws(node) => {" in body
+    assert "cst::TriviaChild::LineComment(node) => {" in body
+    # Both node arms delegate to the single shared helper.
+    assert body.count("count += Self::_whitespace_node_newlines(node.read().span().text_str());") == 2
+    assert "_ => {" not in body
+    # The whitespace-only test is written once in the helper.
+    helper = _method_body(src, "_whitespace_node_newlines")
+    assert "if !t.is_empty() && t.chars().all(char::is_whitespace) {" in helper
+
+
+def test_non_trivia_rule_preserve_blanks_from_parsed_clobbering_config() -> None:
+    """Parsed clobbering-order config reaches the Rust generator and emits the blank-line branch.
+
+    Mirror of ``test_non_trivia_rule_preserve_blanks_emits_blank_line_branch`` but the config is
+    built via ``parse_format_config`` on text listing ``preserve_blanks`` *before*
+    ``trivia_preserve``, the order in which the later directive must not discard ``preserve_blanks``.
+    Its survival through parsing is what makes the blank-line branch appear in the generated Rust
+    source.
+    """
+    cfg = parse_format_config("preserve_blanks: 2;\ntrivia_preserve: LineComment;\n")
+    src = RustUnparserGenerator(parse_grammar('r := a:"x" : b:"y" ;'), formatter_config=cfg).generate()
+    body = _method_body(src, "unparse_r__alt0")
+    assert "if newline_count >= 2 {" in body
+    assert "separator_spec(Some(Doc::HardLine { blank_lines: 2 }), None, true)" in body
 
 
 def test_default_separator_uses_per_rule_spacing_override() -> None:

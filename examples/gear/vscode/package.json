@@ -1,0 +1,68 @@
+{
+  "name": "gear-lsp",
+  "displayName": "gear (fltk-lsp demo)",
+  "description": "In-repo VS Code client for the gear demo language, served by fltk-lsp. Not for publication.",
+  "version": "0.0.1",
+  "private": true,
+  "engines": {
+    "vscode": "^1.75.0"
+  },
+  "categories": [
+    "Programming Languages"
+  ],
+  "activationEvents": [
+    "onLanguage:gear"
+  ],
+  "main": "./extension.js",
+  "capabilities": {
+    "untrustedWorkspaces": {
+      "supported": false
+    }
+  },
+  "contributes": {
+    "languages": [
+      {
+        "id": "gear",
+        "aliases": [
+          "gear"
+        ],
+        "extensions": [
+          ".gear"
+        ],
+        "configuration": "./language-configuration.json"
+      }
+    ],
+    "configuration": {
+      "title": "gear",
+      "properties": {
+        "gear.server.command": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "default": [],
+          "scope": "machine",
+          "markdownDescription": "Override the command used to launch `fltk-lsp` (argv as a string array). Empty means use the in-repo `uv` default computed from the extension's location. Required when the extension is installed as a packaged `.vsix` outside the repo. Machine-scoped: workspace settings cannot set it, so a cloned repo's `.vscode/settings.json` cannot redirect the launched executable."
+        }
+      }
+    },
+    "semanticTokenScopes": [
+      {
+        "scopes": {
+          "constant": [
+            "constant.language"
+          ],
+          "punctuation": [
+            "punctuation"
+          ],
+          "label": [
+            "entity.name.label"
+          ]
+        }
+      }
+    ]
+  },
+  "dependencies": {
+    "vscode-languageclient": "^9.0.1"
+  }
+}

@@ -34,11 +34,28 @@ impl Unparser {
     fn _count_newlines_in_trivia(&self, trivia: &cst::Trivia) -> usize {
         let mut count = 0usize;
         for child in trivia.children() {
-            if let cst::TriviaChild::Span(span) = &child.1 {
-                count += span.text_str().map(|t| t.matches('\n').count()).unwrap_or(0);
+            match &child.1 {
+                cst::TriviaChild::Span(span) => {
+                    count += span.text_str().map(|t| t.matches('\n').count()).unwrap_or(0);
+                }
+                cst::TriviaChild::BlockComment(node) => {
+                    count += Self::_whitespace_node_newlines(node.read().span().text_str());
+                }
+                cst::TriviaChild::LineComment(node) => {
+                    count += Self::_whitespace_node_newlines(node.read().span().text_str());
+                }
             }
         }
         count
+    }
+    #[allow(dead_code)]
+    fn _whitespace_node_newlines(t: Option<&str>) -> usize {
+        if let Some(t) = t {
+            if !t.is_empty() && t.chars().all(char::is_whitespace) {
+                return t.matches('\n').count();
+            }
+        }
+        0
     }
     pub fn unparse_grammar(&self, node: &cst::Grammar) -> Option<UnparseResult> {
         let acc = DocAccumulator::new();

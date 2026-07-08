@@ -1,0 +1,19 @@
+// gear — a demo language for fltk-lsp. Not a real language.
+use lib::shapes:: { Circle, Square as Box };
+
+shape Wheel {
+  hub: Circle;
+  frame: Box;
+}
+
+const SPOKES: Int = 36;
+const LABEL: Text = "front wheel";
+
+fn rim_area(w: Wheel) -> Float {
+  let r = w.hub;
+  return 3.14 * r * r;
+}
+
+fn total_area(w: Wheel) -> Float {
+  return rim_area(w) + rim_area(w);
+}

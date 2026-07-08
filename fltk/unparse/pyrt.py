@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import sys
 from dataclasses import dataclass
-from typing import TYPE_CHECKING, NoReturn
+from typing import TYPE_CHECKING, NoReturn, cast
 
 from fltk.fegen.pyrt.terminalsrc import Span
 
@@ -75,6 +75,42 @@ def count_span_newlines(span: Span, terminals: str) -> int:
     Uses extract_span_text to handle both Python and Rust backends.
     """
     return extract_span_text(span, terminals).count("\n")
+
+
+# C0 information separators U+001C-U+001F: Python's str.isspace() treats them as
+# whitespace, but Rust's char::is_whitespace (Unicode White_Space property) does not.
+# Excluding them keeps the whitespace-only classification identical in both backends.
+_C0_SEPARATORS = "\x1c\x1d\x1e\x1f"
+
+
+def _is_unicode_whitespace_only(text: str) -> bool:
+    """True iff text is non-empty and every character is Unicode White_Space.
+
+    Mirrors Rust's ``char::is_whitespace`` rather than Python's broader
+    ``str.isspace()`` (which also accepts the C0 information separators), so a
+    trivia node classifies as whitespace-only identically across backends.
+    """
+    return bool(text) and all(ch.isspace() and ch not in _C0_SEPARATORS for ch in text)
+
+
+def count_whitespace_newlines(child: object, terminals: str) -> int:
+    """Count the newlines a Trivia child contributes toward blank-line detection.
+
+    A direct span child contributes all of its newlines (via ``count_span_newlines``).
+    A node child (e.g. a grammar that wraps whitespace in a named trivia rule)
+    contributes its newlines only when its span text is non-empty and entirely
+    whitespace; a node holding any non-whitespace (a comment) or an empty span
+    contributes 0, degrading to the direct-span-only behavior and never over-counting.
+    """
+    if is_span(child):
+        return count_span_newlines(cast(Span, child), terminals)
+    span = getattr(child, "span", None)
+    if span is None:
+        return 0
+    text = extract_span_text(cast(Span, span), terminals)
+    if _is_unicode_whitespace_only(text):
+        return text.count("\n")
+    return 0
 
 
 def is_span(obj: object) -> bool:

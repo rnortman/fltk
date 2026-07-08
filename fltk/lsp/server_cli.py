@@ -21,6 +21,7 @@ import typer
 
 from fltk import plumbing
 from fltk.lsp.engine import AnalysisEngine
+from fltk.lsp.resolver import load_resolver
 from fltk.unparse.renderer import RendererConfig
 
 app = typer.Typer(
@@ -39,6 +40,10 @@ def main(
     rule: Annotated[str | None, typer.Option("--rule", help="Start rule name (defaults to the first rule)")] = None,
     width: Annotated[int, typer.Option("--width", help="Line width for document formatting")] = 80,
     indent: Annotated[int, typer.Option("--indent", help="Indent width for document formatting")] = 2,
+    resolver: Annotated[
+        str | None,
+        typer.Option("--resolver", help="Cross-file resolver spec ('module.path:attr' or 'file.py:attr')"),
+    ] = None,
 ) -> None:
     """Serve GRAMMAR over LSP on stdio, applying optional .fltklsp and .fltkfmt specs."""
     try:
@@ -56,14 +61,18 @@ def main(
                 typer.echo(f"Unknown start rule '{rule}'. Valid rules: {valid}", err=True)
                 raise typer.Exit(1)
         formatter_config = plumbing.parse_format_config_file(fmt) if fmt is not None else None
+        # ResolverError subclasses ValueError, so a broken --resolver falls into the handler below --
+        # a resolver that will not load is a startup error, never a half-working server.
+        resolver_obj = load_resolver(resolver) if resolver is not None else None
     except (ValueError, OSError) as exc:
         # ValueError covers grammar/.fltklsp/.fltkfmt content errors (LspConfigError is a
-        # ValueError); OSError covers missing/unreadable --grammar, --lsp, and --fmt.
+        # ValueError) and resolver-spec errors (ResolverError); OSError covers missing/unreadable
+        # --grammar, --lsp, and --fmt.
         typer.echo(str(exc), err=True)
         raise typer.Exit(1) from exc
 
     renderer_config = RendererConfig(max_width=width, indent_width=indent)
-    server = create_server(engine, formatter_config, renderer_config)
+    server = create_server(engine, formatter_config, renderer_config, resolver=resolver_obj)
     server.start_io()
 
 

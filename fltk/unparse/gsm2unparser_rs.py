@@ -1433,10 +1433,43 @@ class RustUnparserGenerator:
         newlines are counted.)  Both reference ``cst::Trivia`` / ``cst::TriviaChild``,
         which always exist (the synthetic ``_trivia`` rule is always present).
         """
-        return [
+        methods = [
             self._gen_has_preservable_trivia_method(),
             self._gen_count_newlines_in_trivia_method(),
         ]
+        whitespace_helper = self._gen_whitespace_node_newlines_method()
+        if whitespace_helper is not None:
+            methods.append(whitespace_helper)
+        return methods
+
+    def _gen_whitespace_node_newlines_method(self) -> str | None:
+        """Emit the ``_whitespace_node_newlines`` helper each node arm of the count method delegates to.
+
+        Returns the newline count of a node child's span text only when that text is non-empty and
+        entirely whitespace (a comment node, an empty span, or a missing span text counts 0),
+        matching the Python helper ``pyrt.count_whitespace_newlines``.  Written once here rather
+        than inlined per node-typed ``TriviaChild`` variant.  Returns ``None`` when the trivia rule
+        has no node-typed variants (Span-only trivia never calls it).
+        """
+        node_child_classes = self._cst.child_class_names_for_rule(gsm.TRIVIA_RULE_NAME)
+        if not node_child_classes:
+            return None
+        return "\n".join(
+            [
+                # Called only from _count_newlines_in_trivia's node arms, itself only on the
+                # preserve_blanks > 0 path; allow(dead_code) keeps preserve_blanks == 0 (the
+                # default, downstream-supported) generated unparsers clippy-clean.
+                "    #[allow(dead_code)]",
+                "    fn _whitespace_node_newlines(t: Option<&str>) -> usize {",
+                "        if let Some(t) = t {",
+                "            if !t.is_empty() && t.chars().all(char::is_whitespace) {",
+                "                return t.matches('\\n').count();",
+                "            }",
+                "        }",
+                "        0",
+                "    }",
+            ]
+        )
 
     def _gen_has_preservable_trivia_method(self) -> str:
         """Emit ``_has_preservable_trivia`` (port of ``gsm2unparser.py:846``).
@@ -1501,17 +1534,23 @@ class RustUnparserGenerator:
     def _gen_count_newlines_in_trivia_method(self) -> str:
         """Emit ``_count_newlines_in_trivia`` (port of ``gsm2unparser.py:971``).
 
-        Sums the newline count of every ``Span`` child of a ``Trivia`` node, using the same
-        inline ``span.text().map(...)`` form as the trivia-rule branch (the
-        ``_count_newlines`` substitute).  When the trivia child enum has more than one variant
-        the ``Span`` child is selected with ``if let`` (not a single-arm ``match`` plus a
-        ``_ => {}`` catch-all, which clippy flags as ``single_match``); a ``Span``-only trivia
-        rule keeps an exhaustive single-arm ``match`` (no wildcard, already clippy-clean).  The
-        ``Span`` variant always exists because a trivia rule always captures whitespace.
+        Sums the newlines each child of a ``Trivia`` node contributes.  A ``Span`` child
+        contributes all of its newlines (inline borrowing ``span.text_str().map(...)`` form, no
+        per-Span ``String`` allocation).  A node-typed child (a grammar that wraps whitespace in
+        a named trivia rule) contributes its newlines only when its span text is non-empty and
+        entirely whitespace; a comment node or an empty span contributes nothing.  That
+        whitespace test lives in the shared ``_whitespace_node_newlines`` helper (emitted by
+        ``_gen_whitespace_node_newlines_method``), which each node arm delegates to, matching the
+        Python helper ``pyrt.count_whitespace_newlines``.
+
+        The generator knows every ``TriviaChild`` variant, so an exhaustive ``match`` with one
+        arm per variant (no wildcard) is emitted -- clippy-clean whether the enum has a single
+        variant or several.
         """
         trivia_class = self._cst.class_name_for_rule(gsm.TRIVIA_RULE_NAME)
         trivia_child_enum = self._cst.child_enum_name(trivia_class)
-        num_variants = self._cst.num_child_variants(gsm.TRIVIA_RULE_NAME)
+        node_child_classes = self._cst.child_class_names_for_rule(gsm.TRIVIA_RULE_NAME)
+        has_span = self._cst.has_span_child(gsm.TRIVIA_RULE_NAME)
         lines = [
             # Called only from the non-trivia branch's preserve_blanks > 0 path; a grammar with
             # preserve_blanks == 0 leaves it uncalled, so allow(dead_code) keeps that (default,
@@ -1520,29 +1559,30 @@ class RustUnparserGenerator:
             f"    fn _count_newlines_in_trivia(&self, trivia: &cst::{trivia_class}) -> usize {{",
             "        let mut count = 0usize;",
             "        for child in trivia.children() {",
+            "            match &child.1 {",
         ]
-        # Borrowing accessor (no per-Span String allocation); the slice is only scanned.
-        count_stmt = "                count += span.text_str().map(|t| t.matches('\\n').count()).unwrap_or(0);"
-        if num_variants > 1:
+        if has_span:
             lines.extend(
                 [
-                    f"            if let cst::{trivia_child_enum}::Span(span) = &child.1 {{",
-                    count_stmt,
-                    "            }",
+                    f"                cst::{trivia_child_enum}::Span(span) => {{",
+                    "                    count += span.text_str().map(|t| t.matches('\\n').count()).unwrap_or(0);",
+                    "                }",
                 ]
             )
-        else:
+        # Each node-typed variant delegates to the shared _whitespace_node_newlines helper so the
+        # whitespace-only counting body is written once (mirroring pyrt.count_whitespace_newlines)
+        # rather than repeated per variant.
+        for cls in node_child_classes:
             lines.extend(
                 [
-                    "            match &child.1 {",
-                    f"                cst::{trivia_child_enum}::Span(span) => {{",
-                    "    " + count_stmt,
+                    f"                cst::{trivia_child_enum}::{cls}(node) => {{",
+                    "                    count += Self::_whitespace_node_newlines(node.read().span().text_str());",
                     "                }",
-                    "            }",
                 ]
             )
         lines.extend(
             [
+                "            }",
                 "        }",
                 "        count",
                 "    }",
@@ -1556,6 +1596,9 @@ class RustUnparserGenerator:
         Shared by both trivia branches, which read the *global*
         ``trivia_config.preserve_blanks`` exactly as the Python backend does
         (``gsm2unparser.py:1168``/``:1341``), not the rule-aware ``get_preserve_blanks``.
+
+        TODO(rule-preserve-blanks): read the rule-aware ``get_preserve_blanks(rule_name)``
+        instead of the global field so per-rule preserve_blanks is honored.
         """
         if self._formatter_config.trivia_config:
             return self._formatter_config.trivia_config.preserve_blanks
