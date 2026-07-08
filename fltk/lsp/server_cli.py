@@ -63,7 +63,7 @@ def main(
         raise typer.Exit(1) from exc
 
     renderer_config = RendererConfig(max_width=width, indent_width=indent)
-    server = create_server(engine, formatter_config, renderer_config, start_rule=rule)
+    server = create_server(engine, formatter_config, renderer_config)
     server.start_io()
 
 

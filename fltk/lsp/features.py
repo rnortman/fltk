@@ -9,6 +9,7 @@ world and the LSP wire shapes.
 
 from __future__ import annotations
 
+import dataclasses
 import logging
 from typing import TYPE_CHECKING, Any
 
@@ -70,6 +71,25 @@ _TYPE_INDEX: dict[str, int] = {name: i for i, name in enumerate(SEMANTIC_TOKEN_T
 _MODIFIER_BIT: dict[str, int] = {name: 1 << i for i, name in enumerate(SEMANTIC_TOKEN_MODIFIERS)}
 
 
+@dataclasses.dataclass(frozen=True, order=True)
+class TokenSegment:
+    """One single-line semantic-token segment at an absolute LSP position.
+
+    ``line``/``char`` are in the negotiated encoding's units against the document the segment was
+    computed from; ``length`` likewise. Self-contained: no ``LineIndex`` is needed to consume it,
+    which is what lets fresh and stale segments (computed against different document versions) be
+    merged after each is rendered to absolute positions against its own index. Field order makes the
+    natural ordering positional (``line``, ``char``, ...), so a sorted, non-overlapping token stream
+    yields a sorted, non-overlapping segment list.
+    """
+
+    line: int
+    char: int
+    length: int
+    type_index: int
+    modifier_bits: int
+
+
 def _modifier_bits(modifiers: tuple[str, ...]) -> int:
     """OR together the legend bits for ``modifiers``; an unknown modifier is defensively dropped.
 
@@ -112,6 +132,51 @@ def _line_segments(
         yield (line, char_start, length)
 
 
+def absolute_segments(
+    tokens: Iterable[classify.Token], line_index: LineIndex, enc: PositionEncoding
+) -> list[TokenSegment]:
+    """Render a sorted, non-overlapping token stream into absolute :class:`TokenSegment`s.
+
+    Legend lookup and the multi-line split happen here: a token whose type is not a legend member is
+    defensively dropped-and-warned (``classify`` never emits one), and each token contributes one
+    segment per covered line. ``line``/``char``/``length`` are in ``enc`` units against ``line_index``.
+    The output is sorted and non-overlapping because the input token stream is.
+    """
+    segments: list[TokenSegment] = []
+    for token in tokens:
+        type_index = _TYPE_INDEX.get(token.token_type)
+        if type_index is None:
+            _LOGGER.warning("fltk-lsp: dropping token of unknown type %r (legend/classifier drift)", token.token_type)
+            continue
+        modifier_bits = _modifier_bits(token.modifiers)
+        for line, char_start, length in _line_segments(token, line_index, enc):
+            segments.append(
+                TokenSegment(
+                    line=line, char=char_start, length=length, type_index=type_index, modifier_bits=modifier_bits
+                )
+            )
+    return segments
+
+
+def delta_encode_segments(segments: Iterable[TokenSegment]) -> list[int]:
+    """Delta-encode absolute segments into the LSP relative token ``data`` array.
+
+    Returns five ints per segment -- ``deltaLine``, ``deltaStartChar``, ``length``, ``tokenType``
+    index, ``tokenModifiers`` bitset. Segments must be sorted and non-overlapping (as produced by
+    :func:`absolute_segments` and preserved by :func:`merge_stale_segments`).
+    """
+    data: list[int] = []
+    prev_line = 0
+    prev_char = 0
+    for seg in segments:
+        delta_line = seg.line - prev_line
+        delta_char = seg.char - prev_char if delta_line == 0 else seg.char
+        data.extend((delta_line, delta_char, seg.length, seg.type_index, seg.modifier_bits))
+        prev_line = seg.line
+        prev_char = seg.char
+    return data
+
+
 def encode_semantic_tokens(tokens: Iterable[classify.Token], line_index: LineIndex, enc: PositionEncoding) -> list[int]:
     """Encode a sorted, non-overlapping token stream into the LSP relative token format.
 
@@ -120,22 +185,33 @@ def encode_semantic_tokens(tokens: Iterable[classify.Token], line_index: LineInd
     and lengths in ``enc`` units. Multi-line tokens are split at line boundaries; a token whose type
     is not a legend member is defensively skipped (``classify`` never emits one).
     """
-    data: list[int] = []
-    prev_line = 0
-    prev_char = 0
-    for token in tokens:
-        type_index = _TYPE_INDEX.get(token.token_type)
-        if type_index is None:
-            _LOGGER.warning("fltk-lsp: dropping token of unknown type %r (legend/classifier drift)", token.token_type)
-            continue
-        modifier_bits = _modifier_bits(token.modifiers)
-        for line, char_start, length in _line_segments(token, line_index, enc):
-            delta_line = line - prev_line
-            delta_char = char_start - prev_char if delta_line == 0 else char_start
-            data.extend((delta_line, delta_char, length, type_index, modifier_bits))
-            prev_line = line
-            prev_char = char_start
-    return data
+    return delta_encode_segments(absolute_segments(tokens, line_index, enc))
+
+
+def merge_stale_segments(
+    fresh: list[TokenSegment],
+    stale: list[TokenSegment],
+    boundary: tuple[int, int],
+) -> list[TokenSegment]:
+    """Fresh prefix segments plus the stale segments at or past ``boundary``.
+
+    ``fresh`` is computed against the current text, ``stale`` against the last successfully analyzed
+    text; ``boundary`` is the ``(line, char)`` of the fresh prefix's end in the current text. A stale
+    segment is kept iff its ``(line, char)`` start is ``>=`` the floor -- the max of ``boundary`` and
+    the end position of the last fresh segment -- so the result stays sorted and non-overlapping even
+    when an edit shifted the stale coordinates backward. No attempt is made to shift stale positions:
+    the server uses full-document sync and has no edit deltas, so kept stale segments carry positions
+    from the old text, clamped or ignored client-side past the current document's end.
+    """
+    floor = boundary
+    if fresh:
+        last = fresh[-1]
+        floor = max(boundary, (last.line, last.char + last.length))
+    result = list(fresh)
+    for seg in stale:
+        if (seg.line, seg.char) >= floor:
+            result.append(seg)
+    return result
 
 
 def _walk_nodes(node: Any) -> Iterator[Any]:

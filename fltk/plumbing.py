@@ -203,7 +203,14 @@ def parse_text(parser_result: ParserResult, text: str, rule_name: str | None = N
             error_pos = result.pos
         else:
             error_pos = 0
-        return ParseResult(None, text, False, error_msg, error_pos=error_pos)
+        # Early success without full consumption: the start rule assembled a real CST for
+        # [0, result.pos) but input remained. Keep that prefix tree; leave both fields None on
+        # hard failure (result is None), where nothing was assembled.
+        prefix_cst = result.result if result else None
+        prefix_pos = result.pos if result else None
+        return ParseResult(
+            None, text, False, error_msg, error_pos=error_pos, prefix_cst=prefix_cst, prefix_pos=prefix_pos
+        )
 
     return ParseResult(result.result, text, True)
 

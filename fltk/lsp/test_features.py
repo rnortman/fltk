@@ -7,6 +7,8 @@ hand-built CST-shaped trees so spans, kinds, and nesting are fully controlled.
 
 from __future__ import annotations
 
+import itertools
+
 from lsprotocol.types import (
     DocumentHighlightKind,
     FoldingRangeKind,
@@ -141,6 +143,112 @@ def test_encode_astral_utf16_vs_utf32_columns_and_lengths() -> None:
     utf16 = features.encode_semantic_tokens(tokens, idx, UTF16)
     # astral char is length 2 in utf-16; the second token then starts at column 2.
     assert utf16 == [0, 0, 2, _type("string"), 0, 0, 2, 1, _type("variable"), 0]
+
+
+# --- Segment / delta split ----------------------------------------------------------------------
+# `encode_semantic_tokens` is now `delta_encode_segments(absolute_segments(...))`; these pin the two
+# stages, and that the composition reproduces the same wire bytes the whole-token path produced.
+
+
+def _seg(line: int, char: int, length: int, type_name: str, modifier_bits: int = 0) -> features.TokenSegment:
+    return features.TokenSegment(
+        line=line, char=char, length=length, type_index=_type(type_name), modifier_bits=modifier_bits
+    )
+
+
+def test_absolute_segments_produce_sorted_positions_and_split_multiline() -> None:
+    text = "ab\ncd ef"
+    idx = LineIndex(text)
+    tokens = [Token(0, 5, "comment", ()), Token(6, 8, "variable", ())]
+    segments = features.absolute_segments(tokens, idx, UTF32)
+    assert segments == [
+        _seg(0, 0, 2, "comment"),  # "ab"
+        _seg(1, 0, 2, "comment"),  # "cd"
+        _seg(1, 3, 2, "variable"),  # "ef"
+    ]
+    # Field-order sorting is the natural order, so a sorted token stream stays sorted here.
+    assert segments == sorted(segments)
+
+
+def test_absolute_segments_drops_unknown_type_and_modifier() -> None:
+    text = "xy"
+    idx = LineIndex(text)
+    declaration_bit = 1 << features.SEMANTIC_TOKEN_MODIFIERS.index("declaration")
+    tokens = [
+        Token(0, 1, "not-a-legend-member", ()),  # dropped whole
+        Token(1, 2, "keyword", ("declaration", "bogus")),  # unknown modifier dropped
+    ]
+    segments = features.absolute_segments(tokens, idx, UTF32)
+    assert segments == [_seg(0, 1, 1, "keyword", declaration_bit)]
+
+
+def test_delta_encode_empty_is_empty() -> None:
+    assert features.delta_encode_segments([]) == []
+
+
+def test_delta_after_absolute_reproduces_encode_bytes() -> None:
+    # Every shape the whole-token encoder covers: multi-line split, astral utf-16 columns, and the
+    # unknown-type/unknown-modifier drop paths -- the composition must be byte-identical.
+    idx16 = LineIndex("\U00010400x")
+    astral_tokens = [Token(0, 1, "string", ()), Token(1, 2, "variable", ())]
+    idx_ml = LineIndex("ab\ncd")
+    ml_tokens = [Token(0, 5, "comment", ())]
+    idx_drop = LineIndex("xy")
+    drop_tokens = [Token(0, 1, "not-a-legend-member", ()), Token(1, 2, "keyword", ("declaration", "bogus"))]
+    for tokens, idx, enc in [
+        (astral_tokens, idx16, UTF16),
+        (astral_tokens, idx16, UTF32),
+        (ml_tokens, idx_ml, UTF32),
+        (drop_tokens, idx_drop, UTF32),
+    ]:
+        composed = features.delta_encode_segments(features.absolute_segments(tokens, idx, enc))
+        assert composed == features.encode_semantic_tokens(tokens, idx, enc)
+
+
+# --- Stale-segment merge ------------------------------------------------------------------------
+
+
+def test_merge_fresh_only_when_stale_empty() -> None:
+    fresh = [_seg(0, 0, 3, "keyword"), _seg(1, 0, 2, "variable")]
+    assert features.merge_stale_segments(fresh, [], (5, 0)) == fresh
+
+
+def test_merge_stale_only_boundary_origin_keeps_all() -> None:
+    # Zero-length prefix: empty fresh, boundary (0,0) -> every stale segment survives.
+    stale = [_seg(0, 0, 3, "keyword"), _seg(2, 4, 2, "variable")]
+    assert features.merge_stale_segments([], stale, (0, 0)) == stale
+
+
+def test_merge_clips_stale_before_boundary_keeps_at_boundary() -> None:
+    fresh = [_seg(0, 0, 4, "keyword")]  # line 0
+    stale = [
+        _seg(1, 0, 3, "variable"),  # before boundary line 2 -> dropped
+        _seg(2, 0, 3, "type"),  # exactly at boundary (2,0) -> kept
+        _seg(3, 2, 2, "number"),  # past boundary -> kept
+    ]
+    merged = features.merge_stale_segments(fresh, stale, (2, 0))
+    assert merged == [_seg(0, 0, 4, "keyword"), _seg(2, 0, 3, "type"), _seg(3, 2, 2, "number")]
+
+
+def test_merge_floor_from_last_fresh_beats_earlier_boundary() -> None:
+    # Boundary is (1,0), but the last fresh segment ends at (1,5); a stale segment starting at (1,2)
+    # would overlap the fresh tail, so the floor from the last fresh segment drops it.
+    fresh = [_seg(1, 0, 5, "keyword")]  # ends at (1,5)
+    stale = [_seg(1, 2, 2, "variable"), _seg(1, 5, 3, "type")]
+    merged = features.merge_stale_segments(fresh, stale, (1, 0))
+    assert merged == [_seg(1, 0, 5, "keyword"), _seg(1, 5, 3, "type")]
+
+
+def test_merge_result_sorted_and_non_overlapping() -> None:
+    # An edit shrank the document so stale coordinates sit before the boundary; the merge stays
+    # sorted and non-overlapping regardless.
+    fresh = [_seg(0, 0, 2, "keyword"), _seg(0, 3, 2, "variable")]  # ends at (0,5)
+    stale = [_seg(0, 1, 1, "type"), _seg(0, 6, 2, "number"), _seg(1, 0, 4, "string")]
+    merged = features.merge_stale_segments(fresh, stale, (0, 5))
+    assert merged == sorted(merged)
+    for a, b in itertools.pairwise(merged):
+        # non-overlapping: each segment ends at or before the next one's start
+        assert (a.line, a.char + a.length) <= (b.line, b.char)
 
 
 # --- Folding ------------------------------------------------------------------------------------

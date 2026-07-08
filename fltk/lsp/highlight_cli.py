@@ -4,8 +4,9 @@
 Loads a ``.fltkg`` grammar and an optional ``.fltklsp`` spec, parses an input file, and
 writes the source to stdout with a small fixed ANSI-color theme -- one 16-color mapping per
 legend member, with the ``declaration`` modifier rendered bold and unpainted text passed
-through unchanged. A ``.fltklsp`` load error or an input parse failure prints a formatted
-message to stderr and exits 1.
+through unchanged. A ``.fltklsp`` load error prints to stderr and exits 1 with no stdout. An input
+parse failure exits 1 with the error on stderr; if the parse assembled a prefix, the prefix is
+painted and the (uncolored) tail is still written to stdout, otherwise stdout is empty.
 """
 
 from __future__ import annotations
@@ -105,12 +106,18 @@ def main(
         typer.echo(str(exc), err=True)
         raise typer.Exit(1) from exc
 
-    result = engine.highlight(text)
-    if result.tokens is None:
-        typer.echo(result.error, err=True)
-        raise typer.Exit(1)
+    analysis = engine.analyze(text)
+    if analysis.error is None:
+        assert analysis.tokens is not None
+        sys.stdout.write(_render(text, analysis.tokens))
+        return
 
-    sys.stdout.write(_render(text, result.tokens))
+    # Parse failed. A partial analysis still carries prefix tokens: paint them (the tail past the
+    # prefix passes through uncolored) so the manual-highlighting harness shows what did parse.
+    if analysis.tokens is not None:
+        sys.stdout.write(_render(text, analysis.tokens))
+    typer.echo(analysis.error.message, err=True)
+    raise typer.Exit(1)
 
 
 if __name__ == "__main__":

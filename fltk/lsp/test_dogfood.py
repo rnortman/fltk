@@ -90,6 +90,22 @@ def test_dogfood_highlights_def_ref_namespace_and_qualifier() -> None:
     assert _token_type(result.tokens, sample, ";") == "punctuation"
 
 
+def test_dogfood_partial_paints_prefix_on_mid_document_error() -> None:
+    engine = AnalysisEngine.from_paths(_GRAMMAR_PATH, _SPEC_PATH)
+    # The first `rule` block is valid; the second (`rule 4 {`, a number where an identifier is
+    # required) breaks the top-level `statement*` repetition, leaving a prefix.
+    sample = 'rule good {\n  scope "n": keyword;\n}\nrule 4 {\n}\n'
+    analysis = engine.analyze(sample)
+    assert analysis.error is not None
+    assert analysis.tree is not None
+    assert analysis.tokens is not None
+    assert analysis.prefix_end is not None
+    # The prefix's opening `rule` keyword is painted, and every token stays within the prefix.
+    first_rule = sample.index("rule")
+    assert any(t.start == first_rule and t.token_type == "keyword" for t in analysis.tokens)
+    assert all(t.end <= analysis.prefix_end for t in analysis.tokens)
+
+
 def test_dogfood_semantics_extract_and_resolve_over_real_grammar() -> None:
     grammar = plumbing.parse_grammar_file(_GRAMMAR_PATH)
     resolved = load_lsp_config(_SEMANTIC_SPEC, grammar)

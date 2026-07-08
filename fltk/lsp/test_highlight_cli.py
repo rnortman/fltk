@@ -47,11 +47,29 @@ def test_explicit_spec_repaints(tmp_path: Path) -> None:
     assert _colored("variable", "world") not in result.stdout
 
 
-def test_parse_failure_exits_1(tmp_path: Path) -> None:
+# A single sequence with no top-level repetition: a parse error is a hard failure with no prefix.
+_HARD_GRAMMAR = 'greeting := kw:"hello" , name:word , punct:"!" ;\nword := /[a-z]+/ ;'
+
+
+def test_partial_parse_paints_prefix_exits_1(tmp_path: Path) -> None:
     grammar = _write(tmp_path, "lang.fltkg", _GRAMMAR)
-    src = _write(tmp_path, "in.txt", "hello world")  # missing the required `!`
+    # First greeting parses and is painted; the second's `4` (not a word) breaks the repetition.
+    src = _write(tmp_path, "in.txt", "hello alpha !\nhello 4 !\n")
 
     result = CliRunner().invoke(app, [str(src), "--grammar", str(grammar), "--rule", "top"])
+
+    assert result.exit_code == 1
+    assert result.stderr != ""
+    # The prefix's `hello` is painted; the broken tail (including `4`) is written uncolored.
+    assert _colored("keyword", "hello") in result.stdout
+    assert "4" in result.stdout
+
+
+def test_hard_failure_empty_stdout_exits_1(tmp_path: Path) -> None:
+    grammar = _write(tmp_path, "lang.fltkg", _HARD_GRAMMAR)
+    src = _write(tmp_path, "in.txt", "hello world")  # missing the required `!`, no prefix assembled
+
+    result = CliRunner().invoke(app, [str(src), "--grammar", str(grammar), "--rule", "greeting"])
 
     assert result.exit_code == 1
     assert result.stdout == ""

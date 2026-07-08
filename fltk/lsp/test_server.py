@@ -24,7 +24,7 @@ from pytest_lsp import ClientServerConfig, LanguageClient
 from fltk import plumbing
 from fltk.lsp.engine import AnalysisEngine
 from fltk.lsp.positions import LineIndex, PositionEncoding
-from fltk.lsp.server import _DocState, create_server
+from fltk.lsp.server import _DocState, _GoodAnalysis, create_server
 from fltk.unparse.renderer import RendererConfig
 
 _DATA = Path(__file__).parent / "test_data"
@@ -48,16 +48,28 @@ _SERVER_COMMAND = [
     "2",
 ]
 
+# A second invocation pinned to the `greeting` rule: unlike `document` (whose `item*` always matches
+# zero items, so it never hard-fails), `greeting` can reject input outright, producing a *failed*
+# analysis with no prefix -- the only way to exercise the served-nothing path over the real protocol.
+_SERVER_COMMAND_RULE = [*_SERVER_COMMAND, "--rule", "greeting"]
+
 _URI = "file:///doc.greet"
 _CLEAN = "greet alice.\ngreet bob."
 _BROKEN = "greet 123."  # `name` is /[a-z]+/, so a digit fails to parse
 _ASTRAL = 'note "h\U0001f600i".'
 _PUBLISH = t.TEXT_DOCUMENT_PUBLISH_DIAGNOSTICS
 
+# Mid-file error shapes: `document := , item*`, so a broken later item leaves an assembled prefix.
+_PARTIAL = "greet alice.\ngreet 123."  # first item parses; `123` on line 1 breaks the second
+_PARTIAL_AFTER = "greet alicia.\ngreet 1."  # prefix repaints line 0 (`alicia`, len 6); line 1 breaks
+
 # A document exercising def/ref/namespace: `module outer` opens a namespace whose name hoists to
 # the root scope; `def alpha` inside defines a member; `use alpha` inside references it; `use outer`
 # at the root references the hoisted module name.
 _SYM = "module outer {\n  def alpha.\n  use alpha.\n}\nuse outer."
+# A broken first item leaves a zero-length prefix, so the partial's own tree carries no symbols --
+# any symbol the outline still reports must come from the last complete analysis, not the prefix.
+_SYM_BROKEN = "greet 1.\n" + _SYM
 
 
 def _init_params(
@@ -119,10 +131,37 @@ async def _tokens(client: LanguageClient) -> list[int]:
     return list(result.data)
 
 
+async def _range_tokens(client: LanguageClient, rng: t.Range) -> list[int]:
+    result = await client.text_document_semantic_tokens_range_async(
+        t.SemanticTokensRangeParams(text_document=t.TextDocumentIdentifier(uri=_URI), range=rng)
+    )
+    assert result is not None
+    return list(result.data)
+
+
+def _decode(data: list[int]) -> list[tuple[int, int, int, int, int]]:
+    """Decode the LSP relative token stream into absolute ``(line, char, length, type, modifiers)``."""
+    out: list[tuple[int, int, int, int, int]] = []
+    line = char = 0
+    for i in range(0, len(data), 5):
+        delta_line, delta_char, length, ttype, mods = data[i : i + 5]
+        line += delta_line
+        char = delta_char if delta_line else char + delta_char
+        out.append((line, char, length, ttype, mods))
+    return out
+
+
 @pytest_lsp.fixture(config=ClientServerConfig(server_command=_SERVER_COMMAND))
 async def client(lsp_client: LanguageClient):
     yield
     # Teardown of a session a test may have left uninitialized.
+    with contextlib.suppress(Exception):
+        await lsp_client.shutdown_session()
+
+
+@pytest_lsp.fixture(config=ClientServerConfig(server_command=_SERVER_COMMAND_RULE))
+async def client_rule(lsp_client: LanguageClient):
+    yield
     with contextlib.suppress(Exception):
         await lsp_client.shutdown_session()
 
@@ -520,7 +559,7 @@ async def test_navigation_served_from_last_good_after_break(client: LanguageClie
 def _fixture_server():
     engine = AnalysisEngine.from_paths(Path(_GRAMMAR), Path(_LSP))
     formatter_config = plumbing.parse_format_config_file(Path(_FMT))
-    return create_server(engine, formatter_config, RendererConfig(max_width=80, indent_width=2), start_rule=None)
+    return create_server(engine, formatter_config, RendererConfig(max_width=80, indent_width=2))
 
 
 def test_format_build_failure_is_memoized(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -565,7 +604,7 @@ def test_formatting_without_fmt_uses_default_config(monkeypatch: pytest.MonkeyPa
     # Formatting is registered even without --fmt, using FormatterConfig() defaults; the path must
     # produce edits (possibly empty), never None or a crash, and log no error.
     engine = AnalysisEngine.from_paths(Path(_GRAMMAR), Path(_LSP))
-    server = create_server(engine, None, RendererConfig(max_width=80, indent_width=2), start_rule=None)
+    server = create_server(engine, None, RendererConfig(max_width=80, indent_width=2))
     monkeypatch.setattr(server, "_encoding", lambda: PositionEncoding.UTF32)
     edits, logs = server._format_blocking("greet   alice.\ngreet bob.")
     assert edits is not None
@@ -576,8 +615,8 @@ def test_store_ignores_older_version_result(monkeypatch: pytest.MonkeyPatch) -> 
     # The out-of-order-version guard: an analysis for an older version must not clobber a newer one.
     server = _fixture_server()
     monkeypatch.setattr(server, "_encoding", lambda: PositionEncoding.UTF32)
-    fresh = server._analyze_blocking(_CLEAN)
-    stale = server._analyze_blocking(_BROKEN)
+    fresh = server._analyze_blocking(_CLEAN, None)
+    stale = server._analyze_blocking(_BROKEN, None)
     server._store(_URI, 2, *fresh, epoch=0)
     server._store(_URI, 1, *stale, epoch=0)
     state = server._docs[_URI]
@@ -590,7 +629,7 @@ def test_store_after_drop_does_not_resurrect_state(monkeypatch: pytest.MonkeyPat
     server = _fixture_server()
     monkeypatch.setattr(server, "text_document_publish_diagnostics", lambda *_a, **_k: None)
     monkeypatch.setattr(server, "_encoding", lambda: PositionEncoding.UTF32)
-    result = server._analyze_blocking(_CLEAN)
+    result = server._analyze_blocking(_CLEAN, None)
     epoch = server._epochs.get(_URI, 0)
     server.drop(_URI)
     server._store(_URI, 1, *result, epoch)
@@ -624,9 +663,9 @@ async def test_analysis_for_single_flight_shares_one_submission(monkeypatch: pyt
     calls = {"n": 0}
     real = server._analyze_blocking
 
-    def _counting(text: str):
+    def _counting(text: str, stale: _GoodAnalysis | None):
         calls["n"] += 1
-        return real(text)
+        return real(text, stale)
 
     monkeypatch.setattr(server, "_analyze_blocking", _counting)
     states = await asyncio.gather(
@@ -653,3 +692,154 @@ async def test_semantic_tokens_range_returns_line_subset(client: LanguageClient)
     assert 0 < len(data) < len(full)  # a strict subset of the full-document token stream
     assert data[0] == 1  # the first emitted token's deltaLine points at line 1
     assert all(data[i] == 0 for i in range(5, len(data), 5))  # every emitted token sits on line 1
+
+
+# --- Partial (prefix-CST) serving --------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_partial_on_open_serves_fresh_prefix_and_diagnostic(client: LanguageClient) -> None:
+    await client.initialize_session(_init_params([t.PositionEncodingKind.Utf32]))
+    await _open(client, _PARTIAL)
+    # A mid-file error still reports a diagnostic at the failure position, exactly as a full failure.
+    diagnostics = client.diagnostics[_URI]
+    assert len(diagnostics) == 1
+    assert diagnostics[0].severity == t.DiagnosticSeverity.Error
+    assert diagnostics[0].range.start == t.Position(line=1, character=6)  # `123`
+    # With no prior good version the served tokens are the fresh prefix only: every token sits on
+    # line 0, and nothing is served for the broken tail on line 1.
+    decoded = _decode(await _tokens(client))
+    assert len(decoded) > 0
+    assert all(line == 0 for line, *_rest in decoded)
+
+
+@pytest.mark.asyncio
+async def test_hard_failure_serves_empty_tokens_from_both_handlers(client_rule: LanguageClient) -> None:
+    await client_rule.initialize_session(_init_params([t.PositionEncodingKind.Utf32]))
+    await _open(client_rule, "xyz")  # the `greeting` start rule rejects `xyz`: no prefix tree at all
+    assert len(client_rule.diagnostics[_URI]) == 1
+    assert await _tokens(client_rule) == []
+    rng = t.Range(start=t.Position(line=0, character=0), end=t.Position(line=0, character=3))
+    assert await _range_tokens(client_rule, rng) == []
+
+
+@pytest.mark.asyncio
+async def test_partial_after_good_merges_fresh_prefix_with_stale_tail(client: LanguageClient) -> None:
+    await client.initialize_session(_init_params([t.PositionEncodingKind.Utf32]))
+    await _open(client, _CLEAN)  # "greet alice.\ngreet bob."
+    assert len(await _tokens(client)) > 0
+    await _change(client, _PARTIAL_AFTER, version=2)  # "greet alicia.\ngreet 1."
+    decoded = _decode(await _tokens(client))
+    # The fresh prefix repaints line 0: the `alicia` name token is length 6 (current text), not the
+    # stale `alice` length 5 -- proof the prefix region is served fresh, not whole-document stale.
+    line0 = [seg for seg in decoded if seg[0] == 0]
+    assert any(length == 6 for _line, _char, length, *_rest in line0)
+    # The stale tail past the prefix boundary is still merged in: line 1 keeps its last-good tokens.
+    assert any(line == 1 for line, *_rest in decoded)
+
+
+@pytest.mark.asyncio
+async def test_semantic_tokens_range_on_partial_state(client: LanguageClient) -> None:
+    await client.initialize_session(_init_params([t.PositionEncodingKind.Utf32]))
+    await _open(client, _CLEAN)
+    await _change(client, _PARTIAL_AFTER, version=2)
+    full = _decode(await _tokens(client))
+    # A range confined to the fresh prefix (line 0) returns a non-empty, line-0-only subset.
+    prefix_rng = t.Range(start=t.Position(line=0, character=0), end=t.Position(line=0, character=13))
+    prefix = _decode(await _range_tokens(client, prefix_rng))
+    assert len(prefix) > 0
+    assert all(line == 0 for line, *_rest in prefix)
+    # A range on the stale tail (line 1) returns the merged stale tokens.
+    tail_rng = t.Range(start=t.Position(line=1, character=0), end=t.Position(line=1, character=10))
+    tail = _decode(await _range_tokens(client, tail_rng))
+    assert len(tail) > 0
+    assert all(line == 1 for line, *_rest in tail)
+    assert len(prefix) + len(tail) == len(full)  # the two disjoint ranges partition the served stream
+    # A single range straddling the merge boundary (start in the fresh prefix on line 0, end in the
+    # stale tail on line 1) returns the union of both -- the boundary is not special-cased.
+    span_rng = t.Range(start=t.Position(line=0, character=0), end=t.Position(line=1, character=10))
+    span = _decode(await _range_tokens(client, span_rng))
+    assert span == prefix + tail
+
+
+@pytest.mark.asyncio
+async def test_document_symbol_served_from_last_good_during_partial(client: LanguageClient) -> None:
+    await client.initialize_session(_init_params([t.PositionEncodingKind.Utf32]))
+    await _open(client, _SYM)
+    await _change(client, _SYM_BROKEN, version=2)  # zero-length prefix: the partial tree has no symbols
+    result = await client.text_document_document_symbol_async(
+        t.DocumentSymbolParams(text_document=t.TextDocumentIdentifier(uri=_URI))
+    )
+    assert result is not None
+    # The outline keeps the complete last-good symbols rather than blanking to the empty prefix.
+    assert {sym.name for sym in result} == {"outer", "alpha"}
+
+
+@pytest.mark.asyncio
+async def test_folding_served_from_last_good_during_partial(client: LanguageClient) -> None:
+    await client.initialize_session(_init_params([t.PositionEncodingKind.Utf32]))
+    await _open(client, "/* a\n b */\ngreet alice.")  # comment fold on lines 0-1
+    await _change(client, "/* a\n b */\ngreet 1.", version=2)  # line 2 breaks -> partial analysis
+    result = await client.text_document_folding_range_async(
+        t.FoldingRangeParams(text_document=t.TextDocumentIdentifier(uri=_URI))
+    )
+    assert result is not None
+    # Folding still serves the last complete tree's comment fold rather than blanking on the partial.
+    comment_folds = [r for r in result if r.kind == t.FoldingRangeKind.Comment]
+    assert any(r.start_line == 0 and r.end_line == 1 for r in comment_folds)
+
+
+@pytest.mark.asyncio
+async def test_selection_served_from_last_good_during_partial(client: LanguageClient) -> None:
+    await client.initialize_session(_init_params([t.PositionEncodingKind.Utf32]))
+    await _open(client, _CLEAN)
+    await _change(client, _PARTIAL, version=2)  # line 1 breaks -> partial analysis
+    result = await client.text_document_selection_range_async(
+        t.SelectionRangeParams(
+            text_document=t.TextDocumentIdentifier(uri=_URI),
+            positions=[t.Position(line=0, character=8)],  # inside `alice`
+        )
+    )
+    assert result is not None
+    # Selection still widens against the last complete tree rather than returning nothing.
+    head = result[0]
+    assert head.range.start.character >= 6
+    assert head.parent is not None
+
+
+@pytest.mark.asyncio
+async def test_rename_refused_on_partial_after_good(client: LanguageClient) -> None:
+    await client.initialize_session(_init_params([t.PositionEncodingKind.Utf32]))
+    await _open(client, _SYM)
+    await _change(client, _SYM_BROKEN, version=2)
+    with pytest.raises(Exception):  # noqa: B017 -- the partial carries a parse error; rename refuses
+        await client.text_document_rename_async(
+            t.RenameParams(
+                text_document=t.TextDocumentIdentifier(uri=_URI),
+                position=_line_col(_SYM_BROKEN, _SYM_BROKEN.index("alpha") + 1, t.PositionEncodingKind.Utf32),
+                new_name="beta",
+            )
+        )
+
+
+@pytest.mark.asyncio
+async def test_hard_failure_after_partial_keeps_serving_tokens(client_rule: LanguageClient) -> None:
+    await client_rule.initialize_session(_init_params([t.PositionEncodingKind.Utf32]))
+    await _open(client_rule, "greet alice. extra")  # `greeting` matches the prefix; ` extra` trails
+    served = await _tokens(client_rule)
+    assert len(served) > 0
+    await _change(client_rule, "xyz", version=2)  # hard failure: no prefix, so served tokens stay put
+    assert await _tokens(client_rule) == served
+
+
+def test_create_server_reads_start_rule_from_engine(monkeypatch: pytest.MonkeyPatch) -> None:
+    # The server takes its start rule from the engine, so the formatting parses and the analysis
+    # parses can never disagree on it.
+    engine = AnalysisEngine.from_paths(Path(_GRAMMAR), Path(_LSP), start_rule="greeting")
+    server = create_server(engine, None, RendererConfig(max_width=80, indent_width=2))
+    assert server._start_rule == "greeting"
+    monkeypatch.setattr(server, "_encoding", lambda: PositionEncoding.UTF32)
+    edits, logs = server._format_blocking("greet alice.")
+    # Formatting parses with the engine's start rule, so a bare greeting formats without error.
+    assert edits is not None
+    assert not any(level == t.MessageType.Error for level, _ in logs)

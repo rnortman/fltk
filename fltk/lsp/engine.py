@@ -10,6 +10,7 @@ codepoint offsets and returns either tokens or a formatted parse-error message.
 from __future__ import annotations
 
 import dataclasses
+import logging
 from typing import TYPE_CHECKING, Any
 
 from fltk import plumbing
@@ -21,6 +22,9 @@ if TYPE_CHECKING:
     from pathlib import Path
 
     from fltk.fegen import gsm
+
+
+_LOGGER = logging.getLogger(__name__)
 
 
 @dataclasses.dataclass(frozen=True)
@@ -50,11 +54,20 @@ class ParseErrorInfo:
 
 @dataclasses.dataclass(frozen=True)
 class DocumentAnalysis:
-    """The full outcome of analyzing one document.
+    """The full outcome of analyzing one document, in one of three shapes:
 
-    On success ``tree``, ``tokens``, and ``symbols`` are populated and ``error`` is ``None``;
-    on failure all three are ``None`` and ``error`` carries the structured failure. The
-    ``tree`` is the analysis-grammar CST root, typed ``Any`` because analysis CSTs are
+    | outcome  | tree | tokens | symbols | error | prefix_end |
+    |----------|------|--------|---------|-------|------------|
+    | complete | set  | set    | set     | None  | None       |
+    | partial  | set  | set    | set     | set   | set        |
+    | failed   | None | None   | None    | set   | None       |
+
+    A *partial* outcome carries the analysis of the successfully-parsed prefix ``[0, prefix_end)``
+    of the *current* text together with the parse error for the region past it: ``tree``/``tokens``/
+    ``symbols`` describe only the prefix, and ``error`` is the same failure a *failed* outcome would
+    carry. Invariant: ``prefix_end is not None`` iff (``error is not None`` and ``tree is not None``).
+
+    The ``tree`` is the analysis-grammar CST root, typed ``Any`` because analysis CSTs are
     per-grammar exec'd classes with no shared base -- consumers walk them structurally via
     ``kind``/``span``/``children``. ``symbols`` is the per-document symbol table the navigation
     and rename features consume.
@@ -64,6 +77,7 @@ class DocumentAnalysis:
     tokens: list[classify.Token] | None
     error: ParseErrorInfo | None
     symbols: symbols.SymbolTable | None = None
+    prefix_end: int | None = None
 
 
 class AnalysisEngine:
@@ -111,6 +125,11 @@ class AnalysisEngine:
         return cls(grammar, resolved_config, start_rule=start_rule)
 
     @property
+    def start_rule(self) -> str | None:
+        """The start-rule override this engine parses with; None means the grammar's first rule."""
+        return self._start_rule
+
+    @property
     def source_grammar(self) -> gsm.Grammar:
         """The original grammar passed to ``__init__``, before the analysis transform.
 
@@ -130,9 +149,11 @@ class AnalysisEngine:
     def analyze(self, text: str) -> DocumentAnalysis:
         """Analyze ``text`` into a CST, semantic tokens, and any structured parse error.
 
-        On a successful parse returns ``tree`` and ``tokens`` with ``error`` ``None``; on
-        failure returns both ``None`` and a ``ParseErrorInfo`` carrying the formatted message
-        and the failure offset. A recursion-limit failure is caught and reported with
+        Returns one of the three :class:`DocumentAnalysis` shapes. A complete parse yields the
+        whole-document tree/tokens/symbols with ``error`` ``None``. A failed parse that still
+        assembled a start-rule prefix yields the *partial* outcome: the prefix's tree/tokens/symbols
+        plus the parse error and the prefix boundary. A failure with no assembled prefix yields the
+        *failed* outcome (all three ``None``). A recursion-limit failure is caught and reported with
         ``offset`` ``None``.
 
         The grammar, spec, and input are all workspace-supplied and untrusted. A deeply nested
@@ -144,10 +165,36 @@ class AnalysisEngine:
         try:
             parsed = plumbing.parse_text(self._parser_result, text, self._start_rule)
             if not parsed.success:
+                error = ParseErrorInfo(message=parsed.error_message or "", offset=parsed.error_pos)
+                if parsed.prefix_cst is None:
+                    return DocumentAnalysis(tree=None, tokens=None, error=error)
+                try:
+                    prefix_symbols = symbols.extract(parsed.prefix_cst, self._tables, self._resolved_config, text)
+                    prefix_tokens = classify.classify(
+                        parsed.prefix_cst,
+                        self._parser_result.grammar,
+                        self._resolved_config,
+                        text,
+                        tables=self._tables,
+                        symbol_table=prefix_symbols,
+                    )
+                except RecursionError:
+                    # Classifying the prefix overflowed while the parse itself did not: degrade to the
+                    # failed outcome carrying the more actionable *parse* error, not a nesting message.
+                    # Record it -- an otherwise-silent degrade is indistinguishable from an ordinary
+                    # hard failure to anyone reading the logs.
+                    _LOGGER.warning(
+                        "prefix classification exceeded the recursion limit (prefix length %s); "
+                        "serving the parse error instead",
+                        parsed.prefix_pos,
+                    )
+                    return DocumentAnalysis(tree=None, tokens=None, error=error)
                 return DocumentAnalysis(
-                    tree=None,
-                    tokens=None,
-                    error=ParseErrorInfo(message=parsed.error_message or "", offset=parsed.error_pos),
+                    tree=parsed.prefix_cst,
+                    tokens=prefix_tokens,
+                    error=error,
+                    symbols=prefix_symbols,
+                    prefix_end=parsed.prefix_pos,
                 )
             symbol_table = symbols.extract(parsed.cst, self._tables, self._resolved_config, text)
             tokens = classify.classify(
@@ -177,7 +224,9 @@ class AnalysisEngine:
         a thin wrapper over ``analyze`` preserving its original result type and behavior exactly.
         """
         analysis = self.analyze(text)
+        # The `error is None` guard is load-bearing: a partial analysis carries fresh prefix tokens
+        # alongside its error, but this one-of contract must still report None tokens on any failure.
         return HighlightResult(
-            tokens=analysis.tokens,
+            tokens=analysis.tokens if analysis.error is None else None,
             error=analysis.error.message if analysis.error is not None else None,
         )

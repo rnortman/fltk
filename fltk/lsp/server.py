@@ -33,11 +33,15 @@ from fltk.lsp import features
 from fltk.lsp.positions import LineIndex, PositionEncoding
 
 if TYPE_CHECKING:
-    from fltk.lsp import classify, symbols
+    from fltk.lsp import symbols
     from fltk.lsp.engine import AnalysisEngine, DocumentAnalysis
     from fltk.plumbing_types import ParserResult, UnparserResult
     from fltk.unparse.fmt_config import FormatterConfig
     from fltk.unparse.renderer import RendererConfig
+
+    # Worker output: the analysis, its line index, and the served tokens (absolute segments plus
+    # their delta encoding), or ``None`` when the analysis produced no tokens.
+    _AnalysisResult = tuple[DocumentAnalysis, LineIndex, "_ServedTokens | None"]
 
 
 _LOGGER = logging.getLogger(__name__)
@@ -88,29 +92,45 @@ _constrain_pygls_encodings()
 
 @dataclasses.dataclass(frozen=True)
 class _GoodAnalysis:
-    """A snapshot of the last successful analysis, self-consistent across one document version.
+    """A snapshot of the last complete analysis, self-consistent across one document version.
 
-    The line index, tree, tokens, and pre-encoded token data are all computed against the *same*
-    document text, so serving any of them for a stale version can never mix coordinates from two
-    versions.
+    The line index, tree, segments, and symbols are all computed against the *same* document text,
+    so serving any of them for a stale version can never mix coordinates from two versions. Its
+    ``segments`` are the fresh absolute segments of that complete analysis -- the stale input a later
+    partial analysis merges its fresh prefix with.
     """
 
     version: int | None
     line_index: LineIndex
     tree: Any
-    tokens: list[classify.Token]
-    encoded_tokens: list[int]
+    segments: list[features.TokenSegment]
     symbols: symbols.SymbolTable
+
+
+@dataclasses.dataclass(frozen=True)
+class _ServedTokens:
+    """What the semantic-token handlers serve: absolute segments plus their wire encoding.
+
+    Either a complete analysis's fresh segments, or a partial analysis's fresh-prefix segments
+    merged with the clipped stale tail of the previous complete analysis. Both the segments and
+    their delta encoding are computed on the worker thread; the handlers only read them. Staleness
+    ordering is enforced by ``_store``'s ``analyzed_version`` guard before this record is written,
+    so it carries no version of its own.
+    """
+
+    segments: list[features.TokenSegment]
+    encoded: list[int]
 
 
 @dataclasses.dataclass
 class _DocState:
-    """Per-URI analysis state: the latest analysis and the last successful one."""
+    """Per-URI analysis state: the latest analysis, the served tokens, and the last complete one."""
 
     analyzed_version: int | None = None
     analysis: DocumentAnalysis | None = None
     line_index: LineIndex | None = None
     last_good: _GoodAnalysis | None = None
+    served_tokens: _ServedTokens | None = None
 
 
 class FltkLanguageServer(LanguageServer):
@@ -126,8 +146,6 @@ class FltkLanguageServer(LanguageServer):
         engine: AnalysisEngine,
         formatter_config: FormatterConfig | None,
         renderer_config: RendererConfig,
-        *,
-        start_rule: str | None,
     ) -> None:
         super().__init__(
             name=_SERVER_NAME,
@@ -137,15 +155,13 @@ class FltkLanguageServer(LanguageServer):
         self._engine = engine
         self._formatter_config = formatter_config
         self._renderer_config = renderer_config
-        # TODO(lsp-start-rule-dedup): the engine already stores the start rule; expose it as a
-        # read-only property and read engine.start_rule here rather than threading a second copy.
-        self._start_rule = start_rule
+        # The engine owns the start rule; reading it here keeps the formatting parses and the
+        # analysis parses from ever disagreeing on which rule the document starts with.
+        self._start_rule = engine.start_rule
         self._executor = ThreadPoolExecutor(max_workers=1, thread_name_prefix="fltk-lsp-analysis")
         self._docs: dict[str, _DocState] = {}
         self._debounce: dict[str, asyncio.Task[None]] = {}
-        self._inflight: dict[
-            str, tuple[int | None, asyncio.Future[tuple[DocumentAnalysis, LineIndex, list[int] | None]]]
-        ] = {}
+        self._inflight: dict[str, tuple[int | None, asyncio.Future[_AnalysisResult]]] = {}
         # Per-URI epoch, bumped on drop: an analysis captures it at submit and its result is
         # discarded if a close advanced the epoch meanwhile, so closed-document state is never
         # resurrected by a late-completing analysis.
@@ -175,11 +191,14 @@ class FltkLanguageServer(LanguageServer):
 
     # -- analysis scheduling ----------------------------------------------------------------
 
-    def _analyze_blocking(self, text: str) -> tuple[DocumentAnalysis, LineIndex, list[int] | None]:
-        """Run the engine, build the line index, and encode tokens; executed on the worker thread.
+    def _analyze_blocking(self, text: str, stale: _GoodAnalysis | None) -> _AnalysisResult:
+        """Run the engine, build the line index, and compute served tokens; on the worker thread.
 
-        The semantic-token encoding is done here, not on the loop thread, so its O(tokens x
-        line-prefix) cost never blocks the protocol loop even for clients that never request tokens.
+        The whole semantic-token pipeline -- absolute segments, the stale-tail merge for a partial
+        analysis, and delta encoding -- runs here, not on the loop thread, so its O(tokens) cost
+        never blocks the protocol loop even for clients that never request tokens. A complete
+        analysis serves its own fresh segments; a partial one serves its fresh prefix merged with
+        ``stale``'s segments clipped at the prefix boundary; a failed one serves nothing.
 
         A single non-terminating parse (catastrophic regex backtracking, unbounded recursion the
         engine does not catch) starves every later analysis: Python worker threads cannot be
@@ -189,10 +208,22 @@ class FltkLanguageServer(LanguageServer):
         """
         analysis = self._engine.analyze(text)
         line_index = LineIndex(text)
-        encoded: list[int] | None = None
-        if analysis.error is None and analysis.tokens is not None:
-            encoded = features.encode_semantic_tokens(analysis.tokens, line_index, self._encoding())
-        return analysis, line_index, encoded
+        served: _ServedTokens | None = None
+        if analysis.tokens is not None:
+            enc = self._encoding()
+            fresh = features.absolute_segments(analysis.tokens, line_index, enc)
+            if analysis.error is None:
+                segments = fresh
+            else:
+                # A partial outcome guarantees prefix_end is set (DocumentAnalysis invariant); trust
+                # it rather than defaulting, so a contract break crashes here instead of silently
+                # computing a zero boundary that keeps the whole stale stream.
+                assert analysis.prefix_end is not None
+                boundary = line_index.offset_to_position(analysis.prefix_end, enc)
+                stale_segments = stale.segments if stale is not None else []
+                segments = features.merge_stale_segments(fresh, stale_segments, boundary)
+            served = _ServedTokens(segments=segments, encoded=features.delta_encode_segments(segments))
+        return analysis, line_index, served
 
     def _store(
         self,
@@ -200,14 +231,15 @@ class FltkLanguageServer(LanguageServer):
         version: int | None,
         analysis: DocumentAnalysis,
         line_index: LineIndex,
-        encoded_tokens: list[int] | None,
+        served: _ServedTokens | None,
         epoch: int,
     ) -> _DocState:
         """Record an analysis result, advancing state only for the current-or-newer version.
 
         A result whose ``epoch`` no longer matches the URI's (a close happened after the analysis
         was submitted) is discarded, so a late-completing analysis never resurrects state for a
-        document that is no longer open.
+        document that is no longer open. When ``served`` is ``None`` (a failed analysis) the
+        previously served token stream is left in place, mirroring the keep-serving-stale policy.
         """
         if self._epochs.get(uri, 0) != epoch:
             return _DocState()
@@ -217,20 +249,19 @@ class FltkLanguageServer(LanguageServer):
         state.analyzed_version = version
         state.analysis = analysis
         state.line_index = line_index
-        if (
-            analysis.error is None
-            and analysis.tree is not None
-            and analysis.tokens is not None
-            and analysis.symbols is not None
-        ):
-            state.last_good = _GoodAnalysis(
-                version=version,
-                line_index=line_index,
-                tree=analysis.tree,
-                tokens=analysis.tokens,
-                encoded_tokens=encoded_tokens or [],
-                symbols=analysis.symbols,
-            )
+        if served is not None:
+            state.served_tokens = served
+            if analysis.error is None and analysis.tree is not None and analysis.symbols is not None:
+                # Complete analysis: its served segments are the fresh segment list, the stale input
+                # a later partial analysis merges against. A partial analysis (error set) never
+                # promotes to last_good, so navigation/folding keep serving the last complete tree.
+                state.last_good = _GoodAnalysis(
+                    version=version,
+                    line_index=line_index,
+                    tree=analysis.tree,
+                    segments=served.segments,
+                    symbols=analysis.symbols,
+                )
         return state
 
     async def _analysis_for(self, uri: str, version: int | None, text: str) -> _DocState:
@@ -242,17 +273,21 @@ class FltkLanguageServer(LanguageServer):
         epoch = self._epochs.get(uri, 0)
         inflight = self._inflight.get(uri)
         if inflight is not None and inflight[0] == version:
-            analysis, line_index, encoded = await inflight[1]
+            analysis, line_index, served = await inflight[1]
         else:
             loop = asyncio.get_running_loop()
-            future = loop.run_in_executor(self._executor, self._analyze_blocking, text)
+            # Snapshot last_good on the loop thread at submit time; only _store (also on the loop
+            # thread) ever writes it, so the worker reads a race-free stale-tail source.
+            existing = self._docs.get(uri)
+            stale = existing.last_good if existing is not None else None
+            future = loop.run_in_executor(self._executor, self._analyze_blocking, text, stale)
             self._inflight[uri] = (version, future)
             try:
-                analysis, line_index, encoded = await future
+                analysis, line_index, served = await future
             finally:
                 if self._inflight.get(uri) is not None and self._inflight[uri][1] is future:
                     del self._inflight[uri]
-        return self._store(uri, version, analysis, line_index, encoded, epoch)
+        return self._store(uri, version, analysis, line_index, served, epoch)
 
     async def _ensure_analyzed(self, uri: str, version: int | None, text: str) -> _DocState:
         """Return state whose analysis matches ``version``, analyzing if necessary."""
@@ -547,14 +582,13 @@ def create_server(
     engine: AnalysisEngine,
     formatter_config: FormatterConfig | None,
     renderer_config: RendererConfig,
-    *,
-    start_rule: str | None,
 ) -> FltkLanguageServer:
     """Build and wire an :class:`FltkLanguageServer`; the caller runs ``start_io``.
 
-    Kept separate from the CLI so the server can be constructed and driven in-process by tests.
+    Kept separate from the CLI so the server can be constructed and driven in-process by tests. The
+    start rule comes from ``engine``; there is no separate parameter to keep in sync with it.
     """
-    server = FltkLanguageServer(engine, formatter_config, renderer_config, start_rule=start_rule)
+    server = FltkLanguageServer(engine, formatter_config, renderer_config)
     legend = lsp.SemanticTokensLegend(
         token_types=list(features.SEMANTIC_TOKEN_TYPES),
         token_modifiers=list(features.SEMANTIC_TOKEN_MODIFIERS),
@@ -578,26 +612,27 @@ def create_server(
         uri = params.text_document.uri
         document = server.workspace.get_text_document(uri)
         state = await server._ensure_analyzed(uri, document.version, document.source)
-        good = server._serveable(state)
-        return lsp.SemanticTokens(data=list(good.encoded_tokens) if good is not None else [])
+        served = state.served_tokens
+        return lsp.SemanticTokens(data=list(served.encoded) if served is not None else [])
 
     @server.feature(lsp.TEXT_DOCUMENT_SEMANTIC_TOKENS_RANGE)
     async def semantic_tokens_range(params: lsp.SemanticTokensRangeParams) -> lsp.SemanticTokens:
         uri = params.text_document.uri
         document = server.workspace.get_text_document(uri)
         state = await server._ensure_analyzed(uri, document.version, document.source)
-        good = server._serveable(state)
-        if good is None:
+        served = state.served_tokens
+        if served is None:
             return lsp.SemanticTokens(data=[])
-        enc = server._encoding()
-        start = good.line_index.position_to_offset(params.range.start.line, params.range.start.character, enc)
-        end = good.line_index.position_to_offset(params.range.end.line, params.range.end.character, enc)
-        # good.tokens is sorted by start and non-overlapping, so end is monotonic too: the overlap
-        # window {t : t.end > start and t.start < end} is the slice [lo:hi] found by two bisects.
-        tokens = good.tokens
-        lo = bisect.bisect_right(tokens, start, key=lambda tok: tok.end)
-        hi = bisect.bisect_left(tokens, end, key=lambda tok: tok.start)
-        return lsp.SemanticTokens(data=features.encode_semantic_tokens(tokens[lo:hi], good.line_index, enc))
+        # Segments are sorted and non-overlapping by (line, char), so their end positions are
+        # monotonic too: the overlap window {s : s.end_pos > range.start and s.start_pos < range.end}
+        # is the slice [lo:hi] found by two bisects on position tuples -- no line index needed, which
+        # is correct for the stale tail too (its positions are already client-coordinate approximations).
+        segments = served.segments
+        start_pos = (params.range.start.line, params.range.start.character)
+        end_pos = (params.range.end.line, params.range.end.character)
+        lo = bisect.bisect_right(segments, start_pos, key=lambda s: (s.line, s.char + s.length))
+        hi = bisect.bisect_left(segments, end_pos, key=lambda s: (s.line, s.char))
+        return lsp.SemanticTokens(data=features.delta_encode_segments(segments[lo:hi]))
 
     @server.feature(lsp.TEXT_DOCUMENT_FOLDING_RANGE)
     async def folding_range(params: lsp.FoldingRangeParams) -> list[lsp.FoldingRange] | None:

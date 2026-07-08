@@ -33,6 +33,16 @@ class ParseResult:
     error_pos: int | None = None
     """Codepoint offset of the furthest parse failure; None when there is no source position
     (e.g. an unknown start rule)."""
+    prefix_cst: Any | None = None
+    """The start rule's CST for the successfully-parsed prefix ``[0, prefix_pos)`` on an
+    early-success-without-full-consumption failure (the start rule matched but did not consume the
+    whole input). ``None`` on success (``cst`` already holds the whole parse), on hard failure (the
+    start rule returned no result), and on an unknown start rule. ``prefix_cst is not None`` iff
+    ``prefix_pos is not None``; a prefix is exposed whenever the start rule returned a result, even a
+    zero-length one."""
+    prefix_pos: int | None = None
+    """Codepoint length consumed by ``prefix_cst`` (may be ``0``); ``None`` whenever ``prefix_cst``
+    is ``None``."""
 
 
 @dataclass
