@@ -46,6 +46,21 @@ def test_dogfood_spec_loads_against_its_own_grammar() -> None:
     assert all(m.paint.token == "punctuation" for m in resolved.global_child_matchers)
 
 
+def test_dogfood_committed_spec_defines_rule_config_name() -> None:
+    # The committed spec defines `def rule_name: type;` inside the `rule rule_config` block, so a
+    # `rule NAME { ... }` heads the outline and its name is a find-references target.
+    grammar = plumbing.parse_grammar_file(_GRAMMAR_PATH)
+    resolved = load_lsp_config(_SPEC_PATH.read_text(), grammar)
+    assert "rule_config" in resolved.def_matchers
+
+    engine = AnalysisEngine.from_paths(_GRAMMAR_PATH, _SPEC_PATH)
+    sample = 'rule scope_stmt {\n  scope "scope": keyword;\n}\n'
+    analysis = engine.analyze(sample)
+    assert analysis.error is None
+    assert analysis.symbols is not None
+    assert ("scope_stmt", ("type",)) in {(s.name, s.kind) for s in analysis.symbols.symbols}
+
+
 def test_dogfood_spec_highlights_a_sample() -> None:
     engine = AnalysisEngine.from_paths(_GRAMMAR_PATH, _SPEC_PATH)
     sample = 'rule def_stmt {\n  scope "name", label:comment: keyword.static;\n}\n'

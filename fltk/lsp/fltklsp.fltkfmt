@@ -1,0 +1,21 @@
+// fltklsp.fltkfmt — formatting for .fltklsp editor-tooling spec files.
+// Tokens within a statement are separated by single spaces; statements sit on their own line;
+// `rule { ... }` bodies break and indent one level.
+
+trivia_preserve: LineComment;
+preserve_blanks: 1;
+
+ws_allowed: nbsp;
+ws_required: nbsp;
+
+before "," { nil; }
+before ";" { nil; }
+before ":" { nil; }
+after ";" { hard; }
+
+rule rule_config {
+  after "{" { hard; }
+  before "}" { hard; }
+  after "}" { hard; }
+  nest from after "{" to before "}";
+}

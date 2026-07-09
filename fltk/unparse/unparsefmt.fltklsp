@@ -1,0 +1,19 @@
+// unparsefmt.fltklsp — editor tooling (highlighting) for the .fltkfmt formatting-spec language.
+//
+// Statement keywords and spacing words are word-shaped literals, so the default classifier
+// already paints them `keyword`; only the non-default paints are declared here. Anchors in a
+// .fltkfmt refer to the *target* grammar's items, which live in a different file, so there is no
+// in-file def/ref beyond the rule-config outline.
+
+// A `rule NAME { ... }` block names the target-grammar rule it configures: an outline entry.
+rule rule_config {
+  def rule_name: type;
+}
+
+// Quoted literals and integer counts.
+rule literal {
+  scope value: string;
+}
+rule integer {
+  scope value: number;
+}

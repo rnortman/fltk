@@ -5,10 +5,11 @@
 // Global literal anchors: the shared statement/anchor punctuation.
 scope ";", ":": punctuation;
 
-// Statement-introducing keywords, and the rule name a `rule` block addresses.
+// Statement-introducing keywords, and the rule name a `rule` block addresses. The rule name is
+// also a definition, so the block heads the outline and supports find-references.
 rule rule_config {
   scope "rule": keyword;
-  scope rule_name: type;
+  def rule_name: type;
 }
 rule scope_stmt     { scope "scope": keyword; }
 rule def_stmt       { scope "def": keyword; }

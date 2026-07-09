@@ -1,0 +1,36 @@
+// fegen.fltklsp — editor tooling (highlighting + def/ref) for the .fltkg grammar language.
+//
+// Dogfoods the addressing surface against fegen.fltkg. Rule names are definitions and every
+// rule-invocation term is a reference, so F12/Shift+F12 and the outline work on grammar rules.
+// Def/ref kinds use `type` because only a legend-token first segment paints the declaration and
+// reference sites; a non-legend kind would leave them at the default `variable`.
+
+// Operators and punctuation: the shared grammar punctuation, addressed globally by literal text.
+scope ":=", "|", "/", "%", "$", "!", "?", "+", "*": operator;
+scope ";", ".", ",", ":", "(", ")": punctuation;
+
+// A rule's name is its definition: outline entry, go-to-def target, same-file rename.
+rule rule {
+  def name: type;
+}
+
+// Every rule-invocation term is a reference to the rule it names.
+rule term {
+  ref rule:identifier: type;
+}
+
+// Quoted literals.
+rule literal {
+  scope value: string;
+}
+
+// Regex bodies get a distinct paint (the legend has no `regexp` type).
+rule raw_string {
+  scope value: macro;
+}
+
+// The identifier naming an item's capture label. The `label:` qualifier picks the child captured
+// under the label named `label` (an unqualified `label` anchor would parse as the qualifier itself).
+rule item {
+  scope label:label: label;
+}

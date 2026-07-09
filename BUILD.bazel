@@ -7,6 +7,7 @@ load("//:rust.bzl", "generate_rust_parser")
 lock(
     name = "requirements",
     srcs = ["pyproject.toml"],
+    args = ["--extra", "lsp"],
     out = "requirements_lock.txt",
 )
 
@@ -21,10 +22,29 @@ py_binary(
     ],
 )
 
+# fltk-grammar-lsp entry point: serves fltk's own DSLs from the @fltk// submodule.
+# Pure-Python path (like :genparser), so no :native_py dependency is needed.
+py_binary(
+    name = "grammar_lsp",
+    srcs = ["fltk/lsp/grammar_cli.py"],
+    main = "fltk/lsp/grammar_cli.py",
+    visibility = ["//visibility:public"],
+    deps = [
+        ":fltk",
+        "@pypi//astor",
+        "@pypi//pygls",
+        "@pypi//typer",
+    ],
+)
+
 py_library(
     name = "fltk",
     srcs = glob(["**/*.py"]),
-    data = ["fltk/py.typed"],
+    data = ["fltk/py.typed"] + glob([
+        "fltk/**/*.fltkg",
+        "fltk/**/*.fltklsp",
+        "fltk/**/*.fltkfmt",
+    ]),
     imports = ["."],
     visibility = ["//visibility:public"],
 )

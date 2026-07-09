@@ -1,0 +1,93 @@
+{
+  "name": "fltk-grammars",
+  "displayName": "fltk grammars (fltkg / fltkfmt / fltklsp)",
+  "description": "VS Code client for fltk's own grammar DSLs, served by fltk-grammar-lsp: highlighting, formatting, and go-to-definition / find-references for .fltkg, .fltkfmt, and .fltklsp files.",
+  "version": "0.0.1",
+  "private": true,
+  "engines": {
+    "vscode": "^1.75.0"
+  },
+  "categories": [
+    "Programming Languages"
+  ],
+  "activationEvents": [
+    "onLanguage:fltkg",
+    "onLanguage:fltkfmt",
+    "onLanguage:fltklsp"
+  ],
+  "main": "./extension.js",
+  "capabilities": {
+    "untrustedWorkspaces": {
+      "supported": false
+    }
+  },
+  "contributes": {
+    "languages": [
+      {
+        "id": "fltkg",
+        "aliases": [
+          "fltk grammar",
+          "fltkg"
+        ],
+        "extensions": [
+          ".fltkg"
+        ],
+        "configuration": "./language-configuration-fltkg.json"
+      },
+      {
+        "id": "fltkfmt",
+        "aliases": [
+          "fltk format spec",
+          "fltkfmt"
+        ],
+        "extensions": [
+          ".fltkfmt"
+        ],
+        "configuration": "./language-configuration-braces.json"
+      },
+      {
+        "id": "fltklsp",
+        "aliases": [
+          "fltk editor spec",
+          "fltklsp"
+        ],
+        "extensions": [
+          ".fltklsp"
+        ],
+        "configuration": "./language-configuration-braces.json"
+      }
+    ],
+    "configuration": {
+      "title": "fltk grammars",
+      "properties": {
+        "fltk.grammars.server.command": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "default": [],
+          "scope": "machine",
+          "markdownDescription": "Override the argv prefix used to launch `fltk-grammar-lsp` (a string array). The extension appends the language id (`fltkg`, `fltkfmt`, or `fltklsp`) as the final argument. Empty means use the in-repo `uv` default computed from the extension's location. Required when the extension is installed as a packaged `.vsix` outside the repo. Machine-scoped: workspace settings cannot set it, so a cloned repo's `.vscode/settings.json` cannot redirect the launched executable."
+        }
+      }
+    },
+    "semanticTokenScopes": [
+      {
+        "scopes": {
+          "constant": [
+            "constant.language"
+          ],
+          "punctuation": [
+            "punctuation"
+          ],
+          "label": [
+            "entity.name.label"
+          ]
+        }
+      }
+    ]
+  },
+  "dependencies": {
+    "vscode-languageclient": "^9.0.1"
+  }
+}
