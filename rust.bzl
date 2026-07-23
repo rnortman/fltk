@@ -6,7 +6,8 @@ This file provides:
     cst.rs + parser.rs as Bazel action outputs. With python_extension = True it
     additionally assembles the crate, compiles the PyO3 cdylib, generates the
     .pyi stub package, and wraps the result in a py_library.
-  - _build_pyo3_cdylib: an internal helper (not part of the public surface) that
+  - fltk_pyo3_cdylib: the public helper (loaded by consumers as
+    `load("@fltk//:rust.bzl", "fltk_pyo3_cdylib")`) that
     compiles those generated sources + a consumer-authored lib.rs into a PyO3
     cdylib (rust_shared_library with extension-module), wrapped in a py_library
     that places the resulting .so on the correct import path and carries
@@ -24,7 +25,7 @@ load("@rules_rust//rust:defs.bzl", "rust_shared_library")
 load("@rules_python//python:defs.bzl", "py_library")
 
 # Default recursion_limit injected into the assembled PyO3 crate root. Single
-# owner shared by the _build_pyo3_cdylib / generate_rust_parser signatures and the
+# owner shared by the fltk_pyo3_cdylib / generate_rust_parser signatures and the
 # pure-Rust "left at default?" misconfiguration guard, so the guard tracks the
 # default automatically instead of comparing against a hardcoded literal.
 _DEFAULT_RECURSION_LIMIT = 512
@@ -90,7 +91,7 @@ def _generate_rust_lib_impl(ctx):
     Runs: genparser gen-rust-lib <out> --module-name <name> [flags...]
 
     The output file is always named "lib.rs" in a subdirectory named after the
-    rule, so that _build_pyo3_cdylib's assembly genrule can reference it via a
+    rule, so that fltk_pyo3_cdylib's assembly genrule can reference it via a
     single-file depset.
     """
     lib_out = ctx.actions.declare_file(ctx.attr.name + "/lib.rs")
@@ -148,7 +149,7 @@ generate_rust_lib = rule(
 Emits one action output:
   <name>/lib.rs — generated crate root declaring mod cst; mod parser; and #[pymodule].
 
-Designed to be consumed by _build_pyo3_cdylib (via the auto-generated lib_rs path)
+Designed to be consumed by fltk_pyo3_cdylib (via the auto-generated lib_rs path)
 or used standalone when a hand-authored lib.rs is not required.
 
 Example:
@@ -292,7 +293,7 @@ _generate_rust_srcs = rule(
             doc = (
                 "Rust module path passed to gen-rust-parser as --cst-mod-path. " +
                 "Defaults to 'super::cst', which works when cst.rs and parser.rs " +
-                "are siblings under the same crate root (the _build_pyo3_cdylib helper " +
+                "are siblings under the same crate root (the fltk_pyo3_cdylib helper " +
                 "assembles exactly this layout). Override when you use a different " +
                 "module hierarchy."
             ),
@@ -349,7 +350,7 @@ and declares:
 When `protocol = True` (requires `protocol_module`), it also emits:
   <name>/cst_protocol.py — the backend-agnostic protocol module
 
-These files are designed to be consumed by _build_pyo3_cdylib, which assembles
+These files are designed to be consumed by fltk_pyo3_cdylib, which assembles
 them alongside a consumer-authored lib.rs into a single crate directory and
 compiles the result into a PyO3 cdylib.
 
@@ -370,9 +371,9 @@ Example (internal instantiation by the macro):
 """,
 )
 
-# ---- _build_pyo3_cdylib ---------------------------------------------------------
+# ---- fltk_pyo3_cdylib ---------------------------------------------------------
 
-def _build_pyo3_cdylib(
+def fltk_pyo3_cdylib(
         name,
         rs_srcs,
         lib_rs = None,
@@ -427,18 +428,19 @@ def _build_pyo3_cdylib(
               the importable module name (e.g. "clockwork_native"). This becomes
               the crate name and the .so stem. Invariant: the `#[pymodule]` fn
               in lib_rs must have exactly this name.
-        rs_srcs: Label providing cst.rs and parser.rs as outputs. As an internal
-                 helper, _build_pyo3_cdylib is always fed the wrapping macro's own
-                 codegen target (its rust_srcs output group), so the hazard below
-                 is no longer consumer-reachable and is retained as an internal
-                 invariant rather than a caller-facing warning.
-                 INTERNAL INVARIANT: the assembly step copies every file from
+        rs_srcs: Label providing cst.rs and parser.rs as outputs. Typically the
+                 label of a generate_rust_parser(...) target in its default
+                 (pure-Rust) mode, whose rust_srcs are exactly cst.rs / parser.rs
+                 (this is the Clockwork consumption pattern). generate_rust_parser
+                 with python_extension = True feeds its own codegen target here
+                 internally.
+                 CALLER INVARIANT: the assembly step copies every file from
                  rs_srcs into the crate gendir by basename AFTER writing lib.rs.
                  If rs_srcs emitted a file whose basename is "lib.rs" it would
                  silently overwrite the assembled crate root (losing the injected
-                 recursion_limit and the lib_rs content).  The codegen rule the
-                 macro feeds here only ever emits cst.rs / parser.rs, upholding
-                 this invariant.
+                 recursion_limit and the lib_rs content).  generate_rust_parser
+                 only ever emits cst.rs / parser.rs, upholding this invariant;
+                 direct callers feeding a hand-rolled rs_srcs must do the same.
         lib_rs: Label or file of the consumer-authored lib.rs that declares
                 `mod cst;`, `mod parser;`, and the `#[pymodule]` entry point.
                 When omitted (default None), the macro generates lib.rs from
@@ -699,7 +701,7 @@ def generate_rust_parser(
         output_group = "stub_srcs",
     )
 
-    _build_pyo3_cdylib(
+    fltk_pyo3_cdylib(
         name = name,
         rs_srcs = ":" + name + "_rust_srcs",
         lib_rs = lib_rs,

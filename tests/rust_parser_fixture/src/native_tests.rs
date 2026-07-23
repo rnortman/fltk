@@ -1060,7 +1060,7 @@ mod tests {
         assert_eq!(parsed.pos, src.chars().count() as i64, "parser must consume all of {src:?}");
         let guard = parsed.result.read();
         let unparsed = crate::unparser_default::Unparser::new()
-            .unparse_num(&*guard)
+            .unparse_num(&guard)
             .unwrap_or_else(|| panic!("native default-config unparse failed for {src:?}: returned None"));
         let resolved = resolve_spacing_specs(unparsed.doc());
         let rendered = Renderer::new(RendererConfig {

@@ -20,12 +20,46 @@ jobs:
         with:
           python-version: "3.10"
           enable-cache: true
+          # pyproject.toml's [tool.uv] required-version is the single source of
+          # truth for the uv version; install exactly that so CI matches local.
+          version-file: pyproject.toml
+
+      # rust-toolchain.toml is the single source of truth for the Rust version.
+      # dtolnay/rust-toolchain does not read that file (its `toolchain` input is
+      # required), so the channel is extracted here and passed in.  Installing
+      # "stable" instead would both diverge from the pin and make CI break on an
+      # unchanged commit whenever a new stable adds a clippy lint.
+      - name: Read pinned Rust toolchain
+        id: rust-toolchain-file
+        run: |
+          channel=$(sed -n 's/^channel *= *"\(.*\)"/\1/p' rust-toolchain.toml)
+          test -n "$channel" || { echo "no channel found in rust-toolchain.toml" >&2; exit 1; }
+          echo "channel=$channel" >> "$GITHUB_OUTPUT"
 
       # Pinned to the v1 tag SHA; Dependabot refreshes this weekly.
       - name: Install Rust toolchain
         uses: dtolnay/rust-toolchain@e97e2d8cc328f1b50210efc529dca0028893a2d9  # v1
         with:
-          toolchain: stable
+          toolchain: ${{ steps.rust-toolchain-file.outputs.channel }}
+          components: clippy, rustfmt
+
+      # Performance-only: a shared disk cache lets the consumer lane reuse
+      # crate artifacts the root lane built instead of recompiling cold.
+      # The toolchain pin lives in MODULE.bazel, not the lock, so both
+      # MODULE.bazel files join both lockfiles in the cache key.
+      # Correctness does not depend on a hit.
+      - name: Configure shared Bazel disk cache
+        run: |
+          mkdir -p "$HOME/.cache/bazel-disk"
+          printf 'common --disk_cache=%s/.cache/bazel-disk\n' "$HOME" >> "$HOME/.bazelrc"
+
+      - name: Cache Bazel disk cache
+        uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830  # v4.3.0
+        with:
+          path: ~/.cache/bazel-disk
+          key: bazel-${{ runner.os }}-${{ hashFiles('.bazelversion', 'MODULE.bazel', 'tests/bazel_consumer/MODULE.bazel', 'MODULE.bazel.lock', 'tests/bazel_consumer/MODULE.bazel.lock') }}
+          restore-keys: |
+            bazel-${{ runner.os }}-
 
       # Deliberately uses check-ci, not check. cargo-deny (the supply-chain /
       # advisory gate) is not installed on this runner; it is enforced via the
@@ -33,3 +67,29 @@ jobs:
       # suite, which is identical to check minus cargo-deny.
       - name: Run checks
         run: make check-ci
+
+      # Bazel's disk cache has no eviction of its own, and the restore-keys prefix
+      # makes every key change layer a fresh generation of artifacts (new toolchain,
+      # new crate versions) on top of the previous cache, so the archive would grow
+      # monotonically until it evicts itself from the repository cache quota — cold
+      # Bazel builds at unpredictable times, the opposite of what the cache is for.
+      # Keep the most recently used ~2 GiB.  Runs before the cache action's post-job
+      # save (post steps run after all normal steps).
+      - name: Prune Bazel disk cache
+        if: always()
+        continue-on-error: true
+        run: |
+          cache_dir="$HOME/.cache/bazel-disk"
+          max_bytes=$((2 * 1024 * 1024 * 1024))
+          [ -d "$cache_dir" ] || exit 0
+          before=$(du -sh "$cache_dir" | cut -f1)
+          find "$cache_dir" -type f -printf '%T@\t%s\t%p\n' | sort -rn | {
+            total=0
+            while IFS=$(printf '\t') read -r _ size path; do
+              total=$((total + size))
+              if [ "$total" -gt "$max_bytes" ]; then
+                rm -f "$path"
+              fi
+            done
+          }
+          echo "Bazel disk cache: $before before prune, $(du -sh "$cache_dir" | cut -f1) after"

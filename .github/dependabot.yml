@@ -4,3 +4,37 @@ updates:
     directory: "/"
     schedule:
       interval: "weekly"
+
+  # Bumps `channel` in rust-toolchain.toml.  The pin is what makes a given commit
+  # reproducible locally; this updater is what keeps it from going stale.  Because
+  # `make check` runs clippy with -D warnings, a release that adds a lint lands as a
+  # failing PR here instead of breaking main on an unchanged commit.
+  - package-ecosystem: "rust-toolchain"
+    directory: "/"
+    schedule:
+      interval: "weekly"
+
+  # pyproject.toml + uv.lock.  requirements_lock.txt is regenerated from uv.lock by
+  # `make regen-locks` (its single writer); check-locks fails a uv bump PR until that
+  # is run on the branch.  No separate pip updater — a second writer would be clobbered.
+  - package-ecosystem: "uv"
+    directory: "/"
+    schedule:
+      interval: "weekly"
+
+  # All six Cargo workspaces (root + standalone crates/fixtures), each with a tracked
+  # Cargo.lock.  Grouped into a single PR set to keep volume sane across directories.
+  - package-ecosystem: "cargo"
+    directories:
+      - "/"
+      - "/crates/fegen-rust"
+      - "/crates/fltkfmt"
+      - "/tests/rust_cst_fixture"
+      - "/tests/rust_parser_fixture"
+      - "/tests/rust_poc_cst"
+    schedule:
+      interval: "weekly"
+    groups:
+      cargo:
+        patterns:
+          - "*"

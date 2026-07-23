@@ -1,0 +1,18 @@
+# Pinned Rust toolchain — SINGLE SOURCE OF TRUTH for local and CI builds.
+#
+# Why an exact version and not "stable": `make check` denies all clippy warnings
+# (`-D warnings`), so every new stable release can turn a fresh lint into a build
+# break on an unchanged commit.  Pinning makes the toolchain a deliberate, reviewable
+# change instead of an ambient one.
+#
+# CI reads the `channel` value out of this file (see .github/workflows/ci.yml) rather
+# than installing "stable".  Bazel cannot read TOML, so every MODULE.bazel that uses
+# rules_rust mirrors the version in a `rust.toolchain(versions = [...])` tag;
+# `make bazel-toolchain-guard` fails the build if any mirror drifts.
+#
+# To bump: change `channel` here AND the matching `versions` line in every
+# MODULE.bazel, run `rustup update`, run `make check`, fix any new lints in the same
+# commit.
+[toolchain]
+channel = "1.97.1"
+components = ["clippy", "rustfmt"]

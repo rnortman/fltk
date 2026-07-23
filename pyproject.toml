@@ -32,6 +32,12 @@ fltk-highlight = "fltk.lsp.highlight_cli:app"
 fltk-lsp = "fltk.lsp.server_cli:app"
 fltk-grammar-lsp = "fltk.lsp.grammar_cli:app"
 
+[tool.uv]
+# Exact pin: the lock drift gate (make check-locks) is sensitive to uv's export
+# output format, so a floating uv could break CI on an unchanged commit.
+# Bump: edit this, run `make check`, commit.
+required-version = "==0.11.28"
+
 [tool.maturin]
 python-packages = ["fltk"]
 module-name = "fltk._native"

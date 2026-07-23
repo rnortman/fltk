@@ -1,15 +1,7 @@
 load("@rules_python//python:defs.bzl", "py_binary", "py_library")
-load("@rules_python//python/uv:lock.bzl", "lock")
 load("@rules_rust//rust:defs.bzl", "rust_shared_library")
 load("//:rules.bzl", "generate_parser")
 load("//:rust.bzl", "generate_rust_parser")
-
-lock(
-    name = "requirements",
-    srcs = ["pyproject.toml"],
-    args = ["--extra", "lsp"],
-    out = "requirements_lock.txt",
-)
 
 py_binary(
     name = "genparser",
@@ -39,7 +31,7 @@ py_binary(
 
 py_library(
     name = "fltk",
-    srcs = glob(["**/*.py"]),
+    srcs = glob(["fltk/**/*.py"]),
     data = ["fltk/py.typed"] + glob([
         "fltk/**/*.fltkg",
         "fltk/**/*.fltklsp",

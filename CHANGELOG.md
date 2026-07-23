@@ -30,6 +30,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Fixed
 - Bazel rules now work when fltk is used as a submodule (use `cst_file.dirname` for output path)
 - Add `imports = ["."]` to py_library for correct Python imports when used as submodule
+- Export `fltk_pyo3_cdylib` from `rust.bzl`; loading it from a consumer module previously failed
 
 ### Added
 - `preserve_blanks: N` directive in format specs to preserve and normalize blank lines

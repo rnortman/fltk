@@ -1,0 +1,51 @@
+# Downstream-consumer smoke targets.  Every load below uses the cross-module @fltk//
+# path a real consumer uses, NOT the same-repo // path the root BUILD.bazel uses —
+# that difference is the whole point of this module.
+load("@fltk//:rules.bzl", "generate_parser")
+load("@fltk//:rust.bzl", "fltk_pyo3_cdylib", "generate_rust_parser")
+load("@rules_python//python:defs.bzl", "py_library", "py_test")
+
+# ── Python-parser path ────────────────────────────────────────────────────────
+# Pure-Python path: no @fltk//:native_py dependency.
+generate_parser(
+    name = "consumer_py_srcs",
+    src = "consumer.fltkg",
+    base_name = "consumer",
+    cst_mod_path = "consumer_cst",
+)
+
+py_library(
+    name = "consumer_py_parser",
+    srcs = [":consumer_py_srcs"],
+    # imports = ["."] so the generated modules resolve as top-level imports.
+    imports = ["."],
+    deps = ["@fltk"],
+)
+
+py_test(
+    name = "consumer_python_test",
+    srcs = ["consumer_python_test.py"],
+    deps = [
+        ":consumer_py_parser",
+        "@fltk",
+    ],
+)
+
+# ── Rust-extension path ───────────────────────────────────────────────────────
+# Exercises the cross-module cdylib build; fltk_pyo3_cdylib must remain exported
+# from @fltk//:rust.bzl.
+generate_rust_parser(
+    name = "consumer_rs_srcs",
+    src = "consumer.fltkg",
+)
+
+fltk_pyo3_cdylib(
+    name = "consumer_native",
+    rs_srcs = ":consumer_rs_srcs",
+)
+
+py_test(
+    name = "consumer_rust_test",
+    srcs = ["consumer_rust_test.py"],
+    deps = [":consumer_native"],
+)

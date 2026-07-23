@@ -1,8 +1,10 @@
 .PHONY: check check-ci check-common lint format-check typecheck test cargo-check cargo-test cargo-clippy \
         cargo-test-no-python cargo-clippy-no-python check-no-pyo3 cargo-deny \
-        cargo-test-python-features \
+        cargo-test-python-features check-locks regen-locks bazel-toolchain-guard \
+        bazel-check bazel-consumer-check \
         build-native build-test-user-ext build-fegen-rust-cst build-rust-parser-fixture \
-        build-test-fixtures gen-rust-cst fix gencode
+        build-test-fixtures build-poc-cst gen-rust-cst gen-rust-parser gen-rust-unparser \
+        build-fegen-rust-parser test-native-parser test-rust-parser-fixture fix gencode
 
 # ══════════════════════════════════════════════════════════════════════════════
 # CHECK TARGET FAMILY — READ BEFORE TOUCHING
@@ -34,10 +36,20 @@
 # ══════════════════════════════════════════════════════════════════════════════
 
 # Shared base: all checks except cargo-deny.
-# ADD new steps here by appending the target name to the `steps` string below.
+# ADD new steps here by appending the target name to CHECK_STEPS below.
 # DO NOT add new steps directly to `check` or `check-ci` — they inherit via this target.
+#
+# Single source for the step list, consumed by both the loop and the success echo
+# (no duplicated literal to drift).  ORDER IS LOAD-BEARING: check-locks must run
+# AFTER test.  The maturin builds under `test` re-resolve a stale Cargo.lock in
+# place (cargo without --locked), and the check-locks git diff is what catches
+# that rewrite — so it has to run afterward to see it.
+CHECK_STEPS := lint format-check typecheck test cargo-check cargo-clippy cargo-test \
+               cargo-test-python-features cargo-test-no-python cargo-clippy-no-python \
+               check-no-pyo3 check-locks bazel-check bazel-consumer-check
+
 check-common:
-	@steps="lint format-check typecheck test cargo-check cargo-clippy cargo-test cargo-test-python-features cargo-test-no-python cargo-clippy-no-python check-no-pyo3"; \
+	@steps="$(CHECK_STEPS)"; \
 	for step in $$steps; do \
 	    tmpfile=$$(mktemp); \
 	    if ! $(MAKE) $$step >"$$tmpfile" 2>&1; then \
@@ -48,7 +60,7 @@ check-common:
 	    fi; \
 	    rm -f "$$tmpfile"; \
 	done; \
-	echo "check-common: all steps passed (lint format-check typecheck test cargo-check cargo-clippy cargo-test cargo-test-python-features cargo-test-no-python cargo-clippy-no-python check-no-pyo3)"
+	echo "check-common: all steps passed ($(CHECK_STEPS))"
 
 # LOCAL / PRECOMMIT lane: check-ci + cargo-deny (the supply-chain gate).
 # Depends on check-ci (not check-common directly) so the one-sanctioned-divergence
@@ -100,10 +112,10 @@ test: build-test-fixtures
 # here because cargo-clippy (a strict superset of cargo-check) already covers them at the
 # same feature sets; running both in make check would double-compile each fixture crate.
 cargo-check:
-	cargo check -q
+	cargo check -q --locked
 
 cargo-test:
-	cargo test -q
+	cargo test -q --locked
 
 # Run fltk-cst-core tests with the python feature enabled, linking libpython via a uv-managed
 # interpreter (python-build-standalone ships the unversioned libpython3.10.so required to link).
@@ -120,33 +132,36 @@ cargo-test-python-features:
 	    echo "cargo-test-python-features: no uv-managed CPython 3.10 found. Run: uv python install cpython-3.10"; \
 	    exit 1; \
 	fi; \
-	PYO3_PYTHON=$$PYO3_PYTHON cargo test -q -p fltk-cst-core --features python
+	PYO3_PYTHON=$$PYO3_PYTHON cargo test -q --locked -p fltk-cst-core --features python
 
 # cargo-clippy covers test crates at their python-on feature set (the only non-default
 # feature that adds code; default features for fegen-rust are already python-on).
 cargo-clippy:
-	cargo clippy -q -- -D warnings
-	cargo clippy -q --manifest-path crates/fegen-rust/Cargo.toml -- -D warnings
-	cargo clippy -q --manifest-path tests/rust_poc_cst/Cargo.toml -- -D warnings
-	cargo clippy -q --manifest-path tests/rust_parser_fixture/Cargo.toml --features python -- -D warnings
+	cargo clippy -q --locked --all-targets -- -D warnings
+	cargo clippy -q --locked --manifest-path crates/fegen-rust/Cargo.toml --all-targets -- -D warnings
+	cargo clippy -q --locked --manifest-path tests/rust_poc_cst/Cargo.toml --all-targets -- -D warnings
+	cargo clippy -q --locked --manifest-path tests/rust_parser_fixture/Cargo.toml --all-targets --features python -- -D warnings
+	# rust_cst_fixture's pyo3 dep is non-optional (no python-off configuration to lint),
+	# so it appears only here, at its default (extension-module) feature set.
+	cargo clippy -q --locked --manifest-path tests/rust_cst_fixture/Cargo.toml --all-targets -- -D warnings
 
 # python-off lane: feature isolation requires -p selection (workspace unification would
 # re-enable pyo3 via fltk-native's dependency).
 cargo-test-no-python:
-	cargo test -q -p fltk-cst-core --no-default-features
-	cargo test -q -p fltk-parser-core
-	cargo test -q --manifest-path tests/rust_parser_fixture/Cargo.toml
-	cargo test -q --manifest-path crates/fegen-rust/Cargo.toml --no-default-features
-	cargo test -q --manifest-path tests/rust_poc_cst/Cargo.toml --no-default-features
-	cargo test -q --manifest-path crates/fltkfmt/Cargo.toml
+	cargo test -q --locked -p fltk-cst-core --no-default-features
+	cargo test -q --locked -p fltk-parser-core
+	cargo test -q --locked --manifest-path tests/rust_parser_fixture/Cargo.toml
+	cargo test -q --locked --manifest-path crates/fegen-rust/Cargo.toml --no-default-features
+	cargo test -q --locked --manifest-path tests/rust_poc_cst/Cargo.toml --no-default-features
+	cargo test -q --locked --manifest-path crates/fltkfmt/Cargo.toml
 
 cargo-clippy-no-python:
-	cargo clippy -q -p fltk-cst-core --no-default-features -- -D warnings
-	cargo clippy -q -p fltk-parser-core -- -D warnings
-	cargo clippy -q --manifest-path tests/rust_parser_fixture/Cargo.toml -- -D warnings
-	cargo clippy -q --manifest-path crates/fegen-rust/Cargo.toml --no-default-features -- -D warnings
-	cargo clippy -q --manifest-path tests/rust_poc_cst/Cargo.toml --no-default-features -- -D warnings
-	cargo clippy -q --manifest-path crates/fltkfmt/Cargo.toml --all-targets -- -D warnings
+	cargo clippy -q --locked -p fltk-cst-core --no-default-features --all-targets -- -D warnings
+	cargo clippy -q --locked -p fltk-parser-core --all-targets -- -D warnings
+	cargo clippy -q --locked --manifest-path tests/rust_parser_fixture/Cargo.toml --all-targets -- -D warnings
+	cargo clippy -q --locked --manifest-path crates/fegen-rust/Cargo.toml --no-default-features --all-targets -- -D warnings
+	cargo clippy -q --locked --manifest-path tests/rust_poc_cst/Cargo.toml --no-default-features --all-targets -- -D warnings
+	cargo clippy -q --locked --manifest-path crates/fltkfmt/Cargo.toml --all-targets -- -D warnings
 	# python-on clippy for rust_poc_cst is covered by cargo-clippy (default features = extension-module)
 
 # Mechanical check: verify pyo3 is absent from the python-off dependency graphs.
@@ -154,25 +169,81 @@ cargo-clippy-no-python:
 # assertion to prevent false passes when cargo tree fails silently.
 check-no-pyo3:
 	@set -e; \
-	core="$$(cargo tree -p fltk-cst-core --no-default-features --edges normal,build)"; \
+	core="$$(cargo tree --locked -p fltk-cst-core --no-default-features --edges normal,build)"; \
 	echo "$$core" | grep -q fltk-cst-core || { echo "FAIL: check-no-pyo3 broken: cargo tree output lacks fltk-cst-core"; exit 1; }; \
 	! echo "$$core" | grep -q pyo3 || { echo "FAIL: pyo3 present in fltk-cst-core --no-default-features graph"; exit 1; }; \
-	parser="$$(cargo tree -p fltk-parser-core --edges normal,build)"; \
+	parser="$$(cargo tree --locked -p fltk-parser-core --edges normal,build)"; \
 	echo "$$parser" | grep -q fltk-cst-core || { echo "FAIL: check-no-pyo3 broken: cargo tree output lacks fltk-cst-core"; exit 1; }; \
 	! echo "$$parser" | grep -q pyo3 || { echo "FAIL: pyo3 present in fltk-parser-core dependency graph"; exit 1; }; \
-	fixture="$$(cargo tree --manifest-path tests/rust_parser_fixture/Cargo.toml --edges normal,build)"; \
+	fixture="$$(cargo tree --locked --manifest-path tests/rust_parser_fixture/Cargo.toml --edges normal,build)"; \
 	echo "$$fixture" | grep -q fltk-parser-core || { echo "FAIL: check-no-pyo3 broken: cargo tree output lacks fltk-parser-core"; exit 1; }; \
 	! echo "$$fixture" | grep -q pyo3 || { echo "FAIL: pyo3 present in rust_parser_fixture default-features graph"; exit 1; }; \
-	fegen="$$(cargo tree --manifest-path crates/fegen-rust/Cargo.toml --no-default-features --edges normal,build)"; \
+	fegen="$$(cargo tree --locked --manifest-path crates/fegen-rust/Cargo.toml --no-default-features --edges normal,build)"; \
 	echo "$$fegen" | grep -q fltk-parser-core || { echo "FAIL: check-no-pyo3 broken: cargo tree output lacks fltk-parser-core"; exit 1; }; \
 	! echo "$$fegen" | grep -q pyo3 || { echo "FAIL: pyo3 present in fegen-rust --no-default-features graph"; exit 1; }; \
-	poc="$$(cargo tree --manifest-path tests/rust_poc_cst/Cargo.toml --no-default-features --edges normal,build)"; \
+	poc="$$(cargo tree --locked --manifest-path tests/rust_poc_cst/Cargo.toml --no-default-features --edges normal,build)"; \
 	echo "$$poc" | grep -q fltk-cst-core || { echo "FAIL: check-no-pyo3 broken: cargo tree output lacks fltk-cst-core"; exit 1; }; \
 	! echo "$$poc" | grep -q pyo3 || { echo "FAIL: pyo3 present in rust_poc_cst --no-default-features graph"; exit 1; }; \
-	fltkfmt="$$(cargo tree --manifest-path crates/fltkfmt/Cargo.toml --edges normal,build)"; \
+	fltkfmt="$$(cargo tree --locked --manifest-path crates/fltkfmt/Cargo.toml --edges normal,build)"; \
 	echo "$$fltkfmt" | grep -q fltk-parser-core || { echo "FAIL: check-no-pyo3 broken: cargo tree output lacks fltk-parser-core"; exit 1; }; \
 	! echo "$$fltkfmt" | grep -q pyo3 || { echo "FAIL: pyo3 present in fltkfmt dependency graph"; exit 1; }; \
 	echo "check-no-pyo3: pyo3 absent from python-off graphs"
+
+# Single writer for the Python/Bazel lock surface: regenerate uv.lock and the
+# Bazel requirements_lock.txt from pyproject.toml/uv.lock.  The uv export command
+# is the exact one recorded in requirements_lock.txt's header — keep them identical.
+# Dependabot uv PRs bump pyproject.toml/uv.lock only; run this on the branch to
+# complete them (check-locks fails until requirements_lock.txt is regenerated).
+regen-locks:
+	uv lock
+	uv export --format requirements-txt --no-editable --no-dev --no-emit-project --extra lsp --output-file requirements_lock.txt
+
+# Lock drift gate.  Regenerate-in-place + git diff --exit-code (the gencode
+# pattern): fails if uv.lock, requirements_lock.txt, or any tracked Cargo.lock
+# differs from what the current manifests resolve to.  A temp-file diff can't be
+# used because the uv-export header embeds the output path.  Runs after `test` in
+# CHECK_STEPS, so any Cargo.lock a maturin build silently re-resolved surfaces here.
+check-locks:
+	uv lock --check
+	$(MAKE) regen-locks
+	git diff --exit-code -- uv.lock requirements_lock.txt Cargo.lock \
+		crates/fegen-rust/Cargo.lock crates/fltkfmt/Cargo.lock \
+		tests/rust_cst_fixture/Cargo.lock tests/rust_parser_fixture/Cargo.lock \
+		tests/rust_poc_cst/Cargo.lock \
+		|| { echo "FAIL: lockfiles drifted; commit the regenerated files"; exit 1; }
+
+# Drift detector for the Rust version: rust-toolchain.toml is the single source of
+# truth, but bzlmod cannot read TOML, so every Bazel module that pulls in rules_rust
+# must mirror the version in a rust.toolchain tag.  Without a mirrored tag a module
+# silently compiles with rules_rust's own default toolchain — a different compiler
+# over the same source.  The mirror list is DERIVED from the tracked MODULE.bazel
+# files, not hardcoded, so a newly added Bazel workspace is guarded the moment it
+# depends on rules_rust; a module that never mentions rules_rust is skipped, and a
+# guard that ends up checking nothing fails rather than passing vacuously.
+# Read-only, and it fails in milliseconds — before a potentially cold multi-minute
+# build with the wrong compiler.
+bazel-toolchain-guard:
+	@want="$$(sed -n 's/^channel *= *"\(.*\)"/\1/p' rust-toolchain.toml)"; \
+	test -n "$$want" || { echo "FAIL: no channel found in rust-toolchain.toml"; exit 1; }; \
+	checked=0; \
+	for f in $$(git ls-files 'MODULE.bazel' '*/MODULE.bazel'); do \
+	    grep -qE '@rules_rust|"rules_rust"' $$f || continue; \
+	    checked=$$((checked + 1)); \
+	    grep -qF "versions = [\"$$want\"]" $$f \
+	        || { echo "FAIL: $$f rust.toolchain pin does not match rust-toolchain.toml channel ($$want); edit it to match"; exit 1; }; \
+	done; \
+	test "$$checked" -gt 0 \
+	    || { echo "FAIL: no tracked MODULE.bazel references rules_rust; the toolchain guard is checking nothing"; exit 1; }
+
+# Bazel verification lane for fltk's OWN Bazel surface.  Consumer-facing breakage
+# (a downstream module importing @fltk) is caught by bazel-consumer-check below.
+bazel-check: bazel-toolchain-guard
+	bazel test //...
+
+# Bazel verification lane for fltk's CONSUMER surface: exercises the cross-module
+# @fltk// load path that `bazel test //...` in the root cannot cover (same-repo //).
+bazel-consumer-check: bazel-toolchain-guard
+	cd tests/bazel_consumer && bazel test //...
 
 # Supply-chain gate: RustSec advisories, license allow-list, banned/duplicate crates,
 # and source allow-listing (cargo-deny). The standalone fixture crates have their own

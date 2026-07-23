@@ -1,5 +1,6 @@
 # cargo-deny policy. Supply-chain gate run by `make cargo-deny` (part of `make check`)
-# across all four workspaces (root + tests/*), all sharing this single config.
+# across all six manifests (root + crates/fegen-rust + crates/fltkfmt + tests/*),
+# all sharing this single config.
 
 [advisories]
 # RustSec advisory database. Fail on any unfixed vulnerability or yanked crate.

@@ -577,15 +577,14 @@ class RustParserGenerator:
                     lines.append(f"            {append_code}")
                 lines.append("        }")
             else:
-                # Required item
-                lines.append(f"        if let Some({item_var}) = self.{item_fn.name}(pos) {{")
-                lines.append(f"            pos = {item_var}.pos;")
+                # Required item: `?` propagates the failure. An `if let ... else { return None; }`
+                # here is semantically identical but trips clippy::question_mark, which downstream
+                # consumers linting generated code would hit as a hard error under -D warnings.
+                lines.append(f"        let {item_var} = self.{item_fn.name}(pos)?;")
+                lines.append(f"        pos = {item_var}.pos;")
                 append_code = self._gen_append_code(item, item_var, item_fn, rule, class_name)
                 if append_code:
-                    lines.append(f"            {append_code}")
-                lines.append("        } else {")
-                lines.append("            return None;")
-                lines.append("        }")
+                    lines.append(f"        {append_code}")
 
             # sep_after for this item (if not last item or always)
             if item_idx < len(alt.sep_after):
@@ -626,14 +625,13 @@ class RustParserGenerator:
                     f"        }}"
                 )
             else:  # WS_REQUIRED
+                # `?` rather than `if let ... else { return None; }`: see the required-item
+                # branch in _gen_alternative for why (clippy::question_mark).
                 return (
-                    f"        if let Some(ws) = self.consume_regex(pos, {ws_idx}) {{\n"
-                    f"            pos = ws.pos;\n"
-                    f"            if self.capture_trivia {{\n"
-                    f"                result.push_child(None, cst::{child_enum}::{trivia_span_variant}(ws.result));\n"
-                    f"            }}\n"
-                    f"        }} else {{\n"
-                    f"            return None;\n"
+                    f"        let ws = self.consume_regex(pos, {ws_idx})?;\n"
+                    f"        pos = ws.pos;\n"
+                    f"        if self.capture_trivia {{\n"
+                    f"            result.push_child(None, cst::{child_enum}::{trivia_span_variant}(ws.result));\n"
                     f"        }}"
                 )
         else:
@@ -650,14 +648,13 @@ class RustParserGenerator:
                     f"        }}"
                 )
             elif sep == gsm.Separator.WS_REQUIRED:
+                # `?` rather than `if let ... else { return None; }`: see the required-item
+                # branch in _gen_alternative for why (clippy::question_mark).
                 return (
-                    f"        if let Some(ws) = self.apply__parse__trivia(pos) {{\n"
-                    f"            pos = ws.pos;\n"
-                    f"            if self.capture_trivia {{\n"
-                    f"                result.push_child(None, cst::{child_enum}::{trivia_variant}(ws.result));\n"
-                    f"            }}\n"
-                    f"        }} else {{\n"
-                    f"            return None;\n"
+                    f"        let ws = self.apply__parse__trivia(pos)?;\n"
+                    f"        pos = ws.pos;\n"
+                    f"        if self.capture_trivia {{\n"
+                    f"            result.push_child(None, cst::{child_enum}::{trivia_variant}(ws.result));\n"
                     f"        }}"
                 )
             else:

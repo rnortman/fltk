@@ -375,7 +375,7 @@ mod tests {
             assert!(
                 !(cp < 0x20 && cp != 0x09 && cp != 0x0a)
                     && cp != 0x7F
-                    && !(0x80 <= cp && cp <= 0x9F),
+                    && !(0x80..=0x9F).contains(&cp),
                 "raw control char U+{cp:04X} found in message: {msg:?}"
             );
         }

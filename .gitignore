@@ -5,6 +5,9 @@ bazel-bin
 bazel-fltk
 bazel-out
 bazel-testlogs
+# tests/bazel_consumer/ is its own Bazel workspace; its convenience symlink is
+# named after the directory (bazel-<dir> = bazel-bazel_consumer).
+bazel-bazel_consumer
 *.egg-info
 target/
 *.so

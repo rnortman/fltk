@@ -1,0 +1,6 @@
+# tests/bazel_consumer is its own Bazel module (an in-repo downstream consumer that
+# bazel_dep's on @fltk via local_path_override).  Without this ignore, the root
+# `bazel test //...` would treat the nested module's packages as its own and fail on
+# the `@fltk//...` loads it cannot resolve from the root module context.  The consumer
+# module is exercised by its own lane: `make bazel-consumer-check`.
+tests/bazel_consumer

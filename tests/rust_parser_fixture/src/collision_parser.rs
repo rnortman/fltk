@@ -134,12 +134,9 @@ impl Parser {
     fn parse_root__alt0(&mut self, mut pos: i64) -> Option<ApplyResult<cst::Root>> {
         let span_start = pos;
         let mut result = cst::Root::new(Span::unknown());
-        if let Some(item0) = self.parse_root__alt0__item0(pos) {
-            pos = item0.pos;
-            result.extend_children(&item0.result);
-        } else {
-            return None;
-        }
+        let item0 = self.parse_root__alt0__item0(pos)?;
+        pos = item0.pos;
+        result.extend_children(&item0.result);
         result.set_span(Span::new_with_source(span_start, pos, self.terminals.source_text()));
         Some(ApplyResult { pos, result })
     }
@@ -162,12 +159,9 @@ impl Parser {
     fn parse_name__alt0(&mut self, mut pos: i64) -> Option<ApplyResult<cst::Name>> {
         let span_start = pos;
         let mut result = cst::Name::new(Span::unknown());
-        if let Some(item0) = self.parse_name__alt0__item0(pos) {
-            pos = item0.pos;
-            result.append_value(item0.result);
-        } else {
-            return None;
-        }
+        let item0 = self.parse_name__alt0__item0(pos)?;
+        pos = item0.pos;
+        result.append_value(item0.result);
         result.set_span(Span::new_with_source(span_start, pos, self.terminals.source_text()));
         Some(ApplyResult { pos, result })
     }
@@ -190,12 +184,9 @@ impl Parser {
     fn parse_parser__alt0(&mut self, mut pos: i64) -> Option<ApplyResult<cst::Parser>> {
         let span_start = pos;
         let mut result = cst::Parser::new(Span::unknown());
-        if let Some(item0) = self.parse_parser__alt0__item0(pos) {
-            pos = item0.pos;
-            result.append_name(item0.result);
-        } else {
-            return None;
-        }
+        let item0 = self.parse_parser__alt0__item0(pos)?;
+        pos = item0.pos;
+        result.append_name(item0.result);
         result.set_span(Span::new_with_source(span_start, pos, self.terminals.source_text()));
         Some(ApplyResult { pos, result })
     }
@@ -218,12 +209,9 @@ impl Parser {
     fn parse_apply_result__alt0(&mut self, mut pos: i64) -> Option<ApplyResult<cst::ApplyResult>> {
         let span_start = pos;
         let mut result = cst::ApplyResult::new(Span::unknown());
-        if let Some(item0) = self.parse_apply_result__alt0__item0(pos) {
-            pos = item0.pos;
-            result.append_name(item0.result);
-        } else {
-            return None;
-        }
+        let item0 = self.parse_apply_result__alt0__item0(pos)?;
+        pos = item0.pos;
+        result.append_name(item0.result);
         result.set_span(Span::new_with_source(span_start, pos, self.terminals.source_text()));
         Some(ApplyResult { pos, result })
     }
@@ -246,12 +234,9 @@ impl Parser {
     fn parse_item__alt0(&mut self, mut pos: i64) -> Option<ApplyResult<cst::Item>> {
         let span_start = pos;
         let mut result = cst::Item::new(Span::unknown());
-        if let Some(item0) = self.parse_item__alt0__item0(pos) {
-            pos = item0.pos;
-            result.append_p(item0.result);
-        } else {
-            return None;
-        }
+        let item0 = self.parse_item__alt0__item0(pos)?;
+        pos = item0.pos;
+        result.append_p(item0.result);
         result.set_span(Span::new_with_source(span_start, pos, self.terminals.source_text()));
         Some(ApplyResult { pos, result })
     }
@@ -263,12 +248,9 @@ impl Parser {
     fn parse_item__alt1(&mut self, mut pos: i64) -> Option<ApplyResult<cst::Item>> {
         let span_start = pos;
         let mut result = cst::Item::new(Span::unknown());
-        if let Some(item0) = self.parse_item__alt1__item0(pos) {
-            pos = item0.pos;
-            result.append_a(item0.result);
-        } else {
-            return None;
-        }
+        let item0 = self.parse_item__alt1__item0(pos)?;
+        pos = item0.pos;
+        result.append_a(item0.result);
         result.set_span(Span::new_with_source(span_start, pos, self.terminals.source_text()));
         Some(ApplyResult { pos, result })
     }
@@ -294,12 +276,9 @@ impl Parser {
     fn parse__trivia__alt0(&mut self, mut pos: i64) -> Option<ApplyResult<cst::Trivia>> {
         let span_start = pos;
         let mut result = cst::Trivia::new(Span::unknown());
-        if let Some(item0) = self.parse__trivia__alt0__item0(pos) {
-            pos = item0.pos;
-            result.append_content(item0.result);
-        } else {
-            return None;
-        }
+        let item0 = self.parse__trivia__alt0__item0(pos)?;
+        pos = item0.pos;
+        result.append_content(item0.result);
         result.set_span(Span::new_with_source(span_start, pos, self.terminals.source_text()));
         Some(ApplyResult { pos, result })
     }

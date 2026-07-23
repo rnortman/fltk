@@ -571,8 +571,25 @@ def test_optional_item_no_return_none() -> None:
     # The alt body is between "fn parse_opt__alt0(" and the next "fn ".
     after_alt0 = src.split("fn parse_opt__alt0(", 1)[1]
     alt0_body = after_alt0.split("\n    fn ", 1)[0]
-    # Optional item: no 'else {' in the item's if-let block.
+    # Optional item: no 'else {' in the item's if-let block, and no `?` propagation either —
+    # a failed optional match must fall through, not fail the alternative.
     assert "} else {" not in alt0_body, "Optional item must not emit 'else { return None; }' in the alt body"
+    assert "?;" not in alt0_body, "Optional item must not propagate failure with `?`"
+
+
+def test_required_item_uses_question_mark() -> None:
+    """Required items propagate failure with `?`, not `if let ... else { return None; }`.
+
+    The `if let` form is semantically identical but trips clippy::question_mark, which is
+    denied under `-D warnings` — a hard error for anyone linting the generated parser.
+    """
+    grammar = _make_simple_grammar()
+    gen = RustParserGenerator(grammar)
+    src = gen.generate()
+    after_alt0 = src.split("fn parse_word__alt0(", 1)[1]
+    alt0_body = after_alt0.split("\n    fn ", 1)[0]
+    assert "let item0 = self.parse_word__alt0__item0(pos)?;" in alt0_body
+    assert "} else {" not in alt0_body, "Required item must not emit the clippy-flagged if-let/else form"
 
 
 def test_zero_or_more_quantifier() -> None:
@@ -627,8 +644,8 @@ def test_suppress_disposition_no_append() -> None:
     assert "append_" not in alt0_body, "SUPPRESS must not emit append_ in the alt body"
 
 
-def test_ws_required_separator_has_else_return_none() -> None:
-    """WS_REQUIRED separator must emit else { return None; } in the separator block."""
+def test_ws_required_separator_propagates_failure() -> None:
+    """WS_REQUIRED separator must fail the alternative when no trivia is present."""
     rule1 = gsm.Rule(
         name="word",
         alternatives=[
@@ -673,30 +690,81 @@ def test_ws_required_separator_has_else_return_none() -> None:
     )
     gen = RustParserGenerator(grammar)
     src = gen.generate()
-    # Isolate the pair__alt0 body to verify the separator-specific else-branch,
-    # rather than relying on any else-return that could come from required items.
+    # Isolate the pair__alt0 body: the separator's own failure propagation must be checked,
+    # not the one belonging to the required items around it.
     after_alt0 = src.split("fn parse_pair__alt0(", 1)[1]
     alt0_body = after_alt0.split("\n    fn ", 1)[0]
-    # The WS_REQUIRED separator calls apply__parse__trivia with an else { return None; }.
-    assert "apply__parse__trivia" in alt0_body, "WS_REQUIRED separator must call apply__parse__trivia"
-    # The trivia if-let block must have an else-return for the WS_REQUIRED case.
-    # The search is bounded: we require the else-return to appear BEFORE the next required-item
-    # check ('if let Some(item1)'), so a WS_ALLOWED downgrade (which removes the trivia else-branch
-    # but keeps the item1 else-return) cannot satisfy this test.
-    item1_idx = alt0_body.find("if let Some(item1)")
-    assert item1_idx != -1, "pair__alt0 must have 'if let Some(item1)' for the second item"
-    trivia_idx = alt0_body.find("apply__parse__trivia")
-    assert trivia_idx != -1, "WS_REQUIRED separator must call apply__parse__trivia"
-    # The separator-specific else-return must appear between the trivia call and item1.
-    trivia_else_idx = alt0_body.find("} else {", trivia_idx)
-    assert trivia_else_idx != -1, "WS_REQUIRED separator block must have '} else {' after the trivia call"
-    assert trivia_else_idx < item1_idx, (
-        "Trivia else-branch must precede 'if let Some(item1)' — "
-        "if it follows, it belongs to item1's required-item check, not the WS_REQUIRED separator"
+    # WS_REQUIRED binds the trivia result with `?` so a missing separator fails the alternative.
+    # A WS_ALLOWED downgrade would emit `if let Some(ws) = ...` instead.
+    assert "let ws = self.apply__parse__trivia(pos)?;" in alt0_body, (
+        "WS_REQUIRED separator must bind apply__parse__trivia with `?`"
     )
-    return_idx = alt0_body.find("return None;", trivia_else_idx)
-    assert return_idx != -1, "WS_REQUIRED separator block must have 'return None;' in the else branch"
-    assert return_idx < item1_idx, "return None; in separator else-block must precede 'if let Some(item1)'"
+
+
+def test_trivia_rule_ws_required_uses_question_mark() -> None:
+    """Inside a trivia rule, a WS_REQUIRED separator consumes a regex and propagates with `?`.
+
+    Trivia rules take the whitespace-as-regex branch rather than calling
+    apply__parse__trivia (which would recurse), so it needs its own coverage.
+    """
+    word_rule = gsm.Rule(
+        name="word",
+        alternatives=[
+            gsm.Items(
+                items=[
+                    gsm.Item(
+                        label="value",
+                        disposition=gsm.Disposition.INCLUDE,
+                        term=gsm.Regex(r"[a-z]+"),
+                        quantifier=gsm.REQUIRED,
+                    )
+                ],
+                sep_after=[gsm.Separator.NO_WS],
+            )
+        ],
+        is_trivia_rule=True,
+    )
+    pair_rule = gsm.Rule(
+        name="triviapair",
+        alternatives=[
+            gsm.Items(
+                items=[
+                    gsm.Item(
+                        label="left",
+                        disposition=gsm.Disposition.INCLUDE,
+                        term=gsm.Identifier("word"),
+                        quantifier=gsm.REQUIRED,
+                    ),
+                    gsm.Item(
+                        label="right",
+                        disposition=gsm.Disposition.INCLUDE,
+                        term=gsm.Identifier("word"),
+                        quantifier=gsm.REQUIRED,
+                    ),
+                ],
+                sep_after=[gsm.Separator.WS_REQUIRED, gsm.Separator.NO_WS],
+            )
+        ],
+        is_trivia_rule=True,
+    )
+    grammar = gsm.Grammar(
+        rules=[pair_rule, word_rule],
+        identifiers={"triviapair": pair_rule, "word": word_rule},
+    )
+    gen = RustParserGenerator(grammar)
+    src = gen.generate()
+    # Isolate the triviapair__alt0 body: the separator's own failure propagation must be
+    # checked, not the one belonging to the required items around it.
+    after_alt0 = src.split("fn parse_triviapair__alt0(", 1)[1]
+    alt0_body = after_alt0.split("\n    fn ", 1)[0]
+    # WS_REQUIRED inside a trivia rule binds the whitespace regex with `?` so a missing
+    # separator fails the alternative.  A WS_ALLOWED downgrade would emit
+    # `if let Some(ws) = ...` instead.
+    assert "let ws = self.consume_regex(pos, " in alt0_body, (
+        "trivia-rule WS_REQUIRED separator must consume the whitespace regex directly"
+    )
+    assert ")?;" in alt0_body, "trivia-rule WS_REQUIRED separator must propagate failure with `?`"
+    assert "} else {" not in alt0_body, "trivia-rule WS_REQUIRED separator must not emit an else arm"
 
 
 # ---------------------------------------------------------------------------

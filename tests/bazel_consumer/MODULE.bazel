@@ -1,0 +1,39 @@
+# In-repo downstream consumer of @fltk.
+#
+# This is its OWN root Bazel module (not part of the //... graph of the repo root —
+# see the root .bazelignore).  It proves what `bazel test //...` in the root cannot:
+# that a downstream module can `bazel_dep(name = "fltk")` and load @fltk//:rules.bzl
+# and @fltk//:rust.bzl from an external-repo context, composing fltk's own deps
+# (rules_rust, rules_python) into its module graph — exactly the Clockwork path.
+# Consumed via `make bazel-consumer-check` (cd tests/bazel_consumer && bazel test //...).
+module(name = "fltk_consumer_test")
+
+# version = "" because bzlmod ignores the module version under local_path_override.
+bazel_dep(name = "fltk", version = "")
+local_path_override(
+    module_name = "fltk",
+    path = "../..",
+)
+
+bazel_dep(name = "rules_python", version = "1.5.0")  # py_test + Python toolchain
+bazel_dep(name = "rules_rust", version = "0.70.0")   # rust extension for the toolchain pin
+
+python = use_extension("@rules_python//python/extensions:python.bzl", "python")
+python.toolchain(
+    is_default = True,
+    python_version = "3.10",
+)
+
+# Rust toolchain for this consumer workspace.  As a root module it selects its own
+# toolchain; it mirrors the same 1.97.1 pin as the fltk root module rather than riding
+# the rules_rust default, so all of `make check` compiles Rust with one compiler.
+#
+# MUST match `channel` in ../../rust-toolchain.toml (the single source of truth).
+# bzlmod cannot read TOML, so the pin is mirrored here; the sync guard that both Bazel
+# check steps depend on (`make bazel-toolchain-guard`) fails the build if this mirror
+# drifts from rust-toolchain.toml.
+rust = use_extension("@rules_rust//rust:extensions.bzl", "rust")
+rust.toolchain(
+    edition = "2021",
+    versions = ["1.97.1"],
+)

@@ -1,0 +1,12 @@
+// Grammar for the consumer-lane smoke tests.
+//
+// Deliberately tiny.  This lane's job is the cross-module @fltk// load path
+// (macro resolution, crate/pip hubs, generated-artifact import), not generator
+// breadth: breadth is covered in-repo by
+// fltk/fegen/test_data/rust_parser_fixture.fltkg, which the root Bazel targets
+// and the cargo fixture crates build against.
+//
+// One labeled child, so the generated label accessor (child_value) is reachable
+// from both the Python and the Rust generated artifacts.
+
+num := value:/[0-9]+/ ;
