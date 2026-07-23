@@ -54,7 +54,7 @@ jobs:
           printf 'common --disk_cache=%s/.cache/bazel-disk\n' "$HOME" >> "$HOME/.bazelrc"
 
       - name: Cache Bazel disk cache
-        uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830  # v4.3.0
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9  # v6.1.0
         with:
           path: ~/.cache/bazel-disk
           key: bazel-${{ runner.os }}-${{ hashFiles('.bazelversion', 'MODULE.bazel', 'tests/bazel_consumer/MODULE.bazel', 'MODULE.bazel.lock', 'tests/bazel_consumer/MODULE.bazel.lock') }}
