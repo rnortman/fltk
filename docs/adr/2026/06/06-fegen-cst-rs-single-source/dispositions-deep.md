@@ -1,4 +1,0 @@
-reuse-1:
-- Disposition: TODO(preamble-helpers-into-cst-core)
-- Action: Added entry in `TODO.md` (after `gencode-poc-fltkg`); added `TODO(preamble-helpers-into-cst-core)` comment at `fltk/fegen/gsm2tree_rs.py:131` (`_preamble()` method). No code moved — the work requires touching the generator, `fltk-cst-core`, and regenerating all committed `.rs` files, which is out of scope for this build-wiring refactor.
-- Severity assessment: Pre-existing issue. Each grammar accumulates a private copy of `extract_span`/`get_span_type`/`get_source_text_type`; a bug fix in the preamble template does not propagate to any generated file until explicit regeneration, so a fleet of stale cdylibs can ship with the old extraction path. No runtime consequence today (one generator, one grammar, manually-regenerated files), but the surface grows proportionally with grammar count.

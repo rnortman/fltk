@@ -1,6 +1,0 @@
-# User notes — requirements gate (verbatim chat directives)
-
-1. This is a NOW-problem, not a future-problem, because there are other OUT-OF-TREE apps that depend on FLTK. (Frustration noted: this keeps getting missed.) This is supposed to be in CLAUDE.md already — make it much stronger / more prominent so it stops being overlooked. Out-of-tree consumers already compare CST node labels against static `cst.X.Label.Y` enums; without cross-backend equality those comparisons break the moment they switch to the Rust backend. That is the live breakage this cycle prevents — the "no in-tree consumer needs it" framing is wrong because the consumers are out of tree.
-
-2. At the end of this cycle we should be able to compare against static `cst.something` enums instead of using `self.cst` in fltk2gsm.py.
-   (Implication: the cross-backend Label `__eq__` must be strong enough that fltk2gsm.py's label comparisons can reference the static module-level `cst` enum constants and still work for BOTH backends; the `isinstance(item, self.cst.Item)` dispatch sites must also be reworked so `self.cst` is no longer needed there. Removing `self.cst` from fltk2gsm.py is an in-scope acceptance criterion / in-tree demonstration of the feature.)

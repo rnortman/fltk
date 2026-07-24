@@ -1,2 +1,0 @@
-1. The entire purpose of PyO3 CST is for USER GRAMMARS to generate and use Rust CST nodes. The plan wrongly treats user grammars as a Phase 5 afterthought ("5A = no-op" recommended). The runtime pipeline (`plumbing.generate_parser()` producing Rust-backed CST for any grammar) is the primary deliverable, not an optional add-on.
-2. The FLTK grammar's own `fltk_cst.py` replacement is secondary — it's just one grammar among many that happens to be self-hosted.

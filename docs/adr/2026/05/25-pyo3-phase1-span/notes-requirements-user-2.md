@@ -1,3 +1,0 @@
-# User requirements notes, round 2 (verbatim)
-
-However this is implemented, the holding of source text and retrievel of source text subspans *in Rust* must be memory-efficient, ideally zero-copy. It is acceptable for retrieving source text to be inefficient *in Python* though ideally this could still use efficient non-copying slicing of immutable data even in Python. Note that the Python implementation supports (unevenly, in theory) source text backing other than `str` but in practice the only backing ever used is `str`. It is acceptable if the Rust backend support nothing other than UTF-8 text as the terminal source. A truly perfect solution would allow this to be file-backed via mmap or similar, but this is not a requirement.

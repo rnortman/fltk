@@ -1,9 +1,0 @@
-## reuse-1
-
-**File:line:** `src/cst_fegen.rs:1-75`, `src/cst_generated.rs:1-75`, `tests/rust_cst_fixture/src/cst.rs:1-75`
-
-**What's duplicated:** The cross-cdylib span helper block — `FLTK_NATIVE_SPAN_TYPE` static, `extract_span`, `get_span_type`, `FLTK_NATIVE_SOURCE_TEXT_TYPE` static, `get_source_text_type` — is emitted byte-for-byte identically into every file the generator produces. The generator emits this block unconditionally from `_preamble()` (`fltk/fegen/gsm2tree_rs.py:131-209`).
-
-**Existing function/utility:** The three copies in committed `.rs` files (`src/cst_fegen.rs`, `src/cst_generated.rs`, `tests/rust_cst_fixture/src/cst.rs`) are all generator output from the same `_preamble()` method. A canonical home for these helpers already exists structurally: `crates/fltk-cst-core` (`crates/fltk-cst-core/src/lib.rs`) is an `rlib` that already carries `Span` and `SourceText` and is already a dependency of every generated cdylib. The preamble logic lives at `gsm2tree_rs.py:131-209`; the statics and functions it emits are at `src/cst_fegen.rs:8-75` (representative copy).
-
-**Consequence:** Each grammar that gets a Rust CST generator run acquires its own private copy of `extract_span`/`get_span_type`/`get_source_text_type`. If the cross-cdylib extraction logic needs to change (e.g., the `downcast_unchecked` SAFETY invariant changes, a new pyo3 API becomes available, or the error message is improved), every committed generated file must be regenerated and recommitted. A bug fix in the preamble template does not propagate to any generated file until that file is explicitly regenerated — meaning a fleet of stale cdylibs can ship with the old (possibly broken) extraction path. Moving the helpers into `fltk-cst-core` as `pub` functions would make them a single definition that all cdylibs call at link time, eliminating the per-grammar copy and making any fix instantly available to all consumers without regeneration.

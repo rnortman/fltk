@@ -13,3 +13,4 @@ target/
 *.so
 *.pyd
 *.dylib
+docs/adr/
