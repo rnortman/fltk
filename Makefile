@@ -108,14 +108,21 @@ build-test-fixtures: build-native build-test-user-ext build-fegen-rust-cst build
 test: build-test-fixtures
 	uv run --group lint --group test pytest -q
 
+# --workspace is load-bearing in the python-on lanes below. The root Cargo.toml is both
+# the workspace root AND a package (fltk-native), so cargo's default selection is that one
+# package -- a bare `cargo check/test/clippy` here silently skips every other member.
+# Without it fltk-unparser-core and fltk-fmt-cli were never compiled, linted, or tested,
+# and cargo-test ran zero tests. It also keeps new workspace members covered by default.
+# The python-off lane further down deliberately keeps -p selection; see its comment.
+
 # cargo-check: fast compile for the workspace. Test-crate per-feature checks are omitted
 # here because cargo-clippy (a strict superset of cargo-check) already covers them at the
 # same feature sets; running both in make check would double-compile each fixture crate.
 cargo-check:
-	cargo check -q --locked
+	cargo check -q --locked --workspace
 
 cargo-test:
-	cargo test -q --locked
+	cargo test -q --locked --workspace
 
 # Run fltk-cst-core tests with the python feature enabled, linking libpython via a uv-managed
 # interpreter (python-build-standalone ships the unversioned libpython3.10.so required to link).
@@ -137,7 +144,7 @@ cargo-test-python-features:
 # cargo-clippy covers test crates at their python-on feature set (the only non-default
 # feature that adds code; default features for fegen-rust are already python-on).
 cargo-clippy:
-	cargo clippy -q --locked --all-targets -- -D warnings
+	cargo clippy -q --locked --workspace --all-targets -- -D warnings
 	cargo clippy -q --locked --manifest-path crates/fegen-rust/Cargo.toml --all-targets -- -D warnings
 	cargo clippy -q --locked --manifest-path tests/rust_poc_cst/Cargo.toml --all-targets -- -D warnings
 	cargo clippy -q --locked --manifest-path tests/rust_parser_fixture/Cargo.toml --all-targets --features python -- -D warnings
