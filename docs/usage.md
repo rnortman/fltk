@@ -109,7 +109,7 @@ For Bazel-based projects, add FLTK as a dependency and use the `generate_parser`
 
 **1. Add FLTK to your `MODULE.bazel`:**
 ```python
-bazel_dep(name = "fltk", version = "...")  # or use git_override
+bazel_dep(name="fltk", version="...")  # or use git_override
 ```
 
 **2. Use the rule in your `BUILD.bazel`:**
@@ -117,18 +117,18 @@ bazel_dep(name = "fltk", version = "...")  # or use git_override
 load("@fltk//:rules.bzl", "generate_parser")
 
 generate_parser(
-    name = "calc_parser_gen",
-    src = "calc.fltkg",
-    base_name = "calc",
-    cst_mod_path = "myproject.calc_cst",
+    name="calc_parser_gen",
+    src="calc.fltkg",
+    base_name="calc",
+    cst_mod_path="myproject.calc_cst",
 )
 
 py_library(
-    name = "calc_parser",
-    srcs = [
+    name="calc_parser",
+    srcs=[
         ":calc_parser_gen",  # Generates calc_cst.py, calc_parser.py, calc_trivia_parser.py
     ],
-    deps = ["@fltk//:fltk"],
+    deps=["@fltk//:fltk"],
 )
 ```
 
@@ -252,10 +252,10 @@ if result.success:
 
     # Get source text for a span
     def get_text(span):
-        return source[span.start:span.end]
+        return source[span.start : span.end]
 
     # Access labeled children
-    if hasattr(cst, 'child_name'):
+    if hasattr(cst, "child_name"):
         name_span = cst.child_name()
         print(f"Name: {get_text(name_span)}")
 
@@ -288,6 +288,7 @@ if not result.success:
     print(f"Parse error: {result.error_message}")
     exit(1)
 
+
 # Walk the CST to evaluate the expression
 def evaluate(node, source):
     """Recursively evaluate the expression CST."""
@@ -295,7 +296,7 @@ def evaluate(node, source):
 
     if class_name == "Number":
         span = node.child_value()
-        return int(source[span.start:span.end])
+        return int(source[span.start : span.end])
 
     elif class_name == "Factor":
         # Factor is either num:number or inner:expr
@@ -311,7 +312,7 @@ def evaluate(node, source):
 
         result = evaluate(factors[0], source)
         for i, op_span in enumerate(ops):
-            op = source[op_span.start:op_span.end]
+            op = source[op_span.start : op_span.end]
             next_val = evaluate(factors[i + 1], source)
             if op == "*":
                 result *= next_val
@@ -326,7 +327,7 @@ def evaluate(node, source):
 
         result = evaluate(terms[0], source)
         for i, op_span in enumerate(ops):
-            op = source[op_span.start:op_span.end]
+            op = source[op_span.start : op_span.end]
             next_val = evaluate(terms[i + 1], source)
             if op == "+":
                 result += next_val
@@ -335,6 +336,7 @@ def evaluate(node, source):
         return result
 
     raise ValueError(f"Unknown node type: {class_name}")
+
 
 # Evaluate and print result
 value = evaluate(result.cst, result.terminals)
@@ -416,8 +418,8 @@ parser = parser_class(source)
 apply_result = parser.apply__parse_expr(0)  # Start at position 0
 
 if apply_result is not None:
-    cst = apply_result.result    # The CST node
-    end_pos = apply_result.pos   # Position after match
+    cst = apply_result.result  # The CST node
+    end_pos = apply_result.pos  # Position after match
 
     # Check if we consumed all input
     if end_pos == len(source.terminals):

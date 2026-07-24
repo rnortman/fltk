@@ -401,7 +401,11 @@ class RustUnparserGenerator:
         """
         blocks = [self._gen_alternative_body(prefix, rule_name, class_name, alt_idx, alt)]
         for item_idx, item in enumerate(alt.items):
-            blocks.extend(self._gen_item_method(prefix, rule_name, class_name, alt_idx, item_idx, item))
+            blocks.extend(
+                self._gen_item_method(
+                    prefix, rule_name, class_name=class_name, alt_idx=alt_idx, item_idx=item_idx, item=item
+                )
+            )
         return blocks
 
     def _gen_alternative_body(self, prefix: str, rule_name: str, class_name: str, alt_idx: int, alt: gsm.Items) -> str:
@@ -690,7 +694,14 @@ class RustUnparserGenerator:
         return lines
 
     def _gen_item_method(
-        self, prefix: str, rule_name: str, class_name: str, alt_idx: int, item_idx: int, item: gsm.Item
+        self,
+        prefix: str,
+        rule_name: str,
+        *,
+        class_name: str,
+        alt_idx: int,
+        item_idx: int,
+        item: gsm.Item,
     ) -> list[str]:
         """Emit the ``{prefix}__alt{N}__item{M}`` method, plus nested methods for a sub-expression.
 
@@ -716,8 +727,11 @@ class RustUnparserGenerator:
         # so the generated method is unused-variable clean under -D warnings.
         node_param = self._node_param(body)
         lines: list[str] = [
-            f"    fn {item_prefix}"
-            f"(&self, {node_param}: &cst::{class_name}, pos: usize, acc: DocAccumulator) -> Option<UnparseResult> {{"
+            (
+                f"    fn {item_prefix}"
+                f"(&self, {node_param}: &cst::{class_name}, pos: usize, acc: "
+                "DocAccumulator) -> Option<UnparseResult> {"
+            )
         ]
         lines.extend(body)
         lines.append("    }")
@@ -840,8 +854,11 @@ class RustUnparserGenerator:
         # match so the generated inner method is unused-variable clean under -D warnings.
         node_param = self._node_param(body)
         lines: list[str] = [
-            f"    fn {inner_prefix}"
-            f"(&self, {node_param}: &cst::{class_name}, pos: usize, acc: DocAccumulator) -> Option<UnparseResult> {{"
+            (
+                f"    fn {inner_prefix}"
+                f"(&self, {node_param}: &cst::{class_name}, pos: usize, acc: "
+                "DocAccumulator) -> Option<UnparseResult> {"
+            )
         ]
         lines.extend(body)
         lines.append("    }")

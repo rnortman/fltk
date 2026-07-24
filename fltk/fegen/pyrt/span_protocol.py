@@ -6,10 +6,10 @@ import fltk.fegen.pyrt.terminalsrc as _pymod
 
 # ``LineColPos`` is re-exported for backward compatibility: ``span_protocol.LineColPos`` is an
 # importable public name and out-of-tree consumers may import it from here. It is not named by
-# any annotation in this module (the protocols use ``LineColPosProtocol``), so ``# noqa: F401`` marks
-# it a deliberate re-export rather than an accidental unused import.
+# any annotation in this module (the protocols use ``LineColPosProtocol``), so it is marked below
+# as a deliberate re-export rather than an accidental unused import.
 from fltk.fegen.pyrt.terminalsrc import (
-    LineColPos,  # noqa: F401  (re-export; see comment above)
+    LineColPos,  # noqa: F401 -- deliberate re-export, see comment above
     SpanKind,
 )
 

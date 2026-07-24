@@ -91,7 +91,7 @@ def test_global_anchor_union_and_qualifiers() -> None:
     # `greeting` is a rule name; `kw` is a label; both resolve unqualified.
     _validate("scope greeting: keyword;\nscope kw: keyword;\n")
     _validate("scope rule:greeting: keyword;\nscope label:kw: keyword;\n")
-    with pytest.raises(lsp_config.LspConfigError, match="'kw' is not a grammar rule name\\b"):
+    with pytest.raises(lsp_config.LspConfigError, match=r"'kw' is not a grammar rule name\b"):
         _validate("scope rule:kw: keyword;\n")
     with pytest.raises(lsp_config.LspConfigError, match="'greeting' is not an item label anywhere in the grammar"):
         _validate("scope label:greeting: keyword;\n")

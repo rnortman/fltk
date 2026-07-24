@@ -131,6 +131,7 @@ def generate(
     cst_module_name: Annotated[
         str, typer.Argument(help='Module import name for CST classes (usually "<base_name>_cst")')
     ],
+    *,
     output_dir: Annotated[
         Path | None,
         typer.Option("--output-dir", "-o", help="Output directory for generated files"),
@@ -330,6 +331,7 @@ def _write_output_file(output_file: Path, src: str, artifact_label: str = "outpu
 def gen_rust_cst(
     grammar_file: Annotated[Path, typer.Argument(help="Path to the FLTK grammar file (.fltkg)")],
     output_file: Annotated[Path, typer.Argument(help="Path to write the .rs source")],
+    *,
     protocol_module: Annotated[
         str | None,
         typer.Option(
@@ -597,6 +599,7 @@ def gen_rust_parser(
 def gen_rust_unparser(
     grammar_file: Annotated[Path, typer.Argument(help="Path to the FLTK grammar file (.fltkg)")],
     output_file: Annotated[Path, typer.Argument(help="Path to write the .rs source")],
+    *,
     cst_mod_path: Annotated[
         str,
         typer.Option(
@@ -768,6 +771,7 @@ def gen_rust_lib(
             help="The #[pymodule] function name / importable module name (e.g. 'clockwork_native').",
         ),
     ],
+    *,
     no_parser: Annotated[
         bool,
         typer.Option("--no-parser", help="Emit a CST-only lib.rs (omit mod parser; and its registration)."),

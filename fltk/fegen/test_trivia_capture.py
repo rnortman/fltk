@@ -106,7 +106,7 @@ def test_trivia_capture_enabled():
     has_trivia_nodes = False
     for child in root_node.children:
         if isinstance(child, tuple) and len(child) == 2:
-            label, value = child
+            _label, value = child
             if hasattr(value, "__class__") and (
                 "TriviaNode" in value.__class__.__name__ or "Trivia" in value.__class__.__name__
             ):
@@ -206,7 +206,7 @@ def test_trivia_capture_disabled():
     has_trivia_nodes = False
     for child in root_node.children:
         if isinstance(child, tuple) and len(child) == 2:
-            label, value = child
+            _label, value = child
             if hasattr(value, "__class__") and "TriviaNode" in value.__class__.__name__:
                 has_trivia_nodes = True
                 break

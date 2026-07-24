@@ -16,6 +16,7 @@ from __future__ import annotations
 import asyncio
 import bisect
 import dataclasses
+import functools
 import importlib.metadata
 import logging
 import pathlib
@@ -251,6 +252,7 @@ class FltkLanguageServer(LanguageServer):
         uri: str,
         version: int | None,
         analysis: DocumentAnalysis,
+        *,
         line_index: LineIndex,
         served: _ServedTokens | None,
         text: str,
@@ -310,7 +312,9 @@ class FltkLanguageServer(LanguageServer):
             finally:
                 if self._inflight.get(uri) is not None and self._inflight[uri][1] is future:
                     del self._inflight[uri]
-        return self._store(uri, version, analysis, line_index, served, analyzed_text, epoch)
+        return self._store(
+            uri, version, analysis, line_index=line_index, served=served, text=analyzed_text, epoch=epoch
+        )
 
     async def _ensure_analyzed(self, uri: str, version: int | None, text: str) -> _DocState:
         """Return state whose analysis matches ``version``, analyzing if necessary."""
@@ -506,6 +510,7 @@ class FltkLanguageServer(LanguageServer):
         self,
         doc: ResolvedDocument,
         offset: int,
+        *,
         requesting_line_index: LineIndex,
         enc: PositionEncoding,
         open_docs: dict[str, tuple[int, str]],
@@ -620,7 +625,16 @@ class FltkLanguageServer(LanguageServer):
         self._maybe_warn_no_root(root)
         loop = asyncio.get_running_loop()
         location, degraded, logs = await loop.run_in_executor(
-            self._executor, self._definition_blocking, doc, offset, good.line_index, enc, open_docs, root
+            self._executor,
+            functools.partial(
+                self._definition_blocking,
+                doc,
+                offset,
+                requesting_line_index=good.line_index,
+                enc=enc,
+                open_docs=open_docs,
+                root=root,
+            ),
         )
         for level, message in logs:
             self.window_log_message(lsp.LogMessageParams(type=level, message=message))
@@ -708,7 +722,7 @@ class FltkLanguageServer(LanguageServer):
         document_changes = self._document_changes()
         if new_name == symbol.name:
             return features.rename_edits(
-                uri, version, [], new_name, state.line_index, enc, document_changes=document_changes
+                uri, version, [], new_name, line_index=state.line_index, enc=enc, document_changes=document_changes
             )
         if self._resolver is not None:
             # Cross-file refusal guard: a same-file rename of a symbol other files reference (or an
@@ -743,7 +757,7 @@ class FltkLanguageServer(LanguageServer):
             msg = "document changed during rename; retry"
             raise JsonRpcException(msg, code=lsp.LSPErrorCodes.RequestFailed)
         return features.rename_edits(
-            uri, version, occurrences, new_name, state.line_index, enc, document_changes=document_changes
+            uri, version, occurrences, new_name, line_index=state.line_index, enc=enc, document_changes=document_changes
         )
 
     # -- formatting pipeline ----------------------------------------------------------------

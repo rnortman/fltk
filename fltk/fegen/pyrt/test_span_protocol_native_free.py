@@ -211,17 +211,21 @@ def test_no_native_bound_name_referenced_in_protocol_bodies():
 # form was covered, but the aliased/relative forms were not).
 _BYPASS_SNIPPETS = (
     # `from fltk import _native as _rn` — submodule-as-attribute, the natural way to spell it.
-    "from typing import TYPE_CHECKING, Protocol\n"
-    "if TYPE_CHECKING:\n"
-    "    from fltk import _native as _rn\n"
-    "class SpanProtocol(Protocol):\n"
-    '    def line_col(self) -> "_rn.LineColPos | None": ...\n',
+    (
+        "from typing import TYPE_CHECKING, Protocol\n"
+        "if TYPE_CHECKING:\n"
+        "    from fltk import _native as _rn\n"
+        "class SpanProtocol(Protocol):\n"
+        '    def line_col(self) -> "_rn.LineColPos | None": ...\n'
+    ),
     # Relative member import `from ..._native import LineColPos as _RLC`.
-    "from typing import TYPE_CHECKING, Protocol\n"
-    "if TYPE_CHECKING:\n"
-    "    from ..._native import LineColPos as _RLC\n"
-    "class SpanProtocol(Protocol):\n"
-    '    def line_col(self) -> "_RLC | None": ...\n',
+    (
+        "from typing import TYPE_CHECKING, Protocol\n"
+        "if TYPE_CHECKING:\n"
+        "    from ..._native import LineColPos as _RLC\n"
+        "class SpanProtocol(Protocol):\n"
+        '    def line_col(self) -> "_RLC | None": ...\n'
+    ),
 )
 
 

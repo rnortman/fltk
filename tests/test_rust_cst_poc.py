@@ -552,7 +552,7 @@ class TestFilterUnderGuardRegression:
 
     def test_child_label_raises_with_exact_count(self):
         """child_<label> with multiple matching children reports the exact count."""
-        node, item_spans, _ = self._make_items_with_mixed_labels()
+        node, _item_spans, _ = self._make_items_with_mixed_labels()
         # 5 item children → count == 5
         with pytest.raises(ValueError, match="Expected one item child but have 5"):
             node.child_item()

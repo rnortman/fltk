@@ -7,44 +7,69 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
-### Changed (Rust API — breaking for the days-old `*_native`/`Box`-based surface)
+## [0.3.0] - 2026-07-24
 
-- **Rust CST Phase 1**: ownership restructure + suffix removal + shared identity.
-  - Generated node structs now own children as `Shared<T>` (`Arc<RwLock<T>>` newtype)
-    instead of `Box<T>`; `Clone` on a node struct is now shallow (Arc clone, not deep copy).
-  - Plain `impl` methods are now suffixless: `new`, `span`, `children`, `push_child`
-    (were `new_native`, `span_native`, `children_native`, `push_child_native`).
-  - Python class names are **unchanged**; Python API is unchanged.
-  - Python child-identity semantics now match the Python backend: a child read twice through
-    any accessor returns the same Python object (`is`-stable); mutations propagate across
-    all references and across the language boundary.
-  - `fltk-cst-core` gains `Shared<T>` (pyo3-free newtype) and a canonical-wrapper registry.
-  - `make gencode` regenerates all Rust outputs in sync (see `gencode` target in Makefile
-    for the full list; includes `crates/fegen-rust/src/cst.rs`,
-    `tests/rust_cst_fixture/src/cst.rs`, `tests/rust_poc_cst/src/cst.rs`,
-    `tests/rust_parser_fixture/src/cst.rs`, `tests/rust_parser_fixture/src/parser.rs`,
-    `tests/rust_parser_fixture/src/collision_cst.rs`,
-    `tests/rust_parser_fixture/src/collision_parser.rs`,
-    and `crates/fltk-cst-spike/src/cst.rs`).
+This release adds two major capabilities on top of a year of hardening: an optional
+**Rust backend** for generated parsers and CSTs, and a full **language-server
+toolchain** for FLTK grammars. The alpha unparser/formatter from 0.2.0 also matured.
+The Python backend remains the default and its public API is unchanged.
 
-### Fixed
-- Bazel rules now work when fltk is used as a submodule (use `cst_file.dirname` for output path)
-- Add `imports = ["."]` to py_library for correct Python imports when used as submodule
-- Export `fltk_pyo3_cdylib` from `rust.bzl`; loading it from a consumer module previously failed
+### Rust backend (alpha)
 
-### Added
-- `preserve_blanks: N` directive in format specs to preserve and normalize blank lines
-- Format specification documentation in docs/format-specs.md
-- CLI usage documentation in docs/usage.md
+FLTK can now generate a Rust implementation of the CST and parser alongside the Python
+one. The goal is a near-drop-in replacement: a downstream project can switch its
+generated parser and CST to the Rust backend and, at most, update its import
+statements — type annotations and call sites are meant to keep working unchanged.
 
-### Fixed
-- Inline comments now stay on the same line as the code they comment
-- Extra blank lines no longer appear between alternatives with comments
-- Comments between rules now stay with the following rule, not the preceding one
-- Missing `classify_trivia_rules` call in `generate_unparser`
+- CST and parser code generation in Rust, with a backend selector so a grammar can
+  target the Python or the Rust implementation.
+- A Rust implementation of the unparser/formatter, plus a standalone pure-Rust
+  `fltkfmt` binary that formats `.fltkg` files without a Python runtime.
+- Generated Rust nodes own their children as `Shared<T>` (an `Arc<RwLock<T>>` newtype),
+  so cloning a node is a shallow reference clone. Child identity now matches the Python
+  backend: reading the same child twice yields the same object, and mutations are
+  visible through every reference and across the language boundary.
+- Type-stub (`.pyi`) emission for the generated extension, and hardening of the
+  cross-cdylib ABI so a compiled parser can be loaded safely from a consumer module.
 
-### Changed
-- Reformatted all .fltkg grammar files using the FLTK formatter
+Treat the Rust backend as early alpha.
+
+### Language Server Protocol tooling
+
+- `fltk-lsp`, a pygls-based language server that drives editor features directly from
+  an FLTK grammar.
+- A `.fltklsp` spec language and classification engine for semantic highlighting, with
+  a companion `fltk-highlight` CLI.
+- Definition, reference, and namespace navigation for grammars; prefix-CST exposure so
+  incomplete input still highlights gracefully; a resolver plugin API; and a VS Code
+  integration.
+- FLTK now dogfoods these servers on its own grammars.
+
+### Unparser and formatter improvements
+
+- New `preserve_blanks: N` directive to preserve and normalize runs of blank lines.
+- Comment handling fixes: inline comments stay on the line they annotate, comments
+  between rules attach to the following rule, and spurious blank lines no longer appear
+  between commented alternatives.
+- New documentation: `docs/format-specs.md` (format-spec reference) and `docs/usage.md`
+  (CLI usage).
+
+### Robustness and security
+
+- Generated parsers enforce a configurable recursion-depth limit, preventing
+  stack-exhaustion denial-of-service on pathological input.
+- A forged-ABI code path that could segfault the Rust backend was closed, and error
+  messages emitted by generated parsers are now properly escaped.
+- Grammar generation catches more latent bugs up front: non-portable regexes, empty
+  `_`-named rules, and identifier collisions are now rejected at generation time.
+
+### Build, CI, and dependencies
+
+- Supply-chain and toolchain hardening: `cargo-deny` gating, pinned CI actions managed
+  by Dependabot, a pinned Rust toolchain mirrored across the cargo and Bazel lanes, and
+  lockfile-drift gates.
+- Dependencies were refreshed across the board (Python, Rust, and CI actions), which
+  included moving to a newer ruff and clearing the resulting lint/format findings.
 
 ## [0.2.0]
 
@@ -169,6 +194,9 @@ cleanups and modernization.
 - Support for left-recursive grammars
 - Development tooling with ruff, pyright, and pytest
 
-[Unreleased]: https://github.com/rnortman/fltk/compare/v0.1.0...HEAD
+[Unreleased]: https://github.com/rnortman/fltk/compare/v0.3.0...HEAD
+[0.3.0]: https://github.com/rnortman/fltk/compare/v0.2.0...v0.3.0
+[0.2.0]: https://github.com/rnortman/fltk/compare/v0.1.1...v0.2.0
+[0.1.1]: https://github.com/rnortman/fltk/compare/v0.1.0...v0.1.1
 [0.1.0]: https://github.com/rnortman/fltk/releases/tag/v0.1.0
 [0.0.1]: https://github.com/rnortman/fltk/releases/tag/v0.0.1

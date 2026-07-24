@@ -171,24 +171,32 @@ _CONFIG_IDS = render_config_ids(_CONFIGS)
 # the matching FormatterConfig. Rust class refs are wrapped in lambdas because
 # rust_parser_fixture is not importable at module level when the fixture isn't built.
 _BACKEND_CONFIGS = [
-    ("fltkfmt", _py_unparser_result, lambda: rust_parser_fixture.unparser.Unparser()),
-    ("default", _py_unparser_result_default, lambda: rust_parser_fixture.unparser_default.Unparser()),
+    (
+        "fltkfmt",
+        _py_unparser_result,
+        lambda: rust_parser_fixture.unparser.Unparser(),  # noqa: PLW0108 -- defers the attribute lookup; inlining would resolve rust_parser_fixture at import time, before the fixture is guaranteed built
+    ),
+    (
+        "default",
+        _py_unparser_result_default,
+        lambda: rust_parser_fixture.unparser_default.Unparser(),  # noqa: PLW0108 -- same deferred-lookup reason as above
+    ),
 ]
 
 
 @pytest.mark.parametrize("_cfg,py_result_fn,rust_unparser_fn", _BACKEND_CONFIGS, ids=[c[0] for c in _BACKEND_CONFIGS])
 @pytest.mark.parametrize("max_width,indent_width", _CONFIGS, ids=_CONFIG_IDS)
 @pytest.mark.parametrize("rule,text", _CORPUS, ids=_CORPUS_IDS)
-def test_unparse_parity(rule, text, max_width, indent_width, _cfg, py_result_fn, rust_unparser_fn):
+def test_unparse_parity(*, rule, text, max_width, indent_width, _cfg, py_result_fn, rust_unparser_fn):
     py_cst = _py_cst(text, rule)
     rust_node = _rust_node(text, rule)
     assert_unparse_parity(
         py_result_fn(),
         py_cst,
-        rust_unparser_fn(),
-        rust_node,
-        rule,
-        text,
+        rust_unparser=rust_unparser_fn(),
+        rust_node=rust_node,
+        rule=rule,
+        text=text,
         indent_width=indent_width,
         max_width=max_width,
     )

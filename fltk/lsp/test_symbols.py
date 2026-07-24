@@ -63,7 +63,7 @@ def _sym(table: symbols.SymbolTable, name: str) -> symbols.Symbol:
 
 def _ref(table: symbols.SymbolTable, text: str, substr: str) -> symbols.Reference:
     """Find the reference whose span is the trailing identifier of ``substr`` (e.g. ``use x``)."""
-    token = substr.split()[-1]
+    token = substr.rsplit(maxsplit=1)[-1]
     start = text.index(substr) + substr.rindex(token)
     end = start + len(token)
     matches = [r for r in table.references if r.start == start and r.end == end]

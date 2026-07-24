@@ -83,14 +83,16 @@ When parsed, both produce a `Span(start, end)` as the child, not a nested node.
 
 ```python
 # CST structure:
+# fmt: off
 Number(
     span=Span(0, 3),
     children=[(Number.Label.VALUE, Span(0, 3))]
 )
+# fmt: on
 
 # Access the matched text:
 span = number_node.child_value()  # Returns Span(0, 3)
-source_text[span.start:span.end]  # Returns "123"
+source_text[span.start : span.end]  # Returns "123"
 ```
 
 ### Rule References → Nested Nodes with Default Labels
@@ -106,6 +108,7 @@ number := /[0-9]+/ ;
 Parsing `"42"` produces:
 
 ```python
+# fmt: off
 Expr(
     children=[(Expr.Label.TERM, Term(
         children=[(Term.Label.NUMBER, Number(
@@ -113,6 +116,7 @@ Expr(
         ))]
     ))]
 )
+# fmt: on
 ```
 
 The `term` reference gets label `TERM`, and `number` gets label `NUMBER` - derived from the rule names.
@@ -126,9 +130,11 @@ assignment := target:identifier , ":=" , value:expr ;
 ```
 
 ```python
+# fmt: off
 # Access by label:
 assignment.child_target()   # Returns the Identifier node
 assignment.child_value()    # Returns the Expr node
+# fmt: on
 
 # Iterate children with specific label:
 for child in node.children_target():
@@ -167,9 +173,11 @@ parens := "(" , expr , ")" ;
 
 ```python
 # Only expr is in the CST (parentheses are suppressed):
+# fmt: off
 Parens(
     children=[(Parens.Label.EXPR, Expr(...))]
 )
+# fmt: on
 
 # To include parentheses, add labels:
 # parens := open:"(" , expr , close:")" ;
@@ -196,7 +204,7 @@ rule := name:identifier ;
 ```
 
 ```python
-node.child_name()   # Returns exactly one, raises if not
+node.child_name()  # Returns exactly one, raises if not
 ```
 
 #### Optional (`?`) - Zero or One
@@ -206,7 +214,7 @@ rule := name:identifier , (":" , type:identifier)? ;
 ```
 
 ```python
-node.maybe_type()   # Returns the type or None
+node.maybe_type()  # Returns the type or None
 # OR check explicitly:
 list(node.children_type())  # Returns [] or [child]
 ```
@@ -218,7 +226,7 @@ rule := items:item+ ;
 ```
 
 ```python
-node.child_items()      # Returns first item, raises if none
+node.child_items()  # Returns first item, raises if none
 list(node.children_items())  # Returns list of all items (at least 1)
 ```
 
@@ -301,10 +309,12 @@ Wrapper(children=[(None, Inner(children=[...]))])
 
 With `!`:
 ```python
+# fmt: off
 Wrapper(children=[
     (Wrapper.Label.A, Item(...)),
     (Wrapper.Label.B, Item(...)),
 ])
+# fmt: on
 ```
 
 **Note**: Inline has limited support and may raise `NotImplementedError`.
@@ -327,6 +337,7 @@ _trivia := /\s+/ ;
 Parsing `"hello   world"`:
 
 ```python
+# fmt: off
 Statement(
     children=[
         (Statement.Label.FIRST, Span(0, 5)),   # "hello"
@@ -334,6 +345,7 @@ Statement(
         (Statement.Label.SECOND, Span(8, 13)), # "world"
     ]
 )
+# fmt: on
 ```
 
 ### With `capture_trivia=False` (Default)
@@ -341,6 +353,7 @@ Statement(
 Trivia is parsed but not included in the CST:
 
 ```python
+# fmt: off
 Statement(
     children=[
         (Statement.Label.FIRST, Span(0, 5)),   # "hello"
@@ -348,6 +361,7 @@ Statement(
         # No trivia node
     ]
 )
+# fmt: on
 ```
 
 ### Complex Trivia Structure
@@ -380,6 +394,7 @@ number := value:/[0-9]+/ ;
 ### Resulting CST (with trivia capture)
 
 ```python
+# fmt: off
 Expr(
     span=Span(0, 9),
     children=[
@@ -416,6 +431,7 @@ Expr(
         ))
     ]
 )
+# fmt: on
 ```
 
 ### Accessing the CST
@@ -427,9 +443,11 @@ ops = list(expr.children_op())  # [Span(2, 3)]  - just "+"
 # Get all terms (using the auto-derived label)
 terms = list(expr.children_term())  # [Term(...), Term(...)]
 
+
 # Get the actual text for a span
 def get_text(span: Span, source: str) -> str:
-    return source[span.start:span.end]
+    return source[span.start : span.end]
+
 
 # Navigate to number values
 for label, child in expr.children:
@@ -449,11 +467,12 @@ for label, child in expr.children:
 ```python
 from fltk.fegen.pyrt.terminalsrc import Span
 
+
 def get_text(node_or_span, source: str) -> str:
     """Get source text for a node or span."""
     if isinstance(node_or_span, Span):
-        return source[node_or_span.start:node_or_span.end]
-    return source[node_or_span.span.start:node_or_span.span.end]
+        return source[node_or_span.start : node_or_span.end]
+    return source[node_or_span.span.start : node_or_span.span.end]
 ```
 
 ### Traversing the Tree
@@ -462,9 +481,9 @@ def get_text(node_or_span, source: str) -> str:
 def visit_all(node, visitor_fn):
     """Visit all nodes in the tree."""
     visitor_fn(node)
-    if hasattr(node, 'children'):
+    if hasattr(node, "children"):
         for label, child in node.children:
-            if hasattr(child, 'children'):  # It's a node, not a Span
+            if hasattr(child, "children"):  # It's a node, not a Span
                 visit_all(child, visitor_fn)
 ```
 
@@ -474,9 +493,11 @@ def visit_all(node, visitor_fn):
 def find_all(node, node_type):
     """Find all nodes of a specific type."""
     results = []
+
     def collector(n):
         if isinstance(n, node_type):
             results.append(n)
+
     visit_all(node, collector)
     return results
 ```

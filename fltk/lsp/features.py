@@ -437,9 +437,9 @@ def rename_edits(
     version: int | None,
     occurrences: Sequence[tuple[int, int]],
     new_name: str,
+    *,
     line_index: LineIndex,
     enc: PositionEncoding,
-    *,
     document_changes: bool,
 ) -> lsp.WorkspaceEdit:
     """Render a :class:`WorkspaceEdit` renaming every occurrence to ``new_name``.

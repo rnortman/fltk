@@ -131,7 +131,7 @@ class AnchorConfig:
     selector_type: ItemSelector
     selector_value: str
 
-    disposition: None | Normal | Omit | RenderAs = None
+    disposition: Normal | Omit | RenderAs | None = None
     # Ordered list of operations to perform at this anchor
     operations: list[FormatOperation] = field(default_factory=list)
 
@@ -614,6 +614,7 @@ def _process_before_statement(
 def _process_range_operation(
     from_spec: fmt_cst.FromSpec | None,
     to_spec: fmt_cst.ToSpec | None,
+    *,
     begin_op: FormatOperation,
     end_op_type: OperationType,
     config: RuleConfig | FormatterConfig,
@@ -708,10 +709,10 @@ def _process_group_statement(
     _process_range_operation(
         group.maybe_from_spec(),
         group.maybe_to_spec(),
-        FormatOperation(OperationType.GROUP_BEGIN),
-        OperationType.GROUP_END,
-        config,
-        terminal_src,
+        begin_op=FormatOperation(OperationType.GROUP_BEGIN),
+        end_op_type=OperationType.GROUP_END,
+        config=config,
+        terminal_src=terminal_src,
     )
 
 
@@ -729,10 +730,10 @@ def _process_nest_statement(
     _process_range_operation(
         nest.maybe_from_spec(),
         nest.maybe_to_spec(),
-        FormatOperation(OperationType.NEST_BEGIN, indent=indent_value),
-        OperationType.NEST_END,
-        config,
-        terminal_src,
+        begin_op=FormatOperation(OperationType.NEST_BEGIN, indent=indent_value),
+        end_op_type=OperationType.NEST_END,
+        config=config,
+        terminal_src=terminal_src,
     )
 
 
@@ -746,10 +747,10 @@ def _process_join_statement(
     _process_range_operation(
         join.maybe_from_spec(),
         join.maybe_to_spec(),
-        FormatOperation(OperationType.JOIN_BEGIN, separator=separator),
-        OperationType.JOIN_END,
-        config,
-        terminal_src,
+        begin_op=FormatOperation(OperationType.JOIN_BEGIN, separator=separator),
+        end_op_type=OperationType.JOIN_END,
+        config=config,
+        terminal_src=terminal_src,
     )
 
 

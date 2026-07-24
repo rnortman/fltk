@@ -30,6 +30,7 @@ app = typer.Typer(
 def main(
     grammar: Annotated[Path, typer.Argument(help="Path to the grammar file (.fltkg)")],
     format_spec: Annotated[Path, typer.Argument(help="Path to the format specification file (.fltkfmt)")],
+    *,
     input_file: Annotated[
         Path | None, typer.Argument(help="Path to the input file (omit or use '-' for stdin)")
     ] = None,

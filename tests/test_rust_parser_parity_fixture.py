@@ -172,4 +172,4 @@ def test_parity(rule, text, expected, capture_trivia):
     py_p = _py_parser(text, capture_trivia)
     rust_p = _rust_parser(text, capture_trivia)
     ts = tsrc.TerminalSource(text)
-    run_parity_corpus_entry(py_p, rust_p, ts, rule, text, expected)
+    run_parity_corpus_entry(py_p, rust_p, ts, rule=rule, text=text, expected=expected)

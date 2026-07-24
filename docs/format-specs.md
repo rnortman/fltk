@@ -240,11 +240,7 @@ from fltk.plumbing import (
 grammar = parse_grammar_file("my.fltkg")
 fmt_config = parse_format_config_file("my.fltkfmt")
 parser_result = generate_parser(grammar, capture_trivia=True)
-unparser_result = generate_unparser(
-    parser_result.grammar,
-    parser_result.cst_module_name,
-    formatter_config=fmt_config
-)
+unparser_result = generate_unparser(parser_result.grammar, parser_result.cst_module_name, formatter_config=fmt_config)
 
 parse_result = parse_text(parser_result, source_code)
 doc = unparse_cst(unparser_result, parse_result.cst, source_code)

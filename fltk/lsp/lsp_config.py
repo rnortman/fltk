@@ -611,6 +611,7 @@ def _local_anchor_matches(anchor: Anchor, rule_index: RuleIndex) -> list[tuple[M
 def _resolve_local_anchor(
     anchor: Anchor,
     paint: Paint,
+    *,
     source_rank: int,
     stmt_index: int,
     rule_index: RuleIndex,
@@ -624,6 +625,7 @@ def _resolve_local_anchor(
 def _resolve_global_anchor(
     anchor: Anchor,
     paint: Paint,
+    *,
     stmt_index: int,
     index: GrammarIndex,
     node_paints: dict[str, list[NodePaint]],
@@ -672,7 +674,14 @@ def resolve_config(config: LspConfig, index: GrammarIndex) -> ResolvedLspConfig:
     for scope in config.global_scopes:
         paint = Paint(token=scope.token, modifiers=scope.modifiers)
         for anchor in scope.anchors:
-            _resolve_global_anchor(anchor, paint, scope.index, index, node_paints, global_child_matchers)
+            _resolve_global_anchor(
+                anchor,
+                paint,
+                stmt_index=scope.index,
+                index=index,
+                node_paints=node_paints,
+                global_out=global_child_matchers,
+            )
 
     for block in config.rule_blocks:
         rule_index = index.rules.get(block.rule_name)
@@ -682,7 +691,9 @@ def resolve_config(config: LspConfig, index: GrammarIndex) -> ResolvedLspConfig:
         for scope in block.scopes:
             paint = Paint(token=scope.token, modifiers=scope.modifiers)
             for anchor in scope.anchors:
-                _resolve_local_anchor(anchor, paint, SOURCE_RANK_SCOPE, scope.index, rule_index, out)
+                _resolve_local_anchor(
+                    anchor, paint, source_rank=SOURCE_RANK_SCOPE, stmt_index=scope.index, rule_index=rule_index, out=out
+                )
         for def_stmt in block.defs:
             # One expansion of the anchor builds each match's tier once, then emits both the
             # declaration-site paint (when the kind's first segment is a legend token) and the

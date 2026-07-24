@@ -93,7 +93,7 @@ def test_parity(rule, text, expected, capture_trivia):
     py_p = _py_parser(text, capture_trivia)
     rust_p = _rust_parser(text, capture_trivia)
     ts = tsrc.TerminalSource(text)
-    run_parity_corpus_entry(py_p, rust_p, ts, rule, text, expected)
+    run_parity_corpus_entry(py_p, rust_p, ts, rule=rule, text=text, expected=expected)
 
 
 # ---------------------------------------------------------------------------
@@ -207,7 +207,7 @@ def test_assert_cst_equal_fails_label_mismatch():
     py_children_copy = list(py_rule.children)
     # Find first labelled child and strip its label
     first_labeled_idx = next(i for i, (lbl, _) in enumerate(py_children_copy) if lbl is not None)
-    lbl, ch = py_children_copy[first_labeled_idx]
+    _lbl, ch = py_children_copy[first_labeled_idx]
     py_children_copy[first_labeled_idx] = (None, ch)  # strip the label
     # Build a modified Python Rule node
     modified_py_rule = py_cst.Rule(

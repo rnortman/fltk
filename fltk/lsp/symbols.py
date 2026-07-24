@@ -140,7 +140,7 @@ def extract(
     """
     root = Scope(start=0, end=len(text), parent=None, children=[], symbols=[])
     pending: list[_PendingRef] = []
-    _walk(tree, 0, root, tables, resolved_config, text, pending)
+    _walk(tree, 0, scope=root, tables=tables, resolved=resolved_config, text=text, pending=pending)
 
     # Order every scope's symbols by name position so resolution scans document order.
     _sort_scope_symbols(root)
@@ -173,6 +173,7 @@ def extract(
 def _walk(
     node: typing.Any,
     depth: int,
+    *,
     scope: Scope,
     tables: classify.GrammarTables,
     resolved: lsp_config.ResolvedLspConfig,
@@ -234,7 +235,7 @@ def _walk(
                 )
 
         if not is_span:
-            _walk(child, child_depth, child_scope, tables, resolved, text, pending)
+            _walk(child, child_depth, scope=child_scope, tables=tables, resolved=resolved, text=text, pending=pending)
 
 
 _M = typing.TypeVar("_M", lsp_config.DefMatcher, lsp_config.RefMatcher)

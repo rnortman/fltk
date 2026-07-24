@@ -82,7 +82,7 @@ def cst_module_import(cst_mod_path: str) -> str:
     it is aliased (``use <path> as cst;``). Shared Rust-codegen helper: also used by
     ``fltk.unparse.gsm2unparser_rs`` so the two generators cannot drift.
     """
-    if cst_mod_path.split("::")[-1] == "cst":
+    if cst_mod_path.rsplit("::", maxsplit=1)[-1] == "cst":
         return f"use {cst_mod_path};"
     return f"use {cst_mod_path} as cst;"
 

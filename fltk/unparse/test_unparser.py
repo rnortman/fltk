@@ -64,7 +64,7 @@ def parse_toy_expression(parser_result, input_text: str) -> tuple[Any, str]:
 
 def test_toy_grammar_parsing(toy_unparser):
     """Test that the toy grammar can be parsed and unparsed correctly."""
-    parser_result, unparser_result, grammar_content = toy_unparser
+    parser_result, unparser_result, _grammar_content = toy_unparser
 
     # Test parsing the example toy file
     script_dir = Path(__file__).parent

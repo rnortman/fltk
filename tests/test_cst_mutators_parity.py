@@ -47,8 +47,8 @@ from tests.gsm2tree_helpers import make_zero_label_grammar as _make_zero_label_g
 # Each backend entry: (key, module, span_factory)
 # span_factory(start, end) → a valid span for that backend.
 _BACKENDS = {
-    "py": (py_cst, lambda start, end: terminalsrc.Span(start, end)),
-    "rust": (rust_cst, lambda start, end: NativeSpan(start, end)),
+    "py": (py_cst, terminalsrc.Span),
+    "rust": (rust_cst, NativeSpan),
 }
 _BACKEND_KEYS = list(_BACKENDS.keys())
 
@@ -244,7 +244,7 @@ class TestRemoveAt:
         s1 = _span(backend, 1, 2)
         node.append_name(s0)
         node.append_name(s1)
-        lbl, child = node.remove_at(-1)
+        _lbl, child = node.remove_at(-1)
         assert _span_eq(child, s1)
         assert len(node.children) == 1
         assert _span_eq(node.children[0][1], s0)
@@ -311,7 +311,7 @@ class TestRemoveAt:
         spans = [_span(backend, i, i + 1) for i in range(3)]
         for s in spans:
             node.append_name(s)
-        lbl, child = node.remove_at(1)
+        _lbl, child = node.remove_at(1)
         assert _span_eq(child, spans[1])
         ch = node.children
         assert len(ch) == 2

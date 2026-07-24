@@ -255,6 +255,7 @@ class UnparserGenerator:
         self,
         method: iir.Method,
         node_var: iir.Var,
+        *,
         pos_var: iir.Var | iir.Expr,
         item: gsm.Item,
         rule_name: str,
@@ -480,7 +481,7 @@ class UnparserGenerator:
             )
             node_var = method.get_param("node")
             pos_var = method.get_param("pos")
-            self._gen_quantified_item_body(method, node_var, pos_var, path, item, rule_name)
+            self._gen_quantified_item_body(method, node_var, pos_var=pos_var, path=path, item=item, rule_name=rule_name)
             return unparser_info
         else:
             # Single items can just use the term unparser directly
@@ -538,6 +539,7 @@ class UnparserGenerator:
         self,
         method: iir.Method,
         node_var: iir.Var,
+        *,
         pos_var: iir.Var,
         path: tuple[str, ...],
         item: gsm.Item,
@@ -1087,6 +1089,7 @@ class UnparserGenerator:
         self,
         method: iir.Method,
         current_pos_var: iir.Var,
+        *,
         node_var: iir.Var,
         accumulator_var: iir.Var,
         separator: gsm.Separator,
@@ -1606,10 +1609,10 @@ class UnparserGenerator:
         self._gen_trivia_processing(
             method,
             current_pos_var,
-            node_var,
-            accumulator_var,
-            items.initial_sep,
-            rule_name,
+            node_var=node_var,
+            accumulator_var=accumulator_var,
+            separator=items.initial_sep,
+            rule_name=rule_name,
         )
 
         for item_idx, item_info in enumerate(item_methods):
@@ -1677,7 +1680,14 @@ class UnparserGenerator:
             if item_idx < len(items.items) and item_idx < len(items.sep_after):
                 separator = items.sep_after[item_idx]
 
-                self._gen_trivia_processing(method, current_pos_var, node_var, accumulator_var, separator, rule_name)
+                self._gen_trivia_processing(
+                    method,
+                    current_pos_var,
+                    node_var=node_var,
+                    accumulator_var=accumulator_var,
+                    separator=separator,
+                    rule_name=rule_name,
+                )
 
         result = self._make_unparse_result(accumulator_var.load(), current_pos_var.load())
         method.block.return_(result)
@@ -1702,7 +1712,9 @@ class UnparserGenerator:
             pos_var = method.get_param("pos")
             accumulator_param = method.get_param("accumulator")
 
-            child_var = self._extract_and_validate_nonsequence_child(method, node_var, pos_var, item, rule_name)
+            child_var = self._extract_and_validate_nonsequence_child(
+                method, node_var, pos_var=pos_var, item=item, rule_name=rule_name
+            )
 
             rule_path = (ref_rule_name,)
             rule_unparser_info = self.unparsers[rule_path]
@@ -1741,7 +1753,9 @@ class UnparserGenerator:
             accumulator_param = method.get_param("accumulator")
 
             if disposition == gsm.Disposition.INCLUDE:
-                self._extract_and_validate_nonsequence_child(method, node_var, pos_var, item, rule_name)
+                self._extract_and_validate_nonsequence_child(
+                    method, node_var, pos_var=pos_var, item=item, rule_name=rule_name
+                )
 
             combinators = self._get_combinators_module()
             text_call = combinators.method.text.call(iir.LiteralString(literal_text))
@@ -1771,7 +1785,9 @@ class UnparserGenerator:
             pos_var = method.get_param("pos")
             accumulator_param = method.get_param("accumulator")
 
-            child_var = self._extract_and_validate_nonsequence_child(method, node_var, pos_var, item, rule_name)
+            child_var = self._extract_and_validate_nonsequence_child(
+                method, node_var, pos_var=pos_var, item=item, rule_name=rule_name
+            )
 
             pyrt_module = self._get_pyrt_module()
             span_text = pyrt_module.method.extract_span_text.call(

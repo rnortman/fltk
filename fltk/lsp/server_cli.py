@@ -81,6 +81,7 @@ def serve(
 @app.command()
 def main(
     grammar: Annotated[Path, typer.Option("--grammar", help="Path to the grammar file (.fltkg)")],
+    *,
     lsp: Annotated[Path | None, typer.Option("--lsp", help="Path to the editor-tooling spec file (.fltklsp)")] = None,
     fmt: Annotated[Path | None, typer.Option("--fmt", help="Path to the formatting spec file (.fltkfmt)")] = None,
     rule: Annotated[str | None, typer.Option("--rule", help="Start rule name (defaults to the first rule)")] = None,

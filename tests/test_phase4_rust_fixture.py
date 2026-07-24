@@ -520,7 +520,7 @@ class TestExtractSpanErrorPaths:
         """The TypeError message from a wrong-typed span mentions fltk._native.Span."""
         Entry = _rust_cst.Entry
         node = Entry()
-        with pytest.raises(TypeError, match="fltk._native.Span"):
+        with pytest.raises(TypeError, match=r"fltk\._native\.Span"):
             node.span = 99
 
 

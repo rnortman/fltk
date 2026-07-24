@@ -617,8 +617,8 @@ def test_store_ignores_older_version_result(monkeypatch: pytest.MonkeyPatch) -> 
     monkeypatch.setattr(server, "_encoding", lambda: PositionEncoding.UTF32)
     fresh = server._analyze_blocking(_CLEAN, None)
     stale = server._analyze_blocking(_BROKEN, None)
-    server._store(_URI, 2, *fresh, epoch=0)
-    server._store(_URI, 1, *stale, epoch=0)
+    server._store(_URI, 2, fresh[0], line_index=fresh[1], served=fresh[2], text=fresh[3], epoch=0)
+    server._store(_URI, 1, stale[0], line_index=stale[1], served=stale[2], text=stale[3], epoch=0)
     state = server._docs[_URI]
     assert state.analyzed_version == 2
     assert state.analysis is fresh[0]
@@ -632,7 +632,7 @@ def test_store_after_drop_does_not_resurrect_state(monkeypatch: pytest.MonkeyPat
     result = server._analyze_blocking(_CLEAN, None)
     epoch = server._epochs.get(_URI, 0)
     server.drop(_URI)
-    server._store(_URI, 1, *result, epoch)
+    server._store(_URI, 1, result[0], line_index=result[1], served=result[2], text=result[3], epoch=epoch)
     assert _URI not in server._docs
 
 

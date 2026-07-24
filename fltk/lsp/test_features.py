@@ -523,9 +523,9 @@ def test_rename_occurrences_returns_symbol_and_deduped_spans() -> None:
 
 
 def test_rename_edits_versioned_document_changes() -> None:
-    _, sym = _nav_table()
+    _, _sym = _nav_table()
     occ = [(4, 5), (12, 13), (20, 21)]
-    edit = features.rename_edits(URI, 7, occ, "z", IDX, UTF32, document_changes=True)
+    edit = features.rename_edits(URI, 7, occ, "z", line_index=IDX, enc=UTF32, document_changes=True)
     assert edit.changes is None
     assert edit.document_changes is not None
     (text_document_edit,) = edit.document_changes
@@ -541,7 +541,7 @@ def test_rename_edits_versioned_document_changes() -> None:
 
 def test_rename_edits_plain_changes_fallback() -> None:
     occ = [(4, 5), (12, 13)]
-    edit = features.rename_edits(URI, 7, occ, "z", IDX, UTF32, document_changes=False)
+    edit = features.rename_edits(URI, 7, occ, "z", line_index=IDX, enc=UTF32, document_changes=False)
     assert edit.document_changes is None
     assert edit.changes is not None
     edits = edit.changes[URI]
@@ -551,7 +551,7 @@ def test_rename_edits_plain_changes_fallback() -> None:
 
 def test_rename_edits_empty_occurrences_document_changes() -> None:
     # A no-op rename renders a well-formed edit carrying zero TextEdits.
-    edit = features.rename_edits(URI, 7, [], "z", IDX, UTF32, document_changes=True)
+    edit = features.rename_edits(URI, 7, [], "z", line_index=IDX, enc=UTF32, document_changes=True)
     assert edit.changes is None
     assert edit.document_changes is not None
     (text_document_edit,) = edit.document_changes
@@ -560,7 +560,7 @@ def test_rename_edits_empty_occurrences_document_changes() -> None:
 
 
 def test_rename_edits_empty_occurrences_plain_changes() -> None:
-    edit = features.rename_edits(URI, 7, [], "z", IDX, UTF32, document_changes=False)
+    edit = features.rename_edits(URI, 7, [], "z", line_index=IDX, enc=UTF32, document_changes=False)
     assert edit.document_changes is None
     assert edit.changes is not None
     assert edit.changes[URI] == []

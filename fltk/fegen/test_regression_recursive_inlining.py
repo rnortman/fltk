@@ -162,7 +162,7 @@ def test_recursive_rule_not_spuriously_inlined():
     has_nested_expr = False
     for child in root_node.children:
         if isinstance(child, tuple) and len(child) == 2:
-            label, value = child
+            _label, value = child
             if hasattr(value, "children"):  # This would be an Expr node
                 has_nested_expr = True
                 break

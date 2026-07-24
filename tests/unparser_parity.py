@@ -79,11 +79,11 @@ def unparse_rust(
 def assert_unparse_parity(
     unparser_result: UnparserResult,
     py_cst: Any,
+    *,
     rust_unparser: Any,
     rust_node: Any,
     rule: str,
     text: str,
-    *,
     indent_width: int = 4,
     max_width: int = 80,
 ) -> None:

@@ -257,6 +257,7 @@ _Interval: typing.TypeAlias = "tuple[int, int, lsp_config.Paint, _Key]"
 def _explicit_intervals(
     node: typing.Any,
     depth: int,
+    *,
     tables: GrammarTables,
     resolved: lsp_config.ResolvedLspConfig,
     text: str,
@@ -280,7 +281,7 @@ def _explicit_intervals(
             if lsp_config.match_applies(matcher.match, label_name, child_text, child_rule_name):
                 out.append((cstart, cend, matcher.paint, (child_depth, matcher.tier)))
         if not is_span:
-            _explicit_intervals(child, child_depth, tables, resolved, text, out)
+            _explicit_intervals(child, child_depth, tables=tables, resolved=resolved, text=text, out=out)
 
 
 def _ref_intervals(symbol_table: SymbolTable, out: list[_Interval]) -> None:
@@ -403,7 +404,7 @@ def classify(
         tables = build_grammar_tables(grammar)
 
     explicit: list[_Interval] = []
-    _explicit_intervals(tree, 0, tables, resolved_config, text, explicit)
+    _explicit_intervals(tree, 0, tables=tables, resolved=resolved_config, text=text, out=explicit)
     if symbol_table is not None:
         _ref_intervals(symbol_table, explicit)
     covered = _merge_ranges([(start, end) for start, end, _, _ in explicit])

@@ -148,7 +148,7 @@ def assert_error_equiv(py_parser, rust_parser, terminals) -> None:
     _assert_messages_equiv(*_parse_error_message(py_msg), *_parse_error_message(rust_msg))
 
 
-def run_parity_corpus_entry(py_p, rust_p, ts, rule: str, text: str, expected) -> None:
+def run_parity_corpus_entry(py_p, rust_p, ts, *, rule: str, text: str, expected) -> None:
     """Shared corpus-entry dispatch body for parity test suites.
 
     Dispatches on expected outcome (SUCCESS / PARTIAL / FAIL), asserts both backends

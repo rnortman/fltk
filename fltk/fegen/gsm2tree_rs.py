@@ -1044,7 +1044,7 @@ class RustCstGenerator:
         non-recursive, and skipping Drop avoids the E0509 restriction on moving fields out of
         types that implement Drop.
         """
-        child_classes, has_span = self._child_variants_for_rule(rule_name)
+        child_classes, _has_span = self._child_variants_for_rule(rule_name)
         enum_name = self.child_enum_name(class_name)
         label_enum_name = self._label_enum_rust_name(class_name) if labels else ""
         label_type = f"Option<{label_enum_name}>" if labels else "Option<()>"
@@ -1466,8 +1466,10 @@ class RustCstGenerator:
             "                    Some(native_lbl)",
             "                } else {",
             "                    return Err(PyTypeError::new_err(format!(",
-            f'                        "{class_name}.{method_name}: label argument is not a '
-            f'{python_enum_name}; got {{}}",',
+            (
+                f'                        "{class_name}.{method_name}: label argument is not a '
+                f'{python_enum_name}; got {{}}",'
+            ),
             "                        lbl.bind(py).get_type().name()?",
             "                    )));",
             "                }",

@@ -164,13 +164,13 @@ def test_missing_attr(resolver_module: str) -> None:
 
 
 def test_attr_not_a_resolver(resolver_module: str) -> None:
-    with pytest.raises(ResolverError, match="neither a resolver.*nor callable"):
+    with pytest.raises(ResolverError, match=r"neither a resolver.*nor callable"):
         load_resolver(f"{resolver_module}:not_a_resolver")
 
 
 def test_missing_resolve_method(resolver_module: str) -> None:
     # An instance without 'resolve' is not callable either -> instantiate path rejects it.
-    with pytest.raises(ResolverError, match="neither a resolver.*nor callable"):
+    with pytest.raises(ResolverError, match=r"neither a resolver.*nor callable"):
         load_resolver(f"{resolver_module}:no_resolve_method")
 
 
@@ -180,7 +180,7 @@ def test_empty_file_suffixes(resolver_module: str) -> None:
 
 
 def test_undotted_file_suffix(resolver_module: str) -> None:
-    with pytest.raises(ResolverError, match="'.'-prefixed"):
+    with pytest.raises(ResolverError, match=r"'\.'-prefixed"):
         load_resolver(f"{resolver_module}:undotted_suffixes")
 
 
