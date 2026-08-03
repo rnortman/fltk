@@ -167,7 +167,7 @@ class TestAppendChildRoundtrip:
 
 
 class TestArcSharingNodeSpan:
-    """§4 item 1: span accessor preserves Arc-sharing; multiple reads merge without ValueError.
+    """Span accessor preserves Arc-sharing; multiple reads merge without ValueError.
 
     These tests verify the fix for the O(N) copy bug: span accessors must return a
     fltk._native.Span that shares the same source Arc as the node, so that two spans

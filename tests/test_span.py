@@ -295,7 +295,7 @@ def test_line_col_second_line():
 
 
 def test_line_col_empty_source():
-    """Empty source: start=0==len, EOF clamp fires, col=-1 (inherited algorithm, design §3).
+    """Empty source: start=0==len, EOF clamp fires, col=-1.
 
     With source='', len=0, start=0: EOF clamp gives pos=start-1=-1.
     The sentinel pushed for empty text is -1, so col=-1 is the documented result.

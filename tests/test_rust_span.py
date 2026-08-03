@@ -273,7 +273,7 @@ class TestSourceTextOpaque:
 
 
 class TestAbiMarkerClassattr:
-    """§4 item 3: SourceText._fltk_cst_core_abi classattr and Span._with_source_unchecked."""
+    """SourceText._fltk_cst_core_abi classattr and Span._with_source_unchecked."""
 
     def test_source_text_abi_classattr_exists(self):
         """SourceText exposes _fltk_cst_core_abi as a class attribute, accessible via type(instance).
@@ -379,8 +379,7 @@ class TestAbiMarkerClassattr:
         """An object with _fltk_cst_core_abi = 'bogus/0.0.0' raises TypeError mentioning ABI mismatch.
 
         Also pins that the {subject} in the error is the derived type name (FakeSource),
-        verifying the py_type_obj_name() derivation on the SourceText path (§2 of the
-        crosscdylib-abi-check-helper design).
+        verifying the py_type_obj_name() derivation on the SourceText path.
         """
 
         class FakeSource:
@@ -451,7 +450,7 @@ class TestAbiMarkerClassattr:
 
 
 class TestSpanAbiMarkerClassattr:
-    """Phase 0 §4.1 item 1: Span._fltk_cst_core_abi classattr (parallel to SourceText)."""
+    """Span._fltk_cst_core_abi classattr (parallel to SourceText)."""
 
     def test_span_abi_classattr_exists(self):
         assert hasattr(Span, "_fltk_cst_core_abi")
@@ -473,7 +472,7 @@ class TestSpanAbiMarkerClassattr:
 
 
 class TestAbiLayoutClassattr:
-    """Phase 0 §4.1 item 2: _fltk_cst_core_abi_layout classattr on Span and SourceText."""
+    """_fltk_cst_core_abi_layout classattr on Span and SourceText."""
 
     def test_span_abi_layout_exists(self):
         assert hasattr(Span, "_fltk_cst_core_abi_layout")
@@ -505,7 +504,7 @@ class TestAbiLayoutClassattr:
 
 
 class TestSpanPathAbiGate:
-    """Phase 0 §4.1 item 1: ABI gate on the Span path (subprocess tests for PyOnceLock init).
+    """ABI gate on the Span path (subprocess tests for PyOnceLock init).
 
     The ABI check fires once in get_span_type's PyOnceLock init, which is not resettable
     within a live process.  Subprocess tests ensure a fresh interpreter for each scenario.
@@ -774,7 +773,7 @@ except TypeError as e:
 
 
 class TestSpanToPyobjectCaching:
-    """Phase 0 §4.1 item 3: boundary caching smoke tests for span_to_pyobject."""
+    """Boundary caching smoke tests for span_to_pyobject."""
 
     def test_repeated_span_reads_are_correct(self):
         """span_to_pyobject returns the correct value across repeated calls (caching is correct)."""
@@ -896,7 +895,7 @@ class TestForgedSourceTextRejected:
     def test_forged_source_text_raises_type_error(self):
         """Trivial forge (copied attrs, default object layout) raises TypeError, not SIGSEGV.
 
-        This is the exact §1.1 repro: a pure-Python class copies both ABI attributes from a
+        This is the exact repro: a pure-Python class copies both ABI attributes from a
         genuine SourceText.  Before the fix, `_with_source_unchecked(0, 5, Forge())` exited
         with signal 11 (SIGSEGV, returncode -11 / 139).  After the fix it must raise TypeError
         and the subprocess must exit cleanly (returncode 0).

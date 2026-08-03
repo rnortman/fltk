@@ -1,7 +1,7 @@
 # ruff: noqa
 """Static conformance fixture: fegen_rust_cst.cst satisfies CstModule without a cast.
 
-This file is checked in and validated by the repo-wide `uv run pyright` gate (§2.3, §4 B4).
+This file is checked in and validated by the repo-wide `uv run pyright` gate.
 It uses the stub at fltk/_stubs/fegen_rust_cst/cst.pyi — pyright reads the stub, not the compiled
 extension — so no Rust toolchain is needed for the check.
 

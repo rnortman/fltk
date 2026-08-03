@@ -1,7 +1,7 @@
 """Tests for fltk.fegen.regex_portability (check_regex_portable) and its integration
 with the Rust parser generator.
 
-Design §7 test plan:
+Test plan:
   - Unit tests: portable patterns return no issue; excluded constructs return an issue
     with the reported offset from error_tracker.longest_parse_len.
   - False-positive guards: correctly-escaped look-alikes must be portable.
@@ -10,10 +10,6 @@ Design §7 test plan:
     RustParserGenerator.generate(); same grammar generates a Python parser without error.
   - Whole-tree completeness: every regex in every Rust-parser-target grammar must be
     portable.
-
-Naming: the committed grammar is fltk/fegen/regex.fltkg (generating regex_parser.py);
-the design document called the artifacts regex_subset_* but the source of truth is the
-committed regex.* names (see implementation log, increment 1).
 """
 
 from __future__ import annotations
@@ -230,7 +226,7 @@ def test_non_portable_pattern_returns_issue(pattern: str) -> None:
     assert isinstance(result, RegexPortabilityIssue)
     assert result.pattern == pattern
     # The reported offset is always error_tracker.longest_parse_len clamped to >= 0
-    # (design §5.2; errhandling-1 fix: the raw sentinel -1 is normalised at construction).
+    # (errhandling-1 fix: the raw sentinel -1 is normalised at construction).
     # We verify it is a non-negative integer; we do not pin the exact value here because
     # the grammar's furthest-progress point may shift as the grammar evolves.
     assert isinstance(result.offset, int)
@@ -238,7 +234,7 @@ def test_non_portable_pattern_returns_issue(pattern: str) -> None:
 
 
 # ===========================================================================
-# Offset pinning for the design's committed offset-source (design §5.2)
+# Offset pinning: the reported offset is error_tracker.longest_parse_len, not result.pos
 # ===========================================================================
 # These tests verify that the offset in the returned issue is
 # error_tracker.longest_parse_len, not result.pos.  They also serve as a basic
@@ -265,7 +261,7 @@ def test_posix_class_offset_is_sensible() -> None:
     # result.pos = 0 (char_class failed; atom returned 0).
     assert result.offset >= 1, (
         f"Expected offset >= 1 for [[:alpha:]] but got {result.offset}. "
-        "The offset should be longest_parse_len (design §5.2), not result.pos (which is 0)."
+        "The offset should be longest_parse_len, not result.pos (which is 0)."
     )
 
 
@@ -279,7 +275,7 @@ def test_lookahead_offset_is_sensible() -> None:
 
 
 # ===========================================================================
-# False-positive guards (must-be-portable look-alikes, design §7)
+# False-positive guards (must-be-portable look-alikes)
 # ===========================================================================
 
 
@@ -364,7 +360,7 @@ def test_f4_inverted_bound_known_over_admission() -> None:
     A context-free grammar cannot express the `min <= max` predicate, so this
     slips through the lint.  Both engines reject it at compile time, so there is
     no silent divergence; the existing all_regex_patterns_compile gate is the
-    backstop.  See spike-outcome-gate.md F4 and design §6.
+    backstop.  Both engines reject it at compile time.
     """
     result = check_regex_portable(r"a{3,1}")
     assert result is None, (
@@ -377,7 +373,7 @@ def test_f5_reversed_class_range_known_over_admission() -> None:
     r"""F5: `[z-a]` (lo > hi range) admitted but both engines reject it -- known gap.
 
     Same class as F4: `lo <= hi` is a semantic predicate a CFG cannot express.
-    Both engines reject it at compile time.  See spike-outcome-gate.md F5 and design §6.
+    Both engines reject it at compile time.
     """
     result = check_regex_portable(r"[z-a]")
     assert result is None, (
@@ -387,7 +383,7 @@ def test_f5_reversed_class_range_known_over_admission() -> None:
 
 
 # ===========================================================================
-# Generator integration tests (design §7)
+# Generator integration tests
 # ===========================================================================
 
 
@@ -410,7 +406,7 @@ def test_non_portable_error_message_has_offset() -> None:
 def test_non_portable_grammar_python_generates_without_error() -> None:
     """A grammar with a POSIX-class regex must NOT raise from the Python generator.
 
-    The portability check is Rust-only (design §5.3).  The Python generator must
+    The portability check is Rust-only.  The Python generator must
     continue to accept the same grammar without error, asserting the deliberate
     asymmetry.
     """
@@ -431,7 +427,7 @@ def test_portable_grammar_rust_generates_without_error() -> None:
 def test_posix_class_motivating_bug_is_rejected() -> None:
     r"""Regression: word := value:/[[:alpha:]]+/ must be rejected at Rust generation time.
 
-    This is the exact grammar from a2-parity.md §90-93, the motivating bug that
+    This is the motivating bug that
     the regex-portability-lint exists to close.  On Python backend it matches 'hello';
     on Rust backend the same grammar matches nothing -- same input, opposite parse tree,
     no error on either side.  The Rust generator must now reject it.
@@ -448,7 +444,7 @@ def test_genparser_cli_exits_nonzero_on_non_portable_grammar() -> None:
     This exercises the genparser.py:386-391 ValueError -> typer.Exit(1) handler —
     the integration surface a real user hits when invoking the CLI.  The test
     spawns a real subprocess so the handler is exercised end-to-end, not just the
-    library ValueError path (design §7: '`genparser gen-rust-parser` on such a grammar
+    library ValueError path ('`genparser gen-rust-parser` on such a grammar
     exits non-zero with the message on stderr').
     """
     grammar_src = "word := value:/[[:alpha:]]+/ ;"
@@ -483,7 +479,7 @@ def test_genparser_cli_exits_nonzero_on_non_portable_grammar() -> None:
 
 
 # ===========================================================================
-# Whole-tree completeness check (design §7 -- under-admission guard)
+# Whole-tree completeness check (under-admission guard)
 # ===========================================================================
 # Every regex in every Rust-parser-target grammar must be portable.
 #
@@ -536,7 +532,7 @@ except Exception as _exc:
 def test_committed_rust_target_grammar_regex_is_portable(grammar_path: str, pattern: str) -> None:
     """Every regex in every committed Rust-parser-target grammar must be portable.
 
-    This is the under-admission guard from design §7: if check_regex_portable flags a
+    This is the under-admission guard: if check_regex_portable flags a
     genuinely-portable pattern in a committed grammar, that is a grammar gap (widen
     regex.fltkg + regen).  If it flags a genuinely-non-portable pattern, that is a
     finding (the committed grammar uses a divergent construct and must be updated).

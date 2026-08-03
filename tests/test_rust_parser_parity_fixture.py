@@ -95,18 +95,18 @@ _CORPUS = [
     ("rec_via_sub", "1x", SUCCESS),
     # "1x+y" → sub-expr: inner:rec_via_sub("1x") . "+", suffix:name("y")
     ("rec_via_sub", "1x+y", SUCCESS),
-    # nest: right-recursive nesting (depth-limit rules, §5)
+    # nest: right-recursive nesting (depth-limit rules)
     ("nest", "42", SUCCESS),
     ("nest", "(42)", SUCCESS),
     ("nest", "((42))", SUCCESS),
-    # nest_sum: left-recursive sum of nests (depth-limit rules, §5)
+    # nest_sum: left-recursive sum of nests (depth-limit rules)
     ("nest_sum", "42", SUCCESS),
     ("nest_sum", "42+99", SUCCESS),
     ("nest_sum", "1+(2)", SUCCESS),
     # nest/nest_sum failures: unclosed paren / no leading operand
     ("nest", "(42", FAIL),
     ("nest_sum", "+42", FAIL),
-    # Portable-but-tricky regex parity cases (design §5.6)
+    # Portable-but-tricky regex parity cases
     # digit_seq: ASCII \d shorthand
     ("digit_seq", "123", SUCCESS),
     ("digit_seq", "abc", FAIL),
@@ -142,6 +142,25 @@ _CORPUS = [
     # anchored_word: ^[a-z]+$ anchors
     ("anchored_word", "hello", SUCCESS),
     ("anchored_word", "hello123", FAIL),
+    # Inline (!) splicing: the callee's children land in the caller, no callee node.
+    ("pair", "a=1", SUCCESS),
+    ("wrapper", "[a=1]", SUCCESS),
+    ("wrapper", "[a]", FAIL),
+    ("opt_wrapper", "<>", SUCCESS),
+    ("opt_wrapper", "<a=1>", SUCCESS),
+    ("rep_wrapper", "{}", SUCCESS),
+    ("rep_wrapper", "{a=1;b=2;}", SUCCESS),
+    # Rust-keyword labels (type, match)
+    ("kw_labels", "abc#7", SUCCESS),
+    ("kw_labels", "abc#x", FAIL),
+    # Terminal-only rule with suppressed delimiters and an optional span label
+    ("quoted", "'ab'", SUCCESS),
+    ("quoted", "'ab5'", SUCCESS),
+    ("quoted", "'ab", FAIL),
+    # Optional span label beside a node label
+    ("mixed_opt", "ab7", SUCCESS),
+    ("mixed_opt", "7", SUCCESS),
+    ("mixed_opt", "ab", FAIL),
     # Failures
     ("num", "abc", FAIL),
     ("name", "123", FAIL),

@@ -92,31 +92,73 @@ def test_transform_is_idempotent():
     assert twice == once
 
 
+def _unexpanded_inline_grammar(*, nested: bool) -> gsm.Grammar:
+    """Build a grammar retaining an INLINE item, bypassing the expanding parse boundary.
+
+    `parse_grammar` expands `!` away, so an INLINE item can only reach
+    `prepare_analysis_grammar` from a programmatic caller that skipped that boundary.
+    """
+    inline_item = gsm.Item(
+        label=None,
+        disposition=gsm.Disposition.INLINE,
+        term=gsm.Identifier("tail"),
+        quantifier=gsm.REQUIRED,
+    )
+    if nested:
+        inline_item = gsm.Item(
+            label=None,
+            disposition=gsm.Disposition.INCLUDE,
+            term=[gsm.Items(items=[inline_item], sep_after=[gsm.Separator.NO_WS])],
+            quantifier=gsm.NOT_REQUIRED,
+        )
+    top = gsm.Rule(
+        name="top",
+        alternatives=[gsm.Items(items=[inline_item], sep_after=[gsm.Separator.NO_WS])],
+    )
+    tail = gsm.Rule(
+        name="tail",
+        alternatives=[
+            gsm.Items(
+                items=[
+                    gsm.Item(
+                        label="mark",
+                        disposition=gsm.Disposition.INCLUDE,
+                        term=gsm.Regex(r"[a-z]+"),
+                        quantifier=gsm.REQUIRED,
+                    )
+                ],
+                sep_after=[gsm.Separator.NO_WS],
+            )
+        ],
+    )
+    return gsm.Grammar(rules=[top, tail], identifiers={"top": top, "tail": tail})
+
+
 def test_inline_grammar_rejected_with_clean_error():
+    with pytest.raises(ValueError, match="inline"):
+        prepare_analysis_grammar(_unexpanded_inline_grammar(nested=False))
+
+
+def test_inline_detection_recurses_into_subexpressions():
+    # The `!` sits inside a sub-expression, so the up-front scan must recurse.
+    with pytest.raises(ValueError, match="inline"):
+        prepare_analysis_grammar(_unexpanded_inline_grammar(nested=True))
+
+
+def test_inline_using_grammar_flows_through_analysis():
+    """After expansion at the parse boundary, an inline-using grammar analyses normally."""
     grammar = parse_grammar(
         """
         top := a:word . !tail ;
         word := name:/[a-z]+/ ;
-        tail := mark:word ;
+        tail := ":" . mark:word ;
         """
     )
+    prepared = prepare_analysis_grammar(grammar)
 
-    with pytest.raises(ValueError, match="inline"):
-        prepare_analysis_grammar(grammar)
-
-
-def test_inline_detection_recurses_into_subexpressions():
-    # The `!` sits inside a parenthesized sub-expression, so the up-front scan must recurse.
-    grammar = parse_grammar(
-        """
-        top := a:word . ( !tail )? ;
-        word := name:/[a-z]+/ ;
-        tail := mark:word ;
-        """
-    )
-
-    with pytest.raises(ValueError, match="inline"):
-        prepare_analysis_grammar(grammar)
+    ana_result = parse_text(generate_parser(prepared), "abc:def", "top")
+    assert ana_result.success
+    assert ":" in set(_iter_span_texts(ana_result.cst))
 
 
 def test_transform_recurses_into_subexpressions():

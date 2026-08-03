@@ -1,10 +1,4 @@
-"""Tests for CST Protocol generation and pyright-checkability.
-
-Design: docs/adr/2026/06/05-cst-type-annotations-regression/design.md
-Tests cover: T1 (protocol generation unit), T2a (member-access fixture), T2b (boundary probe),
-T4 (backend-agnostic swap), T5 (runtime unaffected).
-T3 and T6 are gate-level and run via `make check` / `uv run pyright`.
-"""
+"""Tests for CST Protocol generation and pyright-checkability."""
 
 from __future__ import annotations
 
@@ -188,7 +182,7 @@ def test_cst_module_protocol_has_property_per_rule(
             prop_names.add(item.name)
 
     expected_class_names = {cst_generator.class_name_for_rule_node(r) for r in cst_generator.rule_models}
-    # No Span property: Span is a common-lib type, not a generated-module attribute (§2.1a).
+    # No Span property: Span is a common-lib type, not a generated-module attribute.
     assert expected_class_names == prop_names
 
     # These specific names are accessed by Cst2Gsm at runtime (fltk2gsm.py).
@@ -521,7 +515,7 @@ def test_fltk2gsm_imports_protocol_not_concrete_at_runtime() -> None:
 
 
 # ---------------------------------------------------------------------------
-# Agnostic SpanProtocol consumer surface (delta D3.4 — supersedes §4 item-8 union widening)
+# Agnostic SpanProtocol consumer surface
 # ---------------------------------------------------------------------------
 #
 # The protocol ``span`` field and span-typed children moved from the explicit union

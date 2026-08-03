@@ -1,7 +1,6 @@
 """Tests for nullable-repetition infinite-loop guard + validator gap.
 
-Test order follows design §5: §5.1 (backend guard), §5.2 (validator gap),
-§5.3 (generator rejection), §5.4 (source-text guard placement).
+Test order: backend guard, validator gap, generator rejection, source-text guard placement.
 
 Trigger grammar: rule := (r"a*" .)+
   - outer item: ONE_OR_MORE over a sub-expression
@@ -158,7 +157,7 @@ def _make_trigger_grammar_nil_rule_ref() -> gsm.Grammar:
 
 
 # ---------------------------------------------------------------------------
-# §5.1 Python backend hang/guard test
+# Python backend hang/guard test
 # ---------------------------------------------------------------------------
 
 # The subprocess script builds the trigger grammar, monkeypatches
@@ -233,7 +232,7 @@ _PYTHON_HANG_SCRIPT = textwrap.dedent("""\
 
 
 def test_python_backend_guard():
-    """§5.1 Python backend: loop terminates on empty-match iteration.
+    """Python backend: loop terminates on empty-match iteration.
 
     The subprocess monkeypatches the validator to a no-op so the loop guard is tested
     in isolation; the guard fires and the subprocess prints PASS.
@@ -256,7 +255,7 @@ def test_python_backend_guard():
 
 
 # ---------------------------------------------------------------------------
-# §5.1 Rust backend hang/guard test
+# Rust backend hang/guard test
 # ---------------------------------------------------------------------------
 
 _RUST_MAIN_RS = textwrap.dedent("""\
@@ -325,7 +324,7 @@ def _repo_root() -> pathlib.Path:
 
 
 def test_rust_backend_guard(tmp_path: pathlib.Path, _repo_root: pathlib.Path):
-    """§5.1 Rust backend: loop terminates on empty-match iteration.
+    """Rust backend: loop terminates on empty-match iteration.
 
     The validator is monkeypatched to a no-op so the loop guard is tested in isolation;
     the compiled binary is expected to print PASS.
@@ -414,7 +413,7 @@ def test_rust_backend_guard(tmp_path: pathlib.Path, _repo_root: pathlib.Path):
 
 
 def test_cross_backend_parity():
-    """§5.1 Cross-backend parity: assert expected outcomes shared by both backends.
+    """Cross-backend parity: assert expected outcomes shared by both backends.
 
     Documents the concrete values that test_python_backend_guard (subprocess) and
     test_rust_backend_guard (cargo binary) must both produce.  Does not re-run Python
@@ -436,12 +435,12 @@ def test_cross_backend_parity():
 
 
 # ---------------------------------------------------------------------------
-# §5.2 Validator gap tests
+# Validator gap tests
 # ---------------------------------------------------------------------------
 
 
 class TestValidatorGap:
-    """§5.2 Item.can_be_nil is term-aware."""
+    """Item.can_be_nil is term-aware."""
 
     def test_item_required_nullable_regex_can_be_nil(self):
         """REQUIRED item + nullable Regex(r"a*") → can_be_nil True."""
@@ -539,7 +538,7 @@ class TestValidatorGap:
 # test_item_nil_detection_with_quantifiers that encode the old (buggy) behavior.
 # These must be checked here since we cannot modify the existing test file in this increment.
 class TestItemNilDetectionUpdated:
-    """Correct assertions for Item.can_be_nil (design §4 last bullet)."""
+    """Correct assertions for Item.can_be_nil."""
 
     def test_required_empty_literal_is_nil(self):
         """REQUIRED + empty literal IS nil (contradicts old test assertion)."""
@@ -577,12 +576,12 @@ class TestItemNilDetectionUpdated:
 
 
 # ---------------------------------------------------------------------------
-# §5.3 Generator-level rejection
+# Generator-level rejection
 # ---------------------------------------------------------------------------
 
 
 class TestGeneratorRejection:
-    """§5.3 Both generator entry points reject the trigger grammar."""
+    """Both generator entry points reject the trigger grammar."""
 
     def test_python_generate_parser_rejects_trigger_grammar(self):
         """generate_parser raises ValueError for the trigger grammar (validator wired in)."""
@@ -600,7 +599,7 @@ class TestGeneratorRejection:
 
 
 # ---------------------------------------------------------------------------
-# §5.4 Source-text guard placement (cheap; always runs)
+# Source-text guard placement (cheap; always runs)
 # ---------------------------------------------------------------------------
 
 
@@ -651,7 +650,7 @@ def _make_simple_star_grammar() -> gsm.Grammar:
 
 
 class TestRustGuardPlacement:
-    """§5.4 Rust: generated parser.rs contains the guard immediately after loop opener."""
+    """Generated parser.rs contains the guard immediately after loop opener."""
 
     def test_plus_loop_has_guard_before_pos_update(self):
         """parser.rs for a + grammar contains 'if one_result.pos <= pos { break; }'
@@ -698,7 +697,7 @@ class TestRustGuardPlacement:
 
 
 class TestPythonGuardPlacement:
-    """§5.4 Python: compiled parser contains the guard before pos assignment."""
+    """Compiled Python parser contains the guard before pos assignment."""
 
     def _compile_parser_source(self, grammar: gsm.Grammar) -> str:
         """Compile grammar to Python source via IIR → ast.unparse."""

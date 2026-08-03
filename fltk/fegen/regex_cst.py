@@ -218,6 +218,9 @@ class Regex:
             raise ValueError(msg)
         return children[0] if children else None
 
+    def alternation(self) -> Alternation:
+        return self.child_alternation()
+
 
 Regex.Label.ALTERNATION._fltk_canonical_name = "Regex.Label.ALTERNATION"
 
@@ -381,6 +384,15 @@ class Alternation:
             msg = f"Expected at most one right child but have {n}"
             raise ValueError(msg)
         return children[0] if children else None
+
+    def branch(self) -> Concatenation | None:
+        return self.maybe_branch()
+
+    def left(self) -> Alternation | None:
+        return self.maybe_left()
+
+    def right(self) -> Concatenation | None:
+        return self.maybe_right()
 
 
 Alternation.Label.BRANCH._fltk_canonical_name = "Alternation.Label.BRANCH"
@@ -548,6 +560,15 @@ class Concatenation:
             raise ValueError(msg)
         return children[0] if children else None
 
+    def head(self) -> Concatenation | None:
+        return self.maybe_head()
+
+    def single(self) -> Repetition | None:
+        return self.maybe_single()
+
+    def tail(self) -> Repetition | None:
+        return self.maybe_tail()
+
 
 Concatenation.Label.HEAD._fltk_canonical_name = "Concatenation.Label.HEAD"
 Concatenation.Label.SINGLE._fltk_canonical_name = "Concatenation.Label.SINGLE"
@@ -685,6 +706,12 @@ class Repetition:
             msg = f"Expected at most one quantifier child but have {n}"
             raise ValueError(msg)
         return children[0] if children else None
+
+    def atom(self) -> Atom:
+        return self.child_atom()
+
+    def quantifier(self) -> Quantifier | None:
+        return self.maybe_quantifier()
 
 
 Repetition.Label.ATOM._fltk_canonical_name = "Repetition.Label.ATOM"
@@ -929,6 +956,61 @@ class Quantifier:
             raise ValueError(msg)
         return children[0] if children else None
 
+    def bound(self) -> Bounded | None:
+        return self.maybe_bound()
+
+    def lazy(self) -> fltk.fegen.pyrt.span_protocol.SpanProtocol | None:
+        return self.maybe_lazy()
+
+    def lazy_text(self) -> str | None:
+        child = self.maybe_lazy()
+        if child is None:
+            return None
+        try:
+            return child.text_or_raise()
+        except AttributeError:
+            msg = "Quantifier.lazy_text: child labelled 'lazy' is not a Span"
+            raise TypeError(msg) from None
+
+    def one_or_more(self) -> fltk.fegen.pyrt.span_protocol.SpanProtocol | None:
+        return self.maybe_one_or_more()
+
+    def one_or_more_text(self) -> str | None:
+        child = self.maybe_one_or_more()
+        if child is None:
+            return None
+        try:
+            return child.text_or_raise()
+        except AttributeError:
+            msg = "Quantifier.one_or_more_text: child labelled 'one_or_more' is not a Span"
+            raise TypeError(msg) from None
+
+    def optional(self) -> fltk.fegen.pyrt.span_protocol.SpanProtocol | None:
+        return self.maybe_optional()
+
+    def optional_text(self) -> str | None:
+        child = self.maybe_optional()
+        if child is None:
+            return None
+        try:
+            return child.text_or_raise()
+        except AttributeError:
+            msg = "Quantifier.optional_text: child labelled 'optional' is not a Span"
+            raise TypeError(msg) from None
+
+    def zero_or_more(self) -> fltk.fegen.pyrt.span_protocol.SpanProtocol | None:
+        return self.maybe_zero_or_more()
+
+    def zero_or_more_text(self) -> str | None:
+        child = self.maybe_zero_or_more()
+        if child is None:
+            return None
+        try:
+            return child.text_or_raise()
+        except AttributeError:
+            msg = "Quantifier.zero_or_more_text: child labelled 'zero_or_more' is not a Span"
+            raise TypeError(msg) from None
+
 
 Quantifier.Label.BOUND._fltk_canonical_name = "Quantifier.Label.BOUND"
 Quantifier.Label.LAZY._fltk_canonical_name = "Quantifier.Label.LAZY"
@@ -1091,6 +1173,15 @@ class Bounded:
             raise ValueError(msg)
         return children[0] if children else None
 
+    def count(self) -> Number | None:
+        return self.maybe_count()
+
+    def max(self) -> Number | None:
+        return self.maybe_max()
+
+    def min(self) -> Number | None:
+        return self.maybe_min()
+
 
 Bounded.Label.COUNT._fltk_canonical_name = "Bounded.Label.COUNT"
 Bounded.Label.MAX._fltk_canonical_name = "Bounded.Label.MAX"
@@ -1218,6 +1309,20 @@ class Number:
             msg = f"Expected at most one digits child but have {n}"
             raise ValueError(msg)
         return children[0] if children else None
+
+    def digits(self) -> fltk.fegen.pyrt.span_protocol.SpanProtocol:
+        return self.child_digits()
+
+    def digits_text(self) -> str:
+        child = self.child_digits()
+        try:
+            return child.text_or_raise()
+        except AttributeError:
+            msg = "Number.digits_text: child labelled 'digits' is not a Span"
+            raise TypeError(msg) from None
+
+    def text(self) -> str:
+        return self.span.text_or_raise()
 
 
 Number.Label.DIGITS._fltk_canonical_name = "Number.Label.DIGITS"
@@ -1499,6 +1604,34 @@ class Atom:
             raise ValueError(msg)
         return children[0] if children else None
 
+    def anchor(self) -> Anchor | None:
+        return self.maybe_anchor()
+
+    def char_class(self) -> CharClass | None:
+        return self.maybe_char_class()
+
+    def dot(self) -> Dot | None:
+        return self.maybe_dot()
+
+    def escape(self) -> Escape | None:
+        return self.maybe_escape()
+
+    def group(self) -> Group | None:
+        return self.maybe_group()
+
+    def inline_flags(self) -> InlineFlags | None:
+        return self.maybe_inline_flags()
+
+    def literal_char(self) -> LiteralChar | None:
+        return self.maybe_literal_char()
+
+    def variant(self) -> Label:
+        for label, _child in self.children:
+            if label is not None:
+                return label
+        msg = "Atom.variant: node has no labeled child"
+        raise ValueError(msg)
+
 
 Atom.Label.ANCHOR._fltk_canonical_name = "Atom.Label.ANCHOR"
 Atom.Label.CHAR_CLASS._fltk_canonical_name = "Atom.Label.CHAR_CLASS"
@@ -1630,6 +1763,20 @@ class Dot:
             msg = f"Expected at most one value child but have {n}"
             raise ValueError(msg)
         return children[0] if children else None
+
+    def value(self) -> fltk.fegen.pyrt.span_protocol.SpanProtocol:
+        return self.child_value()
+
+    def value_text(self) -> str:
+        child = self.child_value()
+        try:
+            return child.text_or_raise()
+        except AttributeError:
+            msg = "Dot.value_text: child labelled 'value' is not a Span"
+            raise TypeError(msg) from None
+
+    def text(self) -> str:
+        return self.span.text_or_raise()
 
 
 Dot.Label.VALUE._fltk_canonical_name = "Dot.Label.VALUE"
@@ -1780,6 +1927,42 @@ class Anchor:
             msg = f"Expected at most one dollar child but have {n}"
             raise ValueError(msg)
         return children[0] if children else None
+
+    def caret(self) -> fltk.fegen.pyrt.span_protocol.SpanProtocol | None:
+        return self.maybe_caret()
+
+    def caret_text(self) -> str | None:
+        child = self.maybe_caret()
+        if child is None:
+            return None
+        try:
+            return child.text_or_raise()
+        except AttributeError:
+            msg = "Anchor.caret_text: child labelled 'caret' is not a Span"
+            raise TypeError(msg) from None
+
+    def dollar(self) -> fltk.fegen.pyrt.span_protocol.SpanProtocol | None:
+        return self.maybe_dollar()
+
+    def dollar_text(self) -> str | None:
+        child = self.maybe_dollar()
+        if child is None:
+            return None
+        try:
+            return child.text_or_raise()
+        except AttributeError:
+            msg = "Anchor.dollar_text: child labelled 'dollar' is not a Span"
+            raise TypeError(msg) from None
+
+    def text(self) -> str:
+        return self.span.text_or_raise()
+
+    def variant(self) -> Label:
+        for label, _child in self.children:
+            if label is not None:
+                return label
+        msg = "Anchor.variant: node has no labeled child"
+        raise ValueError(msg)
 
 
 Anchor.Label.CARET._fltk_canonical_name = "Anchor.Label.CARET"
@@ -1944,6 +2127,22 @@ class Group:
             raise ValueError(msg)
         return children[0] if children else None
 
+    def capturing(self) -> Capturing | None:
+        return self.maybe_capturing()
+
+    def flag_group(self) -> FlagGroup | None:
+        return self.maybe_flag_group()
+
+    def non_capturing(self) -> NonCapturing | None:
+        return self.maybe_non_capturing()
+
+    def variant(self) -> Label:
+        for label, _child in self.children:
+            if label is not None:
+                return label
+        msg = "Group.variant: node has no labeled child"
+        raise ValueError(msg)
+
 
 Group.Label.CAPTURING._fltk_canonical_name = "Group.Label.CAPTURING"
 Group.Label.FLAG_GROUP._fltk_canonical_name = "Group.Label.FLAG_GROUP"
@@ -2055,6 +2254,9 @@ class NonCapturing:
             msg = f"Expected at most one body child but have {n}"
             raise ValueError(msg)
         return children[0] if children else None
+
+    def body(self) -> Alternation:
+        return self.child_body()
 
 
 NonCapturing.Label.BODY._fltk_canonical_name = "NonCapturing.Label.BODY"
@@ -2190,6 +2392,12 @@ class FlagGroup:
             raise ValueError(msg)
         return children[0] if children else None
 
+    def body(self) -> Alternation:
+        return self.child_body()
+
+    def flags(self) -> FlagChars:
+        return self.child_flags()
+
 
 FlagGroup.Label.BODY._fltk_canonical_name = "FlagGroup.Label.BODY"
 FlagGroup.Label.FLAGS._fltk_canonical_name = "FlagGroup.Label.FLAGS"
@@ -2301,6 +2509,9 @@ class Capturing:
             raise ValueError(msg)
         return children[0] if children else None
 
+    def body(self) -> Alternation:
+        return self.child_body()
+
 
 Capturing.Label.BODY._fltk_canonical_name = "Capturing.Label.BODY"
 
@@ -2410,6 +2621,9 @@ class InlineFlags:
             msg = f"Expected at most one flags child but have {n}"
             raise ValueError(msg)
         return children[0] if children else None
+
+    def flags(self) -> FlagChars:
+        return self.child_flags()
 
 
 InlineFlags.Label.FLAGS._fltk_canonical_name = "InlineFlags.Label.FLAGS"
@@ -2536,6 +2750,20 @@ class FlagChars:
             msg = f"Expected at most one value child but have {n}"
             raise ValueError(msg)
         return children[0] if children else None
+
+    def value(self) -> fltk.fegen.pyrt.span_protocol.SpanProtocol:
+        return self.child_value()
+
+    def value_text(self) -> str:
+        child = self.child_value()
+        try:
+            return child.text_or_raise()
+        except AttributeError:
+            msg = "FlagChars.value_text: child labelled 'value' is not a Span"
+            raise TypeError(msg) from None
+
+    def text(self) -> str:
+        return self.span.text_or_raise()
 
 
 FlagChars.Label.VALUE._fltk_canonical_name = "FlagChars.Label.VALUE"
@@ -2696,6 +2924,22 @@ class CharClass:
             msg = f"Expected at most one negated child but have {n}"
             raise ValueError(msg)
         return children[0] if children else None
+
+    def class_body(self) -> ClassBody:
+        return self.child_class_body()
+
+    def negated(self) -> fltk.fegen.pyrt.span_protocol.SpanProtocol | None:
+        return self.maybe_negated()
+
+    def negated_text(self) -> str | None:
+        child = self.maybe_negated()
+        if child is None:
+            return None
+        try:
+            return child.text_or_raise()
+        except AttributeError:
+            msg = "CharClass.negated_text: child labelled 'negated' is not a Span"
+            raise TypeError(msg) from None
 
 
 CharClass.Label.CLASS_BODY._fltk_canonical_name = "CharClass.Label.CLASS_BODY"
@@ -2884,6 +3128,35 @@ class ClassBody:
             raise ValueError(msg)
         return children[0] if children else None
 
+    def items(self) -> list[ClassItem]:
+        return list(self.children_items())
+
+    def lead_dash(self) -> fltk.fegen.pyrt.span_protocol.SpanProtocol | None:
+        return self.maybe_lead_dash()
+
+    def lead_dash_text(self) -> str | None:
+        child = self.maybe_lead_dash()
+        if child is None:
+            return None
+        try:
+            return child.text_or_raise()
+        except AttributeError:
+            msg = "ClassBody.lead_dash_text: child labelled 'lead_dash' is not a Span"
+            raise TypeError(msg) from None
+
+    def trail_dash(self) -> fltk.fegen.pyrt.span_protocol.SpanProtocol | None:
+        return self.maybe_trail_dash()
+
+    def trail_dash_text(self) -> str | None:
+        child = self.maybe_trail_dash()
+        if child is None:
+            return None
+        try:
+            return child.text_or_raise()
+        except AttributeError:
+            msg = "ClassBody.trail_dash_text: child labelled 'trail_dash' is not a Span"
+            raise TypeError(msg) from None
+
 
 ClassBody.Label.ITEMS._fltk_canonical_name = "ClassBody.Label.ITEMS"
 ClassBody.Label.LEAD_DASH._fltk_canonical_name = "ClassBody.Label.LEAD_DASH"
@@ -3026,6 +3299,19 @@ class ClassItem:
             raise ValueError(msg)
         return children[0] if children else None
 
+    def class_member(self) -> ClassMember | None:
+        return self.maybe_class_member()
+
+    def class_range(self) -> ClassRange | None:
+        return self.maybe_class_range()
+
+    def variant(self) -> Label:
+        for label, _child in self.children:
+            if label is not None:
+                return label
+        msg = "ClassItem.variant: node has no labeled child"
+        raise ValueError(msg)
+
 
 ClassItem.Label.CLASS_MEMBER._fltk_canonical_name = "ClassItem.Label.CLASS_MEMBER"
 ClassItem.Label.CLASS_RANGE._fltk_canonical_name = "ClassItem.Label.CLASS_RANGE"
@@ -3160,6 +3446,12 @@ class ClassRange:
             msg = f"Expected at most one lo child but have {n}"
             raise ValueError(msg)
         return children[0] if children else None
+
+    def hi(self) -> ClassRangeAtom:
+        return self.child_hi()
+
+    def lo(self) -> ClassRangeAtom:
+        return self.child_lo()
 
 
 ClassRange.Label.HI._fltk_canonical_name = "ClassRange.Label.HI"
@@ -3301,6 +3593,19 @@ class ClassMember:
             msg = f"Expected at most one class_escape child but have {n}"
             raise ValueError(msg)
         return children[0] if children else None
+
+    def class_char(self) -> ClassChar | None:
+        return self.maybe_class_char()
+
+    def class_escape(self) -> ClassEscape | None:
+        return self.maybe_class_escape()
+
+    def variant(self) -> Label:
+        for label, _child in self.children:
+            if label is not None:
+                return label
+        msg = "ClassMember.variant: node has no labeled child"
+        raise ValueError(msg)
 
 
 ClassMember.Label.CLASS_CHAR._fltk_canonical_name = "ClassMember.Label.CLASS_CHAR"
@@ -3445,6 +3750,19 @@ class ClassRangeAtom:
             raise ValueError(msg)
         return children[0] if children else None
 
+    def class_char(self) -> ClassChar | None:
+        return self.maybe_class_char()
+
+    def class_char_escape(self) -> ClassCharEscape | None:
+        return self.maybe_class_char_escape()
+
+    def variant(self) -> Label:
+        for label, _child in self.children:
+            if label is not None:
+                return label
+        msg = "ClassRangeAtom.variant: node has no labeled child"
+        raise ValueError(msg)
+
 
 ClassRangeAtom.Label.CLASS_CHAR._fltk_canonical_name = "ClassRangeAtom.Label.CLASS_CHAR"
 ClassRangeAtom.Label.CLASS_CHAR_ESCAPE._fltk_canonical_name = "ClassRangeAtom.Label.CLASS_CHAR_ESCAPE"
@@ -3572,6 +3890,20 @@ class ClassChar:
             raise ValueError(msg)
         return children[0] if children else None
 
+    def value(self) -> fltk.fegen.pyrt.span_protocol.SpanProtocol:
+        return self.child_value()
+
+    def value_text(self) -> str:
+        child = self.child_value()
+        try:
+            return child.text_or_raise()
+        except AttributeError:
+            msg = "ClassChar.value_text: child labelled 'value' is not a Span"
+            raise TypeError(msg) from None
+
+    def text(self) -> str:
+        return self.span.text_or_raise()
+
 
 ClassChar.Label.VALUE._fltk_canonical_name = "ClassChar.Label.VALUE"
 
@@ -3681,6 +4013,9 @@ class ClassEscape:
             msg = f"Expected at most one body child but have {n}"
             raise ValueError(msg)
         return children[0] if children else None
+
+    def body(self) -> ClassEscapeBody:
+        return self.child_body()
 
 
 ClassEscape.Label.BODY._fltk_canonical_name = "ClassEscape.Label.BODY"
@@ -3824,6 +4159,19 @@ class ClassEscapeBody:
             raise ValueError(msg)
         return children[0] if children else None
 
+    def char_escape(self) -> CharEscape | None:
+        return self.maybe_char_escape()
+
+    def class_shorthand(self) -> ClassShorthand | None:
+        return self.maybe_class_shorthand()
+
+    def variant(self) -> Label:
+        for label, _child in self.children:
+            if label is not None:
+                return label
+        msg = "ClassEscapeBody.variant: node has no labeled child"
+        raise ValueError(msg)
+
 
 ClassEscapeBody.Label.CHAR_ESCAPE._fltk_canonical_name = "ClassEscapeBody.Label.CHAR_ESCAPE"
 ClassEscapeBody.Label.CLASS_SHORTHAND._fltk_canonical_name = "ClassEscapeBody.Label.CLASS_SHORTHAND"
@@ -3935,6 +4283,9 @@ class ClassCharEscape:
             raise ValueError(msg)
         return children[0] if children else None
 
+    def body(self) -> CharEscape:
+        return self.child_body()
+
 
 ClassCharEscape.Label.BODY._fltk_canonical_name = "ClassCharEscape.Label.BODY"
 
@@ -4044,6 +4395,9 @@ class Escape:
             msg = f"Expected at most one body child but have {n}"
             raise ValueError(msg)
         return children[0] if children else None
+
+    def body(self) -> EscapeBody:
+        return self.child_body()
 
 
 Escape.Label.BODY._fltk_canonical_name = "Escape.Label.BODY"
@@ -4251,6 +4605,25 @@ class EscapeBody:
             raise ValueError(msg)
         return children[0] if children else None
 
+    def anchor_escape(self) -> AnchorEscape | None:
+        return self.maybe_anchor_escape()
+
+    def assertion(self) -> Assertion | None:
+        return self.maybe_assertion()
+
+    def char_escape(self) -> CharEscape | None:
+        return self.maybe_char_escape()
+
+    def class_shorthand(self) -> ClassShorthand | None:
+        return self.maybe_class_shorthand()
+
+    def variant(self) -> Label:
+        for label, _child in self.children:
+            if label is not None:
+                return label
+        msg = "EscapeBody.variant: node has no labeled child"
+        raise ValueError(msg)
+
 
 EscapeBody.Label.ANCHOR_ESCAPE._fltk_canonical_name = "EscapeBody.Label.ANCHOR_ESCAPE"
 EscapeBody.Label.ASSERTION._fltk_canonical_name = "EscapeBody.Label.ASSERTION"
@@ -4380,6 +4753,20 @@ class ClassShorthand:
             raise ValueError(msg)
         return children[0] if children else None
 
+    def value(self) -> fltk.fegen.pyrt.span_protocol.SpanProtocol:
+        return self.child_value()
+
+    def value_text(self) -> str:
+        child = self.child_value()
+        try:
+            return child.text_or_raise()
+        except AttributeError:
+            msg = "ClassShorthand.value_text: child labelled 'value' is not a Span"
+            raise TypeError(msg) from None
+
+    def text(self) -> str:
+        return self.span.text_or_raise()
+
 
 ClassShorthand.Label.VALUE._fltk_canonical_name = "ClassShorthand.Label.VALUE"
 
@@ -4506,6 +4893,20 @@ class Assertion:
             raise ValueError(msg)
         return children[0] if children else None
 
+    def value(self) -> fltk.fegen.pyrt.span_protocol.SpanProtocol:
+        return self.child_value()
+
+    def value_text(self) -> str:
+        child = self.child_value()
+        try:
+            return child.text_or_raise()
+        except AttributeError:
+            msg = "Assertion.value_text: child labelled 'value' is not a Span"
+            raise TypeError(msg) from None
+
+    def text(self) -> str:
+        return self.span.text_or_raise()
+
 
 Assertion.Label.VALUE._fltk_canonical_name = "Assertion.Label.VALUE"
 
@@ -4631,6 +5032,20 @@ class AnchorEscape:
             msg = f"Expected at most one value child but have {n}"
             raise ValueError(msg)
         return children[0] if children else None
+
+    def value(self) -> fltk.fegen.pyrt.span_protocol.SpanProtocol:
+        return self.child_value()
+
+    def value_text(self) -> str:
+        child = self.child_value()
+        try:
+            return child.text_or_raise()
+        except AttributeError:
+            msg = "AnchorEscape.value_text: child labelled 'value' is not a Span"
+            raise TypeError(msg) from None
+
+    def text(self) -> str:
+        return self.span.text_or_raise()
 
 
 AnchorEscape.Label.VALUE._fltk_canonical_name = "AnchorEscape.Label.VALUE"
@@ -4838,6 +5253,25 @@ class CharEscape:
             raise ValueError(msg)
         return children[0] if children else None
 
+    def control_escape(self) -> ControlEscape | None:
+        return self.maybe_control_escape()
+
+    def hex_escape(self) -> HexEscape | None:
+        return self.maybe_hex_escape()
+
+    def meta_escape(self) -> MetaEscape | None:
+        return self.maybe_meta_escape()
+
+    def unicode_escape(self) -> UnicodeEscape | None:
+        return self.maybe_unicode_escape()
+
+    def variant(self) -> Label:
+        for label, _child in self.children:
+            if label is not None:
+                return label
+        msg = "CharEscape.variant: node has no labeled child"
+        raise ValueError(msg)
+
 
 CharEscape.Label.CONTROL_ESCAPE._fltk_canonical_name = "CharEscape.Label.CONTROL_ESCAPE"
 CharEscape.Label.HEX_ESCAPE._fltk_canonical_name = "CharEscape.Label.HEX_ESCAPE"
@@ -4967,6 +5401,20 @@ class ControlEscape:
             raise ValueError(msg)
         return children[0] if children else None
 
+    def value(self) -> fltk.fegen.pyrt.span_protocol.SpanProtocol:
+        return self.child_value()
+
+    def value_text(self) -> str:
+        child = self.child_value()
+        try:
+            return child.text_or_raise()
+        except AttributeError:
+            msg = "ControlEscape.value_text: child labelled 'value' is not a Span"
+            raise TypeError(msg) from None
+
+    def text(self) -> str:
+        return self.span.text_or_raise()
+
 
 ControlEscape.Label.VALUE._fltk_canonical_name = "ControlEscape.Label.VALUE"
 
@@ -5092,6 +5540,20 @@ class HexEscape:
             msg = f"Expected at most one digits child but have {n}"
             raise ValueError(msg)
         return children[0] if children else None
+
+    def digits(self) -> fltk.fegen.pyrt.span_protocol.SpanProtocol:
+        return self.child_digits()
+
+    def digits_text(self) -> str:
+        child = self.child_digits()
+        try:
+            return child.text_or_raise()
+        except AttributeError:
+            msg = "HexEscape.digits_text: child labelled 'digits' is not a Span"
+            raise TypeError(msg) from None
+
+    def text(self) -> str:
+        return self.span.text_or_raise()
 
 
 HexEscape.Label.DIGITS._fltk_canonical_name = "HexEscape.Label.DIGITS"
@@ -5219,6 +5681,20 @@ class UnicodeEscape:
             raise ValueError(msg)
         return children[0] if children else None
 
+    def digits(self) -> fltk.fegen.pyrt.span_protocol.SpanProtocol:
+        return self.child_digits()
+
+    def digits_text(self) -> str:
+        child = self.child_digits()
+        try:
+            return child.text_or_raise()
+        except AttributeError:
+            msg = "UnicodeEscape.digits_text: child labelled 'digits' is not a Span"
+            raise TypeError(msg) from None
+
+    def text(self) -> str:
+        return self.span.text_or_raise()
+
 
 UnicodeEscape.Label.DIGITS._fltk_canonical_name = "UnicodeEscape.Label.DIGITS"
 
@@ -5344,6 +5820,20 @@ class MetaEscape:
             msg = f"Expected at most one value child but have {n}"
             raise ValueError(msg)
         return children[0] if children else None
+
+    def value(self) -> fltk.fegen.pyrt.span_protocol.SpanProtocol:
+        return self.child_value()
+
+    def value_text(self) -> str:
+        child = self.child_value()
+        try:
+            return child.text_or_raise()
+        except AttributeError:
+            msg = "MetaEscape.value_text: child labelled 'value' is not a Span"
+            raise TypeError(msg) from None
+
+    def text(self) -> str:
+        return self.span.text_or_raise()
 
 
 MetaEscape.Label.VALUE._fltk_canonical_name = "MetaEscape.Label.VALUE"
@@ -5471,6 +5961,20 @@ class LiteralChar:
             raise ValueError(msg)
         return children[0] if children else None
 
+    def value(self) -> fltk.fegen.pyrt.span_protocol.SpanProtocol:
+        return self.child_value()
+
+    def value_text(self) -> str:
+        child = self.child_value()
+        try:
+            return child.text_or_raise()
+        except AttributeError:
+            msg = "LiteralChar.value_text: child labelled 'value' is not a Span"
+            raise TypeError(msg) from None
+
+    def text(self) -> str:
+        return self.span.text_or_raise()
+
 
 LiteralChar.Label.VALUE._fltk_canonical_name = "LiteralChar.Label.VALUE"
 
@@ -5596,6 +6100,20 @@ class Trivia:
             msg = f"Expected at most one content child but have {n}"
             raise ValueError(msg)
         return children[0] if children else None
+
+    def content(self) -> fltk.fegen.pyrt.span_protocol.SpanProtocol:
+        return self.child_content()
+
+    def content_text(self) -> str:
+        child = self.child_content()
+        try:
+            return child.text_or_raise()
+        except AttributeError:
+            msg = "Trivia.content_text: child labelled 'content' is not a Span"
+            raise TypeError(msg) from None
+
+    def text(self) -> str:
+        return self.span.text_or_raise()
 
 
 Trivia.Label.CONTENT._fltk_canonical_name = "Trivia.Label.CONTENT"

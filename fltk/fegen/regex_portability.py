@@ -17,7 +17,7 @@ Usage::
 
 The checker is wired into the Rust parser generator (``gsm2parser_rs.py``) so that
 every grammar regex is validated at Rust generation time.  The Python generator is not
-checked (the Python ``re`` semantics are the stable baseline; see design §5.3).
+checked (the Python ``re`` semantics are the stable baseline).
 
 Documented limits (constructs admitted by syntax but with a non-ASCII semantic
 residual):
@@ -71,7 +71,7 @@ def check_regex_portable(pattern: str) -> RegexPortabilityIssue | None:
       ``pos < len(pattern)`` (matched a prefix, stopped at a non-portable construct).
 
     The reported ``offset`` is always ``parser.error_tracker.longest_parse_len``
-    (the furthest position any terminal reached before failing, design §5.2).
+    (the furthest position any terminal reached before failing).
     This is the right offset for a recogniser that deliberately *does not* match an
     excluded tail: it points at the deepest position the subset grammar could push
     before stalling -- the location a human wants.  It is populated independently of

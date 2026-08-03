@@ -1803,6 +1803,612 @@ impl Unparser {
         let acc = acc.add_non_trivia(fltk_unparser_core::text(text));
         Some(UnparseResult::new(acc, pos + 1))
     }
+    pub fn unparse_pair(&self, node: &cst::Pair) -> Option<UnparseResult> {
+        let acc = DocAccumulator::new();
+        if let Some(r) = self.unparse_pair__alt0(node, 0, acc) {
+            return Some(r);
+        }
+        None
+    }
+
+    fn unparse_pair__alt0(&self, node: &cst::Pair, pos: usize, acc: DocAccumulator) -> Option<UnparseResult> {
+        let mut pos = pos;
+        let mut acc = acc;
+        let r = self.unparse_pair__alt0__item0(node, pos, acc)?;
+        pos = r.new_pos;
+        acc = r.accumulator;
+        let r = self.unparse_pair__alt0__item1(node, pos, acc)?;
+        pos = r.new_pos;
+        acc = r.accumulator;
+        let r = self.unparse_pair__alt0__item2(node, pos, acc)?;
+        pos = r.new_pos;
+        acc = r.accumulator;
+        Some(UnparseResult::new(acc, pos))
+    }
+
+    fn unparse_pair__alt0__item0(&self, node: &cst::Pair, pos: usize, acc: DocAccumulator) -> Option<UnparseResult> {
+        let children = node.children();
+        if pos >= children.len() {
+            return None;
+        }
+        let child_tuple = &children[pos];
+        if child_tuple.0 != Some(cst::PairLabel::Key) {
+            return None;
+        }
+        let shared = match &child_tuple.1 {
+            cst::PairChild::Name(shared) => shared,
+            _ => return None,
+        };
+        let guard = shared.read();
+        let child_result = self.unparse_name(&guard)?;
+        let acc = acc.add_accumulator(&child_result.accumulator);
+        Some(UnparseResult::new(acc, pos + 1))
+    }
+
+    fn unparse_pair__alt0__item1(&self, _node: &cst::Pair, pos: usize, acc: DocAccumulator) -> Option<UnparseResult> {
+        let acc = acc.add_non_trivia(fltk_unparser_core::text("="));
+        Some(UnparseResult::new(acc, pos))
+    }
+
+    fn unparse_pair__alt0__item2(&self, node: &cst::Pair, pos: usize, acc: DocAccumulator) -> Option<UnparseResult> {
+        let children = node.children();
+        if pos >= children.len() {
+            return None;
+        }
+        let child_tuple = &children[pos];
+        if child_tuple.0 != Some(cst::PairLabel::Val) {
+            return None;
+        }
+        let shared = match &child_tuple.1 {
+            cst::PairChild::Num(shared) => shared,
+            _ => return None,
+        };
+        let guard = shared.read();
+        let child_result = self.unparse_num(&guard)?;
+        let acc = acc.add_accumulator(&child_result.accumulator);
+        Some(UnparseResult::new(acc, pos + 1))
+    }
+    pub fn unparse_wrapper(&self, node: &cst::Wrapper) -> Option<UnparseResult> {
+        let acc = DocAccumulator::new();
+        if let Some(r) = self.unparse_wrapper__alt0(node, 0, acc) {
+            return Some(r);
+        }
+        None
+    }
+
+    fn unparse_wrapper__alt0(&self, node: &cst::Wrapper, pos: usize, acc: DocAccumulator) -> Option<UnparseResult> {
+        let mut pos = pos;
+        let mut acc = acc;
+        let r = self.unparse_wrapper__alt0__item0(node, pos, acc)?;
+        pos = r.new_pos;
+        acc = r.accumulator;
+        let r = self.unparse_wrapper__alt0__item1(node, pos, acc)?;
+        pos = r.new_pos;
+        acc = r.accumulator;
+        let r = self.unparse_wrapper__alt0__item2(node, pos, acc)?;
+        pos = r.new_pos;
+        acc = r.accumulator;
+        Some(UnparseResult::new(acc, pos))
+    }
+
+    fn unparse_wrapper__alt0__item0(&self, _node: &cst::Wrapper, pos: usize, acc: DocAccumulator) -> Option<UnparseResult> {
+        let acc = acc.add_non_trivia(fltk_unparser_core::text("["));
+        Some(UnparseResult::new(acc, pos))
+    }
+
+    fn unparse_wrapper__alt0__item1(&self, node: &cst::Wrapper, pos: usize, acc: DocAccumulator) -> Option<UnparseResult> {
+        self.unparse_wrapper__alt0__item1__alts(node, pos, acc)
+    }
+
+    fn unparse_wrapper__alt0__item1__alts(&self, node: &cst::Wrapper, pos: usize, acc: DocAccumulator) -> Option<UnparseResult> {
+        if let Some(r) = self.unparse_wrapper__alt0__item1__alts__alt0(node, pos, acc) {
+            return Some(r);
+        }
+        None
+    }
+
+    fn unparse_wrapper__alt0__item1__alts__alt0(&self, node: &cst::Wrapper, pos: usize, acc: DocAccumulator) -> Option<UnparseResult> {
+        let mut pos = pos;
+        let mut acc = acc;
+        let r = self.unparse_wrapper__alt0__item1__alts__alt0__item0(node, pos, acc)?;
+        pos = r.new_pos;
+        acc = r.accumulator;
+        let r = self.unparse_wrapper__alt0__item1__alts__alt0__item1(node, pos, acc)?;
+        pos = r.new_pos;
+        acc = r.accumulator;
+        let r = self.unparse_wrapper__alt0__item1__alts__alt0__item2(node, pos, acc)?;
+        pos = r.new_pos;
+        acc = r.accumulator;
+        Some(UnparseResult::new(acc, pos))
+    }
+
+    fn unparse_wrapper__alt0__item1__alts__alt0__item0(&self, node: &cst::Wrapper, pos: usize, acc: DocAccumulator) -> Option<UnparseResult> {
+        let children = node.children();
+        if pos >= children.len() {
+            return None;
+        }
+        let child_tuple = &children[pos];
+        if child_tuple.0 != Some(cst::WrapperLabel::Key) {
+            return None;
+        }
+        let shared = match &child_tuple.1 {
+            cst::WrapperChild::Name(shared) => shared,
+            _ => return None,
+        };
+        let guard = shared.read();
+        let child_result = self.unparse_name(&guard)?;
+        let acc = acc.add_accumulator(&child_result.accumulator);
+        Some(UnparseResult::new(acc, pos + 1))
+    }
+
+    fn unparse_wrapper__alt0__item1__alts__alt0__item1(&self, _node: &cst::Wrapper, pos: usize, acc: DocAccumulator) -> Option<UnparseResult> {
+        let acc = acc.add_non_trivia(fltk_unparser_core::text("="));
+        Some(UnparseResult::new(acc, pos))
+    }
+
+    fn unparse_wrapper__alt0__item1__alts__alt0__item2(&self, node: &cst::Wrapper, pos: usize, acc: DocAccumulator) -> Option<UnparseResult> {
+        let children = node.children();
+        if pos >= children.len() {
+            return None;
+        }
+        let child_tuple = &children[pos];
+        if child_tuple.0 != Some(cst::WrapperLabel::Val) {
+            return None;
+        }
+        let shared = match &child_tuple.1 {
+            cst::WrapperChild::Num(shared) => shared,
+            _ => return None,
+        };
+        let guard = shared.read();
+        let child_result = self.unparse_num(&guard)?;
+        let acc = acc.add_accumulator(&child_result.accumulator);
+        Some(UnparseResult::new(acc, pos + 1))
+    }
+
+    fn unparse_wrapper__alt0__item2(&self, _node: &cst::Wrapper, pos: usize, acc: DocAccumulator) -> Option<UnparseResult> {
+        let acc = acc.add_non_trivia(fltk_unparser_core::text("]"));
+        Some(UnparseResult::new(acc, pos))
+    }
+    pub fn unparse_opt_wrapper(&self, node: &cst::OptWrapper) -> Option<UnparseResult> {
+        let acc = DocAccumulator::new();
+        if let Some(r) = self.unparse_opt_wrapper__alt0(node, 0, acc) {
+            return Some(r);
+        }
+        None
+    }
+
+    fn unparse_opt_wrapper__alt0(&self, node: &cst::OptWrapper, pos: usize, acc: DocAccumulator) -> Option<UnparseResult> {
+        let mut pos = pos;
+        let mut acc = acc;
+        let r = self.unparse_opt_wrapper__alt0__item0(node, pos, acc)?;
+        pos = r.new_pos;
+        acc = r.accumulator;
+        if let Some(r) = self.unparse_opt_wrapper__alt0__item1(node, pos, acc.clone()) {
+            pos = r.new_pos;
+            acc = r.accumulator;
+        }
+        let r = self.unparse_opt_wrapper__alt0__item2(node, pos, acc)?;
+        pos = r.new_pos;
+        acc = r.accumulator;
+        Some(UnparseResult::new(acc, pos))
+    }
+
+    fn unparse_opt_wrapper__alt0__item0(&self, _node: &cst::OptWrapper, pos: usize, acc: DocAccumulator) -> Option<UnparseResult> {
+        let acc = acc.add_non_trivia(fltk_unparser_core::text("<"));
+        Some(UnparseResult::new(acc, pos))
+    }
+
+    fn unparse_opt_wrapper__alt0__item1(&self, node: &cst::OptWrapper, pos: usize, acc: DocAccumulator) -> Option<UnparseResult> {
+        self.unparse_opt_wrapper__alt0__item1__alts(node, pos, acc)
+    }
+
+    fn unparse_opt_wrapper__alt0__item1__alts(&self, node: &cst::OptWrapper, pos: usize, acc: DocAccumulator) -> Option<UnparseResult> {
+        if let Some(r) = self.unparse_opt_wrapper__alt0__item1__alts__alt0(node, pos, acc) {
+            return Some(r);
+        }
+        None
+    }
+
+    fn unparse_opt_wrapper__alt0__item1__alts__alt0(&self, node: &cst::OptWrapper, pos: usize, acc: DocAccumulator) -> Option<UnparseResult> {
+        let mut pos = pos;
+        let mut acc = acc;
+        let r = self.unparse_opt_wrapper__alt0__item1__alts__alt0__item0(node, pos, acc)?;
+        pos = r.new_pos;
+        acc = r.accumulator;
+        let r = self.unparse_opt_wrapper__alt0__item1__alts__alt0__item1(node, pos, acc)?;
+        pos = r.new_pos;
+        acc = r.accumulator;
+        let r = self.unparse_opt_wrapper__alt0__item1__alts__alt0__item2(node, pos, acc)?;
+        pos = r.new_pos;
+        acc = r.accumulator;
+        Some(UnparseResult::new(acc, pos))
+    }
+
+    fn unparse_opt_wrapper__alt0__item1__alts__alt0__item0(&self, node: &cst::OptWrapper, pos: usize, acc: DocAccumulator) -> Option<UnparseResult> {
+        let children = node.children();
+        if pos >= children.len() {
+            return None;
+        }
+        let child_tuple = &children[pos];
+        if child_tuple.0 != Some(cst::OptWrapperLabel::Key) {
+            return None;
+        }
+        let shared = match &child_tuple.1 {
+            cst::OptWrapperChild::Name(shared) => shared,
+            _ => return None,
+        };
+        let guard = shared.read();
+        let child_result = self.unparse_name(&guard)?;
+        let acc = acc.add_accumulator(&child_result.accumulator);
+        Some(UnparseResult::new(acc, pos + 1))
+    }
+
+    fn unparse_opt_wrapper__alt0__item1__alts__alt0__item1(&self, _node: &cst::OptWrapper, pos: usize, acc: DocAccumulator) -> Option<UnparseResult> {
+        let acc = acc.add_non_trivia(fltk_unparser_core::text("="));
+        Some(UnparseResult::new(acc, pos))
+    }
+
+    fn unparse_opt_wrapper__alt0__item1__alts__alt0__item2(&self, node: &cst::OptWrapper, pos: usize, acc: DocAccumulator) -> Option<UnparseResult> {
+        let children = node.children();
+        if pos >= children.len() {
+            return None;
+        }
+        let child_tuple = &children[pos];
+        if child_tuple.0 != Some(cst::OptWrapperLabel::Val) {
+            return None;
+        }
+        let shared = match &child_tuple.1 {
+            cst::OptWrapperChild::Num(shared) => shared,
+            _ => return None,
+        };
+        let guard = shared.read();
+        let child_result = self.unparse_num(&guard)?;
+        let acc = acc.add_accumulator(&child_result.accumulator);
+        Some(UnparseResult::new(acc, pos + 1))
+    }
+
+    fn unparse_opt_wrapper__alt0__item2(&self, _node: &cst::OptWrapper, pos: usize, acc: DocAccumulator) -> Option<UnparseResult> {
+        let acc = acc.add_non_trivia(fltk_unparser_core::text(">"));
+        Some(UnparseResult::new(acc, pos))
+    }
+    pub fn unparse_rep_wrapper(&self, node: &cst::RepWrapper) -> Option<UnparseResult> {
+        let acc = DocAccumulator::new();
+        if let Some(r) = self.unparse_rep_wrapper__alt0(node, 0, acc) {
+            return Some(r);
+        }
+        None
+    }
+
+    fn unparse_rep_wrapper__alt0(&self, node: &cst::RepWrapper, pos: usize, acc: DocAccumulator) -> Option<UnparseResult> {
+        let mut pos = pos;
+        let mut acc = acc;
+        let r = self.unparse_rep_wrapper__alt0__item0(node, pos, acc)?;
+        pos = r.new_pos;
+        acc = r.accumulator;
+        if let Some(r) = self.unparse_rep_wrapper__alt0__item1(node, pos, acc.clone()) {
+            pos = r.new_pos;
+            acc = r.accumulator;
+        }
+        let r = self.unparse_rep_wrapper__alt0__item2(node, pos, acc)?;
+        pos = r.new_pos;
+        acc = r.accumulator;
+        Some(UnparseResult::new(acc, pos))
+    }
+
+    fn unparse_rep_wrapper__alt0__item0(&self, _node: &cst::RepWrapper, pos: usize, acc: DocAccumulator) -> Option<UnparseResult> {
+        let acc = acc.add_non_trivia(fltk_unparser_core::text("{"));
+        Some(UnparseResult::new(acc, pos))
+    }
+
+    fn unparse_rep_wrapper__alt0__item1(&self, node: &cst::RepWrapper, pos: usize, acc: DocAccumulator) -> Option<UnparseResult> {
+        let mut current_pos = pos;
+        let mut acc = acc;
+        while current_pos < node.children().len() {
+            let Some(r) = self.unparse_rep_wrapper__alt0__item1__inner(node, current_pos, acc.clone()) else {
+                break;
+            };
+            acc = r.accumulator;
+            current_pos = r.new_pos;
+        }
+        Some(UnparseResult::new(acc, current_pos))
+    }
+
+    fn unparse_rep_wrapper__alt0__item1__inner(&self, node: &cst::RepWrapper, pos: usize, acc: DocAccumulator) -> Option<UnparseResult> {
+        self.unparse_rep_wrapper__alt0__item1__inner__alts(node, pos, acc)
+    }
+
+    fn unparse_rep_wrapper__alt0__item1__inner__alts(&self, node: &cst::RepWrapper, pos: usize, acc: DocAccumulator) -> Option<UnparseResult> {
+        if let Some(r) = self.unparse_rep_wrapper__alt0__item1__inner__alts__alt0(node, pos, acc) {
+            return Some(r);
+        }
+        None
+    }
+
+    fn unparse_rep_wrapper__alt0__item1__inner__alts__alt0(&self, node: &cst::RepWrapper, pos: usize, acc: DocAccumulator) -> Option<UnparseResult> {
+        let mut pos = pos;
+        let mut acc = acc;
+        let r = self.unparse_rep_wrapper__alt0__item1__inner__alts__alt0__item0(node, pos, acc)?;
+        pos = r.new_pos;
+        acc = r.accumulator;
+        let r = self.unparse_rep_wrapper__alt0__item1__inner__alts__alt0__item1(node, pos, acc)?;
+        pos = r.new_pos;
+        acc = r.accumulator;
+        Some(UnparseResult::new(acc, pos))
+    }
+
+    fn unparse_rep_wrapper__alt0__item1__inner__alts__alt0__item0(&self, node: &cst::RepWrapper, pos: usize, acc: DocAccumulator) -> Option<UnparseResult> {
+        self.unparse_rep_wrapper__alt0__item1__inner__alts__alt0__item0__alts(node, pos, acc)
+    }
+
+    fn unparse_rep_wrapper__alt0__item1__inner__alts__alt0__item0__alts(&self, node: &cst::RepWrapper, pos: usize, acc: DocAccumulator) -> Option<UnparseResult> {
+        if let Some(r) = self.unparse_rep_wrapper__alt0__item1__inner__alts__alt0__item0__alts__alt0(node, pos, acc) {
+            return Some(r);
+        }
+        None
+    }
+
+    fn unparse_rep_wrapper__alt0__item1__inner__alts__alt0__item0__alts__alt0(&self, node: &cst::RepWrapper, pos: usize, acc: DocAccumulator) -> Option<UnparseResult> {
+        let mut pos = pos;
+        let mut acc = acc;
+        let r = self.unparse_rep_wrapper__alt0__item1__inner__alts__alt0__item0__alts__alt0__item0(node, pos, acc)?;
+        pos = r.new_pos;
+        acc = r.accumulator;
+        let r = self.unparse_rep_wrapper__alt0__item1__inner__alts__alt0__item0__alts__alt0__item1(node, pos, acc)?;
+        pos = r.new_pos;
+        acc = r.accumulator;
+        let r = self.unparse_rep_wrapper__alt0__item1__inner__alts__alt0__item0__alts__alt0__item2(node, pos, acc)?;
+        pos = r.new_pos;
+        acc = r.accumulator;
+        Some(UnparseResult::new(acc, pos))
+    }
+
+    fn unparse_rep_wrapper__alt0__item1__inner__alts__alt0__item0__alts__alt0__item0(&self, node: &cst::RepWrapper, pos: usize, acc: DocAccumulator) -> Option<UnparseResult> {
+        let children = node.children();
+        if pos >= children.len() {
+            return None;
+        }
+        let child_tuple = &children[pos];
+        if child_tuple.0 != Some(cst::RepWrapperLabel::Key) {
+            return None;
+        }
+        let shared = match &child_tuple.1 {
+            cst::RepWrapperChild::Name(shared) => shared,
+            _ => return None,
+        };
+        let guard = shared.read();
+        let child_result = self.unparse_name(&guard)?;
+        let acc = acc.add_accumulator(&child_result.accumulator);
+        Some(UnparseResult::new(acc, pos + 1))
+    }
+
+    fn unparse_rep_wrapper__alt0__item1__inner__alts__alt0__item0__alts__alt0__item1(&self, _node: &cst::RepWrapper, pos: usize, acc: DocAccumulator) -> Option<UnparseResult> {
+        let acc = acc.add_non_trivia(fltk_unparser_core::text("="));
+        Some(UnparseResult::new(acc, pos))
+    }
+
+    fn unparse_rep_wrapper__alt0__item1__inner__alts__alt0__item0__alts__alt0__item2(&self, node: &cst::RepWrapper, pos: usize, acc: DocAccumulator) -> Option<UnparseResult> {
+        let children = node.children();
+        if pos >= children.len() {
+            return None;
+        }
+        let child_tuple = &children[pos];
+        if child_tuple.0 != Some(cst::RepWrapperLabel::Val) {
+            return None;
+        }
+        let shared = match &child_tuple.1 {
+            cst::RepWrapperChild::Num(shared) => shared,
+            _ => return None,
+        };
+        let guard = shared.read();
+        let child_result = self.unparse_num(&guard)?;
+        let acc = acc.add_accumulator(&child_result.accumulator);
+        Some(UnparseResult::new(acc, pos + 1))
+    }
+
+    fn unparse_rep_wrapper__alt0__item1__inner__alts__alt0__item1(&self, _node: &cst::RepWrapper, pos: usize, acc: DocAccumulator) -> Option<UnparseResult> {
+        let acc = acc.add_non_trivia(fltk_unparser_core::text(";"));
+        Some(UnparseResult::new(acc, pos))
+    }
+
+    fn unparse_rep_wrapper__alt0__item2(&self, _node: &cst::RepWrapper, pos: usize, acc: DocAccumulator) -> Option<UnparseResult> {
+        let acc = acc.add_non_trivia(fltk_unparser_core::text("}"));
+        Some(UnparseResult::new(acc, pos))
+    }
+    pub fn unparse_kw_labels(&self, node: &cst::KwLabels) -> Option<UnparseResult> {
+        let acc = DocAccumulator::new();
+        if let Some(r) = self.unparse_kw_labels__alt0(node, 0, acc) {
+            return Some(r);
+        }
+        None
+    }
+
+    fn unparse_kw_labels__alt0(&self, node: &cst::KwLabels, pos: usize, acc: DocAccumulator) -> Option<UnparseResult> {
+        let mut pos = pos;
+        let mut acc = acc;
+        let r = self.unparse_kw_labels__alt0__item0(node, pos, acc)?;
+        pos = r.new_pos;
+        acc = r.accumulator;
+        let r = self.unparse_kw_labels__alt0__item1(node, pos, acc)?;
+        pos = r.new_pos;
+        acc = r.accumulator;
+        let r = self.unparse_kw_labels__alt0__item2(node, pos, acc)?;
+        pos = r.new_pos;
+        acc = r.accumulator;
+        Some(UnparseResult::new(acc, pos))
+    }
+
+    fn unparse_kw_labels__alt0__item0(&self, node: &cst::KwLabels, pos: usize, acc: DocAccumulator) -> Option<UnparseResult> {
+        let children = node.children();
+        if pos >= children.len() {
+            return None;
+        }
+        let child_tuple = &children[pos];
+        if child_tuple.0 != Some(cst::KwLabelsLabel::Type) {
+            return None;
+        }
+        let span = match &child_tuple.1 {
+            cst::KwLabelsChild::Span(span) => span,
+            _ => return None,
+        };
+        let Some(text) = span.text() else {
+            panic!("unparse_kw_labels: cannot extract text for regex term label `type` at child position {}: span.text() returned None for {:?}", pos, span);
+        };
+        let acc = acc.add_non_trivia(fltk_unparser_core::text(text));
+        Some(UnparseResult::new(acc, pos + 1))
+    }
+
+    fn unparse_kw_labels__alt0__item1(&self, _node: &cst::KwLabels, pos: usize, acc: DocAccumulator) -> Option<UnparseResult> {
+        let acc = acc.add_non_trivia(fltk_unparser_core::text("#"));
+        Some(UnparseResult::new(acc, pos))
+    }
+
+    fn unparse_kw_labels__alt0__item2(&self, node: &cst::KwLabels, pos: usize, acc: DocAccumulator) -> Option<UnparseResult> {
+        let children = node.children();
+        if pos >= children.len() {
+            return None;
+        }
+        let child_tuple = &children[pos];
+        if child_tuple.0 != Some(cst::KwLabelsLabel::Match) {
+            return None;
+        }
+        let shared = match &child_tuple.1 {
+            cst::KwLabelsChild::Num(shared) => shared,
+            _ => return None,
+        };
+        let guard = shared.read();
+        let child_result = self.unparse_num(&guard)?;
+        let acc = acc.add_accumulator(&child_result.accumulator);
+        Some(UnparseResult::new(acc, pos + 1))
+    }
+    pub fn unparse_quoted(&self, node: &cst::Quoted) -> Option<UnparseResult> {
+        let acc = DocAccumulator::new();
+        if let Some(r) = self.unparse_quoted__alt0(node, 0, acc) {
+            return Some(r);
+        }
+        None
+    }
+
+    fn unparse_quoted__alt0(&self, node: &cst::Quoted, pos: usize, acc: DocAccumulator) -> Option<UnparseResult> {
+        let mut pos = pos;
+        let mut acc = acc;
+        let r = self.unparse_quoted__alt0__item0(node, pos, acc)?;
+        pos = r.new_pos;
+        acc = r.accumulator;
+        let r = self.unparse_quoted__alt0__item1(node, pos, acc)?;
+        pos = r.new_pos;
+        acc = r.accumulator;
+        if let Some(r) = self.unparse_quoted__alt0__item2(node, pos, acc.clone()) {
+            pos = r.new_pos;
+            acc = r.accumulator;
+        }
+        let r = self.unparse_quoted__alt0__item3(node, pos, acc)?;
+        pos = r.new_pos;
+        acc = r.accumulator;
+        Some(UnparseResult::new(acc, pos))
+    }
+
+    fn unparse_quoted__alt0__item0(&self, _node: &cst::Quoted, pos: usize, acc: DocAccumulator) -> Option<UnparseResult> {
+        let acc = acc.add_non_trivia(fltk_unparser_core::text("'"));
+        Some(UnparseResult::new(acc, pos))
+    }
+
+    fn unparse_quoted__alt0__item1(&self, node: &cst::Quoted, pos: usize, acc: DocAccumulator) -> Option<UnparseResult> {
+        let children = node.children();
+        if pos >= children.len() {
+            return None;
+        }
+        let child_tuple = &children[pos];
+        if child_tuple.0 != Some(cst::QuotedLabel::Value) {
+            return None;
+        }
+        let cst::QuotedChild::Span(span) = &child_tuple.1;
+        let Some(text) = span.text() else {
+            panic!("unparse_quoted: cannot extract text for regex term label `value` at child position {}: span.text() returned None for {:?}", pos, span);
+        };
+        let acc = acc.add_non_trivia(fltk_unparser_core::text(text));
+        Some(UnparseResult::new(acc, pos + 1))
+    }
+
+    fn unparse_quoted__alt0__item2(&self, node: &cst::Quoted, pos: usize, acc: DocAccumulator) -> Option<UnparseResult> {
+        let children = node.children();
+        if pos >= children.len() {
+            return None;
+        }
+        let child_tuple = &children[pos];
+        if child_tuple.0 != Some(cst::QuotedLabel::Tail) {
+            return None;
+        }
+        let cst::QuotedChild::Span(span) = &child_tuple.1;
+        let Some(text) = span.text() else {
+            panic!("unparse_quoted: cannot extract text for regex term label `tail` at child position {}: span.text() returned None for {:?}", pos, span);
+        };
+        let acc = acc.add_non_trivia(fltk_unparser_core::text(text));
+        Some(UnparseResult::new(acc, pos + 1))
+    }
+
+    fn unparse_quoted__alt0__item3(&self, _node: &cst::Quoted, pos: usize, acc: DocAccumulator) -> Option<UnparseResult> {
+        let acc = acc.add_non_trivia(fltk_unparser_core::text("'"));
+        Some(UnparseResult::new(acc, pos))
+    }
+    pub fn unparse_mixed_opt(&self, node: &cst::MixedOpt) -> Option<UnparseResult> {
+        let acc = DocAccumulator::new();
+        if let Some(r) = self.unparse_mixed_opt__alt0(node, 0, acc) {
+            return Some(r);
+        }
+        None
+    }
+
+    fn unparse_mixed_opt__alt0(&self, node: &cst::MixedOpt, pos: usize, acc: DocAccumulator) -> Option<UnparseResult> {
+        let mut pos = pos;
+        let mut acc = acc;
+        if let Some(r) = self.unparse_mixed_opt__alt0__item0(node, pos, acc.clone()) {
+            pos = r.new_pos;
+            acc = r.accumulator;
+        }
+        let r = self.unparse_mixed_opt__alt0__item1(node, pos, acc)?;
+        pos = r.new_pos;
+        acc = r.accumulator;
+        Some(UnparseResult::new(acc, pos))
+    }
+
+    fn unparse_mixed_opt__alt0__item0(&self, node: &cst::MixedOpt, pos: usize, acc: DocAccumulator) -> Option<UnparseResult> {
+        let children = node.children();
+        if pos >= children.len() {
+            return None;
+        }
+        let child_tuple = &children[pos];
+        if child_tuple.0 != Some(cst::MixedOptLabel::Key) {
+            return None;
+        }
+        let span = match &child_tuple.1 {
+            cst::MixedOptChild::Span(span) => span,
+            _ => return None,
+        };
+        let Some(text) = span.text() else {
+            panic!("unparse_mixed_opt: cannot extract text for regex term label `key` at child position {}: span.text() returned None for {:?}", pos, span);
+        };
+        let acc = acc.add_non_trivia(fltk_unparser_core::text(text));
+        Some(UnparseResult::new(acc, pos + 1))
+    }
+
+    fn unparse_mixed_opt__alt0__item1(&self, node: &cst::MixedOpt, pos: usize, acc: DocAccumulator) -> Option<UnparseResult> {
+        let children = node.children();
+        if pos >= children.len() {
+            return None;
+        }
+        let child_tuple = &children[pos];
+        if child_tuple.0 != Some(cst::MixedOptLabel::Node) {
+            return None;
+        }
+        let shared = match &child_tuple.1 {
+            cst::MixedOptChild::Num(shared) => shared,
+            _ => return None,
+        };
+        let guard = shared.read();
+        let child_result = self.unparse_num(&guard)?;
+        let acc = acc.add_accumulator(&child_result.accumulator);
+        Some(UnparseResult::new(acc, pos + 1))
+    }
     pub fn unparse__trivia(&self, node: &cst::Trivia) -> Option<UnparseResult> {
         let acc = DocAccumulator::new();
         if let Some(r) = self.unparse__trivia__alt0(node, 0, acc) {
@@ -2480,6 +3086,146 @@ mod python_bindings {
         fn unparse_anchored_word_doc(&self, node: PyRef<'_, cst::PyAnchoredWord>) -> PyResult<Option<PyDoc>> {
             let guard = node.shared().read();
             let Some(r) = self.inner.unparse_anchored_word(&guard) else {
+                return Ok(None);
+            };
+            let resolved = resolve_spacing_specs(r.accumulator.doc());
+            Ok(Some(PyDoc { resolved }))
+        }
+
+        #[pyo3(signature = (node, max_width = 80, indent_width = 4))]
+        fn unparse_pair(&self, node: PyRef<'_, cst::PyPair>, max_width: usize, indent_width: usize) -> PyResult<Option<String>> {
+            let guard = node.shared().read();
+            let Some(r) = self.inner.unparse_pair(&guard) else {
+                return Ok(None);
+            };
+            let resolved = resolve_spacing_specs(r.accumulator.doc());
+            let cfg = RendererConfig { indent_width, max_width };
+            Ok(Some(Renderer::new(cfg).render(&resolved)))
+        }
+
+        fn unparse_pair_doc(&self, node: PyRef<'_, cst::PyPair>) -> PyResult<Option<PyDoc>> {
+            let guard = node.shared().read();
+            let Some(r) = self.inner.unparse_pair(&guard) else {
+                return Ok(None);
+            };
+            let resolved = resolve_spacing_specs(r.accumulator.doc());
+            Ok(Some(PyDoc { resolved }))
+        }
+
+        #[pyo3(signature = (node, max_width = 80, indent_width = 4))]
+        fn unparse_wrapper(&self, node: PyRef<'_, cst::PyWrapper>, max_width: usize, indent_width: usize) -> PyResult<Option<String>> {
+            let guard = node.shared().read();
+            let Some(r) = self.inner.unparse_wrapper(&guard) else {
+                return Ok(None);
+            };
+            let resolved = resolve_spacing_specs(r.accumulator.doc());
+            let cfg = RendererConfig { indent_width, max_width };
+            Ok(Some(Renderer::new(cfg).render(&resolved)))
+        }
+
+        fn unparse_wrapper_doc(&self, node: PyRef<'_, cst::PyWrapper>) -> PyResult<Option<PyDoc>> {
+            let guard = node.shared().read();
+            let Some(r) = self.inner.unparse_wrapper(&guard) else {
+                return Ok(None);
+            };
+            let resolved = resolve_spacing_specs(r.accumulator.doc());
+            Ok(Some(PyDoc { resolved }))
+        }
+
+        #[pyo3(signature = (node, max_width = 80, indent_width = 4))]
+        fn unparse_opt_wrapper(&self, node: PyRef<'_, cst::PyOptWrapper>, max_width: usize, indent_width: usize) -> PyResult<Option<String>> {
+            let guard = node.shared().read();
+            let Some(r) = self.inner.unparse_opt_wrapper(&guard) else {
+                return Ok(None);
+            };
+            let resolved = resolve_spacing_specs(r.accumulator.doc());
+            let cfg = RendererConfig { indent_width, max_width };
+            Ok(Some(Renderer::new(cfg).render(&resolved)))
+        }
+
+        fn unparse_opt_wrapper_doc(&self, node: PyRef<'_, cst::PyOptWrapper>) -> PyResult<Option<PyDoc>> {
+            let guard = node.shared().read();
+            let Some(r) = self.inner.unparse_opt_wrapper(&guard) else {
+                return Ok(None);
+            };
+            let resolved = resolve_spacing_specs(r.accumulator.doc());
+            Ok(Some(PyDoc { resolved }))
+        }
+
+        #[pyo3(signature = (node, max_width = 80, indent_width = 4))]
+        fn unparse_rep_wrapper(&self, node: PyRef<'_, cst::PyRepWrapper>, max_width: usize, indent_width: usize) -> PyResult<Option<String>> {
+            let guard = node.shared().read();
+            let Some(r) = self.inner.unparse_rep_wrapper(&guard) else {
+                return Ok(None);
+            };
+            let resolved = resolve_spacing_specs(r.accumulator.doc());
+            let cfg = RendererConfig { indent_width, max_width };
+            Ok(Some(Renderer::new(cfg).render(&resolved)))
+        }
+
+        fn unparse_rep_wrapper_doc(&self, node: PyRef<'_, cst::PyRepWrapper>) -> PyResult<Option<PyDoc>> {
+            let guard = node.shared().read();
+            let Some(r) = self.inner.unparse_rep_wrapper(&guard) else {
+                return Ok(None);
+            };
+            let resolved = resolve_spacing_specs(r.accumulator.doc());
+            Ok(Some(PyDoc { resolved }))
+        }
+
+        #[pyo3(signature = (node, max_width = 80, indent_width = 4))]
+        fn unparse_kw_labels(&self, node: PyRef<'_, cst::PyKwLabels>, max_width: usize, indent_width: usize) -> PyResult<Option<String>> {
+            let guard = node.shared().read();
+            let Some(r) = self.inner.unparse_kw_labels(&guard) else {
+                return Ok(None);
+            };
+            let resolved = resolve_spacing_specs(r.accumulator.doc());
+            let cfg = RendererConfig { indent_width, max_width };
+            Ok(Some(Renderer::new(cfg).render(&resolved)))
+        }
+
+        fn unparse_kw_labels_doc(&self, node: PyRef<'_, cst::PyKwLabels>) -> PyResult<Option<PyDoc>> {
+            let guard = node.shared().read();
+            let Some(r) = self.inner.unparse_kw_labels(&guard) else {
+                return Ok(None);
+            };
+            let resolved = resolve_spacing_specs(r.accumulator.doc());
+            Ok(Some(PyDoc { resolved }))
+        }
+
+        #[pyo3(signature = (node, max_width = 80, indent_width = 4))]
+        fn unparse_quoted(&self, node: PyRef<'_, cst::PyQuoted>, max_width: usize, indent_width: usize) -> PyResult<Option<String>> {
+            let guard = node.shared().read();
+            let Some(r) = self.inner.unparse_quoted(&guard) else {
+                return Ok(None);
+            };
+            let resolved = resolve_spacing_specs(r.accumulator.doc());
+            let cfg = RendererConfig { indent_width, max_width };
+            Ok(Some(Renderer::new(cfg).render(&resolved)))
+        }
+
+        fn unparse_quoted_doc(&self, node: PyRef<'_, cst::PyQuoted>) -> PyResult<Option<PyDoc>> {
+            let guard = node.shared().read();
+            let Some(r) = self.inner.unparse_quoted(&guard) else {
+                return Ok(None);
+            };
+            let resolved = resolve_spacing_specs(r.accumulator.doc());
+            Ok(Some(PyDoc { resolved }))
+        }
+
+        #[pyo3(signature = (node, max_width = 80, indent_width = 4))]
+        fn unparse_mixed_opt(&self, node: PyRef<'_, cst::PyMixedOpt>, max_width: usize, indent_width: usize) -> PyResult<Option<String>> {
+            let guard = node.shared().read();
+            let Some(r) = self.inner.unparse_mixed_opt(&guard) else {
+                return Ok(None);
+            };
+            let resolved = resolve_spacing_specs(r.accumulator.doc());
+            let cfg = RendererConfig { indent_width, max_width };
+            Ok(Some(Renderer::new(cfg).render(&resolved)))
+        }
+
+        fn unparse_mixed_opt_doc(&self, node: PyRef<'_, cst::PyMixedOpt>) -> PyResult<Option<PyDoc>> {
+            let guard = node.shared().read();
+            let Some(r) = self.inner.unparse_mixed_opt(&guard) else {
                 return Ok(None);
             };
             let resolved = resolve_spacing_specs(r.accumulator.doc());

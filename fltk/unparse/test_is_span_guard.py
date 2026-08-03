@@ -1,4 +1,4 @@
-"""Tests for the dual-backend span guard in generated unparsers (design §2.6a).
+"""Tests for the dual-backend span guard in generated unparsers.
 
 The generated unparser is a backend-agnostic CST consumer: it must recognize a
 span child structurally — ``terminalsrc.Span`` from a Python parser or

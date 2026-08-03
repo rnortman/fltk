@@ -136,7 +136,7 @@ class Span:
         # - Normal text without trailing '\n': sentinel = src_len so that
         #   Span(line_start, src_len) covers all characters including the last one.
         # - Empty text (src_len=0): sentinel = -1, which makes pos=-1 (from the EOF clamp)
-        #   yield col=-1 — the inherited corner case documented in the design (§3).
+        #   yield col=-1 — the inherited corner case for empty text.
         ends_with_newline = bool(line_ends) and line_ends[-1] == src_len - 1
         if not ends_with_newline:
             line_ends.append(src_len if src_len > 0 else -1)

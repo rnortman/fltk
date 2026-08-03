@@ -375,31 +375,31 @@ class TestNodeStructure:
         assert "pub struct Trivia {" in poc_source
 
     def test_span_field_native(self, poc_source: str) -> None:
-        """§2.2: span field is native Span, not a Python-object type."""
+        """Span field is native Span, not a Python-object type."""
         assert "span: Span," in poc_source
         assert "span: PyObject," not in poc_source
         assert "span: Py<PyAny>," not in poc_source
 
     def test_span_getter_emitted(self, poc_source: str) -> None:
-        """§2.2: explicit span getter returning fltk._native.Span (cross-cdylib via Py<pyo3::PyAny>)."""
+        """Explicit span getter returning fltk._native.Span (cross-cdylib via Py<pyo3::PyAny>)."""
         assert "fn span(&self, py: Python<'_>) -> pyo3::PyResult<Py<pyo3::PyAny>> {" in poc_source
 
     def test_span_setter_emitted(self, poc_source: str) -> None:
-        """§2.2: explicit span setter (cross-cdylib compatible via extract_span helper).
+        """Explicit span setter (cross-cdylib compatible via extract_span helper).
         Phase 1: handle is frozen, setter takes &self (mutation through RwLock).
         """
         set_span_sig = "fn set_span(&self, py: Python<'_>, value: &Bound<'_, pyo3::PyAny>) -> pyo3::PyResult<()> {"
         assert set_span_sig in poc_source
 
     def test_children_field_native_vec(self, poc_source: str) -> None:
-        """§2.3: children field is a native Vec, not Py<PyList>."""
+        """Children field is a native Vec, not Py<PyList>."""
         # Phase 2: label enum is IdentifierLabel (CamelCase Rust name).
         assert "children: Vec<(Option<IdentifierLabel>, IdentifierChild)>," in poc_source
         assert "children: Py<PyList>," not in poc_source
         assert "#[pyo3(get)]\n    children:" not in poc_source
 
     def test_children_getter_emitted(self, poc_source: str) -> None:
-        """§2.3: explicit children getter rebuilds PyList from Vec.
+        """Explicit children getter rebuilds PyList from Vec.
 
         The return type uses the fully-qualified pyo3::types::PyList path to avoid
         collision with grammar rules named 'list' generating `pub struct PyList`.
@@ -407,7 +407,7 @@ class TestNodeStructure:
         assert "fn children(&self, py: Python<'_>) -> pyo3::PyResult<Py<pyo3::types::PyList>> {" in poc_source
 
     def test_child_enum_emitted(self, poc_source: str) -> None:
-        """§2.3: per-node child enum is emitted for each node class.
+        """Per-node child enum is emitted for each node class.
         Phase 1: node-typed variants use Shared<T> instead of Box<T>.
         """
         assert "pub enum IdentifierChild {" in poc_source
@@ -426,7 +426,7 @@ class TestNodeStructure:
         assert "fn Label(py: Python<'_>) -> pyo3::PyResult<Py<pyo3::PyAny>> {" in poc_source
 
     def test_extend_children_emitted(self, poc_source: str) -> None:
-        """§2.3/§2.5: extend_children method is emitted for each node class.
+        """extend_children method is emitted for each node class.
         Phase 1: handle is frozen (&self); takes handle ref, not PyRef.
         """
         assert "fn extend_children(" in poc_source
@@ -522,12 +522,12 @@ class TestRegisterClasses:
 
 
 # ---------------------------------------------------------------------------
-# cfg feature gate coverage (§2.3 of design)
+# cfg feature gate coverage
 # ---------------------------------------------------------------------------
 
 
 class TestCfgFeatureGate:
-    """Verify cfg-gate placement per design §2.3.
+    """Verify cfg-gate placement.
 
     Enums (NodeKind, label enums) use dual-cfg blocks rather than cfg_attr on variant helper
     attributes.  pyo3 0.23 validates helper attributes before proc-macro expansion, so
@@ -1004,40 +1004,40 @@ class TestKindGetter:
 
 
 # ---------------------------------------------------------------------------
-# §4 item 2: No-PyObject audit (generator source level)
+# No-PyObject audit (generator source level)
 # ---------------------------------------------------------------------------
 
 
 class TestNoPyObjectAudit:
     def test_no_pyobject_span_field(self, poc_source: str) -> None:
-        """§4 item 2: No generated node struct has span stored as a Python-object type."""
+        """No generated node struct has span stored as a Python-object type."""
         assert "span: PyObject," not in poc_source
         assert "span: Py<PyAny>," not in poc_source
 
     def test_no_py_pylist_children(self, poc_source: str) -> None:
-        """§4 item 2 (§2.3): children field is now a native Vec, not Py<PyList>."""
+        """Children field is a native Vec, not Py<PyList>."""
         assert "children: Py<PyList>," not in poc_source
         # Native Vec storage for children
         assert "Vec<(Option<" in poc_source
 
     def test_no_unknown_span_cache_in_fegen(self, fegen_source: str) -> None:
-        """§4 item 2: UNKNOWN_SPAN_CACHE not emitted for fegen grammar either."""
+        """UNKNOWN_SPAN_CACHE not emitted for fegen grammar either."""
         assert "UNKNOWN_SPAN_CACHE" not in fegen_source
 
     def test_span_uses_native_sentinel(self, poc_source: str) -> None:
-        """§2.2: new method uses Span::unknown() sentinel, not Python import."""
+        """new method uses Span::unknown() sentinel, not Python import."""
         assert "Span::unknown" in poc_source
         assert "UnknownSpan" not in poc_source
 
 
 # ---------------------------------------------------------------------------
-# §4 item 4: Native equality — generator source level
+# Native equality — generator source level
 # ---------------------------------------------------------------------------
 
 
 class TestNativeEqualityGenerated:
     def test_eq_uses_native_structural_equality(self, poc_source: str) -> None:
-        """§2.4: __eq__ delegates to Shared<T>::PartialEq, not Python .eq().
+        """__eq__ delegates to Shared<T>::PartialEq, not Python .eq().
 
         Phase 1: the handle's __eq__ delegates to Shared<T>::PartialEq (which applies the
         ptr_eq short-circuit then deep structural comparison) rather than inlining the logic.
@@ -1049,15 +1049,15 @@ class TestNativeEqualityGenerated:
         assert "*self.inner.read() == *other_handle.inner.read()" not in poc_source
 
     def test_eq_no_python_span_eq(self, poc_source: str) -> None:
-        """§2.4: Python .eq() on span must not appear in __eq__."""
+        """Python .eq() on span must not appear in __eq__."""
         assert "self.span.bind(py).eq(" not in poc_source
 
     def test_eq_no_python_children_eq(self, poc_source: str) -> None:
-        """§2.4: Python .eq() on children must not appear in __eq__."""
+        """Python .eq() on children must not appear in __eq__."""
         assert "self.children.bind(py).eq(" not in poc_source
 
     def test_repr_uses_native_span_repr(self, poc_source: str) -> None:
-        """§2.4: __repr__ uses native span start()/end() accessors, not Python .repr() on a bound obj.
+        """__repr__ uses native span start()/end() accessors, not Python .repr() on a bound obj.
 
         Phase 1: the handle's __repr__ acquires a read guard on the inner Shared and
         accesses span through it (guard.span.start(), guard.span.end()).
@@ -1101,19 +1101,19 @@ class TestPhase1HandleStructure:
 
 
 # ---------------------------------------------------------------------------
-# generate_pyi: .pyi stub emission (§2.1 of design)
+# generate_pyi: .pyi stub emission
 # ---------------------------------------------------------------------------
 
 _PROTO_MODULE = "fltk.fegen.fltk_cst_protocol"
 
 
 # ---------------------------------------------------------------------------
-# generate_protocol: protocol-module emission (§2.2 of design)
+# generate_protocol: protocol-module emission
 # ---------------------------------------------------------------------------
 
 
 class TestGenerateProtocol:
-    """RustCstGenerator.generate_protocol emits backend-agnostic protocol source (§2.2)."""
+    """RustCstGenerator.generate_protocol emits backend-agnostic protocol source."""
 
     def test_ruff_noqa_header(self) -> None:
         """Protocol text begins with the same '# ruff: noqa: N802' prefix as the Python path."""
@@ -1228,7 +1228,7 @@ class TestGeneratePyiHeader:
         assert "NodeKind = _proto.NodeKind" in poc_pyi
 
     def test_no_module_level_span(self, poc_pyi: str) -> None:
-        """No module-level Span: neither backend's generated module exports one (§2.1a)."""
+        """No module-level Span: neither backend's generated module exports one."""
         lines = poc_pyi.splitlines()
         for line in lines:
             stripped = line.strip()
@@ -1248,7 +1248,7 @@ class TestGeneratePyiClasses:
         """Labelled rules have 'Label = _proto.<Class>.Label' (type alias, not ClassVar).
 
         ClassVar annotation causes pyright reportRedeclaration when checking structural
-        compatibility with the protocol's nested Label class (§3 — self-check must pass).
+        compatibility with the protocol's nested Label class (self-check must pass).
         """
         assert "Label = _proto.Identifier.Label" in poc_pyi
         assert "Label = _proto.Items.Label" in poc_pyi
@@ -1328,7 +1328,7 @@ class TestGeneratePyiPerLabelAccessors:
         assert "def extend_name(self, children:" in poc_pyi
 
     def test_children_label_typed_iterator(self, poc_pyi: str) -> None:
-        """children_<label> must be Iterator[T], NOT list[T] (§3 of design)."""
+        """children_<label> must be Iterator[T], NOT list[T]."""
         assert "def children_name(self) -> typing.Iterator[" in poc_pyi
         # Must not be list
         assert "def children_name(self) -> list[" not in poc_pyi
@@ -1348,7 +1348,7 @@ class TestGeneratePyiPerLabelAccessors:
 
 
 class TestMutatorsEmittedRsPymethods:
-    """§4.1: Generated Rust source contains all four pymethod mutators with expected signatures."""
+    """Generated Rust source contains all four pymethod mutators with expected signatures."""
 
     def test_insert_pymethod_present(self, poc_source: str) -> None:
         """fn insert pymethod is emitted on each node."""
@@ -1427,7 +1427,7 @@ class TestMutatorsEmittedRsPymethods:
 
 
 class TestNativeMutatorsEmittedRs:
-    """§4.1: Native (non-pymethod) mutators insert_child/remove_child/replace_child/clear_children are emitted."""
+    """Native (non-pymethod) mutators insert_child/remove_child/replace_child/clear_children are emitted."""
 
     def test_insert_child_native(self, poc_source: str) -> None:
         """pub fn insert_child is emitted on each node struct."""
@@ -1483,7 +1483,7 @@ class TestNativeMutatorsEmittedRs:
 
 
 class TestMutatorsEmittedPyi:
-    """§4.1: .pyi stubs contain all four mutator method signatures."""
+    """.pyi stubs contain all four mutator method signatures."""
 
     def test_insert_present_pyi(self, poc_pyi: str) -> None:
         """insert stub is present in the .pyi."""
@@ -1540,7 +1540,7 @@ class TestMutatorsEmittedPyi:
             assert match is not None, "replace_at must return None in .pyi"
 
     def test_mutators_after_generic_child(self, poc_pyi: str) -> None:
-        """Mutators appear after def child(self) in the stub (§2.3 ordering)."""
+        """Mutators appear after def child(self) in the stub."""
         idx_child = poc_pyi.find("def child(self)")
         idx_insert = poc_pyi.find("def insert(self,")
         assert idx_child != -1, "def child not found in poc_pyi"
@@ -1556,7 +1556,7 @@ class TestMutatorsEmittedPyi:
 
 
 class TestRegistrySnapshotEmittedRs:
-    """§4.1 / §2.3: _registry_snapshot pyfunction is emitted per module (test-introspection feature)."""
+    """_registry_snapshot pyfunction is emitted per module (test-introspection feature)."""
 
     def test_registry_snapshot_pyfunction_present(self, poc_source: str) -> None:
         """_registry_snapshot is emitted as a #[pyfunction] in register_classes."""
@@ -1572,7 +1572,7 @@ class TestRegistrySnapshotEmittedRs:
 
 
 class TestMutatorNoCollisionRs:
-    """§2.1: no per-label generated name can equal any fixed mutator name."""
+    """No per-label generated name can equal any fixed mutator name."""
 
     def test_fixed_mutator_names_not_reachable_from_per_label_prefixes(self) -> None:
         """Per-label prefix families (append_/extend_/children_/child_/maybe_) never produce a fixed mutator name."""
@@ -1651,7 +1651,7 @@ class TestGeneratePyiClassLabelSetMatchesRs:
 
 
 # ---------------------------------------------------------------------------
-# Reserved label rejection (§4.2 of design ADR 2026/06/10-rust-idiomatic-cst-api)
+# Reserved label rejection
 # ---------------------------------------------------------------------------
 
 
@@ -1692,9 +1692,65 @@ class TestReservedLabelRejection:
         gen = RustCstGenerator(grammar)
         assert gen is not None
 
+    def _make_nested_label_grammar(
+        self, label: str, disposition: gsm.Disposition = gsm.Disposition.INCLUDE
+    ) -> gsm.Grammar:
+        """Single-rule grammar whose second item is a sub-expression carrying `label`."""
+        inner = gsm.Items(
+            items=[
+                gsm.Item(
+                    label=label,
+                    disposition=disposition,
+                    term=gsm.Regex(r"[0-9]+"),
+                    quantifier=gsm.REQUIRED,
+                ),
+            ],
+            sep_after=[gsm.Separator.NO_WS],
+        )
+        rule = gsm.Rule(
+            name="node",
+            alternatives=[
+                gsm.Items(
+                    items=[
+                        gsm.Item(
+                            label="value",
+                            disposition=gsm.Disposition.INCLUDE,
+                            term=gsm.Regex(r"[a-z]+"),
+                            quantifier=gsm.REQUIRED,
+                        ),
+                        gsm.Item(
+                            label=None,
+                            disposition=gsm.Disposition.INCLUDE,
+                            term=[inner],
+                            quantifier=gsm.REQUIRED,
+                        ),
+                    ],
+                    sep_after=[gsm.Separator.NO_WS, gsm.Separator.NO_WS],
+                ),
+            ],
+        )
+        return gsm.Grammar(rules=(rule,), identifiers={"node": rule})
+
+    def test_reserved_label_inside_sub_expression_rejected(self) -> None:
+        """Labels nested in `( ... )` reach the emitted surface, so they are validated too."""
+        with pytest.raises(ValueError, match="children") as exc_info:
+            RustCstGenerator(self._make_nested_label_grammar("children"))
+        assert "extend_children" in str(exc_info.value)
+        assert "'node'" in str(exc_info.value)
+
+    def test_invalid_identifier_label_inside_sub_expression_rejected(self) -> None:
+        with pytest.raises(ValueError, match="not a valid identifier") as exc_info:
+            RustCstGenerator(self._make_nested_label_grammar("Bad-Label"))
+        assert "'node'" in str(exc_info.value)
+
+    def test_suppressed_label_is_not_validated(self) -> None:
+        """A suppressed item contributes no child and no label, so its label names nothing."""
+        gen = RustCstGenerator(self._make_nested_label_grammar("children", gsm.Disposition.SUPPRESS))
+        assert "children" not in gen._py_gen.rule_models["node"].labels
+
 
 # ---------------------------------------------------------------------------
-# Reserved class name rejection (§2.6 of design ADR 2026/06/11-rust-bindings-module-split)
+# Reserved class name rejection
 # ---------------------------------------------------------------------------
 
 
@@ -2280,7 +2336,7 @@ def _write_pyi_tmpdir(tmp_path: pathlib.Path, pyi_text: str, mod_name: str = "fe
 
 
 # ---------------------------------------------------------------------------
-# .pyi pyright self-check (§4 item 3 — zero errors on the stub in isolation)
+# .pyi pyright self-check (zero errors on the stub in isolation)
 # ---------------------------------------------------------------------------
 
 
@@ -2340,7 +2396,7 @@ class TestGeneratePyiSelfCheck:
 
 
 # ---------------------------------------------------------------------------
-# Stub-vs-protocol conformance tests (§2.2, §4 item 4)
+# Stub-vs-protocol conformance tests
 # ---------------------------------------------------------------------------
 
 
@@ -2431,14 +2487,14 @@ class TestGeneratePyiConformance:
         """Whole-module no-cast: assign fegen_cst module to cstp.CstModule → zero pyright errors.
 
         This is the primary load-bearing test: verifies the .pyi's structural conformance to
-        the CstModule protocol without any cast. Post-§2.1a (Span property removal), zero errors
-        is the expected and achievable outcome (design §2.2, §4 item 4).
+        the CstModule protocol without any cast. After the Span property removal, zero errors
+        is the expected and achievable outcome.
         Uses the shared fegen_pyright_diagnostics fixture (one pyright run for all fegen tests).
         """
         errors = [d for path, errs in fegen_pyright_diagnostics.items() if "conformance_fixture" in path for d in errs]
         assert errors == [], (
             f"Expected zero pyright errors for fegen_cst -> CstModule (no cast).\n"
-            f"Errors indicate a stub annotation diverges from the protocol (design §1 blockers).\n"
+            f"Errors indicate a stub annotation diverges from the protocol.\n"
             f"Errors: {errors}"
         )
 

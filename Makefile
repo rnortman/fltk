@@ -278,9 +278,8 @@ build-test-user-ext:
 	cd tests/rust_cst_fixture && uv run --group dev maturin develop
 
 # Build FLTK's fegen Rust CST extension (separate cdylib crate).
-# Produces the importable module 'fegen_rust_cst' used by
-# parse_grammar(rust_fegen_cst_module="fegen_rust_cst.cst") and the AC8 Tier-2 test
-# (real Cst2Gsm on Rust fegen backend).
+# Produces the importable module 'fegen_rust_cst' used by the Tier-2 tests
+# (real Cst2Gsm on the Rust fegen backend, cross-backend label equality).
 build-fegen-rust-cst:
 	cd crates/fegen-rust && uv run --group dev maturin develop
 
@@ -392,7 +391,7 @@ gencode:
 	$(MAKE) gen-rust-unparser GRAMMAR=fltk/fegen/test_data/rust_parser_fixture.fltkg RS_OUT=tests/rust_parser_fixture/src/unparser.rs \
 		EXTRA_ARGS="--format-config fltk/fegen/test_data/rust_parser_fixture.fltkfmt --protocol-module tests.rust_parser_fixture_cst_protocol --pyi-output fltk/_stubs/rust_parser_fixture/unparser.pyi \
 		            --init-pyi-output fltk/_stubs/rust_parser_fixture/__init__.pyi --extension-name rust_parser_fixture --submodules cst,parser,unparser,unparser_default,collision_cst,collision_parser"
-	# Default-FormatterConfig variant (no --format-config) for default-config cross-backend parity (§4).
+	# Default-FormatterConfig variant (no --format-config) for default-config cross-backend parity.
 	$(MAKE) gen-rust-unparser GRAMMAR=fltk/fegen/test_data/rust_parser_fixture.fltkg RS_OUT=tests/rust_parser_fixture/src/unparser_default.rs
 	# Rust: tests/rust_parser_fixture/src/collision_cst.rs and collision_parser.rs (collision_fixture.fltkg)
 	# Demonstrates that a cdylib can host multiple grammars; proves Parser/ApplyResult CST

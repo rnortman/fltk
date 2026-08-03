@@ -170,6 +170,9 @@ class Grammar:
             raise ValueError(msg)
         return children[0] if children else None
 
+    def rule(self) -> list[Rule]:
+        return list(self.children_rule())
+
 
 Grammar.Label.RULE._fltk_canonical_name = "Grammar.Label.RULE"
 
@@ -306,6 +309,12 @@ class Rule:
             raise ValueError(msg)
         return children[0] if children else None
 
+    def alternatives(self) -> Alternatives:
+        return self.child_alternatives()
+
+    def name(self) -> Identifier:
+        return self.child_name()
+
 
 Rule.Label.ALTERNATIVES._fltk_canonical_name = "Rule.Label.ALTERNATIVES"
 Rule.Label.NAME._fltk_canonical_name = "Rule.Label.NAME"
@@ -416,6 +425,9 @@ class Alternatives:
             msg = f"Expected at most one items child but have {n}"
             raise ValueError(msg)
         return children[0] if children else None
+
+    def items(self) -> list[Items]:
+        return list(self.children_items())
 
 
 Alternatives.Label.ITEMS._fltk_canonical_name = "Alternatives.Label.ITEMS"
@@ -633,6 +645,18 @@ class Items:
             raise ValueError(msg)
         return children[0] if children else None
 
+    def item(self) -> list[Item]:
+        return list(self.children_item())
+
+    def no_ws(self) -> list[fltk.fegen.pyrt.span_protocol.SpanProtocol]:
+        return list(self.children_no_ws())
+
+    def ws_allowed(self) -> list[fltk.fegen.pyrt.span_protocol.SpanProtocol]:
+        return list(self.children_ws_allowed())
+
+    def ws_required(self) -> list[fltk.fegen.pyrt.span_protocol.SpanProtocol]:
+        return list(self.children_ws_required())
+
 
 Items.Label.ITEM._fltk_canonical_name = "Items.Label.ITEM"
 Items.Label.NO_WS._fltk_canonical_name = "Items.Label.NO_WS"
@@ -829,6 +853,18 @@ class Item:
             msg = f"Expected at most one term child but have {n}"
             raise ValueError(msg)
         return children[0] if children else None
+
+    def disposition(self) -> Disposition | None:
+        return self.maybe_disposition()
+
+    def label(self) -> Identifier | None:
+        return self.maybe_label()
+
+    def quantifier(self) -> Quantifier | None:
+        return self.maybe_quantifier()
+
+    def term(self) -> Term:
+        return self.child_term()
 
 
 Item.Label.DISPOSITION._fltk_canonical_name = "Item.Label.DISPOSITION"
@@ -1029,6 +1065,18 @@ class Term:
             raise ValueError(msg)
         return children[0] if children else None
 
+    def alternatives(self) -> Alternatives | None:
+        return self.maybe_alternatives()
+
+    def identifier(self) -> Identifier | None:
+        return self.maybe_identifier()
+
+    def literal(self) -> Literal | None:
+        return self.maybe_literal()
+
+    def regex(self) -> RawString | None:
+        return self.maybe_regex()
+
 
 Term.Label.ALTERNATIVES._fltk_canonical_name = "Term.Label.ALTERNATIVES"
 Term.Label.IDENTIFIER._fltk_canonical_name = "Term.Label.IDENTIFIER"
@@ -1206,6 +1254,55 @@ class Disposition:
             raise ValueError(msg)
         return children[0] if children else None
 
+    def include(self) -> fltk.fegen.pyrt.span_protocol.SpanProtocol | None:
+        return self.maybe_include()
+
+    def include_text(self) -> str | None:
+        child = self.maybe_include()
+        if child is None:
+            return None
+        try:
+            return child.text_or_raise()
+        except AttributeError:
+            msg = "Disposition.include_text: child labelled 'include' is not a Span"
+            raise TypeError(msg) from None
+
+    def inline(self) -> fltk.fegen.pyrt.span_protocol.SpanProtocol | None:
+        return self.maybe_inline()
+
+    def inline_text(self) -> str | None:
+        child = self.maybe_inline()
+        if child is None:
+            return None
+        try:
+            return child.text_or_raise()
+        except AttributeError:
+            msg = "Disposition.inline_text: child labelled 'inline' is not a Span"
+            raise TypeError(msg) from None
+
+    def suppress(self) -> fltk.fegen.pyrt.span_protocol.SpanProtocol | None:
+        return self.maybe_suppress()
+
+    def suppress_text(self) -> str | None:
+        child = self.maybe_suppress()
+        if child is None:
+            return None
+        try:
+            return child.text_or_raise()
+        except AttributeError:
+            msg = "Disposition.suppress_text: child labelled 'suppress' is not a Span"
+            raise TypeError(msg) from None
+
+    def text(self) -> str:
+        return self.span.text_or_raise()
+
+    def variant(self) -> Label:
+        for label, _child in self.children:
+            if label is not None:
+                return label
+        msg = "Disposition.variant: node has no labeled child"
+        raise ValueError(msg)
+
 
 Disposition.Label.INCLUDE._fltk_canonical_name = "Disposition.Label.INCLUDE"
 Disposition.Label.INLINE._fltk_canonical_name = "Disposition.Label.INLINE"
@@ -1382,6 +1479,55 @@ class Quantifier:
             raise ValueError(msg)
         return children[0] if children else None
 
+    def one_or_more(self) -> fltk.fegen.pyrt.span_protocol.SpanProtocol | None:
+        return self.maybe_one_or_more()
+
+    def one_or_more_text(self) -> str | None:
+        child = self.maybe_one_or_more()
+        if child is None:
+            return None
+        try:
+            return child.text_or_raise()
+        except AttributeError:
+            msg = "Quantifier.one_or_more_text: child labelled 'one_or_more' is not a Span"
+            raise TypeError(msg) from None
+
+    def optional(self) -> fltk.fegen.pyrt.span_protocol.SpanProtocol | None:
+        return self.maybe_optional()
+
+    def optional_text(self) -> str | None:
+        child = self.maybe_optional()
+        if child is None:
+            return None
+        try:
+            return child.text_or_raise()
+        except AttributeError:
+            msg = "Quantifier.optional_text: child labelled 'optional' is not a Span"
+            raise TypeError(msg) from None
+
+    def zero_or_more(self) -> fltk.fegen.pyrt.span_protocol.SpanProtocol | None:
+        return self.maybe_zero_or_more()
+
+    def zero_or_more_text(self) -> str | None:
+        child = self.maybe_zero_or_more()
+        if child is None:
+            return None
+        try:
+            return child.text_or_raise()
+        except AttributeError:
+            msg = "Quantifier.zero_or_more_text: child labelled 'zero_or_more' is not a Span"
+            raise TypeError(msg) from None
+
+    def text(self) -> str:
+        return self.span.text_or_raise()
+
+    def variant(self) -> Label:
+        for label, _child in self.children:
+            if label is not None:
+                return label
+        msg = "Quantifier.variant: node has no labeled child"
+        raise ValueError(msg)
+
 
 Quantifier.Label.ONE_OR_MORE._fltk_canonical_name = "Quantifier.Label.ONE_OR_MORE"
 Quantifier.Label.OPTIONAL._fltk_canonical_name = "Quantifier.Label.OPTIONAL"
@@ -1510,6 +1656,20 @@ class Identifier:
             raise ValueError(msg)
         return children[0] if children else None
 
+    def name(self) -> fltk.fegen.pyrt.span_protocol.SpanProtocol:
+        return self.child_name()
+
+    def name_text(self) -> str:
+        child = self.child_name()
+        try:
+            return child.text_or_raise()
+        except AttributeError:
+            msg = "Identifier.name_text: child labelled 'name' is not a Span"
+            raise TypeError(msg) from None
+
+    def text(self) -> str:
+        return self.span.text_or_raise()
+
 
 Identifier.Label.NAME._fltk_canonical_name = "Identifier.Label.NAME"
 
@@ -1636,6 +1796,20 @@ class RawString:
             raise ValueError(msg)
         return children[0] if children else None
 
+    def value(self) -> fltk.fegen.pyrt.span_protocol.SpanProtocol:
+        return self.child_value()
+
+    def value_text(self) -> str:
+        child = self.child_value()
+        try:
+            return child.text_or_raise()
+        except AttributeError:
+            msg = "RawString.value_text: child labelled 'value' is not a Span"
+            raise TypeError(msg) from None
+
+    def text(self) -> str:
+        return self.span.text_or_raise()
+
 
 RawString.Label.VALUE._fltk_canonical_name = "RawString.Label.VALUE"
 
@@ -1761,6 +1935,20 @@ class Literal:
             msg = f"Expected at most one value child but have {n}"
             raise ValueError(msg)
         return children[0] if children else None
+
+    def value(self) -> fltk.fegen.pyrt.span_protocol.SpanProtocol:
+        return self.child_value()
+
+    def value_text(self) -> str:
+        child = self.child_value()
+        try:
+            return child.text_or_raise()
+        except AttributeError:
+            msg = "Literal.value_text: child labelled 'value' is not a Span"
+            raise TypeError(msg) from None
+
+    def text(self) -> str:
+        return self.span.text_or_raise()
 
 
 Literal.Label.VALUE._fltk_canonical_name = "Literal.Label.VALUE"
@@ -1934,6 +2122,12 @@ class Trivia:
             raise ValueError(msg)
         return children[0] if children else None
 
+    def block_comment(self) -> list[BlockComment]:
+        return list(self.children_block_comment())
+
+    def line_comment(self) -> list[LineComment]:
+        return list(self.children_line_comment())
+
 
 Trivia.Label.BLOCK_COMMENT._fltk_canonical_name = "Trivia.Label.BLOCK_COMMENT"
 Trivia.Label.LINE_COMMENT._fltk_canonical_name = "Trivia.Label.LINE_COMMENT"
@@ -2084,6 +2278,31 @@ class LineComment:
             msg = f"Expected at most one prefix child but have {n}"
             raise ValueError(msg)
         return children[0] if children else None
+
+    def content(self) -> fltk.fegen.pyrt.span_protocol.SpanProtocol:
+        return self.child_content()
+
+    def content_text(self) -> str:
+        child = self.child_content()
+        try:
+            return child.text_or_raise()
+        except AttributeError:
+            msg = "LineComment.content_text: child labelled 'content' is not a Span"
+            raise TypeError(msg) from None
+
+    def prefix(self) -> fltk.fegen.pyrt.span_protocol.SpanProtocol:
+        return self.child_prefix()
+
+    def prefix_text(self) -> str:
+        child = self.child_prefix()
+        try:
+            return child.text_or_raise()
+        except AttributeError:
+            msg = "LineComment.prefix_text: child labelled 'prefix' is not a Span"
+            raise TypeError(msg) from None
+
+    def text(self) -> str:
+        return self.span.text_or_raise()
 
 
 LineComment.Label.CONTENT._fltk_canonical_name = "LineComment.Label.CONTENT"
@@ -2259,6 +2478,42 @@ class BlockComment:
             msg = f"Expected at most one start child but have {n}"
             raise ValueError(msg)
         return children[0] if children else None
+
+    def content(self) -> fltk.fegen.pyrt.span_protocol.SpanProtocol:
+        return self.child_content()
+
+    def content_text(self) -> str:
+        child = self.child_content()
+        try:
+            return child.text_or_raise()
+        except AttributeError:
+            msg = "BlockComment.content_text: child labelled 'content' is not a Span"
+            raise TypeError(msg) from None
+
+    def end(self) -> fltk.fegen.pyrt.span_protocol.SpanProtocol:
+        return self.child_end()
+
+    def end_text(self) -> str:
+        child = self.child_end()
+        try:
+            return child.text_or_raise()
+        except AttributeError:
+            msg = "BlockComment.end_text: child labelled 'end' is not a Span"
+            raise TypeError(msg) from None
+
+    def start(self) -> fltk.fegen.pyrt.span_protocol.SpanProtocol:
+        return self.child_start()
+
+    def start_text(self) -> str:
+        child = self.child_start()
+        try:
+            return child.text_or_raise()
+        except AttributeError:
+            msg = "BlockComment.start_text: child labelled 'start' is not a Span"
+            raise TypeError(msg) from None
+
+    def text(self) -> str:
+        return self.span.text_or_raise()
 
 
 BlockComment.Label.CONTENT._fltk_canonical_name = "BlockComment.Label.CONTENT"

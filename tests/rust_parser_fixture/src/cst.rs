@@ -90,6 +90,20 @@ pub enum NodeKind {
     CaseInsensitive,
     #[pyo3(name = "ANCHOREDWORD")]
     AnchoredWord,
+    #[pyo3(name = "PAIR")]
+    Pair,
+    #[pyo3(name = "WRAPPER")]
+    Wrapper,
+    #[pyo3(name = "OPTWRAPPER")]
+    OptWrapper,
+    #[pyo3(name = "REPWRAPPER")]
+    RepWrapper,
+    #[pyo3(name = "KWLABELS")]
+    KwLabels,
+    #[pyo3(name = "QUOTED")]
+    Quoted,
+    #[pyo3(name = "MIXEDOPT")]
+    MixedOpt,
     #[pyo3(name = "TRIVIA")]
     Trivia,
 }
@@ -127,6 +141,13 @@ pub enum NodeKind {
     NcGroupAlt,
     CaseInsensitive,
     AnchoredWord,
+    Pair,
+    Wrapper,
+    OptWrapper,
+    RepWrapper,
+    KwLabels,
+    Quoted,
+    MixedOpt,
     Trivia,
 }
 
@@ -165,6 +186,13 @@ impl NodeKind {
             NodeKind::NcGroupAlt => "NodeKind.NCGROUPALT",
             NodeKind::CaseInsensitive => "NodeKind.CASEINSENSITIVE",
             NodeKind::AnchoredWord => "NodeKind.ANCHOREDWORD",
+            NodeKind::Pair => "NodeKind.PAIR",
+            NodeKind::Wrapper => "NodeKind.WRAPPER",
+            NodeKind::OptWrapper => "NodeKind.OPTWRAPPER",
+            NodeKind::RepWrapper => "NodeKind.REPWRAPPER",
+            NodeKind::KwLabels => "NodeKind.KWLABELS",
+            NodeKind::Quoted => "NodeKind.QUOTED",
+            NodeKind::MixedOpt => "NodeKind.MIXEDOPT",
             NodeKind::Trivia => "NodeKind.TRIVIA",
         }
     }
@@ -475,6 +503,35 @@ impl Num {
         self.children.extend(spans.into_iter().map(|s| (Some(NumLabel::Value), NumChild::Span(s))));
     }
 
+    /// Return the child labelled `value`.
+    ///
+    /// Panics unless exactly one is present; use `child_value` for the checked form.
+    pub fn value(&self) -> &Span {
+        self.child_value()
+            .unwrap_or_else(|e| panic!("Num.value: {e}"))
+    }
+
+    /// Return the source text of the child labelled `value`.
+    ///
+    /// Borrows from the span's source; panics if the child is absent or its span
+    /// carries no usable source.
+    pub fn value_text(&self) -> &str {
+        self.child_value()
+            .unwrap_or_else(|e| panic!("Num.value_text: {e}"))
+            .text_or_message()
+            .unwrap_or_else(|e| panic!("Num.value_text: {e}"))
+    }
+
+    /// Return this node's own source text.
+    ///
+    /// Covers suppressed content inside the node's span; panics if the span carries no
+    /// usable source.
+    pub fn text(&self) -> &str {
+        self.span
+            .text_or_message()
+            .unwrap_or_else(|e| panic!("Num.text: {e}"))
+    }
+
     /// Insert a child at `index` (Vec::insert semantics: panics if index > len).
     ///
     /// Python-facing clamping is in the `insert` pymethod; native callers must
@@ -705,7 +762,7 @@ impl PyNum {
         child: &Bound<'_, pyo3::PyAny>,
         label: Option<Py<pyo3::PyAny>>,
     ) -> pyo3::PyResult<()> {
-        // Validate child and label BEFORE taking the write lock (§2.3 lock discipline).
+        // Validate child and label BEFORE taking the write lock.
         let span_type = get_span_type(py)?;
         let native_child = NumChild::extract_from_pyobject(py, child, &span_type)?;
         let native_label = match label {
@@ -723,7 +780,7 @@ impl PyNum {
         };
         // Index normalization via operator.index (PyNumber_Index semantics).
         // This raises TypeError (not AttributeError) for non-indexable inputs, matching Python's
-        // operator.index contract. Must be done BEFORE taking any lock (§2.3 lock discipline).
+        // operator.index contract. Must be done BEFORE taking any lock.
         // Overflow by sign: positive overflow clamps to len; negative overflow clamps to 0.
         let raw_idx = py
             .import(pyo3::intern!(py, "operator"))?
@@ -762,7 +819,7 @@ impl PyNum {
         let orig_str = index.str()?.to_string_lossy().into_owned();
         // Normalize via operator.index: raises TypeError (not AttributeError) for
         // non-indexable inputs, matching Python's operator.index contract.
-        // All Python work must happen before any lock (§2.3 lock discipline).
+        // All Python work must happen before any lock.
         let raw_idx = py
             .import(pyo3::intern!(py, "operator"))?
             .getattr(pyo3::intern!(py, "index"))?
@@ -794,7 +851,7 @@ impl PyNum {
                 orig_str, n
             ))
         })?;
-        // Python wrap-out happens after the guard is released (§2.3 lock discipline).
+        // Python wrap-out happens after the guard is released.
         let label_obj: Py<pyo3::PyAny> = match label {
             None => py.None(),
             Some(lbl) => lbl.into_pyobject(py)?.into_any().unbind(),
@@ -811,7 +868,7 @@ impl PyNum {
         child: &Bound<'_, pyo3::PyAny>,
         label: Option<Py<pyo3::PyAny>>,
     ) -> pyo3::PyResult<()> {
-        // Validate child and label BEFORE taking the write lock (§2.3 lock discipline).
+        // Validate child and label BEFORE taking the write lock.
         let span_type = get_span_type(py)?;
         let native_child = NumChild::extract_from_pyobject(py, child, &span_type)?;
         let native_label = match label {
@@ -830,7 +887,7 @@ impl PyNum {
         // Capture the caller's original string representation BEFORE normalization.
         let orig_str = index.str()?.to_string_lossy().into_owned();
         // Normalize via operator.index: raises TypeError for non-indexable inputs.
-        // All Python work must happen before any lock (§2.3 lock discipline).
+        // All Python work must happen before any lock.
         let raw_idx = py
             .import(pyo3::intern!(py, "operator"))?
             .getattr(pyo3::intern!(py, "index"))?
@@ -965,6 +1022,50 @@ impl PyNum {
             None => Ok(None),
             Some(child) => Ok(Some(child.to_pyobject(py)?)),
         }
+    }
+
+    fn value(&self, py: Python<'_>) -> pyo3::PyResult<Py<pyo3::PyAny>> {
+        self.child_value(py)
+    }
+
+    fn value_text(&self) -> pyo3::PyResult<String> {
+        // Lock scope: count label matches and clone only the first under the guard;
+        // drop the guard before to_pyobject / exception raise (Python work).
+        let (count, first) = {
+            let guard = self.inner.read();
+            let mut count = 0usize;
+            let mut first = None;
+            for (lbl, child) in &guard.children {
+                if *lbl == Some(NumLabel::Value) {
+                    count += 1;
+                    if count == 1 {
+                        first = Some(child.clone());
+                    }
+                }
+            }
+            (count, first)
+        };
+        if count != 1 {
+            return Err(PyValueError::new_err(format!(
+                "Expected one value child but have {count}"
+            )));
+        }
+        match first
+            .expect("invariant: Num.value_text: count==1 but first==None; logic error")
+        {
+            NumChild::Span(s) => s
+                .text_or_message()
+                .map(str::to_owned)
+                .map_err(PyValueError::new_err),
+        }
+    }
+
+    fn text(&self) -> pyo3::PyResult<String> {
+        // Clone the span under the read guard, then release it before raising.
+        let span = self.inner.read().span.clone();
+        span.text_or_message()
+            .map(str::to_owned)
+            .map_err(PyValueError::new_err)
     }
 
     fn __eq__(&self, py: Python<'_>, other: &Bound<'_, pyo3::PyAny>) -> pyo3::PyResult<Py<pyo3::PyAny>> {
@@ -1275,6 +1376,35 @@ impl Name {
         self.children.extend(spans.into_iter().map(|s| (Some(NameLabel::Value), NameChild::Span(s))));
     }
 
+    /// Return the child labelled `value`.
+    ///
+    /// Panics unless exactly one is present; use `child_value` for the checked form.
+    pub fn value(&self) -> &Span {
+        self.child_value()
+            .unwrap_or_else(|e| panic!("Name.value: {e}"))
+    }
+
+    /// Return the source text of the child labelled `value`.
+    ///
+    /// Borrows from the span's source; panics if the child is absent or its span
+    /// carries no usable source.
+    pub fn value_text(&self) -> &str {
+        self.child_value()
+            .unwrap_or_else(|e| panic!("Name.value_text: {e}"))
+            .text_or_message()
+            .unwrap_or_else(|e| panic!("Name.value_text: {e}"))
+    }
+
+    /// Return this node's own source text.
+    ///
+    /// Covers suppressed content inside the node's span; panics if the span carries no
+    /// usable source.
+    pub fn text(&self) -> &str {
+        self.span
+            .text_or_message()
+            .unwrap_or_else(|e| panic!("Name.text: {e}"))
+    }
+
     /// Insert a child at `index` (Vec::insert semantics: panics if index > len).
     ///
     /// Python-facing clamping is in the `insert` pymethod; native callers must
@@ -1505,7 +1635,7 @@ impl PyName {
         child: &Bound<'_, pyo3::PyAny>,
         label: Option<Py<pyo3::PyAny>>,
     ) -> pyo3::PyResult<()> {
-        // Validate child and label BEFORE taking the write lock (§2.3 lock discipline).
+        // Validate child and label BEFORE taking the write lock.
         let span_type = get_span_type(py)?;
         let native_child = NameChild::extract_from_pyobject(py, child, &span_type)?;
         let native_label = match label {
@@ -1523,7 +1653,7 @@ impl PyName {
         };
         // Index normalization via operator.index (PyNumber_Index semantics).
         // This raises TypeError (not AttributeError) for non-indexable inputs, matching Python's
-        // operator.index contract. Must be done BEFORE taking any lock (§2.3 lock discipline).
+        // operator.index contract. Must be done BEFORE taking any lock.
         // Overflow by sign: positive overflow clamps to len; negative overflow clamps to 0.
         let raw_idx = py
             .import(pyo3::intern!(py, "operator"))?
@@ -1562,7 +1692,7 @@ impl PyName {
         let orig_str = index.str()?.to_string_lossy().into_owned();
         // Normalize via operator.index: raises TypeError (not AttributeError) for
         // non-indexable inputs, matching Python's operator.index contract.
-        // All Python work must happen before any lock (§2.3 lock discipline).
+        // All Python work must happen before any lock.
         let raw_idx = py
             .import(pyo3::intern!(py, "operator"))?
             .getattr(pyo3::intern!(py, "index"))?
@@ -1594,7 +1724,7 @@ impl PyName {
                 orig_str, n
             ))
         })?;
-        // Python wrap-out happens after the guard is released (§2.3 lock discipline).
+        // Python wrap-out happens after the guard is released.
         let label_obj: Py<pyo3::PyAny> = match label {
             None => py.None(),
             Some(lbl) => lbl.into_pyobject(py)?.into_any().unbind(),
@@ -1611,7 +1741,7 @@ impl PyName {
         child: &Bound<'_, pyo3::PyAny>,
         label: Option<Py<pyo3::PyAny>>,
     ) -> pyo3::PyResult<()> {
-        // Validate child and label BEFORE taking the write lock (§2.3 lock discipline).
+        // Validate child and label BEFORE taking the write lock.
         let span_type = get_span_type(py)?;
         let native_child = NameChild::extract_from_pyobject(py, child, &span_type)?;
         let native_label = match label {
@@ -1630,7 +1760,7 @@ impl PyName {
         // Capture the caller's original string representation BEFORE normalization.
         let orig_str = index.str()?.to_string_lossy().into_owned();
         // Normalize via operator.index: raises TypeError for non-indexable inputs.
-        // All Python work must happen before any lock (§2.3 lock discipline).
+        // All Python work must happen before any lock.
         let raw_idx = py
             .import(pyo3::intern!(py, "operator"))?
             .getattr(pyo3::intern!(py, "index"))?
@@ -1765,6 +1895,50 @@ impl PyName {
             None => Ok(None),
             Some(child) => Ok(Some(child.to_pyobject(py)?)),
         }
+    }
+
+    fn value(&self, py: Python<'_>) -> pyo3::PyResult<Py<pyo3::PyAny>> {
+        self.child_value(py)
+    }
+
+    fn value_text(&self) -> pyo3::PyResult<String> {
+        // Lock scope: count label matches and clone only the first under the guard;
+        // drop the guard before to_pyobject / exception raise (Python work).
+        let (count, first) = {
+            let guard = self.inner.read();
+            let mut count = 0usize;
+            let mut first = None;
+            for (lbl, child) in &guard.children {
+                if *lbl == Some(NameLabel::Value) {
+                    count += 1;
+                    if count == 1 {
+                        first = Some(child.clone());
+                    }
+                }
+            }
+            (count, first)
+        };
+        if count != 1 {
+            return Err(PyValueError::new_err(format!(
+                "Expected one value child but have {count}"
+            )));
+        }
+        match first
+            .expect("invariant: Name.value_text: count==1 but first==None; logic error")
+        {
+            NameChild::Span(s) => s
+                .text_or_message()
+                .map(str::to_owned)
+                .map_err(PyValueError::new_err),
+        }
+    }
+
+    fn text(&self) -> pyo3::PyResult<String> {
+        // Clone the span under the read guard, then release it before raising.
+        let span = self.inner.read().span.clone();
+        span.text_or_message()
+            .map(str::to_owned)
+            .map_err(PyValueError::new_err)
     }
 
     fn __eq__(&self, py: Python<'_>, other: &Bound<'_, pyo3::PyAny>) -> pyo3::PyResult<Py<pyo3::PyAny>> {
@@ -2244,6 +2418,34 @@ impl Atom {
         self.children.extend(children.into_iter().map(|c| (Some(AtomLabel::Num), AtomChild::Num(c.into()))));
     }
 
+    /// Return the optional child labelled `name`.
+    ///
+    /// Panics if more than one is present; use `maybe_name` for the checked form.
+    pub fn name(&self) -> Option<&Shared<Name>> {
+        self.maybe_name()
+            .unwrap_or_else(|e| panic!("Atom.name: {e}"))
+    }
+
+    /// Return the optional child labelled `num`.
+    ///
+    /// Panics if more than one is present; use `maybe_num` for the checked form.
+    pub fn num(&self) -> Option<&Shared<Num>> {
+        self.maybe_num()
+            .unwrap_or_else(|e| panic!("Atom.num: {e}"))
+    }
+
+    /// Return the label of this node's sole labelled child.
+    ///
+    /// Every alternative of this rule is a single labelled item, so the label identifies
+    /// which one matched.  Panics when no child carries a label.
+    pub fn variant(&self) -> AtomLabel {
+        self.children
+            .iter()
+            .find_map(|(lbl, _)| lbl.as_ref())
+            .cloned()
+            .expect("Atom.variant: node has no labeled child")
+    }
+
     /// Insert a child at `index` (Vec::insert semantics: panics if index > len).
     ///
     /// Python-facing clamping is in the `insert` pymethod; native callers must
@@ -2474,7 +2676,7 @@ impl PyAtom {
         child: &Bound<'_, pyo3::PyAny>,
         label: Option<Py<pyo3::PyAny>>,
     ) -> pyo3::PyResult<()> {
-        // Validate child and label BEFORE taking the write lock (§2.3 lock discipline).
+        // Validate child and label BEFORE taking the write lock.
         let span_type = get_span_type(py)?;
         let native_child = AtomChild::extract_from_pyobject(py, child, &span_type)?;
         let native_label = match label {
@@ -2492,7 +2694,7 @@ impl PyAtom {
         };
         // Index normalization via operator.index (PyNumber_Index semantics).
         // This raises TypeError (not AttributeError) for non-indexable inputs, matching Python's
-        // operator.index contract. Must be done BEFORE taking any lock (§2.3 lock discipline).
+        // operator.index contract. Must be done BEFORE taking any lock.
         // Overflow by sign: positive overflow clamps to len; negative overflow clamps to 0.
         let raw_idx = py
             .import(pyo3::intern!(py, "operator"))?
@@ -2531,7 +2733,7 @@ impl PyAtom {
         let orig_str = index.str()?.to_string_lossy().into_owned();
         // Normalize via operator.index: raises TypeError (not AttributeError) for
         // non-indexable inputs, matching Python's operator.index contract.
-        // All Python work must happen before any lock (§2.3 lock discipline).
+        // All Python work must happen before any lock.
         let raw_idx = py
             .import(pyo3::intern!(py, "operator"))?
             .getattr(pyo3::intern!(py, "index"))?
@@ -2563,7 +2765,7 @@ impl PyAtom {
                 orig_str, n
             ))
         })?;
-        // Python wrap-out happens after the guard is released (§2.3 lock discipline).
+        // Python wrap-out happens after the guard is released.
         let label_obj: Py<pyo3::PyAny> = match label {
             None => py.None(),
             Some(lbl) => lbl.into_pyobject(py)?.into_any().unbind(),
@@ -2580,7 +2782,7 @@ impl PyAtom {
         child: &Bound<'_, pyo3::PyAny>,
         label: Option<Py<pyo3::PyAny>>,
     ) -> pyo3::PyResult<()> {
-        // Validate child and label BEFORE taking the write lock (§2.3 lock discipline).
+        // Validate child and label BEFORE taking the write lock.
         let span_type = get_span_type(py)?;
         let native_child = AtomChild::extract_from_pyobject(py, child, &span_type)?;
         let native_label = match label {
@@ -2599,7 +2801,7 @@ impl PyAtom {
         // Capture the caller's original string representation BEFORE normalization.
         let orig_str = index.str()?.to_string_lossy().into_owned();
         // Normalize via operator.index: raises TypeError for non-indexable inputs.
-        // All Python work must happen before any lock (§2.3 lock discipline).
+        // All Python work must happen before any lock.
         let raw_idx = py
             .import(pyo3::intern!(py, "operator"))?
             .getattr(pyo3::intern!(py, "index"))?
@@ -2825,6 +3027,25 @@ impl PyAtom {
             None => Ok(None),
             Some(child) => Ok(Some(child.to_pyobject(py)?)),
         }
+    }
+
+    fn name(&self, py: Python<'_>) -> pyo3::PyResult<Option<Py<pyo3::PyAny>>> {
+        self.maybe_name(py)
+    }
+
+    fn num(&self, py: Python<'_>) -> pyo3::PyResult<Option<Py<pyo3::PyAny>>> {
+        self.maybe_num(py)
+    }
+
+    fn variant(&self) -> pyo3::PyResult<AtomLabel> {
+        // Lock scope: read the first label out, drop the guard before raising.
+        let found = {
+            let guard = self.inner.read();
+            guard.children.iter().find_map(|(lbl, _)| lbl.as_ref()).cloned()
+        };
+        found.ok_or_else(|| PyValueError::new_err(
+            "Atom.variant: node has no labeled child",
+        ))
     }
 
     fn __eq__(&self, py: Python<'_>, other: &Bound<'_, pyo3::PyAny>) -> pyo3::PyResult<Py<pyo3::PyAny>> {
@@ -3231,6 +3452,14 @@ impl ParenExpr {
         self.children.extend(children.into_iter().map(|c| (Some(ParenExprLabel::Inner), ParenExprChild::Atom(c.into()))));
     }
 
+    /// Return the child labelled `inner`.
+    ///
+    /// Panics unless exactly one is present; use `child_inner` for the checked form.
+    pub fn inner(&self) -> &Shared<Atom> {
+        self.child_inner()
+            .unwrap_or_else(|e| panic!("ParenExpr.inner: {e}"))
+    }
+
     /// Insert a child at `index` (Vec::insert semantics: panics if index > len).
     ///
     /// Python-facing clamping is in the `insert` pymethod; native callers must
@@ -3461,7 +3690,7 @@ impl PyParenExpr {
         child: &Bound<'_, pyo3::PyAny>,
         label: Option<Py<pyo3::PyAny>>,
     ) -> pyo3::PyResult<()> {
-        // Validate child and label BEFORE taking the write lock (§2.3 lock discipline).
+        // Validate child and label BEFORE taking the write lock.
         let span_type = get_span_type(py)?;
         let native_child = ParenExprChild::extract_from_pyobject(py, child, &span_type)?;
         let native_label = match label {
@@ -3479,7 +3708,7 @@ impl PyParenExpr {
         };
         // Index normalization via operator.index (PyNumber_Index semantics).
         // This raises TypeError (not AttributeError) for non-indexable inputs, matching Python's
-        // operator.index contract. Must be done BEFORE taking any lock (§2.3 lock discipline).
+        // operator.index contract. Must be done BEFORE taking any lock.
         // Overflow by sign: positive overflow clamps to len; negative overflow clamps to 0.
         let raw_idx = py
             .import(pyo3::intern!(py, "operator"))?
@@ -3518,7 +3747,7 @@ impl PyParenExpr {
         let orig_str = index.str()?.to_string_lossy().into_owned();
         // Normalize via operator.index: raises TypeError (not AttributeError) for
         // non-indexable inputs, matching Python's operator.index contract.
-        // All Python work must happen before any lock (§2.3 lock discipline).
+        // All Python work must happen before any lock.
         let raw_idx = py
             .import(pyo3::intern!(py, "operator"))?
             .getattr(pyo3::intern!(py, "index"))?
@@ -3550,7 +3779,7 @@ impl PyParenExpr {
                 orig_str, n
             ))
         })?;
-        // Python wrap-out happens after the guard is released (§2.3 lock discipline).
+        // Python wrap-out happens after the guard is released.
         let label_obj: Py<pyo3::PyAny> = match label {
             None => py.None(),
             Some(lbl) => lbl.into_pyobject(py)?.into_any().unbind(),
@@ -3567,7 +3796,7 @@ impl PyParenExpr {
         child: &Bound<'_, pyo3::PyAny>,
         label: Option<Py<pyo3::PyAny>>,
     ) -> pyo3::PyResult<()> {
-        // Validate child and label BEFORE taking the write lock (§2.3 lock discipline).
+        // Validate child and label BEFORE taking the write lock.
         let span_type = get_span_type(py)?;
         let native_child = ParenExprChild::extract_from_pyobject(py, child, &span_type)?;
         let native_label = match label {
@@ -3586,7 +3815,7 @@ impl PyParenExpr {
         // Capture the caller's original string representation BEFORE normalization.
         let orig_str = index.str()?.to_string_lossy().into_owned();
         // Normalize via operator.index: raises TypeError for non-indexable inputs.
-        // All Python work must happen before any lock (§2.3 lock discipline).
+        // All Python work must happen before any lock.
         let raw_idx = py
             .import(pyo3::intern!(py, "operator"))?
             .getattr(pyo3::intern!(py, "index"))?
@@ -3721,6 +3950,10 @@ impl PyParenExpr {
             None => Ok(None),
             Some(child) => Ok(Some(child.to_pyobject(py)?)),
         }
+    }
+
+    fn inner(&self, py: Python<'_>) -> pyo3::PyResult<Py<pyo3::PyAny>> {
+        self.child_inner(py)
     }
 
     fn __eq__(&self, py: Python<'_>, other: &Bound<'_, pyo3::PyAny>) -> pyo3::PyResult<Py<pyo3::PyAny>> {
@@ -4200,6 +4433,22 @@ impl Stmt {
         self.children.extend(children.into_iter().map(|c| (Some(StmtLabel::Rhs), StmtChild::Atom(c.into()))));
     }
 
+    /// Return the child labelled `lhs`.
+    ///
+    /// Panics unless exactly one is present; use `child_lhs` for the checked form.
+    pub fn lhs(&self) -> &Shared<Atom> {
+        self.child_lhs()
+            .unwrap_or_else(|e| panic!("Stmt.lhs: {e}"))
+    }
+
+    /// Return the child labelled `rhs`.
+    ///
+    /// Panics unless exactly one is present; use `child_rhs` for the checked form.
+    pub fn rhs(&self) -> &Shared<Atom> {
+        self.child_rhs()
+            .unwrap_or_else(|e| panic!("Stmt.rhs: {e}"))
+    }
+
     /// Insert a child at `index` (Vec::insert semantics: panics if index > len).
     ///
     /// Python-facing clamping is in the `insert` pymethod; native callers must
@@ -4430,7 +4679,7 @@ impl PyStmt {
         child: &Bound<'_, pyo3::PyAny>,
         label: Option<Py<pyo3::PyAny>>,
     ) -> pyo3::PyResult<()> {
-        // Validate child and label BEFORE taking the write lock (§2.3 lock discipline).
+        // Validate child and label BEFORE taking the write lock.
         let span_type = get_span_type(py)?;
         let native_child = StmtChild::extract_from_pyobject(py, child, &span_type)?;
         let native_label = match label {
@@ -4448,7 +4697,7 @@ impl PyStmt {
         };
         // Index normalization via operator.index (PyNumber_Index semantics).
         // This raises TypeError (not AttributeError) for non-indexable inputs, matching Python's
-        // operator.index contract. Must be done BEFORE taking any lock (§2.3 lock discipline).
+        // operator.index contract. Must be done BEFORE taking any lock.
         // Overflow by sign: positive overflow clamps to len; negative overflow clamps to 0.
         let raw_idx = py
             .import(pyo3::intern!(py, "operator"))?
@@ -4487,7 +4736,7 @@ impl PyStmt {
         let orig_str = index.str()?.to_string_lossy().into_owned();
         // Normalize via operator.index: raises TypeError (not AttributeError) for
         // non-indexable inputs, matching Python's operator.index contract.
-        // All Python work must happen before any lock (§2.3 lock discipline).
+        // All Python work must happen before any lock.
         let raw_idx = py
             .import(pyo3::intern!(py, "operator"))?
             .getattr(pyo3::intern!(py, "index"))?
@@ -4519,7 +4768,7 @@ impl PyStmt {
                 orig_str, n
             ))
         })?;
-        // Python wrap-out happens after the guard is released (§2.3 lock discipline).
+        // Python wrap-out happens after the guard is released.
         let label_obj: Py<pyo3::PyAny> = match label {
             None => py.None(),
             Some(lbl) => lbl.into_pyobject(py)?.into_any().unbind(),
@@ -4536,7 +4785,7 @@ impl PyStmt {
         child: &Bound<'_, pyo3::PyAny>,
         label: Option<Py<pyo3::PyAny>>,
     ) -> pyo3::PyResult<()> {
-        // Validate child and label BEFORE taking the write lock (§2.3 lock discipline).
+        // Validate child and label BEFORE taking the write lock.
         let span_type = get_span_type(py)?;
         let native_child = StmtChild::extract_from_pyobject(py, child, &span_type)?;
         let native_label = match label {
@@ -4555,7 +4804,7 @@ impl PyStmt {
         // Capture the caller's original string representation BEFORE normalization.
         let orig_str = index.str()?.to_string_lossy().into_owned();
         // Normalize via operator.index: raises TypeError for non-indexable inputs.
-        // All Python work must happen before any lock (§2.3 lock discipline).
+        // All Python work must happen before any lock.
         let raw_idx = py
             .import(pyo3::intern!(py, "operator"))?
             .getattr(pyo3::intern!(py, "index"))?
@@ -4781,6 +5030,14 @@ impl PyStmt {
             None => Ok(None),
             Some(child) => Ok(Some(child.to_pyobject(py)?)),
         }
+    }
+
+    fn lhs(&self, py: Python<'_>) -> pyo3::PyResult<Py<pyo3::PyAny>> {
+        self.child_lhs(py)
+    }
+
+    fn rhs(&self, py: Python<'_>) -> pyo3::PyResult<Py<pyo3::PyAny>> {
+        self.child_rhs(py)
     }
 
     fn __eq__(&self, py: Python<'_>, other: &Bound<'_, pyo3::PyAny>) -> pyo3::PyResult<Py<pyo3::PyAny>> {
@@ -5152,6 +5409,13 @@ impl Items {
         self.children.extend(children.into_iter().map(|c| (Some(ItemsLabel::Item), ItemsChild::Atom(c.into()))));
     }
 
+    /// Return an iterator over the children labelled `item`.
+    ///
+    /// Arity-named alias of `children_item`.
+    pub fn item(&self) -> impl Iterator<Item = &Shared<Atom>> + '_ {
+        self.children_item()
+    }
+
     /// Insert a child at `index` (Vec::insert semantics: panics if index > len).
     ///
     /// Python-facing clamping is in the `insert` pymethod; native callers must
@@ -5382,7 +5646,7 @@ impl PyItems {
         child: &Bound<'_, pyo3::PyAny>,
         label: Option<Py<pyo3::PyAny>>,
     ) -> pyo3::PyResult<()> {
-        // Validate child and label BEFORE taking the write lock (§2.3 lock discipline).
+        // Validate child and label BEFORE taking the write lock.
         let span_type = get_span_type(py)?;
         let native_child = ItemsChild::extract_from_pyobject(py, child, &span_type)?;
         let native_label = match label {
@@ -5400,7 +5664,7 @@ impl PyItems {
         };
         // Index normalization via operator.index (PyNumber_Index semantics).
         // This raises TypeError (not AttributeError) for non-indexable inputs, matching Python's
-        // operator.index contract. Must be done BEFORE taking any lock (§2.3 lock discipline).
+        // operator.index contract. Must be done BEFORE taking any lock.
         // Overflow by sign: positive overflow clamps to len; negative overflow clamps to 0.
         let raw_idx = py
             .import(pyo3::intern!(py, "operator"))?
@@ -5439,7 +5703,7 @@ impl PyItems {
         let orig_str = index.str()?.to_string_lossy().into_owned();
         // Normalize via operator.index: raises TypeError (not AttributeError) for
         // non-indexable inputs, matching Python's operator.index contract.
-        // All Python work must happen before any lock (§2.3 lock discipline).
+        // All Python work must happen before any lock.
         let raw_idx = py
             .import(pyo3::intern!(py, "operator"))?
             .getattr(pyo3::intern!(py, "index"))?
@@ -5471,7 +5735,7 @@ impl PyItems {
                 orig_str, n
             ))
         })?;
-        // Python wrap-out happens after the guard is released (§2.3 lock discipline).
+        // Python wrap-out happens after the guard is released.
         let label_obj: Py<pyo3::PyAny> = match label {
             None => py.None(),
             Some(lbl) => lbl.into_pyobject(py)?.into_any().unbind(),
@@ -5488,7 +5752,7 @@ impl PyItems {
         child: &Bound<'_, pyo3::PyAny>,
         label: Option<Py<pyo3::PyAny>>,
     ) -> pyo3::PyResult<()> {
-        // Validate child and label BEFORE taking the write lock (§2.3 lock discipline).
+        // Validate child and label BEFORE taking the write lock.
         let span_type = get_span_type(py)?;
         let native_child = ItemsChild::extract_from_pyobject(py, child, &span_type)?;
         let native_label = match label {
@@ -5507,7 +5771,7 @@ impl PyItems {
         // Capture the caller's original string representation BEFORE normalization.
         let orig_str = index.str()?.to_string_lossy().into_owned();
         // Normalize via operator.index: raises TypeError for non-indexable inputs.
-        // All Python work must happen before any lock (§2.3 lock discipline).
+        // All Python work must happen before any lock.
         let raw_idx = py
             .import(pyo3::intern!(py, "operator"))?
             .getattr(pyo3::intern!(py, "index"))?
@@ -5642,6 +5906,10 @@ impl PyItems {
             None => Ok(None),
             Some(child) => Ok(Some(child.to_pyobject(py)?)),
         }
+    }
+
+    fn item(&self, py: Python<'_>) -> pyo3::PyResult<Py<pyo3::types::PyList>> {
+        self.children_item(py)
     }
 
     fn __eq__(&self, py: Python<'_>, other: &Bound<'_, pyo3::PyAny>) -> pyo3::PyResult<Py<pyo3::PyAny>> {
@@ -6013,6 +6281,14 @@ impl OptItem {
         self.children.extend(children.into_iter().map(|c| (Some(OptItemLabel::Item), OptItemChild::Atom(c.into()))));
     }
 
+    /// Return the optional child labelled `item`.
+    ///
+    /// Panics if more than one is present; use `maybe_item` for the checked form.
+    pub fn item(&self) -> Option<&Shared<Atom>> {
+        self.maybe_item()
+            .unwrap_or_else(|e| panic!("OptItem.item: {e}"))
+    }
+
     /// Insert a child at `index` (Vec::insert semantics: panics if index > len).
     ///
     /// Python-facing clamping is in the `insert` pymethod; native callers must
@@ -6243,7 +6519,7 @@ impl PyOptItem {
         child: &Bound<'_, pyo3::PyAny>,
         label: Option<Py<pyo3::PyAny>>,
     ) -> pyo3::PyResult<()> {
-        // Validate child and label BEFORE taking the write lock (§2.3 lock discipline).
+        // Validate child and label BEFORE taking the write lock.
         let span_type = get_span_type(py)?;
         let native_child = OptItemChild::extract_from_pyobject(py, child, &span_type)?;
         let native_label = match label {
@@ -6261,7 +6537,7 @@ impl PyOptItem {
         };
         // Index normalization via operator.index (PyNumber_Index semantics).
         // This raises TypeError (not AttributeError) for non-indexable inputs, matching Python's
-        // operator.index contract. Must be done BEFORE taking any lock (§2.3 lock discipline).
+        // operator.index contract. Must be done BEFORE taking any lock.
         // Overflow by sign: positive overflow clamps to len; negative overflow clamps to 0.
         let raw_idx = py
             .import(pyo3::intern!(py, "operator"))?
@@ -6300,7 +6576,7 @@ impl PyOptItem {
         let orig_str = index.str()?.to_string_lossy().into_owned();
         // Normalize via operator.index: raises TypeError (not AttributeError) for
         // non-indexable inputs, matching Python's operator.index contract.
-        // All Python work must happen before any lock (§2.3 lock discipline).
+        // All Python work must happen before any lock.
         let raw_idx = py
             .import(pyo3::intern!(py, "operator"))?
             .getattr(pyo3::intern!(py, "index"))?
@@ -6332,7 +6608,7 @@ impl PyOptItem {
                 orig_str, n
             ))
         })?;
-        // Python wrap-out happens after the guard is released (§2.3 lock discipline).
+        // Python wrap-out happens after the guard is released.
         let label_obj: Py<pyo3::PyAny> = match label {
             None => py.None(),
             Some(lbl) => lbl.into_pyobject(py)?.into_any().unbind(),
@@ -6349,7 +6625,7 @@ impl PyOptItem {
         child: &Bound<'_, pyo3::PyAny>,
         label: Option<Py<pyo3::PyAny>>,
     ) -> pyo3::PyResult<()> {
-        // Validate child and label BEFORE taking the write lock (§2.3 lock discipline).
+        // Validate child and label BEFORE taking the write lock.
         let span_type = get_span_type(py)?;
         let native_child = OptItemChild::extract_from_pyobject(py, child, &span_type)?;
         let native_label = match label {
@@ -6368,7 +6644,7 @@ impl PyOptItem {
         // Capture the caller's original string representation BEFORE normalization.
         let orig_str = index.str()?.to_string_lossy().into_owned();
         // Normalize via operator.index: raises TypeError for non-indexable inputs.
-        // All Python work must happen before any lock (§2.3 lock discipline).
+        // All Python work must happen before any lock.
         let raw_idx = py
             .import(pyo3::intern!(py, "operator"))?
             .getattr(pyo3::intern!(py, "index"))?
@@ -6503,6 +6779,10 @@ impl PyOptItem {
             None => Ok(None),
             Some(child) => Ok(Some(child.to_pyobject(py)?)),
         }
+    }
+
+    fn item(&self, py: Python<'_>) -> pyo3::PyResult<Option<Py<pyo3::PyAny>>> {
+        self.maybe_item(py)
     }
 
     fn __eq__(&self, py: Python<'_>, other: &Bound<'_, pyo3::PyAny>) -> pyo3::PyResult<Py<pyo3::PyAny>> {
@@ -6874,6 +7154,13 @@ impl ZeroItems {
         self.children.extend(children.into_iter().map(|c| (Some(ZeroItemsLabel::Item), ZeroItemsChild::Atom(c.into()))));
     }
 
+    /// Return an iterator over the children labelled `item`.
+    ///
+    /// Arity-named alias of `children_item`.
+    pub fn item(&self) -> impl Iterator<Item = &Shared<Atom>> + '_ {
+        self.children_item()
+    }
+
     /// Insert a child at `index` (Vec::insert semantics: panics if index > len).
     ///
     /// Python-facing clamping is in the `insert` pymethod; native callers must
@@ -7104,7 +7391,7 @@ impl PyZeroItems {
         child: &Bound<'_, pyo3::PyAny>,
         label: Option<Py<pyo3::PyAny>>,
     ) -> pyo3::PyResult<()> {
-        // Validate child and label BEFORE taking the write lock (§2.3 lock discipline).
+        // Validate child and label BEFORE taking the write lock.
         let span_type = get_span_type(py)?;
         let native_child = ZeroItemsChild::extract_from_pyobject(py, child, &span_type)?;
         let native_label = match label {
@@ -7122,7 +7409,7 @@ impl PyZeroItems {
         };
         // Index normalization via operator.index (PyNumber_Index semantics).
         // This raises TypeError (not AttributeError) for non-indexable inputs, matching Python's
-        // operator.index contract. Must be done BEFORE taking any lock (§2.3 lock discipline).
+        // operator.index contract. Must be done BEFORE taking any lock.
         // Overflow by sign: positive overflow clamps to len; negative overflow clamps to 0.
         let raw_idx = py
             .import(pyo3::intern!(py, "operator"))?
@@ -7161,7 +7448,7 @@ impl PyZeroItems {
         let orig_str = index.str()?.to_string_lossy().into_owned();
         // Normalize via operator.index: raises TypeError (not AttributeError) for
         // non-indexable inputs, matching Python's operator.index contract.
-        // All Python work must happen before any lock (§2.3 lock discipline).
+        // All Python work must happen before any lock.
         let raw_idx = py
             .import(pyo3::intern!(py, "operator"))?
             .getattr(pyo3::intern!(py, "index"))?
@@ -7193,7 +7480,7 @@ impl PyZeroItems {
                 orig_str, n
             ))
         })?;
-        // Python wrap-out happens after the guard is released (§2.3 lock discipline).
+        // Python wrap-out happens after the guard is released.
         let label_obj: Py<pyo3::PyAny> = match label {
             None => py.None(),
             Some(lbl) => lbl.into_pyobject(py)?.into_any().unbind(),
@@ -7210,7 +7497,7 @@ impl PyZeroItems {
         child: &Bound<'_, pyo3::PyAny>,
         label: Option<Py<pyo3::PyAny>>,
     ) -> pyo3::PyResult<()> {
-        // Validate child and label BEFORE taking the write lock (§2.3 lock discipline).
+        // Validate child and label BEFORE taking the write lock.
         let span_type = get_span_type(py)?;
         let native_child = ZeroItemsChild::extract_from_pyobject(py, child, &span_type)?;
         let native_label = match label {
@@ -7229,7 +7516,7 @@ impl PyZeroItems {
         // Capture the caller's original string representation BEFORE normalization.
         let orig_str = index.str()?.to_string_lossy().into_owned();
         // Normalize via operator.index: raises TypeError for non-indexable inputs.
-        // All Python work must happen before any lock (§2.3 lock discipline).
+        // All Python work must happen before any lock.
         let raw_idx = py
             .import(pyo3::intern!(py, "operator"))?
             .getattr(pyo3::intern!(py, "index"))?
@@ -7364,6 +7651,10 @@ impl PyZeroItems {
             None => Ok(None),
             Some(child) => Ok(Some(child.to_pyobject(py)?)),
         }
+    }
+
+    fn item(&self, py: Python<'_>) -> pyo3::PyResult<Py<pyo3::types::PyList>> {
+        self.children_item(py)
     }
 
     fn __eq__(&self, py: Python<'_>, other: &Bound<'_, pyo3::PyAny>) -> pyo3::PyResult<Py<pyo3::PyAny>> {
@@ -7916,6 +8207,30 @@ impl Expr {
         self.children.extend(children.into_iter().map(|c| (Some(ExprLabel::Rhs), ExprChild::Atom(c.into()))));
     }
 
+    /// Return the optional child labelled `atom`.
+    ///
+    /// Panics if more than one is present; use `maybe_atom` for the checked form.
+    pub fn atom(&self) -> Option<&Shared<Atom>> {
+        self.maybe_atom()
+            .unwrap_or_else(|e| panic!("Expr.atom: {e}"))
+    }
+
+    /// Return the optional child labelled `lhs`.
+    ///
+    /// Panics if more than one is present; use `maybe_lhs` for the checked form.
+    pub fn lhs(&self) -> Option<&Shared<Expr>> {
+        self.maybe_lhs()
+            .unwrap_or_else(|e| panic!("Expr.lhs: {e}"))
+    }
+
+    /// Return the optional child labelled `rhs`.
+    ///
+    /// Panics if more than one is present; use `maybe_rhs` for the checked form.
+    pub fn rhs(&self) -> Option<&Shared<Atom>> {
+        self.maybe_rhs()
+            .unwrap_or_else(|e| panic!("Expr.rhs: {e}"))
+    }
+
     /// Insert a child at `index` (Vec::insert semantics: panics if index > len).
     ///
     /// Python-facing clamping is in the `insert` pymethod; native callers must
@@ -8146,7 +8461,7 @@ impl PyExpr {
         child: &Bound<'_, pyo3::PyAny>,
         label: Option<Py<pyo3::PyAny>>,
     ) -> pyo3::PyResult<()> {
-        // Validate child and label BEFORE taking the write lock (§2.3 lock discipline).
+        // Validate child and label BEFORE taking the write lock.
         let span_type = get_span_type(py)?;
         let native_child = ExprChild::extract_from_pyobject(py, child, &span_type)?;
         let native_label = match label {
@@ -8164,7 +8479,7 @@ impl PyExpr {
         };
         // Index normalization via operator.index (PyNumber_Index semantics).
         // This raises TypeError (not AttributeError) for non-indexable inputs, matching Python's
-        // operator.index contract. Must be done BEFORE taking any lock (§2.3 lock discipline).
+        // operator.index contract. Must be done BEFORE taking any lock.
         // Overflow by sign: positive overflow clamps to len; negative overflow clamps to 0.
         let raw_idx = py
             .import(pyo3::intern!(py, "operator"))?
@@ -8203,7 +8518,7 @@ impl PyExpr {
         let orig_str = index.str()?.to_string_lossy().into_owned();
         // Normalize via operator.index: raises TypeError (not AttributeError) for
         // non-indexable inputs, matching Python's operator.index contract.
-        // All Python work must happen before any lock (§2.3 lock discipline).
+        // All Python work must happen before any lock.
         let raw_idx = py
             .import(pyo3::intern!(py, "operator"))?
             .getattr(pyo3::intern!(py, "index"))?
@@ -8235,7 +8550,7 @@ impl PyExpr {
                 orig_str, n
             ))
         })?;
-        // Python wrap-out happens after the guard is released (§2.3 lock discipline).
+        // Python wrap-out happens after the guard is released.
         let label_obj: Py<pyo3::PyAny> = match label {
             None => py.None(),
             Some(lbl) => lbl.into_pyobject(py)?.into_any().unbind(),
@@ -8252,7 +8567,7 @@ impl PyExpr {
         child: &Bound<'_, pyo3::PyAny>,
         label: Option<Py<pyo3::PyAny>>,
     ) -> pyo3::PyResult<()> {
-        // Validate child and label BEFORE taking the write lock (§2.3 lock discipline).
+        // Validate child and label BEFORE taking the write lock.
         let span_type = get_span_type(py)?;
         let native_child = ExprChild::extract_from_pyobject(py, child, &span_type)?;
         let native_label = match label {
@@ -8271,7 +8586,7 @@ impl PyExpr {
         // Capture the caller's original string representation BEFORE normalization.
         let orig_str = index.str()?.to_string_lossy().into_owned();
         // Normalize via operator.index: raises TypeError for non-indexable inputs.
-        // All Python work must happen before any lock (§2.3 lock discipline).
+        // All Python work must happen before any lock.
         let raw_idx = py
             .import(pyo3::intern!(py, "operator"))?
             .getattr(pyo3::intern!(py, "index"))?
@@ -8588,6 +8903,18 @@ impl PyExpr {
             None => Ok(None),
             Some(child) => Ok(Some(child.to_pyobject(py)?)),
         }
+    }
+
+    fn atom(&self, py: Python<'_>) -> pyo3::PyResult<Option<Py<pyo3::PyAny>>> {
+        self.maybe_atom(py)
+    }
+
+    fn lhs(&self, py: Python<'_>) -> pyo3::PyResult<Option<Py<pyo3::PyAny>>> {
+        self.maybe_lhs(py)
+    }
+
+    fn rhs(&self, py: Python<'_>) -> pyo3::PyResult<Option<Py<pyo3::PyAny>>> {
+        self.maybe_rhs(py)
     }
 
     fn __eq__(&self, py: Python<'_>, other: &Bound<'_, pyo3::PyAny>) -> pyo3::PyResult<Py<pyo3::PyAny>> {
@@ -9067,6 +9394,22 @@ impl Lval {
         self.children.extend(children.into_iter().map(|c| (Some(LvalLabel::Inner), LvalChild::Rval(c.into()))));
     }
 
+    /// Return the optional child labelled `base`.
+    ///
+    /// Panics if more than one is present; use `maybe_base` for the checked form.
+    pub fn base(&self) -> Option<&Shared<Name>> {
+        self.maybe_base()
+            .unwrap_or_else(|e| panic!("Lval.base: {e}"))
+    }
+
+    /// Return the optional child labelled `inner`.
+    ///
+    /// Panics if more than one is present; use `maybe_inner` for the checked form.
+    pub fn inner(&self) -> Option<&Shared<Rval>> {
+        self.maybe_inner()
+            .unwrap_or_else(|e| panic!("Lval.inner: {e}"))
+    }
+
     /// Insert a child at `index` (Vec::insert semantics: panics if index > len).
     ///
     /// Python-facing clamping is in the `insert` pymethod; native callers must
@@ -9297,7 +9640,7 @@ impl PyLval {
         child: &Bound<'_, pyo3::PyAny>,
         label: Option<Py<pyo3::PyAny>>,
     ) -> pyo3::PyResult<()> {
-        // Validate child and label BEFORE taking the write lock (§2.3 lock discipline).
+        // Validate child and label BEFORE taking the write lock.
         let span_type = get_span_type(py)?;
         let native_child = LvalChild::extract_from_pyobject(py, child, &span_type)?;
         let native_label = match label {
@@ -9315,7 +9658,7 @@ impl PyLval {
         };
         // Index normalization via operator.index (PyNumber_Index semantics).
         // This raises TypeError (not AttributeError) for non-indexable inputs, matching Python's
-        // operator.index contract. Must be done BEFORE taking any lock (§2.3 lock discipline).
+        // operator.index contract. Must be done BEFORE taking any lock.
         // Overflow by sign: positive overflow clamps to len; negative overflow clamps to 0.
         let raw_idx = py
             .import(pyo3::intern!(py, "operator"))?
@@ -9354,7 +9697,7 @@ impl PyLval {
         let orig_str = index.str()?.to_string_lossy().into_owned();
         // Normalize via operator.index: raises TypeError (not AttributeError) for
         // non-indexable inputs, matching Python's operator.index contract.
-        // All Python work must happen before any lock (§2.3 lock discipline).
+        // All Python work must happen before any lock.
         let raw_idx = py
             .import(pyo3::intern!(py, "operator"))?
             .getattr(pyo3::intern!(py, "index"))?
@@ -9386,7 +9729,7 @@ impl PyLval {
                 orig_str, n
             ))
         })?;
-        // Python wrap-out happens after the guard is released (§2.3 lock discipline).
+        // Python wrap-out happens after the guard is released.
         let label_obj: Py<pyo3::PyAny> = match label {
             None => py.None(),
             Some(lbl) => lbl.into_pyobject(py)?.into_any().unbind(),
@@ -9403,7 +9746,7 @@ impl PyLval {
         child: &Bound<'_, pyo3::PyAny>,
         label: Option<Py<pyo3::PyAny>>,
     ) -> pyo3::PyResult<()> {
-        // Validate child and label BEFORE taking the write lock (§2.3 lock discipline).
+        // Validate child and label BEFORE taking the write lock.
         let span_type = get_span_type(py)?;
         let native_child = LvalChild::extract_from_pyobject(py, child, &span_type)?;
         let native_label = match label {
@@ -9422,7 +9765,7 @@ impl PyLval {
         // Capture the caller's original string representation BEFORE normalization.
         let orig_str = index.str()?.to_string_lossy().into_owned();
         // Normalize via operator.index: raises TypeError for non-indexable inputs.
-        // All Python work must happen before any lock (§2.3 lock discipline).
+        // All Python work must happen before any lock.
         let raw_idx = py
             .import(pyo3::intern!(py, "operator"))?
             .getattr(pyo3::intern!(py, "index"))?
@@ -9648,6 +9991,14 @@ impl PyLval {
             None => Ok(None),
             Some(child) => Ok(Some(child.to_pyobject(py)?)),
         }
+    }
+
+    fn base(&self, py: Python<'_>) -> pyo3::PyResult<Option<Py<pyo3::PyAny>>> {
+        self.maybe_base(py)
+    }
+
+    fn inner(&self, py: Python<'_>) -> pyo3::PyResult<Option<Py<pyo3::PyAny>>> {
+        self.maybe_inner(py)
     }
 
     fn __eq__(&self, py: Python<'_>, other: &Bound<'_, pyo3::PyAny>) -> pyo3::PyResult<Py<pyo3::PyAny>> {
@@ -10127,6 +10478,22 @@ impl Rval {
         self.children.extend(children.into_iter().map(|c| (Some(RvalLabel::Inner), RvalChild::Lval(c.into()))));
     }
 
+    /// Return the optional child labelled `base`.
+    ///
+    /// Panics if more than one is present; use `maybe_base` for the checked form.
+    pub fn base(&self) -> Option<&Shared<Num>> {
+        self.maybe_base()
+            .unwrap_or_else(|e| panic!("Rval.base: {e}"))
+    }
+
+    /// Return the optional child labelled `inner`.
+    ///
+    /// Panics if more than one is present; use `maybe_inner` for the checked form.
+    pub fn inner(&self) -> Option<&Shared<Lval>> {
+        self.maybe_inner()
+            .unwrap_or_else(|e| panic!("Rval.inner: {e}"))
+    }
+
     /// Insert a child at `index` (Vec::insert semantics: panics if index > len).
     ///
     /// Python-facing clamping is in the `insert` pymethod; native callers must
@@ -10357,7 +10724,7 @@ impl PyRval {
         child: &Bound<'_, pyo3::PyAny>,
         label: Option<Py<pyo3::PyAny>>,
     ) -> pyo3::PyResult<()> {
-        // Validate child and label BEFORE taking the write lock (§2.3 lock discipline).
+        // Validate child and label BEFORE taking the write lock.
         let span_type = get_span_type(py)?;
         let native_child = RvalChild::extract_from_pyobject(py, child, &span_type)?;
         let native_label = match label {
@@ -10375,7 +10742,7 @@ impl PyRval {
         };
         // Index normalization via operator.index (PyNumber_Index semantics).
         // This raises TypeError (not AttributeError) for non-indexable inputs, matching Python's
-        // operator.index contract. Must be done BEFORE taking any lock (§2.3 lock discipline).
+        // operator.index contract. Must be done BEFORE taking any lock.
         // Overflow by sign: positive overflow clamps to len; negative overflow clamps to 0.
         let raw_idx = py
             .import(pyo3::intern!(py, "operator"))?
@@ -10414,7 +10781,7 @@ impl PyRval {
         let orig_str = index.str()?.to_string_lossy().into_owned();
         // Normalize via operator.index: raises TypeError (not AttributeError) for
         // non-indexable inputs, matching Python's operator.index contract.
-        // All Python work must happen before any lock (§2.3 lock discipline).
+        // All Python work must happen before any lock.
         let raw_idx = py
             .import(pyo3::intern!(py, "operator"))?
             .getattr(pyo3::intern!(py, "index"))?
@@ -10446,7 +10813,7 @@ impl PyRval {
                 orig_str, n
             ))
         })?;
-        // Python wrap-out happens after the guard is released (§2.3 lock discipline).
+        // Python wrap-out happens after the guard is released.
         let label_obj: Py<pyo3::PyAny> = match label {
             None => py.None(),
             Some(lbl) => lbl.into_pyobject(py)?.into_any().unbind(),
@@ -10463,7 +10830,7 @@ impl PyRval {
         child: &Bound<'_, pyo3::PyAny>,
         label: Option<Py<pyo3::PyAny>>,
     ) -> pyo3::PyResult<()> {
-        // Validate child and label BEFORE taking the write lock (§2.3 lock discipline).
+        // Validate child and label BEFORE taking the write lock.
         let span_type = get_span_type(py)?;
         let native_child = RvalChild::extract_from_pyobject(py, child, &span_type)?;
         let native_label = match label {
@@ -10482,7 +10849,7 @@ impl PyRval {
         // Capture the caller's original string representation BEFORE normalization.
         let orig_str = index.str()?.to_string_lossy().into_owned();
         // Normalize via operator.index: raises TypeError for non-indexable inputs.
-        // All Python work must happen before any lock (§2.3 lock discipline).
+        // All Python work must happen before any lock.
         let raw_idx = py
             .import(pyo3::intern!(py, "operator"))?
             .getattr(pyo3::intern!(py, "index"))?
@@ -10708,6 +11075,14 @@ impl PyRval {
             None => Ok(None),
             Some(child) => Ok(Some(child.to_pyobject(py)?)),
         }
+    }
+
+    fn base(&self, py: Python<'_>) -> pyo3::PyResult<Option<Py<pyo3::PyAny>>> {
+        self.maybe_base(py)
+    }
+
+    fn inner(&self, py: Python<'_>) -> pyo3::PyResult<Option<Py<pyo3::PyAny>>> {
+        self.maybe_inner(py)
     }
 
     fn __eq__(&self, py: Python<'_>, other: &Bound<'_, pyo3::PyAny>) -> pyo3::PyResult<Py<pyo3::PyAny>> {
@@ -11079,6 +11454,14 @@ impl Arrow {
         self.children.extend(children.into_iter().map(|c| (Some(ArrowLabel::Target), ArrowChild::Name(c.into()))));
     }
 
+    /// Return the child labelled `target`.
+    ///
+    /// Panics unless exactly one is present; use `child_target` for the checked form.
+    pub fn target(&self) -> &Shared<Name> {
+        self.child_target()
+            .unwrap_or_else(|e| panic!("Arrow.target: {e}"))
+    }
+
     /// Insert a child at `index` (Vec::insert semantics: panics if index > len).
     ///
     /// Python-facing clamping is in the `insert` pymethod; native callers must
@@ -11309,7 +11692,7 @@ impl PyArrow {
         child: &Bound<'_, pyo3::PyAny>,
         label: Option<Py<pyo3::PyAny>>,
     ) -> pyo3::PyResult<()> {
-        // Validate child and label BEFORE taking the write lock (§2.3 lock discipline).
+        // Validate child and label BEFORE taking the write lock.
         let span_type = get_span_type(py)?;
         let native_child = ArrowChild::extract_from_pyobject(py, child, &span_type)?;
         let native_label = match label {
@@ -11327,7 +11710,7 @@ impl PyArrow {
         };
         // Index normalization via operator.index (PyNumber_Index semantics).
         // This raises TypeError (not AttributeError) for non-indexable inputs, matching Python's
-        // operator.index contract. Must be done BEFORE taking any lock (§2.3 lock discipline).
+        // operator.index contract. Must be done BEFORE taking any lock.
         // Overflow by sign: positive overflow clamps to len; negative overflow clamps to 0.
         let raw_idx = py
             .import(pyo3::intern!(py, "operator"))?
@@ -11366,7 +11749,7 @@ impl PyArrow {
         let orig_str = index.str()?.to_string_lossy().into_owned();
         // Normalize via operator.index: raises TypeError (not AttributeError) for
         // non-indexable inputs, matching Python's operator.index contract.
-        // All Python work must happen before any lock (§2.3 lock discipline).
+        // All Python work must happen before any lock.
         let raw_idx = py
             .import(pyo3::intern!(py, "operator"))?
             .getattr(pyo3::intern!(py, "index"))?
@@ -11398,7 +11781,7 @@ impl PyArrow {
                 orig_str, n
             ))
         })?;
-        // Python wrap-out happens after the guard is released (§2.3 lock discipline).
+        // Python wrap-out happens after the guard is released.
         let label_obj: Py<pyo3::PyAny> = match label {
             None => py.None(),
             Some(lbl) => lbl.into_pyobject(py)?.into_any().unbind(),
@@ -11415,7 +11798,7 @@ impl PyArrow {
         child: &Bound<'_, pyo3::PyAny>,
         label: Option<Py<pyo3::PyAny>>,
     ) -> pyo3::PyResult<()> {
-        // Validate child and label BEFORE taking the write lock (§2.3 lock discipline).
+        // Validate child and label BEFORE taking the write lock.
         let span_type = get_span_type(py)?;
         let native_child = ArrowChild::extract_from_pyobject(py, child, &span_type)?;
         let native_label = match label {
@@ -11434,7 +11817,7 @@ impl PyArrow {
         // Capture the caller's original string representation BEFORE normalization.
         let orig_str = index.str()?.to_string_lossy().into_owned();
         // Normalize via operator.index: raises TypeError for non-indexable inputs.
-        // All Python work must happen before any lock (§2.3 lock discipline).
+        // All Python work must happen before any lock.
         let raw_idx = py
             .import(pyo3::intern!(py, "operator"))?
             .getattr(pyo3::intern!(py, "index"))?
@@ -11569,6 +11952,10 @@ impl PyArrow {
             None => Ok(None),
             Some(child) => Ok(Some(child.to_pyobject(py)?)),
         }
+    }
+
+    fn target(&self, py: Python<'_>) -> pyo3::PyResult<Py<pyo3::PyAny>> {
+        self.child_target(py)
     }
 
     fn __eq__(&self, py: Python<'_>, other: &Bound<'_, pyo3::PyAny>) -> pyo3::PyResult<Py<pyo3::PyAny>> {
@@ -11862,6 +12249,35 @@ impl LatinWord {
         self.children.extend(spans.into_iter().map(|s| (Some(LatinWordLabel::Value), LatinWordChild::Span(s))));
     }
 
+    /// Return the child labelled `value`.
+    ///
+    /// Panics unless exactly one is present; use `child_value` for the checked form.
+    pub fn value(&self) -> &Span {
+        self.child_value()
+            .unwrap_or_else(|e| panic!("LatinWord.value: {e}"))
+    }
+
+    /// Return the source text of the child labelled `value`.
+    ///
+    /// Borrows from the span's source; panics if the child is absent or its span
+    /// carries no usable source.
+    pub fn value_text(&self) -> &str {
+        self.child_value()
+            .unwrap_or_else(|e| panic!("LatinWord.value_text: {e}"))
+            .text_or_message()
+            .unwrap_or_else(|e| panic!("LatinWord.value_text: {e}"))
+    }
+
+    /// Return this node's own source text.
+    ///
+    /// Covers suppressed content inside the node's span; panics if the span carries no
+    /// usable source.
+    pub fn text(&self) -> &str {
+        self.span
+            .text_or_message()
+            .unwrap_or_else(|e| panic!("LatinWord.text: {e}"))
+    }
+
     /// Insert a child at `index` (Vec::insert semantics: panics if index > len).
     ///
     /// Python-facing clamping is in the `insert` pymethod; native callers must
@@ -12092,7 +12508,7 @@ impl PyLatinWord {
         child: &Bound<'_, pyo3::PyAny>,
         label: Option<Py<pyo3::PyAny>>,
     ) -> pyo3::PyResult<()> {
-        // Validate child and label BEFORE taking the write lock (§2.3 lock discipline).
+        // Validate child and label BEFORE taking the write lock.
         let span_type = get_span_type(py)?;
         let native_child = LatinWordChild::extract_from_pyobject(py, child, &span_type)?;
         let native_label = match label {
@@ -12110,7 +12526,7 @@ impl PyLatinWord {
         };
         // Index normalization via operator.index (PyNumber_Index semantics).
         // This raises TypeError (not AttributeError) for non-indexable inputs, matching Python's
-        // operator.index contract. Must be done BEFORE taking any lock (§2.3 lock discipline).
+        // operator.index contract. Must be done BEFORE taking any lock.
         // Overflow by sign: positive overflow clamps to len; negative overflow clamps to 0.
         let raw_idx = py
             .import(pyo3::intern!(py, "operator"))?
@@ -12149,7 +12565,7 @@ impl PyLatinWord {
         let orig_str = index.str()?.to_string_lossy().into_owned();
         // Normalize via operator.index: raises TypeError (not AttributeError) for
         // non-indexable inputs, matching Python's operator.index contract.
-        // All Python work must happen before any lock (§2.3 lock discipline).
+        // All Python work must happen before any lock.
         let raw_idx = py
             .import(pyo3::intern!(py, "operator"))?
             .getattr(pyo3::intern!(py, "index"))?
@@ -12181,7 +12597,7 @@ impl PyLatinWord {
                 orig_str, n
             ))
         })?;
-        // Python wrap-out happens after the guard is released (§2.3 lock discipline).
+        // Python wrap-out happens after the guard is released.
         let label_obj: Py<pyo3::PyAny> = match label {
             None => py.None(),
             Some(lbl) => lbl.into_pyobject(py)?.into_any().unbind(),
@@ -12198,7 +12614,7 @@ impl PyLatinWord {
         child: &Bound<'_, pyo3::PyAny>,
         label: Option<Py<pyo3::PyAny>>,
     ) -> pyo3::PyResult<()> {
-        // Validate child and label BEFORE taking the write lock (§2.3 lock discipline).
+        // Validate child and label BEFORE taking the write lock.
         let span_type = get_span_type(py)?;
         let native_child = LatinWordChild::extract_from_pyobject(py, child, &span_type)?;
         let native_label = match label {
@@ -12217,7 +12633,7 @@ impl PyLatinWord {
         // Capture the caller's original string representation BEFORE normalization.
         let orig_str = index.str()?.to_string_lossy().into_owned();
         // Normalize via operator.index: raises TypeError for non-indexable inputs.
-        // All Python work must happen before any lock (§2.3 lock discipline).
+        // All Python work must happen before any lock.
         let raw_idx = py
             .import(pyo3::intern!(py, "operator"))?
             .getattr(pyo3::intern!(py, "index"))?
@@ -12352,6 +12768,50 @@ impl PyLatinWord {
             None => Ok(None),
             Some(child) => Ok(Some(child.to_pyobject(py)?)),
         }
+    }
+
+    fn value(&self, py: Python<'_>) -> pyo3::PyResult<Py<pyo3::PyAny>> {
+        self.child_value(py)
+    }
+
+    fn value_text(&self) -> pyo3::PyResult<String> {
+        // Lock scope: count label matches and clone only the first under the guard;
+        // drop the guard before to_pyobject / exception raise (Python work).
+        let (count, first) = {
+            let guard = self.inner.read();
+            let mut count = 0usize;
+            let mut first = None;
+            for (lbl, child) in &guard.children {
+                if *lbl == Some(LatinWordLabel::Value) {
+                    count += 1;
+                    if count == 1 {
+                        first = Some(child.clone());
+                    }
+                }
+            }
+            (count, first)
+        };
+        if count != 1 {
+            return Err(PyValueError::new_err(format!(
+                "Expected one value child but have {count}"
+            )));
+        }
+        match first
+            .expect("invariant: LatinWord.value_text: count==1 but first==None; logic error")
+        {
+            LatinWordChild::Span(s) => s
+                .text_or_message()
+                .map(str::to_owned)
+                .map_err(PyValueError::new_err),
+        }
+    }
+
+    fn text(&self) -> pyo3::PyResult<String> {
+        // Clone the span under the read guard, then release it before raising.
+        let span = self.inner.read().span.clone();
+        span.text_or_message()
+            .map(str::to_owned)
+            .map_err(PyValueError::new_err)
     }
 
     fn __eq__(&self, py: Python<'_>, other: &Bound<'_, pyo3::PyAny>) -> pyo3::PyResult<Py<pyo3::PyAny>> {
@@ -12645,6 +13105,35 @@ impl Tagged {
         self.children.extend(spans.into_iter().map(|s| (Some(TaggedLabel::Value), TaggedChild::Span(s))));
     }
 
+    /// Return the child labelled `value`.
+    ///
+    /// Panics unless exactly one is present; use `child_value` for the checked form.
+    pub fn value(&self) -> &Span {
+        self.child_value()
+            .unwrap_or_else(|e| panic!("Tagged.value: {e}"))
+    }
+
+    /// Return the source text of the child labelled `value`.
+    ///
+    /// Borrows from the span's source; panics if the child is absent or its span
+    /// carries no usable source.
+    pub fn value_text(&self) -> &str {
+        self.child_value()
+            .unwrap_or_else(|e| panic!("Tagged.value_text: {e}"))
+            .text_or_message()
+            .unwrap_or_else(|e| panic!("Tagged.value_text: {e}"))
+    }
+
+    /// Return this node's own source text.
+    ///
+    /// Covers suppressed content inside the node's span; panics if the span carries no
+    /// usable source.
+    pub fn text(&self) -> &str {
+        self.span
+            .text_or_message()
+            .unwrap_or_else(|e| panic!("Tagged.text: {e}"))
+    }
+
     /// Insert a child at `index` (Vec::insert semantics: panics if index > len).
     ///
     /// Python-facing clamping is in the `insert` pymethod; native callers must
@@ -12875,7 +13364,7 @@ impl PyTagged {
         child: &Bound<'_, pyo3::PyAny>,
         label: Option<Py<pyo3::PyAny>>,
     ) -> pyo3::PyResult<()> {
-        // Validate child and label BEFORE taking the write lock (§2.3 lock discipline).
+        // Validate child and label BEFORE taking the write lock.
         let span_type = get_span_type(py)?;
         let native_child = TaggedChild::extract_from_pyobject(py, child, &span_type)?;
         let native_label = match label {
@@ -12893,7 +13382,7 @@ impl PyTagged {
         };
         // Index normalization via operator.index (PyNumber_Index semantics).
         // This raises TypeError (not AttributeError) for non-indexable inputs, matching Python's
-        // operator.index contract. Must be done BEFORE taking any lock (§2.3 lock discipline).
+        // operator.index contract. Must be done BEFORE taking any lock.
         // Overflow by sign: positive overflow clamps to len; negative overflow clamps to 0.
         let raw_idx = py
             .import(pyo3::intern!(py, "operator"))?
@@ -12932,7 +13421,7 @@ impl PyTagged {
         let orig_str = index.str()?.to_string_lossy().into_owned();
         // Normalize via operator.index: raises TypeError (not AttributeError) for
         // non-indexable inputs, matching Python's operator.index contract.
-        // All Python work must happen before any lock (§2.3 lock discipline).
+        // All Python work must happen before any lock.
         let raw_idx = py
             .import(pyo3::intern!(py, "operator"))?
             .getattr(pyo3::intern!(py, "index"))?
@@ -12964,7 +13453,7 @@ impl PyTagged {
                 orig_str, n
             ))
         })?;
-        // Python wrap-out happens after the guard is released (§2.3 lock discipline).
+        // Python wrap-out happens after the guard is released.
         let label_obj: Py<pyo3::PyAny> = match label {
             None => py.None(),
             Some(lbl) => lbl.into_pyobject(py)?.into_any().unbind(),
@@ -12981,7 +13470,7 @@ impl PyTagged {
         child: &Bound<'_, pyo3::PyAny>,
         label: Option<Py<pyo3::PyAny>>,
     ) -> pyo3::PyResult<()> {
-        // Validate child and label BEFORE taking the write lock (§2.3 lock discipline).
+        // Validate child and label BEFORE taking the write lock.
         let span_type = get_span_type(py)?;
         let native_child = TaggedChild::extract_from_pyobject(py, child, &span_type)?;
         let native_label = match label {
@@ -13000,7 +13489,7 @@ impl PyTagged {
         // Capture the caller's original string representation BEFORE normalization.
         let orig_str = index.str()?.to_string_lossy().into_owned();
         // Normalize via operator.index: raises TypeError for non-indexable inputs.
-        // All Python work must happen before any lock (§2.3 lock discipline).
+        // All Python work must happen before any lock.
         let raw_idx = py
             .import(pyo3::intern!(py, "operator"))?
             .getattr(pyo3::intern!(py, "index"))?
@@ -13135,6 +13624,50 @@ impl PyTagged {
             None => Ok(None),
             Some(child) => Ok(Some(child.to_pyobject(py)?)),
         }
+    }
+
+    fn value(&self, py: Python<'_>) -> pyo3::PyResult<Py<pyo3::PyAny>> {
+        self.child_value(py)
+    }
+
+    fn value_text(&self) -> pyo3::PyResult<String> {
+        // Lock scope: count label matches and clone only the first under the guard;
+        // drop the guard before to_pyobject / exception raise (Python work).
+        let (count, first) = {
+            let guard = self.inner.read();
+            let mut count = 0usize;
+            let mut first = None;
+            for (lbl, child) in &guard.children {
+                if *lbl == Some(TaggedLabel::Value) {
+                    count += 1;
+                    if count == 1 {
+                        first = Some(child.clone());
+                    }
+                }
+            }
+            (count, first)
+        };
+        if count != 1 {
+            return Err(PyValueError::new_err(format!(
+                "Expected one value child but have {count}"
+            )));
+        }
+        match first
+            .expect("invariant: Tagged.value_text: count==1 but first==None; logic error")
+        {
+            TaggedChild::Span(s) => s
+                .text_or_message()
+                .map(str::to_owned)
+                .map_err(PyValueError::new_err),
+        }
+    }
+
+    fn text(&self) -> pyo3::PyResult<String> {
+        // Clone the span under the read guard, then release it before raising.
+        let span = self.inner.read().span.clone();
+        span.text_or_message()
+            .map(str::to_owned)
+            .map_err(PyValueError::new_err)
     }
 
     fn __eq__(&self, py: Python<'_>, other: &Bound<'_, pyo3::PyAny>) -> pyo3::PyResult<Py<pyo3::PyAny>> {
@@ -13546,6 +14079,26 @@ impl Val {
         self.children.extend(children.into_iter().map(|c| (Some(ValLabel::Item), c)));
     }
 
+    /// Return the child labelled `item`.
+    ///
+    /// Panics unless exactly one is present; use `child_item` for the checked form.
+    pub fn item(&self) -> &ValChild {
+        self.child_item()
+            .unwrap_or_else(|e| panic!("Val.item: {e}"))
+    }
+
+    /// Return the label of this node's sole labelled child.
+    ///
+    /// Every alternative of this rule is a single labelled item, so the label identifies
+    /// which one matched.  Panics when no child carries a label.
+    pub fn variant(&self) -> ValLabel {
+        self.children
+            .iter()
+            .find_map(|(lbl, _)| lbl.as_ref())
+            .cloned()
+            .expect("Val.variant: node has no labeled child")
+    }
+
     /// Insert a child at `index` (Vec::insert semantics: panics if index > len).
     ///
     /// Python-facing clamping is in the `insert` pymethod; native callers must
@@ -13776,7 +14329,7 @@ impl PyVal {
         child: &Bound<'_, pyo3::PyAny>,
         label: Option<Py<pyo3::PyAny>>,
     ) -> pyo3::PyResult<()> {
-        // Validate child and label BEFORE taking the write lock (§2.3 lock discipline).
+        // Validate child and label BEFORE taking the write lock.
         let span_type = get_span_type(py)?;
         let native_child = ValChild::extract_from_pyobject(py, child, &span_type)?;
         let native_label = match label {
@@ -13794,7 +14347,7 @@ impl PyVal {
         };
         // Index normalization via operator.index (PyNumber_Index semantics).
         // This raises TypeError (not AttributeError) for non-indexable inputs, matching Python's
-        // operator.index contract. Must be done BEFORE taking any lock (§2.3 lock discipline).
+        // operator.index contract. Must be done BEFORE taking any lock.
         // Overflow by sign: positive overflow clamps to len; negative overflow clamps to 0.
         let raw_idx = py
             .import(pyo3::intern!(py, "operator"))?
@@ -13833,7 +14386,7 @@ impl PyVal {
         let orig_str = index.str()?.to_string_lossy().into_owned();
         // Normalize via operator.index: raises TypeError (not AttributeError) for
         // non-indexable inputs, matching Python's operator.index contract.
-        // All Python work must happen before any lock (§2.3 lock discipline).
+        // All Python work must happen before any lock.
         let raw_idx = py
             .import(pyo3::intern!(py, "operator"))?
             .getattr(pyo3::intern!(py, "index"))?
@@ -13865,7 +14418,7 @@ impl PyVal {
                 orig_str, n
             ))
         })?;
-        // Python wrap-out happens after the guard is released (§2.3 lock discipline).
+        // Python wrap-out happens after the guard is released.
         let label_obj: Py<pyo3::PyAny> = match label {
             None => py.None(),
             Some(lbl) => lbl.into_pyobject(py)?.into_any().unbind(),
@@ -13882,7 +14435,7 @@ impl PyVal {
         child: &Bound<'_, pyo3::PyAny>,
         label: Option<Py<pyo3::PyAny>>,
     ) -> pyo3::PyResult<()> {
-        // Validate child and label BEFORE taking the write lock (§2.3 lock discipline).
+        // Validate child and label BEFORE taking the write lock.
         let span_type = get_span_type(py)?;
         let native_child = ValChild::extract_from_pyobject(py, child, &span_type)?;
         let native_label = match label {
@@ -13901,7 +14454,7 @@ impl PyVal {
         // Capture the caller's original string representation BEFORE normalization.
         let orig_str = index.str()?.to_string_lossy().into_owned();
         // Normalize via operator.index: raises TypeError for non-indexable inputs.
-        // All Python work must happen before any lock (§2.3 lock discipline).
+        // All Python work must happen before any lock.
         let raw_idx = py
             .import(pyo3::intern!(py, "operator"))?
             .getattr(pyo3::intern!(py, "index"))?
@@ -14036,6 +14589,21 @@ impl PyVal {
             None => Ok(None),
             Some(child) => Ok(Some(child.to_pyobject(py)?)),
         }
+    }
+
+    fn item(&self, py: Python<'_>) -> pyo3::PyResult<Py<pyo3::PyAny>> {
+        self.child_item(py)
+    }
+
+    fn variant(&self) -> pyo3::PyResult<ValLabel> {
+        // Lock scope: read the first label out, drop the guard before raising.
+        let found = {
+            let guard = self.inner.read();
+            guard.children.iter().find_map(|(lbl, _)| lbl.as_ref()).cloned()
+        };
+        found.ok_or_else(|| PyValueError::new_err(
+            "Val.variant: node has no labeled child",
+        ))
     }
 
     fn __eq__(&self, py: Python<'_>, other: &Bound<'_, pyo3::PyAny>) -> pyo3::PyResult<Py<pyo3::PyAny>> {
@@ -14442,6 +15010,14 @@ impl LeadingWs {
         self.children.extend(children.into_iter().map(|c| (Some(LeadingWsLabel::Num), LeadingWsChild::Num(c.into()))));
     }
 
+    /// Return the child labelled `num`.
+    ///
+    /// Panics unless exactly one is present; use `child_num` for the checked form.
+    pub fn num(&self) -> &Shared<Num> {
+        self.child_num()
+            .unwrap_or_else(|e| panic!("LeadingWs.num: {e}"))
+    }
+
     /// Insert a child at `index` (Vec::insert semantics: panics if index > len).
     ///
     /// Python-facing clamping is in the `insert` pymethod; native callers must
@@ -14672,7 +15248,7 @@ impl PyLeadingWs {
         child: &Bound<'_, pyo3::PyAny>,
         label: Option<Py<pyo3::PyAny>>,
     ) -> pyo3::PyResult<()> {
-        // Validate child and label BEFORE taking the write lock (§2.3 lock discipline).
+        // Validate child and label BEFORE taking the write lock.
         let span_type = get_span_type(py)?;
         let native_child = LeadingWsChild::extract_from_pyobject(py, child, &span_type)?;
         let native_label = match label {
@@ -14690,7 +15266,7 @@ impl PyLeadingWs {
         };
         // Index normalization via operator.index (PyNumber_Index semantics).
         // This raises TypeError (not AttributeError) for non-indexable inputs, matching Python's
-        // operator.index contract. Must be done BEFORE taking any lock (§2.3 lock discipline).
+        // operator.index contract. Must be done BEFORE taking any lock.
         // Overflow by sign: positive overflow clamps to len; negative overflow clamps to 0.
         let raw_idx = py
             .import(pyo3::intern!(py, "operator"))?
@@ -14729,7 +15305,7 @@ impl PyLeadingWs {
         let orig_str = index.str()?.to_string_lossy().into_owned();
         // Normalize via operator.index: raises TypeError (not AttributeError) for
         // non-indexable inputs, matching Python's operator.index contract.
-        // All Python work must happen before any lock (§2.3 lock discipline).
+        // All Python work must happen before any lock.
         let raw_idx = py
             .import(pyo3::intern!(py, "operator"))?
             .getattr(pyo3::intern!(py, "index"))?
@@ -14761,7 +15337,7 @@ impl PyLeadingWs {
                 orig_str, n
             ))
         })?;
-        // Python wrap-out happens after the guard is released (§2.3 lock discipline).
+        // Python wrap-out happens after the guard is released.
         let label_obj: Py<pyo3::PyAny> = match label {
             None => py.None(),
             Some(lbl) => lbl.into_pyobject(py)?.into_any().unbind(),
@@ -14778,7 +15354,7 @@ impl PyLeadingWs {
         child: &Bound<'_, pyo3::PyAny>,
         label: Option<Py<pyo3::PyAny>>,
     ) -> pyo3::PyResult<()> {
-        // Validate child and label BEFORE taking the write lock (§2.3 lock discipline).
+        // Validate child and label BEFORE taking the write lock.
         let span_type = get_span_type(py)?;
         let native_child = LeadingWsChild::extract_from_pyobject(py, child, &span_type)?;
         let native_label = match label {
@@ -14797,7 +15373,7 @@ impl PyLeadingWs {
         // Capture the caller's original string representation BEFORE normalization.
         let orig_str = index.str()?.to_string_lossy().into_owned();
         // Normalize via operator.index: raises TypeError for non-indexable inputs.
-        // All Python work must happen before any lock (§2.3 lock discipline).
+        // All Python work must happen before any lock.
         let raw_idx = py
             .import(pyo3::intern!(py, "operator"))?
             .getattr(pyo3::intern!(py, "index"))?
@@ -14932,6 +15508,10 @@ impl PyLeadingWs {
             None => Ok(None),
             Some(child) => Ok(Some(child.to_pyobject(py)?)),
         }
+    }
+
+    fn num(&self, py: Python<'_>) -> pyo3::PyResult<Py<pyo3::PyAny>> {
+        self.child_num(py)
     }
 
     fn __eq__(&self, py: Python<'_>, other: &Bound<'_, pyo3::PyAny>) -> pyo3::PyResult<Py<pyo3::PyAny>> {
@@ -15360,6 +15940,14 @@ impl Grouped {
         self.children.extend(children.into_iter().map(|c| (Some(GroupedLabel::Left), c)));
     }
 
+    /// Return the child labelled `left`.
+    ///
+    /// Panics unless exactly one is present; use `child_left` for the checked form.
+    pub fn left(&self) -> &GroupedChild {
+        self.child_left()
+            .unwrap_or_else(|e| panic!("Grouped.left: {e}"))
+    }
+
     /// Insert a child at `index` (Vec::insert semantics: panics if index > len).
     ///
     /// Python-facing clamping is in the `insert` pymethod; native callers must
@@ -15590,7 +16178,7 @@ impl PyGrouped {
         child: &Bound<'_, pyo3::PyAny>,
         label: Option<Py<pyo3::PyAny>>,
     ) -> pyo3::PyResult<()> {
-        // Validate child and label BEFORE taking the write lock (§2.3 lock discipline).
+        // Validate child and label BEFORE taking the write lock.
         let span_type = get_span_type(py)?;
         let native_child = GroupedChild::extract_from_pyobject(py, child, &span_type)?;
         let native_label = match label {
@@ -15608,7 +16196,7 @@ impl PyGrouped {
         };
         // Index normalization via operator.index (PyNumber_Index semantics).
         // This raises TypeError (not AttributeError) for non-indexable inputs, matching Python's
-        // operator.index contract. Must be done BEFORE taking any lock (§2.3 lock discipline).
+        // operator.index contract. Must be done BEFORE taking any lock.
         // Overflow by sign: positive overflow clamps to len; negative overflow clamps to 0.
         let raw_idx = py
             .import(pyo3::intern!(py, "operator"))?
@@ -15647,7 +16235,7 @@ impl PyGrouped {
         let orig_str = index.str()?.to_string_lossy().into_owned();
         // Normalize via operator.index: raises TypeError (not AttributeError) for
         // non-indexable inputs, matching Python's operator.index contract.
-        // All Python work must happen before any lock (§2.3 lock discipline).
+        // All Python work must happen before any lock.
         let raw_idx = py
             .import(pyo3::intern!(py, "operator"))?
             .getattr(pyo3::intern!(py, "index"))?
@@ -15679,7 +16267,7 @@ impl PyGrouped {
                 orig_str, n
             ))
         })?;
-        // Python wrap-out happens after the guard is released (§2.3 lock discipline).
+        // Python wrap-out happens after the guard is released.
         let label_obj: Py<pyo3::PyAny> = match label {
             None => py.None(),
             Some(lbl) => lbl.into_pyobject(py)?.into_any().unbind(),
@@ -15696,7 +16284,7 @@ impl PyGrouped {
         child: &Bound<'_, pyo3::PyAny>,
         label: Option<Py<pyo3::PyAny>>,
     ) -> pyo3::PyResult<()> {
-        // Validate child and label BEFORE taking the write lock (§2.3 lock discipline).
+        // Validate child and label BEFORE taking the write lock.
         let span_type = get_span_type(py)?;
         let native_child = GroupedChild::extract_from_pyobject(py, child, &span_type)?;
         let native_label = match label {
@@ -15715,7 +16303,7 @@ impl PyGrouped {
         // Capture the caller's original string representation BEFORE normalization.
         let orig_str = index.str()?.to_string_lossy().into_owned();
         // Normalize via operator.index: raises TypeError for non-indexable inputs.
-        // All Python work must happen before any lock (§2.3 lock discipline).
+        // All Python work must happen before any lock.
         let raw_idx = py
             .import(pyo3::intern!(py, "operator"))?
             .getattr(pyo3::intern!(py, "index"))?
@@ -15850,6 +16438,10 @@ impl PyGrouped {
             None => Ok(None),
             Some(child) => Ok(Some(child.to_pyobject(py)?)),
         }
+    }
+
+    fn left(&self, py: Python<'_>) -> pyo3::PyResult<Py<pyo3::PyAny>> {
+        self.child_left(py)
     }
 
     fn __eq__(&self, py: Python<'_>, other: &Bound<'_, pyo3::PyAny>) -> pyo3::PyResult<Py<pyo3::PyAny>> {
@@ -16351,6 +16943,22 @@ impl RecViaSub {
         self.children.extend(children.into_iter().map(|c| (Some(RecViaSubLabel::Suffix), RecViaSubChild::Name(c.into()))));
     }
 
+    /// Return the child labelled `inner`.
+    ///
+    /// Panics unless exactly one is present; use `child_inner` for the checked form.
+    pub fn inner(&self) -> &RecViaSubChild {
+        self.child_inner()
+            .unwrap_or_else(|e| panic!("RecViaSub.inner: {e}"))
+    }
+
+    /// Return the child labelled `suffix`.
+    ///
+    /// Panics unless exactly one is present; use `child_suffix` for the checked form.
+    pub fn suffix(&self) -> &Shared<Name> {
+        self.child_suffix()
+            .unwrap_or_else(|e| panic!("RecViaSub.suffix: {e}"))
+    }
+
     /// Insert a child at `index` (Vec::insert semantics: panics if index > len).
     ///
     /// Python-facing clamping is in the `insert` pymethod; native callers must
@@ -16581,7 +17189,7 @@ impl PyRecViaSub {
         child: &Bound<'_, pyo3::PyAny>,
         label: Option<Py<pyo3::PyAny>>,
     ) -> pyo3::PyResult<()> {
-        // Validate child and label BEFORE taking the write lock (§2.3 lock discipline).
+        // Validate child and label BEFORE taking the write lock.
         let span_type = get_span_type(py)?;
         let native_child = RecViaSubChild::extract_from_pyobject(py, child, &span_type)?;
         let native_label = match label {
@@ -16599,7 +17207,7 @@ impl PyRecViaSub {
         };
         // Index normalization via operator.index (PyNumber_Index semantics).
         // This raises TypeError (not AttributeError) for non-indexable inputs, matching Python's
-        // operator.index contract. Must be done BEFORE taking any lock (§2.3 lock discipline).
+        // operator.index contract. Must be done BEFORE taking any lock.
         // Overflow by sign: positive overflow clamps to len; negative overflow clamps to 0.
         let raw_idx = py
             .import(pyo3::intern!(py, "operator"))?
@@ -16638,7 +17246,7 @@ impl PyRecViaSub {
         let orig_str = index.str()?.to_string_lossy().into_owned();
         // Normalize via operator.index: raises TypeError (not AttributeError) for
         // non-indexable inputs, matching Python's operator.index contract.
-        // All Python work must happen before any lock (§2.3 lock discipline).
+        // All Python work must happen before any lock.
         let raw_idx = py
             .import(pyo3::intern!(py, "operator"))?
             .getattr(pyo3::intern!(py, "index"))?
@@ -16670,7 +17278,7 @@ impl PyRecViaSub {
                 orig_str, n
             ))
         })?;
-        // Python wrap-out happens after the guard is released (§2.3 lock discipline).
+        // Python wrap-out happens after the guard is released.
         let label_obj: Py<pyo3::PyAny> = match label {
             None => py.None(),
             Some(lbl) => lbl.into_pyobject(py)?.into_any().unbind(),
@@ -16687,7 +17295,7 @@ impl PyRecViaSub {
         child: &Bound<'_, pyo3::PyAny>,
         label: Option<Py<pyo3::PyAny>>,
     ) -> pyo3::PyResult<()> {
-        // Validate child and label BEFORE taking the write lock (§2.3 lock discipline).
+        // Validate child and label BEFORE taking the write lock.
         let span_type = get_span_type(py)?;
         let native_child = RecViaSubChild::extract_from_pyobject(py, child, &span_type)?;
         let native_label = match label {
@@ -16706,7 +17314,7 @@ impl PyRecViaSub {
         // Capture the caller's original string representation BEFORE normalization.
         let orig_str = index.str()?.to_string_lossy().into_owned();
         // Normalize via operator.index: raises TypeError for non-indexable inputs.
-        // All Python work must happen before any lock (§2.3 lock discipline).
+        // All Python work must happen before any lock.
         let raw_idx = py
             .import(pyo3::intern!(py, "operator"))?
             .getattr(pyo3::intern!(py, "index"))?
@@ -16932,6 +17540,14 @@ impl PyRecViaSub {
             None => Ok(None),
             Some(child) => Ok(Some(child.to_pyobject(py)?)),
         }
+    }
+
+    fn inner(&self, py: Python<'_>) -> pyo3::PyResult<Py<pyo3::PyAny>> {
+        self.child_inner(py)
+    }
+
+    fn suffix(&self, py: Python<'_>) -> pyo3::PyResult<Py<pyo3::PyAny>> {
+        self.child_suffix(py)
     }
 
     fn __eq__(&self, py: Python<'_>, other: &Bound<'_, pyo3::PyAny>) -> pyo3::PyResult<Py<pyo3::PyAny>> {
@@ -17411,6 +18027,22 @@ impl Nest {
         self.children.extend(children.into_iter().map(|c| (Some(NestLabel::Leaf), NestChild::Num(c.into()))));
     }
 
+    /// Return the optional child labelled `inner`.
+    ///
+    /// Panics if more than one is present; use `maybe_inner` for the checked form.
+    pub fn inner(&self) -> Option<&Shared<Nest>> {
+        self.maybe_inner()
+            .unwrap_or_else(|e| panic!("Nest.inner: {e}"))
+    }
+
+    /// Return the optional child labelled `leaf`.
+    ///
+    /// Panics if more than one is present; use `maybe_leaf` for the checked form.
+    pub fn leaf(&self) -> Option<&Shared<Num>> {
+        self.maybe_leaf()
+            .unwrap_or_else(|e| panic!("Nest.leaf: {e}"))
+    }
+
     /// Insert a child at `index` (Vec::insert semantics: panics if index > len).
     ///
     /// Python-facing clamping is in the `insert` pymethod; native callers must
@@ -17641,7 +18273,7 @@ impl PyNest {
         child: &Bound<'_, pyo3::PyAny>,
         label: Option<Py<pyo3::PyAny>>,
     ) -> pyo3::PyResult<()> {
-        // Validate child and label BEFORE taking the write lock (§2.3 lock discipline).
+        // Validate child and label BEFORE taking the write lock.
         let span_type = get_span_type(py)?;
         let native_child = NestChild::extract_from_pyobject(py, child, &span_type)?;
         let native_label = match label {
@@ -17659,7 +18291,7 @@ impl PyNest {
         };
         // Index normalization via operator.index (PyNumber_Index semantics).
         // This raises TypeError (not AttributeError) for non-indexable inputs, matching Python's
-        // operator.index contract. Must be done BEFORE taking any lock (§2.3 lock discipline).
+        // operator.index contract. Must be done BEFORE taking any lock.
         // Overflow by sign: positive overflow clamps to len; negative overflow clamps to 0.
         let raw_idx = py
             .import(pyo3::intern!(py, "operator"))?
@@ -17698,7 +18330,7 @@ impl PyNest {
         let orig_str = index.str()?.to_string_lossy().into_owned();
         // Normalize via operator.index: raises TypeError (not AttributeError) for
         // non-indexable inputs, matching Python's operator.index contract.
-        // All Python work must happen before any lock (§2.3 lock discipline).
+        // All Python work must happen before any lock.
         let raw_idx = py
             .import(pyo3::intern!(py, "operator"))?
             .getattr(pyo3::intern!(py, "index"))?
@@ -17730,7 +18362,7 @@ impl PyNest {
                 orig_str, n
             ))
         })?;
-        // Python wrap-out happens after the guard is released (§2.3 lock discipline).
+        // Python wrap-out happens after the guard is released.
         let label_obj: Py<pyo3::PyAny> = match label {
             None => py.None(),
             Some(lbl) => lbl.into_pyobject(py)?.into_any().unbind(),
@@ -17747,7 +18379,7 @@ impl PyNest {
         child: &Bound<'_, pyo3::PyAny>,
         label: Option<Py<pyo3::PyAny>>,
     ) -> pyo3::PyResult<()> {
-        // Validate child and label BEFORE taking the write lock (§2.3 lock discipline).
+        // Validate child and label BEFORE taking the write lock.
         let span_type = get_span_type(py)?;
         let native_child = NestChild::extract_from_pyobject(py, child, &span_type)?;
         let native_label = match label {
@@ -17766,7 +18398,7 @@ impl PyNest {
         // Capture the caller's original string representation BEFORE normalization.
         let orig_str = index.str()?.to_string_lossy().into_owned();
         // Normalize via operator.index: raises TypeError for non-indexable inputs.
-        // All Python work must happen before any lock (§2.3 lock discipline).
+        // All Python work must happen before any lock.
         let raw_idx = py
             .import(pyo3::intern!(py, "operator"))?
             .getattr(pyo3::intern!(py, "index"))?
@@ -17992,6 +18624,14 @@ impl PyNest {
             None => Ok(None),
             Some(child) => Ok(Some(child.to_pyobject(py)?)),
         }
+    }
+
+    fn inner(&self, py: Python<'_>) -> pyo3::PyResult<Option<Py<pyo3::PyAny>>> {
+        self.maybe_inner(py)
+    }
+
+    fn leaf(&self, py: Python<'_>) -> pyo3::PyResult<Option<Py<pyo3::PyAny>>> {
+        self.maybe_leaf(py)
     }
 
     fn __eq__(&self, py: Python<'_>, other: &Bound<'_, pyo3::PyAny>) -> pyo3::PyResult<Py<pyo3::PyAny>> {
@@ -18544,6 +19184,30 @@ impl NestSum {
         self.children.extend(children.into_iter().map(|c| (Some(NestSumLabel::Rhs), NestSumChild::Nest(c.into()))));
     }
 
+    /// Return the optional child labelled `first`.
+    ///
+    /// Panics if more than one is present; use `maybe_first` for the checked form.
+    pub fn first(&self) -> Option<&Shared<Nest>> {
+        self.maybe_first()
+            .unwrap_or_else(|e| panic!("NestSum.first: {e}"))
+    }
+
+    /// Return the optional child labelled `lhs`.
+    ///
+    /// Panics if more than one is present; use `maybe_lhs` for the checked form.
+    pub fn lhs(&self) -> Option<&Shared<NestSum>> {
+        self.maybe_lhs()
+            .unwrap_or_else(|e| panic!("NestSum.lhs: {e}"))
+    }
+
+    /// Return the optional child labelled `rhs`.
+    ///
+    /// Panics if more than one is present; use `maybe_rhs` for the checked form.
+    pub fn rhs(&self) -> Option<&Shared<Nest>> {
+        self.maybe_rhs()
+            .unwrap_or_else(|e| panic!("NestSum.rhs: {e}"))
+    }
+
     /// Insert a child at `index` (Vec::insert semantics: panics if index > len).
     ///
     /// Python-facing clamping is in the `insert` pymethod; native callers must
@@ -18774,7 +19438,7 @@ impl PyNestSum {
         child: &Bound<'_, pyo3::PyAny>,
         label: Option<Py<pyo3::PyAny>>,
     ) -> pyo3::PyResult<()> {
-        // Validate child and label BEFORE taking the write lock (§2.3 lock discipline).
+        // Validate child and label BEFORE taking the write lock.
         let span_type = get_span_type(py)?;
         let native_child = NestSumChild::extract_from_pyobject(py, child, &span_type)?;
         let native_label = match label {
@@ -18792,7 +19456,7 @@ impl PyNestSum {
         };
         // Index normalization via operator.index (PyNumber_Index semantics).
         // This raises TypeError (not AttributeError) for non-indexable inputs, matching Python's
-        // operator.index contract. Must be done BEFORE taking any lock (§2.3 lock discipline).
+        // operator.index contract. Must be done BEFORE taking any lock.
         // Overflow by sign: positive overflow clamps to len; negative overflow clamps to 0.
         let raw_idx = py
             .import(pyo3::intern!(py, "operator"))?
@@ -18831,7 +19495,7 @@ impl PyNestSum {
         let orig_str = index.str()?.to_string_lossy().into_owned();
         // Normalize via operator.index: raises TypeError (not AttributeError) for
         // non-indexable inputs, matching Python's operator.index contract.
-        // All Python work must happen before any lock (§2.3 lock discipline).
+        // All Python work must happen before any lock.
         let raw_idx = py
             .import(pyo3::intern!(py, "operator"))?
             .getattr(pyo3::intern!(py, "index"))?
@@ -18863,7 +19527,7 @@ impl PyNestSum {
                 orig_str, n
             ))
         })?;
-        // Python wrap-out happens after the guard is released (§2.3 lock discipline).
+        // Python wrap-out happens after the guard is released.
         let label_obj: Py<pyo3::PyAny> = match label {
             None => py.None(),
             Some(lbl) => lbl.into_pyobject(py)?.into_any().unbind(),
@@ -18880,7 +19544,7 @@ impl PyNestSum {
         child: &Bound<'_, pyo3::PyAny>,
         label: Option<Py<pyo3::PyAny>>,
     ) -> pyo3::PyResult<()> {
-        // Validate child and label BEFORE taking the write lock (§2.3 lock discipline).
+        // Validate child and label BEFORE taking the write lock.
         let span_type = get_span_type(py)?;
         let native_child = NestSumChild::extract_from_pyobject(py, child, &span_type)?;
         let native_label = match label {
@@ -18899,7 +19563,7 @@ impl PyNestSum {
         // Capture the caller's original string representation BEFORE normalization.
         let orig_str = index.str()?.to_string_lossy().into_owned();
         // Normalize via operator.index: raises TypeError for non-indexable inputs.
-        // All Python work must happen before any lock (§2.3 lock discipline).
+        // All Python work must happen before any lock.
         let raw_idx = py
             .import(pyo3::intern!(py, "operator"))?
             .getattr(pyo3::intern!(py, "index"))?
@@ -19218,6 +19882,18 @@ impl PyNestSum {
         }
     }
 
+    fn first(&self, py: Python<'_>) -> pyo3::PyResult<Option<Py<pyo3::PyAny>>> {
+        self.maybe_first(py)
+    }
+
+    fn lhs(&self, py: Python<'_>) -> pyo3::PyResult<Option<Py<pyo3::PyAny>>> {
+        self.maybe_lhs(py)
+    }
+
+    fn rhs(&self, py: Python<'_>) -> pyo3::PyResult<Option<Py<pyo3::PyAny>>> {
+        self.maybe_rhs(py)
+    }
+
     fn __eq__(&self, py: Python<'_>, other: &Bound<'_, pyo3::PyAny>) -> pyo3::PyResult<Py<pyo3::PyAny>> {
         if !other.is_instance_of::<PyNestSum>() {
             return Ok(py.NotImplemented());
@@ -19509,6 +20185,35 @@ impl DigitSeq {
         self.children.extend(spans.into_iter().map(|s| (Some(DigitSeqLabel::Value), DigitSeqChild::Span(s))));
     }
 
+    /// Return the child labelled `value`.
+    ///
+    /// Panics unless exactly one is present; use `child_value` for the checked form.
+    pub fn value(&self) -> &Span {
+        self.child_value()
+            .unwrap_or_else(|e| panic!("DigitSeq.value: {e}"))
+    }
+
+    /// Return the source text of the child labelled `value`.
+    ///
+    /// Borrows from the span's source; panics if the child is absent or its span
+    /// carries no usable source.
+    pub fn value_text(&self) -> &str {
+        self.child_value()
+            .unwrap_or_else(|e| panic!("DigitSeq.value_text: {e}"))
+            .text_or_message()
+            .unwrap_or_else(|e| panic!("DigitSeq.value_text: {e}"))
+    }
+
+    /// Return this node's own source text.
+    ///
+    /// Covers suppressed content inside the node's span; panics if the span carries no
+    /// usable source.
+    pub fn text(&self) -> &str {
+        self.span
+            .text_or_message()
+            .unwrap_or_else(|e| panic!("DigitSeq.text: {e}"))
+    }
+
     /// Insert a child at `index` (Vec::insert semantics: panics if index > len).
     ///
     /// Python-facing clamping is in the `insert` pymethod; native callers must
@@ -19739,7 +20444,7 @@ impl PyDigitSeq {
         child: &Bound<'_, pyo3::PyAny>,
         label: Option<Py<pyo3::PyAny>>,
     ) -> pyo3::PyResult<()> {
-        // Validate child and label BEFORE taking the write lock (§2.3 lock discipline).
+        // Validate child and label BEFORE taking the write lock.
         let span_type = get_span_type(py)?;
         let native_child = DigitSeqChild::extract_from_pyobject(py, child, &span_type)?;
         let native_label = match label {
@@ -19757,7 +20462,7 @@ impl PyDigitSeq {
         };
         // Index normalization via operator.index (PyNumber_Index semantics).
         // This raises TypeError (not AttributeError) for non-indexable inputs, matching Python's
-        // operator.index contract. Must be done BEFORE taking any lock (§2.3 lock discipline).
+        // operator.index contract. Must be done BEFORE taking any lock.
         // Overflow by sign: positive overflow clamps to len; negative overflow clamps to 0.
         let raw_idx = py
             .import(pyo3::intern!(py, "operator"))?
@@ -19796,7 +20501,7 @@ impl PyDigitSeq {
         let orig_str = index.str()?.to_string_lossy().into_owned();
         // Normalize via operator.index: raises TypeError (not AttributeError) for
         // non-indexable inputs, matching Python's operator.index contract.
-        // All Python work must happen before any lock (§2.3 lock discipline).
+        // All Python work must happen before any lock.
         let raw_idx = py
             .import(pyo3::intern!(py, "operator"))?
             .getattr(pyo3::intern!(py, "index"))?
@@ -19828,7 +20533,7 @@ impl PyDigitSeq {
                 orig_str, n
             ))
         })?;
-        // Python wrap-out happens after the guard is released (§2.3 lock discipline).
+        // Python wrap-out happens after the guard is released.
         let label_obj: Py<pyo3::PyAny> = match label {
             None => py.None(),
             Some(lbl) => lbl.into_pyobject(py)?.into_any().unbind(),
@@ -19845,7 +20550,7 @@ impl PyDigitSeq {
         child: &Bound<'_, pyo3::PyAny>,
         label: Option<Py<pyo3::PyAny>>,
     ) -> pyo3::PyResult<()> {
-        // Validate child and label BEFORE taking the write lock (§2.3 lock discipline).
+        // Validate child and label BEFORE taking the write lock.
         let span_type = get_span_type(py)?;
         let native_child = DigitSeqChild::extract_from_pyobject(py, child, &span_type)?;
         let native_label = match label {
@@ -19864,7 +20569,7 @@ impl PyDigitSeq {
         // Capture the caller's original string representation BEFORE normalization.
         let orig_str = index.str()?.to_string_lossy().into_owned();
         // Normalize via operator.index: raises TypeError for non-indexable inputs.
-        // All Python work must happen before any lock (§2.3 lock discipline).
+        // All Python work must happen before any lock.
         let raw_idx = py
             .import(pyo3::intern!(py, "operator"))?
             .getattr(pyo3::intern!(py, "index"))?
@@ -19999,6 +20704,50 @@ impl PyDigitSeq {
             None => Ok(None),
             Some(child) => Ok(Some(child.to_pyobject(py)?)),
         }
+    }
+
+    fn value(&self, py: Python<'_>) -> pyo3::PyResult<Py<pyo3::PyAny>> {
+        self.child_value(py)
+    }
+
+    fn value_text(&self) -> pyo3::PyResult<String> {
+        // Lock scope: count label matches and clone only the first under the guard;
+        // drop the guard before to_pyobject / exception raise (Python work).
+        let (count, first) = {
+            let guard = self.inner.read();
+            let mut count = 0usize;
+            let mut first = None;
+            for (lbl, child) in &guard.children {
+                if *lbl == Some(DigitSeqLabel::Value) {
+                    count += 1;
+                    if count == 1 {
+                        first = Some(child.clone());
+                    }
+                }
+            }
+            (count, first)
+        };
+        if count != 1 {
+            return Err(PyValueError::new_err(format!(
+                "Expected one value child but have {count}"
+            )));
+        }
+        match first
+            .expect("invariant: DigitSeq.value_text: count==1 but first==None; logic error")
+        {
+            DigitSeqChild::Span(s) => s
+                .text_or_message()
+                .map(str::to_owned)
+                .map_err(PyValueError::new_err),
+        }
+    }
+
+    fn text(&self) -> pyo3::PyResult<String> {
+        // Clone the span under the read guard, then release it before raising.
+        let span = self.inner.read().span.clone();
+        span.text_or_message()
+            .map(str::to_owned)
+            .map_err(PyValueError::new_err)
     }
 
     fn __eq__(&self, py: Python<'_>, other: &Bound<'_, pyo3::PyAny>) -> pyo3::PyResult<Py<pyo3::PyAny>> {
@@ -20292,6 +21041,35 @@ impl WordSeq {
         self.children.extend(spans.into_iter().map(|s| (Some(WordSeqLabel::Value), WordSeqChild::Span(s))));
     }
 
+    /// Return the child labelled `value`.
+    ///
+    /// Panics unless exactly one is present; use `child_value` for the checked form.
+    pub fn value(&self) -> &Span {
+        self.child_value()
+            .unwrap_or_else(|e| panic!("WordSeq.value: {e}"))
+    }
+
+    /// Return the source text of the child labelled `value`.
+    ///
+    /// Borrows from the span's source; panics if the child is absent or its span
+    /// carries no usable source.
+    pub fn value_text(&self) -> &str {
+        self.child_value()
+            .unwrap_or_else(|e| panic!("WordSeq.value_text: {e}"))
+            .text_or_message()
+            .unwrap_or_else(|e| panic!("WordSeq.value_text: {e}"))
+    }
+
+    /// Return this node's own source text.
+    ///
+    /// Covers suppressed content inside the node's span; panics if the span carries no
+    /// usable source.
+    pub fn text(&self) -> &str {
+        self.span
+            .text_or_message()
+            .unwrap_or_else(|e| panic!("WordSeq.text: {e}"))
+    }
+
     /// Insert a child at `index` (Vec::insert semantics: panics if index > len).
     ///
     /// Python-facing clamping is in the `insert` pymethod; native callers must
@@ -20522,7 +21300,7 @@ impl PyWordSeq {
         child: &Bound<'_, pyo3::PyAny>,
         label: Option<Py<pyo3::PyAny>>,
     ) -> pyo3::PyResult<()> {
-        // Validate child and label BEFORE taking the write lock (§2.3 lock discipline).
+        // Validate child and label BEFORE taking the write lock.
         let span_type = get_span_type(py)?;
         let native_child = WordSeqChild::extract_from_pyobject(py, child, &span_type)?;
         let native_label = match label {
@@ -20540,7 +21318,7 @@ impl PyWordSeq {
         };
         // Index normalization via operator.index (PyNumber_Index semantics).
         // This raises TypeError (not AttributeError) for non-indexable inputs, matching Python's
-        // operator.index contract. Must be done BEFORE taking any lock (§2.3 lock discipline).
+        // operator.index contract. Must be done BEFORE taking any lock.
         // Overflow by sign: positive overflow clamps to len; negative overflow clamps to 0.
         let raw_idx = py
             .import(pyo3::intern!(py, "operator"))?
@@ -20579,7 +21357,7 @@ impl PyWordSeq {
         let orig_str = index.str()?.to_string_lossy().into_owned();
         // Normalize via operator.index: raises TypeError (not AttributeError) for
         // non-indexable inputs, matching Python's operator.index contract.
-        // All Python work must happen before any lock (§2.3 lock discipline).
+        // All Python work must happen before any lock.
         let raw_idx = py
             .import(pyo3::intern!(py, "operator"))?
             .getattr(pyo3::intern!(py, "index"))?
@@ -20611,7 +21389,7 @@ impl PyWordSeq {
                 orig_str, n
             ))
         })?;
-        // Python wrap-out happens after the guard is released (§2.3 lock discipline).
+        // Python wrap-out happens after the guard is released.
         let label_obj: Py<pyo3::PyAny> = match label {
             None => py.None(),
             Some(lbl) => lbl.into_pyobject(py)?.into_any().unbind(),
@@ -20628,7 +21406,7 @@ impl PyWordSeq {
         child: &Bound<'_, pyo3::PyAny>,
         label: Option<Py<pyo3::PyAny>>,
     ) -> pyo3::PyResult<()> {
-        // Validate child and label BEFORE taking the write lock (§2.3 lock discipline).
+        // Validate child and label BEFORE taking the write lock.
         let span_type = get_span_type(py)?;
         let native_child = WordSeqChild::extract_from_pyobject(py, child, &span_type)?;
         let native_label = match label {
@@ -20647,7 +21425,7 @@ impl PyWordSeq {
         // Capture the caller's original string representation BEFORE normalization.
         let orig_str = index.str()?.to_string_lossy().into_owned();
         // Normalize via operator.index: raises TypeError for non-indexable inputs.
-        // All Python work must happen before any lock (§2.3 lock discipline).
+        // All Python work must happen before any lock.
         let raw_idx = py
             .import(pyo3::intern!(py, "operator"))?
             .getattr(pyo3::intern!(py, "index"))?
@@ -20782,6 +21560,50 @@ impl PyWordSeq {
             None => Ok(None),
             Some(child) => Ok(Some(child.to_pyobject(py)?)),
         }
+    }
+
+    fn value(&self, py: Python<'_>) -> pyo3::PyResult<Py<pyo3::PyAny>> {
+        self.child_value(py)
+    }
+
+    fn value_text(&self) -> pyo3::PyResult<String> {
+        // Lock scope: count label matches and clone only the first under the guard;
+        // drop the guard before to_pyobject / exception raise (Python work).
+        let (count, first) = {
+            let guard = self.inner.read();
+            let mut count = 0usize;
+            let mut first = None;
+            for (lbl, child) in &guard.children {
+                if *lbl == Some(WordSeqLabel::Value) {
+                    count += 1;
+                    if count == 1 {
+                        first = Some(child.clone());
+                    }
+                }
+            }
+            (count, first)
+        };
+        if count != 1 {
+            return Err(PyValueError::new_err(format!(
+                "Expected one value child but have {count}"
+            )));
+        }
+        match first
+            .expect("invariant: WordSeq.value_text: count==1 but first==None; logic error")
+        {
+            WordSeqChild::Span(s) => s
+                .text_or_message()
+                .map(str::to_owned)
+                .map_err(PyValueError::new_err),
+        }
+    }
+
+    fn text(&self) -> pyo3::PyResult<String> {
+        // Clone the span under the read guard, then release it before raising.
+        let span = self.inner.read().span.clone();
+        span.text_or_message()
+            .map(str::to_owned)
+            .map_err(PyValueError::new_err)
     }
 
     fn __eq__(&self, py: Python<'_>, other: &Bound<'_, pyo3::PyAny>) -> pyo3::PyResult<Py<pyo3::PyAny>> {
@@ -21075,6 +21897,35 @@ impl WsSeq {
         self.children.extend(spans.into_iter().map(|s| (Some(WsSeqLabel::Value), WsSeqChild::Span(s))));
     }
 
+    /// Return the child labelled `value`.
+    ///
+    /// Panics unless exactly one is present; use `child_value` for the checked form.
+    pub fn value(&self) -> &Span {
+        self.child_value()
+            .unwrap_or_else(|e| panic!("WsSeq.value: {e}"))
+    }
+
+    /// Return the source text of the child labelled `value`.
+    ///
+    /// Borrows from the span's source; panics if the child is absent or its span
+    /// carries no usable source.
+    pub fn value_text(&self) -> &str {
+        self.child_value()
+            .unwrap_or_else(|e| panic!("WsSeq.value_text: {e}"))
+            .text_or_message()
+            .unwrap_or_else(|e| panic!("WsSeq.value_text: {e}"))
+    }
+
+    /// Return this node's own source text.
+    ///
+    /// Covers suppressed content inside the node's span; panics if the span carries no
+    /// usable source.
+    pub fn text(&self) -> &str {
+        self.span
+            .text_or_message()
+            .unwrap_or_else(|e| panic!("WsSeq.text: {e}"))
+    }
+
     /// Insert a child at `index` (Vec::insert semantics: panics if index > len).
     ///
     /// Python-facing clamping is in the `insert` pymethod; native callers must
@@ -21305,7 +22156,7 @@ impl PyWsSeq {
         child: &Bound<'_, pyo3::PyAny>,
         label: Option<Py<pyo3::PyAny>>,
     ) -> pyo3::PyResult<()> {
-        // Validate child and label BEFORE taking the write lock (§2.3 lock discipline).
+        // Validate child and label BEFORE taking the write lock.
         let span_type = get_span_type(py)?;
         let native_child = WsSeqChild::extract_from_pyobject(py, child, &span_type)?;
         let native_label = match label {
@@ -21323,7 +22174,7 @@ impl PyWsSeq {
         };
         // Index normalization via operator.index (PyNumber_Index semantics).
         // This raises TypeError (not AttributeError) for non-indexable inputs, matching Python's
-        // operator.index contract. Must be done BEFORE taking any lock (§2.3 lock discipline).
+        // operator.index contract. Must be done BEFORE taking any lock.
         // Overflow by sign: positive overflow clamps to len; negative overflow clamps to 0.
         let raw_idx = py
             .import(pyo3::intern!(py, "operator"))?
@@ -21362,7 +22213,7 @@ impl PyWsSeq {
         let orig_str = index.str()?.to_string_lossy().into_owned();
         // Normalize via operator.index: raises TypeError (not AttributeError) for
         // non-indexable inputs, matching Python's operator.index contract.
-        // All Python work must happen before any lock (§2.3 lock discipline).
+        // All Python work must happen before any lock.
         let raw_idx = py
             .import(pyo3::intern!(py, "operator"))?
             .getattr(pyo3::intern!(py, "index"))?
@@ -21394,7 +22245,7 @@ impl PyWsSeq {
                 orig_str, n
             ))
         })?;
-        // Python wrap-out happens after the guard is released (§2.3 lock discipline).
+        // Python wrap-out happens after the guard is released.
         let label_obj: Py<pyo3::PyAny> = match label {
             None => py.None(),
             Some(lbl) => lbl.into_pyobject(py)?.into_any().unbind(),
@@ -21411,7 +22262,7 @@ impl PyWsSeq {
         child: &Bound<'_, pyo3::PyAny>,
         label: Option<Py<pyo3::PyAny>>,
     ) -> pyo3::PyResult<()> {
-        // Validate child and label BEFORE taking the write lock (§2.3 lock discipline).
+        // Validate child and label BEFORE taking the write lock.
         let span_type = get_span_type(py)?;
         let native_child = WsSeqChild::extract_from_pyobject(py, child, &span_type)?;
         let native_label = match label {
@@ -21430,7 +22281,7 @@ impl PyWsSeq {
         // Capture the caller's original string representation BEFORE normalization.
         let orig_str = index.str()?.to_string_lossy().into_owned();
         // Normalize via operator.index: raises TypeError for non-indexable inputs.
-        // All Python work must happen before any lock (§2.3 lock discipline).
+        // All Python work must happen before any lock.
         let raw_idx = py
             .import(pyo3::intern!(py, "operator"))?
             .getattr(pyo3::intern!(py, "index"))?
@@ -21565,6 +22416,50 @@ impl PyWsSeq {
             None => Ok(None),
             Some(child) => Ok(Some(child.to_pyobject(py)?)),
         }
+    }
+
+    fn value(&self, py: Python<'_>) -> pyo3::PyResult<Py<pyo3::PyAny>> {
+        self.child_value(py)
+    }
+
+    fn value_text(&self) -> pyo3::PyResult<String> {
+        // Lock scope: count label matches and clone only the first under the guard;
+        // drop the guard before to_pyobject / exception raise (Python work).
+        let (count, first) = {
+            let guard = self.inner.read();
+            let mut count = 0usize;
+            let mut first = None;
+            for (lbl, child) in &guard.children {
+                if *lbl == Some(WsSeqLabel::Value) {
+                    count += 1;
+                    if count == 1 {
+                        first = Some(child.clone());
+                    }
+                }
+            }
+            (count, first)
+        };
+        if count != 1 {
+            return Err(PyValueError::new_err(format!(
+                "Expected one value child but have {count}"
+            )));
+        }
+        match first
+            .expect("invariant: WsSeq.value_text: count==1 but first==None; logic error")
+        {
+            WsSeqChild::Span(s) => s
+                .text_or_message()
+                .map(str::to_owned)
+                .map_err(PyValueError::new_err),
+        }
+    }
+
+    fn text(&self) -> pyo3::PyResult<String> {
+        // Clone the span under the read guard, then release it before raising.
+        let span = self.inner.read().span.clone();
+        span.text_or_message()
+            .map(str::to_owned)
+            .map_err(PyValueError::new_err)
     }
 
     fn __eq__(&self, py: Python<'_>, other: &Bound<'_, pyo3::PyAny>) -> pyo3::PyResult<Py<pyo3::PyAny>> {
@@ -21858,6 +22753,35 @@ impl ThreeToFiveDigits {
         self.children.extend(spans.into_iter().map(|s| (Some(ThreeToFiveDigitsLabel::Value), ThreeToFiveDigitsChild::Span(s))));
     }
 
+    /// Return the child labelled `value`.
+    ///
+    /// Panics unless exactly one is present; use `child_value` for the checked form.
+    pub fn value(&self) -> &Span {
+        self.child_value()
+            .unwrap_or_else(|e| panic!("ThreeToFiveDigits.value: {e}"))
+    }
+
+    /// Return the source text of the child labelled `value`.
+    ///
+    /// Borrows from the span's source; panics if the child is absent or its span
+    /// carries no usable source.
+    pub fn value_text(&self) -> &str {
+        self.child_value()
+            .unwrap_or_else(|e| panic!("ThreeToFiveDigits.value_text: {e}"))
+            .text_or_message()
+            .unwrap_or_else(|e| panic!("ThreeToFiveDigits.value_text: {e}"))
+    }
+
+    /// Return this node's own source text.
+    ///
+    /// Covers suppressed content inside the node's span; panics if the span carries no
+    /// usable source.
+    pub fn text(&self) -> &str {
+        self.span
+            .text_or_message()
+            .unwrap_or_else(|e| panic!("ThreeToFiveDigits.text: {e}"))
+    }
+
     /// Insert a child at `index` (Vec::insert semantics: panics if index > len).
     ///
     /// Python-facing clamping is in the `insert` pymethod; native callers must
@@ -22088,7 +23012,7 @@ impl PyThreeToFiveDigits {
         child: &Bound<'_, pyo3::PyAny>,
         label: Option<Py<pyo3::PyAny>>,
     ) -> pyo3::PyResult<()> {
-        // Validate child and label BEFORE taking the write lock (§2.3 lock discipline).
+        // Validate child and label BEFORE taking the write lock.
         let span_type = get_span_type(py)?;
         let native_child = ThreeToFiveDigitsChild::extract_from_pyobject(py, child, &span_type)?;
         let native_label = match label {
@@ -22106,7 +23030,7 @@ impl PyThreeToFiveDigits {
         };
         // Index normalization via operator.index (PyNumber_Index semantics).
         // This raises TypeError (not AttributeError) for non-indexable inputs, matching Python's
-        // operator.index contract. Must be done BEFORE taking any lock (§2.3 lock discipline).
+        // operator.index contract. Must be done BEFORE taking any lock.
         // Overflow by sign: positive overflow clamps to len; negative overflow clamps to 0.
         let raw_idx = py
             .import(pyo3::intern!(py, "operator"))?
@@ -22145,7 +23069,7 @@ impl PyThreeToFiveDigits {
         let orig_str = index.str()?.to_string_lossy().into_owned();
         // Normalize via operator.index: raises TypeError (not AttributeError) for
         // non-indexable inputs, matching Python's operator.index contract.
-        // All Python work must happen before any lock (§2.3 lock discipline).
+        // All Python work must happen before any lock.
         let raw_idx = py
             .import(pyo3::intern!(py, "operator"))?
             .getattr(pyo3::intern!(py, "index"))?
@@ -22177,7 +23101,7 @@ impl PyThreeToFiveDigits {
                 orig_str, n
             ))
         })?;
-        // Python wrap-out happens after the guard is released (§2.3 lock discipline).
+        // Python wrap-out happens after the guard is released.
         let label_obj: Py<pyo3::PyAny> = match label {
             None => py.None(),
             Some(lbl) => lbl.into_pyobject(py)?.into_any().unbind(),
@@ -22194,7 +23118,7 @@ impl PyThreeToFiveDigits {
         child: &Bound<'_, pyo3::PyAny>,
         label: Option<Py<pyo3::PyAny>>,
     ) -> pyo3::PyResult<()> {
-        // Validate child and label BEFORE taking the write lock (§2.3 lock discipline).
+        // Validate child and label BEFORE taking the write lock.
         let span_type = get_span_type(py)?;
         let native_child = ThreeToFiveDigitsChild::extract_from_pyobject(py, child, &span_type)?;
         let native_label = match label {
@@ -22213,7 +23137,7 @@ impl PyThreeToFiveDigits {
         // Capture the caller's original string representation BEFORE normalization.
         let orig_str = index.str()?.to_string_lossy().into_owned();
         // Normalize via operator.index: raises TypeError for non-indexable inputs.
-        // All Python work must happen before any lock (§2.3 lock discipline).
+        // All Python work must happen before any lock.
         let raw_idx = py
             .import(pyo3::intern!(py, "operator"))?
             .getattr(pyo3::intern!(py, "index"))?
@@ -22348,6 +23272,50 @@ impl PyThreeToFiveDigits {
             None => Ok(None),
             Some(child) => Ok(Some(child.to_pyobject(py)?)),
         }
+    }
+
+    fn value(&self, py: Python<'_>) -> pyo3::PyResult<Py<pyo3::PyAny>> {
+        self.child_value(py)
+    }
+
+    fn value_text(&self) -> pyo3::PyResult<String> {
+        // Lock scope: count label matches and clone only the first under the guard;
+        // drop the guard before to_pyobject / exception raise (Python work).
+        let (count, first) = {
+            let guard = self.inner.read();
+            let mut count = 0usize;
+            let mut first = None;
+            for (lbl, child) in &guard.children {
+                if *lbl == Some(ThreeToFiveDigitsLabel::Value) {
+                    count += 1;
+                    if count == 1 {
+                        first = Some(child.clone());
+                    }
+                }
+            }
+            (count, first)
+        };
+        if count != 1 {
+            return Err(PyValueError::new_err(format!(
+                "Expected one value child but have {count}"
+            )));
+        }
+        match first
+            .expect("invariant: ThreeToFiveDigits.value_text: count==1 but first==None; logic error")
+        {
+            ThreeToFiveDigitsChild::Span(s) => s
+                .text_or_message()
+                .map(str::to_owned)
+                .map_err(PyValueError::new_err),
+        }
+    }
+
+    fn text(&self) -> pyo3::PyResult<String> {
+        // Clone the span under the read guard, then release it before raising.
+        let span = self.inner.read().span.clone();
+        span.text_or_message()
+            .map(str::to_owned)
+            .map_err(PyValueError::new_err)
     }
 
     fn __eq__(&self, py: Python<'_>, other: &Bound<'_, pyo3::PyAny>) -> pyo3::PyResult<Py<pyo3::PyAny>> {
@@ -22641,6 +23609,35 @@ impl ExactlyTwoDigits {
         self.children.extend(spans.into_iter().map(|s| (Some(ExactlyTwoDigitsLabel::Value), ExactlyTwoDigitsChild::Span(s))));
     }
 
+    /// Return the child labelled `value`.
+    ///
+    /// Panics unless exactly one is present; use `child_value` for the checked form.
+    pub fn value(&self) -> &Span {
+        self.child_value()
+            .unwrap_or_else(|e| panic!("ExactlyTwoDigits.value: {e}"))
+    }
+
+    /// Return the source text of the child labelled `value`.
+    ///
+    /// Borrows from the span's source; panics if the child is absent or its span
+    /// carries no usable source.
+    pub fn value_text(&self) -> &str {
+        self.child_value()
+            .unwrap_or_else(|e| panic!("ExactlyTwoDigits.value_text: {e}"))
+            .text_or_message()
+            .unwrap_or_else(|e| panic!("ExactlyTwoDigits.value_text: {e}"))
+    }
+
+    /// Return this node's own source text.
+    ///
+    /// Covers suppressed content inside the node's span; panics if the span carries no
+    /// usable source.
+    pub fn text(&self) -> &str {
+        self.span
+            .text_or_message()
+            .unwrap_or_else(|e| panic!("ExactlyTwoDigits.text: {e}"))
+    }
+
     /// Insert a child at `index` (Vec::insert semantics: panics if index > len).
     ///
     /// Python-facing clamping is in the `insert` pymethod; native callers must
@@ -22871,7 +23868,7 @@ impl PyExactlyTwoDigits {
         child: &Bound<'_, pyo3::PyAny>,
         label: Option<Py<pyo3::PyAny>>,
     ) -> pyo3::PyResult<()> {
-        // Validate child and label BEFORE taking the write lock (§2.3 lock discipline).
+        // Validate child and label BEFORE taking the write lock.
         let span_type = get_span_type(py)?;
         let native_child = ExactlyTwoDigitsChild::extract_from_pyobject(py, child, &span_type)?;
         let native_label = match label {
@@ -22889,7 +23886,7 @@ impl PyExactlyTwoDigits {
         };
         // Index normalization via operator.index (PyNumber_Index semantics).
         // This raises TypeError (not AttributeError) for non-indexable inputs, matching Python's
-        // operator.index contract. Must be done BEFORE taking any lock (§2.3 lock discipline).
+        // operator.index contract. Must be done BEFORE taking any lock.
         // Overflow by sign: positive overflow clamps to len; negative overflow clamps to 0.
         let raw_idx = py
             .import(pyo3::intern!(py, "operator"))?
@@ -22928,7 +23925,7 @@ impl PyExactlyTwoDigits {
         let orig_str = index.str()?.to_string_lossy().into_owned();
         // Normalize via operator.index: raises TypeError (not AttributeError) for
         // non-indexable inputs, matching Python's operator.index contract.
-        // All Python work must happen before any lock (§2.3 lock discipline).
+        // All Python work must happen before any lock.
         let raw_idx = py
             .import(pyo3::intern!(py, "operator"))?
             .getattr(pyo3::intern!(py, "index"))?
@@ -22960,7 +23957,7 @@ impl PyExactlyTwoDigits {
                 orig_str, n
             ))
         })?;
-        // Python wrap-out happens after the guard is released (§2.3 lock discipline).
+        // Python wrap-out happens after the guard is released.
         let label_obj: Py<pyo3::PyAny> = match label {
             None => py.None(),
             Some(lbl) => lbl.into_pyobject(py)?.into_any().unbind(),
@@ -22977,7 +23974,7 @@ impl PyExactlyTwoDigits {
         child: &Bound<'_, pyo3::PyAny>,
         label: Option<Py<pyo3::PyAny>>,
     ) -> pyo3::PyResult<()> {
-        // Validate child and label BEFORE taking the write lock (§2.3 lock discipline).
+        // Validate child and label BEFORE taking the write lock.
         let span_type = get_span_type(py)?;
         let native_child = ExactlyTwoDigitsChild::extract_from_pyobject(py, child, &span_type)?;
         let native_label = match label {
@@ -22996,7 +23993,7 @@ impl PyExactlyTwoDigits {
         // Capture the caller's original string representation BEFORE normalization.
         let orig_str = index.str()?.to_string_lossy().into_owned();
         // Normalize via operator.index: raises TypeError for non-indexable inputs.
-        // All Python work must happen before any lock (§2.3 lock discipline).
+        // All Python work must happen before any lock.
         let raw_idx = py
             .import(pyo3::intern!(py, "operator"))?
             .getattr(pyo3::intern!(py, "index"))?
@@ -23131,6 +24128,50 @@ impl PyExactlyTwoDigits {
             None => Ok(None),
             Some(child) => Ok(Some(child.to_pyobject(py)?)),
         }
+    }
+
+    fn value(&self, py: Python<'_>) -> pyo3::PyResult<Py<pyo3::PyAny>> {
+        self.child_value(py)
+    }
+
+    fn value_text(&self) -> pyo3::PyResult<String> {
+        // Lock scope: count label matches and clone only the first under the guard;
+        // drop the guard before to_pyobject / exception raise (Python work).
+        let (count, first) = {
+            let guard = self.inner.read();
+            let mut count = 0usize;
+            let mut first = None;
+            for (lbl, child) in &guard.children {
+                if *lbl == Some(ExactlyTwoDigitsLabel::Value) {
+                    count += 1;
+                    if count == 1 {
+                        first = Some(child.clone());
+                    }
+                }
+            }
+            (count, first)
+        };
+        if count != 1 {
+            return Err(PyValueError::new_err(format!(
+                "Expected one value child but have {count}"
+            )));
+        }
+        match first
+            .expect("invariant: ExactlyTwoDigits.value_text: count==1 but first==None; logic error")
+        {
+            ExactlyTwoDigitsChild::Span(s) => s
+                .text_or_message()
+                .map(str::to_owned)
+                .map_err(PyValueError::new_err),
+        }
+    }
+
+    fn text(&self) -> pyo3::PyResult<String> {
+        // Clone the span under the read guard, then release it before raising.
+        let span = self.inner.read().span.clone();
+        span.text_or_message()
+            .map(str::to_owned)
+            .map_err(PyValueError::new_err)
     }
 
     fn __eq__(&self, py: Python<'_>, other: &Bound<'_, pyo3::PyAny>) -> pyo3::PyResult<Py<pyo3::PyAny>> {
@@ -23424,6 +24465,35 @@ impl EscapedMetas {
         self.children.extend(spans.into_iter().map(|s| (Some(EscapedMetasLabel::Value), EscapedMetasChild::Span(s))));
     }
 
+    /// Return the child labelled `value`.
+    ///
+    /// Panics unless exactly one is present; use `child_value` for the checked form.
+    pub fn value(&self) -> &Span {
+        self.child_value()
+            .unwrap_or_else(|e| panic!("EscapedMetas.value: {e}"))
+    }
+
+    /// Return the source text of the child labelled `value`.
+    ///
+    /// Borrows from the span's source; panics if the child is absent or its span
+    /// carries no usable source.
+    pub fn value_text(&self) -> &str {
+        self.child_value()
+            .unwrap_or_else(|e| panic!("EscapedMetas.value_text: {e}"))
+            .text_or_message()
+            .unwrap_or_else(|e| panic!("EscapedMetas.value_text: {e}"))
+    }
+
+    /// Return this node's own source text.
+    ///
+    /// Covers suppressed content inside the node's span; panics if the span carries no
+    /// usable source.
+    pub fn text(&self) -> &str {
+        self.span
+            .text_or_message()
+            .unwrap_or_else(|e| panic!("EscapedMetas.text: {e}"))
+    }
+
     /// Insert a child at `index` (Vec::insert semantics: panics if index > len).
     ///
     /// Python-facing clamping is in the `insert` pymethod; native callers must
@@ -23654,7 +24724,7 @@ impl PyEscapedMetas {
         child: &Bound<'_, pyo3::PyAny>,
         label: Option<Py<pyo3::PyAny>>,
     ) -> pyo3::PyResult<()> {
-        // Validate child and label BEFORE taking the write lock (§2.3 lock discipline).
+        // Validate child and label BEFORE taking the write lock.
         let span_type = get_span_type(py)?;
         let native_child = EscapedMetasChild::extract_from_pyobject(py, child, &span_type)?;
         let native_label = match label {
@@ -23672,7 +24742,7 @@ impl PyEscapedMetas {
         };
         // Index normalization via operator.index (PyNumber_Index semantics).
         // This raises TypeError (not AttributeError) for non-indexable inputs, matching Python's
-        // operator.index contract. Must be done BEFORE taking any lock (§2.3 lock discipline).
+        // operator.index contract. Must be done BEFORE taking any lock.
         // Overflow by sign: positive overflow clamps to len; negative overflow clamps to 0.
         let raw_idx = py
             .import(pyo3::intern!(py, "operator"))?
@@ -23711,7 +24781,7 @@ impl PyEscapedMetas {
         let orig_str = index.str()?.to_string_lossy().into_owned();
         // Normalize via operator.index: raises TypeError (not AttributeError) for
         // non-indexable inputs, matching Python's operator.index contract.
-        // All Python work must happen before any lock (§2.3 lock discipline).
+        // All Python work must happen before any lock.
         let raw_idx = py
             .import(pyo3::intern!(py, "operator"))?
             .getattr(pyo3::intern!(py, "index"))?
@@ -23743,7 +24813,7 @@ impl PyEscapedMetas {
                 orig_str, n
             ))
         })?;
-        // Python wrap-out happens after the guard is released (§2.3 lock discipline).
+        // Python wrap-out happens after the guard is released.
         let label_obj: Py<pyo3::PyAny> = match label {
             None => py.None(),
             Some(lbl) => lbl.into_pyobject(py)?.into_any().unbind(),
@@ -23760,7 +24830,7 @@ impl PyEscapedMetas {
         child: &Bound<'_, pyo3::PyAny>,
         label: Option<Py<pyo3::PyAny>>,
     ) -> pyo3::PyResult<()> {
-        // Validate child and label BEFORE taking the write lock (§2.3 lock discipline).
+        // Validate child and label BEFORE taking the write lock.
         let span_type = get_span_type(py)?;
         let native_child = EscapedMetasChild::extract_from_pyobject(py, child, &span_type)?;
         let native_label = match label {
@@ -23779,7 +24849,7 @@ impl PyEscapedMetas {
         // Capture the caller's original string representation BEFORE normalization.
         let orig_str = index.str()?.to_string_lossy().into_owned();
         // Normalize via operator.index: raises TypeError for non-indexable inputs.
-        // All Python work must happen before any lock (§2.3 lock discipline).
+        // All Python work must happen before any lock.
         let raw_idx = py
             .import(pyo3::intern!(py, "operator"))?
             .getattr(pyo3::intern!(py, "index"))?
@@ -23914,6 +24984,50 @@ impl PyEscapedMetas {
             None => Ok(None),
             Some(child) => Ok(Some(child.to_pyobject(py)?)),
         }
+    }
+
+    fn value(&self, py: Python<'_>) -> pyo3::PyResult<Py<pyo3::PyAny>> {
+        self.child_value(py)
+    }
+
+    fn value_text(&self) -> pyo3::PyResult<String> {
+        // Lock scope: count label matches and clone only the first under the guard;
+        // drop the guard before to_pyobject / exception raise (Python work).
+        let (count, first) = {
+            let guard = self.inner.read();
+            let mut count = 0usize;
+            let mut first = None;
+            for (lbl, child) in &guard.children {
+                if *lbl == Some(EscapedMetasLabel::Value) {
+                    count += 1;
+                    if count == 1 {
+                        first = Some(child.clone());
+                    }
+                }
+            }
+            (count, first)
+        };
+        if count != 1 {
+            return Err(PyValueError::new_err(format!(
+                "Expected one value child but have {count}"
+            )));
+        }
+        match first
+            .expect("invariant: EscapedMetas.value_text: count==1 but first==None; logic error")
+        {
+            EscapedMetasChild::Span(s) => s
+                .text_or_message()
+                .map(str::to_owned)
+                .map_err(PyValueError::new_err),
+        }
+    }
+
+    fn text(&self) -> pyo3::PyResult<String> {
+        // Clone the span under the read guard, then release it before raising.
+        let span = self.inner.read().span.clone();
+        span.text_or_message()
+            .map(str::to_owned)
+            .map_err(PyValueError::new_err)
     }
 
     fn __eq__(&self, py: Python<'_>, other: &Bound<'_, pyo3::PyAny>) -> pyo3::PyResult<Py<pyo3::PyAny>> {
@@ -24207,6 +25321,35 @@ impl LatinRange {
         self.children.extend(spans.into_iter().map(|s| (Some(LatinRangeLabel::Value), LatinRangeChild::Span(s))));
     }
 
+    /// Return the child labelled `value`.
+    ///
+    /// Panics unless exactly one is present; use `child_value` for the checked form.
+    pub fn value(&self) -> &Span {
+        self.child_value()
+            .unwrap_or_else(|e| panic!("LatinRange.value: {e}"))
+    }
+
+    /// Return the source text of the child labelled `value`.
+    ///
+    /// Borrows from the span's source; panics if the child is absent or its span
+    /// carries no usable source.
+    pub fn value_text(&self) -> &str {
+        self.child_value()
+            .unwrap_or_else(|e| panic!("LatinRange.value_text: {e}"))
+            .text_or_message()
+            .unwrap_or_else(|e| panic!("LatinRange.value_text: {e}"))
+    }
+
+    /// Return this node's own source text.
+    ///
+    /// Covers suppressed content inside the node's span; panics if the span carries no
+    /// usable source.
+    pub fn text(&self) -> &str {
+        self.span
+            .text_or_message()
+            .unwrap_or_else(|e| panic!("LatinRange.text: {e}"))
+    }
+
     /// Insert a child at `index` (Vec::insert semantics: panics if index > len).
     ///
     /// Python-facing clamping is in the `insert` pymethod; native callers must
@@ -24437,7 +25580,7 @@ impl PyLatinRange {
         child: &Bound<'_, pyo3::PyAny>,
         label: Option<Py<pyo3::PyAny>>,
     ) -> pyo3::PyResult<()> {
-        // Validate child and label BEFORE taking the write lock (§2.3 lock discipline).
+        // Validate child and label BEFORE taking the write lock.
         let span_type = get_span_type(py)?;
         let native_child = LatinRangeChild::extract_from_pyobject(py, child, &span_type)?;
         let native_label = match label {
@@ -24455,7 +25598,7 @@ impl PyLatinRange {
         };
         // Index normalization via operator.index (PyNumber_Index semantics).
         // This raises TypeError (not AttributeError) for non-indexable inputs, matching Python's
-        // operator.index contract. Must be done BEFORE taking any lock (§2.3 lock discipline).
+        // operator.index contract. Must be done BEFORE taking any lock.
         // Overflow by sign: positive overflow clamps to len; negative overflow clamps to 0.
         let raw_idx = py
             .import(pyo3::intern!(py, "operator"))?
@@ -24494,7 +25637,7 @@ impl PyLatinRange {
         let orig_str = index.str()?.to_string_lossy().into_owned();
         // Normalize via operator.index: raises TypeError (not AttributeError) for
         // non-indexable inputs, matching Python's operator.index contract.
-        // All Python work must happen before any lock (§2.3 lock discipline).
+        // All Python work must happen before any lock.
         let raw_idx = py
             .import(pyo3::intern!(py, "operator"))?
             .getattr(pyo3::intern!(py, "index"))?
@@ -24526,7 +25669,7 @@ impl PyLatinRange {
                 orig_str, n
             ))
         })?;
-        // Python wrap-out happens after the guard is released (§2.3 lock discipline).
+        // Python wrap-out happens after the guard is released.
         let label_obj: Py<pyo3::PyAny> = match label {
             None => py.None(),
             Some(lbl) => lbl.into_pyobject(py)?.into_any().unbind(),
@@ -24543,7 +25686,7 @@ impl PyLatinRange {
         child: &Bound<'_, pyo3::PyAny>,
         label: Option<Py<pyo3::PyAny>>,
     ) -> pyo3::PyResult<()> {
-        // Validate child and label BEFORE taking the write lock (§2.3 lock discipline).
+        // Validate child and label BEFORE taking the write lock.
         let span_type = get_span_type(py)?;
         let native_child = LatinRangeChild::extract_from_pyobject(py, child, &span_type)?;
         let native_label = match label {
@@ -24562,7 +25705,7 @@ impl PyLatinRange {
         // Capture the caller's original string representation BEFORE normalization.
         let orig_str = index.str()?.to_string_lossy().into_owned();
         // Normalize via operator.index: raises TypeError for non-indexable inputs.
-        // All Python work must happen before any lock (§2.3 lock discipline).
+        // All Python work must happen before any lock.
         let raw_idx = py
             .import(pyo3::intern!(py, "operator"))?
             .getattr(pyo3::intern!(py, "index"))?
@@ -24697,6 +25840,50 @@ impl PyLatinRange {
             None => Ok(None),
             Some(child) => Ok(Some(child.to_pyobject(py)?)),
         }
+    }
+
+    fn value(&self, py: Python<'_>) -> pyo3::PyResult<Py<pyo3::PyAny>> {
+        self.child_value(py)
+    }
+
+    fn value_text(&self) -> pyo3::PyResult<String> {
+        // Lock scope: count label matches and clone only the first under the guard;
+        // drop the guard before to_pyobject / exception raise (Python work).
+        let (count, first) = {
+            let guard = self.inner.read();
+            let mut count = 0usize;
+            let mut first = None;
+            for (lbl, child) in &guard.children {
+                if *lbl == Some(LatinRangeLabel::Value) {
+                    count += 1;
+                    if count == 1 {
+                        first = Some(child.clone());
+                    }
+                }
+            }
+            (count, first)
+        };
+        if count != 1 {
+            return Err(PyValueError::new_err(format!(
+                "Expected one value child but have {count}"
+            )));
+        }
+        match first
+            .expect("invariant: LatinRange.value_text: count==1 but first==None; logic error")
+        {
+            LatinRangeChild::Span(s) => s
+                .text_or_message()
+                .map(str::to_owned)
+                .map_err(PyValueError::new_err),
+        }
+    }
+
+    fn text(&self) -> pyo3::PyResult<String> {
+        // Clone the span under the read guard, then release it before raising.
+        let span = self.inner.read().span.clone();
+        span.text_or_message()
+            .map(str::to_owned)
+            .map_err(PyValueError::new_err)
     }
 
     fn __eq__(&self, py: Python<'_>, other: &Bound<'_, pyo3::PyAny>) -> pyo3::PyResult<Py<pyo3::PyAny>> {
@@ -24990,6 +26177,35 @@ impl NcGroupAlt {
         self.children.extend(spans.into_iter().map(|s| (Some(NcGroupAltLabel::Value), NcGroupAltChild::Span(s))));
     }
 
+    /// Return the child labelled `value`.
+    ///
+    /// Panics unless exactly one is present; use `child_value` for the checked form.
+    pub fn value(&self) -> &Span {
+        self.child_value()
+            .unwrap_or_else(|e| panic!("NcGroupAlt.value: {e}"))
+    }
+
+    /// Return the source text of the child labelled `value`.
+    ///
+    /// Borrows from the span's source; panics if the child is absent or its span
+    /// carries no usable source.
+    pub fn value_text(&self) -> &str {
+        self.child_value()
+            .unwrap_or_else(|e| panic!("NcGroupAlt.value_text: {e}"))
+            .text_or_message()
+            .unwrap_or_else(|e| panic!("NcGroupAlt.value_text: {e}"))
+    }
+
+    /// Return this node's own source text.
+    ///
+    /// Covers suppressed content inside the node's span; panics if the span carries no
+    /// usable source.
+    pub fn text(&self) -> &str {
+        self.span
+            .text_or_message()
+            .unwrap_or_else(|e| panic!("NcGroupAlt.text: {e}"))
+    }
+
     /// Insert a child at `index` (Vec::insert semantics: panics if index > len).
     ///
     /// Python-facing clamping is in the `insert` pymethod; native callers must
@@ -25220,7 +26436,7 @@ impl PyNcGroupAlt {
         child: &Bound<'_, pyo3::PyAny>,
         label: Option<Py<pyo3::PyAny>>,
     ) -> pyo3::PyResult<()> {
-        // Validate child and label BEFORE taking the write lock (§2.3 lock discipline).
+        // Validate child and label BEFORE taking the write lock.
         let span_type = get_span_type(py)?;
         let native_child = NcGroupAltChild::extract_from_pyobject(py, child, &span_type)?;
         let native_label = match label {
@@ -25238,7 +26454,7 @@ impl PyNcGroupAlt {
         };
         // Index normalization via operator.index (PyNumber_Index semantics).
         // This raises TypeError (not AttributeError) for non-indexable inputs, matching Python's
-        // operator.index contract. Must be done BEFORE taking any lock (§2.3 lock discipline).
+        // operator.index contract. Must be done BEFORE taking any lock.
         // Overflow by sign: positive overflow clamps to len; negative overflow clamps to 0.
         let raw_idx = py
             .import(pyo3::intern!(py, "operator"))?
@@ -25277,7 +26493,7 @@ impl PyNcGroupAlt {
         let orig_str = index.str()?.to_string_lossy().into_owned();
         // Normalize via operator.index: raises TypeError (not AttributeError) for
         // non-indexable inputs, matching Python's operator.index contract.
-        // All Python work must happen before any lock (§2.3 lock discipline).
+        // All Python work must happen before any lock.
         let raw_idx = py
             .import(pyo3::intern!(py, "operator"))?
             .getattr(pyo3::intern!(py, "index"))?
@@ -25309,7 +26525,7 @@ impl PyNcGroupAlt {
                 orig_str, n
             ))
         })?;
-        // Python wrap-out happens after the guard is released (§2.3 lock discipline).
+        // Python wrap-out happens after the guard is released.
         let label_obj: Py<pyo3::PyAny> = match label {
             None => py.None(),
             Some(lbl) => lbl.into_pyobject(py)?.into_any().unbind(),
@@ -25326,7 +26542,7 @@ impl PyNcGroupAlt {
         child: &Bound<'_, pyo3::PyAny>,
         label: Option<Py<pyo3::PyAny>>,
     ) -> pyo3::PyResult<()> {
-        // Validate child and label BEFORE taking the write lock (§2.3 lock discipline).
+        // Validate child and label BEFORE taking the write lock.
         let span_type = get_span_type(py)?;
         let native_child = NcGroupAltChild::extract_from_pyobject(py, child, &span_type)?;
         let native_label = match label {
@@ -25345,7 +26561,7 @@ impl PyNcGroupAlt {
         // Capture the caller's original string representation BEFORE normalization.
         let orig_str = index.str()?.to_string_lossy().into_owned();
         // Normalize via operator.index: raises TypeError for non-indexable inputs.
-        // All Python work must happen before any lock (§2.3 lock discipline).
+        // All Python work must happen before any lock.
         let raw_idx = py
             .import(pyo3::intern!(py, "operator"))?
             .getattr(pyo3::intern!(py, "index"))?
@@ -25480,6 +26696,50 @@ impl PyNcGroupAlt {
             None => Ok(None),
             Some(child) => Ok(Some(child.to_pyobject(py)?)),
         }
+    }
+
+    fn value(&self, py: Python<'_>) -> pyo3::PyResult<Py<pyo3::PyAny>> {
+        self.child_value(py)
+    }
+
+    fn value_text(&self) -> pyo3::PyResult<String> {
+        // Lock scope: count label matches and clone only the first under the guard;
+        // drop the guard before to_pyobject / exception raise (Python work).
+        let (count, first) = {
+            let guard = self.inner.read();
+            let mut count = 0usize;
+            let mut first = None;
+            for (lbl, child) in &guard.children {
+                if *lbl == Some(NcGroupAltLabel::Value) {
+                    count += 1;
+                    if count == 1 {
+                        first = Some(child.clone());
+                    }
+                }
+            }
+            (count, first)
+        };
+        if count != 1 {
+            return Err(PyValueError::new_err(format!(
+                "Expected one value child but have {count}"
+            )));
+        }
+        match first
+            .expect("invariant: NcGroupAlt.value_text: count==1 but first==None; logic error")
+        {
+            NcGroupAltChild::Span(s) => s
+                .text_or_message()
+                .map(str::to_owned)
+                .map_err(PyValueError::new_err),
+        }
+    }
+
+    fn text(&self) -> pyo3::PyResult<String> {
+        // Clone the span under the read guard, then release it before raising.
+        let span = self.inner.read().span.clone();
+        span.text_or_message()
+            .map(str::to_owned)
+            .map_err(PyValueError::new_err)
     }
 
     fn __eq__(&self, py: Python<'_>, other: &Bound<'_, pyo3::PyAny>) -> pyo3::PyResult<Py<pyo3::PyAny>> {
@@ -25773,6 +27033,35 @@ impl CaseInsensitive {
         self.children.extend(spans.into_iter().map(|s| (Some(CaseInsensitiveLabel::Value), CaseInsensitiveChild::Span(s))));
     }
 
+    /// Return the child labelled `value`.
+    ///
+    /// Panics unless exactly one is present; use `child_value` for the checked form.
+    pub fn value(&self) -> &Span {
+        self.child_value()
+            .unwrap_or_else(|e| panic!("CaseInsensitive.value: {e}"))
+    }
+
+    /// Return the source text of the child labelled `value`.
+    ///
+    /// Borrows from the span's source; panics if the child is absent or its span
+    /// carries no usable source.
+    pub fn value_text(&self) -> &str {
+        self.child_value()
+            .unwrap_or_else(|e| panic!("CaseInsensitive.value_text: {e}"))
+            .text_or_message()
+            .unwrap_or_else(|e| panic!("CaseInsensitive.value_text: {e}"))
+    }
+
+    /// Return this node's own source text.
+    ///
+    /// Covers suppressed content inside the node's span; panics if the span carries no
+    /// usable source.
+    pub fn text(&self) -> &str {
+        self.span
+            .text_or_message()
+            .unwrap_or_else(|e| panic!("CaseInsensitive.text: {e}"))
+    }
+
     /// Insert a child at `index` (Vec::insert semantics: panics if index > len).
     ///
     /// Python-facing clamping is in the `insert` pymethod; native callers must
@@ -26003,7 +27292,7 @@ impl PyCaseInsensitive {
         child: &Bound<'_, pyo3::PyAny>,
         label: Option<Py<pyo3::PyAny>>,
     ) -> pyo3::PyResult<()> {
-        // Validate child and label BEFORE taking the write lock (§2.3 lock discipline).
+        // Validate child and label BEFORE taking the write lock.
         let span_type = get_span_type(py)?;
         let native_child = CaseInsensitiveChild::extract_from_pyobject(py, child, &span_type)?;
         let native_label = match label {
@@ -26021,7 +27310,7 @@ impl PyCaseInsensitive {
         };
         // Index normalization via operator.index (PyNumber_Index semantics).
         // This raises TypeError (not AttributeError) for non-indexable inputs, matching Python's
-        // operator.index contract. Must be done BEFORE taking any lock (§2.3 lock discipline).
+        // operator.index contract. Must be done BEFORE taking any lock.
         // Overflow by sign: positive overflow clamps to len; negative overflow clamps to 0.
         let raw_idx = py
             .import(pyo3::intern!(py, "operator"))?
@@ -26060,7 +27349,7 @@ impl PyCaseInsensitive {
         let orig_str = index.str()?.to_string_lossy().into_owned();
         // Normalize via operator.index: raises TypeError (not AttributeError) for
         // non-indexable inputs, matching Python's operator.index contract.
-        // All Python work must happen before any lock (§2.3 lock discipline).
+        // All Python work must happen before any lock.
         let raw_idx = py
             .import(pyo3::intern!(py, "operator"))?
             .getattr(pyo3::intern!(py, "index"))?
@@ -26092,7 +27381,7 @@ impl PyCaseInsensitive {
                 orig_str, n
             ))
         })?;
-        // Python wrap-out happens after the guard is released (§2.3 lock discipline).
+        // Python wrap-out happens after the guard is released.
         let label_obj: Py<pyo3::PyAny> = match label {
             None => py.None(),
             Some(lbl) => lbl.into_pyobject(py)?.into_any().unbind(),
@@ -26109,7 +27398,7 @@ impl PyCaseInsensitive {
         child: &Bound<'_, pyo3::PyAny>,
         label: Option<Py<pyo3::PyAny>>,
     ) -> pyo3::PyResult<()> {
-        // Validate child and label BEFORE taking the write lock (§2.3 lock discipline).
+        // Validate child and label BEFORE taking the write lock.
         let span_type = get_span_type(py)?;
         let native_child = CaseInsensitiveChild::extract_from_pyobject(py, child, &span_type)?;
         let native_label = match label {
@@ -26128,7 +27417,7 @@ impl PyCaseInsensitive {
         // Capture the caller's original string representation BEFORE normalization.
         let orig_str = index.str()?.to_string_lossy().into_owned();
         // Normalize via operator.index: raises TypeError for non-indexable inputs.
-        // All Python work must happen before any lock (§2.3 lock discipline).
+        // All Python work must happen before any lock.
         let raw_idx = py
             .import(pyo3::intern!(py, "operator"))?
             .getattr(pyo3::intern!(py, "index"))?
@@ -26263,6 +27552,50 @@ impl PyCaseInsensitive {
             None => Ok(None),
             Some(child) => Ok(Some(child.to_pyobject(py)?)),
         }
+    }
+
+    fn value(&self, py: Python<'_>) -> pyo3::PyResult<Py<pyo3::PyAny>> {
+        self.child_value(py)
+    }
+
+    fn value_text(&self) -> pyo3::PyResult<String> {
+        // Lock scope: count label matches and clone only the first under the guard;
+        // drop the guard before to_pyobject / exception raise (Python work).
+        let (count, first) = {
+            let guard = self.inner.read();
+            let mut count = 0usize;
+            let mut first = None;
+            for (lbl, child) in &guard.children {
+                if *lbl == Some(CaseInsensitiveLabel::Value) {
+                    count += 1;
+                    if count == 1 {
+                        first = Some(child.clone());
+                    }
+                }
+            }
+            (count, first)
+        };
+        if count != 1 {
+            return Err(PyValueError::new_err(format!(
+                "Expected one value child but have {count}"
+            )));
+        }
+        match first
+            .expect("invariant: CaseInsensitive.value_text: count==1 but first==None; logic error")
+        {
+            CaseInsensitiveChild::Span(s) => s
+                .text_or_message()
+                .map(str::to_owned)
+                .map_err(PyValueError::new_err),
+        }
+    }
+
+    fn text(&self) -> pyo3::PyResult<String> {
+        // Clone the span under the read guard, then release it before raising.
+        let span = self.inner.read().span.clone();
+        span.text_or_message()
+            .map(str::to_owned)
+            .map_err(PyValueError::new_err)
     }
 
     fn __eq__(&self, py: Python<'_>, other: &Bound<'_, pyo3::PyAny>) -> pyo3::PyResult<Py<pyo3::PyAny>> {
@@ -26556,6 +27889,35 @@ impl AnchoredWord {
         self.children.extend(spans.into_iter().map(|s| (Some(AnchoredWordLabel::Value), AnchoredWordChild::Span(s))));
     }
 
+    /// Return the child labelled `value`.
+    ///
+    /// Panics unless exactly one is present; use `child_value` for the checked form.
+    pub fn value(&self) -> &Span {
+        self.child_value()
+            .unwrap_or_else(|e| panic!("AnchoredWord.value: {e}"))
+    }
+
+    /// Return the source text of the child labelled `value`.
+    ///
+    /// Borrows from the span's source; panics if the child is absent or its span
+    /// carries no usable source.
+    pub fn value_text(&self) -> &str {
+        self.child_value()
+            .unwrap_or_else(|e| panic!("AnchoredWord.value_text: {e}"))
+            .text_or_message()
+            .unwrap_or_else(|e| panic!("AnchoredWord.value_text: {e}"))
+    }
+
+    /// Return this node's own source text.
+    ///
+    /// Covers suppressed content inside the node's span; panics if the span carries no
+    /// usable source.
+    pub fn text(&self) -> &str {
+        self.span
+            .text_or_message()
+            .unwrap_or_else(|e| panic!("AnchoredWord.text: {e}"))
+    }
+
     /// Insert a child at `index` (Vec::insert semantics: panics if index > len).
     ///
     /// Python-facing clamping is in the `insert` pymethod; native callers must
@@ -26786,7 +28148,7 @@ impl PyAnchoredWord {
         child: &Bound<'_, pyo3::PyAny>,
         label: Option<Py<pyo3::PyAny>>,
     ) -> pyo3::PyResult<()> {
-        // Validate child and label BEFORE taking the write lock (§2.3 lock discipline).
+        // Validate child and label BEFORE taking the write lock.
         let span_type = get_span_type(py)?;
         let native_child = AnchoredWordChild::extract_from_pyobject(py, child, &span_type)?;
         let native_label = match label {
@@ -26804,7 +28166,7 @@ impl PyAnchoredWord {
         };
         // Index normalization via operator.index (PyNumber_Index semantics).
         // This raises TypeError (not AttributeError) for non-indexable inputs, matching Python's
-        // operator.index contract. Must be done BEFORE taking any lock (§2.3 lock discipline).
+        // operator.index contract. Must be done BEFORE taking any lock.
         // Overflow by sign: positive overflow clamps to len; negative overflow clamps to 0.
         let raw_idx = py
             .import(pyo3::intern!(py, "operator"))?
@@ -26843,7 +28205,7 @@ impl PyAnchoredWord {
         let orig_str = index.str()?.to_string_lossy().into_owned();
         // Normalize via operator.index: raises TypeError (not AttributeError) for
         // non-indexable inputs, matching Python's operator.index contract.
-        // All Python work must happen before any lock (§2.3 lock discipline).
+        // All Python work must happen before any lock.
         let raw_idx = py
             .import(pyo3::intern!(py, "operator"))?
             .getattr(pyo3::intern!(py, "index"))?
@@ -26875,7 +28237,7 @@ impl PyAnchoredWord {
                 orig_str, n
             ))
         })?;
-        // Python wrap-out happens after the guard is released (§2.3 lock discipline).
+        // Python wrap-out happens after the guard is released.
         let label_obj: Py<pyo3::PyAny> = match label {
             None => py.None(),
             Some(lbl) => lbl.into_pyobject(py)?.into_any().unbind(),
@@ -26892,7 +28254,7 @@ impl PyAnchoredWord {
         child: &Bound<'_, pyo3::PyAny>,
         label: Option<Py<pyo3::PyAny>>,
     ) -> pyo3::PyResult<()> {
-        // Validate child and label BEFORE taking the write lock (§2.3 lock discipline).
+        // Validate child and label BEFORE taking the write lock.
         let span_type = get_span_type(py)?;
         let native_child = AnchoredWordChild::extract_from_pyobject(py, child, &span_type)?;
         let native_label = match label {
@@ -26911,7 +28273,7 @@ impl PyAnchoredWord {
         // Capture the caller's original string representation BEFORE normalization.
         let orig_str = index.str()?.to_string_lossy().into_owned();
         // Normalize via operator.index: raises TypeError for non-indexable inputs.
-        // All Python work must happen before any lock (§2.3 lock discipline).
+        // All Python work must happen before any lock.
         let raw_idx = py
             .import(pyo3::intern!(py, "operator"))?
             .getattr(pyo3::intern!(py, "index"))?
@@ -27048,6 +28410,50 @@ impl PyAnchoredWord {
         }
     }
 
+    fn value(&self, py: Python<'_>) -> pyo3::PyResult<Py<pyo3::PyAny>> {
+        self.child_value(py)
+    }
+
+    fn value_text(&self) -> pyo3::PyResult<String> {
+        // Lock scope: count label matches and clone only the first under the guard;
+        // drop the guard before to_pyobject / exception raise (Python work).
+        let (count, first) = {
+            let guard = self.inner.read();
+            let mut count = 0usize;
+            let mut first = None;
+            for (lbl, child) in &guard.children {
+                if *lbl == Some(AnchoredWordLabel::Value) {
+                    count += 1;
+                    if count == 1 {
+                        first = Some(child.clone());
+                    }
+                }
+            }
+            (count, first)
+        };
+        if count != 1 {
+            return Err(PyValueError::new_err(format!(
+                "Expected one value child but have {count}"
+            )));
+        }
+        match first
+            .expect("invariant: AnchoredWord.value_text: count==1 but first==None; logic error")
+        {
+            AnchoredWordChild::Span(s) => s
+                .text_or_message()
+                .map(str::to_owned)
+                .map_err(PyValueError::new_err),
+        }
+    }
+
+    fn text(&self) -> pyo3::PyResult<String> {
+        // Clone the span under the read guard, then release it before raising.
+        let span = self.inner.read().span.clone();
+        span.text_or_message()
+            .map(str::to_owned)
+            .map_err(PyValueError::new_err)
+    }
+
     fn __eq__(&self, py: Python<'_>, other: &Bound<'_, pyo3::PyAny>) -> pyo3::PyResult<Py<pyo3::PyAny>> {
         if !other.is_instance_of::<PyAnchoredWord>() {
             return Ok(py.NotImplemented());
@@ -27069,6 +28475,7636 @@ impl PyAnchoredWord {
         let children_len = guard.children.len();
         format!(
             "AnchoredWord(span={span_repr}, children=[<{children_len} child(ren)>])"
+        )
+    }
+
+}
+
+// ───────────────────────────────────────────────────────────────────────────
+// PairLabel
+// ───────────────────────────────────────────────────────────────────────────
+
+/// Label discriminant enum for children of this node type.
+///
+/// Python-visible name is `Pair_Label` (preserved for compatibility).
+/// Rust consumers use the CamelCase `PairLabel` name.
+#[cfg(feature = "python")]
+#[pyclass(frozen, from_py_object, name = "Pair_Label")]
+#[derive(Clone, Debug, PartialEq, Eq, Hash)]
+pub enum PairLabel {
+    #[pyo3(name = "KEY")]
+    Key,
+    #[pyo3(name = "VAL")]
+    Val,
+}
+
+#[cfg(not(feature = "python"))]
+#[derive(Clone, Debug, PartialEq, Eq, Hash)]
+pub enum PairLabel {
+    Key,
+    Val,
+}
+
+#[cfg(feature = "python")]
+#[pymethods]
+impl PairLabel {
+    fn __repr__(&self) -> &'static str {
+        match self {
+            PairLabel::Key => "Pair.Label.KEY",
+            PairLabel::Val => "Pair.Label.VAL",
+        }
+    }
+
+    #[getter]
+    fn _fltk_canonical_name(&self) -> &'static str {
+        self.__repr__()
+    }
+
+    fn __eq__(&self, py: Python<'_>, other: &Bound<'_, pyo3::PyAny>) -> pyo3::PyResult<Py<pyo3::PyAny>> {
+        if let Ok(other_kind) = other.extract::<PairLabel>() {
+            return Ok((self == &other_kind).into_pyobject(py)?.to_owned().unbind().into_any());
+        }
+        if let Ok(cn) = other.getattr(pyo3::intern!(py, "_fltk_canonical_name")) {
+            if let Ok(cn_str) = cn.extract::<&str>() {
+                return Ok((self.__repr__() == cn_str).into_pyobject(py)?.to_owned().unbind().into_any());
+            }
+        }
+        Ok(py.NotImplemented())
+    }
+
+    fn __hash__(&self, py: Python<'_>) -> pyo3::PyResult<isize> {
+        pyo3::types::PyAnyMethods::hash(
+            pyo3::types::PyString::new(py, self.__repr__()).as_any()
+        )
+    }
+}
+
+/// Child value enum for `Pair` nodes.
+///
+/// Node-typed variants hold `Shared<T>` (`Arc<RwLock<T>>`); `Clone` is shallow
+/// (increments the reference count, does not copy the node).
+#[derive(Clone, Debug)]
+pub enum PairChild {
+    Name(Shared<Name>),
+    Num(Shared<Num>),
+}
+
+impl PartialEq for PairChild {
+    fn eq(&self, other: &Self) -> bool {
+        match (self, other) {
+            (PairChild::Name(a), PairChild::Name(b)) => a == b,
+            (PairChild::Num(a), PairChild::Num(b)) => a == b,
+            _ => false,
+        }
+    }
+}
+
+impl PairChild {
+    fn into_drop_item(self) -> Option<DropWorklistItem> {
+        match self {
+            Self::Name(s) => Some(DropWorklistItem::Name(s)),
+            Self::Num(s) => Some(DropWorklistItem::Num(s)),
+        }
+    }
+
+    /// Shallow structural equality for one child pair.
+    /// Span pair: compare directly. Node pair: ptr_eq short-circuit (skip enqueue)
+    /// or enqueue for the worklist. Variant mismatch: return false.
+    fn eq_shallow_enqueue(&self, other: &Self, worklist: &mut Vec<EqWorklistItem>) -> bool {
+        match (self, other) {
+            (Self::Name(a), Self::Name(b)) => {
+                if !a.ptr_eq(b) {
+                    worklist.push(EqWorklistItem::Name(a.clone(), b.clone()));
+                }
+                true
+            }
+            (Self::Num(a), Self::Num(b)) => {
+                if !a.ptr_eq(b) {
+                    worklist.push(EqWorklistItem::Num(a.clone(), b.clone()));
+                }
+                true
+            }
+            _ => false,
+        }
+    }
+}
+
+#[cfg(feature = "python")]
+impl PairChild {
+    fn to_pyobject(&self, py: Python<'_>) -> pyo3::PyResult<Py<pyo3::PyAny>> {
+        match self {
+            Self::Name(shared) => {
+                let addr = shared.arc_ptr();
+                registry::get_or_insert_with(py, addr, || {
+                    let handle = PyName { inner: shared.clone() };
+                    Py::new(py, handle).map(|p| p.into_any())
+                })
+            }
+            Self::Num(shared) => {
+                let addr = shared.arc_ptr();
+                registry::get_or_insert_with(py, addr, || {
+                    let handle = PyNum { inner: shared.clone() };
+                    Py::new(py, handle).map(|p| p.into_any())
+                })
+            }
+        }
+    }
+
+    fn extract_from_pyobject(
+        py: Python<'_>,
+        obj: &Bound<'_, pyo3::PyAny>,
+        _span_type: &Bound<'_, pyo3::types::PyType>,
+    ) -> pyo3::PyResult<Self> {
+        if obj.is_instance_of::<PyName>() {
+            let handle: pyo3::PyRef<PyName> = obj.extract()?;
+            let shared = handle.inner.clone();
+            let addr = shared.arc_ptr();
+            // Hand-in: register this Python handle as canonical for its Shared.
+            drop(handle); // release the PyRef before calling Python
+            // Propagate registry errors: a swallowed Err here would leave the
+            // handle unregistered, causing the next wrap-out to mint a different
+            // object and silently break is-stability.
+            registry::register_if_absent(py, addr, obj)?;
+            return Ok(Self::Name(shared));
+        }
+        if obj.is_instance_of::<PyNum>() {
+            let handle: pyo3::PyRef<PyNum> = obj.extract()?;
+            let shared = handle.inner.clone();
+            let addr = shared.arc_ptr();
+            // Hand-in: register this Python handle as canonical for its Shared.
+            drop(handle); // release the PyRef before calling Python
+            // Propagate registry errors: a swallowed Err here would leave the
+            // handle unregistered, causing the next wrap-out to mint a different
+            // object and silently break is-stability.
+            registry::register_if_absent(py, addr, obj)?;
+            return Ok(Self::Num(shared));
+        }
+        Err(pyo3::exceptions::PyTypeError::new_err(format!(
+            "Pair: unsupported child type {}",
+            obj.get_type().name()?
+        )))
+    }
+}
+
+// ───────────────────────────────────────────────────────────────────────────
+// Pair
+// ───────────────────────────────────────────────────────────────────────────
+
+/// CST data struct for `Pair`. See [`fltk_cst_core::Shared`] for clone/equality/reference semantics.
+///
+/// `Debug` output is non-recursive: prints span + child count only. Traverse via `children()` to inspect subtrees.
+/// Teardown is iterative: bounded stack at any depth.
+/// Equality is iterative: bounded stack at any depth.
+#[derive(Clone)]
+pub struct Pair {
+    // Not pub: use span() / children() / push_child() — the stable accessor API.
+    // Direct field access bypasses any future validation logic on setters.
+    span: Span,
+    children: Vec<(Option<PairLabel>, PairChild)>,
+}
+
+// Manual Debug: prints span + child COUNT, never recursing into children.
+// A derived Debug would recurse through Shared<T> children with no depth
+// bound; tree depth is attacker-controlled for parsers over untrusted
+// input, so `{:?}` on a deep tree would abort the process (stack
+// exhaustion, uncatchable). Mirrors the Python __repr__'s content.
+impl fmt::Debug for Pair {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("Pair")
+            .field("span", &self.span)
+            .field("children", &format_args!("<{} child(ren)>", self.children.len()))
+            .finish()
+    }
+}
+
+// Iterative Drop: derived drop glue would recurse through Shared children
+// one frame set per tree level (attacker-controlled depth → stack
+// exhaustion, uncatchable abort). Drains the subtree via a worklist instead.
+impl Drop for Pair {
+    fn drop(&mut self) {
+        if self.children.is_empty() {
+            return; // also the recursion terminator for nodes drained by the worklist
+        }
+        // Worklist is allocated lazily: Vec::new() does not heap-allocate until
+        // the first push.  drain_into pushes only when it steals (count == 1).
+        // In the common backtracking case (shared/memoized children) no steal
+        // occurs and no allocation happens.  Owned deep chains allocate once.
+        let mut worklist: Vec<DropWorklistItem> = Vec::new();
+        for (_, child) in self.children.drain(..) {
+            if let Some(item) = child.into_drop_item() {
+                item.drain_into(&mut worklist);
+            }
+        }
+        while let Some(item) = worklist.pop() {
+            item.drain_into(&mut worklist);
+        }
+    }
+}
+
+// Iterative PartialEq: the recursive version would recurse through Shared children
+// one frame set per tree level (attacker-controlled depth → stack
+// exhaustion, uncatchable abort). Uses an explicit worklist of node pairs.
+impl PartialEq for Pair {
+    fn eq(&self, other: &Self) -> bool {
+        if self.span != other.span || self.children.len() != other.children.len() {
+            return false;
+        }
+        // Worklist allocated lazily (Vec::new does not heap-allocate until
+        // first push); shallow trees and all-ptr_eq children never allocate.
+        let mut worklist: Vec<EqWorklistItem> = Vec::new();
+        for ((la, ca), (lb, cb)) in self.children.iter().zip(other.children.iter()) {
+            if la != lb || !ca.eq_shallow_enqueue(cb, &mut worklist) {
+                return false;
+            }
+        }
+        while let Some(item) = worklist.pop() {
+            if !item.compare(&mut worklist) {
+                return false;
+            }
+        }
+        true
+    }
+}
+
+impl Pair {
+    /// Construct a node with the given span and no children. GIL-free.
+    pub fn new(span: Span) -> Self {
+        Pair {
+            span,
+            children: Vec::new(),
+        }
+    }
+
+    /// Return the [`NodeKind`] discriminant for this node type.
+    pub fn kind(&self) -> NodeKind {
+        NodeKind::Pair
+    }
+
+    /// Return a reference to the stored [`Span`].
+    pub fn span(&self) -> &Span {
+        &self.span
+    }
+
+    /// Replace the node's span.
+    pub fn set_span(&mut self, span: Span) {
+        self.span = span;
+    }
+
+    /// Return a slice of all children (unfiltered).
+    ///
+    /// Each entry is `(label, child)`. Use the per-label accessors
+    /// (`children_<lbl>`, `child_<lbl>`, `maybe_<lbl>`) for type-safe access.
+    pub fn children(&self) -> &[(Option<PairLabel>, PairChild)] {
+        self.children.as_slice()
+    }
+
+    /// Push a child onto the children `Vec`.
+    ///
+    /// No type-checking is performed: any child variant may be stored under
+    /// any label. Per-label typed mutators (`append_<lbl>`, `extend_<lbl>`)
+    /// provide type-constrained alternatives.
+    pub fn push_child(&mut self, label: Option<PairLabel>, child: PairChild) {
+        self.children.push((label, child));
+    }
+
+    /// Return the single child (any label), or `Err` if there is not exactly one.
+    ///
+    /// Mirrors the Python `child()` method: count violation → `CstError::ChildCount`.
+    pub fn child(&self) -> Result<&(Option<PairLabel>, PairChild), CstError> {
+        match self.children.as_slice() {
+            [single] => Ok(single),
+            slice => Err(CstError::ChildCount {
+                label: "<any>",
+                expected: "1",
+                found: slice.len(),
+            }),
+        }
+    }
+
+    /// Copy all children from `other` into `self`, sharing the `Shared<T>` arcs.
+    ///
+    /// Children are appended (Arc reference-count bumps, not deep copies),
+    /// matching the Python backend's reference-copy behavior. Labels are preserved.
+    ///
+    /// The borrow checker prevents `self.extend_children(self)` at the data-struct
+    /// level (`&mut` + `&` of the same value don't coexist). For self-extend from
+    /// Python, the handle pymethod handles it via snapshotting.
+    pub fn extend_children(&mut self, other: &Self) {
+        self.children.extend(other.children.iter().cloned());
+    }
+
+    /// Return an iterator over `Shared<Name>` children labelled `key`.
+    ///
+    /// Off-type variants stored under the `key` label are silently skipped.
+    /// Use `children()` (the untyped slice) for a lossless view.
+    pub fn children_key(&self) -> impl Iterator<Item = &Shared<Name>> + '_ {
+        self.children.iter()
+            .filter(|(lbl, _)| *lbl == Some(PairLabel::Key))
+            .filter_map(|(_, child)| match child {
+                PairChild::Name(s) => Some(s),
+                _ => None,
+            })
+    }
+
+    /// Return the single child labelled `key`, or `Err` if not exactly one.
+    ///
+    /// Count is checked by label match first (`CstError::ChildCount`); if the
+    /// count is valid and the surviving child has the wrong variant type,
+    /// `CstError::UnexpectedChildType` is returned (single-typed labels only).
+    pub fn child_key(&self) -> Result<&Shared<Name>, CstError> {
+        let mut it = self.children.iter()
+            .filter(|(lbl, _)| *lbl == Some(PairLabel::Key));
+        match (it.next(), it.next()) {
+            (Some((_, child)), None) => match child {
+                PairChild::Name(s) => Ok(s),
+                _ => Err(CstError::UnexpectedChildType { label: "key" }),
+            },
+            _ => Err(CstError::ChildCount {
+                label: "key",
+                expected: "1",
+                found: self.children.iter()
+                    .filter(|(lbl, _)| *lbl == Some(PairLabel::Key))
+                    .count(),
+            }),
+        }
+    }
+
+    /// Return the optional child labelled `key`, or `Err` if more than one.
+    ///
+    /// Returns `Ok(None)` for zero, `Ok(Some(...))` for one,
+    /// `Err(CstError::ChildCount)` for two or more.
+    pub fn maybe_key(&self) -> Result<Option<&Shared<Name>>, CstError> {
+        let mut it = self.children.iter()
+            .filter(|(lbl, _)| *lbl == Some(PairLabel::Key));
+        match (it.next(), it.next()) {
+            (None, _) => Ok(None),
+            (Some((_, child)), None) => match child {
+                PairChild::Name(s) => Ok(Some(s)),
+                _ => Err(CstError::UnexpectedChildType { label: "key" }),
+            },
+            _ => Err(CstError::ChildCount {
+                label: "key",
+                expected: "0 or 1",
+                found: self.children.iter()
+                    .filter(|(lbl, _)| *lbl == Some(PairLabel::Key))
+                    .count(),
+            }),
+        }
+    }
+
+    /// Append a child with label `key`, accepting `Name` or `Shared<Name>`.
+    pub fn append_key(&mut self, child: impl Into<Shared<Name>>) {
+        self.children.push((Some(PairLabel::Key), PairChild::Name(child.into())));
+    }
+
+    /// Append multiple children with label `key`.
+    pub fn extend_key(&mut self, children: impl IntoIterator<Item = impl Into<Shared<Name>>>) {
+        self.children.extend(children.into_iter().map(|c| (Some(PairLabel::Key), PairChild::Name(c.into()))));
+    }
+
+    /// Return an iterator over `Shared<Num>` children labelled `val`.
+    ///
+    /// Off-type variants stored under the `val` label are silently skipped.
+    /// Use `children()` (the untyped slice) for a lossless view.
+    pub fn children_val(&self) -> impl Iterator<Item = &Shared<Num>> + '_ {
+        self.children.iter()
+            .filter(|(lbl, _)| *lbl == Some(PairLabel::Val))
+            .filter_map(|(_, child)| match child {
+                PairChild::Num(s) => Some(s),
+                _ => None,
+            })
+    }
+
+    /// Return the single child labelled `val`, or `Err` if not exactly one.
+    ///
+    /// Count is checked by label match first (`CstError::ChildCount`); if the
+    /// count is valid and the surviving child has the wrong variant type,
+    /// `CstError::UnexpectedChildType` is returned (single-typed labels only).
+    pub fn child_val(&self) -> Result<&Shared<Num>, CstError> {
+        let mut it = self.children.iter()
+            .filter(|(lbl, _)| *lbl == Some(PairLabel::Val));
+        match (it.next(), it.next()) {
+            (Some((_, child)), None) => match child {
+                PairChild::Num(s) => Ok(s),
+                _ => Err(CstError::UnexpectedChildType { label: "val" }),
+            },
+            _ => Err(CstError::ChildCount {
+                label: "val",
+                expected: "1",
+                found: self.children.iter()
+                    .filter(|(lbl, _)| *lbl == Some(PairLabel::Val))
+                    .count(),
+            }),
+        }
+    }
+
+    /// Return the optional child labelled `val`, or `Err` if more than one.
+    ///
+    /// Returns `Ok(None)` for zero, `Ok(Some(...))` for one,
+    /// `Err(CstError::ChildCount)` for two or more.
+    pub fn maybe_val(&self) -> Result<Option<&Shared<Num>>, CstError> {
+        let mut it = self.children.iter()
+            .filter(|(lbl, _)| *lbl == Some(PairLabel::Val));
+        match (it.next(), it.next()) {
+            (None, _) => Ok(None),
+            (Some((_, child)), None) => match child {
+                PairChild::Num(s) => Ok(Some(s)),
+                _ => Err(CstError::UnexpectedChildType { label: "val" }),
+            },
+            _ => Err(CstError::ChildCount {
+                label: "val",
+                expected: "0 or 1",
+                found: self.children.iter()
+                    .filter(|(lbl, _)| *lbl == Some(PairLabel::Val))
+                    .count(),
+            }),
+        }
+    }
+
+    /// Append a child with label `val`, accepting `Num` or `Shared<Num>`.
+    pub fn append_val(&mut self, child: impl Into<Shared<Num>>) {
+        self.children.push((Some(PairLabel::Val), PairChild::Num(child.into())));
+    }
+
+    /// Append multiple children with label `val`.
+    pub fn extend_val(&mut self, children: impl IntoIterator<Item = impl Into<Shared<Num>>>) {
+        self.children.extend(children.into_iter().map(|c| (Some(PairLabel::Val), PairChild::Num(c.into()))));
+    }
+
+    /// Return the child labelled `key`.
+    ///
+    /// Panics unless exactly one is present; use `child_key` for the checked form.
+    pub fn key(&self) -> &Shared<Name> {
+        self.child_key()
+            .unwrap_or_else(|e| panic!("Pair.key: {e}"))
+    }
+
+    /// Return the child labelled `val`.
+    ///
+    /// Panics unless exactly one is present; use `child_val` for the checked form.
+    pub fn val(&self) -> &Shared<Num> {
+        self.child_val()
+            .unwrap_or_else(|e| panic!("Pair.val: {e}"))
+    }
+
+    /// Insert a child at `index` (Vec::insert semantics: panics if index > len).
+    ///
+    /// Python-facing clamping is in the `insert` pymethod; native callers must
+    /// bounds-check. Unlike `list.insert`, Vec::insert panics on out-of-bounds.
+    pub fn insert_child(&mut self, index: usize, label: Option<PairLabel>, child: PairChild) {
+        self.children.insert(index, (label, child));
+    }
+
+    /// Remove and return the child at `index` (Vec::remove semantics: panics if out of range).
+    ///
+    /// Panics on out-of-range. Python-facing IndexError is in the `remove_at` pymethod.
+    pub fn remove_child(&mut self, index: usize) -> (Option<PairLabel>, PairChild) {
+        self.children.remove(index)
+    }
+
+    /// Replace the child at `index`, returning the old entry (panics if out of range).
+    ///
+    /// Panics on out-of-range. Python-facing IndexError is in the `replace_at` pymethod.
+    pub fn replace_child(
+        &mut self, index: usize, label: Option<PairLabel>, child: PairChild,
+    ) -> (Option<PairLabel>, PairChild) {
+        std::mem::replace(&mut self.children[index], (label, child))
+    }
+
+    /// Remove all children.
+    pub fn clear_children(&mut self) {
+        self.children.clear();
+    }
+}
+
+#[cfg(feature = "python")]
+#[pyclass(frozen, weakref, name = "Pair")]
+pub struct PyPair {
+    // Not pub: all external access goes through shared() or to_py_canonical().
+    // A pub field would let mixed-app Rust code construct an unregistered handle
+    // (Py::new(py, PyFoo { inner: s.clone() })), silently breaking is-stability.
+    inner: Shared<Pair>,
+}
+
+#[cfg(feature = "python")]
+impl PyPair {
+    /// Return a reference to the inner `Shared<Pair>`.
+    pub fn shared(&self) -> &Shared<Pair> {
+        &self.inner
+    }
+
+    /// Wrap a `Shared<Pair>` into a canonical Python handle,
+    /// looking up the registry first so the same handle is returned
+    /// for the same `Shared` allocation.
+    pub fn to_py_canonical(py: Python<'_>, s: &Shared<Pair>) -> pyo3::PyResult<Py<PyPair>> {
+        let addr = s.arc_ptr();
+        let obj = registry::get_or_insert_with(py, addr, || {
+            let handle = PyPair { inner: s.clone() };
+            Py::new(py, handle).map(|p| p.into_any())
+        })?;
+        obj.bind(py).cast::<PyPair>().map(|b| b.clone().unbind()).map_err(|e| e.into())
+    }
+}
+
+#[cfg(feature = "python")]
+#[pymethods]
+impl PyPair {
+    #[new]
+    #[pyo3(signature = (*, span = None))]
+    fn new(py: Python<'_>, span: Option<&Bound<'_, pyo3::PyAny>>) -> pyo3::PyResult<Py<PyPair>> {
+        let native_span = match span {
+            Some(s) => extract_span(py, s)?,
+            None => Span::unknown(),
+        };
+        let data = Pair {
+            span: native_span,
+            children: Vec::new(),
+        };
+        let shared = Shared::new(data);
+        let addr = shared.arc_ptr();
+        let handle = PyPair { inner: shared };
+        let py_obj = Py::new(py, handle)?;
+        // Register as canonical — fresh Shared, no alias can exist yet.
+        registry::force_register(py, addr, py_obj.bind(py))?;
+        Ok(py_obj)
+    }
+
+    #[getter]
+    fn span(&self, py: Python<'_>) -> pyo3::PyResult<Py<pyo3::PyAny>> {
+        // Snapshot the span under the read lock, then drop the guard before
+        // calling span_to_pyobject — which performs Python work (Py::new or
+        // Python method calls) that must not happen while a node lock is held.
+        let span = self.inner.read().span.clone();
+        span_to_pyobject(py, &span)
+    }
+
+    #[setter]
+    fn set_span(&self, py: Python<'_>, value: &Bound<'_, pyo3::PyAny>) -> pyo3::PyResult<()> {
+        self.inner.write().span = extract_span(py, value)?;
+        Ok(())
+    }
+
+    #[getter]
+    fn kind(&self) -> NodeKind {
+        NodeKind::Pair
+    }
+
+    #[classattr]
+    #[allow(non_snake_case)]
+    fn Label(py: Python<'_>) -> pyo3::PyResult<Py<pyo3::PyAny>> {
+        Ok(<PairLabel as pyo3::PyTypeInfo>::type_object(py).into_any().unbind())
+    }
+
+    #[getter]
+    fn children(&self, py: Python<'_>) -> pyo3::PyResult<Py<pyo3::types::PyList>> {
+        // Snapshot the children vec (Arc clones for node children — O(n) refcount bumps).
+        // Lock scope: acquire read, snapshot, release before touching Python.
+        let snapshot: Vec<_> = {
+            let guard = self.inner.read();
+            guard.children.clone()
+        };
+        let result = pyo3::types::PyList::empty(py);
+        for (label, child) in &snapshot {
+            let label_obj: Py<pyo3::PyAny> = match label {
+                None => py.None(),
+                Some(lbl) => lbl.clone().into_pyobject(py)?.into_any().unbind(),
+            };
+            let child_obj = child.to_pyobject(py)?;
+            let tup = pyo3::types::PyTuple::new(py, [label_obj, child_obj])?;
+            result.append(tup)?;
+        }
+        Ok(result.unbind())
+    }
+
+    #[pyo3(signature = (child, label = None))]
+    fn append(
+        &self, py: Python<'_>, child: &Bound<'_, pyo3::PyAny>, label: Option<Py<pyo3::PyAny>>,
+    ) -> pyo3::PyResult<()> {
+        let span_type = get_span_type(py)?;
+        let native_child = PairChild::extract_from_pyobject(py, child, &span_type)?;
+        let native_label = match label {
+            None => None,
+            Some(lbl) => {
+                if let Ok(native_lbl) = lbl.bind(py).extract::<PairLabel>() {
+                    Some(native_lbl)
+                } else {
+                    return Err(PyTypeError::new_err(format!(
+                        "Pair.append: label argument is not a Pair_Label; got {}",
+                        lbl.bind(py).get_type().name()?
+                    )));
+                }
+            }
+        };
+        self.inner.write().children.push((native_label, native_child));
+        Ok(())
+    }
+
+    #[pyo3(signature = (children, label = None))]
+    fn extend(
+        &self,
+        py: Python<'_>,
+        children: &Bound<'_, pyo3::PyAny>,
+        label: Option<Py<pyo3::PyAny>>,
+    ) -> pyo3::PyResult<()> {
+        let span_type = get_span_type(py)?;
+        let native_label = match label {
+            None => None,
+            Some(lbl) => {
+                if let Ok(native_lbl) = lbl.bind(py).extract::<PairLabel>() {
+                    Some(native_lbl)
+                } else {
+                    return Err(PyTypeError::new_err(format!(
+                        "Pair.extend: label argument is not a Pair_Label; got {}",
+                        lbl.bind(py).get_type().name()?
+                    )));
+                }
+            }
+        };
+        let iter = children.try_iter()?;
+        for child_result in iter {
+            let child = child_result?;
+            let native_child = PairChild::extract_from_pyobject(py, &child, &span_type)?;
+            self.inner.write().children.push((native_label.clone(), native_child));
+        }
+        Ok(())
+    }
+
+    fn extend_children(&self, _py: Python<'_>, other: &PyPair) -> pyo3::PyResult<()> {
+        // Snapshot other's children first: the read guard is dropped at the end of
+        // this block, so the write lock below is safe even when self and other are
+        // the same node (self-extend). No ptr_eq call is needed here — the snapshot
+        // approach handles self-extend structurally.
+        // Lock scope: hold read only long enough to clone the Arc-based children vec.
+        let snapshot: Vec<_> = {
+            let guard = other.inner.read();
+            guard.children.clone()
+        };
+        // Node-typed children are pushed directly as Shared<T> values.  Registry
+        // consistency is maintained lazily: wrap-out registers on first Python read
+        // via get_or_insert_with (registry.rs).  Eagerly registering here would be
+        // a no-op — the WeakValueDictionary would evict handles held by nothing.
+        self.inner.write().children.extend(snapshot);
+        Ok(())
+    }
+
+    fn child(&self, py: Python<'_>) -> pyo3::PyResult<Py<pyo3::PyAny>> {
+        // Lock scope: read len and clone at most the single entry under the guard;
+        // drop the guard before any Python work (object conversion, exception raise).
+        let (n, entry) = {
+            let guard = self.inner.read();
+            let n = guard.children.len();
+            let entry = if n == 1 { Some(guard.children[0].clone()) } else { None };
+            (n, entry)
+        };
+        let Some((label, child)) = entry else {
+            return Err(PyValueError::new_err(format!(
+                "Expected one child but have {n}"
+            )));
+        };
+        let label_obj: Py<pyo3::PyAny> = match label {
+            None => py.None(),
+            Some(lbl) => lbl.into_pyobject(py)?.into_any().unbind(),
+        };
+        let child_obj = child.to_pyobject(py)?;
+        Ok(pyo3::types::PyTuple::new(py, [label_obj, child_obj])?.into_any().unbind())
+    }
+
+    #[pyo3(signature = (index, child, label = None))]
+    fn insert(
+        &self,
+        py: Python<'_>,
+        index: &Bound<'_, pyo3::PyAny>,
+        child: &Bound<'_, pyo3::PyAny>,
+        label: Option<Py<pyo3::PyAny>>,
+    ) -> pyo3::PyResult<()> {
+        // Validate child and label BEFORE taking the write lock.
+        let span_type = get_span_type(py)?;
+        let native_child = PairChild::extract_from_pyobject(py, child, &span_type)?;
+        let native_label = match label {
+            None => None,
+            Some(lbl) => {
+                if let Ok(native_lbl) = lbl.bind(py).extract::<PairLabel>() {
+                    Some(native_lbl)
+                } else {
+                    return Err(PyTypeError::new_err(format!(
+                        "Pair.insert: label argument is not a Pair_Label; got {}",
+                        lbl.bind(py).get_type().name()?
+                    )));
+                }
+            }
+        };
+        // Index normalization via operator.index (PyNumber_Index semantics).
+        // This raises TypeError (not AttributeError) for non-indexable inputs, matching Python's
+        // operator.index contract. Must be done BEFORE taking any lock.
+        // Overflow by sign: positive overflow clamps to len; negative overflow clamps to 0.
+        let raw_idx = py
+            .import(pyo3::intern!(py, "operator"))?
+            .getattr(pyo3::intern!(py, "index"))?
+            .call1((index,))?;
+        // Fast path for the common exact-int case; fall back to sign-based Python call for beyond-i64.
+        let (is_negative_big, raw_i64) = if let Ok(i) = raw_idx.extract::<i64>() {
+            (false, Some(i))
+        } else {
+            // Beyond i64: use Python __lt__ to determine sign.  The lt call is still outside
+            // any lock, so lock discipline is maintained.
+            let neg = raw_idx.lt(0i64)?;
+            (neg, None)
+        };
+        // Now take a single write lock for the entire len-read + clamp + insert sequence.
+        let mut guard = self.inner.write();
+        let n = guard.children.len();
+        let clamped: usize = match raw_i64 {
+            Some(i) if i < 0 => {
+                let normalized = n as i64 + i;
+                if normalized < 0 { 0 } else { normalized as usize }
+            }
+            Some(i) => {
+                let u = i as usize;
+                if u > n { n } else { u }
+            }
+            None => if is_negative_big { 0 } else { n },
+        };
+        guard.children.insert(clamped, (native_label, native_child));
+        Ok(())
+    }
+
+    fn remove_at(&self, py: Python<'_>, index: &Bound<'_, pyo3::PyAny>) -> pyo3::PyResult<Py<pyo3::PyAny>> {
+        // Capture the caller's original string representation BEFORE normalization,
+        // so error messages show the original value (e.g. `True` not `1`).
+        let orig_str = index.str()?.to_string_lossy().into_owned();
+        // Normalize via operator.index: raises TypeError (not AttributeError) for
+        // non-indexable inputs, matching Python's operator.index contract.
+        // All Python work must happen before any lock.
+        let raw_idx = py
+            .import(pyo3::intern!(py, "operator"))?
+            .getattr(pyo3::intern!(py, "index"))?
+            .call1((index,))?;
+        // Fast path: extract i64. Beyond i64 is always OOB for real trees.
+        let maybe_i64: Option<i64> = raw_idx.extract::<i64>().ok();
+        // Single write lock: resolve + bounds-check + Vec::remove atomically (no TOCTOU).
+        // On OOB, capture n and return Err after releasing the guard.
+        let result: Result<_, usize> = {
+            let mut guard = self.inner.write();
+            let n = guard.children.len();
+            let resolved: Option<usize> = match maybe_i64 {
+                Some(i) if i < 0 => {
+                    let normalized = n as i64 + i;
+                    if normalized < 0 || normalized as usize >= n { None }
+                    else { Some(normalized as usize) }
+                }
+                Some(i) if (i as usize) < n => Some(i as usize),
+                _ => None,
+            };
+            match resolved {
+                Some(idx) => Ok(guard.children.remove(idx)),
+                None => Err(n),
+            }
+        };
+        let (label, child) = result.map_err(|n| {
+            PyIndexError::new_err(format!(
+                "Pair.remove_at: index {} out of range ({} children)",
+                orig_str, n
+            ))
+        })?;
+        // Python wrap-out happens after the guard is released.
+        let label_obj: Py<pyo3::PyAny> = match label {
+            None => py.None(),
+            Some(lbl) => lbl.into_pyobject(py)?.into_any().unbind(),
+        };
+        let child_obj = child.to_pyobject(py)?;
+        Ok(pyo3::types::PyTuple::new(py, [label_obj, child_obj])?.into_any().unbind())
+    }
+
+    #[pyo3(signature = (index, child, label = None))]
+    fn replace_at(
+        &self,
+        py: Python<'_>,
+        index: &Bound<'_, pyo3::PyAny>,
+        child: &Bound<'_, pyo3::PyAny>,
+        label: Option<Py<pyo3::PyAny>>,
+    ) -> pyo3::PyResult<()> {
+        // Validate child and label BEFORE taking the write lock.
+        let span_type = get_span_type(py)?;
+        let native_child = PairChild::extract_from_pyobject(py, child, &span_type)?;
+        let native_label = match label {
+            None => None,
+            Some(lbl) => {
+                if let Ok(native_lbl) = lbl.bind(py).extract::<PairLabel>() {
+                    Some(native_lbl)
+                } else {
+                    return Err(PyTypeError::new_err(format!(
+                        "Pair.replace_at: label argument is not a Pair_Label; got {}",
+                        lbl.bind(py).get_type().name()?
+                    )));
+                }
+            }
+        };
+        // Capture the caller's original string representation BEFORE normalization.
+        let orig_str = index.str()?.to_string_lossy().into_owned();
+        // Normalize via operator.index: raises TypeError for non-indexable inputs.
+        // All Python work must happen before any lock.
+        let raw_idx = py
+            .import(pyo3::intern!(py, "operator"))?
+            .getattr(pyo3::intern!(py, "index"))?
+            .call1((index,))?;
+        let maybe_i64: Option<i64> = raw_idx.extract::<i64>().ok();
+        // Single write lock: resolve + bounds-check + mem::replace atomically (no TOCTOU).
+        let old = {
+            let mut guard = self.inner.write();
+            let n = guard.children.len();
+            let resolved: Option<usize> = match maybe_i64 {
+                Some(i) if i < 0 => {
+                    let normalized = n as i64 + i;
+                    if normalized < 0 || normalized as usize >= n { None }
+                    else { Some(normalized as usize) }
+                }
+                Some(i) if (i as usize) < n => Some(i as usize),
+                _ => None,
+            };
+            let idx = match resolved {
+                Some(i) => i,
+                None => {
+                    return Err(PyIndexError::new_err(format!(
+                        "Pair.replace_at: index {} out of range ({} children)",
+                        orig_str, n
+                    )));
+                }
+            };
+            std::mem::replace(&mut guard.children[idx], (native_label, native_child))
+        };
+        // Drop old entry outside the lock to avoid recursive lock acquisition
+        // if the child's drop chain re-enters Python.
+        drop(old);
+        Ok(())
+    }
+
+    fn clear(&self, _py: Python<'_>) -> pyo3::PyResult<()> {
+        let old = {
+            let mut guard = self.inner.write();
+            std::mem::take(&mut guard.children)
+        };
+        // Drop old entries outside the lock.
+        drop(old);
+        Ok(())
+    }
+
+    fn append_key(&self, py: Python<'_>, child: &Bound<'_, pyo3::PyAny>) -> pyo3::PyResult<()> {
+        let span_type = get_span_type(py)?;
+        let native_child = PairChild::extract_from_pyobject(py, child, &span_type)?;
+        self.inner.write().children.push((Some(PairLabel::Key), native_child));
+        Ok(())
+    }
+
+    fn extend_key(&self, py: Python<'_>, children: &Bound<'_, pyo3::PyAny>) -> pyo3::PyResult<()> {
+        let span_type = get_span_type(py)?;
+        let iter = children.try_iter()?;
+        for child_result in iter {
+            let child = child_result?;
+            let native_child = PairChild::extract_from_pyobject(py, &child, &span_type)?;
+            let entry = (Some(PairLabel::Key), native_child);
+            self.inner.write().children.push(entry);
+        }
+        Ok(())
+    }
+
+    fn children_key(&self, py: Python<'_>) -> pyo3::PyResult<Py<pyo3::types::PyList>> {
+        // Lock scope: filter by label under the read guard, cloning only matching
+        // children (Arc bump or Span copy each); drop the guard before to_pyobject,
+        // which performs Python work that must not happen while a node lock is held.
+        let matching: Vec<_> = {
+            let guard = self.inner.read();
+            guard.children.iter()
+                .filter(|(lbl, _)| *lbl == Some(PairLabel::Key))
+                .map(|(_, child)| child.clone())
+                .collect()
+        };
+        let result = pyo3::types::PyList::empty(py);
+        for child in &matching {
+            result.append(child.to_pyobject(py)?)?;
+        }
+        Ok(result.unbind())
+    }
+
+    fn child_key(&self, py: Python<'_>) -> pyo3::PyResult<Py<pyo3::PyAny>> {
+        // Lock scope: count label matches and clone only the first under the guard;
+        // drop the guard before to_pyobject / exception raise (Python work).
+        let (count, first) = {
+            let guard = self.inner.read();
+            let mut count = 0usize;
+            let mut first = None;
+            for (lbl, child) in &guard.children {
+                if *lbl == Some(PairLabel::Key) {
+                    count += 1;
+                    if count == 1 {
+                        first = Some(child.clone());
+                    }
+                }
+            }
+            (count, first)
+        };
+        if count != 1 {
+            return Err(PyValueError::new_err(format!(
+                "Expected one key child but have {count}"
+            )));
+        }
+        first.expect("invariant: Pair.child_key: count==1 but first==None; logic error")
+            .to_pyobject(py)
+    }
+
+    fn maybe_key(&self, py: Python<'_>) -> pyo3::PyResult<Option<Py<pyo3::PyAny>>> {
+        // Lock scope: count label matches and clone only the first under the guard;
+        // drop the guard before to_pyobject / exception raise (Python work).
+        let (count, first) = {
+            let guard = self.inner.read();
+            let mut count = 0usize;
+            let mut first = None;
+            for (lbl, child) in &guard.children {
+                if *lbl == Some(PairLabel::Key) {
+                    count += 1;
+                    if count == 1 {
+                        first = Some(child.clone());
+                    }
+                }
+            }
+            (count, first)
+        };
+        if count > 1 {
+            return Err(PyValueError::new_err(
+                "Expected at most one key child but have at least 2",
+            ));
+        }
+        match first {
+            None => Ok(None),
+            Some(child) => Ok(Some(child.to_pyobject(py)?)),
+        }
+    }
+
+    fn append_val(&self, py: Python<'_>, child: &Bound<'_, pyo3::PyAny>) -> pyo3::PyResult<()> {
+        let span_type = get_span_type(py)?;
+        let native_child = PairChild::extract_from_pyobject(py, child, &span_type)?;
+        self.inner.write().children.push((Some(PairLabel::Val), native_child));
+        Ok(())
+    }
+
+    fn extend_val(&self, py: Python<'_>, children: &Bound<'_, pyo3::PyAny>) -> pyo3::PyResult<()> {
+        let span_type = get_span_type(py)?;
+        let iter = children.try_iter()?;
+        for child_result in iter {
+            let child = child_result?;
+            let native_child = PairChild::extract_from_pyobject(py, &child, &span_type)?;
+            let entry = (Some(PairLabel::Val), native_child);
+            self.inner.write().children.push(entry);
+        }
+        Ok(())
+    }
+
+    fn children_val(&self, py: Python<'_>) -> pyo3::PyResult<Py<pyo3::types::PyList>> {
+        // Lock scope: filter by label under the read guard, cloning only matching
+        // children (Arc bump or Span copy each); drop the guard before to_pyobject,
+        // which performs Python work that must not happen while a node lock is held.
+        let matching: Vec<_> = {
+            let guard = self.inner.read();
+            guard.children.iter()
+                .filter(|(lbl, _)| *lbl == Some(PairLabel::Val))
+                .map(|(_, child)| child.clone())
+                .collect()
+        };
+        let result = pyo3::types::PyList::empty(py);
+        for child in &matching {
+            result.append(child.to_pyobject(py)?)?;
+        }
+        Ok(result.unbind())
+    }
+
+    fn child_val(&self, py: Python<'_>) -> pyo3::PyResult<Py<pyo3::PyAny>> {
+        // Lock scope: count label matches and clone only the first under the guard;
+        // drop the guard before to_pyobject / exception raise (Python work).
+        let (count, first) = {
+            let guard = self.inner.read();
+            let mut count = 0usize;
+            let mut first = None;
+            for (lbl, child) in &guard.children {
+                if *lbl == Some(PairLabel::Val) {
+                    count += 1;
+                    if count == 1 {
+                        first = Some(child.clone());
+                    }
+                }
+            }
+            (count, first)
+        };
+        if count != 1 {
+            return Err(PyValueError::new_err(format!(
+                "Expected one val child but have {count}"
+            )));
+        }
+        first.expect("invariant: Pair.child_val: count==1 but first==None; logic error")
+            .to_pyobject(py)
+    }
+
+    fn maybe_val(&self, py: Python<'_>) -> pyo3::PyResult<Option<Py<pyo3::PyAny>>> {
+        // Lock scope: count label matches and clone only the first under the guard;
+        // drop the guard before to_pyobject / exception raise (Python work).
+        let (count, first) = {
+            let guard = self.inner.read();
+            let mut count = 0usize;
+            let mut first = None;
+            for (lbl, child) in &guard.children {
+                if *lbl == Some(PairLabel::Val) {
+                    count += 1;
+                    if count == 1 {
+                        first = Some(child.clone());
+                    }
+                }
+            }
+            (count, first)
+        };
+        if count > 1 {
+            return Err(PyValueError::new_err(
+                "Expected at most one val child but have at least 2",
+            ));
+        }
+        match first {
+            None => Ok(None),
+            Some(child) => Ok(Some(child.to_pyobject(py)?)),
+        }
+    }
+
+    fn key(&self, py: Python<'_>) -> pyo3::PyResult<Py<pyo3::PyAny>> {
+        self.child_key(py)
+    }
+
+    fn val(&self, py: Python<'_>) -> pyo3::PyResult<Py<pyo3::PyAny>> {
+        self.child_val(py)
+    }
+
+    fn __eq__(&self, py: Python<'_>, other: &Bound<'_, pyo3::PyAny>) -> pyo3::PyResult<Py<pyo3::PyAny>> {
+        if !other.is_instance_of::<PyPair>() {
+            return Ok(py.NotImplemented());
+        }
+        let other_handle: pyo3::PyRef<PyPair> = other.extract()?;
+        // Delegate to Shared<T>::PartialEq which applies the ptr_eq short-circuit
+        // (avoids same-lock re-entry on `x == x`) then deep structural comparison.
+        let eq = self.inner == other_handle.inner;
+        Ok(eq.into_pyobject(py)?.to_owned().unbind().into_any())
+    }
+
+    fn __hash__(&self) -> pyo3::PyResult<isize> {
+        Err(PyTypeError::new_err("unhashable type: 'Pair'"))
+    }
+
+    fn __repr__(&self, _py: Python<'_>) -> String {
+        let guard = self.inner.read();
+        let span_repr = format!("Span(start={}, end={})", guard.span.start(), guard.span.end());
+        let children_len = guard.children.len();
+        format!(
+            "Pair(span={span_repr}, children=[<{children_len} child(ren)>])"
+        )
+    }
+
+}
+
+// ───────────────────────────────────────────────────────────────────────────
+// WrapperLabel
+// ───────────────────────────────────────────────────────────────────────────
+
+/// Label discriminant enum for children of this node type.
+///
+/// Python-visible name is `Wrapper_Label` (preserved for compatibility).
+/// Rust consumers use the CamelCase `WrapperLabel` name.
+#[cfg(feature = "python")]
+#[pyclass(frozen, from_py_object, name = "Wrapper_Label")]
+#[derive(Clone, Debug, PartialEq, Eq, Hash)]
+pub enum WrapperLabel {
+    #[pyo3(name = "KEY")]
+    Key,
+    #[pyo3(name = "VAL")]
+    Val,
+}
+
+#[cfg(not(feature = "python"))]
+#[derive(Clone, Debug, PartialEq, Eq, Hash)]
+pub enum WrapperLabel {
+    Key,
+    Val,
+}
+
+#[cfg(feature = "python")]
+#[pymethods]
+impl WrapperLabel {
+    fn __repr__(&self) -> &'static str {
+        match self {
+            WrapperLabel::Key => "Wrapper.Label.KEY",
+            WrapperLabel::Val => "Wrapper.Label.VAL",
+        }
+    }
+
+    #[getter]
+    fn _fltk_canonical_name(&self) -> &'static str {
+        self.__repr__()
+    }
+
+    fn __eq__(&self, py: Python<'_>, other: &Bound<'_, pyo3::PyAny>) -> pyo3::PyResult<Py<pyo3::PyAny>> {
+        if let Ok(other_kind) = other.extract::<WrapperLabel>() {
+            return Ok((self == &other_kind).into_pyobject(py)?.to_owned().unbind().into_any());
+        }
+        if let Ok(cn) = other.getattr(pyo3::intern!(py, "_fltk_canonical_name")) {
+            if let Ok(cn_str) = cn.extract::<&str>() {
+                return Ok((self.__repr__() == cn_str).into_pyobject(py)?.to_owned().unbind().into_any());
+            }
+        }
+        Ok(py.NotImplemented())
+    }
+
+    fn __hash__(&self, py: Python<'_>) -> pyo3::PyResult<isize> {
+        pyo3::types::PyAnyMethods::hash(
+            pyo3::types::PyString::new(py, self.__repr__()).as_any()
+        )
+    }
+}
+
+/// Child value enum for `Wrapper` nodes.
+///
+/// Node-typed variants hold `Shared<T>` (`Arc<RwLock<T>>`); `Clone` is shallow
+/// (increments the reference count, does not copy the node).
+#[derive(Clone, Debug)]
+pub enum WrapperChild {
+    Name(Shared<Name>),
+    Num(Shared<Num>),
+}
+
+impl PartialEq for WrapperChild {
+    fn eq(&self, other: &Self) -> bool {
+        match (self, other) {
+            (WrapperChild::Name(a), WrapperChild::Name(b)) => a == b,
+            (WrapperChild::Num(a), WrapperChild::Num(b)) => a == b,
+            _ => false,
+        }
+    }
+}
+
+impl WrapperChild {
+    fn into_drop_item(self) -> Option<DropWorklistItem> {
+        match self {
+            Self::Name(s) => Some(DropWorklistItem::Name(s)),
+            Self::Num(s) => Some(DropWorklistItem::Num(s)),
+        }
+    }
+
+    /// Shallow structural equality for one child pair.
+    /// Span pair: compare directly. Node pair: ptr_eq short-circuit (skip enqueue)
+    /// or enqueue for the worklist. Variant mismatch: return false.
+    fn eq_shallow_enqueue(&self, other: &Self, worklist: &mut Vec<EqWorklistItem>) -> bool {
+        match (self, other) {
+            (Self::Name(a), Self::Name(b)) => {
+                if !a.ptr_eq(b) {
+                    worklist.push(EqWorklistItem::Name(a.clone(), b.clone()));
+                }
+                true
+            }
+            (Self::Num(a), Self::Num(b)) => {
+                if !a.ptr_eq(b) {
+                    worklist.push(EqWorklistItem::Num(a.clone(), b.clone()));
+                }
+                true
+            }
+            _ => false,
+        }
+    }
+}
+
+#[cfg(feature = "python")]
+impl WrapperChild {
+    fn to_pyobject(&self, py: Python<'_>) -> pyo3::PyResult<Py<pyo3::PyAny>> {
+        match self {
+            Self::Name(shared) => {
+                let addr = shared.arc_ptr();
+                registry::get_or_insert_with(py, addr, || {
+                    let handle = PyName { inner: shared.clone() };
+                    Py::new(py, handle).map(|p| p.into_any())
+                })
+            }
+            Self::Num(shared) => {
+                let addr = shared.arc_ptr();
+                registry::get_or_insert_with(py, addr, || {
+                    let handle = PyNum { inner: shared.clone() };
+                    Py::new(py, handle).map(|p| p.into_any())
+                })
+            }
+        }
+    }
+
+    fn extract_from_pyobject(
+        py: Python<'_>,
+        obj: &Bound<'_, pyo3::PyAny>,
+        _span_type: &Bound<'_, pyo3::types::PyType>,
+    ) -> pyo3::PyResult<Self> {
+        if obj.is_instance_of::<PyName>() {
+            let handle: pyo3::PyRef<PyName> = obj.extract()?;
+            let shared = handle.inner.clone();
+            let addr = shared.arc_ptr();
+            // Hand-in: register this Python handle as canonical for its Shared.
+            drop(handle); // release the PyRef before calling Python
+            // Propagate registry errors: a swallowed Err here would leave the
+            // handle unregistered, causing the next wrap-out to mint a different
+            // object and silently break is-stability.
+            registry::register_if_absent(py, addr, obj)?;
+            return Ok(Self::Name(shared));
+        }
+        if obj.is_instance_of::<PyNum>() {
+            let handle: pyo3::PyRef<PyNum> = obj.extract()?;
+            let shared = handle.inner.clone();
+            let addr = shared.arc_ptr();
+            // Hand-in: register this Python handle as canonical for its Shared.
+            drop(handle); // release the PyRef before calling Python
+            // Propagate registry errors: a swallowed Err here would leave the
+            // handle unregistered, causing the next wrap-out to mint a different
+            // object and silently break is-stability.
+            registry::register_if_absent(py, addr, obj)?;
+            return Ok(Self::Num(shared));
+        }
+        Err(pyo3::exceptions::PyTypeError::new_err(format!(
+            "Wrapper: unsupported child type {}",
+            obj.get_type().name()?
+        )))
+    }
+}
+
+// ───────────────────────────────────────────────────────────────────────────
+// Wrapper
+// ───────────────────────────────────────────────────────────────────────────
+
+/// CST data struct for `Wrapper`. See [`fltk_cst_core::Shared`] for clone/equality/reference semantics.
+///
+/// `Debug` output is non-recursive: prints span + child count only. Traverse via `children()` to inspect subtrees.
+/// Teardown is iterative: bounded stack at any depth.
+/// Equality is iterative: bounded stack at any depth.
+#[derive(Clone)]
+pub struct Wrapper {
+    // Not pub: use span() / children() / push_child() — the stable accessor API.
+    // Direct field access bypasses any future validation logic on setters.
+    span: Span,
+    children: Vec<(Option<WrapperLabel>, WrapperChild)>,
+}
+
+// Manual Debug: prints span + child COUNT, never recursing into children.
+// A derived Debug would recurse through Shared<T> children with no depth
+// bound; tree depth is attacker-controlled for parsers over untrusted
+// input, so `{:?}` on a deep tree would abort the process (stack
+// exhaustion, uncatchable). Mirrors the Python __repr__'s content.
+impl fmt::Debug for Wrapper {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("Wrapper")
+            .field("span", &self.span)
+            .field("children", &format_args!("<{} child(ren)>", self.children.len()))
+            .finish()
+    }
+}
+
+// Iterative Drop: derived drop glue would recurse through Shared children
+// one frame set per tree level (attacker-controlled depth → stack
+// exhaustion, uncatchable abort). Drains the subtree via a worklist instead.
+impl Drop for Wrapper {
+    fn drop(&mut self) {
+        if self.children.is_empty() {
+            return; // also the recursion terminator for nodes drained by the worklist
+        }
+        // Worklist is allocated lazily: Vec::new() does not heap-allocate until
+        // the first push.  drain_into pushes only when it steals (count == 1).
+        // In the common backtracking case (shared/memoized children) no steal
+        // occurs and no allocation happens.  Owned deep chains allocate once.
+        let mut worklist: Vec<DropWorklistItem> = Vec::new();
+        for (_, child) in self.children.drain(..) {
+            if let Some(item) = child.into_drop_item() {
+                item.drain_into(&mut worklist);
+            }
+        }
+        while let Some(item) = worklist.pop() {
+            item.drain_into(&mut worklist);
+        }
+    }
+}
+
+// Iterative PartialEq: the recursive version would recurse through Shared children
+// one frame set per tree level (attacker-controlled depth → stack
+// exhaustion, uncatchable abort). Uses an explicit worklist of node pairs.
+impl PartialEq for Wrapper {
+    fn eq(&self, other: &Self) -> bool {
+        if self.span != other.span || self.children.len() != other.children.len() {
+            return false;
+        }
+        // Worklist allocated lazily (Vec::new does not heap-allocate until
+        // first push); shallow trees and all-ptr_eq children never allocate.
+        let mut worklist: Vec<EqWorklistItem> = Vec::new();
+        for ((la, ca), (lb, cb)) in self.children.iter().zip(other.children.iter()) {
+            if la != lb || !ca.eq_shallow_enqueue(cb, &mut worklist) {
+                return false;
+            }
+        }
+        while let Some(item) = worklist.pop() {
+            if !item.compare(&mut worklist) {
+                return false;
+            }
+        }
+        true
+    }
+}
+
+impl Wrapper {
+    /// Construct a node with the given span and no children. GIL-free.
+    pub fn new(span: Span) -> Self {
+        Wrapper {
+            span,
+            children: Vec::new(),
+        }
+    }
+
+    /// Return the [`NodeKind`] discriminant for this node type.
+    pub fn kind(&self) -> NodeKind {
+        NodeKind::Wrapper
+    }
+
+    /// Return a reference to the stored [`Span`].
+    pub fn span(&self) -> &Span {
+        &self.span
+    }
+
+    /// Replace the node's span.
+    pub fn set_span(&mut self, span: Span) {
+        self.span = span;
+    }
+
+    /// Return a slice of all children (unfiltered).
+    ///
+    /// Each entry is `(label, child)`. Use the per-label accessors
+    /// (`children_<lbl>`, `child_<lbl>`, `maybe_<lbl>`) for type-safe access.
+    pub fn children(&self) -> &[(Option<WrapperLabel>, WrapperChild)] {
+        self.children.as_slice()
+    }
+
+    /// Push a child onto the children `Vec`.
+    ///
+    /// No type-checking is performed: any child variant may be stored under
+    /// any label. Per-label typed mutators (`append_<lbl>`, `extend_<lbl>`)
+    /// provide type-constrained alternatives.
+    pub fn push_child(&mut self, label: Option<WrapperLabel>, child: WrapperChild) {
+        self.children.push((label, child));
+    }
+
+    /// Return the single child (any label), or `Err` if there is not exactly one.
+    ///
+    /// Mirrors the Python `child()` method: count violation → `CstError::ChildCount`.
+    pub fn child(&self) -> Result<&(Option<WrapperLabel>, WrapperChild), CstError> {
+        match self.children.as_slice() {
+            [single] => Ok(single),
+            slice => Err(CstError::ChildCount {
+                label: "<any>",
+                expected: "1",
+                found: slice.len(),
+            }),
+        }
+    }
+
+    /// Copy all children from `other` into `self`, sharing the `Shared<T>` arcs.
+    ///
+    /// Children are appended (Arc reference-count bumps, not deep copies),
+    /// matching the Python backend's reference-copy behavior. Labels are preserved.
+    ///
+    /// The borrow checker prevents `self.extend_children(self)` at the data-struct
+    /// level (`&mut` + `&` of the same value don't coexist). For self-extend from
+    /// Python, the handle pymethod handles it via snapshotting.
+    pub fn extend_children(&mut self, other: &Self) {
+        self.children.extend(other.children.iter().cloned());
+    }
+
+    /// Return an iterator over `Shared<Name>` children labelled `key`.
+    ///
+    /// Off-type variants stored under the `key` label are silently skipped.
+    /// Use `children()` (the untyped slice) for a lossless view.
+    pub fn children_key(&self) -> impl Iterator<Item = &Shared<Name>> + '_ {
+        self.children.iter()
+            .filter(|(lbl, _)| *lbl == Some(WrapperLabel::Key))
+            .filter_map(|(_, child)| match child {
+                WrapperChild::Name(s) => Some(s),
+                _ => None,
+            })
+    }
+
+    /// Return the single child labelled `key`, or `Err` if not exactly one.
+    ///
+    /// Count is checked by label match first (`CstError::ChildCount`); if the
+    /// count is valid and the surviving child has the wrong variant type,
+    /// `CstError::UnexpectedChildType` is returned (single-typed labels only).
+    pub fn child_key(&self) -> Result<&Shared<Name>, CstError> {
+        let mut it = self.children.iter()
+            .filter(|(lbl, _)| *lbl == Some(WrapperLabel::Key));
+        match (it.next(), it.next()) {
+            (Some((_, child)), None) => match child {
+                WrapperChild::Name(s) => Ok(s),
+                _ => Err(CstError::UnexpectedChildType { label: "key" }),
+            },
+            _ => Err(CstError::ChildCount {
+                label: "key",
+                expected: "1",
+                found: self.children.iter()
+                    .filter(|(lbl, _)| *lbl == Some(WrapperLabel::Key))
+                    .count(),
+            }),
+        }
+    }
+
+    /// Return the optional child labelled `key`, or `Err` if more than one.
+    ///
+    /// Returns `Ok(None)` for zero, `Ok(Some(...))` for one,
+    /// `Err(CstError::ChildCount)` for two or more.
+    pub fn maybe_key(&self) -> Result<Option<&Shared<Name>>, CstError> {
+        let mut it = self.children.iter()
+            .filter(|(lbl, _)| *lbl == Some(WrapperLabel::Key));
+        match (it.next(), it.next()) {
+            (None, _) => Ok(None),
+            (Some((_, child)), None) => match child {
+                WrapperChild::Name(s) => Ok(Some(s)),
+                _ => Err(CstError::UnexpectedChildType { label: "key" }),
+            },
+            _ => Err(CstError::ChildCount {
+                label: "key",
+                expected: "0 or 1",
+                found: self.children.iter()
+                    .filter(|(lbl, _)| *lbl == Some(WrapperLabel::Key))
+                    .count(),
+            }),
+        }
+    }
+
+    /// Append a child with label `key`, accepting `Name` or `Shared<Name>`.
+    pub fn append_key(&mut self, child: impl Into<Shared<Name>>) {
+        self.children.push((Some(WrapperLabel::Key), WrapperChild::Name(child.into())));
+    }
+
+    /// Append multiple children with label `key`.
+    pub fn extend_key(&mut self, children: impl IntoIterator<Item = impl Into<Shared<Name>>>) {
+        self.children.extend(children.into_iter().map(|c| (Some(WrapperLabel::Key), WrapperChild::Name(c.into()))));
+    }
+
+    /// Return an iterator over `Shared<Num>` children labelled `val`.
+    ///
+    /// Off-type variants stored under the `val` label are silently skipped.
+    /// Use `children()` (the untyped slice) for a lossless view.
+    pub fn children_val(&self) -> impl Iterator<Item = &Shared<Num>> + '_ {
+        self.children.iter()
+            .filter(|(lbl, _)| *lbl == Some(WrapperLabel::Val))
+            .filter_map(|(_, child)| match child {
+                WrapperChild::Num(s) => Some(s),
+                _ => None,
+            })
+    }
+
+    /// Return the single child labelled `val`, or `Err` if not exactly one.
+    ///
+    /// Count is checked by label match first (`CstError::ChildCount`); if the
+    /// count is valid and the surviving child has the wrong variant type,
+    /// `CstError::UnexpectedChildType` is returned (single-typed labels only).
+    pub fn child_val(&self) -> Result<&Shared<Num>, CstError> {
+        let mut it = self.children.iter()
+            .filter(|(lbl, _)| *lbl == Some(WrapperLabel::Val));
+        match (it.next(), it.next()) {
+            (Some((_, child)), None) => match child {
+                WrapperChild::Num(s) => Ok(s),
+                _ => Err(CstError::UnexpectedChildType { label: "val" }),
+            },
+            _ => Err(CstError::ChildCount {
+                label: "val",
+                expected: "1",
+                found: self.children.iter()
+                    .filter(|(lbl, _)| *lbl == Some(WrapperLabel::Val))
+                    .count(),
+            }),
+        }
+    }
+
+    /// Return the optional child labelled `val`, or `Err` if more than one.
+    ///
+    /// Returns `Ok(None)` for zero, `Ok(Some(...))` for one,
+    /// `Err(CstError::ChildCount)` for two or more.
+    pub fn maybe_val(&self) -> Result<Option<&Shared<Num>>, CstError> {
+        let mut it = self.children.iter()
+            .filter(|(lbl, _)| *lbl == Some(WrapperLabel::Val));
+        match (it.next(), it.next()) {
+            (None, _) => Ok(None),
+            (Some((_, child)), None) => match child {
+                WrapperChild::Num(s) => Ok(Some(s)),
+                _ => Err(CstError::UnexpectedChildType { label: "val" }),
+            },
+            _ => Err(CstError::ChildCount {
+                label: "val",
+                expected: "0 or 1",
+                found: self.children.iter()
+                    .filter(|(lbl, _)| *lbl == Some(WrapperLabel::Val))
+                    .count(),
+            }),
+        }
+    }
+
+    /// Append a child with label `val`, accepting `Num` or `Shared<Num>`.
+    pub fn append_val(&mut self, child: impl Into<Shared<Num>>) {
+        self.children.push((Some(WrapperLabel::Val), WrapperChild::Num(child.into())));
+    }
+
+    /// Append multiple children with label `val`.
+    pub fn extend_val(&mut self, children: impl IntoIterator<Item = impl Into<Shared<Num>>>) {
+        self.children.extend(children.into_iter().map(|c| (Some(WrapperLabel::Val), WrapperChild::Num(c.into()))));
+    }
+
+    /// Return the child labelled `key`.
+    ///
+    /// Panics unless exactly one is present; use `child_key` for the checked form.
+    pub fn key(&self) -> &Shared<Name> {
+        self.child_key()
+            .unwrap_or_else(|e| panic!("Wrapper.key: {e}"))
+    }
+
+    /// Return the child labelled `val`.
+    ///
+    /// Panics unless exactly one is present; use `child_val` for the checked form.
+    pub fn val(&self) -> &Shared<Num> {
+        self.child_val()
+            .unwrap_or_else(|e| panic!("Wrapper.val: {e}"))
+    }
+
+    /// Insert a child at `index` (Vec::insert semantics: panics if index > len).
+    ///
+    /// Python-facing clamping is in the `insert` pymethod; native callers must
+    /// bounds-check. Unlike `list.insert`, Vec::insert panics on out-of-bounds.
+    pub fn insert_child(&mut self, index: usize, label: Option<WrapperLabel>, child: WrapperChild) {
+        self.children.insert(index, (label, child));
+    }
+
+    /// Remove and return the child at `index` (Vec::remove semantics: panics if out of range).
+    ///
+    /// Panics on out-of-range. Python-facing IndexError is in the `remove_at` pymethod.
+    pub fn remove_child(&mut self, index: usize) -> (Option<WrapperLabel>, WrapperChild) {
+        self.children.remove(index)
+    }
+
+    /// Replace the child at `index`, returning the old entry (panics if out of range).
+    ///
+    /// Panics on out-of-range. Python-facing IndexError is in the `replace_at` pymethod.
+    pub fn replace_child(
+        &mut self, index: usize, label: Option<WrapperLabel>, child: WrapperChild,
+    ) -> (Option<WrapperLabel>, WrapperChild) {
+        std::mem::replace(&mut self.children[index], (label, child))
+    }
+
+    /// Remove all children.
+    pub fn clear_children(&mut self) {
+        self.children.clear();
+    }
+}
+
+#[cfg(feature = "python")]
+#[pyclass(frozen, weakref, name = "Wrapper")]
+pub struct PyWrapper {
+    // Not pub: all external access goes through shared() or to_py_canonical().
+    // A pub field would let mixed-app Rust code construct an unregistered handle
+    // (Py::new(py, PyFoo { inner: s.clone() })), silently breaking is-stability.
+    inner: Shared<Wrapper>,
+}
+
+#[cfg(feature = "python")]
+impl PyWrapper {
+    /// Return a reference to the inner `Shared<Wrapper>`.
+    pub fn shared(&self) -> &Shared<Wrapper> {
+        &self.inner
+    }
+
+    /// Wrap a `Shared<Wrapper>` into a canonical Python handle,
+    /// looking up the registry first so the same handle is returned
+    /// for the same `Shared` allocation.
+    pub fn to_py_canonical(py: Python<'_>, s: &Shared<Wrapper>) -> pyo3::PyResult<Py<PyWrapper>> {
+        let addr = s.arc_ptr();
+        let obj = registry::get_or_insert_with(py, addr, || {
+            let handle = PyWrapper { inner: s.clone() };
+            Py::new(py, handle).map(|p| p.into_any())
+        })?;
+        obj.bind(py).cast::<PyWrapper>().map(|b| b.clone().unbind()).map_err(|e| e.into())
+    }
+}
+
+#[cfg(feature = "python")]
+#[pymethods]
+impl PyWrapper {
+    #[new]
+    #[pyo3(signature = (*, span = None))]
+    fn new(py: Python<'_>, span: Option<&Bound<'_, pyo3::PyAny>>) -> pyo3::PyResult<Py<PyWrapper>> {
+        let native_span = match span {
+            Some(s) => extract_span(py, s)?,
+            None => Span::unknown(),
+        };
+        let data = Wrapper {
+            span: native_span,
+            children: Vec::new(),
+        };
+        let shared = Shared::new(data);
+        let addr = shared.arc_ptr();
+        let handle = PyWrapper { inner: shared };
+        let py_obj = Py::new(py, handle)?;
+        // Register as canonical — fresh Shared, no alias can exist yet.
+        registry::force_register(py, addr, py_obj.bind(py))?;
+        Ok(py_obj)
+    }
+
+    #[getter]
+    fn span(&self, py: Python<'_>) -> pyo3::PyResult<Py<pyo3::PyAny>> {
+        // Snapshot the span under the read lock, then drop the guard before
+        // calling span_to_pyobject — which performs Python work (Py::new or
+        // Python method calls) that must not happen while a node lock is held.
+        let span = self.inner.read().span.clone();
+        span_to_pyobject(py, &span)
+    }
+
+    #[setter]
+    fn set_span(&self, py: Python<'_>, value: &Bound<'_, pyo3::PyAny>) -> pyo3::PyResult<()> {
+        self.inner.write().span = extract_span(py, value)?;
+        Ok(())
+    }
+
+    #[getter]
+    fn kind(&self) -> NodeKind {
+        NodeKind::Wrapper
+    }
+
+    #[classattr]
+    #[allow(non_snake_case)]
+    fn Label(py: Python<'_>) -> pyo3::PyResult<Py<pyo3::PyAny>> {
+        Ok(<WrapperLabel as pyo3::PyTypeInfo>::type_object(py).into_any().unbind())
+    }
+
+    #[getter]
+    fn children(&self, py: Python<'_>) -> pyo3::PyResult<Py<pyo3::types::PyList>> {
+        // Snapshot the children vec (Arc clones for node children — O(n) refcount bumps).
+        // Lock scope: acquire read, snapshot, release before touching Python.
+        let snapshot: Vec<_> = {
+            let guard = self.inner.read();
+            guard.children.clone()
+        };
+        let result = pyo3::types::PyList::empty(py);
+        for (label, child) in &snapshot {
+            let label_obj: Py<pyo3::PyAny> = match label {
+                None => py.None(),
+                Some(lbl) => lbl.clone().into_pyobject(py)?.into_any().unbind(),
+            };
+            let child_obj = child.to_pyobject(py)?;
+            let tup = pyo3::types::PyTuple::new(py, [label_obj, child_obj])?;
+            result.append(tup)?;
+        }
+        Ok(result.unbind())
+    }
+
+    #[pyo3(signature = (child, label = None))]
+    fn append(
+        &self, py: Python<'_>, child: &Bound<'_, pyo3::PyAny>, label: Option<Py<pyo3::PyAny>>,
+    ) -> pyo3::PyResult<()> {
+        let span_type = get_span_type(py)?;
+        let native_child = WrapperChild::extract_from_pyobject(py, child, &span_type)?;
+        let native_label = match label {
+            None => None,
+            Some(lbl) => {
+                if let Ok(native_lbl) = lbl.bind(py).extract::<WrapperLabel>() {
+                    Some(native_lbl)
+                } else {
+                    return Err(PyTypeError::new_err(format!(
+                        "Wrapper.append: label argument is not a Wrapper_Label; got {}",
+                        lbl.bind(py).get_type().name()?
+                    )));
+                }
+            }
+        };
+        self.inner.write().children.push((native_label, native_child));
+        Ok(())
+    }
+
+    #[pyo3(signature = (children, label = None))]
+    fn extend(
+        &self,
+        py: Python<'_>,
+        children: &Bound<'_, pyo3::PyAny>,
+        label: Option<Py<pyo3::PyAny>>,
+    ) -> pyo3::PyResult<()> {
+        let span_type = get_span_type(py)?;
+        let native_label = match label {
+            None => None,
+            Some(lbl) => {
+                if let Ok(native_lbl) = lbl.bind(py).extract::<WrapperLabel>() {
+                    Some(native_lbl)
+                } else {
+                    return Err(PyTypeError::new_err(format!(
+                        "Wrapper.extend: label argument is not a Wrapper_Label; got {}",
+                        lbl.bind(py).get_type().name()?
+                    )));
+                }
+            }
+        };
+        let iter = children.try_iter()?;
+        for child_result in iter {
+            let child = child_result?;
+            let native_child = WrapperChild::extract_from_pyobject(py, &child, &span_type)?;
+            self.inner.write().children.push((native_label.clone(), native_child));
+        }
+        Ok(())
+    }
+
+    fn extend_children(&self, _py: Python<'_>, other: &PyWrapper) -> pyo3::PyResult<()> {
+        // Snapshot other's children first: the read guard is dropped at the end of
+        // this block, so the write lock below is safe even when self and other are
+        // the same node (self-extend). No ptr_eq call is needed here — the snapshot
+        // approach handles self-extend structurally.
+        // Lock scope: hold read only long enough to clone the Arc-based children vec.
+        let snapshot: Vec<_> = {
+            let guard = other.inner.read();
+            guard.children.clone()
+        };
+        // Node-typed children are pushed directly as Shared<T> values.  Registry
+        // consistency is maintained lazily: wrap-out registers on first Python read
+        // via get_or_insert_with (registry.rs).  Eagerly registering here would be
+        // a no-op — the WeakValueDictionary would evict handles held by nothing.
+        self.inner.write().children.extend(snapshot);
+        Ok(())
+    }
+
+    fn child(&self, py: Python<'_>) -> pyo3::PyResult<Py<pyo3::PyAny>> {
+        // Lock scope: read len and clone at most the single entry under the guard;
+        // drop the guard before any Python work (object conversion, exception raise).
+        let (n, entry) = {
+            let guard = self.inner.read();
+            let n = guard.children.len();
+            let entry = if n == 1 { Some(guard.children[0].clone()) } else { None };
+            (n, entry)
+        };
+        let Some((label, child)) = entry else {
+            return Err(PyValueError::new_err(format!(
+                "Expected one child but have {n}"
+            )));
+        };
+        let label_obj: Py<pyo3::PyAny> = match label {
+            None => py.None(),
+            Some(lbl) => lbl.into_pyobject(py)?.into_any().unbind(),
+        };
+        let child_obj = child.to_pyobject(py)?;
+        Ok(pyo3::types::PyTuple::new(py, [label_obj, child_obj])?.into_any().unbind())
+    }
+
+    #[pyo3(signature = (index, child, label = None))]
+    fn insert(
+        &self,
+        py: Python<'_>,
+        index: &Bound<'_, pyo3::PyAny>,
+        child: &Bound<'_, pyo3::PyAny>,
+        label: Option<Py<pyo3::PyAny>>,
+    ) -> pyo3::PyResult<()> {
+        // Validate child and label BEFORE taking the write lock.
+        let span_type = get_span_type(py)?;
+        let native_child = WrapperChild::extract_from_pyobject(py, child, &span_type)?;
+        let native_label = match label {
+            None => None,
+            Some(lbl) => {
+                if let Ok(native_lbl) = lbl.bind(py).extract::<WrapperLabel>() {
+                    Some(native_lbl)
+                } else {
+                    return Err(PyTypeError::new_err(format!(
+                        "Wrapper.insert: label argument is not a Wrapper_Label; got {}",
+                        lbl.bind(py).get_type().name()?
+                    )));
+                }
+            }
+        };
+        // Index normalization via operator.index (PyNumber_Index semantics).
+        // This raises TypeError (not AttributeError) for non-indexable inputs, matching Python's
+        // operator.index contract. Must be done BEFORE taking any lock.
+        // Overflow by sign: positive overflow clamps to len; negative overflow clamps to 0.
+        let raw_idx = py
+            .import(pyo3::intern!(py, "operator"))?
+            .getattr(pyo3::intern!(py, "index"))?
+            .call1((index,))?;
+        // Fast path for the common exact-int case; fall back to sign-based Python call for beyond-i64.
+        let (is_negative_big, raw_i64) = if let Ok(i) = raw_idx.extract::<i64>() {
+            (false, Some(i))
+        } else {
+            // Beyond i64: use Python __lt__ to determine sign.  The lt call is still outside
+            // any lock, so lock discipline is maintained.
+            let neg = raw_idx.lt(0i64)?;
+            (neg, None)
+        };
+        // Now take a single write lock for the entire len-read + clamp + insert sequence.
+        let mut guard = self.inner.write();
+        let n = guard.children.len();
+        let clamped: usize = match raw_i64 {
+            Some(i) if i < 0 => {
+                let normalized = n as i64 + i;
+                if normalized < 0 { 0 } else { normalized as usize }
+            }
+            Some(i) => {
+                let u = i as usize;
+                if u > n { n } else { u }
+            }
+            None => if is_negative_big { 0 } else { n },
+        };
+        guard.children.insert(clamped, (native_label, native_child));
+        Ok(())
+    }
+
+    fn remove_at(&self, py: Python<'_>, index: &Bound<'_, pyo3::PyAny>) -> pyo3::PyResult<Py<pyo3::PyAny>> {
+        // Capture the caller's original string representation BEFORE normalization,
+        // so error messages show the original value (e.g. `True` not `1`).
+        let orig_str = index.str()?.to_string_lossy().into_owned();
+        // Normalize via operator.index: raises TypeError (not AttributeError) for
+        // non-indexable inputs, matching Python's operator.index contract.
+        // All Python work must happen before any lock.
+        let raw_idx = py
+            .import(pyo3::intern!(py, "operator"))?
+            .getattr(pyo3::intern!(py, "index"))?
+            .call1((index,))?;
+        // Fast path: extract i64. Beyond i64 is always OOB for real trees.
+        let maybe_i64: Option<i64> = raw_idx.extract::<i64>().ok();
+        // Single write lock: resolve + bounds-check + Vec::remove atomically (no TOCTOU).
+        // On OOB, capture n and return Err after releasing the guard.
+        let result: Result<_, usize> = {
+            let mut guard = self.inner.write();
+            let n = guard.children.len();
+            let resolved: Option<usize> = match maybe_i64 {
+                Some(i) if i < 0 => {
+                    let normalized = n as i64 + i;
+                    if normalized < 0 || normalized as usize >= n { None }
+                    else { Some(normalized as usize) }
+                }
+                Some(i) if (i as usize) < n => Some(i as usize),
+                _ => None,
+            };
+            match resolved {
+                Some(idx) => Ok(guard.children.remove(idx)),
+                None => Err(n),
+            }
+        };
+        let (label, child) = result.map_err(|n| {
+            PyIndexError::new_err(format!(
+                "Wrapper.remove_at: index {} out of range ({} children)",
+                orig_str, n
+            ))
+        })?;
+        // Python wrap-out happens after the guard is released.
+        let label_obj: Py<pyo3::PyAny> = match label {
+            None => py.None(),
+            Some(lbl) => lbl.into_pyobject(py)?.into_any().unbind(),
+        };
+        let child_obj = child.to_pyobject(py)?;
+        Ok(pyo3::types::PyTuple::new(py, [label_obj, child_obj])?.into_any().unbind())
+    }
+
+    #[pyo3(signature = (index, child, label = None))]
+    fn replace_at(
+        &self,
+        py: Python<'_>,
+        index: &Bound<'_, pyo3::PyAny>,
+        child: &Bound<'_, pyo3::PyAny>,
+        label: Option<Py<pyo3::PyAny>>,
+    ) -> pyo3::PyResult<()> {
+        // Validate child and label BEFORE taking the write lock.
+        let span_type = get_span_type(py)?;
+        let native_child = WrapperChild::extract_from_pyobject(py, child, &span_type)?;
+        let native_label = match label {
+            None => None,
+            Some(lbl) => {
+                if let Ok(native_lbl) = lbl.bind(py).extract::<WrapperLabel>() {
+                    Some(native_lbl)
+                } else {
+                    return Err(PyTypeError::new_err(format!(
+                        "Wrapper.replace_at: label argument is not a Wrapper_Label; got {}",
+                        lbl.bind(py).get_type().name()?
+                    )));
+                }
+            }
+        };
+        // Capture the caller's original string representation BEFORE normalization.
+        let orig_str = index.str()?.to_string_lossy().into_owned();
+        // Normalize via operator.index: raises TypeError for non-indexable inputs.
+        // All Python work must happen before any lock.
+        let raw_idx = py
+            .import(pyo3::intern!(py, "operator"))?
+            .getattr(pyo3::intern!(py, "index"))?
+            .call1((index,))?;
+        let maybe_i64: Option<i64> = raw_idx.extract::<i64>().ok();
+        // Single write lock: resolve + bounds-check + mem::replace atomically (no TOCTOU).
+        let old = {
+            let mut guard = self.inner.write();
+            let n = guard.children.len();
+            let resolved: Option<usize> = match maybe_i64 {
+                Some(i) if i < 0 => {
+                    let normalized = n as i64 + i;
+                    if normalized < 0 || normalized as usize >= n { None }
+                    else { Some(normalized as usize) }
+                }
+                Some(i) if (i as usize) < n => Some(i as usize),
+                _ => None,
+            };
+            let idx = match resolved {
+                Some(i) => i,
+                None => {
+                    return Err(PyIndexError::new_err(format!(
+                        "Wrapper.replace_at: index {} out of range ({} children)",
+                        orig_str, n
+                    )));
+                }
+            };
+            std::mem::replace(&mut guard.children[idx], (native_label, native_child))
+        };
+        // Drop old entry outside the lock to avoid recursive lock acquisition
+        // if the child's drop chain re-enters Python.
+        drop(old);
+        Ok(())
+    }
+
+    fn clear(&self, _py: Python<'_>) -> pyo3::PyResult<()> {
+        let old = {
+            let mut guard = self.inner.write();
+            std::mem::take(&mut guard.children)
+        };
+        // Drop old entries outside the lock.
+        drop(old);
+        Ok(())
+    }
+
+    fn append_key(&self, py: Python<'_>, child: &Bound<'_, pyo3::PyAny>) -> pyo3::PyResult<()> {
+        let span_type = get_span_type(py)?;
+        let native_child = WrapperChild::extract_from_pyobject(py, child, &span_type)?;
+        self.inner.write().children.push((Some(WrapperLabel::Key), native_child));
+        Ok(())
+    }
+
+    fn extend_key(&self, py: Python<'_>, children: &Bound<'_, pyo3::PyAny>) -> pyo3::PyResult<()> {
+        let span_type = get_span_type(py)?;
+        let iter = children.try_iter()?;
+        for child_result in iter {
+            let child = child_result?;
+            let native_child = WrapperChild::extract_from_pyobject(py, &child, &span_type)?;
+            let entry = (Some(WrapperLabel::Key), native_child);
+            self.inner.write().children.push(entry);
+        }
+        Ok(())
+    }
+
+    fn children_key(&self, py: Python<'_>) -> pyo3::PyResult<Py<pyo3::types::PyList>> {
+        // Lock scope: filter by label under the read guard, cloning only matching
+        // children (Arc bump or Span copy each); drop the guard before to_pyobject,
+        // which performs Python work that must not happen while a node lock is held.
+        let matching: Vec<_> = {
+            let guard = self.inner.read();
+            guard.children.iter()
+                .filter(|(lbl, _)| *lbl == Some(WrapperLabel::Key))
+                .map(|(_, child)| child.clone())
+                .collect()
+        };
+        let result = pyo3::types::PyList::empty(py);
+        for child in &matching {
+            result.append(child.to_pyobject(py)?)?;
+        }
+        Ok(result.unbind())
+    }
+
+    fn child_key(&self, py: Python<'_>) -> pyo3::PyResult<Py<pyo3::PyAny>> {
+        // Lock scope: count label matches and clone only the first under the guard;
+        // drop the guard before to_pyobject / exception raise (Python work).
+        let (count, first) = {
+            let guard = self.inner.read();
+            let mut count = 0usize;
+            let mut first = None;
+            for (lbl, child) in &guard.children {
+                if *lbl == Some(WrapperLabel::Key) {
+                    count += 1;
+                    if count == 1 {
+                        first = Some(child.clone());
+                    }
+                }
+            }
+            (count, first)
+        };
+        if count != 1 {
+            return Err(PyValueError::new_err(format!(
+                "Expected one key child but have {count}"
+            )));
+        }
+        first.expect("invariant: Wrapper.child_key: count==1 but first==None; logic error")
+            .to_pyobject(py)
+    }
+
+    fn maybe_key(&self, py: Python<'_>) -> pyo3::PyResult<Option<Py<pyo3::PyAny>>> {
+        // Lock scope: count label matches and clone only the first under the guard;
+        // drop the guard before to_pyobject / exception raise (Python work).
+        let (count, first) = {
+            let guard = self.inner.read();
+            let mut count = 0usize;
+            let mut first = None;
+            for (lbl, child) in &guard.children {
+                if *lbl == Some(WrapperLabel::Key) {
+                    count += 1;
+                    if count == 1 {
+                        first = Some(child.clone());
+                    }
+                }
+            }
+            (count, first)
+        };
+        if count > 1 {
+            return Err(PyValueError::new_err(
+                "Expected at most one key child but have at least 2",
+            ));
+        }
+        match first {
+            None => Ok(None),
+            Some(child) => Ok(Some(child.to_pyobject(py)?)),
+        }
+    }
+
+    fn append_val(&self, py: Python<'_>, child: &Bound<'_, pyo3::PyAny>) -> pyo3::PyResult<()> {
+        let span_type = get_span_type(py)?;
+        let native_child = WrapperChild::extract_from_pyobject(py, child, &span_type)?;
+        self.inner.write().children.push((Some(WrapperLabel::Val), native_child));
+        Ok(())
+    }
+
+    fn extend_val(&self, py: Python<'_>, children: &Bound<'_, pyo3::PyAny>) -> pyo3::PyResult<()> {
+        let span_type = get_span_type(py)?;
+        let iter = children.try_iter()?;
+        for child_result in iter {
+            let child = child_result?;
+            let native_child = WrapperChild::extract_from_pyobject(py, &child, &span_type)?;
+            let entry = (Some(WrapperLabel::Val), native_child);
+            self.inner.write().children.push(entry);
+        }
+        Ok(())
+    }
+
+    fn children_val(&self, py: Python<'_>) -> pyo3::PyResult<Py<pyo3::types::PyList>> {
+        // Lock scope: filter by label under the read guard, cloning only matching
+        // children (Arc bump or Span copy each); drop the guard before to_pyobject,
+        // which performs Python work that must not happen while a node lock is held.
+        let matching: Vec<_> = {
+            let guard = self.inner.read();
+            guard.children.iter()
+                .filter(|(lbl, _)| *lbl == Some(WrapperLabel::Val))
+                .map(|(_, child)| child.clone())
+                .collect()
+        };
+        let result = pyo3::types::PyList::empty(py);
+        for child in &matching {
+            result.append(child.to_pyobject(py)?)?;
+        }
+        Ok(result.unbind())
+    }
+
+    fn child_val(&self, py: Python<'_>) -> pyo3::PyResult<Py<pyo3::PyAny>> {
+        // Lock scope: count label matches and clone only the first under the guard;
+        // drop the guard before to_pyobject / exception raise (Python work).
+        let (count, first) = {
+            let guard = self.inner.read();
+            let mut count = 0usize;
+            let mut first = None;
+            for (lbl, child) in &guard.children {
+                if *lbl == Some(WrapperLabel::Val) {
+                    count += 1;
+                    if count == 1 {
+                        first = Some(child.clone());
+                    }
+                }
+            }
+            (count, first)
+        };
+        if count != 1 {
+            return Err(PyValueError::new_err(format!(
+                "Expected one val child but have {count}"
+            )));
+        }
+        first.expect("invariant: Wrapper.child_val: count==1 but first==None; logic error")
+            .to_pyobject(py)
+    }
+
+    fn maybe_val(&self, py: Python<'_>) -> pyo3::PyResult<Option<Py<pyo3::PyAny>>> {
+        // Lock scope: count label matches and clone only the first under the guard;
+        // drop the guard before to_pyobject / exception raise (Python work).
+        let (count, first) = {
+            let guard = self.inner.read();
+            let mut count = 0usize;
+            let mut first = None;
+            for (lbl, child) in &guard.children {
+                if *lbl == Some(WrapperLabel::Val) {
+                    count += 1;
+                    if count == 1 {
+                        first = Some(child.clone());
+                    }
+                }
+            }
+            (count, first)
+        };
+        if count > 1 {
+            return Err(PyValueError::new_err(
+                "Expected at most one val child but have at least 2",
+            ));
+        }
+        match first {
+            None => Ok(None),
+            Some(child) => Ok(Some(child.to_pyobject(py)?)),
+        }
+    }
+
+    fn key(&self, py: Python<'_>) -> pyo3::PyResult<Py<pyo3::PyAny>> {
+        self.child_key(py)
+    }
+
+    fn val(&self, py: Python<'_>) -> pyo3::PyResult<Py<pyo3::PyAny>> {
+        self.child_val(py)
+    }
+
+    fn __eq__(&self, py: Python<'_>, other: &Bound<'_, pyo3::PyAny>) -> pyo3::PyResult<Py<pyo3::PyAny>> {
+        if !other.is_instance_of::<PyWrapper>() {
+            return Ok(py.NotImplemented());
+        }
+        let other_handle: pyo3::PyRef<PyWrapper> = other.extract()?;
+        // Delegate to Shared<T>::PartialEq which applies the ptr_eq short-circuit
+        // (avoids same-lock re-entry on `x == x`) then deep structural comparison.
+        let eq = self.inner == other_handle.inner;
+        Ok(eq.into_pyobject(py)?.to_owned().unbind().into_any())
+    }
+
+    fn __hash__(&self) -> pyo3::PyResult<isize> {
+        Err(PyTypeError::new_err("unhashable type: 'Wrapper'"))
+    }
+
+    fn __repr__(&self, _py: Python<'_>) -> String {
+        let guard = self.inner.read();
+        let span_repr = format!("Span(start={}, end={})", guard.span.start(), guard.span.end());
+        let children_len = guard.children.len();
+        format!(
+            "Wrapper(span={span_repr}, children=[<{children_len} child(ren)>])"
+        )
+    }
+
+}
+
+// ───────────────────────────────────────────────────────────────────────────
+// OptWrapperLabel
+// ───────────────────────────────────────────────────────────────────────────
+
+/// Label discriminant enum for children of this node type.
+///
+/// Python-visible name is `OptWrapper_Label` (preserved for compatibility).
+/// Rust consumers use the CamelCase `OptWrapperLabel` name.
+#[cfg(feature = "python")]
+#[pyclass(frozen, from_py_object, name = "OptWrapper_Label")]
+#[derive(Clone, Debug, PartialEq, Eq, Hash)]
+pub enum OptWrapperLabel {
+    #[pyo3(name = "KEY")]
+    Key,
+    #[pyo3(name = "VAL")]
+    Val,
+}
+
+#[cfg(not(feature = "python"))]
+#[derive(Clone, Debug, PartialEq, Eq, Hash)]
+pub enum OptWrapperLabel {
+    Key,
+    Val,
+}
+
+#[cfg(feature = "python")]
+#[pymethods]
+impl OptWrapperLabel {
+    fn __repr__(&self) -> &'static str {
+        match self {
+            OptWrapperLabel::Key => "OptWrapper.Label.KEY",
+            OptWrapperLabel::Val => "OptWrapper.Label.VAL",
+        }
+    }
+
+    #[getter]
+    fn _fltk_canonical_name(&self) -> &'static str {
+        self.__repr__()
+    }
+
+    fn __eq__(&self, py: Python<'_>, other: &Bound<'_, pyo3::PyAny>) -> pyo3::PyResult<Py<pyo3::PyAny>> {
+        if let Ok(other_kind) = other.extract::<OptWrapperLabel>() {
+            return Ok((self == &other_kind).into_pyobject(py)?.to_owned().unbind().into_any());
+        }
+        if let Ok(cn) = other.getattr(pyo3::intern!(py, "_fltk_canonical_name")) {
+            if let Ok(cn_str) = cn.extract::<&str>() {
+                return Ok((self.__repr__() == cn_str).into_pyobject(py)?.to_owned().unbind().into_any());
+            }
+        }
+        Ok(py.NotImplemented())
+    }
+
+    fn __hash__(&self, py: Python<'_>) -> pyo3::PyResult<isize> {
+        pyo3::types::PyAnyMethods::hash(
+            pyo3::types::PyString::new(py, self.__repr__()).as_any()
+        )
+    }
+}
+
+/// Child value enum for `OptWrapper` nodes.
+///
+/// Node-typed variants hold `Shared<T>` (`Arc<RwLock<T>>`); `Clone` is shallow
+/// (increments the reference count, does not copy the node).
+#[derive(Clone, Debug)]
+pub enum OptWrapperChild {
+    Name(Shared<Name>),
+    Num(Shared<Num>),
+}
+
+impl PartialEq for OptWrapperChild {
+    fn eq(&self, other: &Self) -> bool {
+        match (self, other) {
+            (OptWrapperChild::Name(a), OptWrapperChild::Name(b)) => a == b,
+            (OptWrapperChild::Num(a), OptWrapperChild::Num(b)) => a == b,
+            _ => false,
+        }
+    }
+}
+
+impl OptWrapperChild {
+    fn into_drop_item(self) -> Option<DropWorklistItem> {
+        match self {
+            Self::Name(s) => Some(DropWorklistItem::Name(s)),
+            Self::Num(s) => Some(DropWorklistItem::Num(s)),
+        }
+    }
+
+    /// Shallow structural equality for one child pair.
+    /// Span pair: compare directly. Node pair: ptr_eq short-circuit (skip enqueue)
+    /// or enqueue for the worklist. Variant mismatch: return false.
+    fn eq_shallow_enqueue(&self, other: &Self, worklist: &mut Vec<EqWorklistItem>) -> bool {
+        match (self, other) {
+            (Self::Name(a), Self::Name(b)) => {
+                if !a.ptr_eq(b) {
+                    worklist.push(EqWorklistItem::Name(a.clone(), b.clone()));
+                }
+                true
+            }
+            (Self::Num(a), Self::Num(b)) => {
+                if !a.ptr_eq(b) {
+                    worklist.push(EqWorklistItem::Num(a.clone(), b.clone()));
+                }
+                true
+            }
+            _ => false,
+        }
+    }
+}
+
+#[cfg(feature = "python")]
+impl OptWrapperChild {
+    fn to_pyobject(&self, py: Python<'_>) -> pyo3::PyResult<Py<pyo3::PyAny>> {
+        match self {
+            Self::Name(shared) => {
+                let addr = shared.arc_ptr();
+                registry::get_or_insert_with(py, addr, || {
+                    let handle = PyName { inner: shared.clone() };
+                    Py::new(py, handle).map(|p| p.into_any())
+                })
+            }
+            Self::Num(shared) => {
+                let addr = shared.arc_ptr();
+                registry::get_or_insert_with(py, addr, || {
+                    let handle = PyNum { inner: shared.clone() };
+                    Py::new(py, handle).map(|p| p.into_any())
+                })
+            }
+        }
+    }
+
+    fn extract_from_pyobject(
+        py: Python<'_>,
+        obj: &Bound<'_, pyo3::PyAny>,
+        _span_type: &Bound<'_, pyo3::types::PyType>,
+    ) -> pyo3::PyResult<Self> {
+        if obj.is_instance_of::<PyName>() {
+            let handle: pyo3::PyRef<PyName> = obj.extract()?;
+            let shared = handle.inner.clone();
+            let addr = shared.arc_ptr();
+            // Hand-in: register this Python handle as canonical for its Shared.
+            drop(handle); // release the PyRef before calling Python
+            // Propagate registry errors: a swallowed Err here would leave the
+            // handle unregistered, causing the next wrap-out to mint a different
+            // object and silently break is-stability.
+            registry::register_if_absent(py, addr, obj)?;
+            return Ok(Self::Name(shared));
+        }
+        if obj.is_instance_of::<PyNum>() {
+            let handle: pyo3::PyRef<PyNum> = obj.extract()?;
+            let shared = handle.inner.clone();
+            let addr = shared.arc_ptr();
+            // Hand-in: register this Python handle as canonical for its Shared.
+            drop(handle); // release the PyRef before calling Python
+            // Propagate registry errors: a swallowed Err here would leave the
+            // handle unregistered, causing the next wrap-out to mint a different
+            // object and silently break is-stability.
+            registry::register_if_absent(py, addr, obj)?;
+            return Ok(Self::Num(shared));
+        }
+        Err(pyo3::exceptions::PyTypeError::new_err(format!(
+            "OptWrapper: unsupported child type {}",
+            obj.get_type().name()?
+        )))
+    }
+}
+
+// ───────────────────────────────────────────────────────────────────────────
+// OptWrapper
+// ───────────────────────────────────────────────────────────────────────────
+
+/// CST data struct for `OptWrapper`. See [`fltk_cst_core::Shared`] for clone/equality/reference semantics.
+///
+/// `Debug` output is non-recursive: prints span + child count only. Traverse via `children()` to inspect subtrees.
+/// Teardown is iterative: bounded stack at any depth.
+/// Equality is iterative: bounded stack at any depth.
+#[derive(Clone)]
+pub struct OptWrapper {
+    // Not pub: use span() / children() / push_child() — the stable accessor API.
+    // Direct field access bypasses any future validation logic on setters.
+    span: Span,
+    children: Vec<(Option<OptWrapperLabel>, OptWrapperChild)>,
+}
+
+// Manual Debug: prints span + child COUNT, never recursing into children.
+// A derived Debug would recurse through Shared<T> children with no depth
+// bound; tree depth is attacker-controlled for parsers over untrusted
+// input, so `{:?}` on a deep tree would abort the process (stack
+// exhaustion, uncatchable). Mirrors the Python __repr__'s content.
+impl fmt::Debug for OptWrapper {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("OptWrapper")
+            .field("span", &self.span)
+            .field("children", &format_args!("<{} child(ren)>", self.children.len()))
+            .finish()
+    }
+}
+
+// Iterative Drop: derived drop glue would recurse through Shared children
+// one frame set per tree level (attacker-controlled depth → stack
+// exhaustion, uncatchable abort). Drains the subtree via a worklist instead.
+impl Drop for OptWrapper {
+    fn drop(&mut self) {
+        if self.children.is_empty() {
+            return; // also the recursion terminator for nodes drained by the worklist
+        }
+        // Worklist is allocated lazily: Vec::new() does not heap-allocate until
+        // the first push.  drain_into pushes only when it steals (count == 1).
+        // In the common backtracking case (shared/memoized children) no steal
+        // occurs and no allocation happens.  Owned deep chains allocate once.
+        let mut worklist: Vec<DropWorklistItem> = Vec::new();
+        for (_, child) in self.children.drain(..) {
+            if let Some(item) = child.into_drop_item() {
+                item.drain_into(&mut worklist);
+            }
+        }
+        while let Some(item) = worklist.pop() {
+            item.drain_into(&mut worklist);
+        }
+    }
+}
+
+// Iterative PartialEq: the recursive version would recurse through Shared children
+// one frame set per tree level (attacker-controlled depth → stack
+// exhaustion, uncatchable abort). Uses an explicit worklist of node pairs.
+impl PartialEq for OptWrapper {
+    fn eq(&self, other: &Self) -> bool {
+        if self.span != other.span || self.children.len() != other.children.len() {
+            return false;
+        }
+        // Worklist allocated lazily (Vec::new does not heap-allocate until
+        // first push); shallow trees and all-ptr_eq children never allocate.
+        let mut worklist: Vec<EqWorklistItem> = Vec::new();
+        for ((la, ca), (lb, cb)) in self.children.iter().zip(other.children.iter()) {
+            if la != lb || !ca.eq_shallow_enqueue(cb, &mut worklist) {
+                return false;
+            }
+        }
+        while let Some(item) = worklist.pop() {
+            if !item.compare(&mut worklist) {
+                return false;
+            }
+        }
+        true
+    }
+}
+
+impl OptWrapper {
+    /// Construct a node with the given span and no children. GIL-free.
+    pub fn new(span: Span) -> Self {
+        OptWrapper {
+            span,
+            children: Vec::new(),
+        }
+    }
+
+    /// Return the [`NodeKind`] discriminant for this node type.
+    pub fn kind(&self) -> NodeKind {
+        NodeKind::OptWrapper
+    }
+
+    /// Return a reference to the stored [`Span`].
+    pub fn span(&self) -> &Span {
+        &self.span
+    }
+
+    /// Replace the node's span.
+    pub fn set_span(&mut self, span: Span) {
+        self.span = span;
+    }
+
+    /// Return a slice of all children (unfiltered).
+    ///
+    /// Each entry is `(label, child)`. Use the per-label accessors
+    /// (`children_<lbl>`, `child_<lbl>`, `maybe_<lbl>`) for type-safe access.
+    pub fn children(&self) -> &[(Option<OptWrapperLabel>, OptWrapperChild)] {
+        self.children.as_slice()
+    }
+
+    /// Push a child onto the children `Vec`.
+    ///
+    /// No type-checking is performed: any child variant may be stored under
+    /// any label. Per-label typed mutators (`append_<lbl>`, `extend_<lbl>`)
+    /// provide type-constrained alternatives.
+    pub fn push_child(&mut self, label: Option<OptWrapperLabel>, child: OptWrapperChild) {
+        self.children.push((label, child));
+    }
+
+    /// Return the single child (any label), or `Err` if there is not exactly one.
+    ///
+    /// Mirrors the Python `child()` method: count violation → `CstError::ChildCount`.
+    pub fn child(&self) -> Result<&(Option<OptWrapperLabel>, OptWrapperChild), CstError> {
+        match self.children.as_slice() {
+            [single] => Ok(single),
+            slice => Err(CstError::ChildCount {
+                label: "<any>",
+                expected: "1",
+                found: slice.len(),
+            }),
+        }
+    }
+
+    /// Copy all children from `other` into `self`, sharing the `Shared<T>` arcs.
+    ///
+    /// Children are appended (Arc reference-count bumps, not deep copies),
+    /// matching the Python backend's reference-copy behavior. Labels are preserved.
+    ///
+    /// The borrow checker prevents `self.extend_children(self)` at the data-struct
+    /// level (`&mut` + `&` of the same value don't coexist). For self-extend from
+    /// Python, the handle pymethod handles it via snapshotting.
+    pub fn extend_children(&mut self, other: &Self) {
+        self.children.extend(other.children.iter().cloned());
+    }
+
+    /// Return an iterator over `Shared<Name>` children labelled `key`.
+    ///
+    /// Off-type variants stored under the `key` label are silently skipped.
+    /// Use `children()` (the untyped slice) for a lossless view.
+    pub fn children_key(&self) -> impl Iterator<Item = &Shared<Name>> + '_ {
+        self.children.iter()
+            .filter(|(lbl, _)| *lbl == Some(OptWrapperLabel::Key))
+            .filter_map(|(_, child)| match child {
+                OptWrapperChild::Name(s) => Some(s),
+                _ => None,
+            })
+    }
+
+    /// Return the single child labelled `key`, or `Err` if not exactly one.
+    ///
+    /// Count is checked by label match first (`CstError::ChildCount`); if the
+    /// count is valid and the surviving child has the wrong variant type,
+    /// `CstError::UnexpectedChildType` is returned (single-typed labels only).
+    pub fn child_key(&self) -> Result<&Shared<Name>, CstError> {
+        let mut it = self.children.iter()
+            .filter(|(lbl, _)| *lbl == Some(OptWrapperLabel::Key));
+        match (it.next(), it.next()) {
+            (Some((_, child)), None) => match child {
+                OptWrapperChild::Name(s) => Ok(s),
+                _ => Err(CstError::UnexpectedChildType { label: "key" }),
+            },
+            _ => Err(CstError::ChildCount {
+                label: "key",
+                expected: "1",
+                found: self.children.iter()
+                    .filter(|(lbl, _)| *lbl == Some(OptWrapperLabel::Key))
+                    .count(),
+            }),
+        }
+    }
+
+    /// Return the optional child labelled `key`, or `Err` if more than one.
+    ///
+    /// Returns `Ok(None)` for zero, `Ok(Some(...))` for one,
+    /// `Err(CstError::ChildCount)` for two or more.
+    pub fn maybe_key(&self) -> Result<Option<&Shared<Name>>, CstError> {
+        let mut it = self.children.iter()
+            .filter(|(lbl, _)| *lbl == Some(OptWrapperLabel::Key));
+        match (it.next(), it.next()) {
+            (None, _) => Ok(None),
+            (Some((_, child)), None) => match child {
+                OptWrapperChild::Name(s) => Ok(Some(s)),
+                _ => Err(CstError::UnexpectedChildType { label: "key" }),
+            },
+            _ => Err(CstError::ChildCount {
+                label: "key",
+                expected: "0 or 1",
+                found: self.children.iter()
+                    .filter(|(lbl, _)| *lbl == Some(OptWrapperLabel::Key))
+                    .count(),
+            }),
+        }
+    }
+
+    /// Append a child with label `key`, accepting `Name` or `Shared<Name>`.
+    pub fn append_key(&mut self, child: impl Into<Shared<Name>>) {
+        self.children.push((Some(OptWrapperLabel::Key), OptWrapperChild::Name(child.into())));
+    }
+
+    /// Append multiple children with label `key`.
+    pub fn extend_key(&mut self, children: impl IntoIterator<Item = impl Into<Shared<Name>>>) {
+        self.children.extend(children.into_iter().map(|c| (Some(OptWrapperLabel::Key), OptWrapperChild::Name(c.into()))));
+    }
+
+    /// Return an iterator over `Shared<Num>` children labelled `val`.
+    ///
+    /// Off-type variants stored under the `val` label are silently skipped.
+    /// Use `children()` (the untyped slice) for a lossless view.
+    pub fn children_val(&self) -> impl Iterator<Item = &Shared<Num>> + '_ {
+        self.children.iter()
+            .filter(|(lbl, _)| *lbl == Some(OptWrapperLabel::Val))
+            .filter_map(|(_, child)| match child {
+                OptWrapperChild::Num(s) => Some(s),
+                _ => None,
+            })
+    }
+
+    /// Return the single child labelled `val`, or `Err` if not exactly one.
+    ///
+    /// Count is checked by label match first (`CstError::ChildCount`); if the
+    /// count is valid and the surviving child has the wrong variant type,
+    /// `CstError::UnexpectedChildType` is returned (single-typed labels only).
+    pub fn child_val(&self) -> Result<&Shared<Num>, CstError> {
+        let mut it = self.children.iter()
+            .filter(|(lbl, _)| *lbl == Some(OptWrapperLabel::Val));
+        match (it.next(), it.next()) {
+            (Some((_, child)), None) => match child {
+                OptWrapperChild::Num(s) => Ok(s),
+                _ => Err(CstError::UnexpectedChildType { label: "val" }),
+            },
+            _ => Err(CstError::ChildCount {
+                label: "val",
+                expected: "1",
+                found: self.children.iter()
+                    .filter(|(lbl, _)| *lbl == Some(OptWrapperLabel::Val))
+                    .count(),
+            }),
+        }
+    }
+
+    /// Return the optional child labelled `val`, or `Err` if more than one.
+    ///
+    /// Returns `Ok(None)` for zero, `Ok(Some(...))` for one,
+    /// `Err(CstError::ChildCount)` for two or more.
+    pub fn maybe_val(&self) -> Result<Option<&Shared<Num>>, CstError> {
+        let mut it = self.children.iter()
+            .filter(|(lbl, _)| *lbl == Some(OptWrapperLabel::Val));
+        match (it.next(), it.next()) {
+            (None, _) => Ok(None),
+            (Some((_, child)), None) => match child {
+                OptWrapperChild::Num(s) => Ok(Some(s)),
+                _ => Err(CstError::UnexpectedChildType { label: "val" }),
+            },
+            _ => Err(CstError::ChildCount {
+                label: "val",
+                expected: "0 or 1",
+                found: self.children.iter()
+                    .filter(|(lbl, _)| *lbl == Some(OptWrapperLabel::Val))
+                    .count(),
+            }),
+        }
+    }
+
+    /// Append a child with label `val`, accepting `Num` or `Shared<Num>`.
+    pub fn append_val(&mut self, child: impl Into<Shared<Num>>) {
+        self.children.push((Some(OptWrapperLabel::Val), OptWrapperChild::Num(child.into())));
+    }
+
+    /// Append multiple children with label `val`.
+    pub fn extend_val(&mut self, children: impl IntoIterator<Item = impl Into<Shared<Num>>>) {
+        self.children.extend(children.into_iter().map(|c| (Some(OptWrapperLabel::Val), OptWrapperChild::Num(c.into()))));
+    }
+
+    /// Return the optional child labelled `key`.
+    ///
+    /// Panics if more than one is present; use `maybe_key` for the checked form.
+    pub fn key(&self) -> Option<&Shared<Name>> {
+        self.maybe_key()
+            .unwrap_or_else(|e| panic!("OptWrapper.key: {e}"))
+    }
+
+    /// Return the optional child labelled `val`.
+    ///
+    /// Panics if more than one is present; use `maybe_val` for the checked form.
+    pub fn val(&self) -> Option<&Shared<Num>> {
+        self.maybe_val()
+            .unwrap_or_else(|e| panic!("OptWrapper.val: {e}"))
+    }
+
+    /// Insert a child at `index` (Vec::insert semantics: panics if index > len).
+    ///
+    /// Python-facing clamping is in the `insert` pymethod; native callers must
+    /// bounds-check. Unlike `list.insert`, Vec::insert panics on out-of-bounds.
+    pub fn insert_child(&mut self, index: usize, label: Option<OptWrapperLabel>, child: OptWrapperChild) {
+        self.children.insert(index, (label, child));
+    }
+
+    /// Remove and return the child at `index` (Vec::remove semantics: panics if out of range).
+    ///
+    /// Panics on out-of-range. Python-facing IndexError is in the `remove_at` pymethod.
+    pub fn remove_child(&mut self, index: usize) -> (Option<OptWrapperLabel>, OptWrapperChild) {
+        self.children.remove(index)
+    }
+
+    /// Replace the child at `index`, returning the old entry (panics if out of range).
+    ///
+    /// Panics on out-of-range. Python-facing IndexError is in the `replace_at` pymethod.
+    pub fn replace_child(
+        &mut self, index: usize, label: Option<OptWrapperLabel>, child: OptWrapperChild,
+    ) -> (Option<OptWrapperLabel>, OptWrapperChild) {
+        std::mem::replace(&mut self.children[index], (label, child))
+    }
+
+    /// Remove all children.
+    pub fn clear_children(&mut self) {
+        self.children.clear();
+    }
+}
+
+#[cfg(feature = "python")]
+#[pyclass(frozen, weakref, name = "OptWrapper")]
+pub struct PyOptWrapper {
+    // Not pub: all external access goes through shared() or to_py_canonical().
+    // A pub field would let mixed-app Rust code construct an unregistered handle
+    // (Py::new(py, PyFoo { inner: s.clone() })), silently breaking is-stability.
+    inner: Shared<OptWrapper>,
+}
+
+#[cfg(feature = "python")]
+impl PyOptWrapper {
+    /// Return a reference to the inner `Shared<OptWrapper>`.
+    pub fn shared(&self) -> &Shared<OptWrapper> {
+        &self.inner
+    }
+
+    /// Wrap a `Shared<OptWrapper>` into a canonical Python handle,
+    /// looking up the registry first so the same handle is returned
+    /// for the same `Shared` allocation.
+    pub fn to_py_canonical(py: Python<'_>, s: &Shared<OptWrapper>) -> pyo3::PyResult<Py<PyOptWrapper>> {
+        let addr = s.arc_ptr();
+        let obj = registry::get_or_insert_with(py, addr, || {
+            let handle = PyOptWrapper { inner: s.clone() };
+            Py::new(py, handle).map(|p| p.into_any())
+        })?;
+        obj.bind(py).cast::<PyOptWrapper>().map(|b| b.clone().unbind()).map_err(|e| e.into())
+    }
+}
+
+#[cfg(feature = "python")]
+#[pymethods]
+impl PyOptWrapper {
+    #[new]
+    #[pyo3(signature = (*, span = None))]
+    fn new(py: Python<'_>, span: Option<&Bound<'_, pyo3::PyAny>>) -> pyo3::PyResult<Py<PyOptWrapper>> {
+        let native_span = match span {
+            Some(s) => extract_span(py, s)?,
+            None => Span::unknown(),
+        };
+        let data = OptWrapper {
+            span: native_span,
+            children: Vec::new(),
+        };
+        let shared = Shared::new(data);
+        let addr = shared.arc_ptr();
+        let handle = PyOptWrapper { inner: shared };
+        let py_obj = Py::new(py, handle)?;
+        // Register as canonical — fresh Shared, no alias can exist yet.
+        registry::force_register(py, addr, py_obj.bind(py))?;
+        Ok(py_obj)
+    }
+
+    #[getter]
+    fn span(&self, py: Python<'_>) -> pyo3::PyResult<Py<pyo3::PyAny>> {
+        // Snapshot the span under the read lock, then drop the guard before
+        // calling span_to_pyobject — which performs Python work (Py::new or
+        // Python method calls) that must not happen while a node lock is held.
+        let span = self.inner.read().span.clone();
+        span_to_pyobject(py, &span)
+    }
+
+    #[setter]
+    fn set_span(&self, py: Python<'_>, value: &Bound<'_, pyo3::PyAny>) -> pyo3::PyResult<()> {
+        self.inner.write().span = extract_span(py, value)?;
+        Ok(())
+    }
+
+    #[getter]
+    fn kind(&self) -> NodeKind {
+        NodeKind::OptWrapper
+    }
+
+    #[classattr]
+    #[allow(non_snake_case)]
+    fn Label(py: Python<'_>) -> pyo3::PyResult<Py<pyo3::PyAny>> {
+        Ok(<OptWrapperLabel as pyo3::PyTypeInfo>::type_object(py).into_any().unbind())
+    }
+
+    #[getter]
+    fn children(&self, py: Python<'_>) -> pyo3::PyResult<Py<pyo3::types::PyList>> {
+        // Snapshot the children vec (Arc clones for node children — O(n) refcount bumps).
+        // Lock scope: acquire read, snapshot, release before touching Python.
+        let snapshot: Vec<_> = {
+            let guard = self.inner.read();
+            guard.children.clone()
+        };
+        let result = pyo3::types::PyList::empty(py);
+        for (label, child) in &snapshot {
+            let label_obj: Py<pyo3::PyAny> = match label {
+                None => py.None(),
+                Some(lbl) => lbl.clone().into_pyobject(py)?.into_any().unbind(),
+            };
+            let child_obj = child.to_pyobject(py)?;
+            let tup = pyo3::types::PyTuple::new(py, [label_obj, child_obj])?;
+            result.append(tup)?;
+        }
+        Ok(result.unbind())
+    }
+
+    #[pyo3(signature = (child, label = None))]
+    fn append(
+        &self, py: Python<'_>, child: &Bound<'_, pyo3::PyAny>, label: Option<Py<pyo3::PyAny>>,
+    ) -> pyo3::PyResult<()> {
+        let span_type = get_span_type(py)?;
+        let native_child = OptWrapperChild::extract_from_pyobject(py, child, &span_type)?;
+        let native_label = match label {
+            None => None,
+            Some(lbl) => {
+                if let Ok(native_lbl) = lbl.bind(py).extract::<OptWrapperLabel>() {
+                    Some(native_lbl)
+                } else {
+                    return Err(PyTypeError::new_err(format!(
+                        "OptWrapper.append: label argument is not a OptWrapper_Label; got {}",
+                        lbl.bind(py).get_type().name()?
+                    )));
+                }
+            }
+        };
+        self.inner.write().children.push((native_label, native_child));
+        Ok(())
+    }
+
+    #[pyo3(signature = (children, label = None))]
+    fn extend(
+        &self,
+        py: Python<'_>,
+        children: &Bound<'_, pyo3::PyAny>,
+        label: Option<Py<pyo3::PyAny>>,
+    ) -> pyo3::PyResult<()> {
+        let span_type = get_span_type(py)?;
+        let native_label = match label {
+            None => None,
+            Some(lbl) => {
+                if let Ok(native_lbl) = lbl.bind(py).extract::<OptWrapperLabel>() {
+                    Some(native_lbl)
+                } else {
+                    return Err(PyTypeError::new_err(format!(
+                        "OptWrapper.extend: label argument is not a OptWrapper_Label; got {}",
+                        lbl.bind(py).get_type().name()?
+                    )));
+                }
+            }
+        };
+        let iter = children.try_iter()?;
+        for child_result in iter {
+            let child = child_result?;
+            let native_child = OptWrapperChild::extract_from_pyobject(py, &child, &span_type)?;
+            self.inner.write().children.push((native_label.clone(), native_child));
+        }
+        Ok(())
+    }
+
+    fn extend_children(&self, _py: Python<'_>, other: &PyOptWrapper) -> pyo3::PyResult<()> {
+        // Snapshot other's children first: the read guard is dropped at the end of
+        // this block, so the write lock below is safe even when self and other are
+        // the same node (self-extend). No ptr_eq call is needed here — the snapshot
+        // approach handles self-extend structurally.
+        // Lock scope: hold read only long enough to clone the Arc-based children vec.
+        let snapshot: Vec<_> = {
+            let guard = other.inner.read();
+            guard.children.clone()
+        };
+        // Node-typed children are pushed directly as Shared<T> values.  Registry
+        // consistency is maintained lazily: wrap-out registers on first Python read
+        // via get_or_insert_with (registry.rs).  Eagerly registering here would be
+        // a no-op — the WeakValueDictionary would evict handles held by nothing.
+        self.inner.write().children.extend(snapshot);
+        Ok(())
+    }
+
+    fn child(&self, py: Python<'_>) -> pyo3::PyResult<Py<pyo3::PyAny>> {
+        // Lock scope: read len and clone at most the single entry under the guard;
+        // drop the guard before any Python work (object conversion, exception raise).
+        let (n, entry) = {
+            let guard = self.inner.read();
+            let n = guard.children.len();
+            let entry = if n == 1 { Some(guard.children[0].clone()) } else { None };
+            (n, entry)
+        };
+        let Some((label, child)) = entry else {
+            return Err(PyValueError::new_err(format!(
+                "Expected one child but have {n}"
+            )));
+        };
+        let label_obj: Py<pyo3::PyAny> = match label {
+            None => py.None(),
+            Some(lbl) => lbl.into_pyobject(py)?.into_any().unbind(),
+        };
+        let child_obj = child.to_pyobject(py)?;
+        Ok(pyo3::types::PyTuple::new(py, [label_obj, child_obj])?.into_any().unbind())
+    }
+
+    #[pyo3(signature = (index, child, label = None))]
+    fn insert(
+        &self,
+        py: Python<'_>,
+        index: &Bound<'_, pyo3::PyAny>,
+        child: &Bound<'_, pyo3::PyAny>,
+        label: Option<Py<pyo3::PyAny>>,
+    ) -> pyo3::PyResult<()> {
+        // Validate child and label BEFORE taking the write lock.
+        let span_type = get_span_type(py)?;
+        let native_child = OptWrapperChild::extract_from_pyobject(py, child, &span_type)?;
+        let native_label = match label {
+            None => None,
+            Some(lbl) => {
+                if let Ok(native_lbl) = lbl.bind(py).extract::<OptWrapperLabel>() {
+                    Some(native_lbl)
+                } else {
+                    return Err(PyTypeError::new_err(format!(
+                        "OptWrapper.insert: label argument is not a OptWrapper_Label; got {}",
+                        lbl.bind(py).get_type().name()?
+                    )));
+                }
+            }
+        };
+        // Index normalization via operator.index (PyNumber_Index semantics).
+        // This raises TypeError (not AttributeError) for non-indexable inputs, matching Python's
+        // operator.index contract. Must be done BEFORE taking any lock.
+        // Overflow by sign: positive overflow clamps to len; negative overflow clamps to 0.
+        let raw_idx = py
+            .import(pyo3::intern!(py, "operator"))?
+            .getattr(pyo3::intern!(py, "index"))?
+            .call1((index,))?;
+        // Fast path for the common exact-int case; fall back to sign-based Python call for beyond-i64.
+        let (is_negative_big, raw_i64) = if let Ok(i) = raw_idx.extract::<i64>() {
+            (false, Some(i))
+        } else {
+            // Beyond i64: use Python __lt__ to determine sign.  The lt call is still outside
+            // any lock, so lock discipline is maintained.
+            let neg = raw_idx.lt(0i64)?;
+            (neg, None)
+        };
+        // Now take a single write lock for the entire len-read + clamp + insert sequence.
+        let mut guard = self.inner.write();
+        let n = guard.children.len();
+        let clamped: usize = match raw_i64 {
+            Some(i) if i < 0 => {
+                let normalized = n as i64 + i;
+                if normalized < 0 { 0 } else { normalized as usize }
+            }
+            Some(i) => {
+                let u = i as usize;
+                if u > n { n } else { u }
+            }
+            None => if is_negative_big { 0 } else { n },
+        };
+        guard.children.insert(clamped, (native_label, native_child));
+        Ok(())
+    }
+
+    fn remove_at(&self, py: Python<'_>, index: &Bound<'_, pyo3::PyAny>) -> pyo3::PyResult<Py<pyo3::PyAny>> {
+        // Capture the caller's original string representation BEFORE normalization,
+        // so error messages show the original value (e.g. `True` not `1`).
+        let orig_str = index.str()?.to_string_lossy().into_owned();
+        // Normalize via operator.index: raises TypeError (not AttributeError) for
+        // non-indexable inputs, matching Python's operator.index contract.
+        // All Python work must happen before any lock.
+        let raw_idx = py
+            .import(pyo3::intern!(py, "operator"))?
+            .getattr(pyo3::intern!(py, "index"))?
+            .call1((index,))?;
+        // Fast path: extract i64. Beyond i64 is always OOB for real trees.
+        let maybe_i64: Option<i64> = raw_idx.extract::<i64>().ok();
+        // Single write lock: resolve + bounds-check + Vec::remove atomically (no TOCTOU).
+        // On OOB, capture n and return Err after releasing the guard.
+        let result: Result<_, usize> = {
+            let mut guard = self.inner.write();
+            let n = guard.children.len();
+            let resolved: Option<usize> = match maybe_i64 {
+                Some(i) if i < 0 => {
+                    let normalized = n as i64 + i;
+                    if normalized < 0 || normalized as usize >= n { None }
+                    else { Some(normalized as usize) }
+                }
+                Some(i) if (i as usize) < n => Some(i as usize),
+                _ => None,
+            };
+            match resolved {
+                Some(idx) => Ok(guard.children.remove(idx)),
+                None => Err(n),
+            }
+        };
+        let (label, child) = result.map_err(|n| {
+            PyIndexError::new_err(format!(
+                "OptWrapper.remove_at: index {} out of range ({} children)",
+                orig_str, n
+            ))
+        })?;
+        // Python wrap-out happens after the guard is released.
+        let label_obj: Py<pyo3::PyAny> = match label {
+            None => py.None(),
+            Some(lbl) => lbl.into_pyobject(py)?.into_any().unbind(),
+        };
+        let child_obj = child.to_pyobject(py)?;
+        Ok(pyo3::types::PyTuple::new(py, [label_obj, child_obj])?.into_any().unbind())
+    }
+
+    #[pyo3(signature = (index, child, label = None))]
+    fn replace_at(
+        &self,
+        py: Python<'_>,
+        index: &Bound<'_, pyo3::PyAny>,
+        child: &Bound<'_, pyo3::PyAny>,
+        label: Option<Py<pyo3::PyAny>>,
+    ) -> pyo3::PyResult<()> {
+        // Validate child and label BEFORE taking the write lock.
+        let span_type = get_span_type(py)?;
+        let native_child = OptWrapperChild::extract_from_pyobject(py, child, &span_type)?;
+        let native_label = match label {
+            None => None,
+            Some(lbl) => {
+                if let Ok(native_lbl) = lbl.bind(py).extract::<OptWrapperLabel>() {
+                    Some(native_lbl)
+                } else {
+                    return Err(PyTypeError::new_err(format!(
+                        "OptWrapper.replace_at: label argument is not a OptWrapper_Label; got {}",
+                        lbl.bind(py).get_type().name()?
+                    )));
+                }
+            }
+        };
+        // Capture the caller's original string representation BEFORE normalization.
+        let orig_str = index.str()?.to_string_lossy().into_owned();
+        // Normalize via operator.index: raises TypeError for non-indexable inputs.
+        // All Python work must happen before any lock.
+        let raw_idx = py
+            .import(pyo3::intern!(py, "operator"))?
+            .getattr(pyo3::intern!(py, "index"))?
+            .call1((index,))?;
+        let maybe_i64: Option<i64> = raw_idx.extract::<i64>().ok();
+        // Single write lock: resolve + bounds-check + mem::replace atomically (no TOCTOU).
+        let old = {
+            let mut guard = self.inner.write();
+            let n = guard.children.len();
+            let resolved: Option<usize> = match maybe_i64 {
+                Some(i) if i < 0 => {
+                    let normalized = n as i64 + i;
+                    if normalized < 0 || normalized as usize >= n { None }
+                    else { Some(normalized as usize) }
+                }
+                Some(i) if (i as usize) < n => Some(i as usize),
+                _ => None,
+            };
+            let idx = match resolved {
+                Some(i) => i,
+                None => {
+                    return Err(PyIndexError::new_err(format!(
+                        "OptWrapper.replace_at: index {} out of range ({} children)",
+                        orig_str, n
+                    )));
+                }
+            };
+            std::mem::replace(&mut guard.children[idx], (native_label, native_child))
+        };
+        // Drop old entry outside the lock to avoid recursive lock acquisition
+        // if the child's drop chain re-enters Python.
+        drop(old);
+        Ok(())
+    }
+
+    fn clear(&self, _py: Python<'_>) -> pyo3::PyResult<()> {
+        let old = {
+            let mut guard = self.inner.write();
+            std::mem::take(&mut guard.children)
+        };
+        // Drop old entries outside the lock.
+        drop(old);
+        Ok(())
+    }
+
+    fn append_key(&self, py: Python<'_>, child: &Bound<'_, pyo3::PyAny>) -> pyo3::PyResult<()> {
+        let span_type = get_span_type(py)?;
+        let native_child = OptWrapperChild::extract_from_pyobject(py, child, &span_type)?;
+        self.inner.write().children.push((Some(OptWrapperLabel::Key), native_child));
+        Ok(())
+    }
+
+    fn extend_key(&self, py: Python<'_>, children: &Bound<'_, pyo3::PyAny>) -> pyo3::PyResult<()> {
+        let span_type = get_span_type(py)?;
+        let iter = children.try_iter()?;
+        for child_result in iter {
+            let child = child_result?;
+            let native_child = OptWrapperChild::extract_from_pyobject(py, &child, &span_type)?;
+            let entry = (Some(OptWrapperLabel::Key), native_child);
+            self.inner.write().children.push(entry);
+        }
+        Ok(())
+    }
+
+    fn children_key(&self, py: Python<'_>) -> pyo3::PyResult<Py<pyo3::types::PyList>> {
+        // Lock scope: filter by label under the read guard, cloning only matching
+        // children (Arc bump or Span copy each); drop the guard before to_pyobject,
+        // which performs Python work that must not happen while a node lock is held.
+        let matching: Vec<_> = {
+            let guard = self.inner.read();
+            guard.children.iter()
+                .filter(|(lbl, _)| *lbl == Some(OptWrapperLabel::Key))
+                .map(|(_, child)| child.clone())
+                .collect()
+        };
+        let result = pyo3::types::PyList::empty(py);
+        for child in &matching {
+            result.append(child.to_pyobject(py)?)?;
+        }
+        Ok(result.unbind())
+    }
+
+    fn child_key(&self, py: Python<'_>) -> pyo3::PyResult<Py<pyo3::PyAny>> {
+        // Lock scope: count label matches and clone only the first under the guard;
+        // drop the guard before to_pyobject / exception raise (Python work).
+        let (count, first) = {
+            let guard = self.inner.read();
+            let mut count = 0usize;
+            let mut first = None;
+            for (lbl, child) in &guard.children {
+                if *lbl == Some(OptWrapperLabel::Key) {
+                    count += 1;
+                    if count == 1 {
+                        first = Some(child.clone());
+                    }
+                }
+            }
+            (count, first)
+        };
+        if count != 1 {
+            return Err(PyValueError::new_err(format!(
+                "Expected one key child but have {count}"
+            )));
+        }
+        first.expect("invariant: OptWrapper.child_key: count==1 but first==None; logic error")
+            .to_pyobject(py)
+    }
+
+    fn maybe_key(&self, py: Python<'_>) -> pyo3::PyResult<Option<Py<pyo3::PyAny>>> {
+        // Lock scope: count label matches and clone only the first under the guard;
+        // drop the guard before to_pyobject / exception raise (Python work).
+        let (count, first) = {
+            let guard = self.inner.read();
+            let mut count = 0usize;
+            let mut first = None;
+            for (lbl, child) in &guard.children {
+                if *lbl == Some(OptWrapperLabel::Key) {
+                    count += 1;
+                    if count == 1 {
+                        first = Some(child.clone());
+                    }
+                }
+            }
+            (count, first)
+        };
+        if count > 1 {
+            return Err(PyValueError::new_err(
+                "Expected at most one key child but have at least 2",
+            ));
+        }
+        match first {
+            None => Ok(None),
+            Some(child) => Ok(Some(child.to_pyobject(py)?)),
+        }
+    }
+
+    fn append_val(&self, py: Python<'_>, child: &Bound<'_, pyo3::PyAny>) -> pyo3::PyResult<()> {
+        let span_type = get_span_type(py)?;
+        let native_child = OptWrapperChild::extract_from_pyobject(py, child, &span_type)?;
+        self.inner.write().children.push((Some(OptWrapperLabel::Val), native_child));
+        Ok(())
+    }
+
+    fn extend_val(&self, py: Python<'_>, children: &Bound<'_, pyo3::PyAny>) -> pyo3::PyResult<()> {
+        let span_type = get_span_type(py)?;
+        let iter = children.try_iter()?;
+        for child_result in iter {
+            let child = child_result?;
+            let native_child = OptWrapperChild::extract_from_pyobject(py, &child, &span_type)?;
+            let entry = (Some(OptWrapperLabel::Val), native_child);
+            self.inner.write().children.push(entry);
+        }
+        Ok(())
+    }
+
+    fn children_val(&self, py: Python<'_>) -> pyo3::PyResult<Py<pyo3::types::PyList>> {
+        // Lock scope: filter by label under the read guard, cloning only matching
+        // children (Arc bump or Span copy each); drop the guard before to_pyobject,
+        // which performs Python work that must not happen while a node lock is held.
+        let matching: Vec<_> = {
+            let guard = self.inner.read();
+            guard.children.iter()
+                .filter(|(lbl, _)| *lbl == Some(OptWrapperLabel::Val))
+                .map(|(_, child)| child.clone())
+                .collect()
+        };
+        let result = pyo3::types::PyList::empty(py);
+        for child in &matching {
+            result.append(child.to_pyobject(py)?)?;
+        }
+        Ok(result.unbind())
+    }
+
+    fn child_val(&self, py: Python<'_>) -> pyo3::PyResult<Py<pyo3::PyAny>> {
+        // Lock scope: count label matches and clone only the first under the guard;
+        // drop the guard before to_pyobject / exception raise (Python work).
+        let (count, first) = {
+            let guard = self.inner.read();
+            let mut count = 0usize;
+            let mut first = None;
+            for (lbl, child) in &guard.children {
+                if *lbl == Some(OptWrapperLabel::Val) {
+                    count += 1;
+                    if count == 1 {
+                        first = Some(child.clone());
+                    }
+                }
+            }
+            (count, first)
+        };
+        if count != 1 {
+            return Err(PyValueError::new_err(format!(
+                "Expected one val child but have {count}"
+            )));
+        }
+        first.expect("invariant: OptWrapper.child_val: count==1 but first==None; logic error")
+            .to_pyobject(py)
+    }
+
+    fn maybe_val(&self, py: Python<'_>) -> pyo3::PyResult<Option<Py<pyo3::PyAny>>> {
+        // Lock scope: count label matches and clone only the first under the guard;
+        // drop the guard before to_pyobject / exception raise (Python work).
+        let (count, first) = {
+            let guard = self.inner.read();
+            let mut count = 0usize;
+            let mut first = None;
+            for (lbl, child) in &guard.children {
+                if *lbl == Some(OptWrapperLabel::Val) {
+                    count += 1;
+                    if count == 1 {
+                        first = Some(child.clone());
+                    }
+                }
+            }
+            (count, first)
+        };
+        if count > 1 {
+            return Err(PyValueError::new_err(
+                "Expected at most one val child but have at least 2",
+            ));
+        }
+        match first {
+            None => Ok(None),
+            Some(child) => Ok(Some(child.to_pyobject(py)?)),
+        }
+    }
+
+    fn key(&self, py: Python<'_>) -> pyo3::PyResult<Option<Py<pyo3::PyAny>>> {
+        self.maybe_key(py)
+    }
+
+    fn val(&self, py: Python<'_>) -> pyo3::PyResult<Option<Py<pyo3::PyAny>>> {
+        self.maybe_val(py)
+    }
+
+    fn __eq__(&self, py: Python<'_>, other: &Bound<'_, pyo3::PyAny>) -> pyo3::PyResult<Py<pyo3::PyAny>> {
+        if !other.is_instance_of::<PyOptWrapper>() {
+            return Ok(py.NotImplemented());
+        }
+        let other_handle: pyo3::PyRef<PyOptWrapper> = other.extract()?;
+        // Delegate to Shared<T>::PartialEq which applies the ptr_eq short-circuit
+        // (avoids same-lock re-entry on `x == x`) then deep structural comparison.
+        let eq = self.inner == other_handle.inner;
+        Ok(eq.into_pyobject(py)?.to_owned().unbind().into_any())
+    }
+
+    fn __hash__(&self) -> pyo3::PyResult<isize> {
+        Err(PyTypeError::new_err("unhashable type: 'OptWrapper'"))
+    }
+
+    fn __repr__(&self, _py: Python<'_>) -> String {
+        let guard = self.inner.read();
+        let span_repr = format!("Span(start={}, end={})", guard.span.start(), guard.span.end());
+        let children_len = guard.children.len();
+        format!(
+            "OptWrapper(span={span_repr}, children=[<{children_len} child(ren)>])"
+        )
+    }
+
+}
+
+// ───────────────────────────────────────────────────────────────────────────
+// RepWrapperLabel
+// ───────────────────────────────────────────────────────────────────────────
+
+/// Label discriminant enum for children of this node type.
+///
+/// Python-visible name is `RepWrapper_Label` (preserved for compatibility).
+/// Rust consumers use the CamelCase `RepWrapperLabel` name.
+#[cfg(feature = "python")]
+#[pyclass(frozen, from_py_object, name = "RepWrapper_Label")]
+#[derive(Clone, Debug, PartialEq, Eq, Hash)]
+pub enum RepWrapperLabel {
+    #[pyo3(name = "KEY")]
+    Key,
+    #[pyo3(name = "VAL")]
+    Val,
+}
+
+#[cfg(not(feature = "python"))]
+#[derive(Clone, Debug, PartialEq, Eq, Hash)]
+pub enum RepWrapperLabel {
+    Key,
+    Val,
+}
+
+#[cfg(feature = "python")]
+#[pymethods]
+impl RepWrapperLabel {
+    fn __repr__(&self) -> &'static str {
+        match self {
+            RepWrapperLabel::Key => "RepWrapper.Label.KEY",
+            RepWrapperLabel::Val => "RepWrapper.Label.VAL",
+        }
+    }
+
+    #[getter]
+    fn _fltk_canonical_name(&self) -> &'static str {
+        self.__repr__()
+    }
+
+    fn __eq__(&self, py: Python<'_>, other: &Bound<'_, pyo3::PyAny>) -> pyo3::PyResult<Py<pyo3::PyAny>> {
+        if let Ok(other_kind) = other.extract::<RepWrapperLabel>() {
+            return Ok((self == &other_kind).into_pyobject(py)?.to_owned().unbind().into_any());
+        }
+        if let Ok(cn) = other.getattr(pyo3::intern!(py, "_fltk_canonical_name")) {
+            if let Ok(cn_str) = cn.extract::<&str>() {
+                return Ok((self.__repr__() == cn_str).into_pyobject(py)?.to_owned().unbind().into_any());
+            }
+        }
+        Ok(py.NotImplemented())
+    }
+
+    fn __hash__(&self, py: Python<'_>) -> pyo3::PyResult<isize> {
+        pyo3::types::PyAnyMethods::hash(
+            pyo3::types::PyString::new(py, self.__repr__()).as_any()
+        )
+    }
+}
+
+/// Child value enum for `RepWrapper` nodes.
+///
+/// Node-typed variants hold `Shared<T>` (`Arc<RwLock<T>>`); `Clone` is shallow
+/// (increments the reference count, does not copy the node).
+#[derive(Clone, Debug)]
+pub enum RepWrapperChild {
+    Name(Shared<Name>),
+    Num(Shared<Num>),
+}
+
+impl PartialEq for RepWrapperChild {
+    fn eq(&self, other: &Self) -> bool {
+        match (self, other) {
+            (RepWrapperChild::Name(a), RepWrapperChild::Name(b)) => a == b,
+            (RepWrapperChild::Num(a), RepWrapperChild::Num(b)) => a == b,
+            _ => false,
+        }
+    }
+}
+
+impl RepWrapperChild {
+    fn into_drop_item(self) -> Option<DropWorklistItem> {
+        match self {
+            Self::Name(s) => Some(DropWorklistItem::Name(s)),
+            Self::Num(s) => Some(DropWorklistItem::Num(s)),
+        }
+    }
+
+    /// Shallow structural equality for one child pair.
+    /// Span pair: compare directly. Node pair: ptr_eq short-circuit (skip enqueue)
+    /// or enqueue for the worklist. Variant mismatch: return false.
+    fn eq_shallow_enqueue(&self, other: &Self, worklist: &mut Vec<EqWorklistItem>) -> bool {
+        match (self, other) {
+            (Self::Name(a), Self::Name(b)) => {
+                if !a.ptr_eq(b) {
+                    worklist.push(EqWorklistItem::Name(a.clone(), b.clone()));
+                }
+                true
+            }
+            (Self::Num(a), Self::Num(b)) => {
+                if !a.ptr_eq(b) {
+                    worklist.push(EqWorklistItem::Num(a.clone(), b.clone()));
+                }
+                true
+            }
+            _ => false,
+        }
+    }
+}
+
+#[cfg(feature = "python")]
+impl RepWrapperChild {
+    fn to_pyobject(&self, py: Python<'_>) -> pyo3::PyResult<Py<pyo3::PyAny>> {
+        match self {
+            Self::Name(shared) => {
+                let addr = shared.arc_ptr();
+                registry::get_or_insert_with(py, addr, || {
+                    let handle = PyName { inner: shared.clone() };
+                    Py::new(py, handle).map(|p| p.into_any())
+                })
+            }
+            Self::Num(shared) => {
+                let addr = shared.arc_ptr();
+                registry::get_or_insert_with(py, addr, || {
+                    let handle = PyNum { inner: shared.clone() };
+                    Py::new(py, handle).map(|p| p.into_any())
+                })
+            }
+        }
+    }
+
+    fn extract_from_pyobject(
+        py: Python<'_>,
+        obj: &Bound<'_, pyo3::PyAny>,
+        _span_type: &Bound<'_, pyo3::types::PyType>,
+    ) -> pyo3::PyResult<Self> {
+        if obj.is_instance_of::<PyName>() {
+            let handle: pyo3::PyRef<PyName> = obj.extract()?;
+            let shared = handle.inner.clone();
+            let addr = shared.arc_ptr();
+            // Hand-in: register this Python handle as canonical for its Shared.
+            drop(handle); // release the PyRef before calling Python
+            // Propagate registry errors: a swallowed Err here would leave the
+            // handle unregistered, causing the next wrap-out to mint a different
+            // object and silently break is-stability.
+            registry::register_if_absent(py, addr, obj)?;
+            return Ok(Self::Name(shared));
+        }
+        if obj.is_instance_of::<PyNum>() {
+            let handle: pyo3::PyRef<PyNum> = obj.extract()?;
+            let shared = handle.inner.clone();
+            let addr = shared.arc_ptr();
+            // Hand-in: register this Python handle as canonical for its Shared.
+            drop(handle); // release the PyRef before calling Python
+            // Propagate registry errors: a swallowed Err here would leave the
+            // handle unregistered, causing the next wrap-out to mint a different
+            // object and silently break is-stability.
+            registry::register_if_absent(py, addr, obj)?;
+            return Ok(Self::Num(shared));
+        }
+        Err(pyo3::exceptions::PyTypeError::new_err(format!(
+            "RepWrapper: unsupported child type {}",
+            obj.get_type().name()?
+        )))
+    }
+}
+
+// ───────────────────────────────────────────────────────────────────────────
+// RepWrapper
+// ───────────────────────────────────────────────────────────────────────────
+
+/// CST data struct for `RepWrapper`. See [`fltk_cst_core::Shared`] for clone/equality/reference semantics.
+///
+/// `Debug` output is non-recursive: prints span + child count only. Traverse via `children()` to inspect subtrees.
+/// Teardown is iterative: bounded stack at any depth.
+/// Equality is iterative: bounded stack at any depth.
+#[derive(Clone)]
+pub struct RepWrapper {
+    // Not pub: use span() / children() / push_child() — the stable accessor API.
+    // Direct field access bypasses any future validation logic on setters.
+    span: Span,
+    children: Vec<(Option<RepWrapperLabel>, RepWrapperChild)>,
+}
+
+// Manual Debug: prints span + child COUNT, never recursing into children.
+// A derived Debug would recurse through Shared<T> children with no depth
+// bound; tree depth is attacker-controlled for parsers over untrusted
+// input, so `{:?}` on a deep tree would abort the process (stack
+// exhaustion, uncatchable). Mirrors the Python __repr__'s content.
+impl fmt::Debug for RepWrapper {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("RepWrapper")
+            .field("span", &self.span)
+            .field("children", &format_args!("<{} child(ren)>", self.children.len()))
+            .finish()
+    }
+}
+
+// Iterative Drop: derived drop glue would recurse through Shared children
+// one frame set per tree level (attacker-controlled depth → stack
+// exhaustion, uncatchable abort). Drains the subtree via a worklist instead.
+impl Drop for RepWrapper {
+    fn drop(&mut self) {
+        if self.children.is_empty() {
+            return; // also the recursion terminator for nodes drained by the worklist
+        }
+        // Worklist is allocated lazily: Vec::new() does not heap-allocate until
+        // the first push.  drain_into pushes only when it steals (count == 1).
+        // In the common backtracking case (shared/memoized children) no steal
+        // occurs and no allocation happens.  Owned deep chains allocate once.
+        let mut worklist: Vec<DropWorklistItem> = Vec::new();
+        for (_, child) in self.children.drain(..) {
+            if let Some(item) = child.into_drop_item() {
+                item.drain_into(&mut worklist);
+            }
+        }
+        while let Some(item) = worklist.pop() {
+            item.drain_into(&mut worklist);
+        }
+    }
+}
+
+// Iterative PartialEq: the recursive version would recurse through Shared children
+// one frame set per tree level (attacker-controlled depth → stack
+// exhaustion, uncatchable abort). Uses an explicit worklist of node pairs.
+impl PartialEq for RepWrapper {
+    fn eq(&self, other: &Self) -> bool {
+        if self.span != other.span || self.children.len() != other.children.len() {
+            return false;
+        }
+        // Worklist allocated lazily (Vec::new does not heap-allocate until
+        // first push); shallow trees and all-ptr_eq children never allocate.
+        let mut worklist: Vec<EqWorklistItem> = Vec::new();
+        for ((la, ca), (lb, cb)) in self.children.iter().zip(other.children.iter()) {
+            if la != lb || !ca.eq_shallow_enqueue(cb, &mut worklist) {
+                return false;
+            }
+        }
+        while let Some(item) = worklist.pop() {
+            if !item.compare(&mut worklist) {
+                return false;
+            }
+        }
+        true
+    }
+}
+
+impl RepWrapper {
+    /// Construct a node with the given span and no children. GIL-free.
+    pub fn new(span: Span) -> Self {
+        RepWrapper {
+            span,
+            children: Vec::new(),
+        }
+    }
+
+    /// Return the [`NodeKind`] discriminant for this node type.
+    pub fn kind(&self) -> NodeKind {
+        NodeKind::RepWrapper
+    }
+
+    /// Return a reference to the stored [`Span`].
+    pub fn span(&self) -> &Span {
+        &self.span
+    }
+
+    /// Replace the node's span.
+    pub fn set_span(&mut self, span: Span) {
+        self.span = span;
+    }
+
+    /// Return a slice of all children (unfiltered).
+    ///
+    /// Each entry is `(label, child)`. Use the per-label accessors
+    /// (`children_<lbl>`, `child_<lbl>`, `maybe_<lbl>`) for type-safe access.
+    pub fn children(&self) -> &[(Option<RepWrapperLabel>, RepWrapperChild)] {
+        self.children.as_slice()
+    }
+
+    /// Push a child onto the children `Vec`.
+    ///
+    /// No type-checking is performed: any child variant may be stored under
+    /// any label. Per-label typed mutators (`append_<lbl>`, `extend_<lbl>`)
+    /// provide type-constrained alternatives.
+    pub fn push_child(&mut self, label: Option<RepWrapperLabel>, child: RepWrapperChild) {
+        self.children.push((label, child));
+    }
+
+    /// Return the single child (any label), or `Err` if there is not exactly one.
+    ///
+    /// Mirrors the Python `child()` method: count violation → `CstError::ChildCount`.
+    pub fn child(&self) -> Result<&(Option<RepWrapperLabel>, RepWrapperChild), CstError> {
+        match self.children.as_slice() {
+            [single] => Ok(single),
+            slice => Err(CstError::ChildCount {
+                label: "<any>",
+                expected: "1",
+                found: slice.len(),
+            }),
+        }
+    }
+
+    /// Copy all children from `other` into `self`, sharing the `Shared<T>` arcs.
+    ///
+    /// Children are appended (Arc reference-count bumps, not deep copies),
+    /// matching the Python backend's reference-copy behavior. Labels are preserved.
+    ///
+    /// The borrow checker prevents `self.extend_children(self)` at the data-struct
+    /// level (`&mut` + `&` of the same value don't coexist). For self-extend from
+    /// Python, the handle pymethod handles it via snapshotting.
+    pub fn extend_children(&mut self, other: &Self) {
+        self.children.extend(other.children.iter().cloned());
+    }
+
+    /// Return an iterator over `Shared<Name>` children labelled `key`.
+    ///
+    /// Off-type variants stored under the `key` label are silently skipped.
+    /// Use `children()` (the untyped slice) for a lossless view.
+    pub fn children_key(&self) -> impl Iterator<Item = &Shared<Name>> + '_ {
+        self.children.iter()
+            .filter(|(lbl, _)| *lbl == Some(RepWrapperLabel::Key))
+            .filter_map(|(_, child)| match child {
+                RepWrapperChild::Name(s) => Some(s),
+                _ => None,
+            })
+    }
+
+    /// Return the single child labelled `key`, or `Err` if not exactly one.
+    ///
+    /// Count is checked by label match first (`CstError::ChildCount`); if the
+    /// count is valid and the surviving child has the wrong variant type,
+    /// `CstError::UnexpectedChildType` is returned (single-typed labels only).
+    pub fn child_key(&self) -> Result<&Shared<Name>, CstError> {
+        let mut it = self.children.iter()
+            .filter(|(lbl, _)| *lbl == Some(RepWrapperLabel::Key));
+        match (it.next(), it.next()) {
+            (Some((_, child)), None) => match child {
+                RepWrapperChild::Name(s) => Ok(s),
+                _ => Err(CstError::UnexpectedChildType { label: "key" }),
+            },
+            _ => Err(CstError::ChildCount {
+                label: "key",
+                expected: "1",
+                found: self.children.iter()
+                    .filter(|(lbl, _)| *lbl == Some(RepWrapperLabel::Key))
+                    .count(),
+            }),
+        }
+    }
+
+    /// Return the optional child labelled `key`, or `Err` if more than one.
+    ///
+    /// Returns `Ok(None)` for zero, `Ok(Some(...))` for one,
+    /// `Err(CstError::ChildCount)` for two or more.
+    pub fn maybe_key(&self) -> Result<Option<&Shared<Name>>, CstError> {
+        let mut it = self.children.iter()
+            .filter(|(lbl, _)| *lbl == Some(RepWrapperLabel::Key));
+        match (it.next(), it.next()) {
+            (None, _) => Ok(None),
+            (Some((_, child)), None) => match child {
+                RepWrapperChild::Name(s) => Ok(Some(s)),
+                _ => Err(CstError::UnexpectedChildType { label: "key" }),
+            },
+            _ => Err(CstError::ChildCount {
+                label: "key",
+                expected: "0 or 1",
+                found: self.children.iter()
+                    .filter(|(lbl, _)| *lbl == Some(RepWrapperLabel::Key))
+                    .count(),
+            }),
+        }
+    }
+
+    /// Append a child with label `key`, accepting `Name` or `Shared<Name>`.
+    pub fn append_key(&mut self, child: impl Into<Shared<Name>>) {
+        self.children.push((Some(RepWrapperLabel::Key), RepWrapperChild::Name(child.into())));
+    }
+
+    /// Append multiple children with label `key`.
+    pub fn extend_key(&mut self, children: impl IntoIterator<Item = impl Into<Shared<Name>>>) {
+        self.children.extend(children.into_iter().map(|c| (Some(RepWrapperLabel::Key), RepWrapperChild::Name(c.into()))));
+    }
+
+    /// Return an iterator over `Shared<Num>` children labelled `val`.
+    ///
+    /// Off-type variants stored under the `val` label are silently skipped.
+    /// Use `children()` (the untyped slice) for a lossless view.
+    pub fn children_val(&self) -> impl Iterator<Item = &Shared<Num>> + '_ {
+        self.children.iter()
+            .filter(|(lbl, _)| *lbl == Some(RepWrapperLabel::Val))
+            .filter_map(|(_, child)| match child {
+                RepWrapperChild::Num(s) => Some(s),
+                _ => None,
+            })
+    }
+
+    /// Return the single child labelled `val`, or `Err` if not exactly one.
+    ///
+    /// Count is checked by label match first (`CstError::ChildCount`); if the
+    /// count is valid and the surviving child has the wrong variant type,
+    /// `CstError::UnexpectedChildType` is returned (single-typed labels only).
+    pub fn child_val(&self) -> Result<&Shared<Num>, CstError> {
+        let mut it = self.children.iter()
+            .filter(|(lbl, _)| *lbl == Some(RepWrapperLabel::Val));
+        match (it.next(), it.next()) {
+            (Some((_, child)), None) => match child {
+                RepWrapperChild::Num(s) => Ok(s),
+                _ => Err(CstError::UnexpectedChildType { label: "val" }),
+            },
+            _ => Err(CstError::ChildCount {
+                label: "val",
+                expected: "1",
+                found: self.children.iter()
+                    .filter(|(lbl, _)| *lbl == Some(RepWrapperLabel::Val))
+                    .count(),
+            }),
+        }
+    }
+
+    /// Return the optional child labelled `val`, or `Err` if more than one.
+    ///
+    /// Returns `Ok(None)` for zero, `Ok(Some(...))` for one,
+    /// `Err(CstError::ChildCount)` for two or more.
+    pub fn maybe_val(&self) -> Result<Option<&Shared<Num>>, CstError> {
+        let mut it = self.children.iter()
+            .filter(|(lbl, _)| *lbl == Some(RepWrapperLabel::Val));
+        match (it.next(), it.next()) {
+            (None, _) => Ok(None),
+            (Some((_, child)), None) => match child {
+                RepWrapperChild::Num(s) => Ok(Some(s)),
+                _ => Err(CstError::UnexpectedChildType { label: "val" }),
+            },
+            _ => Err(CstError::ChildCount {
+                label: "val",
+                expected: "0 or 1",
+                found: self.children.iter()
+                    .filter(|(lbl, _)| *lbl == Some(RepWrapperLabel::Val))
+                    .count(),
+            }),
+        }
+    }
+
+    /// Append a child with label `val`, accepting `Num` or `Shared<Num>`.
+    pub fn append_val(&mut self, child: impl Into<Shared<Num>>) {
+        self.children.push((Some(RepWrapperLabel::Val), RepWrapperChild::Num(child.into())));
+    }
+
+    /// Append multiple children with label `val`.
+    pub fn extend_val(&mut self, children: impl IntoIterator<Item = impl Into<Shared<Num>>>) {
+        self.children.extend(children.into_iter().map(|c| (Some(RepWrapperLabel::Val), RepWrapperChild::Num(c.into()))));
+    }
+
+    /// Return an iterator over the children labelled `key`.
+    ///
+    /// Arity-named alias of `children_key`.
+    pub fn key(&self) -> impl Iterator<Item = &Shared<Name>> + '_ {
+        self.children_key()
+    }
+
+    /// Return an iterator over the children labelled `val`.
+    ///
+    /// Arity-named alias of `children_val`.
+    pub fn val(&self) -> impl Iterator<Item = &Shared<Num>> + '_ {
+        self.children_val()
+    }
+
+    /// Insert a child at `index` (Vec::insert semantics: panics if index > len).
+    ///
+    /// Python-facing clamping is in the `insert` pymethod; native callers must
+    /// bounds-check. Unlike `list.insert`, Vec::insert panics on out-of-bounds.
+    pub fn insert_child(&mut self, index: usize, label: Option<RepWrapperLabel>, child: RepWrapperChild) {
+        self.children.insert(index, (label, child));
+    }
+
+    /// Remove and return the child at `index` (Vec::remove semantics: panics if out of range).
+    ///
+    /// Panics on out-of-range. Python-facing IndexError is in the `remove_at` pymethod.
+    pub fn remove_child(&mut self, index: usize) -> (Option<RepWrapperLabel>, RepWrapperChild) {
+        self.children.remove(index)
+    }
+
+    /// Replace the child at `index`, returning the old entry (panics if out of range).
+    ///
+    /// Panics on out-of-range. Python-facing IndexError is in the `replace_at` pymethod.
+    pub fn replace_child(
+        &mut self, index: usize, label: Option<RepWrapperLabel>, child: RepWrapperChild,
+    ) -> (Option<RepWrapperLabel>, RepWrapperChild) {
+        std::mem::replace(&mut self.children[index], (label, child))
+    }
+
+    /// Remove all children.
+    pub fn clear_children(&mut self) {
+        self.children.clear();
+    }
+}
+
+#[cfg(feature = "python")]
+#[pyclass(frozen, weakref, name = "RepWrapper")]
+pub struct PyRepWrapper {
+    // Not pub: all external access goes through shared() or to_py_canonical().
+    // A pub field would let mixed-app Rust code construct an unregistered handle
+    // (Py::new(py, PyFoo { inner: s.clone() })), silently breaking is-stability.
+    inner: Shared<RepWrapper>,
+}
+
+#[cfg(feature = "python")]
+impl PyRepWrapper {
+    /// Return a reference to the inner `Shared<RepWrapper>`.
+    pub fn shared(&self) -> &Shared<RepWrapper> {
+        &self.inner
+    }
+
+    /// Wrap a `Shared<RepWrapper>` into a canonical Python handle,
+    /// looking up the registry first so the same handle is returned
+    /// for the same `Shared` allocation.
+    pub fn to_py_canonical(py: Python<'_>, s: &Shared<RepWrapper>) -> pyo3::PyResult<Py<PyRepWrapper>> {
+        let addr = s.arc_ptr();
+        let obj = registry::get_or_insert_with(py, addr, || {
+            let handle = PyRepWrapper { inner: s.clone() };
+            Py::new(py, handle).map(|p| p.into_any())
+        })?;
+        obj.bind(py).cast::<PyRepWrapper>().map(|b| b.clone().unbind()).map_err(|e| e.into())
+    }
+}
+
+#[cfg(feature = "python")]
+#[pymethods]
+impl PyRepWrapper {
+    #[new]
+    #[pyo3(signature = (*, span = None))]
+    fn new(py: Python<'_>, span: Option<&Bound<'_, pyo3::PyAny>>) -> pyo3::PyResult<Py<PyRepWrapper>> {
+        let native_span = match span {
+            Some(s) => extract_span(py, s)?,
+            None => Span::unknown(),
+        };
+        let data = RepWrapper {
+            span: native_span,
+            children: Vec::new(),
+        };
+        let shared = Shared::new(data);
+        let addr = shared.arc_ptr();
+        let handle = PyRepWrapper { inner: shared };
+        let py_obj = Py::new(py, handle)?;
+        // Register as canonical — fresh Shared, no alias can exist yet.
+        registry::force_register(py, addr, py_obj.bind(py))?;
+        Ok(py_obj)
+    }
+
+    #[getter]
+    fn span(&self, py: Python<'_>) -> pyo3::PyResult<Py<pyo3::PyAny>> {
+        // Snapshot the span under the read lock, then drop the guard before
+        // calling span_to_pyobject — which performs Python work (Py::new or
+        // Python method calls) that must not happen while a node lock is held.
+        let span = self.inner.read().span.clone();
+        span_to_pyobject(py, &span)
+    }
+
+    #[setter]
+    fn set_span(&self, py: Python<'_>, value: &Bound<'_, pyo3::PyAny>) -> pyo3::PyResult<()> {
+        self.inner.write().span = extract_span(py, value)?;
+        Ok(())
+    }
+
+    #[getter]
+    fn kind(&self) -> NodeKind {
+        NodeKind::RepWrapper
+    }
+
+    #[classattr]
+    #[allow(non_snake_case)]
+    fn Label(py: Python<'_>) -> pyo3::PyResult<Py<pyo3::PyAny>> {
+        Ok(<RepWrapperLabel as pyo3::PyTypeInfo>::type_object(py).into_any().unbind())
+    }
+
+    #[getter]
+    fn children(&self, py: Python<'_>) -> pyo3::PyResult<Py<pyo3::types::PyList>> {
+        // Snapshot the children vec (Arc clones for node children — O(n) refcount bumps).
+        // Lock scope: acquire read, snapshot, release before touching Python.
+        let snapshot: Vec<_> = {
+            let guard = self.inner.read();
+            guard.children.clone()
+        };
+        let result = pyo3::types::PyList::empty(py);
+        for (label, child) in &snapshot {
+            let label_obj: Py<pyo3::PyAny> = match label {
+                None => py.None(),
+                Some(lbl) => lbl.clone().into_pyobject(py)?.into_any().unbind(),
+            };
+            let child_obj = child.to_pyobject(py)?;
+            let tup = pyo3::types::PyTuple::new(py, [label_obj, child_obj])?;
+            result.append(tup)?;
+        }
+        Ok(result.unbind())
+    }
+
+    #[pyo3(signature = (child, label = None))]
+    fn append(
+        &self, py: Python<'_>, child: &Bound<'_, pyo3::PyAny>, label: Option<Py<pyo3::PyAny>>,
+    ) -> pyo3::PyResult<()> {
+        let span_type = get_span_type(py)?;
+        let native_child = RepWrapperChild::extract_from_pyobject(py, child, &span_type)?;
+        let native_label = match label {
+            None => None,
+            Some(lbl) => {
+                if let Ok(native_lbl) = lbl.bind(py).extract::<RepWrapperLabel>() {
+                    Some(native_lbl)
+                } else {
+                    return Err(PyTypeError::new_err(format!(
+                        "RepWrapper.append: label argument is not a RepWrapper_Label; got {}",
+                        lbl.bind(py).get_type().name()?
+                    )));
+                }
+            }
+        };
+        self.inner.write().children.push((native_label, native_child));
+        Ok(())
+    }
+
+    #[pyo3(signature = (children, label = None))]
+    fn extend(
+        &self,
+        py: Python<'_>,
+        children: &Bound<'_, pyo3::PyAny>,
+        label: Option<Py<pyo3::PyAny>>,
+    ) -> pyo3::PyResult<()> {
+        let span_type = get_span_type(py)?;
+        let native_label = match label {
+            None => None,
+            Some(lbl) => {
+                if let Ok(native_lbl) = lbl.bind(py).extract::<RepWrapperLabel>() {
+                    Some(native_lbl)
+                } else {
+                    return Err(PyTypeError::new_err(format!(
+                        "RepWrapper.extend: label argument is not a RepWrapper_Label; got {}",
+                        lbl.bind(py).get_type().name()?
+                    )));
+                }
+            }
+        };
+        let iter = children.try_iter()?;
+        for child_result in iter {
+            let child = child_result?;
+            let native_child = RepWrapperChild::extract_from_pyobject(py, &child, &span_type)?;
+            self.inner.write().children.push((native_label.clone(), native_child));
+        }
+        Ok(())
+    }
+
+    fn extend_children(&self, _py: Python<'_>, other: &PyRepWrapper) -> pyo3::PyResult<()> {
+        // Snapshot other's children first: the read guard is dropped at the end of
+        // this block, so the write lock below is safe even when self and other are
+        // the same node (self-extend). No ptr_eq call is needed here — the snapshot
+        // approach handles self-extend structurally.
+        // Lock scope: hold read only long enough to clone the Arc-based children vec.
+        let snapshot: Vec<_> = {
+            let guard = other.inner.read();
+            guard.children.clone()
+        };
+        // Node-typed children are pushed directly as Shared<T> values.  Registry
+        // consistency is maintained lazily: wrap-out registers on first Python read
+        // via get_or_insert_with (registry.rs).  Eagerly registering here would be
+        // a no-op — the WeakValueDictionary would evict handles held by nothing.
+        self.inner.write().children.extend(snapshot);
+        Ok(())
+    }
+
+    fn child(&self, py: Python<'_>) -> pyo3::PyResult<Py<pyo3::PyAny>> {
+        // Lock scope: read len and clone at most the single entry under the guard;
+        // drop the guard before any Python work (object conversion, exception raise).
+        let (n, entry) = {
+            let guard = self.inner.read();
+            let n = guard.children.len();
+            let entry = if n == 1 { Some(guard.children[0].clone()) } else { None };
+            (n, entry)
+        };
+        let Some((label, child)) = entry else {
+            return Err(PyValueError::new_err(format!(
+                "Expected one child but have {n}"
+            )));
+        };
+        let label_obj: Py<pyo3::PyAny> = match label {
+            None => py.None(),
+            Some(lbl) => lbl.into_pyobject(py)?.into_any().unbind(),
+        };
+        let child_obj = child.to_pyobject(py)?;
+        Ok(pyo3::types::PyTuple::new(py, [label_obj, child_obj])?.into_any().unbind())
+    }
+
+    #[pyo3(signature = (index, child, label = None))]
+    fn insert(
+        &self,
+        py: Python<'_>,
+        index: &Bound<'_, pyo3::PyAny>,
+        child: &Bound<'_, pyo3::PyAny>,
+        label: Option<Py<pyo3::PyAny>>,
+    ) -> pyo3::PyResult<()> {
+        // Validate child and label BEFORE taking the write lock.
+        let span_type = get_span_type(py)?;
+        let native_child = RepWrapperChild::extract_from_pyobject(py, child, &span_type)?;
+        let native_label = match label {
+            None => None,
+            Some(lbl) => {
+                if let Ok(native_lbl) = lbl.bind(py).extract::<RepWrapperLabel>() {
+                    Some(native_lbl)
+                } else {
+                    return Err(PyTypeError::new_err(format!(
+                        "RepWrapper.insert: label argument is not a RepWrapper_Label; got {}",
+                        lbl.bind(py).get_type().name()?
+                    )));
+                }
+            }
+        };
+        // Index normalization via operator.index (PyNumber_Index semantics).
+        // This raises TypeError (not AttributeError) for non-indexable inputs, matching Python's
+        // operator.index contract. Must be done BEFORE taking any lock.
+        // Overflow by sign: positive overflow clamps to len; negative overflow clamps to 0.
+        let raw_idx = py
+            .import(pyo3::intern!(py, "operator"))?
+            .getattr(pyo3::intern!(py, "index"))?
+            .call1((index,))?;
+        // Fast path for the common exact-int case; fall back to sign-based Python call for beyond-i64.
+        let (is_negative_big, raw_i64) = if let Ok(i) = raw_idx.extract::<i64>() {
+            (false, Some(i))
+        } else {
+            // Beyond i64: use Python __lt__ to determine sign.  The lt call is still outside
+            // any lock, so lock discipline is maintained.
+            let neg = raw_idx.lt(0i64)?;
+            (neg, None)
+        };
+        // Now take a single write lock for the entire len-read + clamp + insert sequence.
+        let mut guard = self.inner.write();
+        let n = guard.children.len();
+        let clamped: usize = match raw_i64 {
+            Some(i) if i < 0 => {
+                let normalized = n as i64 + i;
+                if normalized < 0 { 0 } else { normalized as usize }
+            }
+            Some(i) => {
+                let u = i as usize;
+                if u > n { n } else { u }
+            }
+            None => if is_negative_big { 0 } else { n },
+        };
+        guard.children.insert(clamped, (native_label, native_child));
+        Ok(())
+    }
+
+    fn remove_at(&self, py: Python<'_>, index: &Bound<'_, pyo3::PyAny>) -> pyo3::PyResult<Py<pyo3::PyAny>> {
+        // Capture the caller's original string representation BEFORE normalization,
+        // so error messages show the original value (e.g. `True` not `1`).
+        let orig_str = index.str()?.to_string_lossy().into_owned();
+        // Normalize via operator.index: raises TypeError (not AttributeError) for
+        // non-indexable inputs, matching Python's operator.index contract.
+        // All Python work must happen before any lock.
+        let raw_idx = py
+            .import(pyo3::intern!(py, "operator"))?
+            .getattr(pyo3::intern!(py, "index"))?
+            .call1((index,))?;
+        // Fast path: extract i64. Beyond i64 is always OOB for real trees.
+        let maybe_i64: Option<i64> = raw_idx.extract::<i64>().ok();
+        // Single write lock: resolve + bounds-check + Vec::remove atomically (no TOCTOU).
+        // On OOB, capture n and return Err after releasing the guard.
+        let result: Result<_, usize> = {
+            let mut guard = self.inner.write();
+            let n = guard.children.len();
+            let resolved: Option<usize> = match maybe_i64 {
+                Some(i) if i < 0 => {
+                    let normalized = n as i64 + i;
+                    if normalized < 0 || normalized as usize >= n { None }
+                    else { Some(normalized as usize) }
+                }
+                Some(i) if (i as usize) < n => Some(i as usize),
+                _ => None,
+            };
+            match resolved {
+                Some(idx) => Ok(guard.children.remove(idx)),
+                None => Err(n),
+            }
+        };
+        let (label, child) = result.map_err(|n| {
+            PyIndexError::new_err(format!(
+                "RepWrapper.remove_at: index {} out of range ({} children)",
+                orig_str, n
+            ))
+        })?;
+        // Python wrap-out happens after the guard is released.
+        let label_obj: Py<pyo3::PyAny> = match label {
+            None => py.None(),
+            Some(lbl) => lbl.into_pyobject(py)?.into_any().unbind(),
+        };
+        let child_obj = child.to_pyobject(py)?;
+        Ok(pyo3::types::PyTuple::new(py, [label_obj, child_obj])?.into_any().unbind())
+    }
+
+    #[pyo3(signature = (index, child, label = None))]
+    fn replace_at(
+        &self,
+        py: Python<'_>,
+        index: &Bound<'_, pyo3::PyAny>,
+        child: &Bound<'_, pyo3::PyAny>,
+        label: Option<Py<pyo3::PyAny>>,
+    ) -> pyo3::PyResult<()> {
+        // Validate child and label BEFORE taking the write lock.
+        let span_type = get_span_type(py)?;
+        let native_child = RepWrapperChild::extract_from_pyobject(py, child, &span_type)?;
+        let native_label = match label {
+            None => None,
+            Some(lbl) => {
+                if let Ok(native_lbl) = lbl.bind(py).extract::<RepWrapperLabel>() {
+                    Some(native_lbl)
+                } else {
+                    return Err(PyTypeError::new_err(format!(
+                        "RepWrapper.replace_at: label argument is not a RepWrapper_Label; got {}",
+                        lbl.bind(py).get_type().name()?
+                    )));
+                }
+            }
+        };
+        // Capture the caller's original string representation BEFORE normalization.
+        let orig_str = index.str()?.to_string_lossy().into_owned();
+        // Normalize via operator.index: raises TypeError for non-indexable inputs.
+        // All Python work must happen before any lock.
+        let raw_idx = py
+            .import(pyo3::intern!(py, "operator"))?
+            .getattr(pyo3::intern!(py, "index"))?
+            .call1((index,))?;
+        let maybe_i64: Option<i64> = raw_idx.extract::<i64>().ok();
+        // Single write lock: resolve + bounds-check + mem::replace atomically (no TOCTOU).
+        let old = {
+            let mut guard = self.inner.write();
+            let n = guard.children.len();
+            let resolved: Option<usize> = match maybe_i64 {
+                Some(i) if i < 0 => {
+                    let normalized = n as i64 + i;
+                    if normalized < 0 || normalized as usize >= n { None }
+                    else { Some(normalized as usize) }
+                }
+                Some(i) if (i as usize) < n => Some(i as usize),
+                _ => None,
+            };
+            let idx = match resolved {
+                Some(i) => i,
+                None => {
+                    return Err(PyIndexError::new_err(format!(
+                        "RepWrapper.replace_at: index {} out of range ({} children)",
+                        orig_str, n
+                    )));
+                }
+            };
+            std::mem::replace(&mut guard.children[idx], (native_label, native_child))
+        };
+        // Drop old entry outside the lock to avoid recursive lock acquisition
+        // if the child's drop chain re-enters Python.
+        drop(old);
+        Ok(())
+    }
+
+    fn clear(&self, _py: Python<'_>) -> pyo3::PyResult<()> {
+        let old = {
+            let mut guard = self.inner.write();
+            std::mem::take(&mut guard.children)
+        };
+        // Drop old entries outside the lock.
+        drop(old);
+        Ok(())
+    }
+
+    fn append_key(&self, py: Python<'_>, child: &Bound<'_, pyo3::PyAny>) -> pyo3::PyResult<()> {
+        let span_type = get_span_type(py)?;
+        let native_child = RepWrapperChild::extract_from_pyobject(py, child, &span_type)?;
+        self.inner.write().children.push((Some(RepWrapperLabel::Key), native_child));
+        Ok(())
+    }
+
+    fn extend_key(&self, py: Python<'_>, children: &Bound<'_, pyo3::PyAny>) -> pyo3::PyResult<()> {
+        let span_type = get_span_type(py)?;
+        let iter = children.try_iter()?;
+        for child_result in iter {
+            let child = child_result?;
+            let native_child = RepWrapperChild::extract_from_pyobject(py, &child, &span_type)?;
+            let entry = (Some(RepWrapperLabel::Key), native_child);
+            self.inner.write().children.push(entry);
+        }
+        Ok(())
+    }
+
+    fn children_key(&self, py: Python<'_>) -> pyo3::PyResult<Py<pyo3::types::PyList>> {
+        // Lock scope: filter by label under the read guard, cloning only matching
+        // children (Arc bump or Span copy each); drop the guard before to_pyobject,
+        // which performs Python work that must not happen while a node lock is held.
+        let matching: Vec<_> = {
+            let guard = self.inner.read();
+            guard.children.iter()
+                .filter(|(lbl, _)| *lbl == Some(RepWrapperLabel::Key))
+                .map(|(_, child)| child.clone())
+                .collect()
+        };
+        let result = pyo3::types::PyList::empty(py);
+        for child in &matching {
+            result.append(child.to_pyobject(py)?)?;
+        }
+        Ok(result.unbind())
+    }
+
+    fn child_key(&self, py: Python<'_>) -> pyo3::PyResult<Py<pyo3::PyAny>> {
+        // Lock scope: count label matches and clone only the first under the guard;
+        // drop the guard before to_pyobject / exception raise (Python work).
+        let (count, first) = {
+            let guard = self.inner.read();
+            let mut count = 0usize;
+            let mut first = None;
+            for (lbl, child) in &guard.children {
+                if *lbl == Some(RepWrapperLabel::Key) {
+                    count += 1;
+                    if count == 1 {
+                        first = Some(child.clone());
+                    }
+                }
+            }
+            (count, first)
+        };
+        if count != 1 {
+            return Err(PyValueError::new_err(format!(
+                "Expected one key child but have {count}"
+            )));
+        }
+        first.expect("invariant: RepWrapper.child_key: count==1 but first==None; logic error")
+            .to_pyobject(py)
+    }
+
+    fn maybe_key(&self, py: Python<'_>) -> pyo3::PyResult<Option<Py<pyo3::PyAny>>> {
+        // Lock scope: count label matches and clone only the first under the guard;
+        // drop the guard before to_pyobject / exception raise (Python work).
+        let (count, first) = {
+            let guard = self.inner.read();
+            let mut count = 0usize;
+            let mut first = None;
+            for (lbl, child) in &guard.children {
+                if *lbl == Some(RepWrapperLabel::Key) {
+                    count += 1;
+                    if count == 1 {
+                        first = Some(child.clone());
+                    }
+                }
+            }
+            (count, first)
+        };
+        if count > 1 {
+            return Err(PyValueError::new_err(
+                "Expected at most one key child but have at least 2",
+            ));
+        }
+        match first {
+            None => Ok(None),
+            Some(child) => Ok(Some(child.to_pyobject(py)?)),
+        }
+    }
+
+    fn append_val(&self, py: Python<'_>, child: &Bound<'_, pyo3::PyAny>) -> pyo3::PyResult<()> {
+        let span_type = get_span_type(py)?;
+        let native_child = RepWrapperChild::extract_from_pyobject(py, child, &span_type)?;
+        self.inner.write().children.push((Some(RepWrapperLabel::Val), native_child));
+        Ok(())
+    }
+
+    fn extend_val(&self, py: Python<'_>, children: &Bound<'_, pyo3::PyAny>) -> pyo3::PyResult<()> {
+        let span_type = get_span_type(py)?;
+        let iter = children.try_iter()?;
+        for child_result in iter {
+            let child = child_result?;
+            let native_child = RepWrapperChild::extract_from_pyobject(py, &child, &span_type)?;
+            let entry = (Some(RepWrapperLabel::Val), native_child);
+            self.inner.write().children.push(entry);
+        }
+        Ok(())
+    }
+
+    fn children_val(&self, py: Python<'_>) -> pyo3::PyResult<Py<pyo3::types::PyList>> {
+        // Lock scope: filter by label under the read guard, cloning only matching
+        // children (Arc bump or Span copy each); drop the guard before to_pyobject,
+        // which performs Python work that must not happen while a node lock is held.
+        let matching: Vec<_> = {
+            let guard = self.inner.read();
+            guard.children.iter()
+                .filter(|(lbl, _)| *lbl == Some(RepWrapperLabel::Val))
+                .map(|(_, child)| child.clone())
+                .collect()
+        };
+        let result = pyo3::types::PyList::empty(py);
+        for child in &matching {
+            result.append(child.to_pyobject(py)?)?;
+        }
+        Ok(result.unbind())
+    }
+
+    fn child_val(&self, py: Python<'_>) -> pyo3::PyResult<Py<pyo3::PyAny>> {
+        // Lock scope: count label matches and clone only the first under the guard;
+        // drop the guard before to_pyobject / exception raise (Python work).
+        let (count, first) = {
+            let guard = self.inner.read();
+            let mut count = 0usize;
+            let mut first = None;
+            for (lbl, child) in &guard.children {
+                if *lbl == Some(RepWrapperLabel::Val) {
+                    count += 1;
+                    if count == 1 {
+                        first = Some(child.clone());
+                    }
+                }
+            }
+            (count, first)
+        };
+        if count != 1 {
+            return Err(PyValueError::new_err(format!(
+                "Expected one val child but have {count}"
+            )));
+        }
+        first.expect("invariant: RepWrapper.child_val: count==1 but first==None; logic error")
+            .to_pyobject(py)
+    }
+
+    fn maybe_val(&self, py: Python<'_>) -> pyo3::PyResult<Option<Py<pyo3::PyAny>>> {
+        // Lock scope: count label matches and clone only the first under the guard;
+        // drop the guard before to_pyobject / exception raise (Python work).
+        let (count, first) = {
+            let guard = self.inner.read();
+            let mut count = 0usize;
+            let mut first = None;
+            for (lbl, child) in &guard.children {
+                if *lbl == Some(RepWrapperLabel::Val) {
+                    count += 1;
+                    if count == 1 {
+                        first = Some(child.clone());
+                    }
+                }
+            }
+            (count, first)
+        };
+        if count > 1 {
+            return Err(PyValueError::new_err(
+                "Expected at most one val child but have at least 2",
+            ));
+        }
+        match first {
+            None => Ok(None),
+            Some(child) => Ok(Some(child.to_pyobject(py)?)),
+        }
+    }
+
+    fn key(&self, py: Python<'_>) -> pyo3::PyResult<Py<pyo3::types::PyList>> {
+        self.children_key(py)
+    }
+
+    fn val(&self, py: Python<'_>) -> pyo3::PyResult<Py<pyo3::types::PyList>> {
+        self.children_val(py)
+    }
+
+    fn __eq__(&self, py: Python<'_>, other: &Bound<'_, pyo3::PyAny>) -> pyo3::PyResult<Py<pyo3::PyAny>> {
+        if !other.is_instance_of::<PyRepWrapper>() {
+            return Ok(py.NotImplemented());
+        }
+        let other_handle: pyo3::PyRef<PyRepWrapper> = other.extract()?;
+        // Delegate to Shared<T>::PartialEq which applies the ptr_eq short-circuit
+        // (avoids same-lock re-entry on `x == x`) then deep structural comparison.
+        let eq = self.inner == other_handle.inner;
+        Ok(eq.into_pyobject(py)?.to_owned().unbind().into_any())
+    }
+
+    fn __hash__(&self) -> pyo3::PyResult<isize> {
+        Err(PyTypeError::new_err("unhashable type: 'RepWrapper'"))
+    }
+
+    fn __repr__(&self, _py: Python<'_>) -> String {
+        let guard = self.inner.read();
+        let span_repr = format!("Span(start={}, end={})", guard.span.start(), guard.span.end());
+        let children_len = guard.children.len();
+        format!(
+            "RepWrapper(span={span_repr}, children=[<{children_len} child(ren)>])"
+        )
+    }
+
+}
+
+// ───────────────────────────────────────────────────────────────────────────
+// KwLabelsLabel
+// ───────────────────────────────────────────────────────────────────────────
+
+/// Label discriminant enum for children of this node type.
+///
+/// Python-visible name is `KwLabels_Label` (preserved for compatibility).
+/// Rust consumers use the CamelCase `KwLabelsLabel` name.
+#[cfg(feature = "python")]
+#[pyclass(frozen, from_py_object, name = "KwLabels_Label")]
+#[derive(Clone, Debug, PartialEq, Eq, Hash)]
+pub enum KwLabelsLabel {
+    #[pyo3(name = "MATCH")]
+    Match,
+    #[pyo3(name = "TYPE")]
+    Type,
+}
+
+#[cfg(not(feature = "python"))]
+#[derive(Clone, Debug, PartialEq, Eq, Hash)]
+pub enum KwLabelsLabel {
+    Match,
+    Type,
+}
+
+#[cfg(feature = "python")]
+#[pymethods]
+impl KwLabelsLabel {
+    fn __repr__(&self) -> &'static str {
+        match self {
+            KwLabelsLabel::Match => "KwLabels.Label.MATCH",
+            KwLabelsLabel::Type => "KwLabels.Label.TYPE",
+        }
+    }
+
+    #[getter]
+    fn _fltk_canonical_name(&self) -> &'static str {
+        self.__repr__()
+    }
+
+    fn __eq__(&self, py: Python<'_>, other: &Bound<'_, pyo3::PyAny>) -> pyo3::PyResult<Py<pyo3::PyAny>> {
+        if let Ok(other_kind) = other.extract::<KwLabelsLabel>() {
+            return Ok((self == &other_kind).into_pyobject(py)?.to_owned().unbind().into_any());
+        }
+        if let Ok(cn) = other.getattr(pyo3::intern!(py, "_fltk_canonical_name")) {
+            if let Ok(cn_str) = cn.extract::<&str>() {
+                return Ok((self.__repr__() == cn_str).into_pyobject(py)?.to_owned().unbind().into_any());
+            }
+        }
+        Ok(py.NotImplemented())
+    }
+
+    fn __hash__(&self, py: Python<'_>) -> pyo3::PyResult<isize> {
+        pyo3::types::PyAnyMethods::hash(
+            pyo3::types::PyString::new(py, self.__repr__()).as_any()
+        )
+    }
+}
+
+/// Child value enum for `KwLabels` nodes.
+///
+/// Node-typed variants hold `Shared<T>` (`Arc<RwLock<T>>`); `Clone` is shallow
+/// (increments the reference count, does not copy the node).
+#[derive(Clone, Debug)]
+pub enum KwLabelsChild {
+    Span(Span),
+    Num(Shared<Num>),
+}
+
+impl PartialEq for KwLabelsChild {
+    fn eq(&self, other: &Self) -> bool {
+        match (self, other) {
+            (KwLabelsChild::Span(a), KwLabelsChild::Span(b)) => a == b,
+            (KwLabelsChild::Num(a), KwLabelsChild::Num(b)) => a == b,
+            _ => false,
+        }
+    }
+}
+
+impl KwLabelsChild {
+    fn into_drop_item(self) -> Option<DropWorklistItem> {
+        match self {
+            Self::Span(_) => None,
+            Self::Num(s) => Some(DropWorklistItem::Num(s)),
+        }
+    }
+
+    /// Shallow structural equality for one child pair.
+    /// Span pair: compare directly. Node pair: ptr_eq short-circuit (skip enqueue)
+    /// or enqueue for the worklist. Variant mismatch: return false.
+    fn eq_shallow_enqueue(&self, other: &Self, worklist: &mut Vec<EqWorklistItem>) -> bool {
+        match (self, other) {
+            (Self::Span(a), Self::Span(b)) => a == b,
+            (Self::Num(a), Self::Num(b)) => {
+                if !a.ptr_eq(b) {
+                    worklist.push(EqWorklistItem::Num(a.clone(), b.clone()));
+                }
+                true
+            }
+            _ => false,
+        }
+    }
+}
+
+#[cfg(feature = "python")]
+impl KwLabelsChild {
+    fn to_pyobject(&self, py: Python<'_>) -> pyo3::PyResult<Py<pyo3::PyAny>> {
+        match self {
+            Self::Span(s) => {
+                span_to_pyobject(py, s)
+            }
+            Self::Num(shared) => {
+                let addr = shared.arc_ptr();
+                registry::get_or_insert_with(py, addr, || {
+                    let handle = PyNum { inner: shared.clone() };
+                    Py::new(py, handle).map(|p| p.into_any())
+                })
+            }
+        }
+    }
+
+    fn extract_from_pyobject(
+        py: Python<'_>,
+        obj: &Bound<'_, pyo3::PyAny>,
+        span_type: &Bound<'_, pyo3::types::PyType>,
+    ) -> pyo3::PyResult<Self> {
+        // Try Span (terminal child) first — handles cross-cdylib span instances.
+        if obj.is_instance_of::<Span>() || obj.is_instance(span_type)? {
+            return extract_span(py, obj).map(Self::Span);
+        }
+        if obj.is_instance_of::<PyNum>() {
+            let handle: pyo3::PyRef<PyNum> = obj.extract()?;
+            let shared = handle.inner.clone();
+            let addr = shared.arc_ptr();
+            // Hand-in: register this Python handle as canonical for its Shared.
+            drop(handle); // release the PyRef before calling Python
+            // Propagate registry errors: a swallowed Err here would leave the
+            // handle unregistered, causing the next wrap-out to mint a different
+            // object and silently break is-stability.
+            registry::register_if_absent(py, addr, obj)?;
+            return Ok(Self::Num(shared));
+        }
+        Err(pyo3::exceptions::PyTypeError::new_err(format!(
+            "KwLabels: unsupported child type {}",
+            obj.get_type().name()?
+        )))
+    }
+}
+
+// ───────────────────────────────────────────────────────────────────────────
+// KwLabels
+// ───────────────────────────────────────────────────────────────────────────
+
+/// CST data struct for `KwLabels`. See [`fltk_cst_core::Shared`] for clone/equality/reference semantics.
+///
+/// `Debug` output is non-recursive: prints span + child count only. Traverse via `children()` to inspect subtrees.
+/// Teardown is iterative: bounded stack at any depth.
+/// Equality is iterative: bounded stack at any depth.
+#[derive(Clone)]
+pub struct KwLabels {
+    // Not pub: use span() / children() / push_child() — the stable accessor API.
+    // Direct field access bypasses any future validation logic on setters.
+    span: Span,
+    children: Vec<(Option<KwLabelsLabel>, KwLabelsChild)>,
+}
+
+// Manual Debug: prints span + child COUNT, never recursing into children.
+// A derived Debug would recurse through Shared<T> children with no depth
+// bound; tree depth is attacker-controlled for parsers over untrusted
+// input, so `{:?}` on a deep tree would abort the process (stack
+// exhaustion, uncatchable). Mirrors the Python __repr__'s content.
+impl fmt::Debug for KwLabels {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("KwLabels")
+            .field("span", &self.span)
+            .field("children", &format_args!("<{} child(ren)>", self.children.len()))
+            .finish()
+    }
+}
+
+// Iterative Drop: derived drop glue would recurse through Shared children
+// one frame set per tree level (attacker-controlled depth → stack
+// exhaustion, uncatchable abort). Drains the subtree via a worklist instead.
+impl Drop for KwLabels {
+    fn drop(&mut self) {
+        if self.children.is_empty() {
+            return; // also the recursion terminator for nodes drained by the worklist
+        }
+        // Worklist is allocated lazily: Vec::new() does not heap-allocate until
+        // the first push.  drain_into pushes only when it steals (count == 1).
+        // In the common backtracking case (shared/memoized children) no steal
+        // occurs and no allocation happens.  Owned deep chains allocate once.
+        let mut worklist: Vec<DropWorklistItem> = Vec::new();
+        for (_, child) in self.children.drain(..) {
+            if let Some(item) = child.into_drop_item() {
+                item.drain_into(&mut worklist);
+            }
+        }
+        while let Some(item) = worklist.pop() {
+            item.drain_into(&mut worklist);
+        }
+    }
+}
+
+// Iterative PartialEq: the recursive version would recurse through Shared children
+// one frame set per tree level (attacker-controlled depth → stack
+// exhaustion, uncatchable abort). Uses an explicit worklist of node pairs.
+impl PartialEq for KwLabels {
+    fn eq(&self, other: &Self) -> bool {
+        if self.span != other.span || self.children.len() != other.children.len() {
+            return false;
+        }
+        // Worklist allocated lazily (Vec::new does not heap-allocate until
+        // first push); shallow trees and all-ptr_eq children never allocate.
+        let mut worklist: Vec<EqWorklistItem> = Vec::new();
+        for ((la, ca), (lb, cb)) in self.children.iter().zip(other.children.iter()) {
+            if la != lb || !ca.eq_shallow_enqueue(cb, &mut worklist) {
+                return false;
+            }
+        }
+        while let Some(item) = worklist.pop() {
+            if !item.compare(&mut worklist) {
+                return false;
+            }
+        }
+        true
+    }
+}
+
+impl KwLabels {
+    /// Construct a node with the given span and no children. GIL-free.
+    pub fn new(span: Span) -> Self {
+        KwLabels {
+            span,
+            children: Vec::new(),
+        }
+    }
+
+    /// Return the [`NodeKind`] discriminant for this node type.
+    pub fn kind(&self) -> NodeKind {
+        NodeKind::KwLabels
+    }
+
+    /// Return a reference to the stored [`Span`].
+    pub fn span(&self) -> &Span {
+        &self.span
+    }
+
+    /// Replace the node's span.
+    pub fn set_span(&mut self, span: Span) {
+        self.span = span;
+    }
+
+    /// Return a slice of all children (unfiltered).
+    ///
+    /// Each entry is `(label, child)`. Use the per-label accessors
+    /// (`children_<lbl>`, `child_<lbl>`, `maybe_<lbl>`) for type-safe access.
+    pub fn children(&self) -> &[(Option<KwLabelsLabel>, KwLabelsChild)] {
+        self.children.as_slice()
+    }
+
+    /// Push a child onto the children `Vec`.
+    ///
+    /// No type-checking is performed: any child variant may be stored under
+    /// any label. Per-label typed mutators (`append_<lbl>`, `extend_<lbl>`)
+    /// provide type-constrained alternatives.
+    pub fn push_child(&mut self, label: Option<KwLabelsLabel>, child: KwLabelsChild) {
+        self.children.push((label, child));
+    }
+
+    /// Return the single child (any label), or `Err` if there is not exactly one.
+    ///
+    /// Mirrors the Python `child()` method: count violation → `CstError::ChildCount`.
+    pub fn child(&self) -> Result<&(Option<KwLabelsLabel>, KwLabelsChild), CstError> {
+        match self.children.as_slice() {
+            [single] => Ok(single),
+            slice => Err(CstError::ChildCount {
+                label: "<any>",
+                expected: "1",
+                found: slice.len(),
+            }),
+        }
+    }
+
+    /// Copy all children from `other` into `self`, sharing the `Shared<T>` arcs.
+    ///
+    /// Children are appended (Arc reference-count bumps, not deep copies),
+    /// matching the Python backend's reference-copy behavior. Labels are preserved.
+    ///
+    /// The borrow checker prevents `self.extend_children(self)` at the data-struct
+    /// level (`&mut` + `&` of the same value don't coexist). For self-extend from
+    /// Python, the handle pymethod handles it via snapshotting.
+    pub fn extend_children(&mut self, other: &Self) {
+        self.children.extend(other.children.iter().cloned());
+    }
+
+    /// Return an iterator over `Shared<Num>` children labelled `match`.
+    ///
+    /// Off-type variants stored under the `match` label are silently skipped.
+    /// Use `children()` (the untyped slice) for a lossless view.
+    pub fn children_match(&self) -> impl Iterator<Item = &Shared<Num>> + '_ {
+        self.children.iter()
+            .filter(|(lbl, _)| *lbl == Some(KwLabelsLabel::Match))
+            .filter_map(|(_, child)| match child {
+                KwLabelsChild::Num(s) => Some(s),
+                _ => None,
+            })
+    }
+
+    /// Return the single child labelled `match`, or `Err` if not exactly one.
+    ///
+    /// Count is checked by label match first (`CstError::ChildCount`); if the
+    /// count is valid and the surviving child has the wrong variant type,
+    /// `CstError::UnexpectedChildType` is returned (single-typed labels only).
+    pub fn child_match(&self) -> Result<&Shared<Num>, CstError> {
+        let mut it = self.children.iter()
+            .filter(|(lbl, _)| *lbl == Some(KwLabelsLabel::Match));
+        match (it.next(), it.next()) {
+            (Some((_, child)), None) => match child {
+                KwLabelsChild::Num(s) => Ok(s),
+                _ => Err(CstError::UnexpectedChildType { label: "match" }),
+            },
+            _ => Err(CstError::ChildCount {
+                label: "match",
+                expected: "1",
+                found: self.children.iter()
+                    .filter(|(lbl, _)| *lbl == Some(KwLabelsLabel::Match))
+                    .count(),
+            }),
+        }
+    }
+
+    /// Return the optional child labelled `match`, or `Err` if more than one.
+    ///
+    /// Returns `Ok(None)` for zero, `Ok(Some(...))` for one,
+    /// `Err(CstError::ChildCount)` for two or more.
+    pub fn maybe_match(&self) -> Result<Option<&Shared<Num>>, CstError> {
+        let mut it = self.children.iter()
+            .filter(|(lbl, _)| *lbl == Some(KwLabelsLabel::Match));
+        match (it.next(), it.next()) {
+            (None, _) => Ok(None),
+            (Some((_, child)), None) => match child {
+                KwLabelsChild::Num(s) => Ok(Some(s)),
+                _ => Err(CstError::UnexpectedChildType { label: "match" }),
+            },
+            _ => Err(CstError::ChildCount {
+                label: "match",
+                expected: "0 or 1",
+                found: self.children.iter()
+                    .filter(|(lbl, _)| *lbl == Some(KwLabelsLabel::Match))
+                    .count(),
+            }),
+        }
+    }
+
+    /// Append a child with label `match`, accepting `Num` or `Shared<Num>`.
+    pub fn append_match(&mut self, child: impl Into<Shared<Num>>) {
+        self.children.push((Some(KwLabelsLabel::Match), KwLabelsChild::Num(child.into())));
+    }
+
+    /// Append multiple children with label `match`.
+    pub fn extend_match(&mut self, children: impl IntoIterator<Item = impl Into<Shared<Num>>>) {
+        self.children.extend(children.into_iter().map(|c| (Some(KwLabelsLabel::Match), KwLabelsChild::Num(c.into()))));
+    }
+
+    /// Return an iterator over `Span` children labelled `type`.
+    ///
+    /// Off-type variants stored under the `type` label are silently skipped.
+    /// Use `children()` (the untyped slice) for a lossless view.
+    pub fn children_type(&self) -> impl Iterator<Item = &Span> + '_ {
+        self.children.iter()
+            .filter(|(lbl, _)| *lbl == Some(KwLabelsLabel::Type))
+            .filter_map(|(_, child)| match child {
+                KwLabelsChild::Span(s) => Some(s),
+                _ => None,
+            })
+    }
+
+    /// Return the single child labelled `type`, or `Err` if not exactly one.
+    ///
+    /// Count is checked by label match first (`CstError::ChildCount`); if the
+    /// count is valid and the surviving child has the wrong variant type,
+    /// `CstError::UnexpectedChildType` is returned (single-typed labels only).
+    pub fn child_type(&self) -> Result<&Span, CstError> {
+        let mut it = self.children.iter()
+            .filter(|(lbl, _)| *lbl == Some(KwLabelsLabel::Type));
+        match (it.next(), it.next()) {
+            (Some((_, child)), None) => match child {
+                KwLabelsChild::Span(s) => Ok(s),
+                _ => Err(CstError::UnexpectedChildType { label: "type" }),
+            },
+            _ => Err(CstError::ChildCount {
+                label: "type",
+                expected: "1",
+                found: self.children.iter()
+                    .filter(|(lbl, _)| *lbl == Some(KwLabelsLabel::Type))
+                    .count(),
+            }),
+        }
+    }
+
+    /// Return the optional child labelled `type`, or `Err` if more than one.
+    ///
+    /// Returns `Ok(None)` for zero, `Ok(Some(...))` for one,
+    /// `Err(CstError::ChildCount)` for two or more.
+    pub fn maybe_type(&self) -> Result<Option<&Span>, CstError> {
+        let mut it = self.children.iter()
+            .filter(|(lbl, _)| *lbl == Some(KwLabelsLabel::Type));
+        match (it.next(), it.next()) {
+            (None, _) => Ok(None),
+            (Some((_, child)), None) => match child {
+                KwLabelsChild::Span(s) => Ok(Some(s)),
+                _ => Err(CstError::UnexpectedChildType { label: "type" }),
+            },
+            _ => Err(CstError::ChildCount {
+                label: "type",
+                expected: "0 or 1",
+                found: self.children.iter()
+                    .filter(|(lbl, _)| *lbl == Some(KwLabelsLabel::Type))
+                    .count(),
+            }),
+        }
+    }
+
+    /// Append a `Span` child with label `type`.
+    pub fn append_type(&mut self, span: Span) {
+        self.children.push((Some(KwLabelsLabel::Type), KwLabelsChild::Span(span)));
+    }
+
+    /// Append multiple `Span` children with label `type`.
+    pub fn extend_type(&mut self, spans: impl IntoIterator<Item = Span>) {
+        self.children.extend(spans.into_iter().map(|s| (Some(KwLabelsLabel::Type), KwLabelsChild::Span(s))));
+    }
+
+    /// Return the child labelled `match`.
+    ///
+    /// Panics unless exactly one is present; use `child_match` for the checked form.
+    pub fn r#match(&self) -> &Shared<Num> {
+        self.child_match()
+            .unwrap_or_else(|e| panic!("KwLabels.match: {e}"))
+    }
+
+    /// Return the child labelled `type`.
+    ///
+    /// Panics unless exactly one is present; use `child_type` for the checked form.
+    pub fn r#type(&self) -> &Span {
+        self.child_type()
+            .unwrap_or_else(|e| panic!("KwLabels.type: {e}"))
+    }
+
+    /// Return the source text of the child labelled `type`.
+    ///
+    /// Borrows from the span's source; panics if the child is absent or its span
+    /// carries no usable source.
+    pub fn type_text(&self) -> &str {
+        self.child_type()
+            .unwrap_or_else(|e| panic!("KwLabels.type_text: {e}"))
+            .text_or_message()
+            .unwrap_or_else(|e| panic!("KwLabels.type_text: {e}"))
+    }
+
+    /// Insert a child at `index` (Vec::insert semantics: panics if index > len).
+    ///
+    /// Python-facing clamping is in the `insert` pymethod; native callers must
+    /// bounds-check. Unlike `list.insert`, Vec::insert panics on out-of-bounds.
+    pub fn insert_child(&mut self, index: usize, label: Option<KwLabelsLabel>, child: KwLabelsChild) {
+        self.children.insert(index, (label, child));
+    }
+
+    /// Remove and return the child at `index` (Vec::remove semantics: panics if out of range).
+    ///
+    /// Panics on out-of-range. Python-facing IndexError is in the `remove_at` pymethod.
+    pub fn remove_child(&mut self, index: usize) -> (Option<KwLabelsLabel>, KwLabelsChild) {
+        self.children.remove(index)
+    }
+
+    /// Replace the child at `index`, returning the old entry (panics if out of range).
+    ///
+    /// Panics on out-of-range. Python-facing IndexError is in the `replace_at` pymethod.
+    pub fn replace_child(
+        &mut self, index: usize, label: Option<KwLabelsLabel>, child: KwLabelsChild,
+    ) -> (Option<KwLabelsLabel>, KwLabelsChild) {
+        std::mem::replace(&mut self.children[index], (label, child))
+    }
+
+    /// Remove all children.
+    pub fn clear_children(&mut self) {
+        self.children.clear();
+    }
+}
+
+#[cfg(feature = "python")]
+#[pyclass(frozen, weakref, name = "KwLabels")]
+pub struct PyKwLabels {
+    // Not pub: all external access goes through shared() or to_py_canonical().
+    // A pub field would let mixed-app Rust code construct an unregistered handle
+    // (Py::new(py, PyFoo { inner: s.clone() })), silently breaking is-stability.
+    inner: Shared<KwLabels>,
+}
+
+#[cfg(feature = "python")]
+impl PyKwLabels {
+    /// Return a reference to the inner `Shared<KwLabels>`.
+    pub fn shared(&self) -> &Shared<KwLabels> {
+        &self.inner
+    }
+
+    /// Wrap a `Shared<KwLabels>` into a canonical Python handle,
+    /// looking up the registry first so the same handle is returned
+    /// for the same `Shared` allocation.
+    pub fn to_py_canonical(py: Python<'_>, s: &Shared<KwLabels>) -> pyo3::PyResult<Py<PyKwLabels>> {
+        let addr = s.arc_ptr();
+        let obj = registry::get_or_insert_with(py, addr, || {
+            let handle = PyKwLabels { inner: s.clone() };
+            Py::new(py, handle).map(|p| p.into_any())
+        })?;
+        obj.bind(py).cast::<PyKwLabels>().map(|b| b.clone().unbind()).map_err(|e| e.into())
+    }
+}
+
+#[cfg(feature = "python")]
+#[pymethods]
+impl PyKwLabels {
+    #[new]
+    #[pyo3(signature = (*, span = None))]
+    fn new(py: Python<'_>, span: Option<&Bound<'_, pyo3::PyAny>>) -> pyo3::PyResult<Py<PyKwLabels>> {
+        let native_span = match span {
+            Some(s) => extract_span(py, s)?,
+            None => Span::unknown(),
+        };
+        let data = KwLabels {
+            span: native_span,
+            children: Vec::new(),
+        };
+        let shared = Shared::new(data);
+        let addr = shared.arc_ptr();
+        let handle = PyKwLabels { inner: shared };
+        let py_obj = Py::new(py, handle)?;
+        // Register as canonical — fresh Shared, no alias can exist yet.
+        registry::force_register(py, addr, py_obj.bind(py))?;
+        Ok(py_obj)
+    }
+
+    #[getter]
+    fn span(&self, py: Python<'_>) -> pyo3::PyResult<Py<pyo3::PyAny>> {
+        // Snapshot the span under the read lock, then drop the guard before
+        // calling span_to_pyobject — which performs Python work (Py::new or
+        // Python method calls) that must not happen while a node lock is held.
+        let span = self.inner.read().span.clone();
+        span_to_pyobject(py, &span)
+    }
+
+    #[setter]
+    fn set_span(&self, py: Python<'_>, value: &Bound<'_, pyo3::PyAny>) -> pyo3::PyResult<()> {
+        self.inner.write().span = extract_span(py, value)?;
+        Ok(())
+    }
+
+    #[getter]
+    fn kind(&self) -> NodeKind {
+        NodeKind::KwLabels
+    }
+
+    #[classattr]
+    #[allow(non_snake_case)]
+    fn Label(py: Python<'_>) -> pyo3::PyResult<Py<pyo3::PyAny>> {
+        Ok(<KwLabelsLabel as pyo3::PyTypeInfo>::type_object(py).into_any().unbind())
+    }
+
+    #[getter]
+    fn children(&self, py: Python<'_>) -> pyo3::PyResult<Py<pyo3::types::PyList>> {
+        // Snapshot the children vec (Arc clones for node children — O(n) refcount bumps).
+        // Lock scope: acquire read, snapshot, release before touching Python.
+        let snapshot: Vec<_> = {
+            let guard = self.inner.read();
+            guard.children.clone()
+        };
+        let result = pyo3::types::PyList::empty(py);
+        for (label, child) in &snapshot {
+            let label_obj: Py<pyo3::PyAny> = match label {
+                None => py.None(),
+                Some(lbl) => lbl.clone().into_pyobject(py)?.into_any().unbind(),
+            };
+            let child_obj = child.to_pyobject(py)?;
+            let tup = pyo3::types::PyTuple::new(py, [label_obj, child_obj])?;
+            result.append(tup)?;
+        }
+        Ok(result.unbind())
+    }
+
+    #[pyo3(signature = (child, label = None))]
+    fn append(
+        &self, py: Python<'_>, child: &Bound<'_, pyo3::PyAny>, label: Option<Py<pyo3::PyAny>>,
+    ) -> pyo3::PyResult<()> {
+        let span_type = get_span_type(py)?;
+        let native_child = KwLabelsChild::extract_from_pyobject(py, child, &span_type)?;
+        let native_label = match label {
+            None => None,
+            Some(lbl) => {
+                if let Ok(native_lbl) = lbl.bind(py).extract::<KwLabelsLabel>() {
+                    Some(native_lbl)
+                } else {
+                    return Err(PyTypeError::new_err(format!(
+                        "KwLabels.append: label argument is not a KwLabels_Label; got {}",
+                        lbl.bind(py).get_type().name()?
+                    )));
+                }
+            }
+        };
+        self.inner.write().children.push((native_label, native_child));
+        Ok(())
+    }
+
+    #[pyo3(signature = (children, label = None))]
+    fn extend(
+        &self,
+        py: Python<'_>,
+        children: &Bound<'_, pyo3::PyAny>,
+        label: Option<Py<pyo3::PyAny>>,
+    ) -> pyo3::PyResult<()> {
+        let span_type = get_span_type(py)?;
+        let native_label = match label {
+            None => None,
+            Some(lbl) => {
+                if let Ok(native_lbl) = lbl.bind(py).extract::<KwLabelsLabel>() {
+                    Some(native_lbl)
+                } else {
+                    return Err(PyTypeError::new_err(format!(
+                        "KwLabels.extend: label argument is not a KwLabels_Label; got {}",
+                        lbl.bind(py).get_type().name()?
+                    )));
+                }
+            }
+        };
+        let iter = children.try_iter()?;
+        for child_result in iter {
+            let child = child_result?;
+            let native_child = KwLabelsChild::extract_from_pyobject(py, &child, &span_type)?;
+            self.inner.write().children.push((native_label.clone(), native_child));
+        }
+        Ok(())
+    }
+
+    fn extend_children(&self, _py: Python<'_>, other: &PyKwLabels) -> pyo3::PyResult<()> {
+        // Snapshot other's children first: the read guard is dropped at the end of
+        // this block, so the write lock below is safe even when self and other are
+        // the same node (self-extend). No ptr_eq call is needed here — the snapshot
+        // approach handles self-extend structurally.
+        // Lock scope: hold read only long enough to clone the Arc-based children vec.
+        let snapshot: Vec<_> = {
+            let guard = other.inner.read();
+            guard.children.clone()
+        };
+        // Node-typed children are pushed directly as Shared<T> values.  Registry
+        // consistency is maintained lazily: wrap-out registers on first Python read
+        // via get_or_insert_with (registry.rs).  Eagerly registering here would be
+        // a no-op — the WeakValueDictionary would evict handles held by nothing.
+        self.inner.write().children.extend(snapshot);
+        Ok(())
+    }
+
+    fn child(&self, py: Python<'_>) -> pyo3::PyResult<Py<pyo3::PyAny>> {
+        // Lock scope: read len and clone at most the single entry under the guard;
+        // drop the guard before any Python work (object conversion, exception raise).
+        let (n, entry) = {
+            let guard = self.inner.read();
+            let n = guard.children.len();
+            let entry = if n == 1 { Some(guard.children[0].clone()) } else { None };
+            (n, entry)
+        };
+        let Some((label, child)) = entry else {
+            return Err(PyValueError::new_err(format!(
+                "Expected one child but have {n}"
+            )));
+        };
+        let label_obj: Py<pyo3::PyAny> = match label {
+            None => py.None(),
+            Some(lbl) => lbl.into_pyobject(py)?.into_any().unbind(),
+        };
+        let child_obj = child.to_pyobject(py)?;
+        Ok(pyo3::types::PyTuple::new(py, [label_obj, child_obj])?.into_any().unbind())
+    }
+
+    #[pyo3(signature = (index, child, label = None))]
+    fn insert(
+        &self,
+        py: Python<'_>,
+        index: &Bound<'_, pyo3::PyAny>,
+        child: &Bound<'_, pyo3::PyAny>,
+        label: Option<Py<pyo3::PyAny>>,
+    ) -> pyo3::PyResult<()> {
+        // Validate child and label BEFORE taking the write lock.
+        let span_type = get_span_type(py)?;
+        let native_child = KwLabelsChild::extract_from_pyobject(py, child, &span_type)?;
+        let native_label = match label {
+            None => None,
+            Some(lbl) => {
+                if let Ok(native_lbl) = lbl.bind(py).extract::<KwLabelsLabel>() {
+                    Some(native_lbl)
+                } else {
+                    return Err(PyTypeError::new_err(format!(
+                        "KwLabels.insert: label argument is not a KwLabels_Label; got {}",
+                        lbl.bind(py).get_type().name()?
+                    )));
+                }
+            }
+        };
+        // Index normalization via operator.index (PyNumber_Index semantics).
+        // This raises TypeError (not AttributeError) for non-indexable inputs, matching Python's
+        // operator.index contract. Must be done BEFORE taking any lock.
+        // Overflow by sign: positive overflow clamps to len; negative overflow clamps to 0.
+        let raw_idx = py
+            .import(pyo3::intern!(py, "operator"))?
+            .getattr(pyo3::intern!(py, "index"))?
+            .call1((index,))?;
+        // Fast path for the common exact-int case; fall back to sign-based Python call for beyond-i64.
+        let (is_negative_big, raw_i64) = if let Ok(i) = raw_idx.extract::<i64>() {
+            (false, Some(i))
+        } else {
+            // Beyond i64: use Python __lt__ to determine sign.  The lt call is still outside
+            // any lock, so lock discipline is maintained.
+            let neg = raw_idx.lt(0i64)?;
+            (neg, None)
+        };
+        // Now take a single write lock for the entire len-read + clamp + insert sequence.
+        let mut guard = self.inner.write();
+        let n = guard.children.len();
+        let clamped: usize = match raw_i64 {
+            Some(i) if i < 0 => {
+                let normalized = n as i64 + i;
+                if normalized < 0 { 0 } else { normalized as usize }
+            }
+            Some(i) => {
+                let u = i as usize;
+                if u > n { n } else { u }
+            }
+            None => if is_negative_big { 0 } else { n },
+        };
+        guard.children.insert(clamped, (native_label, native_child));
+        Ok(())
+    }
+
+    fn remove_at(&self, py: Python<'_>, index: &Bound<'_, pyo3::PyAny>) -> pyo3::PyResult<Py<pyo3::PyAny>> {
+        // Capture the caller's original string representation BEFORE normalization,
+        // so error messages show the original value (e.g. `True` not `1`).
+        let orig_str = index.str()?.to_string_lossy().into_owned();
+        // Normalize via operator.index: raises TypeError (not AttributeError) for
+        // non-indexable inputs, matching Python's operator.index contract.
+        // All Python work must happen before any lock.
+        let raw_idx = py
+            .import(pyo3::intern!(py, "operator"))?
+            .getattr(pyo3::intern!(py, "index"))?
+            .call1((index,))?;
+        // Fast path: extract i64. Beyond i64 is always OOB for real trees.
+        let maybe_i64: Option<i64> = raw_idx.extract::<i64>().ok();
+        // Single write lock: resolve + bounds-check + Vec::remove atomically (no TOCTOU).
+        // On OOB, capture n and return Err after releasing the guard.
+        let result: Result<_, usize> = {
+            let mut guard = self.inner.write();
+            let n = guard.children.len();
+            let resolved: Option<usize> = match maybe_i64 {
+                Some(i) if i < 0 => {
+                    let normalized = n as i64 + i;
+                    if normalized < 0 || normalized as usize >= n { None }
+                    else { Some(normalized as usize) }
+                }
+                Some(i) if (i as usize) < n => Some(i as usize),
+                _ => None,
+            };
+            match resolved {
+                Some(idx) => Ok(guard.children.remove(idx)),
+                None => Err(n),
+            }
+        };
+        let (label, child) = result.map_err(|n| {
+            PyIndexError::new_err(format!(
+                "KwLabels.remove_at: index {} out of range ({} children)",
+                orig_str, n
+            ))
+        })?;
+        // Python wrap-out happens after the guard is released.
+        let label_obj: Py<pyo3::PyAny> = match label {
+            None => py.None(),
+            Some(lbl) => lbl.into_pyobject(py)?.into_any().unbind(),
+        };
+        let child_obj = child.to_pyobject(py)?;
+        Ok(pyo3::types::PyTuple::new(py, [label_obj, child_obj])?.into_any().unbind())
+    }
+
+    #[pyo3(signature = (index, child, label = None))]
+    fn replace_at(
+        &self,
+        py: Python<'_>,
+        index: &Bound<'_, pyo3::PyAny>,
+        child: &Bound<'_, pyo3::PyAny>,
+        label: Option<Py<pyo3::PyAny>>,
+    ) -> pyo3::PyResult<()> {
+        // Validate child and label BEFORE taking the write lock.
+        let span_type = get_span_type(py)?;
+        let native_child = KwLabelsChild::extract_from_pyobject(py, child, &span_type)?;
+        let native_label = match label {
+            None => None,
+            Some(lbl) => {
+                if let Ok(native_lbl) = lbl.bind(py).extract::<KwLabelsLabel>() {
+                    Some(native_lbl)
+                } else {
+                    return Err(PyTypeError::new_err(format!(
+                        "KwLabels.replace_at: label argument is not a KwLabels_Label; got {}",
+                        lbl.bind(py).get_type().name()?
+                    )));
+                }
+            }
+        };
+        // Capture the caller's original string representation BEFORE normalization.
+        let orig_str = index.str()?.to_string_lossy().into_owned();
+        // Normalize via operator.index: raises TypeError for non-indexable inputs.
+        // All Python work must happen before any lock.
+        let raw_idx = py
+            .import(pyo3::intern!(py, "operator"))?
+            .getattr(pyo3::intern!(py, "index"))?
+            .call1((index,))?;
+        let maybe_i64: Option<i64> = raw_idx.extract::<i64>().ok();
+        // Single write lock: resolve + bounds-check + mem::replace atomically (no TOCTOU).
+        let old = {
+            let mut guard = self.inner.write();
+            let n = guard.children.len();
+            let resolved: Option<usize> = match maybe_i64 {
+                Some(i) if i < 0 => {
+                    let normalized = n as i64 + i;
+                    if normalized < 0 || normalized as usize >= n { None }
+                    else { Some(normalized as usize) }
+                }
+                Some(i) if (i as usize) < n => Some(i as usize),
+                _ => None,
+            };
+            let idx = match resolved {
+                Some(i) => i,
+                None => {
+                    return Err(PyIndexError::new_err(format!(
+                        "KwLabels.replace_at: index {} out of range ({} children)",
+                        orig_str, n
+                    )));
+                }
+            };
+            std::mem::replace(&mut guard.children[idx], (native_label, native_child))
+        };
+        // Drop old entry outside the lock to avoid recursive lock acquisition
+        // if the child's drop chain re-enters Python.
+        drop(old);
+        Ok(())
+    }
+
+    fn clear(&self, _py: Python<'_>) -> pyo3::PyResult<()> {
+        let old = {
+            let mut guard = self.inner.write();
+            std::mem::take(&mut guard.children)
+        };
+        // Drop old entries outside the lock.
+        drop(old);
+        Ok(())
+    }
+
+    fn append_match(&self, py: Python<'_>, child: &Bound<'_, pyo3::PyAny>) -> pyo3::PyResult<()> {
+        let span_type = get_span_type(py)?;
+        let native_child = KwLabelsChild::extract_from_pyobject(py, child, &span_type)?;
+        self.inner.write().children.push((Some(KwLabelsLabel::Match), native_child));
+        Ok(())
+    }
+
+    fn extend_match(&self, py: Python<'_>, children: &Bound<'_, pyo3::PyAny>) -> pyo3::PyResult<()> {
+        let span_type = get_span_type(py)?;
+        let iter = children.try_iter()?;
+        for child_result in iter {
+            let child = child_result?;
+            let native_child = KwLabelsChild::extract_from_pyobject(py, &child, &span_type)?;
+            let entry = (Some(KwLabelsLabel::Match), native_child);
+            self.inner.write().children.push(entry);
+        }
+        Ok(())
+    }
+
+    fn children_match(&self, py: Python<'_>) -> pyo3::PyResult<Py<pyo3::types::PyList>> {
+        // Lock scope: filter by label under the read guard, cloning only matching
+        // children (Arc bump or Span copy each); drop the guard before to_pyobject,
+        // which performs Python work that must not happen while a node lock is held.
+        let matching: Vec<_> = {
+            let guard = self.inner.read();
+            guard.children.iter()
+                .filter(|(lbl, _)| *lbl == Some(KwLabelsLabel::Match))
+                .map(|(_, child)| child.clone())
+                .collect()
+        };
+        let result = pyo3::types::PyList::empty(py);
+        for child in &matching {
+            result.append(child.to_pyobject(py)?)?;
+        }
+        Ok(result.unbind())
+    }
+
+    fn child_match(&self, py: Python<'_>) -> pyo3::PyResult<Py<pyo3::PyAny>> {
+        // Lock scope: count label matches and clone only the first under the guard;
+        // drop the guard before to_pyobject / exception raise (Python work).
+        let (count, first) = {
+            let guard = self.inner.read();
+            let mut count = 0usize;
+            let mut first = None;
+            for (lbl, child) in &guard.children {
+                if *lbl == Some(KwLabelsLabel::Match) {
+                    count += 1;
+                    if count == 1 {
+                        first = Some(child.clone());
+                    }
+                }
+            }
+            (count, first)
+        };
+        if count != 1 {
+            return Err(PyValueError::new_err(format!(
+                "Expected one match child but have {count}"
+            )));
+        }
+        first.expect("invariant: KwLabels.child_match: count==1 but first==None; logic error")
+            .to_pyobject(py)
+    }
+
+    fn maybe_match(&self, py: Python<'_>) -> pyo3::PyResult<Option<Py<pyo3::PyAny>>> {
+        // Lock scope: count label matches and clone only the first under the guard;
+        // drop the guard before to_pyobject / exception raise (Python work).
+        let (count, first) = {
+            let guard = self.inner.read();
+            let mut count = 0usize;
+            let mut first = None;
+            for (lbl, child) in &guard.children {
+                if *lbl == Some(KwLabelsLabel::Match) {
+                    count += 1;
+                    if count == 1 {
+                        first = Some(child.clone());
+                    }
+                }
+            }
+            (count, first)
+        };
+        if count > 1 {
+            return Err(PyValueError::new_err(
+                "Expected at most one match child but have at least 2",
+            ));
+        }
+        match first {
+            None => Ok(None),
+            Some(child) => Ok(Some(child.to_pyobject(py)?)),
+        }
+    }
+
+    fn append_type(&self, py: Python<'_>, child: &Bound<'_, pyo3::PyAny>) -> pyo3::PyResult<()> {
+        let span_type = get_span_type(py)?;
+        let native_child = KwLabelsChild::extract_from_pyobject(py, child, &span_type)?;
+        self.inner.write().children.push((Some(KwLabelsLabel::Type), native_child));
+        Ok(())
+    }
+
+    fn extend_type(&self, py: Python<'_>, children: &Bound<'_, pyo3::PyAny>) -> pyo3::PyResult<()> {
+        let span_type = get_span_type(py)?;
+        let iter = children.try_iter()?;
+        for child_result in iter {
+            let child = child_result?;
+            let native_child = KwLabelsChild::extract_from_pyobject(py, &child, &span_type)?;
+            let entry = (Some(KwLabelsLabel::Type), native_child);
+            self.inner.write().children.push(entry);
+        }
+        Ok(())
+    }
+
+    fn children_type(&self, py: Python<'_>) -> pyo3::PyResult<Py<pyo3::types::PyList>> {
+        // Lock scope: filter by label under the read guard, cloning only matching
+        // children (Arc bump or Span copy each); drop the guard before to_pyobject,
+        // which performs Python work that must not happen while a node lock is held.
+        let matching: Vec<_> = {
+            let guard = self.inner.read();
+            guard.children.iter()
+                .filter(|(lbl, _)| *lbl == Some(KwLabelsLabel::Type))
+                .map(|(_, child)| child.clone())
+                .collect()
+        };
+        let result = pyo3::types::PyList::empty(py);
+        for child in &matching {
+            result.append(child.to_pyobject(py)?)?;
+        }
+        Ok(result.unbind())
+    }
+
+    fn child_type(&self, py: Python<'_>) -> pyo3::PyResult<Py<pyo3::PyAny>> {
+        // Lock scope: count label matches and clone only the first under the guard;
+        // drop the guard before to_pyobject / exception raise (Python work).
+        let (count, first) = {
+            let guard = self.inner.read();
+            let mut count = 0usize;
+            let mut first = None;
+            for (lbl, child) in &guard.children {
+                if *lbl == Some(KwLabelsLabel::Type) {
+                    count += 1;
+                    if count == 1 {
+                        first = Some(child.clone());
+                    }
+                }
+            }
+            (count, first)
+        };
+        if count != 1 {
+            return Err(PyValueError::new_err(format!(
+                "Expected one type child but have {count}"
+            )));
+        }
+        first.expect("invariant: KwLabels.child_type: count==1 but first==None; logic error")
+            .to_pyobject(py)
+    }
+
+    fn maybe_type(&self, py: Python<'_>) -> pyo3::PyResult<Option<Py<pyo3::PyAny>>> {
+        // Lock scope: count label matches and clone only the first under the guard;
+        // drop the guard before to_pyobject / exception raise (Python work).
+        let (count, first) = {
+            let guard = self.inner.read();
+            let mut count = 0usize;
+            let mut first = None;
+            for (lbl, child) in &guard.children {
+                if *lbl == Some(KwLabelsLabel::Type) {
+                    count += 1;
+                    if count == 1 {
+                        first = Some(child.clone());
+                    }
+                }
+            }
+            (count, first)
+        };
+        if count > 1 {
+            return Err(PyValueError::new_err(
+                "Expected at most one type child but have at least 2",
+            ));
+        }
+        match first {
+            None => Ok(None),
+            Some(child) => Ok(Some(child.to_pyobject(py)?)),
+        }
+    }
+
+    #[pyo3(name = "match")]
+    fn r#match(&self, py: Python<'_>) -> pyo3::PyResult<Py<pyo3::PyAny>> {
+        self.child_match(py)
+    }
+
+    #[pyo3(name = "type")]
+    fn r#type(&self, py: Python<'_>) -> pyo3::PyResult<Py<pyo3::PyAny>> {
+        self.child_type(py)
+    }
+
+    fn type_text(&self) -> pyo3::PyResult<String> {
+        // Lock scope: count label matches and clone only the first under the guard;
+        // drop the guard before to_pyobject / exception raise (Python work).
+        let (count, first) = {
+            let guard = self.inner.read();
+            let mut count = 0usize;
+            let mut first = None;
+            for (lbl, child) in &guard.children {
+                if *lbl == Some(KwLabelsLabel::Type) {
+                    count += 1;
+                    if count == 1 {
+                        first = Some(child.clone());
+                    }
+                }
+            }
+            (count, first)
+        };
+        if count != 1 {
+            return Err(PyValueError::new_err(format!(
+                "Expected one type child but have {count}"
+            )));
+        }
+        match first
+            .expect("invariant: KwLabels.type_text: count==1 but first==None; logic error")
+        {
+            KwLabelsChild::Span(s) => s
+                .text_or_message()
+                .map(str::to_owned)
+                .map_err(PyValueError::new_err),
+            _ => Err(PyTypeError::new_err("KwLabels.type_text: child labelled 'type' is not a Span")),
+        }
+    }
+
+    fn __eq__(&self, py: Python<'_>, other: &Bound<'_, pyo3::PyAny>) -> pyo3::PyResult<Py<pyo3::PyAny>> {
+        if !other.is_instance_of::<PyKwLabels>() {
+            return Ok(py.NotImplemented());
+        }
+        let other_handle: pyo3::PyRef<PyKwLabels> = other.extract()?;
+        // Delegate to Shared<T>::PartialEq which applies the ptr_eq short-circuit
+        // (avoids same-lock re-entry on `x == x`) then deep structural comparison.
+        let eq = self.inner == other_handle.inner;
+        Ok(eq.into_pyobject(py)?.to_owned().unbind().into_any())
+    }
+
+    fn __hash__(&self) -> pyo3::PyResult<isize> {
+        Err(PyTypeError::new_err("unhashable type: 'KwLabels'"))
+    }
+
+    fn __repr__(&self, _py: Python<'_>) -> String {
+        let guard = self.inner.read();
+        let span_repr = format!("Span(start={}, end={})", guard.span.start(), guard.span.end());
+        let children_len = guard.children.len();
+        format!(
+            "KwLabels(span={span_repr}, children=[<{children_len} child(ren)>])"
+        )
+    }
+
+}
+
+// ───────────────────────────────────────────────────────────────────────────
+// QuotedLabel
+// ───────────────────────────────────────────────────────────────────────────
+
+/// Label discriminant enum for children of this node type.
+///
+/// Python-visible name is `Quoted_Label` (preserved for compatibility).
+/// Rust consumers use the CamelCase `QuotedLabel` name.
+#[cfg(feature = "python")]
+#[pyclass(frozen, from_py_object, name = "Quoted_Label")]
+#[derive(Clone, Debug, PartialEq, Eq, Hash)]
+pub enum QuotedLabel {
+    #[pyo3(name = "TAIL")]
+    Tail,
+    #[pyo3(name = "VALUE")]
+    Value,
+}
+
+#[cfg(not(feature = "python"))]
+#[derive(Clone, Debug, PartialEq, Eq, Hash)]
+pub enum QuotedLabel {
+    Tail,
+    Value,
+}
+
+#[cfg(feature = "python")]
+#[pymethods]
+impl QuotedLabel {
+    fn __repr__(&self) -> &'static str {
+        match self {
+            QuotedLabel::Tail => "Quoted.Label.TAIL",
+            QuotedLabel::Value => "Quoted.Label.VALUE",
+        }
+    }
+
+    #[getter]
+    fn _fltk_canonical_name(&self) -> &'static str {
+        self.__repr__()
+    }
+
+    fn __eq__(&self, py: Python<'_>, other: &Bound<'_, pyo3::PyAny>) -> pyo3::PyResult<Py<pyo3::PyAny>> {
+        if let Ok(other_kind) = other.extract::<QuotedLabel>() {
+            return Ok((self == &other_kind).into_pyobject(py)?.to_owned().unbind().into_any());
+        }
+        if let Ok(cn) = other.getattr(pyo3::intern!(py, "_fltk_canonical_name")) {
+            if let Ok(cn_str) = cn.extract::<&str>() {
+                return Ok((self.__repr__() == cn_str).into_pyobject(py)?.to_owned().unbind().into_any());
+            }
+        }
+        Ok(py.NotImplemented())
+    }
+
+    fn __hash__(&self, py: Python<'_>) -> pyo3::PyResult<isize> {
+        pyo3::types::PyAnyMethods::hash(
+            pyo3::types::PyString::new(py, self.__repr__()).as_any()
+        )
+    }
+}
+
+/// Child value enum for `Quoted` nodes.
+///
+/// Node-typed variants hold `Shared<T>` (`Arc<RwLock<T>>`); `Clone` is shallow
+/// (increments the reference count, does not copy the node).
+#[derive(Clone, Debug)]
+pub enum QuotedChild {
+    Span(Span),
+}
+
+impl PartialEq for QuotedChild {
+    fn eq(&self, other: &Self) -> bool {
+        match (self, other) {
+            (QuotedChild::Span(a), QuotedChild::Span(b)) => a == b,
+        }
+    }
+}
+
+#[cfg(feature = "python")]
+impl QuotedChild {
+    fn to_pyobject(&self, py: Python<'_>) -> pyo3::PyResult<Py<pyo3::PyAny>> {
+        match self {
+            Self::Span(s) => {
+                span_to_pyobject(py, s)
+            }
+        }
+    }
+
+    fn extract_from_pyobject(
+        py: Python<'_>,
+        obj: &Bound<'_, pyo3::PyAny>,
+        span_type: &Bound<'_, pyo3::types::PyType>,
+    ) -> pyo3::PyResult<Self> {
+        // Try Span (terminal child) first — handles cross-cdylib span instances.
+        if obj.is_instance_of::<Span>() || obj.is_instance(span_type)? {
+            return extract_span(py, obj).map(Self::Span);
+        }
+        Err(pyo3::exceptions::PyTypeError::new_err(format!(
+            "Quoted: unsupported child type {}",
+            obj.get_type().name()?
+        )))
+    }
+}
+
+// ───────────────────────────────────────────────────────────────────────────
+// Quoted
+// ───────────────────────────────────────────────────────────────────────────
+
+/// CST data struct for `Quoted`. See [`fltk_cst_core::Shared`] for clone/equality/reference semantics.
+///
+/// `Debug` output is non-recursive: prints span + child count only. Traverse via `children()` to inspect subtrees.
+#[derive(Clone)]
+pub struct Quoted {
+    // Not pub: use span() / children() / push_child() — the stable accessor API.
+    // Direct field access bypasses any future validation logic on setters.
+    span: Span,
+    children: Vec<(Option<QuotedLabel>, QuotedChild)>,
+}
+
+// Manual Debug: prints span + child COUNT, never recursing into children.
+// A derived Debug would recurse through Shared<T> children with no depth
+// bound; tree depth is attacker-controlled for parsers over untrusted
+// input, so `{:?}` on a deep tree would abort the process (stack
+// exhaustion, uncatchable). Mirrors the Python __repr__'s content.
+impl fmt::Debug for Quoted {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("Quoted")
+            .field("span", &self.span)
+            .field("children", &format_args!("<{} child(ren)>", self.children.len()))
+            .finish()
+    }
+}
+
+// Span-only PartialEq: no node-typed children, so this cannot recurse — depth-safe.
+impl PartialEq for Quoted {
+    fn eq(&self, other: &Self) -> bool {
+        self.span == other.span && self.children == other.children
+    }
+}
+
+impl Quoted {
+    /// Construct a node with the given span and no children. GIL-free.
+    pub fn new(span: Span) -> Self {
+        Quoted {
+            span,
+            children: Vec::new(),
+        }
+    }
+
+    /// Return the [`NodeKind`] discriminant for this node type.
+    pub fn kind(&self) -> NodeKind {
+        NodeKind::Quoted
+    }
+
+    /// Return a reference to the stored [`Span`].
+    pub fn span(&self) -> &Span {
+        &self.span
+    }
+
+    /// Replace the node's span.
+    pub fn set_span(&mut self, span: Span) {
+        self.span = span;
+    }
+
+    /// Return a slice of all children (unfiltered).
+    ///
+    /// Each entry is `(label, child)`. Use the per-label accessors
+    /// (`children_<lbl>`, `child_<lbl>`, `maybe_<lbl>`) for type-safe access.
+    pub fn children(&self) -> &[(Option<QuotedLabel>, QuotedChild)] {
+        self.children.as_slice()
+    }
+
+    /// Push a child onto the children `Vec`.
+    ///
+    /// No type-checking is performed: any child variant may be stored under
+    /// any label. Per-label typed mutators (`append_<lbl>`, `extend_<lbl>`)
+    /// provide type-constrained alternatives.
+    pub fn push_child(&mut self, label: Option<QuotedLabel>, child: QuotedChild) {
+        self.children.push((label, child));
+    }
+
+    /// Return the single child (any label), or `Err` if there is not exactly one.
+    ///
+    /// Mirrors the Python `child()` method: count violation → `CstError::ChildCount`.
+    pub fn child(&self) -> Result<&(Option<QuotedLabel>, QuotedChild), CstError> {
+        match self.children.as_slice() {
+            [single] => Ok(single),
+            slice => Err(CstError::ChildCount {
+                label: "<any>",
+                expected: "1",
+                found: slice.len(),
+            }),
+        }
+    }
+
+    /// Copy all children from `other` into `self`, sharing the `Shared<T>` arcs.
+    ///
+    /// Children are appended (Arc reference-count bumps, not deep copies),
+    /// matching the Python backend's reference-copy behavior. Labels are preserved.
+    ///
+    /// The borrow checker prevents `self.extend_children(self)` at the data-struct
+    /// level (`&mut` + `&` of the same value don't coexist). For self-extend from
+    /// Python, the handle pymethod handles it via snapshotting.
+    pub fn extend_children(&mut self, other: &Self) {
+        self.children.extend(other.children.iter().cloned());
+    }
+
+    /// Return an iterator over `Span` children labelled `tail`.
+    ///
+    /// Off-type variants stored under the `tail` label are silently skipped.
+    /// Use `children()` (the untyped slice) for a lossless view.
+    pub fn children_tail(&self) -> impl Iterator<Item = &Span> + '_ {
+        self.children.iter()
+            .filter(|(lbl, _)| *lbl == Some(QuotedLabel::Tail))
+            .map(|(_, child)| match child { QuotedChild::Span(s) => s })
+    }
+
+    /// Return the single child labelled `tail`, or `Err` if not exactly one.
+    ///
+    /// Count is checked by label match first (`CstError::ChildCount`); if the
+    /// count is valid and the surviving child has the wrong variant type,
+    /// `CstError::UnexpectedChildType` is returned (single-typed labels only).
+    pub fn child_tail(&self) -> Result<&Span, CstError> {
+        let mut it = self.children.iter()
+            .filter(|(lbl, _)| *lbl == Some(QuotedLabel::Tail));
+        match (it.next(), it.next()) {
+            (Some((_, child)), None) => match child {
+                QuotedChild::Span(s) => Ok(s),
+            },
+            _ => Err(CstError::ChildCount {
+                label: "tail",
+                expected: "1",
+                found: self.children.iter()
+                    .filter(|(lbl, _)| *lbl == Some(QuotedLabel::Tail))
+                    .count(),
+            }),
+        }
+    }
+
+    /// Return the optional child labelled `tail`, or `Err` if more than one.
+    ///
+    /// Returns `Ok(None)` for zero, `Ok(Some(...))` for one,
+    /// `Err(CstError::ChildCount)` for two or more.
+    pub fn maybe_tail(&self) -> Result<Option<&Span>, CstError> {
+        let mut it = self.children.iter()
+            .filter(|(lbl, _)| *lbl == Some(QuotedLabel::Tail));
+        match (it.next(), it.next()) {
+            (None, _) => Ok(None),
+            (Some((_, child)), None) => match child {
+                QuotedChild::Span(s) => Ok(Some(s)),
+            },
+            _ => Err(CstError::ChildCount {
+                label: "tail",
+                expected: "0 or 1",
+                found: self.children.iter()
+                    .filter(|(lbl, _)| *lbl == Some(QuotedLabel::Tail))
+                    .count(),
+            }),
+        }
+    }
+
+    /// Append a `Span` child with label `tail`.
+    pub fn append_tail(&mut self, span: Span) {
+        self.children.push((Some(QuotedLabel::Tail), QuotedChild::Span(span)));
+    }
+
+    /// Append multiple `Span` children with label `tail`.
+    pub fn extend_tail(&mut self, spans: impl IntoIterator<Item = Span>) {
+        self.children.extend(spans.into_iter().map(|s| (Some(QuotedLabel::Tail), QuotedChild::Span(s))));
+    }
+
+    /// Return an iterator over `Span` children labelled `value`.
+    ///
+    /// Off-type variants stored under the `value` label are silently skipped.
+    /// Use `children()` (the untyped slice) for a lossless view.
+    pub fn children_value(&self) -> impl Iterator<Item = &Span> + '_ {
+        self.children.iter()
+            .filter(|(lbl, _)| *lbl == Some(QuotedLabel::Value))
+            .map(|(_, child)| match child { QuotedChild::Span(s) => s })
+    }
+
+    /// Return the single child labelled `value`, or `Err` if not exactly one.
+    ///
+    /// Count is checked by label match first (`CstError::ChildCount`); if the
+    /// count is valid and the surviving child has the wrong variant type,
+    /// `CstError::UnexpectedChildType` is returned (single-typed labels only).
+    pub fn child_value(&self) -> Result<&Span, CstError> {
+        let mut it = self.children.iter()
+            .filter(|(lbl, _)| *lbl == Some(QuotedLabel::Value));
+        match (it.next(), it.next()) {
+            (Some((_, child)), None) => match child {
+                QuotedChild::Span(s) => Ok(s),
+            },
+            _ => Err(CstError::ChildCount {
+                label: "value",
+                expected: "1",
+                found: self.children.iter()
+                    .filter(|(lbl, _)| *lbl == Some(QuotedLabel::Value))
+                    .count(),
+            }),
+        }
+    }
+
+    /// Return the optional child labelled `value`, or `Err` if more than one.
+    ///
+    /// Returns `Ok(None)` for zero, `Ok(Some(...))` for one,
+    /// `Err(CstError::ChildCount)` for two or more.
+    pub fn maybe_value(&self) -> Result<Option<&Span>, CstError> {
+        let mut it = self.children.iter()
+            .filter(|(lbl, _)| *lbl == Some(QuotedLabel::Value));
+        match (it.next(), it.next()) {
+            (None, _) => Ok(None),
+            (Some((_, child)), None) => match child {
+                QuotedChild::Span(s) => Ok(Some(s)),
+            },
+            _ => Err(CstError::ChildCount {
+                label: "value",
+                expected: "0 or 1",
+                found: self.children.iter()
+                    .filter(|(lbl, _)| *lbl == Some(QuotedLabel::Value))
+                    .count(),
+            }),
+        }
+    }
+
+    /// Append a `Span` child with label `value`.
+    pub fn append_value(&mut self, span: Span) {
+        self.children.push((Some(QuotedLabel::Value), QuotedChild::Span(span)));
+    }
+
+    /// Append multiple `Span` children with label `value`.
+    pub fn extend_value(&mut self, spans: impl IntoIterator<Item = Span>) {
+        self.children.extend(spans.into_iter().map(|s| (Some(QuotedLabel::Value), QuotedChild::Span(s))));
+    }
+
+    /// Return the optional child labelled `tail`.
+    ///
+    /// Panics if more than one is present; use `maybe_tail` for the checked form.
+    pub fn tail(&self) -> Option<&Span> {
+        self.maybe_tail()
+            .unwrap_or_else(|e| panic!("Quoted.tail: {e}"))
+    }
+
+    /// Return the source text of the optional child labelled `tail`.
+    ///
+    /// `None` when the child is absent; panics if more than one is present or the
+    /// span carries no usable source.
+    pub fn tail_text(&self) -> Option<&str> {
+        Some(
+            self.maybe_tail()
+                .unwrap_or_else(|e| panic!("Quoted.tail_text: {e}"))?
+                .text_or_message()
+                .unwrap_or_else(|e| panic!("Quoted.tail_text: {e}")),
+        )
+    }
+
+    /// Return the child labelled `value`.
+    ///
+    /// Panics unless exactly one is present; use `child_value` for the checked form.
+    pub fn value(&self) -> &Span {
+        self.child_value()
+            .unwrap_or_else(|e| panic!("Quoted.value: {e}"))
+    }
+
+    /// Return the source text of the child labelled `value`.
+    ///
+    /// Borrows from the span's source; panics if the child is absent or its span
+    /// carries no usable source.
+    pub fn value_text(&self) -> &str {
+        self.child_value()
+            .unwrap_or_else(|e| panic!("Quoted.value_text: {e}"))
+            .text_or_message()
+            .unwrap_or_else(|e| panic!("Quoted.value_text: {e}"))
+    }
+
+    /// Return this node's own source text.
+    ///
+    /// Covers suppressed content inside the node's span; panics if the span carries no
+    /// usable source.
+    pub fn text(&self) -> &str {
+        self.span
+            .text_or_message()
+            .unwrap_or_else(|e| panic!("Quoted.text: {e}"))
+    }
+
+    /// Insert a child at `index` (Vec::insert semantics: panics if index > len).
+    ///
+    /// Python-facing clamping is in the `insert` pymethod; native callers must
+    /// bounds-check. Unlike `list.insert`, Vec::insert panics on out-of-bounds.
+    pub fn insert_child(&mut self, index: usize, label: Option<QuotedLabel>, child: QuotedChild) {
+        self.children.insert(index, (label, child));
+    }
+
+    /// Remove and return the child at `index` (Vec::remove semantics: panics if out of range).
+    ///
+    /// Panics on out-of-range. Python-facing IndexError is in the `remove_at` pymethod.
+    pub fn remove_child(&mut self, index: usize) -> (Option<QuotedLabel>, QuotedChild) {
+        self.children.remove(index)
+    }
+
+    /// Replace the child at `index`, returning the old entry (panics if out of range).
+    ///
+    /// Panics on out-of-range. Python-facing IndexError is in the `replace_at` pymethod.
+    pub fn replace_child(
+        &mut self, index: usize, label: Option<QuotedLabel>, child: QuotedChild,
+    ) -> (Option<QuotedLabel>, QuotedChild) {
+        std::mem::replace(&mut self.children[index], (label, child))
+    }
+
+    /// Remove all children.
+    pub fn clear_children(&mut self) {
+        self.children.clear();
+    }
+}
+
+#[cfg(feature = "python")]
+#[pyclass(frozen, weakref, name = "Quoted")]
+pub struct PyQuoted {
+    // Not pub: all external access goes through shared() or to_py_canonical().
+    // A pub field would let mixed-app Rust code construct an unregistered handle
+    // (Py::new(py, PyFoo { inner: s.clone() })), silently breaking is-stability.
+    inner: Shared<Quoted>,
+}
+
+#[cfg(feature = "python")]
+impl PyQuoted {
+    /// Return a reference to the inner `Shared<Quoted>`.
+    pub fn shared(&self) -> &Shared<Quoted> {
+        &self.inner
+    }
+
+    /// Wrap a `Shared<Quoted>` into a canonical Python handle,
+    /// looking up the registry first so the same handle is returned
+    /// for the same `Shared` allocation.
+    pub fn to_py_canonical(py: Python<'_>, s: &Shared<Quoted>) -> pyo3::PyResult<Py<PyQuoted>> {
+        let addr = s.arc_ptr();
+        let obj = registry::get_or_insert_with(py, addr, || {
+            let handle = PyQuoted { inner: s.clone() };
+            Py::new(py, handle).map(|p| p.into_any())
+        })?;
+        obj.bind(py).cast::<PyQuoted>().map(|b| b.clone().unbind()).map_err(|e| e.into())
+    }
+}
+
+#[cfg(feature = "python")]
+#[pymethods]
+impl PyQuoted {
+    #[new]
+    #[pyo3(signature = (*, span = None))]
+    fn new(py: Python<'_>, span: Option<&Bound<'_, pyo3::PyAny>>) -> pyo3::PyResult<Py<PyQuoted>> {
+        let native_span = match span {
+            Some(s) => extract_span(py, s)?,
+            None => Span::unknown(),
+        };
+        let data = Quoted {
+            span: native_span,
+            children: Vec::new(),
+        };
+        let shared = Shared::new(data);
+        let addr = shared.arc_ptr();
+        let handle = PyQuoted { inner: shared };
+        let py_obj = Py::new(py, handle)?;
+        // Register as canonical — fresh Shared, no alias can exist yet.
+        registry::force_register(py, addr, py_obj.bind(py))?;
+        Ok(py_obj)
+    }
+
+    #[getter]
+    fn span(&self, py: Python<'_>) -> pyo3::PyResult<Py<pyo3::PyAny>> {
+        // Snapshot the span under the read lock, then drop the guard before
+        // calling span_to_pyobject — which performs Python work (Py::new or
+        // Python method calls) that must not happen while a node lock is held.
+        let span = self.inner.read().span.clone();
+        span_to_pyobject(py, &span)
+    }
+
+    #[setter]
+    fn set_span(&self, py: Python<'_>, value: &Bound<'_, pyo3::PyAny>) -> pyo3::PyResult<()> {
+        self.inner.write().span = extract_span(py, value)?;
+        Ok(())
+    }
+
+    #[getter]
+    fn kind(&self) -> NodeKind {
+        NodeKind::Quoted
+    }
+
+    #[classattr]
+    #[allow(non_snake_case)]
+    fn Label(py: Python<'_>) -> pyo3::PyResult<Py<pyo3::PyAny>> {
+        Ok(<QuotedLabel as pyo3::PyTypeInfo>::type_object(py).into_any().unbind())
+    }
+
+    #[getter]
+    fn children(&self, py: Python<'_>) -> pyo3::PyResult<Py<pyo3::types::PyList>> {
+        // Snapshot the children vec (Arc clones for node children — O(n) refcount bumps).
+        // Lock scope: acquire read, snapshot, release before touching Python.
+        let snapshot: Vec<_> = {
+            let guard = self.inner.read();
+            guard.children.clone()
+        };
+        let result = pyo3::types::PyList::empty(py);
+        for (label, child) in &snapshot {
+            let label_obj: Py<pyo3::PyAny> = match label {
+                None => py.None(),
+                Some(lbl) => lbl.clone().into_pyobject(py)?.into_any().unbind(),
+            };
+            let child_obj = child.to_pyobject(py)?;
+            let tup = pyo3::types::PyTuple::new(py, [label_obj, child_obj])?;
+            result.append(tup)?;
+        }
+        Ok(result.unbind())
+    }
+
+    #[pyo3(signature = (child, label = None))]
+    fn append(
+        &self, py: Python<'_>, child: &Bound<'_, pyo3::PyAny>, label: Option<Py<pyo3::PyAny>>,
+    ) -> pyo3::PyResult<()> {
+        let span_type = get_span_type(py)?;
+        let native_child = QuotedChild::extract_from_pyobject(py, child, &span_type)?;
+        let native_label = match label {
+            None => None,
+            Some(lbl) => {
+                if let Ok(native_lbl) = lbl.bind(py).extract::<QuotedLabel>() {
+                    Some(native_lbl)
+                } else {
+                    return Err(PyTypeError::new_err(format!(
+                        "Quoted.append: label argument is not a Quoted_Label; got {}",
+                        lbl.bind(py).get_type().name()?
+                    )));
+                }
+            }
+        };
+        self.inner.write().children.push((native_label, native_child));
+        Ok(())
+    }
+
+    #[pyo3(signature = (children, label = None))]
+    fn extend(
+        &self,
+        py: Python<'_>,
+        children: &Bound<'_, pyo3::PyAny>,
+        label: Option<Py<pyo3::PyAny>>,
+    ) -> pyo3::PyResult<()> {
+        let span_type = get_span_type(py)?;
+        let native_label = match label {
+            None => None,
+            Some(lbl) => {
+                if let Ok(native_lbl) = lbl.bind(py).extract::<QuotedLabel>() {
+                    Some(native_lbl)
+                } else {
+                    return Err(PyTypeError::new_err(format!(
+                        "Quoted.extend: label argument is not a Quoted_Label; got {}",
+                        lbl.bind(py).get_type().name()?
+                    )));
+                }
+            }
+        };
+        let iter = children.try_iter()?;
+        for child_result in iter {
+            let child = child_result?;
+            let native_child = QuotedChild::extract_from_pyobject(py, &child, &span_type)?;
+            self.inner.write().children.push((native_label.clone(), native_child));
+        }
+        Ok(())
+    }
+
+    fn extend_children(&self, _py: Python<'_>, other: &PyQuoted) -> pyo3::PyResult<()> {
+        // Snapshot other's children first: the read guard is dropped at the end of
+        // this block, so the write lock below is safe even when self and other are
+        // the same node (self-extend). No ptr_eq call is needed here — the snapshot
+        // approach handles self-extend structurally.
+        // Lock scope: hold read only long enough to clone the Arc-based children vec.
+        let snapshot: Vec<_> = {
+            let guard = other.inner.read();
+            guard.children.clone()
+        };
+        // Node-typed children are pushed directly as Shared<T> values.  Registry
+        // consistency is maintained lazily: wrap-out registers on first Python read
+        // via get_or_insert_with (registry.rs).  Eagerly registering here would be
+        // a no-op — the WeakValueDictionary would evict handles held by nothing.
+        self.inner.write().children.extend(snapshot);
+        Ok(())
+    }
+
+    fn child(&self, py: Python<'_>) -> pyo3::PyResult<Py<pyo3::PyAny>> {
+        // Lock scope: read len and clone at most the single entry under the guard;
+        // drop the guard before any Python work (object conversion, exception raise).
+        let (n, entry) = {
+            let guard = self.inner.read();
+            let n = guard.children.len();
+            let entry = if n == 1 { Some(guard.children[0].clone()) } else { None };
+            (n, entry)
+        };
+        let Some((label, child)) = entry else {
+            return Err(PyValueError::new_err(format!(
+                "Expected one child but have {n}"
+            )));
+        };
+        let label_obj: Py<pyo3::PyAny> = match label {
+            None => py.None(),
+            Some(lbl) => lbl.into_pyobject(py)?.into_any().unbind(),
+        };
+        let child_obj = child.to_pyobject(py)?;
+        Ok(pyo3::types::PyTuple::new(py, [label_obj, child_obj])?.into_any().unbind())
+    }
+
+    #[pyo3(signature = (index, child, label = None))]
+    fn insert(
+        &self,
+        py: Python<'_>,
+        index: &Bound<'_, pyo3::PyAny>,
+        child: &Bound<'_, pyo3::PyAny>,
+        label: Option<Py<pyo3::PyAny>>,
+    ) -> pyo3::PyResult<()> {
+        // Validate child and label BEFORE taking the write lock.
+        let span_type = get_span_type(py)?;
+        let native_child = QuotedChild::extract_from_pyobject(py, child, &span_type)?;
+        let native_label = match label {
+            None => None,
+            Some(lbl) => {
+                if let Ok(native_lbl) = lbl.bind(py).extract::<QuotedLabel>() {
+                    Some(native_lbl)
+                } else {
+                    return Err(PyTypeError::new_err(format!(
+                        "Quoted.insert: label argument is not a Quoted_Label; got {}",
+                        lbl.bind(py).get_type().name()?
+                    )));
+                }
+            }
+        };
+        // Index normalization via operator.index (PyNumber_Index semantics).
+        // This raises TypeError (not AttributeError) for non-indexable inputs, matching Python's
+        // operator.index contract. Must be done BEFORE taking any lock.
+        // Overflow by sign: positive overflow clamps to len; negative overflow clamps to 0.
+        let raw_idx = py
+            .import(pyo3::intern!(py, "operator"))?
+            .getattr(pyo3::intern!(py, "index"))?
+            .call1((index,))?;
+        // Fast path for the common exact-int case; fall back to sign-based Python call for beyond-i64.
+        let (is_negative_big, raw_i64) = if let Ok(i) = raw_idx.extract::<i64>() {
+            (false, Some(i))
+        } else {
+            // Beyond i64: use Python __lt__ to determine sign.  The lt call is still outside
+            // any lock, so lock discipline is maintained.
+            let neg = raw_idx.lt(0i64)?;
+            (neg, None)
+        };
+        // Now take a single write lock for the entire len-read + clamp + insert sequence.
+        let mut guard = self.inner.write();
+        let n = guard.children.len();
+        let clamped: usize = match raw_i64 {
+            Some(i) if i < 0 => {
+                let normalized = n as i64 + i;
+                if normalized < 0 { 0 } else { normalized as usize }
+            }
+            Some(i) => {
+                let u = i as usize;
+                if u > n { n } else { u }
+            }
+            None => if is_negative_big { 0 } else { n },
+        };
+        guard.children.insert(clamped, (native_label, native_child));
+        Ok(())
+    }
+
+    fn remove_at(&self, py: Python<'_>, index: &Bound<'_, pyo3::PyAny>) -> pyo3::PyResult<Py<pyo3::PyAny>> {
+        // Capture the caller's original string representation BEFORE normalization,
+        // so error messages show the original value (e.g. `True` not `1`).
+        let orig_str = index.str()?.to_string_lossy().into_owned();
+        // Normalize via operator.index: raises TypeError (not AttributeError) for
+        // non-indexable inputs, matching Python's operator.index contract.
+        // All Python work must happen before any lock.
+        let raw_idx = py
+            .import(pyo3::intern!(py, "operator"))?
+            .getattr(pyo3::intern!(py, "index"))?
+            .call1((index,))?;
+        // Fast path: extract i64. Beyond i64 is always OOB for real trees.
+        let maybe_i64: Option<i64> = raw_idx.extract::<i64>().ok();
+        // Single write lock: resolve + bounds-check + Vec::remove atomically (no TOCTOU).
+        // On OOB, capture n and return Err after releasing the guard.
+        let result: Result<_, usize> = {
+            let mut guard = self.inner.write();
+            let n = guard.children.len();
+            let resolved: Option<usize> = match maybe_i64 {
+                Some(i) if i < 0 => {
+                    let normalized = n as i64 + i;
+                    if normalized < 0 || normalized as usize >= n { None }
+                    else { Some(normalized as usize) }
+                }
+                Some(i) if (i as usize) < n => Some(i as usize),
+                _ => None,
+            };
+            match resolved {
+                Some(idx) => Ok(guard.children.remove(idx)),
+                None => Err(n),
+            }
+        };
+        let (label, child) = result.map_err(|n| {
+            PyIndexError::new_err(format!(
+                "Quoted.remove_at: index {} out of range ({} children)",
+                orig_str, n
+            ))
+        })?;
+        // Python wrap-out happens after the guard is released.
+        let label_obj: Py<pyo3::PyAny> = match label {
+            None => py.None(),
+            Some(lbl) => lbl.into_pyobject(py)?.into_any().unbind(),
+        };
+        let child_obj = child.to_pyobject(py)?;
+        Ok(pyo3::types::PyTuple::new(py, [label_obj, child_obj])?.into_any().unbind())
+    }
+
+    #[pyo3(signature = (index, child, label = None))]
+    fn replace_at(
+        &self,
+        py: Python<'_>,
+        index: &Bound<'_, pyo3::PyAny>,
+        child: &Bound<'_, pyo3::PyAny>,
+        label: Option<Py<pyo3::PyAny>>,
+    ) -> pyo3::PyResult<()> {
+        // Validate child and label BEFORE taking the write lock.
+        let span_type = get_span_type(py)?;
+        let native_child = QuotedChild::extract_from_pyobject(py, child, &span_type)?;
+        let native_label = match label {
+            None => None,
+            Some(lbl) => {
+                if let Ok(native_lbl) = lbl.bind(py).extract::<QuotedLabel>() {
+                    Some(native_lbl)
+                } else {
+                    return Err(PyTypeError::new_err(format!(
+                        "Quoted.replace_at: label argument is not a Quoted_Label; got {}",
+                        lbl.bind(py).get_type().name()?
+                    )));
+                }
+            }
+        };
+        // Capture the caller's original string representation BEFORE normalization.
+        let orig_str = index.str()?.to_string_lossy().into_owned();
+        // Normalize via operator.index: raises TypeError for non-indexable inputs.
+        // All Python work must happen before any lock.
+        let raw_idx = py
+            .import(pyo3::intern!(py, "operator"))?
+            .getattr(pyo3::intern!(py, "index"))?
+            .call1((index,))?;
+        let maybe_i64: Option<i64> = raw_idx.extract::<i64>().ok();
+        // Single write lock: resolve + bounds-check + mem::replace atomically (no TOCTOU).
+        let old = {
+            let mut guard = self.inner.write();
+            let n = guard.children.len();
+            let resolved: Option<usize> = match maybe_i64 {
+                Some(i) if i < 0 => {
+                    let normalized = n as i64 + i;
+                    if normalized < 0 || normalized as usize >= n { None }
+                    else { Some(normalized as usize) }
+                }
+                Some(i) if (i as usize) < n => Some(i as usize),
+                _ => None,
+            };
+            let idx = match resolved {
+                Some(i) => i,
+                None => {
+                    return Err(PyIndexError::new_err(format!(
+                        "Quoted.replace_at: index {} out of range ({} children)",
+                        orig_str, n
+                    )));
+                }
+            };
+            std::mem::replace(&mut guard.children[idx], (native_label, native_child))
+        };
+        // Drop old entry outside the lock to avoid recursive lock acquisition
+        // if the child's drop chain re-enters Python.
+        drop(old);
+        Ok(())
+    }
+
+    fn clear(&self, _py: Python<'_>) -> pyo3::PyResult<()> {
+        let old = {
+            let mut guard = self.inner.write();
+            std::mem::take(&mut guard.children)
+        };
+        // Drop old entries outside the lock.
+        drop(old);
+        Ok(())
+    }
+
+    fn append_tail(&self, py: Python<'_>, child: &Bound<'_, pyo3::PyAny>) -> pyo3::PyResult<()> {
+        let span_type = get_span_type(py)?;
+        let native_child = QuotedChild::extract_from_pyobject(py, child, &span_type)?;
+        self.inner.write().children.push((Some(QuotedLabel::Tail), native_child));
+        Ok(())
+    }
+
+    fn extend_tail(&self, py: Python<'_>, children: &Bound<'_, pyo3::PyAny>) -> pyo3::PyResult<()> {
+        let span_type = get_span_type(py)?;
+        let iter = children.try_iter()?;
+        for child_result in iter {
+            let child = child_result?;
+            let native_child = QuotedChild::extract_from_pyobject(py, &child, &span_type)?;
+            let entry = (Some(QuotedLabel::Tail), native_child);
+            self.inner.write().children.push(entry);
+        }
+        Ok(())
+    }
+
+    fn children_tail(&self, py: Python<'_>) -> pyo3::PyResult<Py<pyo3::types::PyList>> {
+        // Lock scope: filter by label under the read guard, cloning only matching
+        // children (Arc bump or Span copy each); drop the guard before to_pyobject,
+        // which performs Python work that must not happen while a node lock is held.
+        let matching: Vec<_> = {
+            let guard = self.inner.read();
+            guard.children.iter()
+                .filter(|(lbl, _)| *lbl == Some(QuotedLabel::Tail))
+                .map(|(_, child)| child.clone())
+                .collect()
+        };
+        let result = pyo3::types::PyList::empty(py);
+        for child in &matching {
+            result.append(child.to_pyobject(py)?)?;
+        }
+        Ok(result.unbind())
+    }
+
+    fn child_tail(&self, py: Python<'_>) -> pyo3::PyResult<Py<pyo3::PyAny>> {
+        // Lock scope: count label matches and clone only the first under the guard;
+        // drop the guard before to_pyobject / exception raise (Python work).
+        let (count, first) = {
+            let guard = self.inner.read();
+            let mut count = 0usize;
+            let mut first = None;
+            for (lbl, child) in &guard.children {
+                if *lbl == Some(QuotedLabel::Tail) {
+                    count += 1;
+                    if count == 1 {
+                        first = Some(child.clone());
+                    }
+                }
+            }
+            (count, first)
+        };
+        if count != 1 {
+            return Err(PyValueError::new_err(format!(
+                "Expected one tail child but have {count}"
+            )));
+        }
+        first.expect("invariant: Quoted.child_tail: count==1 but first==None; logic error")
+            .to_pyobject(py)
+    }
+
+    fn maybe_tail(&self, py: Python<'_>) -> pyo3::PyResult<Option<Py<pyo3::PyAny>>> {
+        // Lock scope: count label matches and clone only the first under the guard;
+        // drop the guard before to_pyobject / exception raise (Python work).
+        let (count, first) = {
+            let guard = self.inner.read();
+            let mut count = 0usize;
+            let mut first = None;
+            for (lbl, child) in &guard.children {
+                if *lbl == Some(QuotedLabel::Tail) {
+                    count += 1;
+                    if count == 1 {
+                        first = Some(child.clone());
+                    }
+                }
+            }
+            (count, first)
+        };
+        if count > 1 {
+            return Err(PyValueError::new_err(
+                "Expected at most one tail child but have at least 2",
+            ));
+        }
+        match first {
+            None => Ok(None),
+            Some(child) => Ok(Some(child.to_pyobject(py)?)),
+        }
+    }
+
+    fn append_value(&self, py: Python<'_>, child: &Bound<'_, pyo3::PyAny>) -> pyo3::PyResult<()> {
+        let span_type = get_span_type(py)?;
+        let native_child = QuotedChild::extract_from_pyobject(py, child, &span_type)?;
+        self.inner.write().children.push((Some(QuotedLabel::Value), native_child));
+        Ok(())
+    }
+
+    fn extend_value(&self, py: Python<'_>, children: &Bound<'_, pyo3::PyAny>) -> pyo3::PyResult<()> {
+        let span_type = get_span_type(py)?;
+        let iter = children.try_iter()?;
+        for child_result in iter {
+            let child = child_result?;
+            let native_child = QuotedChild::extract_from_pyobject(py, &child, &span_type)?;
+            let entry = (Some(QuotedLabel::Value), native_child);
+            self.inner.write().children.push(entry);
+        }
+        Ok(())
+    }
+
+    fn children_value(&self, py: Python<'_>) -> pyo3::PyResult<Py<pyo3::types::PyList>> {
+        // Lock scope: filter by label under the read guard, cloning only matching
+        // children (Arc bump or Span copy each); drop the guard before to_pyobject,
+        // which performs Python work that must not happen while a node lock is held.
+        let matching: Vec<_> = {
+            let guard = self.inner.read();
+            guard.children.iter()
+                .filter(|(lbl, _)| *lbl == Some(QuotedLabel::Value))
+                .map(|(_, child)| child.clone())
+                .collect()
+        };
+        let result = pyo3::types::PyList::empty(py);
+        for child in &matching {
+            result.append(child.to_pyobject(py)?)?;
+        }
+        Ok(result.unbind())
+    }
+
+    fn child_value(&self, py: Python<'_>) -> pyo3::PyResult<Py<pyo3::PyAny>> {
+        // Lock scope: count label matches and clone only the first under the guard;
+        // drop the guard before to_pyobject / exception raise (Python work).
+        let (count, first) = {
+            let guard = self.inner.read();
+            let mut count = 0usize;
+            let mut first = None;
+            for (lbl, child) in &guard.children {
+                if *lbl == Some(QuotedLabel::Value) {
+                    count += 1;
+                    if count == 1 {
+                        first = Some(child.clone());
+                    }
+                }
+            }
+            (count, first)
+        };
+        if count != 1 {
+            return Err(PyValueError::new_err(format!(
+                "Expected one value child but have {count}"
+            )));
+        }
+        first.expect("invariant: Quoted.child_value: count==1 but first==None; logic error")
+            .to_pyobject(py)
+    }
+
+    fn maybe_value(&self, py: Python<'_>) -> pyo3::PyResult<Option<Py<pyo3::PyAny>>> {
+        // Lock scope: count label matches and clone only the first under the guard;
+        // drop the guard before to_pyobject / exception raise (Python work).
+        let (count, first) = {
+            let guard = self.inner.read();
+            let mut count = 0usize;
+            let mut first = None;
+            for (lbl, child) in &guard.children {
+                if *lbl == Some(QuotedLabel::Value) {
+                    count += 1;
+                    if count == 1 {
+                        first = Some(child.clone());
+                    }
+                }
+            }
+            (count, first)
+        };
+        if count > 1 {
+            return Err(PyValueError::new_err(
+                "Expected at most one value child but have at least 2",
+            ));
+        }
+        match first {
+            None => Ok(None),
+            Some(child) => Ok(Some(child.to_pyobject(py)?)),
+        }
+    }
+
+    fn tail(&self, py: Python<'_>) -> pyo3::PyResult<Option<Py<pyo3::PyAny>>> {
+        self.maybe_tail(py)
+    }
+
+    fn tail_text(&self) -> pyo3::PyResult<Option<String>> {
+        // Lock scope: count label matches and clone only the first under the guard;
+        // drop the guard before to_pyobject / exception raise (Python work).
+        let (count, first) = {
+            let guard = self.inner.read();
+            let mut count = 0usize;
+            let mut first = None;
+            for (lbl, child) in &guard.children {
+                if *lbl == Some(QuotedLabel::Tail) {
+                    count += 1;
+                    if count == 1 {
+                        first = Some(child.clone());
+                    }
+                }
+            }
+            (count, first)
+        };
+        if count > 1 {
+            return Err(PyValueError::new_err(
+                "Expected at most one tail child but have at least 2",
+            ));
+        }
+        match first {
+            None => Ok(None),
+            Some(QuotedChild::Span(s)) => s
+                .text_or_message()
+                .map(|t| Some(t.to_owned()))
+                .map_err(PyValueError::new_err),
+        }
+    }
+
+    fn value(&self, py: Python<'_>) -> pyo3::PyResult<Py<pyo3::PyAny>> {
+        self.child_value(py)
+    }
+
+    fn value_text(&self) -> pyo3::PyResult<String> {
+        // Lock scope: count label matches and clone only the first under the guard;
+        // drop the guard before to_pyobject / exception raise (Python work).
+        let (count, first) = {
+            let guard = self.inner.read();
+            let mut count = 0usize;
+            let mut first = None;
+            for (lbl, child) in &guard.children {
+                if *lbl == Some(QuotedLabel::Value) {
+                    count += 1;
+                    if count == 1 {
+                        first = Some(child.clone());
+                    }
+                }
+            }
+            (count, first)
+        };
+        if count != 1 {
+            return Err(PyValueError::new_err(format!(
+                "Expected one value child but have {count}"
+            )));
+        }
+        match first
+            .expect("invariant: Quoted.value_text: count==1 but first==None; logic error")
+        {
+            QuotedChild::Span(s) => s
+                .text_or_message()
+                .map(str::to_owned)
+                .map_err(PyValueError::new_err),
+        }
+    }
+
+    fn text(&self) -> pyo3::PyResult<String> {
+        // Clone the span under the read guard, then release it before raising.
+        let span = self.inner.read().span.clone();
+        span.text_or_message()
+            .map(str::to_owned)
+            .map_err(PyValueError::new_err)
+    }
+
+    fn __eq__(&self, py: Python<'_>, other: &Bound<'_, pyo3::PyAny>) -> pyo3::PyResult<Py<pyo3::PyAny>> {
+        if !other.is_instance_of::<PyQuoted>() {
+            return Ok(py.NotImplemented());
+        }
+        let other_handle: pyo3::PyRef<PyQuoted> = other.extract()?;
+        // Delegate to Shared<T>::PartialEq which applies the ptr_eq short-circuit
+        // (avoids same-lock re-entry on `x == x`) then deep structural comparison.
+        let eq = self.inner == other_handle.inner;
+        Ok(eq.into_pyobject(py)?.to_owned().unbind().into_any())
+    }
+
+    fn __hash__(&self) -> pyo3::PyResult<isize> {
+        Err(PyTypeError::new_err("unhashable type: 'Quoted'"))
+    }
+
+    fn __repr__(&self, _py: Python<'_>) -> String {
+        let guard = self.inner.read();
+        let span_repr = format!("Span(start={}, end={})", guard.span.start(), guard.span.end());
+        let children_len = guard.children.len();
+        format!(
+            "Quoted(span={span_repr}, children=[<{children_len} child(ren)>])"
+        )
+    }
+
+}
+
+// ───────────────────────────────────────────────────────────────────────────
+// MixedOptLabel
+// ───────────────────────────────────────────────────────────────────────────
+
+/// Label discriminant enum for children of this node type.
+///
+/// Python-visible name is `MixedOpt_Label` (preserved for compatibility).
+/// Rust consumers use the CamelCase `MixedOptLabel` name.
+#[cfg(feature = "python")]
+#[pyclass(frozen, from_py_object, name = "MixedOpt_Label")]
+#[derive(Clone, Debug, PartialEq, Eq, Hash)]
+pub enum MixedOptLabel {
+    #[pyo3(name = "KEY")]
+    Key,
+    #[pyo3(name = "NODE")]
+    Node,
+}
+
+#[cfg(not(feature = "python"))]
+#[derive(Clone, Debug, PartialEq, Eq, Hash)]
+pub enum MixedOptLabel {
+    Key,
+    Node,
+}
+
+#[cfg(feature = "python")]
+#[pymethods]
+impl MixedOptLabel {
+    fn __repr__(&self) -> &'static str {
+        match self {
+            MixedOptLabel::Key => "MixedOpt.Label.KEY",
+            MixedOptLabel::Node => "MixedOpt.Label.NODE",
+        }
+    }
+
+    #[getter]
+    fn _fltk_canonical_name(&self) -> &'static str {
+        self.__repr__()
+    }
+
+    fn __eq__(&self, py: Python<'_>, other: &Bound<'_, pyo3::PyAny>) -> pyo3::PyResult<Py<pyo3::PyAny>> {
+        if let Ok(other_kind) = other.extract::<MixedOptLabel>() {
+            return Ok((self == &other_kind).into_pyobject(py)?.to_owned().unbind().into_any());
+        }
+        if let Ok(cn) = other.getattr(pyo3::intern!(py, "_fltk_canonical_name")) {
+            if let Ok(cn_str) = cn.extract::<&str>() {
+                return Ok((self.__repr__() == cn_str).into_pyobject(py)?.to_owned().unbind().into_any());
+            }
+        }
+        Ok(py.NotImplemented())
+    }
+
+    fn __hash__(&self, py: Python<'_>) -> pyo3::PyResult<isize> {
+        pyo3::types::PyAnyMethods::hash(
+            pyo3::types::PyString::new(py, self.__repr__()).as_any()
+        )
+    }
+}
+
+/// Child value enum for `MixedOpt` nodes.
+///
+/// Node-typed variants hold `Shared<T>` (`Arc<RwLock<T>>`); `Clone` is shallow
+/// (increments the reference count, does not copy the node).
+#[derive(Clone, Debug)]
+pub enum MixedOptChild {
+    Span(Span),
+    Num(Shared<Num>),
+}
+
+impl PartialEq for MixedOptChild {
+    fn eq(&self, other: &Self) -> bool {
+        match (self, other) {
+            (MixedOptChild::Span(a), MixedOptChild::Span(b)) => a == b,
+            (MixedOptChild::Num(a), MixedOptChild::Num(b)) => a == b,
+            _ => false,
+        }
+    }
+}
+
+impl MixedOptChild {
+    fn into_drop_item(self) -> Option<DropWorklistItem> {
+        match self {
+            Self::Span(_) => None,
+            Self::Num(s) => Some(DropWorklistItem::Num(s)),
+        }
+    }
+
+    /// Shallow structural equality for one child pair.
+    /// Span pair: compare directly. Node pair: ptr_eq short-circuit (skip enqueue)
+    /// or enqueue for the worklist. Variant mismatch: return false.
+    fn eq_shallow_enqueue(&self, other: &Self, worklist: &mut Vec<EqWorklistItem>) -> bool {
+        match (self, other) {
+            (Self::Span(a), Self::Span(b)) => a == b,
+            (Self::Num(a), Self::Num(b)) => {
+                if !a.ptr_eq(b) {
+                    worklist.push(EqWorklistItem::Num(a.clone(), b.clone()));
+                }
+                true
+            }
+            _ => false,
+        }
+    }
+}
+
+#[cfg(feature = "python")]
+impl MixedOptChild {
+    fn to_pyobject(&self, py: Python<'_>) -> pyo3::PyResult<Py<pyo3::PyAny>> {
+        match self {
+            Self::Span(s) => {
+                span_to_pyobject(py, s)
+            }
+            Self::Num(shared) => {
+                let addr = shared.arc_ptr();
+                registry::get_or_insert_with(py, addr, || {
+                    let handle = PyNum { inner: shared.clone() };
+                    Py::new(py, handle).map(|p| p.into_any())
+                })
+            }
+        }
+    }
+
+    fn extract_from_pyobject(
+        py: Python<'_>,
+        obj: &Bound<'_, pyo3::PyAny>,
+        span_type: &Bound<'_, pyo3::types::PyType>,
+    ) -> pyo3::PyResult<Self> {
+        // Try Span (terminal child) first — handles cross-cdylib span instances.
+        if obj.is_instance_of::<Span>() || obj.is_instance(span_type)? {
+            return extract_span(py, obj).map(Self::Span);
+        }
+        if obj.is_instance_of::<PyNum>() {
+            let handle: pyo3::PyRef<PyNum> = obj.extract()?;
+            let shared = handle.inner.clone();
+            let addr = shared.arc_ptr();
+            // Hand-in: register this Python handle as canonical for its Shared.
+            drop(handle); // release the PyRef before calling Python
+            // Propagate registry errors: a swallowed Err here would leave the
+            // handle unregistered, causing the next wrap-out to mint a different
+            // object and silently break is-stability.
+            registry::register_if_absent(py, addr, obj)?;
+            return Ok(Self::Num(shared));
+        }
+        Err(pyo3::exceptions::PyTypeError::new_err(format!(
+            "MixedOpt: unsupported child type {}",
+            obj.get_type().name()?
+        )))
+    }
+}
+
+// ───────────────────────────────────────────────────────────────────────────
+// MixedOpt
+// ───────────────────────────────────────────────────────────────────────────
+
+/// CST data struct for `MixedOpt`. See [`fltk_cst_core::Shared`] for clone/equality/reference semantics.
+///
+/// `Debug` output is non-recursive: prints span + child count only. Traverse via `children()` to inspect subtrees.
+/// Teardown is iterative: bounded stack at any depth.
+/// Equality is iterative: bounded stack at any depth.
+#[derive(Clone)]
+pub struct MixedOpt {
+    // Not pub: use span() / children() / push_child() — the stable accessor API.
+    // Direct field access bypasses any future validation logic on setters.
+    span: Span,
+    children: Vec<(Option<MixedOptLabel>, MixedOptChild)>,
+}
+
+// Manual Debug: prints span + child COUNT, never recursing into children.
+// A derived Debug would recurse through Shared<T> children with no depth
+// bound; tree depth is attacker-controlled for parsers over untrusted
+// input, so `{:?}` on a deep tree would abort the process (stack
+// exhaustion, uncatchable). Mirrors the Python __repr__'s content.
+impl fmt::Debug for MixedOpt {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("MixedOpt")
+            .field("span", &self.span)
+            .field("children", &format_args!("<{} child(ren)>", self.children.len()))
+            .finish()
+    }
+}
+
+// Iterative Drop: derived drop glue would recurse through Shared children
+// one frame set per tree level (attacker-controlled depth → stack
+// exhaustion, uncatchable abort). Drains the subtree via a worklist instead.
+impl Drop for MixedOpt {
+    fn drop(&mut self) {
+        if self.children.is_empty() {
+            return; // also the recursion terminator for nodes drained by the worklist
+        }
+        // Worklist is allocated lazily: Vec::new() does not heap-allocate until
+        // the first push.  drain_into pushes only when it steals (count == 1).
+        // In the common backtracking case (shared/memoized children) no steal
+        // occurs and no allocation happens.  Owned deep chains allocate once.
+        let mut worklist: Vec<DropWorklistItem> = Vec::new();
+        for (_, child) in self.children.drain(..) {
+            if let Some(item) = child.into_drop_item() {
+                item.drain_into(&mut worklist);
+            }
+        }
+        while let Some(item) = worklist.pop() {
+            item.drain_into(&mut worklist);
+        }
+    }
+}
+
+// Iterative PartialEq: the recursive version would recurse through Shared children
+// one frame set per tree level (attacker-controlled depth → stack
+// exhaustion, uncatchable abort). Uses an explicit worklist of node pairs.
+impl PartialEq for MixedOpt {
+    fn eq(&self, other: &Self) -> bool {
+        if self.span != other.span || self.children.len() != other.children.len() {
+            return false;
+        }
+        // Worklist allocated lazily (Vec::new does not heap-allocate until
+        // first push); shallow trees and all-ptr_eq children never allocate.
+        let mut worklist: Vec<EqWorklistItem> = Vec::new();
+        for ((la, ca), (lb, cb)) in self.children.iter().zip(other.children.iter()) {
+            if la != lb || !ca.eq_shallow_enqueue(cb, &mut worklist) {
+                return false;
+            }
+        }
+        while let Some(item) = worklist.pop() {
+            if !item.compare(&mut worklist) {
+                return false;
+            }
+        }
+        true
+    }
+}
+
+impl MixedOpt {
+    /// Construct a node with the given span and no children. GIL-free.
+    pub fn new(span: Span) -> Self {
+        MixedOpt {
+            span,
+            children: Vec::new(),
+        }
+    }
+
+    /// Return the [`NodeKind`] discriminant for this node type.
+    pub fn kind(&self) -> NodeKind {
+        NodeKind::MixedOpt
+    }
+
+    /// Return a reference to the stored [`Span`].
+    pub fn span(&self) -> &Span {
+        &self.span
+    }
+
+    /// Replace the node's span.
+    pub fn set_span(&mut self, span: Span) {
+        self.span = span;
+    }
+
+    /// Return a slice of all children (unfiltered).
+    ///
+    /// Each entry is `(label, child)`. Use the per-label accessors
+    /// (`children_<lbl>`, `child_<lbl>`, `maybe_<lbl>`) for type-safe access.
+    pub fn children(&self) -> &[(Option<MixedOptLabel>, MixedOptChild)] {
+        self.children.as_slice()
+    }
+
+    /// Push a child onto the children `Vec`.
+    ///
+    /// No type-checking is performed: any child variant may be stored under
+    /// any label. Per-label typed mutators (`append_<lbl>`, `extend_<lbl>`)
+    /// provide type-constrained alternatives.
+    pub fn push_child(&mut self, label: Option<MixedOptLabel>, child: MixedOptChild) {
+        self.children.push((label, child));
+    }
+
+    /// Return the single child (any label), or `Err` if there is not exactly one.
+    ///
+    /// Mirrors the Python `child()` method: count violation → `CstError::ChildCount`.
+    pub fn child(&self) -> Result<&(Option<MixedOptLabel>, MixedOptChild), CstError> {
+        match self.children.as_slice() {
+            [single] => Ok(single),
+            slice => Err(CstError::ChildCount {
+                label: "<any>",
+                expected: "1",
+                found: slice.len(),
+            }),
+        }
+    }
+
+    /// Copy all children from `other` into `self`, sharing the `Shared<T>` arcs.
+    ///
+    /// Children are appended (Arc reference-count bumps, not deep copies),
+    /// matching the Python backend's reference-copy behavior. Labels are preserved.
+    ///
+    /// The borrow checker prevents `self.extend_children(self)` at the data-struct
+    /// level (`&mut` + `&` of the same value don't coexist). For self-extend from
+    /// Python, the handle pymethod handles it via snapshotting.
+    pub fn extend_children(&mut self, other: &Self) {
+        self.children.extend(other.children.iter().cloned());
+    }
+
+    /// Return an iterator over `Span` children labelled `key`.
+    ///
+    /// Off-type variants stored under the `key` label are silently skipped.
+    /// Use `children()` (the untyped slice) for a lossless view.
+    pub fn children_key(&self) -> impl Iterator<Item = &Span> + '_ {
+        self.children.iter()
+            .filter(|(lbl, _)| *lbl == Some(MixedOptLabel::Key))
+            .filter_map(|(_, child)| match child {
+                MixedOptChild::Span(s) => Some(s),
+                _ => None,
+            })
+    }
+
+    /// Return the single child labelled `key`, or `Err` if not exactly one.
+    ///
+    /// Count is checked by label match first (`CstError::ChildCount`); if the
+    /// count is valid and the surviving child has the wrong variant type,
+    /// `CstError::UnexpectedChildType` is returned (single-typed labels only).
+    pub fn child_key(&self) -> Result<&Span, CstError> {
+        let mut it = self.children.iter()
+            .filter(|(lbl, _)| *lbl == Some(MixedOptLabel::Key));
+        match (it.next(), it.next()) {
+            (Some((_, child)), None) => match child {
+                MixedOptChild::Span(s) => Ok(s),
+                _ => Err(CstError::UnexpectedChildType { label: "key" }),
+            },
+            _ => Err(CstError::ChildCount {
+                label: "key",
+                expected: "1",
+                found: self.children.iter()
+                    .filter(|(lbl, _)| *lbl == Some(MixedOptLabel::Key))
+                    .count(),
+            }),
+        }
+    }
+
+    /// Return the optional child labelled `key`, or `Err` if more than one.
+    ///
+    /// Returns `Ok(None)` for zero, `Ok(Some(...))` for one,
+    /// `Err(CstError::ChildCount)` for two or more.
+    pub fn maybe_key(&self) -> Result<Option<&Span>, CstError> {
+        let mut it = self.children.iter()
+            .filter(|(lbl, _)| *lbl == Some(MixedOptLabel::Key));
+        match (it.next(), it.next()) {
+            (None, _) => Ok(None),
+            (Some((_, child)), None) => match child {
+                MixedOptChild::Span(s) => Ok(Some(s)),
+                _ => Err(CstError::UnexpectedChildType { label: "key" }),
+            },
+            _ => Err(CstError::ChildCount {
+                label: "key",
+                expected: "0 or 1",
+                found: self.children.iter()
+                    .filter(|(lbl, _)| *lbl == Some(MixedOptLabel::Key))
+                    .count(),
+            }),
+        }
+    }
+
+    /// Append a `Span` child with label `key`.
+    pub fn append_key(&mut self, span: Span) {
+        self.children.push((Some(MixedOptLabel::Key), MixedOptChild::Span(span)));
+    }
+
+    /// Append multiple `Span` children with label `key`.
+    pub fn extend_key(&mut self, spans: impl IntoIterator<Item = Span>) {
+        self.children.extend(spans.into_iter().map(|s| (Some(MixedOptLabel::Key), MixedOptChild::Span(s))));
+    }
+
+    /// Return an iterator over `Shared<Num>` children labelled `node`.
+    ///
+    /// Off-type variants stored under the `node` label are silently skipped.
+    /// Use `children()` (the untyped slice) for a lossless view.
+    pub fn children_node(&self) -> impl Iterator<Item = &Shared<Num>> + '_ {
+        self.children.iter()
+            .filter(|(lbl, _)| *lbl == Some(MixedOptLabel::Node))
+            .filter_map(|(_, child)| match child {
+                MixedOptChild::Num(s) => Some(s),
+                _ => None,
+            })
+    }
+
+    /// Return the single child labelled `node`, or `Err` if not exactly one.
+    ///
+    /// Count is checked by label match first (`CstError::ChildCount`); if the
+    /// count is valid and the surviving child has the wrong variant type,
+    /// `CstError::UnexpectedChildType` is returned (single-typed labels only).
+    pub fn child_node(&self) -> Result<&Shared<Num>, CstError> {
+        let mut it = self.children.iter()
+            .filter(|(lbl, _)| *lbl == Some(MixedOptLabel::Node));
+        match (it.next(), it.next()) {
+            (Some((_, child)), None) => match child {
+                MixedOptChild::Num(s) => Ok(s),
+                _ => Err(CstError::UnexpectedChildType { label: "node" }),
+            },
+            _ => Err(CstError::ChildCount {
+                label: "node",
+                expected: "1",
+                found: self.children.iter()
+                    .filter(|(lbl, _)| *lbl == Some(MixedOptLabel::Node))
+                    .count(),
+            }),
+        }
+    }
+
+    /// Return the optional child labelled `node`, or `Err` if more than one.
+    ///
+    /// Returns `Ok(None)` for zero, `Ok(Some(...))` for one,
+    /// `Err(CstError::ChildCount)` for two or more.
+    pub fn maybe_node(&self) -> Result<Option<&Shared<Num>>, CstError> {
+        let mut it = self.children.iter()
+            .filter(|(lbl, _)| *lbl == Some(MixedOptLabel::Node));
+        match (it.next(), it.next()) {
+            (None, _) => Ok(None),
+            (Some((_, child)), None) => match child {
+                MixedOptChild::Num(s) => Ok(Some(s)),
+                _ => Err(CstError::UnexpectedChildType { label: "node" }),
+            },
+            _ => Err(CstError::ChildCount {
+                label: "node",
+                expected: "0 or 1",
+                found: self.children.iter()
+                    .filter(|(lbl, _)| *lbl == Some(MixedOptLabel::Node))
+                    .count(),
+            }),
+        }
+    }
+
+    /// Append a child with label `node`, accepting `Num` or `Shared<Num>`.
+    pub fn append_node(&mut self, child: impl Into<Shared<Num>>) {
+        self.children.push((Some(MixedOptLabel::Node), MixedOptChild::Num(child.into())));
+    }
+
+    /// Append multiple children with label `node`.
+    pub fn extend_node(&mut self, children: impl IntoIterator<Item = impl Into<Shared<Num>>>) {
+        self.children.extend(children.into_iter().map(|c| (Some(MixedOptLabel::Node), MixedOptChild::Num(c.into()))));
+    }
+
+    /// Return the optional child labelled `key`.
+    ///
+    /// Panics if more than one is present; use `maybe_key` for the checked form.
+    pub fn key(&self) -> Option<&Span> {
+        self.maybe_key()
+            .unwrap_or_else(|e| panic!("MixedOpt.key: {e}"))
+    }
+
+    /// Return the source text of the optional child labelled `key`.
+    ///
+    /// `None` when the child is absent; panics if more than one is present or the
+    /// span carries no usable source.
+    pub fn key_text(&self) -> Option<&str> {
+        Some(
+            self.maybe_key()
+                .unwrap_or_else(|e| panic!("MixedOpt.key_text: {e}"))?
+                .text_or_message()
+                .unwrap_or_else(|e| panic!("MixedOpt.key_text: {e}")),
+        )
+    }
+
+    /// Return the child labelled `node`.
+    ///
+    /// Panics unless exactly one is present; use `child_node` for the checked form.
+    pub fn node(&self) -> &Shared<Num> {
+        self.child_node()
+            .unwrap_or_else(|e| panic!("MixedOpt.node: {e}"))
+    }
+
+    /// Insert a child at `index` (Vec::insert semantics: panics if index > len).
+    ///
+    /// Python-facing clamping is in the `insert` pymethod; native callers must
+    /// bounds-check. Unlike `list.insert`, Vec::insert panics on out-of-bounds.
+    pub fn insert_child(&mut self, index: usize, label: Option<MixedOptLabel>, child: MixedOptChild) {
+        self.children.insert(index, (label, child));
+    }
+
+    /// Remove and return the child at `index` (Vec::remove semantics: panics if out of range).
+    ///
+    /// Panics on out-of-range. Python-facing IndexError is in the `remove_at` pymethod.
+    pub fn remove_child(&mut self, index: usize) -> (Option<MixedOptLabel>, MixedOptChild) {
+        self.children.remove(index)
+    }
+
+    /// Replace the child at `index`, returning the old entry (panics if out of range).
+    ///
+    /// Panics on out-of-range. Python-facing IndexError is in the `replace_at` pymethod.
+    pub fn replace_child(
+        &mut self, index: usize, label: Option<MixedOptLabel>, child: MixedOptChild,
+    ) -> (Option<MixedOptLabel>, MixedOptChild) {
+        std::mem::replace(&mut self.children[index], (label, child))
+    }
+
+    /// Remove all children.
+    pub fn clear_children(&mut self) {
+        self.children.clear();
+    }
+}
+
+#[cfg(feature = "python")]
+#[pyclass(frozen, weakref, name = "MixedOpt")]
+pub struct PyMixedOpt {
+    // Not pub: all external access goes through shared() or to_py_canonical().
+    // A pub field would let mixed-app Rust code construct an unregistered handle
+    // (Py::new(py, PyFoo { inner: s.clone() })), silently breaking is-stability.
+    inner: Shared<MixedOpt>,
+}
+
+#[cfg(feature = "python")]
+impl PyMixedOpt {
+    /// Return a reference to the inner `Shared<MixedOpt>`.
+    pub fn shared(&self) -> &Shared<MixedOpt> {
+        &self.inner
+    }
+
+    /// Wrap a `Shared<MixedOpt>` into a canonical Python handle,
+    /// looking up the registry first so the same handle is returned
+    /// for the same `Shared` allocation.
+    pub fn to_py_canonical(py: Python<'_>, s: &Shared<MixedOpt>) -> pyo3::PyResult<Py<PyMixedOpt>> {
+        let addr = s.arc_ptr();
+        let obj = registry::get_or_insert_with(py, addr, || {
+            let handle = PyMixedOpt { inner: s.clone() };
+            Py::new(py, handle).map(|p| p.into_any())
+        })?;
+        obj.bind(py).cast::<PyMixedOpt>().map(|b| b.clone().unbind()).map_err(|e| e.into())
+    }
+}
+
+#[cfg(feature = "python")]
+#[pymethods]
+impl PyMixedOpt {
+    #[new]
+    #[pyo3(signature = (*, span = None))]
+    fn new(py: Python<'_>, span: Option<&Bound<'_, pyo3::PyAny>>) -> pyo3::PyResult<Py<PyMixedOpt>> {
+        let native_span = match span {
+            Some(s) => extract_span(py, s)?,
+            None => Span::unknown(),
+        };
+        let data = MixedOpt {
+            span: native_span,
+            children: Vec::new(),
+        };
+        let shared = Shared::new(data);
+        let addr = shared.arc_ptr();
+        let handle = PyMixedOpt { inner: shared };
+        let py_obj = Py::new(py, handle)?;
+        // Register as canonical — fresh Shared, no alias can exist yet.
+        registry::force_register(py, addr, py_obj.bind(py))?;
+        Ok(py_obj)
+    }
+
+    #[getter]
+    fn span(&self, py: Python<'_>) -> pyo3::PyResult<Py<pyo3::PyAny>> {
+        // Snapshot the span under the read lock, then drop the guard before
+        // calling span_to_pyobject — which performs Python work (Py::new or
+        // Python method calls) that must not happen while a node lock is held.
+        let span = self.inner.read().span.clone();
+        span_to_pyobject(py, &span)
+    }
+
+    #[setter]
+    fn set_span(&self, py: Python<'_>, value: &Bound<'_, pyo3::PyAny>) -> pyo3::PyResult<()> {
+        self.inner.write().span = extract_span(py, value)?;
+        Ok(())
+    }
+
+    #[getter]
+    fn kind(&self) -> NodeKind {
+        NodeKind::MixedOpt
+    }
+
+    #[classattr]
+    #[allow(non_snake_case)]
+    fn Label(py: Python<'_>) -> pyo3::PyResult<Py<pyo3::PyAny>> {
+        Ok(<MixedOptLabel as pyo3::PyTypeInfo>::type_object(py).into_any().unbind())
+    }
+
+    #[getter]
+    fn children(&self, py: Python<'_>) -> pyo3::PyResult<Py<pyo3::types::PyList>> {
+        // Snapshot the children vec (Arc clones for node children — O(n) refcount bumps).
+        // Lock scope: acquire read, snapshot, release before touching Python.
+        let snapshot: Vec<_> = {
+            let guard = self.inner.read();
+            guard.children.clone()
+        };
+        let result = pyo3::types::PyList::empty(py);
+        for (label, child) in &snapshot {
+            let label_obj: Py<pyo3::PyAny> = match label {
+                None => py.None(),
+                Some(lbl) => lbl.clone().into_pyobject(py)?.into_any().unbind(),
+            };
+            let child_obj = child.to_pyobject(py)?;
+            let tup = pyo3::types::PyTuple::new(py, [label_obj, child_obj])?;
+            result.append(tup)?;
+        }
+        Ok(result.unbind())
+    }
+
+    #[pyo3(signature = (child, label = None))]
+    fn append(
+        &self, py: Python<'_>, child: &Bound<'_, pyo3::PyAny>, label: Option<Py<pyo3::PyAny>>,
+    ) -> pyo3::PyResult<()> {
+        let span_type = get_span_type(py)?;
+        let native_child = MixedOptChild::extract_from_pyobject(py, child, &span_type)?;
+        let native_label = match label {
+            None => None,
+            Some(lbl) => {
+                if let Ok(native_lbl) = lbl.bind(py).extract::<MixedOptLabel>() {
+                    Some(native_lbl)
+                } else {
+                    return Err(PyTypeError::new_err(format!(
+                        "MixedOpt.append: label argument is not a MixedOpt_Label; got {}",
+                        lbl.bind(py).get_type().name()?
+                    )));
+                }
+            }
+        };
+        self.inner.write().children.push((native_label, native_child));
+        Ok(())
+    }
+
+    #[pyo3(signature = (children, label = None))]
+    fn extend(
+        &self,
+        py: Python<'_>,
+        children: &Bound<'_, pyo3::PyAny>,
+        label: Option<Py<pyo3::PyAny>>,
+    ) -> pyo3::PyResult<()> {
+        let span_type = get_span_type(py)?;
+        let native_label = match label {
+            None => None,
+            Some(lbl) => {
+                if let Ok(native_lbl) = lbl.bind(py).extract::<MixedOptLabel>() {
+                    Some(native_lbl)
+                } else {
+                    return Err(PyTypeError::new_err(format!(
+                        "MixedOpt.extend: label argument is not a MixedOpt_Label; got {}",
+                        lbl.bind(py).get_type().name()?
+                    )));
+                }
+            }
+        };
+        let iter = children.try_iter()?;
+        for child_result in iter {
+            let child = child_result?;
+            let native_child = MixedOptChild::extract_from_pyobject(py, &child, &span_type)?;
+            self.inner.write().children.push((native_label.clone(), native_child));
+        }
+        Ok(())
+    }
+
+    fn extend_children(&self, _py: Python<'_>, other: &PyMixedOpt) -> pyo3::PyResult<()> {
+        // Snapshot other's children first: the read guard is dropped at the end of
+        // this block, so the write lock below is safe even when self and other are
+        // the same node (self-extend). No ptr_eq call is needed here — the snapshot
+        // approach handles self-extend structurally.
+        // Lock scope: hold read only long enough to clone the Arc-based children vec.
+        let snapshot: Vec<_> = {
+            let guard = other.inner.read();
+            guard.children.clone()
+        };
+        // Node-typed children are pushed directly as Shared<T> values.  Registry
+        // consistency is maintained lazily: wrap-out registers on first Python read
+        // via get_or_insert_with (registry.rs).  Eagerly registering here would be
+        // a no-op — the WeakValueDictionary would evict handles held by nothing.
+        self.inner.write().children.extend(snapshot);
+        Ok(())
+    }
+
+    fn child(&self, py: Python<'_>) -> pyo3::PyResult<Py<pyo3::PyAny>> {
+        // Lock scope: read len and clone at most the single entry under the guard;
+        // drop the guard before any Python work (object conversion, exception raise).
+        let (n, entry) = {
+            let guard = self.inner.read();
+            let n = guard.children.len();
+            let entry = if n == 1 { Some(guard.children[0].clone()) } else { None };
+            (n, entry)
+        };
+        let Some((label, child)) = entry else {
+            return Err(PyValueError::new_err(format!(
+                "Expected one child but have {n}"
+            )));
+        };
+        let label_obj: Py<pyo3::PyAny> = match label {
+            None => py.None(),
+            Some(lbl) => lbl.into_pyobject(py)?.into_any().unbind(),
+        };
+        let child_obj = child.to_pyobject(py)?;
+        Ok(pyo3::types::PyTuple::new(py, [label_obj, child_obj])?.into_any().unbind())
+    }
+
+    #[pyo3(signature = (index, child, label = None))]
+    fn insert(
+        &self,
+        py: Python<'_>,
+        index: &Bound<'_, pyo3::PyAny>,
+        child: &Bound<'_, pyo3::PyAny>,
+        label: Option<Py<pyo3::PyAny>>,
+    ) -> pyo3::PyResult<()> {
+        // Validate child and label BEFORE taking the write lock.
+        let span_type = get_span_type(py)?;
+        let native_child = MixedOptChild::extract_from_pyobject(py, child, &span_type)?;
+        let native_label = match label {
+            None => None,
+            Some(lbl) => {
+                if let Ok(native_lbl) = lbl.bind(py).extract::<MixedOptLabel>() {
+                    Some(native_lbl)
+                } else {
+                    return Err(PyTypeError::new_err(format!(
+                        "MixedOpt.insert: label argument is not a MixedOpt_Label; got {}",
+                        lbl.bind(py).get_type().name()?
+                    )));
+                }
+            }
+        };
+        // Index normalization via operator.index (PyNumber_Index semantics).
+        // This raises TypeError (not AttributeError) for non-indexable inputs, matching Python's
+        // operator.index contract. Must be done BEFORE taking any lock.
+        // Overflow by sign: positive overflow clamps to len; negative overflow clamps to 0.
+        let raw_idx = py
+            .import(pyo3::intern!(py, "operator"))?
+            .getattr(pyo3::intern!(py, "index"))?
+            .call1((index,))?;
+        // Fast path for the common exact-int case; fall back to sign-based Python call for beyond-i64.
+        let (is_negative_big, raw_i64) = if let Ok(i) = raw_idx.extract::<i64>() {
+            (false, Some(i))
+        } else {
+            // Beyond i64: use Python __lt__ to determine sign.  The lt call is still outside
+            // any lock, so lock discipline is maintained.
+            let neg = raw_idx.lt(0i64)?;
+            (neg, None)
+        };
+        // Now take a single write lock for the entire len-read + clamp + insert sequence.
+        let mut guard = self.inner.write();
+        let n = guard.children.len();
+        let clamped: usize = match raw_i64 {
+            Some(i) if i < 0 => {
+                let normalized = n as i64 + i;
+                if normalized < 0 { 0 } else { normalized as usize }
+            }
+            Some(i) => {
+                let u = i as usize;
+                if u > n { n } else { u }
+            }
+            None => if is_negative_big { 0 } else { n },
+        };
+        guard.children.insert(clamped, (native_label, native_child));
+        Ok(())
+    }
+
+    fn remove_at(&self, py: Python<'_>, index: &Bound<'_, pyo3::PyAny>) -> pyo3::PyResult<Py<pyo3::PyAny>> {
+        // Capture the caller's original string representation BEFORE normalization,
+        // so error messages show the original value (e.g. `True` not `1`).
+        let orig_str = index.str()?.to_string_lossy().into_owned();
+        // Normalize via operator.index: raises TypeError (not AttributeError) for
+        // non-indexable inputs, matching Python's operator.index contract.
+        // All Python work must happen before any lock.
+        let raw_idx = py
+            .import(pyo3::intern!(py, "operator"))?
+            .getattr(pyo3::intern!(py, "index"))?
+            .call1((index,))?;
+        // Fast path: extract i64. Beyond i64 is always OOB for real trees.
+        let maybe_i64: Option<i64> = raw_idx.extract::<i64>().ok();
+        // Single write lock: resolve + bounds-check + Vec::remove atomically (no TOCTOU).
+        // On OOB, capture n and return Err after releasing the guard.
+        let result: Result<_, usize> = {
+            let mut guard = self.inner.write();
+            let n = guard.children.len();
+            let resolved: Option<usize> = match maybe_i64 {
+                Some(i) if i < 0 => {
+                    let normalized = n as i64 + i;
+                    if normalized < 0 || normalized as usize >= n { None }
+                    else { Some(normalized as usize) }
+                }
+                Some(i) if (i as usize) < n => Some(i as usize),
+                _ => None,
+            };
+            match resolved {
+                Some(idx) => Ok(guard.children.remove(idx)),
+                None => Err(n),
+            }
+        };
+        let (label, child) = result.map_err(|n| {
+            PyIndexError::new_err(format!(
+                "MixedOpt.remove_at: index {} out of range ({} children)",
+                orig_str, n
+            ))
+        })?;
+        // Python wrap-out happens after the guard is released.
+        let label_obj: Py<pyo3::PyAny> = match label {
+            None => py.None(),
+            Some(lbl) => lbl.into_pyobject(py)?.into_any().unbind(),
+        };
+        let child_obj = child.to_pyobject(py)?;
+        Ok(pyo3::types::PyTuple::new(py, [label_obj, child_obj])?.into_any().unbind())
+    }
+
+    #[pyo3(signature = (index, child, label = None))]
+    fn replace_at(
+        &self,
+        py: Python<'_>,
+        index: &Bound<'_, pyo3::PyAny>,
+        child: &Bound<'_, pyo3::PyAny>,
+        label: Option<Py<pyo3::PyAny>>,
+    ) -> pyo3::PyResult<()> {
+        // Validate child and label BEFORE taking the write lock.
+        let span_type = get_span_type(py)?;
+        let native_child = MixedOptChild::extract_from_pyobject(py, child, &span_type)?;
+        let native_label = match label {
+            None => None,
+            Some(lbl) => {
+                if let Ok(native_lbl) = lbl.bind(py).extract::<MixedOptLabel>() {
+                    Some(native_lbl)
+                } else {
+                    return Err(PyTypeError::new_err(format!(
+                        "MixedOpt.replace_at: label argument is not a MixedOpt_Label; got {}",
+                        lbl.bind(py).get_type().name()?
+                    )));
+                }
+            }
+        };
+        // Capture the caller's original string representation BEFORE normalization.
+        let orig_str = index.str()?.to_string_lossy().into_owned();
+        // Normalize via operator.index: raises TypeError for non-indexable inputs.
+        // All Python work must happen before any lock.
+        let raw_idx = py
+            .import(pyo3::intern!(py, "operator"))?
+            .getattr(pyo3::intern!(py, "index"))?
+            .call1((index,))?;
+        let maybe_i64: Option<i64> = raw_idx.extract::<i64>().ok();
+        // Single write lock: resolve + bounds-check + mem::replace atomically (no TOCTOU).
+        let old = {
+            let mut guard = self.inner.write();
+            let n = guard.children.len();
+            let resolved: Option<usize> = match maybe_i64 {
+                Some(i) if i < 0 => {
+                    let normalized = n as i64 + i;
+                    if normalized < 0 || normalized as usize >= n { None }
+                    else { Some(normalized as usize) }
+                }
+                Some(i) if (i as usize) < n => Some(i as usize),
+                _ => None,
+            };
+            let idx = match resolved {
+                Some(i) => i,
+                None => {
+                    return Err(PyIndexError::new_err(format!(
+                        "MixedOpt.replace_at: index {} out of range ({} children)",
+                        orig_str, n
+                    )));
+                }
+            };
+            std::mem::replace(&mut guard.children[idx], (native_label, native_child))
+        };
+        // Drop old entry outside the lock to avoid recursive lock acquisition
+        // if the child's drop chain re-enters Python.
+        drop(old);
+        Ok(())
+    }
+
+    fn clear(&self, _py: Python<'_>) -> pyo3::PyResult<()> {
+        let old = {
+            let mut guard = self.inner.write();
+            std::mem::take(&mut guard.children)
+        };
+        // Drop old entries outside the lock.
+        drop(old);
+        Ok(())
+    }
+
+    fn append_key(&self, py: Python<'_>, child: &Bound<'_, pyo3::PyAny>) -> pyo3::PyResult<()> {
+        let span_type = get_span_type(py)?;
+        let native_child = MixedOptChild::extract_from_pyobject(py, child, &span_type)?;
+        self.inner.write().children.push((Some(MixedOptLabel::Key), native_child));
+        Ok(())
+    }
+
+    fn extend_key(&self, py: Python<'_>, children: &Bound<'_, pyo3::PyAny>) -> pyo3::PyResult<()> {
+        let span_type = get_span_type(py)?;
+        let iter = children.try_iter()?;
+        for child_result in iter {
+            let child = child_result?;
+            let native_child = MixedOptChild::extract_from_pyobject(py, &child, &span_type)?;
+            let entry = (Some(MixedOptLabel::Key), native_child);
+            self.inner.write().children.push(entry);
+        }
+        Ok(())
+    }
+
+    fn children_key(&self, py: Python<'_>) -> pyo3::PyResult<Py<pyo3::types::PyList>> {
+        // Lock scope: filter by label under the read guard, cloning only matching
+        // children (Arc bump or Span copy each); drop the guard before to_pyobject,
+        // which performs Python work that must not happen while a node lock is held.
+        let matching: Vec<_> = {
+            let guard = self.inner.read();
+            guard.children.iter()
+                .filter(|(lbl, _)| *lbl == Some(MixedOptLabel::Key))
+                .map(|(_, child)| child.clone())
+                .collect()
+        };
+        let result = pyo3::types::PyList::empty(py);
+        for child in &matching {
+            result.append(child.to_pyobject(py)?)?;
+        }
+        Ok(result.unbind())
+    }
+
+    fn child_key(&self, py: Python<'_>) -> pyo3::PyResult<Py<pyo3::PyAny>> {
+        // Lock scope: count label matches and clone only the first under the guard;
+        // drop the guard before to_pyobject / exception raise (Python work).
+        let (count, first) = {
+            let guard = self.inner.read();
+            let mut count = 0usize;
+            let mut first = None;
+            for (lbl, child) in &guard.children {
+                if *lbl == Some(MixedOptLabel::Key) {
+                    count += 1;
+                    if count == 1 {
+                        first = Some(child.clone());
+                    }
+                }
+            }
+            (count, first)
+        };
+        if count != 1 {
+            return Err(PyValueError::new_err(format!(
+                "Expected one key child but have {count}"
+            )));
+        }
+        first.expect("invariant: MixedOpt.child_key: count==1 but first==None; logic error")
+            .to_pyobject(py)
+    }
+
+    fn maybe_key(&self, py: Python<'_>) -> pyo3::PyResult<Option<Py<pyo3::PyAny>>> {
+        // Lock scope: count label matches and clone only the first under the guard;
+        // drop the guard before to_pyobject / exception raise (Python work).
+        let (count, first) = {
+            let guard = self.inner.read();
+            let mut count = 0usize;
+            let mut first = None;
+            for (lbl, child) in &guard.children {
+                if *lbl == Some(MixedOptLabel::Key) {
+                    count += 1;
+                    if count == 1 {
+                        first = Some(child.clone());
+                    }
+                }
+            }
+            (count, first)
+        };
+        if count > 1 {
+            return Err(PyValueError::new_err(
+                "Expected at most one key child but have at least 2",
+            ));
+        }
+        match first {
+            None => Ok(None),
+            Some(child) => Ok(Some(child.to_pyobject(py)?)),
+        }
+    }
+
+    fn append_node(&self, py: Python<'_>, child: &Bound<'_, pyo3::PyAny>) -> pyo3::PyResult<()> {
+        let span_type = get_span_type(py)?;
+        let native_child = MixedOptChild::extract_from_pyobject(py, child, &span_type)?;
+        self.inner.write().children.push((Some(MixedOptLabel::Node), native_child));
+        Ok(())
+    }
+
+    fn extend_node(&self, py: Python<'_>, children: &Bound<'_, pyo3::PyAny>) -> pyo3::PyResult<()> {
+        let span_type = get_span_type(py)?;
+        let iter = children.try_iter()?;
+        for child_result in iter {
+            let child = child_result?;
+            let native_child = MixedOptChild::extract_from_pyobject(py, &child, &span_type)?;
+            let entry = (Some(MixedOptLabel::Node), native_child);
+            self.inner.write().children.push(entry);
+        }
+        Ok(())
+    }
+
+    fn children_node(&self, py: Python<'_>) -> pyo3::PyResult<Py<pyo3::types::PyList>> {
+        // Lock scope: filter by label under the read guard, cloning only matching
+        // children (Arc bump or Span copy each); drop the guard before to_pyobject,
+        // which performs Python work that must not happen while a node lock is held.
+        let matching: Vec<_> = {
+            let guard = self.inner.read();
+            guard.children.iter()
+                .filter(|(lbl, _)| *lbl == Some(MixedOptLabel::Node))
+                .map(|(_, child)| child.clone())
+                .collect()
+        };
+        let result = pyo3::types::PyList::empty(py);
+        for child in &matching {
+            result.append(child.to_pyobject(py)?)?;
+        }
+        Ok(result.unbind())
+    }
+
+    fn child_node(&self, py: Python<'_>) -> pyo3::PyResult<Py<pyo3::PyAny>> {
+        // Lock scope: count label matches and clone only the first under the guard;
+        // drop the guard before to_pyobject / exception raise (Python work).
+        let (count, first) = {
+            let guard = self.inner.read();
+            let mut count = 0usize;
+            let mut first = None;
+            for (lbl, child) in &guard.children {
+                if *lbl == Some(MixedOptLabel::Node) {
+                    count += 1;
+                    if count == 1 {
+                        first = Some(child.clone());
+                    }
+                }
+            }
+            (count, first)
+        };
+        if count != 1 {
+            return Err(PyValueError::new_err(format!(
+                "Expected one node child but have {count}"
+            )));
+        }
+        first.expect("invariant: MixedOpt.child_node: count==1 but first==None; logic error")
+            .to_pyobject(py)
+    }
+
+    fn maybe_node(&self, py: Python<'_>) -> pyo3::PyResult<Option<Py<pyo3::PyAny>>> {
+        // Lock scope: count label matches and clone only the first under the guard;
+        // drop the guard before to_pyobject / exception raise (Python work).
+        let (count, first) = {
+            let guard = self.inner.read();
+            let mut count = 0usize;
+            let mut first = None;
+            for (lbl, child) in &guard.children {
+                if *lbl == Some(MixedOptLabel::Node) {
+                    count += 1;
+                    if count == 1 {
+                        first = Some(child.clone());
+                    }
+                }
+            }
+            (count, first)
+        };
+        if count > 1 {
+            return Err(PyValueError::new_err(
+                "Expected at most one node child but have at least 2",
+            ));
+        }
+        match first {
+            None => Ok(None),
+            Some(child) => Ok(Some(child.to_pyobject(py)?)),
+        }
+    }
+
+    fn key(&self, py: Python<'_>) -> pyo3::PyResult<Option<Py<pyo3::PyAny>>> {
+        self.maybe_key(py)
+    }
+
+    fn key_text(&self) -> pyo3::PyResult<Option<String>> {
+        // Lock scope: count label matches and clone only the first under the guard;
+        // drop the guard before to_pyobject / exception raise (Python work).
+        let (count, first) = {
+            let guard = self.inner.read();
+            let mut count = 0usize;
+            let mut first = None;
+            for (lbl, child) in &guard.children {
+                if *lbl == Some(MixedOptLabel::Key) {
+                    count += 1;
+                    if count == 1 {
+                        first = Some(child.clone());
+                    }
+                }
+            }
+            (count, first)
+        };
+        if count > 1 {
+            return Err(PyValueError::new_err(
+                "Expected at most one key child but have at least 2",
+            ));
+        }
+        match first {
+            None => Ok(None),
+            Some(MixedOptChild::Span(s)) => s
+                .text_or_message()
+                .map(|t| Some(t.to_owned()))
+                .map_err(PyValueError::new_err),
+            Some(_) => Err(PyTypeError::new_err("MixedOpt.key_text: child labelled 'key' is not a Span")),
+        }
+    }
+
+    fn node(&self, py: Python<'_>) -> pyo3::PyResult<Py<pyo3::PyAny>> {
+        self.child_node(py)
+    }
+
+    fn __eq__(&self, py: Python<'_>, other: &Bound<'_, pyo3::PyAny>) -> pyo3::PyResult<Py<pyo3::PyAny>> {
+        if !other.is_instance_of::<PyMixedOpt>() {
+            return Ok(py.NotImplemented());
+        }
+        let other_handle: pyo3::PyRef<PyMixedOpt> = other.extract()?;
+        // Delegate to Shared<T>::PartialEq which applies the ptr_eq short-circuit
+        // (avoids same-lock re-entry on `x == x`) then deep structural comparison.
+        let eq = self.inner == other_handle.inner;
+        Ok(eq.into_pyobject(py)?.to_owned().unbind().into_any())
+    }
+
+    fn __hash__(&self) -> pyo3::PyResult<isize> {
+        Err(PyTypeError::new_err("unhashable type: 'MixedOpt'"))
+    }
+
+    fn __repr__(&self, _py: Python<'_>) -> String {
+        let guard = self.inner.read();
+        let span_repr = format!("Span(start={}, end={})", guard.span.start(), guard.span.end());
+        let children_len = guard.children.len();
+        format!(
+            "MixedOpt(span={span_repr}, children=[<{children_len} child(ren)>])"
         )
     }
 
@@ -27356,6 +36392,35 @@ impl Trivia {
         self.children.extend(spans.into_iter().map(|s| (Some(TriviaLabel::Content), TriviaChild::Span(s))));
     }
 
+    /// Return the child labelled `content`.
+    ///
+    /// Panics unless exactly one is present; use `child_content` for the checked form.
+    pub fn content(&self) -> &Span {
+        self.child_content()
+            .unwrap_or_else(|e| panic!("Trivia.content: {e}"))
+    }
+
+    /// Return the source text of the child labelled `content`.
+    ///
+    /// Borrows from the span's source; panics if the child is absent or its span
+    /// carries no usable source.
+    pub fn content_text(&self) -> &str {
+        self.child_content()
+            .unwrap_or_else(|e| panic!("Trivia.content_text: {e}"))
+            .text_or_message()
+            .unwrap_or_else(|e| panic!("Trivia.content_text: {e}"))
+    }
+
+    /// Return this node's own source text.
+    ///
+    /// Covers suppressed content inside the node's span; panics if the span carries no
+    /// usable source.
+    pub fn text(&self) -> &str {
+        self.span
+            .text_or_message()
+            .unwrap_or_else(|e| panic!("Trivia.text: {e}"))
+    }
+
     /// Insert a child at `index` (Vec::insert semantics: panics if index > len).
     ///
     /// Python-facing clamping is in the `insert` pymethod; native callers must
@@ -27586,7 +36651,7 @@ impl PyTrivia {
         child: &Bound<'_, pyo3::PyAny>,
         label: Option<Py<pyo3::PyAny>>,
     ) -> pyo3::PyResult<()> {
-        // Validate child and label BEFORE taking the write lock (§2.3 lock discipline).
+        // Validate child and label BEFORE taking the write lock.
         let span_type = get_span_type(py)?;
         let native_child = TriviaChild::extract_from_pyobject(py, child, &span_type)?;
         let native_label = match label {
@@ -27604,7 +36669,7 @@ impl PyTrivia {
         };
         // Index normalization via operator.index (PyNumber_Index semantics).
         // This raises TypeError (not AttributeError) for non-indexable inputs, matching Python's
-        // operator.index contract. Must be done BEFORE taking any lock (§2.3 lock discipline).
+        // operator.index contract. Must be done BEFORE taking any lock.
         // Overflow by sign: positive overflow clamps to len; negative overflow clamps to 0.
         let raw_idx = py
             .import(pyo3::intern!(py, "operator"))?
@@ -27643,7 +36708,7 @@ impl PyTrivia {
         let orig_str = index.str()?.to_string_lossy().into_owned();
         // Normalize via operator.index: raises TypeError (not AttributeError) for
         // non-indexable inputs, matching Python's operator.index contract.
-        // All Python work must happen before any lock (§2.3 lock discipline).
+        // All Python work must happen before any lock.
         let raw_idx = py
             .import(pyo3::intern!(py, "operator"))?
             .getattr(pyo3::intern!(py, "index"))?
@@ -27675,7 +36740,7 @@ impl PyTrivia {
                 orig_str, n
             ))
         })?;
-        // Python wrap-out happens after the guard is released (§2.3 lock discipline).
+        // Python wrap-out happens after the guard is released.
         let label_obj: Py<pyo3::PyAny> = match label {
             None => py.None(),
             Some(lbl) => lbl.into_pyobject(py)?.into_any().unbind(),
@@ -27692,7 +36757,7 @@ impl PyTrivia {
         child: &Bound<'_, pyo3::PyAny>,
         label: Option<Py<pyo3::PyAny>>,
     ) -> pyo3::PyResult<()> {
-        // Validate child and label BEFORE taking the write lock (§2.3 lock discipline).
+        // Validate child and label BEFORE taking the write lock.
         let span_type = get_span_type(py)?;
         let native_child = TriviaChild::extract_from_pyobject(py, child, &span_type)?;
         let native_label = match label {
@@ -27711,7 +36776,7 @@ impl PyTrivia {
         // Capture the caller's original string representation BEFORE normalization.
         let orig_str = index.str()?.to_string_lossy().into_owned();
         // Normalize via operator.index: raises TypeError for non-indexable inputs.
-        // All Python work must happen before any lock (§2.3 lock discipline).
+        // All Python work must happen before any lock.
         let raw_idx = py
             .import(pyo3::intern!(py, "operator"))?
             .getattr(pyo3::intern!(py, "index"))?
@@ -27846,6 +36911,50 @@ impl PyTrivia {
             None => Ok(None),
             Some(child) => Ok(Some(child.to_pyobject(py)?)),
         }
+    }
+
+    fn content(&self, py: Python<'_>) -> pyo3::PyResult<Py<pyo3::PyAny>> {
+        self.child_content(py)
+    }
+
+    fn content_text(&self) -> pyo3::PyResult<String> {
+        // Lock scope: count label matches and clone only the first under the guard;
+        // drop the guard before to_pyobject / exception raise (Python work).
+        let (count, first) = {
+            let guard = self.inner.read();
+            let mut count = 0usize;
+            let mut first = None;
+            for (lbl, child) in &guard.children {
+                if *lbl == Some(TriviaLabel::Content) {
+                    count += 1;
+                    if count == 1 {
+                        first = Some(child.clone());
+                    }
+                }
+            }
+            (count, first)
+        };
+        if count != 1 {
+            return Err(PyValueError::new_err(format!(
+                "Expected one content child but have {count}"
+            )));
+        }
+        match first
+            .expect("invariant: Trivia.content_text: count==1 but first==None; logic error")
+        {
+            TriviaChild::Span(s) => s
+                .text_or_message()
+                .map(str::to_owned)
+                .map_err(PyValueError::new_err),
+        }
+    }
+
+    fn text(&self) -> pyo3::PyResult<String> {
+        // Clone the span under the read guard, then release it before raising.
+        let span = self.inner.read().span.clone();
+        span.text_or_message()
+            .map(str::to_owned)
+            .map_err(PyValueError::new_err)
     }
 
     fn __eq__(&self, py: Python<'_>, other: &Bound<'_, pyo3::PyAny>) -> pyo3::PyResult<Py<pyo3::PyAny>> {
@@ -28216,6 +37325,20 @@ pub fn register_classes(module: &Bound<'_, pyo3::types::PyModule>) -> pyo3::PyRe
     module.add_class::<PyCaseInsensitive>()?;
     module.add_class::<AnchoredWordLabel>()?;
     module.add_class::<PyAnchoredWord>()?;
+    module.add_class::<PairLabel>()?;
+    module.add_class::<PyPair>()?;
+    module.add_class::<WrapperLabel>()?;
+    module.add_class::<PyWrapper>()?;
+    module.add_class::<OptWrapperLabel>()?;
+    module.add_class::<PyOptWrapper>()?;
+    module.add_class::<RepWrapperLabel>()?;
+    module.add_class::<PyRepWrapper>()?;
+    module.add_class::<KwLabelsLabel>()?;
+    module.add_class::<PyKwLabels>()?;
+    module.add_class::<QuotedLabel>()?;
+    module.add_class::<PyQuoted>()?;
+    module.add_class::<MixedOptLabel>()?;
+    module.add_class::<PyMixedOpt>()?;
     module.add_class::<TriviaLabel>()?;
     module.add_class::<PyTrivia>()?;
     #[cfg(feature = "test-introspection")]

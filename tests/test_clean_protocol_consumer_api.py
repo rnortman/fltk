@@ -177,7 +177,7 @@ def _get_first_items_node(grammar_tree) -> object:
 
 
 # ---------------------------------------------------------------------------
-# §4 item 1 — Shape 1 + Shape 2 pyright + ruff clean (AC 8a, 11)
+# Shape 1 + Shape 2 pyright + ruff clean (AC 8a, 11)
 # ---------------------------------------------------------------------------
 
 # These Shape 1 and Shape 2 fixtures are consumed by the pyright/ruff cleanliness tests below.
@@ -247,13 +247,13 @@ def shape2_match_dispatch(items: cst.Items) -> list[tuple[str, Any]]:
 def test_shapes_fixture_pyright_clean(
     protocol_pyright_diagnostics: dict[str, list[dict]],
 ) -> None:
-    """§4 item 1 (AC 8a): Shape 1 + Shape 2 fixture is pyright-clean with zero errors."""
+    """Shape 1 + Shape 2 fixture is pyright-clean with zero errors."""
     errors = _diags_for_file(protocol_pyright_diagnostics, "shapes_fixture.py")
     assert errors == [], f"Unexpected pyright errors in shapes fixture:\n{errors}"
 
 
 def test_shapes_fixture_ruff_clean(tmp_path: pathlib.Path) -> None:
-    """§4 item 1 (AC 8a): Shape 1 + Shape 2 fixture is ruff-clean with zero violations."""
+    """Shape 1 + Shape 2 fixture is ruff-clean with zero violations."""
     fixture = tmp_path / "shapes_fixture.py"
     fixture.write_text(_SHAPES_FIXTURE)
     violations = _run_ruff(fixture)
@@ -261,7 +261,7 @@ def test_shapes_fixture_ruff_clean(tmp_path: pathlib.Path) -> None:
 
 
 def test_shapes_fixture_no_forbidden_patterns() -> None:
-    """§4 item 1 (AC 8a, 11): fixture text contains no cast, runtime_checkable, S101 noqa, or TYPE_CHECKING."""
+    """Fixture text contains no cast, runtime_checkable, S101 noqa, or TYPE_CHECKING."""
     # Check by scanning lines that contain actual code (not docstring content)
     code_lines = [line for line in _SHAPES_FIXTURE.splitlines() if not line.strip().startswith('"""')]
     code_text = "\n".join(code_lines)
@@ -280,7 +280,7 @@ def test_shapes_fixture_no_forbidden_patterns() -> None:
 
 
 def test_fltk2gsm_single_cst_import() -> None:
-    """§4 item 2 (AC 1): fltk2gsm.py imports exactly one CST module (the protocol module)."""
+    """fltk2gsm.py imports exactly one CST module (the protocol module)."""
     source = FLTK2GSM_PATH.read_text()
     assert "fltk_cst_protocol" in source, "fltk2gsm must import fltk_cst_protocol"
     # Ensure no import of the concrete fltk_cst module (the protocol is the only CST import).
@@ -293,20 +293,20 @@ def test_fltk2gsm_single_cst_import() -> None:
 
 
 def test_fltk2gsm_no_type_checking_block() -> None:
-    """§4 item 2 (AC 1): fltk2gsm.py has no TYPE_CHECKING block for CST shadowing."""
+    """fltk2gsm.py has no TYPE_CHECKING block for CST shadowing."""
     source = FLTK2GSM_PATH.read_text()
     assert "TYPE_CHECKING" not in source, "fltk2gsm must not use TYPE_CHECKING for CST shadowing"
 
 
 def test_fltk2gsm_no_typing_cast() -> None:
-    """§4 item 2 (AC 2): fltk2gsm.py has no typing.cast calls forced by CST types."""
+    """fltk2gsm.py has no typing.cast calls forced by CST types."""
     source = FLTK2GSM_PATH.read_text()
     assert "typing.cast" not in source, "fltk2gsm must not use typing.cast"
     assert "cast(" not in source, "fltk2gsm must not use cast()"
 
 
 def test_fltk2gsm_no_cst_forced_suppressions() -> None:
-    """§4 item 2 (AC 3): fltk2gsm.py has no CST-forced suppressions (no noqa S101)."""
+    """fltk2gsm.py has no CST-forced suppressions (no noqa S101)."""
     source = FLTK2GSM_PATH.read_text()
     assert "# noqa: S101" not in source, "fltk2gsm must not use # noqa: S101 suppressions"
     assert "# type: ignore" not in source, "fltk2gsm must not use # type: ignore suppressions"
@@ -316,19 +316,19 @@ def test_fltk2gsm_no_cst_forced_suppressions() -> None:
 def test_fltk2gsm_pyright_clean(
     pyright_available: bool,  # noqa: FBT001
 ) -> None:
-    """§4 item 2 (AC 4): pyright is clean on fltk2gsm.py."""
+    """pyright is clean on fltk2gsm.py."""
     errors = _run_pyright(FLTK2GSM_PATH, pyright_available=pyright_available)
     assert errors == [], f"Unexpected pyright errors in fltk2gsm.py:\n{errors}"
 
 
 def test_fltk2gsm_ruff_clean() -> None:
-    """§4 item 2 (AC 5): ruff check is clean on fltk2gsm.py."""
+    """ruff check is clean on fltk2gsm.py."""
     violations = _run_ruff(FLTK2GSM_PATH)
     assert violations == [], f"Unexpected ruff violations in fltk2gsm.py:\n{violations}"
 
 
 def test_protocol_module_no_new_file_level_suppressions() -> None:
-    """§4 item 2 (design §3): generated protocol module must not acquire new file-level suppressions.
+    """Generated protocol module must not acquire new file-level suppressions.
 
     The pre-existing '# ruff: noqa: N802' is permitted (suppresses non-lowercase function names,
     not consumer-induced). No other file-level noqa or type: ignore lines may be added.
@@ -346,12 +346,12 @@ def test_protocol_module_no_new_file_level_suppressions() -> None:
 
 
 # ---------------------------------------------------------------------------
-# §4 item 4 — Runtime enum values (AC 6)
+# Runtime enum values (AC 6)
 # ---------------------------------------------------------------------------
 
 
 def test_protocol_label_members_have_runtime_values() -> None:
-    """§4 item 4 (AC 6): Protocol Label members are runtime objects usable in ==."""
+    """Protocol Label members are runtime objects usable in ==."""
     # Access the member — must not be an unbound annotation (which would be None or raise)
     label_item = proto_cst.Items.Label.ITEM
     assert label_item is not None, "Items.Label.ITEM must be a runtime object"
@@ -368,7 +368,7 @@ def test_protocol_label_members_have_runtime_values() -> None:
 
 
 def test_protocol_nodekind_members_have_runtime_values() -> None:
-    """§4 item 4 (AC 6): Protocol NodeKind members are runtime objects usable in ==."""
+    """Protocol NodeKind members are runtime objects usable in ==."""
     kind_items = proto_cst.NodeKind.ITEMS
     assert kind_items is not None
     kind_grammar = proto_cst.NodeKind.GRAMMAR
@@ -378,7 +378,7 @@ def test_protocol_nodekind_members_have_runtime_values() -> None:
 
 
 def test_protocol_import_does_not_import_concrete_backends() -> None:
-    """§4 item 4 (AC 6): importing only the protocol module must not import concrete backends."""
+    """Importing only the protocol module must not import concrete backends."""
     result = subprocess.run(
         [  # noqa: S607
             "uv",
@@ -405,13 +405,13 @@ def test_protocol_import_does_not_import_concrete_backends() -> None:
 
 
 # ---------------------------------------------------------------------------
-# §4 item 5 — AC 7 cross-backend equality/hash
+# Cross-backend equality/hash (AC 7)
 # ---------------------------------------------------------------------------
 
 
 @_FEGEN_RUST_CST_SKIP
 class TestCrossBackendEqualityHash:
-    """§4 item 5 (AC 7): protocol-module Label/NodeKind members compare equal to Python and Rust
+    """Protocol-module Label/NodeKind members compare equal to Python and Rust
     backend counterparts, both operand orders, with consistent hashing."""
 
     # --- NodeKind ---
@@ -542,13 +542,13 @@ class TestCrossBackendEqualityHash:
 
 
 # ---------------------------------------------------------------------------
-# §4 item 6 — AC 12 cross-backend dual-shape dispatch (load-bearing)
+# Cross-backend dual-shape dispatch (AC 12, load-bearing)
 # ---------------------------------------------------------------------------
 
 
 @_FEGEN_RUST_CST_SKIP
 class TestCrossBackendDualShapeDispatch:
-    """§4 item 6 (AC 12): protocol-only consumer runs both Shape 1 and Shape 2 against both
+    """Protocol-only consumer runs both Shape 1 and Shape 2 against both
     Python-produced and Rust-produced trees; identical, correct dispatch for all 4 combinations.
     Includes case cst.Span.kind: matching Python terminalsrc.Span AND Rust fltk._native.Span.
     No backend-specific code path; no enum-namespace name in the consumer.
@@ -707,13 +707,13 @@ class TestCrossBackendDualShapeDispatch:
 
 
 # ---------------------------------------------------------------------------
-# §4 item 7 — Canonical-string agreement invariant
+# Canonical-string agreement invariant
 # ---------------------------------------------------------------------------
 
 
 @_FEGEN_RUST_CST_SKIP
 class TestCanonicalStringAgreement:
-    """§4 item 7: canonical strings agree across protocol / Python-concrete / Rust-concrete."""
+    """Canonical strings agree across protocol / Python-concrete / Rust-concrete."""
 
     def test_nodekind_canonical_strings_agree(self) -> None:
         """NodeKind._fltk_canonical_name agrees across protocol, Python, and embedded Rust."""
@@ -774,12 +774,12 @@ class TestCanonicalStringAgreement:
 
 
 # ---------------------------------------------------------------------------
-# §4 item 8 — Span equality/hash unchanged
+# Span equality/hash unchanged
 # ---------------------------------------------------------------------------
 
 
 class TestSpanEqualityHashUnchanged:
-    """§4 item 8: adding Span.kind field did not change ==, hash, or repr contracts."""
+    """Adding Span.kind field did not change ==, hash, or repr contracts."""
 
     def test_span_equality_same_position(self) -> None:
         """Two Spans at the same (start, end) are == regardless of kind (which is constant)."""
@@ -828,7 +828,7 @@ class TestSpanEqualityHashUnchanged:
 
 
 # ---------------------------------------------------------------------------
-# §4 item 9 — Structural-mismatch contract preserved (Option A)
+# Structural-mismatch contract preserved (Option A)
 # ---------------------------------------------------------------------------
 
 _CASTLESS_PROBE_FIXTURE = """\
@@ -845,7 +845,7 @@ _m: cstp.CstModule = fltk_cst
 def test_structural_mismatch_contract_preserved(
     protocol_pyright_diagnostics: dict[str, list[dict]],
 ) -> None:
-    """§4 item 9: test_boundary_probe_documents_label_mismatch still passes.
+    """test_boundary_probe_documents_label_mismatch still passes.
 
     Concrete enum.Enum Label remains non-assignable to the protocol plain-class Label.
     Adding runtime values to Label members (Option A) must NOT make the protocol Label
@@ -860,7 +860,7 @@ def test_structural_mismatch_contract_preserved(
 
 
 def test_protocol_label_remains_plain_class_not_enum() -> None:
-    """§4 item 9 (Option A): protocol Label is a plain class, not an enum.Enum subclass.
+    """Protocol Label is a plain class, not an enum.Enum subclass.
 
     Adding runtime values (Option A) must not change the Label to an enum.
     """
@@ -884,8 +884,8 @@ def test_protocol_label_remains_plain_class_not_enum() -> None:
 
 
 # ---------------------------------------------------------------------------
-# §4 item 8 (rust-cst-native-span design) — Protocol span annotation widening
-# is additive: Python-backend-only consumer still type-checks unedited
+# Protocol span annotation widening is additive: Python-backend-only consumer
+# still type-checks unedited
 # ---------------------------------------------------------------------------
 
 # A fixture representing a Python-backend-only consumer that:
@@ -895,7 +895,7 @@ def test_protocol_label_remains_plain_class_not_enum() -> None:
 # After the widening (protocol span: terminalsrc.Span | fltk._native.Span), this code must
 # still be pyright-clean — the consumer need not edit their own annotations.
 _PYTHON_BACKEND_CONSUMER_FIXTURE = '''\
-"""Python-backend-only consumer fixture for §4 item 8 (rust-cst-native-span).
+"""Python-backend-only consumer fixture for protocol span annotation widening.
 
 Uses terminalsrc.Span in explicit annotations; must remain pyright-clean after
 protocol span annotation widening to terminalsrc.Span | fltk._native.Span.
@@ -925,7 +925,7 @@ def process_node(node: fltk_cst.Identifier) -> str:
 def test_python_backend_consumer_pyright_clean(
     protocol_pyright_diagnostics: dict[str, list[dict]],
 ) -> None:
-    """§4 item 8 (rust-cst-native-span): Python-backend consumer with terminalsrc.Span
+    """Python-backend consumer with terminalsrc.Span
     annotations type-checks unedited after protocol span widening (additive union).
     """
     errors = _diags_for_file(protocol_pyright_diagnostics, "python_backend_consumer.py")

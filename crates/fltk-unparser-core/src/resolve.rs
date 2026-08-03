@@ -13,8 +13,7 @@
 //! The internal passes operate on `Rc<Doc>` rather than `&Doc`/owned `Doc` so that
 //! unchanged subtrees are shared by refcount bump, mirroring Python's frozen-dataclass
 //! sharing (a leaf "passes through unchanged" as the same object). Recursion is left
-//! as-is for this milestone (design §3 / answered open question 1: the renderer is
-//! already iterative and resolve mirrors Python's recursion exactly).
+//! as-is: the renderer is already iterative and resolve mirrors Python's recursion exactly.
 
 use std::collections::VecDeque;
 use std::rc::Rc;

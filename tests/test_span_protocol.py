@@ -427,7 +427,7 @@ class TestLineColCrossBackend:
     def test_no_trailing_newline_sentinel(self):
         """Cross-backend: last line without trailing \\n uses sentinel=len on both backends.
 
-        This is the regression guard for the off-by-one fix (design §2.5 note 3).
+        This is the regression guard for the off-by-one fix.
         Source 'hello\\nworld' — 'world' starts at pos 6, len=11.
         sentinel=len means line_span.end==11, covering all 5 chars of 'world'.
         sentinel=len-1 (old bug) would give line_span.end==10, truncating the last char.
@@ -570,7 +570,7 @@ class TestDriftAnchor:
         """Python span.line_col() agrees with TerminalSource.pos_to_line_col() at non-negative positions.
 
         Both implementations now use sentinel=len (exclusive past-end) for the final line
-        when there is no trailing newline (design §2.5 note 3 fixed both).  We use text
+        when there is no trailing newline.  We use text
         ending with '\\n' here to additionally confirm the newline-terminated case (no
         sentinel push) also produces identical results and to avoid any future sentinel
         divergence masking itself in this anchor.

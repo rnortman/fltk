@@ -6,7 +6,7 @@ it should reject (over-admission, the dangerous direction) or rejects something 
 should accept (over-rejection, the annoying direction). The corpus tests prove the
 grammar handles *real* patterns; this suite proves it handles *hostile* ones.
 
-Structure (§4.1 of design.md):
+Structure:
 
 - Each case is a ``(pattern, expected, rationale)`` triple.
 - ``expected`` is ``ACCEPT`` or ``REJECT``.
@@ -14,11 +14,11 @@ Structure (§4.1 of design.md):
   correct, citing the ``regex.fltkg`` line or cross-engine behavior where applicable.
 - ACCEPT-direction cases are cross-checked against Python ``re.compile``: if ``re``
   rejects a pattern we expect to ACCEPT, the test fails with a mis-spec error.
-- REJECT-direction cases are NOT cross-checked against ``re.compile`` (§4.1): most
+- REJECT-direction cases are NOT cross-checked against ``re.compile``: most
   of them are "Python re accepts, Rust regex-automata rejects," and we have no inline
   Rust oracle. REJECT-case correctness rests on the mandatory Rust-aware rationale string.
 
-All assertions are accept/reject booleans only; no ``longest_parse_len`` assertions (§4.1).
+All assertions are accept/reject booleans only; no ``longest_parse_len`` assertions.
 
 Findings discovered during authoring are flagged with ``FINDING`` in the rationale.
 
@@ -37,7 +37,7 @@ over-rejections of a portable construct were found.
         ``\x00``.  The test cases below have been updated from ACCEPT (FINDING) to REJECT.
   F2 -- ``U`` inline flag (``(?U)``, ``(?iU)``, ``(?U:a)``): grammar admits ``U`` via
         ``flag_chars /[imsU]+/``; Python re rejects ``U`` as an unknown extension/flag.
-        Rust-only flag, admitted by design (lint is Rust-only per design.md §5.3).
+        Rust-only flag, admitted by design (lint is Rust-only).
   F3 -- ``\z`` top-level anchor: grammar admits it via ``anchor_escape /[Az]/``; Rust
         accepts ``\z`` (end-of-text) but Python re rejects it ('bad escape'). The old
         grammar comment 'verified on both engines' was wrong for Python >= 3.6 and has
@@ -402,7 +402,7 @@ CASES: list[tuple[str, bool, str] | tuple[str, bool, str, bool]] = [
     ),
 
     # -------------------------------------------------------------------------
-    # Bare-brace divergence (§4.2)
+    # Bare-brace divergence
     # -------------------------------------------------------------------------
     (
         "a{",
@@ -594,12 +594,12 @@ CASES: list[tuple[str, bool, str] | tuple[str, bool, str, bool]] = [
     # =========================================================================
 
     # -------------------------------------------------------------------------
-    # Empty / nilable shapes (§6 edge case)
+    # Empty / nilable shapes
     # -------------------------------------------------------------------------
     (
         "",
         ACCEPT,
-        "Empty pattern: regex := alternation; alternation has seed 'branch:concatenation?' where concatenation is optional -> alternation can match empty -> result.pos=0==len('') -> ACCEPT. The lint's check_regex_portable treats '' as portable and special-cases it; here we pin what the bare parser actually does (regex.fltkg:51-52, §6 of design).",
+        "Empty pattern: regex := alternation; alternation has seed 'branch:concatenation?' where concatenation is optional -> alternation can match empty -> result.pos=0==len('') -> ACCEPT. The lint's check_regex_portable treats '' as portable and special-cases it; here we pin what the bare parser actually does (regex.fltkg:51-52).",
     ),
     (
         "()",
@@ -681,7 +681,7 @@ CASES: list[tuple[str, bool, str] | tuple[str, bool, str, bool]] = [
     ),
 
     # -------------------------------------------------------------------------
-    # Whitespace-significant patterns (§6, §4.2)
+    # Whitespace-significant patterns
     # -------------------------------------------------------------------------
     (
         " a",
@@ -729,7 +729,7 @@ CASES: list[tuple[str, bool, str] | tuple[str, bool, str, bool]] = [
     ),
 
     # -------------------------------------------------------------------------
-    # Quantifier-on-quantifier and lazy markers (§4.2)
+    # Quantifier-on-quantifier and lazy markers
     # -------------------------------------------------------------------------
     (
         "a*?",
@@ -788,7 +788,7 @@ CASES: list[tuple[str, bool, str] | tuple[str, bool, str, bool]] = [
     ),
 
     # =========================================================================
-    # UTF-8 / NON-ASCII PROBES (REQUIRED — §4.2, §4.3)
+    # UTF-8 / NON-ASCII PROBES (REQUIRED)
     # All non-ASCII patterns are parsed as Unicode codepoints; positions are
     # codepoints on both backends (Python TerminalSource len() + re.match(pos=),
     # Rust Span start/end in codepoints via cp_to_byte). These cases are
@@ -802,7 +802,7 @@ CASES: list[tuple[str, bool, str] | tuple[str, bool, str, bool]] = [
     (
         "café",
         ACCEPT,
-        "Multi-byte literal chars 'café': 'c','a','f' are ASCII literal_char; 'é' (U+00E9, 2 UTF-8 bytes) is non-ASCII and NOT in literal_char's excluded set (only ASCII metacharacters excluded) -> each codepoint is a literal_char -> ACCEPT. Non-ASCII literal_chars are portable on both engines (§4.3).",
+        "Multi-byte literal chars 'café': 'c','a','f' are ASCII literal_char; 'é' (U+00E9, 2 UTF-8 bytes) is non-ASCII and NOT in literal_char's excluded set (only ASCII metacharacters excluded) -> each codepoint is a literal_char -> ACCEPT. Non-ASCII literal_chars are portable on both engines.",
     ),
     (
         "αβγ",
@@ -817,7 +817,7 @@ CASES: list[tuple[str, bool, str] | tuple[str, bool, str, bool]] = [
     (
         "a\U0001d11eb",
         ACCEPT,
-        "Astral-plane codepoint in the middle 'a\U0001d11eb': U+1D11E (MUSICAL SYMBOL G CLEF, 4 UTF-8 bytes) is one Python str codepoint, one Rust char, admitted as literal_char -> ACCEPT. Stresses codepoint-vs-byte position handling with a 4-byte character (§4.3).",
+        "Astral-plane codepoint in the middle 'a\U0001d11eb': U+1D11E (MUSICAL SYMBOL G CLEF, 4 UTF-8 bytes) is one Python str codepoint, one Rust char, admitted as literal_char -> ACCEPT. Stresses codepoint-vs-byte position handling with a 4-byte character.",
     ),
 
     # -------------------------------------------------------------------------
@@ -826,7 +826,7 @@ CASES: list[tuple[str, bool, str] | tuple[str, bool, str, bool]] = [
     (
         "é+",
         ACCEPT,
-        "'é+': U+00E9 (2 UTF-8 bytes) as literal_char atom, then '+' quantifier -> ACCEPT. The accept predicate checks result.pos == len(terminals) in codepoints; a Rust cp_to_byte indexing bug would yield a wrong end position -> short parse -> reject. This directly guards the §4.3 hazard.",
+        "'é+': U+00E9 (2 UTF-8 bytes) as literal_char atom, then '+' quantifier -> ACCEPT. The accept predicate checks result.pos == len(terminals) in codepoints; a Rust cp_to_byte indexing bug would yield a wrong end position -> short parse -> reject. This directly guards the codepoint-vs-byte hazard.",
     ),
     (
         "中*",
@@ -879,7 +879,7 @@ CASES: list[tuple[str, bool, str] | tuple[str, bool, str, bool]] = [
     (
         r"\w+",
         ACCEPT,
-        r"\w+ word shorthand with quantifier: escape_body -> class_shorthand /[dDwWsS]/ matches 'w' -> \w admitted; '+' quantifier -> ACCEPT. Grammar-level acceptance proven; note: cross-engine match-set parity for \w on non-ASCII input (e.g. whether 'é' matches \w) is a Unicode category-table divergence risk owned by the differential harness (lint §9), NOT proven here.",
+        r"\w+ word shorthand with quantifier: escape_body -> class_shorthand /[dDwWsS]/ matches 'w' -> \w admitted; '+' quantifier -> ACCEPT. Grammar-level acceptance proven; note: cross-engine match-set parity for \w on non-ASCII input (e.g. whether 'é' matches \w) is a Unicode category-table divergence risk owned by the differential harness, NOT proven here.",
     ),
     (
         r"\s",
@@ -1014,10 +1014,10 @@ def test_adversarial_case(
 ) -> None:
     """Assert the grammar's accept/reject disposition matches the expected value.
 
-    - For ACCEPT cases: also cross-check with Python ``re.compile`` (§4.1), unless
+    - For ACCEPT cases: also cross-check with Python ``re.compile``, unless
       ``skip_re_check=True`` (used only for documented grammar over-admissions where
       the grammar accepts a pattern that Python re rejects -- these carry a FINDING: rationale).
-    - For REJECT cases: rationale string is the only oracle (§4.1 asymmetry note).
+    - For REJECT cases: rationale string is the only oracle (asymmetry note).
     - Rationale is asserted non-empty so every case is self-documenting.
     """
     assert rationale, "Every adversarial case must have a non-empty rationale string."

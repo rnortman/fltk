@@ -345,6 +345,113 @@ def validate_no_underscore_only_names(grammar: Grammar) -> None:
         raise ValueError("Underscore-only names found:\n" + "\n".join(errors))
 
 
+class _InlineExpander:
+    """Rewrites INLINE items into unlabeled INCLUDE sub-expression items.
+
+    ``expand_rule`` is memoized per rule name and returns that rule's fully expanded
+    alternatives; the same object is used both as the rule's own alternatives and as the
+    sub-expression term spliced into every ``!rule`` call site.  The DFS descends only
+    along INLINE edges, so ``_stack`` detects inline recursion without touching ordinary
+    (legal) rule recursion.
+    """
+
+    def __init__(self, grammar: Grammar) -> None:
+        self.grammar = grammar
+        self._memo: dict[str, Sequence[Items]] = {}
+        self._stack: list[str] = []
+        self._trivia_reachable: set[str] = set()
+        trivia_rule = grammar.identifiers.get(TRIVIA_RULE_NAME)
+        if trivia_rule is not None:
+            _mark_trivia_reachable(trivia_rule, grammar.identifiers, self._trivia_reachable)
+
+    def expand_rule(self, rule_name: str) -> Sequence[Items]:
+        memoized = self._memo.get(rule_name)
+        if memoized is not None:
+            return memoized
+        if rule_name in self._stack:
+            cycle = " -> ".join([*self._stack[self._stack.index(rule_name) :], rule_name])
+            msg = f"Cycle of inlined rules: {cycle}"
+            raise ValueError(msg)
+
+        self._stack.append(rule_name)
+        try:
+            rule = self.grammar.identifiers[rule_name]
+            alternatives = [self._expand_items(alt, rule_name) for alt in rule.alternatives]
+        finally:
+            self._stack.pop()
+
+        self._memo[rule_name] = alternatives
+        return alternatives
+
+    def _expand_items(self, items: Items, rule_name: str) -> Items:
+        new_items = [self._expand_item(item, rule_name, idx) for idx, item in enumerate(items.items)]
+        return dataclasses.replace(items, items=new_items)
+
+    def _expand_item(self, item: Item, rule_name: str, idx: int) -> Item:
+        if item.disposition == Disposition.INLINE:
+            target = self._validate_inline(item, rule_name, idx)
+            return Item(
+                label=None,
+                disposition=Disposition.INCLUDE,
+                term=self.expand_rule(target),
+                quantifier=item.quantifier,
+            )
+        if isinstance(item.term, Identifier | Literal | Regex | Invocation):
+            return item
+        if isinstance(item.term, Sequence):
+            return dataclasses.replace(item, term=[self._expand_items(alt, rule_name) for alt in item.term])
+        return item
+
+    def _validate_inline(self, item: Item, rule_name: str, idx: int) -> str:
+        context = f"rule {rule_name!r} item {idx}"
+        if not isinstance(item.term, Identifier):
+            msg = (
+                f"Inline disposition ('!') in {context} requires a rule reference, got {item.term!r}. "
+                f"Literals, regexes and sub-expressions have no children to splice into the parent."
+            )
+            raise ValueError(msg)
+        if item.label is not None:
+            msg = (
+                f"Inline disposition ('!') in {context} carries the label {item.label!r}. "
+                f"An inlined rule contributes no node of its own, so there is nothing for the label to name."
+            )
+            raise ValueError(msg)
+        target = item.term.value
+        if target not in self.grammar.identifiers:
+            msg = f"Inline disposition ('!') in {context} references unknown rule {target!r}"
+            raise ValueError(msg)
+        if target in self._trivia_reachable:
+            msg = (
+                f"Inline disposition ('!') in {context} references trivia rule {target!r}. "
+                f"Rules reachable from '{TRIVIA_RULE_NAME}' cannot be inlined."
+            )
+            raise ValueError(msg)
+        return target
+
+
+def expand_inline_dispositions(grammar: Grammar) -> Grammar:
+    """Return ``grammar`` with every INLINE (``!``) item rewritten as a sub-expression.
+
+    An INLINE item ``!foo`` becomes an unlabeled INCLUDE item whose term is a
+    ``Sequence[Items]`` holding ``foo``'s alternatives, with the original quantifier and the
+    parent's separators preserved.  ``foo``'s children therefore land directly in the parent
+    node under the parent's Label enum, which is what the ``!`` disposition documents.  The
+    inlined rule itself is untouched: it keeps its node class, parser entry point and rule id.
+
+    Expansion is transitive (a target's own INLINE items are expanded first), pure, and
+    idempotent — the result contains no INLINE items, so a second call changes nothing.  All
+    ``Rule`` and ``Items`` objects are rebuilt so no nilability memo is carried over from the
+    input grammar.
+
+    Raises ``ValueError`` for an INLINE item that is labeled, does not reference a rule,
+    references an unknown rule, references a rule reachable from the trivia rule, or takes
+    part in a cycle of inlined rules.
+    """
+    expander = _InlineExpander(grammar)
+    new_rules = [dataclasses.replace(rule, alternatives=expander.expand_rule(rule.name)) for rule in grammar.rules]
+    return dataclasses.replace(grammar, rules=new_rules, identifiers={rule.name: rule for rule in new_rules})
+
+
 def classify_trivia_rules(grammar: Grammar) -> Grammar:
     """Classify rules as trivia/non-trivia based on reachability from TRIVIA_RULE_NAME rule.
 

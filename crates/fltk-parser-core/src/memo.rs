@@ -70,7 +70,7 @@ pub type Cache<T> = HashMap<i64, MemoEntry<T>>;
 /// (Rust's default spawned threads use 2 MiB; async-runtime worker threads vary) or with
 /// grammars that have deep per-rule call structure must lower `max_depth` proportionally
 /// or size the stack accordingly. Cargo-test threads have 2 MiB; do not test the default
-/// limit from `cargo test` — use pytest (see design §6).
+/// limit from `cargo test` — use pytest.
 pub const DEFAULT_MAX_DEPTH: u32 = 1000;
 
 /// Mutable state for the packrat memoizer, held by the generated `Parser`.
@@ -139,8 +139,8 @@ impl PackratState {
     /// Returns `true` if a depth limit was exceeded during parsing.
     ///
     /// Sticky: once set, every `apply` on this instance returns `None` immediately.
-    /// Check this after every parse; discard the result if set (§2 contract — a result
-    /// produced with the flag set is not the parse the grammar defines; see design).
+    /// Check this after every parse; discard the result if set — a result
+    /// produced with the flag set is not the parse the grammar defines.
     pub fn depth_exceeded(&self) -> bool {
         self.depth_exceeded
     }

@@ -185,9 +185,9 @@ parenthesized group is a nested `alternatives`, i.e. a `Sequence[Items]` term
 - Carry an **implicit INCLUDE disposition** when no disposition glyph is written
   (`fltk2gsm.py:117-122`: a sub-expression term defaults to INCLUDE).
 - Splice their children into the parent node automatically (`inline_to_parent=True`,
-  `gsm2parser.py:355-372`; merged via `extend_children`, `gsm2parser.py:803-806`). This
-  automatic splicing is unrelated to the `!` INLINE disposition (§6.3), which is **not**
-  implemented.
+  `gsm2parser.py:355-372`; merged via `extend_children`, `gsm2parser.py:803-806`). The `!`
+  INLINE disposition (§6.3) is implemented on top of exactly this mechanism: `!rule` is
+  rewritten into a sub-expression holding `rule`'s alternatives before code generation.
 
 ### 4.1 Match resolution: PEG ordered first-match
 
@@ -359,22 +359,25 @@ Effects:
   identifier, or a `Span` for a literal or regex. An unlabeled `$`-literal appears as an
   **unlabeled `Span` child** (`rust_parser_fixture.fltkg:48`,
   `tagged := $"tag" . value:/[a-z]+/`).
-- **`!` INLINE — accepted syntactically, but NOT implemented.** The `disposition` rule
-  defines `inline:"!"` so the glyph parses, and the CST/tree generator models it
-  (`gsm2tree.py:631-636`, splicing the referenced rule's model into the parent with cycle
-  detection at `gsm2tree.py:1008-1012`). However, **both parser generators reject it**:
+- **`!` INLINE** — the referenced rule contributes **no node of its own**; its children
+  become children of the parent, under the parent's `Label` enum. Every text→GSM boundary
+  runs `gsm.expand_inline_dispositions`, which rewrites `!rule` into an unlabeled INCLUDE
+  item whose term is a sub-expression holding `rule`'s alternatives, preserving the item's
+  quantifier and the surrounding separators. Everything downstream therefore sees an
+  ordinary sub-expression (§4). Restrictions, each a `ValueError` at expansion:
 
-  - Python: `raise NotImplementedError("Inline items not yet supported: {item}")` for any
-    `item.disposition == INLINE` (`gsm2parser.py:782-784`).
-  - Rust:
-    `raise NotImplementedError("INLINE disposition is not supported in Rust parser generation")`
-    (`gsm2parser_rs.py:824-826` and `1010-1012`).
+  - The term must be a rule reference: `!"lit"`, `!/re/` and `!( ... )` are rejected (there
+    are no children to splice).
+  - The item must be unlabeled: `x:!rule` is rejected (no node exists for the label to name).
+    An unlabeled `!rule` does **not** receive the usual implicit rule-name label.
+  - The referenced rule must exist and must not be reachable from `_trivia` (this also bans
+    `!` inside the trivia subtree, e.g. `_trivia := !ws`).
+  - Cycles along `!` edges are rejected; ordinary (non-inline) recursion is unaffected.
 
-  Consequently **`!rule` cannot appear in any grammar that is compiled to a parser.** The
-  only uses of `!` in the tree are in `fltk.fltkg` (`:11`, `:34`), the explicitly-broken
-  aspirational grammar (§1). The live grammars define the glyph but never apply it to an
-  item. To splice a group's children into the parent node, use a sub-expression (§4), which
-  is a separate, fully-working mechanism and must not be confused with the `!` disposition.
+  The inlined rule remains a rule: it still generates a node class and a parser entry point
+  and still appears in `RULE_NAMES`. Only the `!`-marked call sites splice. Inlining costs
+  the callee's packrat memoization at that site and attributes terminal failures inside the
+  spliced body to the caller, exactly as a hand-written sub-expression does.
 
 ### 6.4 Quantifiers
 
@@ -724,9 +727,8 @@ which are part of the `Term` union but are **dead** — vestiges of the aspirati
 - The Rust parser generator explicitly rejects `Invocation`
   (`gsm2parser_rs.py:768-770`).
 
-These constructs, the `let X : Stack[String]` `var` syntax, and the `!` INLINE disposition
-(§6.3) are not part of the usable grammar language. Author grammars using only the constructs
-described in §1–§10.
+These constructs and the `let X : Stack[String]` `var` syntax are not part of the usable
+grammar language. Author grammars using only the constructs described in §1–§10.
 
 ---
 
@@ -747,7 +749,7 @@ described in §1–§10.
 | `_trivia` non-nil                         | **Enforced**                                                    | `gsm.py:406-415` |
 | Non-trivia rule referencing trivia rule   | **Forbidden**                                                   | `gsm.py:456-474` |
 | `%` (suppress) on a sub-expression        | **Forbidden** (assert)                                          | `gsm2tree.py:629` |
-| `!` INLINE disposition                    | **Syntax accepted; NOT implemented in either parser backend**   | `gsm2parser.py:782-784`; `gsm2parser_rs.py:824-826, 1010-1012` |
+| `!` INLINE disposition                    | **Supported** via grammar rewrite; unlabeled rule references only, no trivia targets, no `!` cycles | `gsm.py` `expand_inline_dispositions` |
 | Invocation / Expression / Var terms       | **Dead / unsupported**                                          | `gsm2parser.py:374-375`; `gsm2parser_rs.py:768-770` |
 | Repeated nilable item (`+`/`*`)           | **Rejected** (under-approx + runtime guard)                     | `gsm.py:418-453` |
 | Underscore-only name or label             | **Rejected**                                                    | `gsm.py:305-345` |

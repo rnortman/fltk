@@ -10,12 +10,18 @@ failure.
 from __future__ import annotations
 
 import builtins
+import logging
 from pathlib import Path
+from typing import TYPE_CHECKING
 
 import pytest
 from typer.testing import CliRunner
 
+from fltk.fegen import cst_ergonomics
 from fltk.lsp import server_cli
+
+if TYPE_CHECKING:
+    from collections.abc import Iterator
 
 _DATA = Path(__file__).parent / "test_data"
 _GRAMMAR = str(_DATA / "greet.fltkg")
@@ -23,6 +29,26 @@ _LSP = str(_DATA / "greet.fltklsp")
 _FMT = str(_DATA / "greet.fltkfmt")
 
 runner = CliRunner()
+
+
+@pytest.fixture(autouse=True)
+def _silence_cst_generation_logging() -> Iterator[None]:
+    """Keep CST generation quiet for the duration of every CliRunner invocation here.
+
+    Emitting a record under pytest's live logging suspends and resumes the global capture,
+    which swaps out the stdio streams CliRunner installed for the invocation and closes them;
+    the runner then fails reading its own captured output.  Building a server for
+    ``greet.fltkg`` reports a skipped ergonomic member (the grammar has a ``text`` label), so
+    that one logger is raised above the live-logging threshold.  Every other logger stays
+    audible, so a real error from the code under test is not swallowed.
+    """
+    gen_logger = logging.getLogger(cst_ergonomics.__name__)
+    previous = gen_logger.level
+    gen_logger.setLevel(logging.CRITICAL)
+    try:
+        yield
+    finally:
+        gen_logger.setLevel(previous)
 
 
 def test_missing_grammar_file_exits_1() -> None:

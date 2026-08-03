@@ -151,7 +151,7 @@ def test_token_stream_invariants() -> None:
     assert all(text[t.start : t.end] != "hello" for t in tokens)
 
 
-# --- Ref-site paint (§4.4) ------------------------------------------------------------------------
+# --- Ref-site paint -------------------------------------------------------------------------------
 
 # A def/ref language: `let NAME ;` declares, `use NAME ;` references. Default paint for the `word`
 # regex is `variable`; a resolved ref inherits its defining kind's token.

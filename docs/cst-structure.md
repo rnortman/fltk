@@ -56,6 +56,9 @@ For each label in the rule, these methods are generated:
 | `child_{label}()` | `ChildType` | Get single child with this label (raises if not exactly 1) |
 | `maybe_{label}()` | `Optional[ChildType]` | Get single child or `None` (raises if > 1) |
 
+Alongside these, each node class gets a smaller set of accessors shaped by what the grammar
+actually guarantees — see [Ergonomic Accessors](#ergonomic-accessors).
+
 ## How Grammar Constructs Map to CST
 
 ### Rule Names to Class Names
@@ -317,7 +320,161 @@ Wrapper(children=[
 # fmt: on
 ```
 
-**Note**: Inline has limited support and may raise `NotImplementedError`.
+The inlined rule's labels join the parent's `Label` enum and child-type union, and any
+trivia captured between the inlined rule's items attaches to the **parent** as an unlabeled
+child. The inlined rule itself is unaffected: it still has its own node class, parser entry
+point and entry in `RULE_NAMES`, and behaves normally wherever it is referenced without `!`.
+
+#### Rules for `!`
+
+- **Rule references only.** `!"lit"`, `!/re/` and `!( ... )` are errors — there are no
+  children to splice.
+- **No label.** `x:!inner` is an error: the inlined rule contributes no node for the label
+  to name. An unlabeled `!inner` also does *not* get the implicit `inner` label that a plain
+  `inner` reference would.
+- **No trivia targets.** `!_trivia`, or `!` of any rule reachable from `_trivia`, is an
+  error. This includes using `!` inside the trivia subtree (`_trivia := !ws`).
+- **No `!` cycles.** `a := !b ; b := !a ;` is an error. Ordinary recursion is unaffected —
+  a rule referenced normally inside an inlined body is fine.
+- **Quantifiers apply to the whole body.** `!inner?` splices zero or one copy of `inner`'s
+  children; `!inner*` splices any number, in source order.
+
+#### Consequences to expect
+
+- The call site loses `inner`'s packrat memoization and terminal failures inside the spliced
+  body are attributed to the parent rule — the same behavior as writing the body out as a
+  sub-expression by hand.
+- `.fltkfmt` rule configs attach to nodes by rule, and inlined content lives in the parent
+  node, so the **parent** rule's config governs it. A `rule inner { ... }` block no longer
+  applies at `!inner` sites; it still applies wherever `inner` is referenced normally.
+
+## Ergonomic Accessors
+
+The five label-specific methods above are uniform: every label gets all of them, whatever
+the grammar says about how many children can carry that label. On top of them, generated
+node classes carry a second, smaller surface derived from the grammar's own guarantees.
+These members are additive — nothing in the five-method set changes — and they are emitted
+identically by the Python and Rust backends.
+
+### Bare per-label accessors
+
+For a label `foo`, the generated class gets a `foo()` method whose type follows the label's
+multiplicity over the **whole rule** (all alternatives combined):
+
+| Multiplicity | Python | Rust (native) |
+|---|---|---|
+| exactly one | `foo() -> T` (raises unless exactly one) | `fn foo(&self) -> &T` |
+| at most one | `foo() -> T \| None` (raises if more than one) | `fn foo(&self) -> Option<&T>` |
+| anything else | `foo() -> list[T]` | `fn foo(&self) -> impl Iterator<Item = &T>` |
+
+```fltkg
+decl := name:identifier , (":" , type:identifier)? ;
+args := arg:expr* ;
+```
+
+```python
+decl.name()  # -> Identifier      (required by every alternative)
+decl.type()  # -> Identifier|None (present in only some parses)
+args.arg()  # -> list[Expr]
+```
+
+A label that is required *twice* in one alternative, or that appears under a `+`/`*`
+quantifier, is a collection — the accessor never claims a guarantee the parser does not
+make.
+
+### Text shortcuts
+
+`{label}_text()` is emitted when the label's only possible child type is a `Span` (a
+literal or regex) and the label is single-valued. It replaces the two-hop
+`node.child_foo()` + span-to-text dance:
+
+```python
+number.value_text()  # -> str        (required label)
+suffix.unit_text()  # -> str | None (optional label; None when the child is absent)
+```
+
+`text()` is emitted on **terminal-only** rules — rules whose children are all spans — and
+returns the node's own span text. Note that a node's span covers suppressed content too:
+
+```fltkg
+string_literal := %"\"" . content:/[^"]*/ . %"\"" ;
+```
+
+```python
+lit.text()  # '"hello"'  — the node span, quotes included
+lit.content_text()  # 'hello'    — the labeled span only
+```
+
+### `variant()`
+
+`variant()` is emitted on rules that are pure dispatch: two or more alternatives, each of
+which is exactly one required, labeled item. It returns the `Label` of the node's sole
+labeled child, so a `match` replaces a chain of `maybe_*` probes:
+
+```fltkg
+statement := assign:assignment | call:call_expr | ret:return_stmt ;
+```
+
+```python
+match statement.variant():
+    case Statement.Label.ASSIGN:
+        ...
+    case Statement.Label.CALL:
+        ...
+```
+
+Because unlabeled rule references get the rule name as an implicit label, this covers plain
+`a := b | c | d ;` dispatch rules too. `Label` values compare equal across the Python and
+Rust backends, so `variant()` results are interchangeable.
+
+### Name collisions: skipped, never renamed
+
+These members put label names directly into the class namespace, so a label can collide
+with something that is already there. When that happens the **new** member is dropped and
+the existing surface wins; generation logs the rule, member and reason, and never fails.
+A candidate is skipped when its name:
+
+- is a fixed member of the node class (`span`, `kind`, `children`, `child`, `append`,
+  `text`, `variant`, ...),
+- is already claimed by another label's five-method set (label `x` and label `append_x`
+  together: `append_x`'s bare accessor loses, because `x`'s `append_x()` was claimed first),
+- starts with `__` (Python name mangling would rewrite it, and dunders would shadow the
+  dataclass's own),
+- is a Python keyword, or one of the Rust keywords that cannot be written as a raw
+  identifier (`crate`, `self`, `super`, `Self`, `_`).
+
+Other Rust keywords are fine: a label named `type` becomes `r#type()` on the Rust native
+surface and keeps the name `type()` in Python.
+
+The routine case is a label that shadows a rule-level member. In
+`identifier := text:/[a-z]+/ ;`, the label `text` loses its bare accessor to the rule-level
+`text()`, and `text_text()` is emitted for the labeled span — so `identifier.text()` still
+returns the string you wanted.
+
+Candidates are claimed in a fixed order (`text`, `variant`, then per label in sorted order
+the bare accessor followed by its text shortcut), so the outcome is deterministic and the
+same on both backends.
+
+### Errors, and the Rust native panic contract
+
+Everything reachable from Python — the Python backend's classes and the Rust backend's
+Python bindings alike — raises `ValueError` on a violated expectation, with the same
+message the corresponding `child_*`/`maybe_*` method would produce. `*_text()` and `text()`
+raise if the span carries no source, which only happens for hand-built nodes; storing a
+non-`Span` child under a span label (only possible through the untyped `append`/`extend`)
+makes `*_text()` raise `TypeError` naming the label.
+
+Two error wordings are backend-specific rather than shared: the `maybe_*` count message for
+a duplicated child, and the message for a span whose indices are out of range for its
+source. Both come from surfaces that predate these members and that the new members report
+verbatim; match on the exception type, not the message text, if you switch backends.
+
+The Rust **native** surface is different, deliberately. `child_foo()` and friends return
+`Result<_, CstError>` and never panic; the ergonomic accessors return the value directly
+and **panic** when the tree violates what the grammar guarantees — the wrong child count,
+or a sourceless span. Only hand construction or hand mutation can produce such a tree; a
+parser-produced one cannot. Reach for the checked five-method set in code that builds or
+mutates trees, and for the ergonomic accessors when consuming a parse result.
 
 ## Trivia Handling
 

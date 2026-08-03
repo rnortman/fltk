@@ -1,7 +1,8 @@
 // Fixture grammar for Rust parser generator tests.
 // Covers: literal, regex, quantifiers (+, ?, *), WS_REQUIRED separator,
 //         sub-expression, union label, suppress, include,
-//         direct + indirect left recursion, multibyte literal + regex.
+//         direct + indirect left recursion, multibyte literal + regex,
+//         inline (!) splicing, Rust-keyword labels.
 
 // A number (one or more digits)
 num := value:/[0-9]+/ ;
@@ -49,7 +50,7 @@ tagged := $"tag" . value:/[a-z]+/ ;
 
 // Union label: the same label "item" applies to two different types (num node, name node,
 // or a bare regex span).  The third alternative exercises the union-span arm
-// (cst::ValChild::Span) of the append path (design §2.6B).
+// (cst::ValChild::Span) of the append path.
 val := item:num | item:name | item:/[!@#$]+/ ;
 
 // Rule with a leading WS_ALLOWED separator (initial_sep).
@@ -69,11 +70,11 @@ rec_via_sub := (inner:rec_via_sub . "+" | inner:atom) . suffix:name ;
 nest := %"(" . inner:nest . %")" | leaf:num ;
 
 // Left recursion whose growth step descends into nesting: a depth-rejected growth
-// iteration stalls grow_seed, which returns the seed — the Some-with-flag shape (§2).
+// iteration stalls grow_seed, which returns the seed — the Some-with-flag shape.
 nest_sum := lhs:nest_sum . "+" . rhs:nest | first:nest ;
 
 // ---------------------------------------------------------------------------
-// Portable-but-tricky regex parity cases (design §5.6)
+// Portable-but-tricky regex parity cases
 // Each rule exercises a regex construct verified portable on both Python re and
 // Rust regex-automata.  Every pattern is non-nullable (matches ≥1 character) so
 // it is safe in quantified rules.
@@ -110,3 +111,44 @@ case_insensitive := value:/(?i)[a-z]+/ ;
 // Anchored pattern: ^ and $ (line anchors, portable)
 // Must consume entire input for parity tests to work; use non-empty prefix
 anchored_word := value:/^[a-z]+$/ ;
+
+// ---------------------------------------------------------------------------
+// Inline disposition (!)
+// The referenced rule contributes no node of its own: its children become the
+// caller's children, under the caller's Label enum.  The rule still exists and
+// is still independently parseable.
+// ---------------------------------------------------------------------------
+
+// The body spliced by the wrappers below.
+pair := key:name . "=" . val:num ;
+
+// Unquantified splice: Wrapper's children are Pair's children, no Pair node.
+wrapper := %"[" . !pair . %"]" ;
+
+// Optional splice: the quantifier applies to the whole spliced body.
+opt_wrapper := %"<" . !pair? . %">" ;
+
+// Repeated splice inside a sub-expression: key/val become collections.
+rep_wrapper := %"{" . (!pair . %";")* . %"}" ;
+
+// ---------------------------------------------------------------------------
+// Rust-keyword labels: the native bare accessors are raw identifiers (r#type,
+// r#match) while the Python-visible names stay unescaped.  `type` is span-only
+// and single, so it also gets a type_text() shortcut.
+// ---------------------------------------------------------------------------
+kw_labels := type:/[a-z]+/ . "#" . match:num ;
+
+// ---------------------------------------------------------------------------
+// Terminal-only rule with suppressed delimiters and an optional span label.
+// The node's own span covers the quotes, so text() returns "'ab5'" where
+// value_text() returns "ab"; tail is optional, so tail_text() returns None
+// when it is absent.
+// ---------------------------------------------------------------------------
+quoted := %"'" . value:/[a-z]+/ . tail:/[0-9]/? . %"'" ;
+
+// ---------------------------------------------------------------------------
+// Optional span label beside a node label: the child enum has both a Span and a
+// node variant, so key_text() carries a wrong-variant arm on the optional path.
+// That arm is only reachable through the untyped mutators.
+// ---------------------------------------------------------------------------
+mixed_opt := key:/[a-z]+/? . node:num ;
