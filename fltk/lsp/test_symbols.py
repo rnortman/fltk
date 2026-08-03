@@ -149,7 +149,7 @@ def test_namespace_opens_a_nested_scope() -> None:
     assert text[inner.start : inner.end].startswith("mod m")
 
 
-# --- Namespace hoist (§2.1) -----------------------------------------------------------------------
+# --- Namespace hoist ------------------------------------------------------------------------------
 
 
 def test_namespace_name_hoists_and_members_stay_inside() -> None:

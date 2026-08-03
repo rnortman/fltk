@@ -40,11 +40,14 @@ def parse_grammar(grammar_text: str) -> gsm.Grammar:
     Args:
         grammar_text: The .fltkg grammar source text
 
+    Inline (``!``) dispositions are expanded away here, so no consumer of the returned
+    grammar ever sees an INLINE item.
+
     Returns:
         The parsed grammar
 
     Raises:
-        ValueError: If grammar parsing fails
+        ValueError: If grammar parsing or inline expansion fails
     """
     terminals = terminalsrc.TerminalSource(grammar_text)
 
@@ -62,7 +65,7 @@ def parse_grammar(grammar_text: str) -> gsm.Grammar:
 
     cst2gsm = fltk2gsm.Cst2Gsm(terminals.terminals)
     # result.result is typed Any (ParseResult.cst: Any); cast to satisfy visit_grammar's annotation.
-    return cst2gsm.visit_grammar(cast("cst.Grammar", result.result))
+    return gsm.expand_inline_dispositions(cst2gsm.visit_grammar(cast("cst.Grammar", result.result)))
 
 
 def parse_grammar_file(grammar_path: Path) -> gsm.Grammar:

@@ -111,10 +111,14 @@ class Cst2Gsm:
         # cst_label is a raw CST node; visit_identifier reads only span offsets off it,
         # so no self.cst isinstance dispatch is needed here.
         label = self.visit_identifier(cst_label).value if (cst_label := item.maybe_label()) else None
-        if label is None and isinstance(term, gsm.Identifier):
-            label = term.value
 
         disposition = self.visit_disposition(cst_disposition) if (cst_disposition := item.maybe_disposition()) else None
+
+        # An unlabeled rule reference is implicitly labeled with the rule name, except under
+        # INLINE: an inlined rule contributes no node, so there is nothing for a label to name.
+        if label is None and isinstance(term, gsm.Identifier) and disposition != gsm.Disposition.INLINE:
+            label = term.value
+
         if disposition is None:
             if label or isinstance(term, Sequence):
                 disposition = gsm.Disposition.INCLUDE

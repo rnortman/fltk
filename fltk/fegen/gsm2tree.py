@@ -7,7 +7,7 @@ from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Literal
 
 from fltk import pygen
-from fltk.fegen import gsm, naming
+from fltk.fegen import cst_ergonomics, gsm, naming
 from fltk.iir import model as iir
 from fltk.iir import typemodel
 from fltk.iir.py import compiler as pycompiler
@@ -17,6 +17,12 @@ if TYPE_CHECKING:
     from fltk.iir.context import CompilerContext
 
 ModelType = str | typemodel.TypeKey
+
+INLINE_NOT_EXPANDED_MSG = (
+    "INLINE disposition must be expanded with gsm.expand_inline_dispositions() before code generation"
+)
+
+ErgonomicMember = Literal["bare", "text", "rule_text", "variant"]
 
 
 @dataclass()
@@ -41,7 +47,17 @@ class CstGenerator:
         self.Span = iir.Type.make(cname="Span")
 
         for rule in self.grammar.rules:
-            self.rule_models[rule.name] = self.model_for_rule(rule, [])
+            self.rule_models[rule.name] = self.model_for_rule(rule)
+
+        # Computed once: all emission surfaces share the same plan, so a member exists on
+        # all of them or on none.
+        self.rule_plans: dict[str, cst_ergonomics.RulePlan] = {
+            rule.name: cst_ergonomics.plan_rule(rule, self.rule_models[rule.name]) for rule in self.grammar.rules
+        }
+
+    def plan_for_rule(self, rule_name: str) -> cst_ergonomics.RulePlan | None:
+        """The ergonomic member plan for a rule, or None for a model with no backing rule."""
+        return self.rule_plans.get(rule_name)
 
     def class_name_for_rule_node(self, rule_name: str) -> str:
         return naming.snake_to_upper_camel(rule_name)
@@ -208,7 +224,7 @@ class CstGenerator:
         module.body.extend(self._emit_node_kind_canonical_name_assignments())
 
         # Module-level helper: lazily resolve fltk._native.Span so the generated module never
-        # imports the native extension at load time (preserves pure-Python importability, §2.2).
+        # imports the native extension at load time (preserves pure-Python importability).
         # sys is imported at the top of generated modules to support lazy native-Span resolution.
         module.body.extend(
             ast.parse(
@@ -241,9 +257,7 @@ def _get_native_span_type():
             for label in labels:
                 label_enum.body.append(pygen.stmt(f"{label.upper()} = enum.auto()"))
 
-            # Cross-backend equality contract (§2.2): canonical-name-keyed eq/hash.
-            # _emit_cross_backend_eq_hash uses self._fltk_canonical_name, which is a plain string
-            # attribute set post-class (not a property) — see _emit_label_canonical_name_assignments.
+            # Cross-backend equality contract: canonical-name-keyed eq/hash.
             self._emit_cross_backend_eq_hash(label_enum)
 
             klass.body.append(label_enum)
@@ -254,12 +268,10 @@ def _get_native_span_type():
             )
             raise RuntimeError(msg)
         child_annotation = self.py_annotation_for_model_types(model_types=model.types, in_module=True)
-        # Mirror the Protocol generator's label_annotation pattern: when the node has labels, use
-        # Optional[Label]; when label-free, use None (matching Protocol/Rust reference exactly).
+        # Must match the Protocol generator's label_annotation pattern.
         label_annotation = "typing.Optional[Label]" if labels else "None"
-        # kind: instance attribute (dataclass field with default) for NodeKind discriminant (§2.4).
         # MUST NOT be ClassVar — pyright rejects ClassVar against the Protocol's instance-attr declaration.
-        # Use node_kind_member_name for the member name to stay in sync with the Protocol generator.
+        # Uses node_kind_member_name to stay in sync with the Protocol generator.
         kind_member = self.node_kind_member_name(rule_name) if rule_name else class_name.upper()
         klass.body.extend(
             [
@@ -318,9 +330,6 @@ def _get_native_span_type():
         )
         klass.body.append(child_fn)
 
-        # Four named mutators: insert / remove_at / replace_at / clear (§2.4)
-        # Validation helpers: emitted inline per-class (they reference class-specific Label enum
-        # and allowed child types).  Lazy native-Span resolution via the module-level helper.
         klass.body.extend(self._emit_py_mutators(class_name, child_annotation, label_annotation, model))
 
         multi_type = len(model.types) > 1
@@ -377,9 +386,85 @@ def _get_native_span_type():
             )
         )
 
+        plan = self.plan_for_rule(rule_name)
+        if plan is not None:
+            klass.body.extend(
+                self._emit_label_ergonomics(
+                    plan=plan,
+                    annotation_for=lambda label: child_annotation_by_labels[label],
+                    body_for=lambda member, label: self._concrete_ergonomic_body(
+                        plan=plan, class_name=class_name, member=member, label=label
+                    ),
+                )
+            )
+
         stmts: list[ast.stmt] = [klass]
         stmts.extend(self._emit_label_canonical_name_assignments(class_name, labels))
         return stmts
+
+    @staticmethod
+    def _concrete_ergonomic_body(
+        *,
+        plan: cst_ergonomics.RulePlan,
+        class_name: str,
+        member: ErgonomicMember,
+        label: str,
+    ) -> list[ast.stmt]:
+        """Method bodies for the ergonomic accessors on a concrete dataclass.
+
+        The per-label accessors delegate to the corresponding quintet member, so the
+        count-checking behaviour and the ValueError messages are identical by construction.
+
+        ``<label>_text`` raises ``TypeError`` when a non-Span child is stored under a span
+        label — only reachable through the untyped mutators.
+        """
+        if member == "bare":
+            arity = plan.bare_accessors[label]
+            if arity == cst_ergonomics.ArityClass.REQUIRED_SINGLE:
+                return [pygen.stmt(f"return self.child_{label}()")]
+            if arity == cst_ergonomics.ArityClass.OPTIONAL_SINGLE:
+                return [pygen.stmt(f"return self.maybe_{label}()")]
+            return [pygen.stmt(f"return list(self.children_{label}())")]
+        if member == "text":
+            arity = plan.text_accessors[label]
+            wrong_type_msg = f"{class_name}.{label}_text: child labelled '{label}' is not a Span"
+            if arity == cst_ergonomics.ArityClass.REQUIRED_SINGLE:
+                return ast.parse(
+                    f"""\
+child = self.child_{label}()
+try:
+    return child.text_or_raise()
+except AttributeError:
+    msg = "{wrong_type_msg}"
+    raise TypeError(msg) from None
+"""
+                ).body
+            return ast.parse(
+                f"""\
+child = self.maybe_{label}()
+if child is None:
+    return None
+try:
+    return child.text_or_raise()
+except AttributeError:
+    msg = "{wrong_type_msg}"
+    raise TypeError(msg) from None
+"""
+            ).body
+        if member == "rule_text":
+            return [pygen.stmt("return self.span.text_or_raise()")]
+        if member == "variant":
+            return ast.parse(
+                f"""\
+for label, _child in self.children:
+    if label is not None:
+        return label
+msg = "{class_name}.variant: node has no labeled child"
+raise ValueError(msg)
+"""
+            ).body
+        msg = f"Unknown ergonomic member: {member!r}"
+        raise ValueError(msg)
 
     def _emit_py_mutators(
         self,
@@ -391,8 +476,8 @@ def _get_native_span_type():
         """Emit insert / remove_at / replace_at / clear on the concrete dataclass.
 
         Validation is strict: child and label are type-checked before mutation, consistent with
-        §2.2 (new API is strict from day one; grandfathered append/extend are unchanged).
-        Lazy native-Span resolution via module-level _get_native_span_type() (§2.2 asymmetry).
+        New API is strict from day one; grandfathered append/extend are unchanged.
+        Lazy native-Span resolution via module-level _get_native_span_type().
 
         Returns a list of stmts: an optional class-variable assignment followed by FunctionDef
         nodes.  The class-variable (_MUTATOR_ALLOWED_CHILD_TYPES) is emitted only when the node
@@ -435,7 +520,7 @@ def _get_native_span_type():
             fns.extend(ast.parse("_MUTATOR_ALLOWED_CHILD_TYPES = None\n").body)
 
         # Emit _check_child_type: validates that child is an allowed type.
-        # When Span types are present, native Span must be checked lazily (§2.2 asymmetry).
+        # When Span types are present, native Span must be checked lazily.
         # Static checks use `isinstance(child, A | B)` (UP038 / Python 3.10+ union syntax).
         # Dynamic check uses a class-level tuple _MUTATOR_ALLOWED_CHILD_TYPES that starts with
         # the static types and is updated once (in-place, lock-free) when fltk._native is first
@@ -527,10 +612,10 @@ if label is not None:
             fns.append(check_label_fn)
 
         # insert(index, child, label=None) — list.insert clamping semantics via explicit clamp.
-        # Validation order: child → label → index, matching the Rust backend (§3).
+        # Validation order: child → label → index, matching the Rust backend.
         # Explicit clamping is required: CPython's list.insert raises OverflowError for indices
         # beyond ssize_t (e.g. 10**25), so we clamp after operator.index to match Rust's behaviour
-        # for arbitrarily-large ints (§3, pinned by test_insert_clamp_large_positive).
+        # for arbitrarily-large ints (pinned by test_insert_clamp_large_positive).
         insert_fn = pygen.function(
             "insert",
             f"self, index: int, child: {child_annotation}, label: {label_annotation} = None",
@@ -582,7 +667,7 @@ if norm < 0 or norm >= n:
         fns.append(remove_fn)
 
         # replace_at(index, child, label=None) -> None — strict bounds check + parity message.
-        # Validation order: child → label → index, matching the Rust backend (§3).
+        # Validation order: child → label → index, matching the Rust backend.
         replace_fn = pygen.function(
             "replace_at",
             f"self, index: int, child: {child_annotation}, label: {label_annotation} = None",
@@ -607,7 +692,7 @@ self._check_label_type_for_mutators(label, "replace_at")
 
         return fns
 
-    def model_for_item(self, item: gsm.Item, inline_stack: list[str]) -> ItemsModel:
+    def model_for_item(self, item: gsm.Item) -> ItemsModel:
         if isinstance(item.term, gsm.Identifier):
             if item.term.value not in self.grammar.identifiers:
                 msg = f"Identifier {item.term.value} not in grammar"
@@ -616,34 +701,29 @@ self._check_label_type_for_mutators(label, "replace_at")
         if isinstance(item.term, gsm.Literal | gsm.Regex):
             return ItemsModel(types={self.Span.key})
         if isinstance(item.term, Sequence):
-            return self.model_for_alternatives(item.term, inline_stack)
+            return self.model_for_alternatives(item.term)
         msg = f"Term type {item.term}"
         raise NotImplementedError(msg)
 
-    def model_for_items(self, items: gsm.Items, inline_stack: list[str]) -> ItemsModel:
+    def model_for_items(self, items: gsm.Items) -> ItemsModel:
         model = ItemsModel()
         for item in items.items:
+            if item.disposition == gsm.Disposition.INLINE:
+                raise ValueError(INLINE_NOT_EXPANDED_MSG)
             if item.disposition == gsm.Disposition.SUPPRESS:
                 assert not isinstance(item.term, Sequence)
                 continue
-            if item.disposition == gsm.Disposition.INLINE:
-                assert isinstance(item.term, gsm.Identifier)
-                inline_rule = self.grammar.identifiers[item.term.value]
-                assert isinstance(inline_rule, gsm.Rule)
-                inline_model = self.model_for_rule(inline_rule, inline_stack)
-                model.incorporate(inline_model)
-            else:
-                item_model = self.model_for_item(item, inline_stack)
-                model.incorporate(item_model)
-                if item.label:
-                    assert not isinstance(item.term, Sequence)
-                    model.labels[item.label] |= item_model.types
+            item_model = self.model_for_item(item)
+            model.incorporate(item_model)
+            if item.label:
+                assert not isinstance(item.term, Sequence)
+                model.labels[item.label] |= item_model.types
         return model
 
-    def model_for_alternatives(self, alternatives: Iterable[gsm.Items], inline_stack: list[str]) -> ItemsModel:
+    def model_for_alternatives(self, alternatives: Iterable[gsm.Items]) -> ItemsModel:
         model = ItemsModel()
         for alternative in alternatives:
-            model.incorporate(self.model_for_items(alternative, inline_stack))
+            model.incorporate(self.model_for_items(alternative))
         return model
 
     def protocol_node_name(self, rule_name: str) -> str:
@@ -811,7 +891,7 @@ class _ProtocolLabelMember:
         Single home for the protocol-text rendering formula shared by the Python ``generate
         --protocol`` path (genparser.py) and the Rust ``RustCstGenerator.generate_protocol``
         path (gsm2tree_rs.py), so the two render byte-identical bytes through one code path
-        (design §2.2; the cross-path byte-identity test is the guardrail).
+        (the cross-path byte-identity test is the guardrail).
 
         File-level ruff suppressions:
         - N802: CstModule @property methods have PascalCase names matching module attributes
@@ -890,6 +970,65 @@ class _ProtocolLabelMember:
 
         return fns
 
+    def _emit_label_ergonomics(
+        self,
+        *,
+        plan: cst_ergonomics.RulePlan,
+        annotation_for: Callable[[str], str],
+        body_for: Callable[[ErgonomicMember, str], list[ast.stmt]],
+    ) -> list[ast.FunctionDef]:
+        """Emit the arity-aware ergonomic accessors.
+
+        Returns a flat list of FunctionDefs: per label in sorted order the bare accessor
+        ``<label>()`` and the span shortcut ``<label>_text()``, then the rule-level ``text()``
+        and ``variant()``.  Which of those the plan contains is decided in cst_ergonomics, so
+        all emission surfaces stay member-for-member identical.
+
+        Parameters
+        ----------
+        plan:
+            The rule's member plan.
+        annotation_for:
+            Maps label name → child type annotation string for that label.
+        body_for:
+            Maps (member kind, label) → list of body statements.  The label is the empty string
+            for the rule-level members.  Protocol callers return [pygen.stmt("...")] throughout.
+        """
+        fns: list[ast.FunctionDef] = []
+
+        for label in sorted(set(plan.bare_accessors) | set(plan.text_accessors)):
+            bare_arity = plan.bare_accessors.get(label)
+            if bare_arity is not None:
+                lann = annotation_for(label)
+                if bare_arity == cst_ergonomics.ArityClass.REQUIRED_SINGLE:
+                    ret = lann
+                elif bare_arity == cst_ergonomics.ArityClass.OPTIONAL_SINGLE:
+                    ret = f"typing.Optional[{lann}]"
+                else:
+                    ret = f"list[{lann}]"
+                fn = pygen.function(label, "self", ret)
+                fn.body = body_for("bare", label)
+                fns.append(fn)
+
+            text_arity = plan.text_accessors.get(label)
+            if text_arity is not None:
+                ret = "str" if text_arity == cst_ergonomics.ArityClass.REQUIRED_SINGLE else "typing.Optional[str]"
+                fn = pygen.function(f"{label}_text", "self", ret)
+                fn.body = body_for("text", label)
+                fns.append(fn)
+
+        if plan.rule_text:
+            fn = pygen.function("text", "self", "str")
+            fn.body = body_for("rule_text", "")
+            fns.append(fn)
+
+        if plan.variant:
+            fn = pygen.function("variant", "self", "Label")
+            fn.body = body_for("variant", "")
+            fns.append(fn)
+
+        return fns
+
     def _protocol_class_for_model(
         self, class_name: str, model: ItemsModel, rule_name: str, *, emit_kind_literal: bool
     ) -> ast.ClassDef:
@@ -902,7 +1041,6 @@ class _ProtocolLabelMember:
 
         labels = sorted(model.labels.keys())
 
-        # Nested Label class (if this node has labels)
         if labels:
             label_class = pygen.klass(name="Label")
             for label in labels:
@@ -915,12 +1053,8 @@ class _ProtocolLabelMember:
                 label_class.body.append(pygen.stmt(f"{label.upper()}: typing.ClassVar[object]"))
             klass.body.append(label_class)
 
-        # kind discriminant: emit Literal[NodeKind.X] with runtime default value.
-        # The protocol-local NodeKind is now a real runtime enum, so the default is readable as
-        # cst.<Node>.kind on the class object, enabling native .kind narrowing (probe D4).
-        # The discriminant form is controlled by the explicit emit_kind_literal parameter;
-        # py_module plays no role in protocol output.  emit_kind_literal=False yields the
-        # degraded `kind: object` form as a documented opt-out.
+        # Runtime default enables cst.<Node>.kind narrowing.
+        # py_module plays no role in protocol output.
         if rule_name and emit_kind_literal:
             member = self.node_kind_member_name(rule_name)
             klass.body.append(pygen.stmt(f"kind: typing.Literal[NodeKind.{member}] = NodeKind.{member}"))
@@ -962,7 +1096,7 @@ class _ProtocolLabelMember:
         child_fn.body.append(pygen.stmt("..."))
         klass.body.append(child_fn)
 
-        # Four named mutator stubs (§2.4, matching concrete class order)
+        # Order must match the concrete class.
         insert_fn = pygen.function(
             "insert",
             f"self, index: int, child: {child_annotation}, label: {label_annotation} = None",
@@ -1000,6 +1134,16 @@ class _ProtocolLabelMember:
             )
         )
 
+        plan = self.plan_for_rule(rule_name)
+        if plan is not None:
+            klass.body.extend(
+                self._emit_label_ergonomics(
+                    plan=plan,
+                    annotation_for=protocol_annotation_for,
+                    body_for=lambda _member, _label: [pygen.stmt("...")],
+                )
+            )
+
         return klass
 
     def _protocol_span_class(self) -> ast.ClassDef:
@@ -1035,16 +1179,12 @@ class _ProtocolLabelMember:
         # every backend. Consumers obtain Span from fltk.fegen.pyrt.span or fltk._native directly.
         return klass
 
-    def model_for_rule(self, rule: gsm.Rule, inline_stack: list[str]) -> ItemsModel:
-        if rule.name in inline_stack:
-            msg = f"Recursive cycle of inlined rules: {[*inline_stack, rule.name]}"
-            raise ValueError(msg)
-        inline_stack.append(rule.name)
+    def model_for_rule(self, rule: gsm.Rule) -> ItemsModel:
         try:
             return self.rule_models[rule.name]
         except KeyError:
             pass
-        model = self.model_for_alternatives(rule.alternatives, inline_stack)
+        model = self.model_for_alternatives(rule.alternatives)
 
         if self.rule_has_whitespace_separators(rule):
             if rule.is_trivia_rule:

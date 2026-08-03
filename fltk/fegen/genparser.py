@@ -30,11 +30,12 @@ app = typer.Typer(
 
 
 def _read_and_parse_grammar(grammar_file: Path) -> gsm.Grammar:
-    """Read a grammar file and return the raw GSM, with CLI-friendly error handling.
+    """Read a grammar file and return the GSM, with CLI-friendly error handling.
 
-    Runs the full file-read + TerminalSource + fltk_parser + Cst2Gsm pipeline and
-    exits via typer on any failure.  Does NOT apply trivia processing; callers are
-    responsible for calling add_trivia_rule_to_grammar / classify_trivia_rules if needed.
+    Runs the full file-read + TerminalSource + fltk_parser + Cst2Gsm pipeline plus inline
+    (``!``) expansion, and exits via typer on any failure.  Does NOT apply trivia processing;
+    callers are responsible for calling add_trivia_rule_to_grammar / classify_trivia_rules
+    if needed.
     """
     if not grammar_file.exists():
         typer.echo(f"Error: Grammar file '{grammar_file}' not found", err=True)
@@ -62,7 +63,13 @@ def _read_and_parse_grammar(grammar_file: Path) -> gsm.Grammar:
 
     cst2gsm = fltk2gsm.Cst2Gsm(terminals.terminals)
     # result.result is typed Any (ParseResult.cst: Any); cast to satisfy visit_grammar's annotation.
-    return cst2gsm.visit_grammar(cast("cst.Grammar", result.result))
+    grammar = cst2gsm.visit_grammar(cast("cst.Grammar", result.result))
+
+    try:
+        return gsm.expand_inline_dispositions(grammar)
+    except ValueError as e:
+        typer.echo(f"Error: Invalid grammar file '{grammar_file}': {e}", err=True)
+        raise typer.Exit(1) from e
 
 
 def parse_grammar_file(grammar_file: Path) -> gsm.Grammar:
@@ -474,7 +481,7 @@ def gen_rust_cst(
         raise typer.Exit(1) from e
 
     # Generate all artifact text before opening any file so a generation error doesn't leave
-    # partial files. Write order: .rs, then the protocol .py, then the .pyi (design §2.2).
+    # partial files. Write order: .rs, then the protocol .py, then the .pyi.
     pyi_text: str | None = None
     protocol_text: str | None = None
     try:
@@ -549,7 +556,7 @@ def _render_init_pyi(
     """Validate the stub-package marker options and render the ``__init__.pyi`` text.
 
     Shared by gen-rust-cst / gen-rust-unparser, which can both emit the grammar-independent
-    stub-package marker alongside the ``.pyi`` they already write (design §2.2).  Returns
+    stub-package marker alongside the ``.pyi`` they already write.  Returns
     ``None`` when ``--init-pyi-output`` is not given (no marker requested).  Otherwise exits via
     typer.Exit on a misconfiguration: ``--init-pyi-output`` requires both ``--extension-name``
     and ``--submodules``, and the extension name plus each comma-separated submodule entry must

@@ -279,7 +279,7 @@ assertion := value:/[bB]/ ;
 // `\A` (start of text, portable on both engines) and `\z` (end of text, Rust-only --
 // Python `re` rejects `\z` as a bad escape). `\Z` is EXCLUDED (Python accepts, Rust
 // rejects -- divergent). `\z` is admitted here because this lint targets the Rust
-// generator only (design.md §5.3): it is Rust-valid and would not cause a silent
+// generator only: it is Rust-valid and would not cause a silent
 // mis-parse on the Rust path; its Python non-portability is out of scope for a
 // Rust-only check (F3 in spike-outcome-gate.md). These are top-level only; inside a
 // class `[\A]`/`[\z]` are rejected by both engines, so they are not in any class

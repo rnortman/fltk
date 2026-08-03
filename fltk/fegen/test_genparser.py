@@ -39,8 +39,8 @@ def simple_grammar_file(tmp_path_factory: pytest.TempPathFactory) -> pathlib.Pat
 def test_gen_rust_cst_command_emits_source(simple_grammar_file: pathlib.Path, tmp_path: pathlib.Path) -> None:
     """Run gen-rust-cst on a small grammar and assert the output is correct Rust source.
 
-    Design §Test Plan Tier 1: output contains `pub fn register_classes`, the class
-    name ("Word"), and no `use crate::UNKNOWN_SPAN;`.
+    Output contains `pub fn register_classes`, the class name ("Word"), and no
+    `use crate::UNKNOWN_SPAN;`.
     """
     output_rs = tmp_path / "simple_cst.rs"
     runner = CliRunner()
@@ -78,7 +78,7 @@ def test_gen_rust_cst_sentinel_decoupled(simple_grammar_file: pathlib.Path, tmp_
     """Emitted preamble uses native Span::unknown() sentinel — no PyOnceLock cache, no
     fltk._native.UnknownSpan runtime import, no crate:: linkage.
 
-    Design §2.2 (native span sentinel) / §Test Plan item 2.
+    Verifies the emitted preamble uses native Span::unknown() without external imports.
     """
     output_rs = tmp_path / "sentinel_test_cst.rs"
     runner = CliRunner()
@@ -106,7 +106,7 @@ def test_gen_rust_cst_sentinel_decoupled(simple_grammar_file: pathlib.Path, tmp_
 def test_gen_rust_cst_no_double_trivia(simple_grammar_file: pathlib.Path) -> None:
     """_parse_grammar_raw feeds RustCstGenerator a grammar with no pre-existing _trivia rule.
 
-    Design §Test Plan Tier 1 and §genparser.py emit subcommand (double-trivia caveat):
+    Double-trivia caveat:
     _parse_grammar_raw must NOT call add_trivia_rule_to_grammar. The grammar it
     returns must therefore lack _trivia when the .fltkg source does not define one.
     RustCstGenerator applies trivia processing internally; receiving a pre-processed
@@ -124,7 +124,7 @@ def test_gen_rust_cst_no_double_trivia(simple_grammar_file: pathlib.Path) -> Non
 
 
 # ---------------------------------------------------------------------------
-# test_gsm2parser_extend_children_emission  (§2.3/§2.5 parser-generator change)
+# test_gsm2parser_extend_children_emission
 # ---------------------------------------------------------------------------
 
 # Grammar with a repeating term that becomes inline_to_parent.
@@ -138,7 +138,7 @@ word := value:/[a-z]+/ ;
 def test_gsm2parser_extend_children_call_site(tmp_path: pathlib.Path) -> None:
     """gsm2parser emits extend_children calls, not .children.extend(), for inline-to-parent sites.
 
-    Design §2.3 parser-generator note / §2.5 partial: generated parsers must route
+    Generated parsers must route
     child mutations through the node's own extend_children method so the native Vec
     is updated (not a throwaway rebuilt PyList from the getter).
     """
@@ -251,7 +251,7 @@ def test_generated_parser_concrete_terminalsrc_span_annotations(tmp_path: pathli
 
 
 # ---------------------------------------------------------------------------
-# generate --protocol opt-in CLI tests (§2.1)
+# generate --protocol opt-in CLI tests
 # ---------------------------------------------------------------------------
 
 
@@ -532,7 +532,7 @@ def test_gen_rust_cst_invalid_protocol_module(simple_grammar_file: pathlib.Path,
 
 
 # ---------------------------------------------------------------------------
-# gen-rust-cst --protocol-output CLI tests (§2.2)
+# gen-rust-cst --protocol-output CLI tests
 # ---------------------------------------------------------------------------
 
 
@@ -593,7 +593,7 @@ def test_gen_rust_cst_protocol_output_writes_protocol_pyi_and_rs(
 def test_gen_rust_cst_protocol_output_matches_python_protocol(
     simple_grammar_file: pathlib.Path, tmp_path: pathlib.Path
 ) -> None:
-    """Cross-path byte-identity: gen-rust-cst --protocol-output equals generate --protocol (§1.2/§2.2).
+    """Cross-path byte-identity: gen-rust-cst --protocol-output equals generate --protocol.
 
     The protocol module is backend-agnostic; the Rust path must produce a protocol .py
     byte-identical to the Python `generate --protocol` (and `--protocol-only`) output for
@@ -630,7 +630,7 @@ def test_gen_rust_cst_protocol_output_matches_python_protocol(
     assert rust_protocol == py_protocol, (
         "Rust --protocol-output must be byte-identical to Python generate --protocol for the same grammar"
     )
-    # Guard the discriminant form (§1.2): the Literal kind, not the degraded `kind: object`.
+    # Guard the discriminant form: the Literal kind, not the degraded `kind: object`.
     assert "typing.Literal[NodeKind." in rust_protocol
     assert "kind: object" not in rust_protocol
 
@@ -638,7 +638,7 @@ def test_gen_rust_cst_protocol_output_matches_python_protocol(
 def test_gen_rust_cst_rs_unchanged_with_protocol_output(
     simple_grammar_file: pathlib.Path, tmp_path: pathlib.Path
 ) -> None:
-    """Adding --protocol-output does not change the .rs output (additive, §2.3)."""
+    """Adding --protocol-output does not change the .rs output (additive)."""
     rs_plain = tmp_path / "plain" / "cst.rs"
     rs_with = tmp_path / "with" / "cst.rs"
     rs_plain.parent.mkdir()
@@ -665,7 +665,7 @@ def test_gen_rust_cst_rs_unchanged_with_protocol_output(
 
 
 # ---------------------------------------------------------------------------
-# gen-rust-cst --init-pyi-output stub-package marker CLI tests (§2.2)
+# gen-rust-cst --init-pyi-output stub-package marker CLI tests
 # ---------------------------------------------------------------------------
 
 
@@ -848,7 +848,7 @@ def test_gen_rust_cst_init_pyi_rejects_malformed_extension_name(
 
 
 # ---------------------------------------------------------------------------
-# gen-rust-parser CLI tests  (design §4 item 2)
+# gen-rust-parser CLI tests
 # ---------------------------------------------------------------------------
 
 
@@ -879,15 +879,28 @@ def test_gen_rust_parser_missing_grammar_file(tmp_path: pathlib.Path) -> None:
 
 def test_gen_rust_parser_generation_error_no_partial_file(tmp_path: pathlib.Path) -> None:
     """gen-rust-parser exits 1 on generation error and leaves no partial output file."""
-    # A grammar that triggers NotImplementedError: use INLINE disposition on an identifier.
+    # A labeled INLINE item is rejected during inline expansion: an inlined rule contributes
+    # no node of its own, so there is nothing for the label to name.
     bad_grammar = tmp_path / "bad.fltkg"
-    bad_grammar.write_text("parent := !child:child ;\nchild := value:/[a-z]+/ ;\n")
+    bad_grammar.write_text("parent := x:!child ;\nchild := value:/[a-z]+/ ;\n")
     output_rs = tmp_path / "parser.rs"
     runner = CliRunner()
     result = runner.invoke(app, ["gen-rust-parser", str(bad_grammar), str(output_rs)])
 
     assert result.exit_code != 0, "Expected non-zero exit for unsupported grammar feature"
     assert not output_rs.exists(), "No partial output file should be created on generation error"
+
+
+def test_gen_rust_parser_inline_disposition(tmp_path: pathlib.Path) -> None:
+    """gen-rust-parser accepts a grammar using the `!` inline disposition."""
+    grammar_file = tmp_path / "inline.fltkg"
+    grammar_file.write_text("parent := !child ;\nchild := value:/[a-z]+/ ;\n")
+    output_rs = tmp_path / "parser.rs"
+    runner = CliRunner()
+    result = runner.invoke(app, ["gen-rust-parser", str(grammar_file), str(output_rs)])
+
+    assert result.exit_code == 0, f"gen-rust-parser failed:\n{result.output}\n{result.exception}"
+    assert "pub fn apply__parse_parent(" in output_rs.read_text()
 
 
 def test_gen_rust_parser_invalid_cst_mod_path(simple_grammar_file: pathlib.Path, tmp_path: pathlib.Path) -> None:
@@ -918,7 +931,7 @@ def test_gen_rust_parser_custom_cst_mod_path(simple_grammar_file: pathlib.Path, 
 
 
 # ---------------------------------------------------------------------------
-# gen-rust-unparser CLI tests  (design §2.5 / §4)
+# gen-rust-unparser CLI tests
 # ---------------------------------------------------------------------------
 
 
@@ -1198,14 +1211,14 @@ def test_gen_rust_unparser_pyi_write_failure_exits_cleanly(
 
 
 # ---------------------------------------------------------------------------
-# gen-rust-unparser --init-pyi-output stub-package marker CLI tests (§2.2 / §2.7)
+# gen-rust-unparser --init-pyi-output stub-package marker CLI tests
 # ---------------------------------------------------------------------------
 
 
 def test_gen_rust_unparser_init_pyi_writes_marker(simple_grammar_file: pathlib.Path, tmp_path: pathlib.Path) -> None:
     """--init-pyi-output on gen-rust-unparser writes a comment-only marker alongside the .rs.
 
-    Mirrors the gen-rust-cst marker path: this is the routing the rust_parser_fixture uses (§2.7),
+    Mirrors the gen-rust-cst marker path: this is the routing the rust_parser_fixture uses,
     where the package's only .pyi comes from the unparser invocation, not the CST one.
     """
     import ast  # noqa: PLC0415
@@ -1385,7 +1398,7 @@ def test_gen_rust_unparser_init_pyi_rejects_malformed_extension_name(
 
 
 # ---------------------------------------------------------------------------
-# gen-rust-lib CLI tests  (design §2.3 / §4)
+# gen-rust-lib CLI tests
 # ---------------------------------------------------------------------------
 
 

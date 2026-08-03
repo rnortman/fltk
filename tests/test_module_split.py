@@ -1,10 +1,10 @@
-"""Module-split acceptance tests: §4.3-§4.6 of the rust-bindings-module-split design.
+"""Module-split acceptance tests.
 
 Verifies:
-  §4.3 -- collision fixture: Parser/ApplyResult CST classes and parser machinery coexist.
-  §4.4 -- import mechanics for fegen_rust_cst (sys.modules, from-import, importlib).
-  §4.5 -- Span/SourceText absent from generated modules; present where required.
-  §4.6 -- fltk._native is runtime-only; PoC classes live in poc_cst.cst; fegen CST in fegen_rust_cst.
+  - Collision fixture: Parser/ApplyResult CST classes and parser machinery coexist.
+  - Import mechanics for fegen_rust_cst (sys.modules, from-import, importlib).
+  - Span/SourceText absent from generated modules; present where required.
+  - fltk._native is runtime-only; PoC classes live in poc_cst.cst; fegen CST in fegen_rust_cst.
 """
 
 from __future__ import annotations
@@ -54,7 +54,7 @@ from poc_cst.cst import Items as PocItems  # noqa: E402
 from fltk._native import SourceText, Span  # noqa: E402
 
 # ===========================================================================
-# §4.3 -- Collision fixture headline acceptance test
+# Collision fixture headline acceptance test
 # ===========================================================================
 
 
@@ -129,7 +129,7 @@ class TestCollisionFixture:
 
 
 # ===========================================================================
-# §4.4 -- Import mechanics for fegen_rust_cst
+# Import mechanics for fegen_rust_cst
 # ===========================================================================
 
 
@@ -179,7 +179,7 @@ class TestImportMechanics:
 
 
 # ===========================================================================
-# §4.5 -- Span/SourceText drop from generated modules
+# Span/SourceText drop from generated modules
 # ===========================================================================
 
 
@@ -213,7 +213,7 @@ class TestSpanDrop:
         assert not hasattr(fegen_rust_cst.parser, "SourceText")
 
     def test_rust_parser_fixture_top_level_no_span(self):
-        """rust_parser_fixture top level has no Span attribute (§2.4 scoped drop)."""
+        """rust_parser_fixture top level has no Span attribute."""
         assert not hasattr(rust_parser_fixture, "Span")
 
     def test_rust_parser_fixture_top_level_no_source_text(self):
@@ -221,12 +221,12 @@ class TestSpanDrop:
         assert not hasattr(rust_parser_fixture, "SourceText")
 
     def test_phase4_roundtrip_cst_top_level_has_span(self):
-        """phase4_roundtrip_cst (rust_cst_fixture) keeps Span at top level (§2.4 exception)."""
+        """phase4_roundtrip_cst (rust_cst_fixture) keeps Span at top level."""
         assert hasattr(phase4_roundtrip_cst, "Span")
         assert isinstance(phase4_roundtrip_cst.Span, type)
 
     def test_phase4_roundtrip_cst_top_level_has_source_text(self):
-        """phase4_roundtrip_cst keeps SourceText at top level (§2.4 exception)."""
+        """phase4_roundtrip_cst keeps SourceText at top level."""
         assert hasattr(phase4_roundtrip_cst, "SourceText")
         assert isinstance(phase4_roundtrip_cst.SourceText, type)
 
@@ -240,7 +240,7 @@ class TestSpanDrop:
 
 
 # ===========================================================================
-# §4.6 -- fltk._native is runtime-only; PoC and fegen CST in standalone extensions
+# fltk._native is runtime-only; PoC and fegen CST in standalone extensions
 # ===========================================================================
 
 

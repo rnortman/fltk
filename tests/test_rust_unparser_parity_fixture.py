@@ -5,7 +5,7 @@ the Rust parser backends (capture_trivia=True), unparsed with both unparser back
 rendered to a string at matching RendererConfig; the rendered bytes must be equal.
 
 The Rust unparser bakes its FormatterConfig at generation time, so each config is a
-separate baked module. Design §4 requires parity over *both* configs, so this module
+separate baked module. Parity is required over *both* configs, so this module
 runs the shared corpus twice:
 
 - `.fltkfmt`: the committed Rust `unparser.rs` (baked with the fixture `.fltkfmt`,
@@ -94,7 +94,7 @@ def _rust_node(text: str, rule: str):
 # `.fltkfmt` config paths (before/after anchors, rule- and item-level group/nest/join,
 # WS_REQUIRED/WS_ALLOWED spacing, trivia collapse) plus default-spacing rules,
 # union labels, multibyte text, suppressed/included terms, sub-expressions, and
-# bounded-depth recursion (design §4: recursion without the deep-tree limit).
+# bounded-depth recursion (recursion without the deep-tree limit).
 _CORPUS = [
     # Basic rules (default spacing)
     ("num", "123"),
@@ -158,6 +158,22 @@ _CORPUS = [
     ("nest_sum", "42"),
     ("nest_sum", "42+99"),
     ("nest_sum", "1+(2)"),
+    # inline (!) splice: both unparsers walk the spliced body as a sub-expression
+    # against the caller's children, quantified and unquantified.
+    ("pair", "a=1"),
+    ("wrapper", "[a=1]"),
+    ("opt_wrapper", "<>"),
+    ("opt_wrapper", "<a=1>"),
+    ("rep_wrapper", "{}"),
+    ("rep_wrapper", "{a=1;b=2;}"),
+    # Rust-keyword labels
+    ("kw_labels", "abc#7"),
+    # suppressed delimiters re-emitted around a terminal-only body
+    ("quoted", "'ab'"),
+    ("quoted", "'ab5'"),
+    # optional span label beside a node label, present and absent
+    ("mixed_opt", "ab7"),
+    ("mixed_opt", "7"),
 ]
 
 _CORPUS_IDS = [f"{rule}-{n}" for n, (rule, _) in enumerate(_CORPUS)]

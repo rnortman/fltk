@@ -202,6 +202,12 @@ class Expr:
             raise ValueError(msg)
         return children[0] if children else None
 
+    def plus(self) -> list[fltk.fegen.pyrt.span_protocol.SpanProtocol]:
+        return list(self.children_plus())
+
+    def term(self) -> list[Term]:
+        return list(self.children_term())
+
 
 Expr.Label.PLUS._fltk_canonical_name = "Expr.Label.PLUS"
 Expr.Label.TERM._fltk_canonical_name = "Expr.Label.TERM"
@@ -373,6 +379,12 @@ class Term:
             raise ValueError(msg)
         return children[0] if children else None
 
+    def factor(self) -> list[Factor]:
+        return list(self.children_factor())
+
+    def mult(self) -> list[fltk.fegen.pyrt.span_protocol.SpanProtocol]:
+        return list(self.children_mult())
+
 
 Term.Label.FACTOR._fltk_canonical_name = "Term.Label.FACTOR"
 Term.Label.MULT._fltk_canonical_name = "Term.Label.MULT"
@@ -508,6 +520,12 @@ class Factor:
             raise ValueError(msg)
         return children[0] if children else None
 
+    def expr(self) -> Expr | None:
+        return self.maybe_expr()
+
+    def number(self) -> Number | None:
+        return self.maybe_number()
+
 
 Factor.Label.EXPR._fltk_canonical_name = "Factor.Label.EXPR"
 Factor.Label.NUMBER._fltk_canonical_name = "Factor.Label.NUMBER"
@@ -635,6 +653,20 @@ class Number:
             raise ValueError(msg)
         return children[0] if children else None
 
+    def value(self) -> fltk.fegen.pyrt.span_protocol.SpanProtocol:
+        return self.child_value()
+
+    def value_text(self) -> str:
+        child = self.child_value()
+        try:
+            return child.text_or_raise()
+        except AttributeError:
+            msg = "Number.value_text: child labelled 'value' is not a Span"
+            raise TypeError(msg) from None
+
+    def text(self) -> str:
+        return self.span.text_or_raise()
+
 
 Number.Label.VALUE._fltk_canonical_name = "Number.Label.VALUE"
 
@@ -760,6 +792,20 @@ class Trivia:
             msg = f"Expected at most one content child but have {n}"
             raise ValueError(msg)
         return children[0] if children else None
+
+    def content(self) -> fltk.fegen.pyrt.span_protocol.SpanProtocol:
+        return self.child_content()
+
+    def content_text(self) -> str:
+        child = self.child_content()
+        try:
+            return child.text_or_raise()
+        except AttributeError:
+            msg = "Trivia.content_text: child labelled 'content' is not a Span"
+            raise TypeError(msg) from None
+
+    def text(self) -> str:
+        return self.span.text_or_raise()
 
 
 Trivia.Label.CONTENT._fltk_canonical_name = "Trivia.Label.CONTENT"

@@ -10,7 +10,7 @@ import pytest
 from fltk.fegen.gsm2lib_rs import LibSpec, RustLibGenerator, Submodule, render_stub_package_init
 
 # ---------------------------------------------------------------------------
-# Standard output — design §4 "Unit (string output)" items
+# Standard output
 # ---------------------------------------------------------------------------
 
 
@@ -78,7 +78,7 @@ def test_standard_output_no_span_types() -> None:
 
 
 # ---------------------------------------------------------------------------
-# --no-parser / with_parser=False  — design §4 "Unit" items
+# --no-parser / with_parser=False
 # ---------------------------------------------------------------------------
 
 
@@ -102,7 +102,7 @@ def test_no_parser_keeps_cst() -> None:
 
 
 # ---------------------------------------------------------------------------
-# with_unparser  — design §2.5 LibSpec wiring
+# with_unparser (LibSpec wiring)
 # ---------------------------------------------------------------------------
 
 
@@ -157,7 +157,7 @@ def test_with_unparser_registration_order() -> None:
 
 
 # ---------------------------------------------------------------------------
-# Validation — design §4 "Unit" items
+# Validation
 # ---------------------------------------------------------------------------
 
 
@@ -414,7 +414,7 @@ def test_span_types_without_unknown_span_still_registers_submodules() -> None:
 
 
 # ---------------------------------------------------------------------------
-# render_stub_package_init — stub-package __init__.pyi marker (design §2.2, §5)
+# render_stub_package_init — stub-package __init__.pyi marker
 # ---------------------------------------------------------------------------
 
 

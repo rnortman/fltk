@@ -285,7 +285,7 @@ impl DepthParser {
     ///
     /// Left-recursive. The growth step calls `nest`, which is right-recursive; a small
     /// `max_depth` can depth-reject the `nest` call inside a growth iteration, stalling
-    /// `grow_seed` which returns the seed as `Some` with the flag set (T4 / §2 shape).
+    /// `grow_seed` which returns the seed as `Some` with the flag set.
     fn nest_sum(p: &mut DepthParser, pos: i64) -> Option<ApplyResult<Expr>> {
         // Alternative 1: nest_sum "+" nest (left-recursive)
         if let Some(ApplyResult { pos: p1, result: lhs }) = p.apply__nest_sum(pos) {
@@ -400,7 +400,7 @@ fn test_fail() {
     // a := b "+" num; b := a | num.
     // b(0): a(0) → poison (Failure seed); num("a") → None; b returns None.
     // a(0): b returned None; no fallback; a returns None.
-    // Exercises the failed-recursion-seed path (design §2.5 step 5).
+    // Exercises the failed-recursion-seed path.
     assert!(result.is_none());
 }
 
@@ -426,7 +426,7 @@ fn test_memoization_hit() {
 
 /// Verify that a `Failure` cache entry is not recomputed on the second call.
 ///
-/// Covers design §4.1: "Failure caching: failed rule re-queried at same pos does not re-execute."
+/// Failure caching: a failed rule re-queried at the same position does not re-execute.
 /// Maps to test_memo.py::test_fail (Python verifies `None`; we additionally verify no re-execution).
 #[test]
 fn test_failure_caching() {
@@ -536,7 +536,7 @@ fn test_depth_limit_t3_sticky() {
 /// - `grow_seed` stalls and returns the seed value (`1` at pos=1).
 /// - `apply__nest_sum` returns `Some(pos=1)` AND `depth_exceeded()` is true.
 ///
-/// This pins the §2 contract's premise: a `Some` result with the flag set must be discarded.
+/// Pins the contract premise: a `Some` result with the flag set must be discarded.
 #[test]
 fn test_depth_limit_t4_some_with_flag() {
     let input = tokens("1+(((9)))");
@@ -553,7 +553,7 @@ fn test_depth_limit_t4_some_with_flag() {
     let result = p.apply__nest_sum(0);
     assert!(p.packrat.depth_exceeded(), "depth_exceeded must be set (growth was depth-rejected)");
     // The result is Some (the seed `1` at pos=1), but the flag is set — must be discarded.
-    // We assert Some here to pin the §2 truncated-Some premise.
+    // We assert Some here to pin the truncated-Some premise.
     assert!(result.is_some(), "nest_sum should return Some(seed) even when growth was depth-rejected");
     let ApplyResult { pos, .. } = result.unwrap();
     assert_eq!(pos, 1, "seed was `1` at pos=1");
@@ -564,7 +564,7 @@ fn test_depth_limit_t4_some_with_flag() {
 
 /// T5 (zero limit): `max_depth = 0` rejects the very first `apply` call.
 ///
-/// Design §2: "max_depth == 0: first apply fails with flag set. Well-defined."
+/// `max_depth == 0`: the very first `apply` fails with the flag set.
 /// The guard uses `>=`, so depth=0 fires immediately. Tests that changing `>=` to `>`
 /// would be caught.
 #[test]

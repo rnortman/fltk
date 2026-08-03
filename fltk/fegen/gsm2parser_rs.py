@@ -47,7 +47,7 @@ import itertools
 from collections.abc import Sequence
 from dataclasses import dataclass
 
-from fltk.fegen import gsm
+from fltk.fegen import gsm, gsm2tree
 from fltk.fegen.gsm2tree_rs import RustCstGenerator
 from fltk.fegen.regex_portability import check_regex_portable
 
@@ -124,7 +124,7 @@ class RustParserGenerator:
         # Work from the grammar with trivia rules added and classified
         self._grammar = self._cst.grammar
         self._cst_mod_path = cst_mod_path
-        # None means "omit the 'from <source_name>' clause" in the header (design §2.2).
+        # None means "omit the 'from <source_name>' clause" in the header.
         self._source_name: str | None = source_name
 
         # Regex table: pattern -> index
@@ -793,7 +793,7 @@ class RustParserGenerator:
             # Validate portability before registering the pattern.  Check at the
             # user-term site (not inside _regex_idx) so the domain is author-written
             # patterns only -- _regex_idx is also called for the internal trivia
-            # pattern \s+ which the grammar author never wrote (design §5.3).
+            # pattern \s+ which the grammar author never wrote.
             # Gate on _regex_index miss so each distinct pattern is checked once --
             # a pattern used in N rules is fully re-parsed N times otherwise (the check
             # is pure and the result identical for a given string, so de-duplication is
@@ -874,8 +874,7 @@ class RustParserGenerator:
             return ""
 
         if item.disposition == gsm.Disposition.INLINE:
-            msg = "INLINE disposition is not supported in Rust parser generation"
-            raise NotImplementedError(msg)
+            raise ValueError(gsm2tree.INLINE_NOT_EXPANDED_MSG)
 
         if item_fn.inline_to_parent:
             # Sub-expression or multiple-items: extend children from item result
@@ -897,7 +896,7 @@ class RustParserGenerator:
         # to cst.rs (where `pub struct Py{CN}` names can collide with pyo3 imports) does NOT
         # apply here.  The `use pyo3::prelude::*` glob inside the nested `mod python_bindings`
         # is intentionally retained — it is self-contained and cannot collide with rule-derived
-        # names.  See design-buildfix.md §2.4 which identifies this asymmetry explicitly.
+        # names.
         # If a future change emits rule-derived names in parser.rs, this analysis must be
         # revisited and the glob must be replaced with an explicit import list for that block.
         boilerplate = """\
@@ -1028,7 +1027,7 @@ pub use python_bindings::register_classes;"""
     def _gen_regex_compile_test(self) -> str:
         """Emit the cfg(test) block that verifies all regex patterns compile.
 
-        Emitted only when the regex table is non-empty (design §2.4).
+        Emitted only when the regex table is non-empty.
         Runs under each downstream consumer's cargo test, naming any unsupported pattern.
         """
         lines = []
@@ -1060,8 +1059,7 @@ pub use python_bindings::register_classes;"""
             return ""
 
         if item.disposition == gsm.Disposition.INLINE:
-            msg = "INLINE disposition is not supported in Rust parser generation"
-            raise NotImplementedError(msg)
+            raise ValueError(gsm2tree.INLINE_NOT_EXPANDED_MSG)
 
         child_enum = self._child_enum_name(rule.name)
         rule_name = rule.name

@@ -211,7 +211,7 @@ fn intersect_disjoint_returns_unknown_sentinel() {
     let a = span(0, 5, &src);
     let b = span(6, 11, &src);
     let result = a.intersect(&b).expect("disjoint intersect should succeed (not Err)");
-    // Design §2.2: disjoint → Ok(Span::unknown())
+    // Disjoint spans intersect to Ok(Span::unknown()).
     assert!(result == Span::unknown());
 }
 
@@ -578,7 +578,7 @@ fn child_item_unexpected_child_type() {
 
 #[test]
 fn child_item_count_error_beats_type_error() {
-    // test-13 / design §4.3 item 2: two children with the right label, wrong type →
+    // Two children with the right label, wrong type →
     // ChildCount wins over UnexpectedChildType.
     let src = make_source();
     let mut items = Items::new(span(0, 5, &src));

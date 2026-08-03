@@ -20,10 +20,10 @@ use fltk_parser_core::{apply, ApplyResult, Cache, ErrorTracker, PackratState, Te
 
 use super::cst;
 
-pub const RULE_NAMES: [&str; 31] = ["num", "name", "atom", "paren_expr", "stmt", "items", "opt_item", "zero_items", "expr", "lval", "rval", "arrow", "latin_word", "tagged", "val", "leading_ws", "grouped", "rec_via_sub", "nest", "nest_sum", "digit_seq", "word_seq", "ws_seq", "three_to_five_digits", "exactly_two_digits", "escaped_metas", "latin_range", "nc_group_alt", "case_insensitive", "anchored_word", "_trivia"];
+pub const RULE_NAMES: [&str; 38] = ["num", "name", "atom", "paren_expr", "stmt", "items", "opt_item", "zero_items", "expr", "lval", "rval", "arrow", "latin_word", "tagged", "val", "leading_ws", "grouped", "rec_via_sub", "nest", "nest_sum", "digit_seq", "word_seq", "ws_seq", "three_to_five_digits", "exactly_two_digits", "escaped_metas", "latin_range", "nc_group_alt", "case_insensitive", "anchored_word", "pair", "wrapper", "opt_wrapper", "rep_wrapper", "kw_labels", "quoted", "mixed_opt", "_trivia"];
 
-const REGEX_PATTERNS: [&str; 15] = ["[0-9]+", "[a-z]+", "[À-ÿ]+", "[!@#$]+", "\\d+", "\\w+", "\\s+", "[0-9]{3,5}", "[0-9]{2}", "\\.\\*\\+", "[À-Ö]+", "(?:ab|cd)+", "(?i)[a-z]+", "^[a-z]+$", "[\\s]+"];
-static REGEX_CELLS: [OnceLock<Regex>; 15] = [OnceLock::new(), OnceLock::new(), OnceLock::new(), OnceLock::new(), OnceLock::new(), OnceLock::new(), OnceLock::new(), OnceLock::new(), OnceLock::new(), OnceLock::new(), OnceLock::new(), OnceLock::new(), OnceLock::new(), OnceLock::new(), OnceLock::new()];
+const REGEX_PATTERNS: [&str; 16] = ["[0-9]+", "[a-z]+", "[À-ÿ]+", "[!@#$]+", "\\d+", "\\w+", "\\s+", "[0-9]{3,5}", "[0-9]{2}", "\\.\\*\\+", "[À-Ö]+", "(?:ab|cd)+", "(?i)[a-z]+", "^[a-z]+$", "[0-9]", "[\\s]+"];
+static REGEX_CELLS: [OnceLock<Regex>; 16] = [OnceLock::new(), OnceLock::new(), OnceLock::new(), OnceLock::new(), OnceLock::new(), OnceLock::new(), OnceLock::new(), OnceLock::new(), OnceLock::new(), OnceLock::new(), OnceLock::new(), OnceLock::new(), OnceLock::new(), OnceLock::new(), OnceLock::new(), OnceLock::new()];
 
 fn regex_at(idx: usize) -> &'static Regex {
     REGEX_CELLS[idx].get_or_init(|| {
@@ -67,6 +67,13 @@ pub struct Parser {
     cache__parse_nc_group_alt: Cache<Shared<cst::NcGroupAlt>>,
     cache__parse_case_insensitive: Cache<Shared<cst::CaseInsensitive>>,
     cache__parse_anchored_word: Cache<Shared<cst::AnchoredWord>>,
+    cache__parse_pair: Cache<Shared<cst::Pair>>,
+    cache__parse_wrapper: Cache<Shared<cst::Wrapper>>,
+    cache__parse_opt_wrapper: Cache<Shared<cst::OptWrapper>>,
+    cache__parse_rep_wrapper: Cache<Shared<cst::RepWrapper>>,
+    cache__parse_kw_labels: Cache<Shared<cst::KwLabels>>,
+    cache__parse_quoted: Cache<Shared<cst::Quoted>>,
+    cache__parse_mixed_opt: Cache<Shared<cst::MixedOpt>>,
     cache__parse__trivia: Cache<Shared<cst::Trivia>>,
 }
 
@@ -112,6 +119,13 @@ impl Parser {
             cache__parse_nc_group_alt: Cache::new(),
             cache__parse_case_insensitive: Cache::new(),
             cache__parse_anchored_word: Cache::new(),
+            cache__parse_pair: Cache::new(),
+            cache__parse_wrapper: Cache::new(),
+            cache__parse_opt_wrapper: Cache::new(),
+            cache__parse_rep_wrapper: Cache::new(),
+            cache__parse_kw_labels: Cache::new(),
+            cache__parse_quoted: Cache::new(),
+            cache__parse_mixed_opt: Cache::new(),
             cache__parse__trivia: Cache::new(),
         }
     }
@@ -1310,12 +1324,418 @@ impl Parser {
         None
     }
 
+    pub fn apply__parse_pair(&mut self, pos: i64) -> Option<ApplyResult<Shared<cst::Pair>>> {
+        apply(self, 30u32, pos, |p| &mut p.packrat, |p| &mut p.cache__parse_pair, Self::parse_pair)
+    }
+
+    fn parse_pair__alt0__item0(&mut self, pos: i64) -> Option<ApplyResult<Shared<cst::Name>>> {
+        self.apply__parse_name(pos)
+    }
+
+    fn parse_pair__alt0__item1(&mut self, pos: i64) -> Option<ApplyResult<Span>> {
+        self.consume_literal(pos, "=")
+    }
+
+    fn parse_pair__alt0__item2(&mut self, pos: i64) -> Option<ApplyResult<Shared<cst::Num>>> {
+        self.apply__parse_num(pos)
+    }
+
+    fn parse_pair__alt0(&mut self, mut pos: i64) -> Option<ApplyResult<cst::Pair>> {
+        let span_start = pos;
+        let mut result = cst::Pair::new(Span::unknown());
+        let item0 = self.parse_pair__alt0__item0(pos)?;
+        pos = item0.pos;
+        result.append_key(item0.result);
+        let item1 = self.parse_pair__alt0__item1(pos)?;
+        pos = item1.pos;
+        let item2 = self.parse_pair__alt0__item2(pos)?;
+        pos = item2.pos;
+        result.append_val(item2.result);
+        result.set_span(Span::new_with_source(span_start, pos, self.terminals.source_text()));
+        Some(ApplyResult { pos, result })
+    }
+
+    fn parse_pair(&mut self, pos: i64) -> Option<ApplyResult<Shared<cst::Pair>>> {
+        if let Some(alt0) = self.parse_pair__alt0(pos) {
+            return Some(ApplyResult { pos: alt0.pos, result: Shared::new(alt0.result) });
+        }
+        None
+    }
+
+    pub fn apply__parse_wrapper(&mut self, pos: i64) -> Option<ApplyResult<Shared<cst::Wrapper>>> {
+        apply(self, 31u32, pos, |p| &mut p.packrat, |p| &mut p.cache__parse_wrapper, Self::parse_wrapper)
+    }
+
+    fn parse_wrapper__alt0__item0(&mut self, pos: i64) -> Option<ApplyResult<Span>> {
+        self.consume_literal(pos, "[")
+    }
+
+    fn parse_wrapper__alt0__item1__alts__alt0__item0(&mut self, pos: i64) -> Option<ApplyResult<Shared<cst::Name>>> {
+        self.apply__parse_name(pos)
+    }
+
+    fn parse_wrapper__alt0__item1__alts__alt0__item1(&mut self, pos: i64) -> Option<ApplyResult<Span>> {
+        self.consume_literal(pos, "=")
+    }
+
+    fn parse_wrapper__alt0__item1__alts__alt0__item2(&mut self, pos: i64) -> Option<ApplyResult<Shared<cst::Num>>> {
+        self.apply__parse_num(pos)
+    }
+
+    fn parse_wrapper__alt0__item1__alts__alt0(&mut self, mut pos: i64) -> Option<ApplyResult<cst::Wrapper>> {
+        let span_start = pos;
+        let mut result = cst::Wrapper::new(Span::unknown());
+        let item0 = self.parse_wrapper__alt0__item1__alts__alt0__item0(pos)?;
+        pos = item0.pos;
+        result.append_key(item0.result);
+        let item1 = self.parse_wrapper__alt0__item1__alts__alt0__item1(pos)?;
+        pos = item1.pos;
+        let item2 = self.parse_wrapper__alt0__item1__alts__alt0__item2(pos)?;
+        pos = item2.pos;
+        result.append_val(item2.result);
+        result.set_span(Span::new_with_source(span_start, pos, self.terminals.source_text()));
+        Some(ApplyResult { pos, result })
+    }
+
+    fn parse_wrapper__alt0__item1__alts(&mut self, pos: i64) -> Option<ApplyResult<cst::Wrapper>> {
+        if let Some(r) = self.parse_wrapper__alt0__item1__alts__alt0(pos) {
+            return Some(r);
+        }
+        None
+    }
+
+    fn parse_wrapper__alt0__item1(&mut self, pos: i64) -> Option<ApplyResult<cst::Wrapper>> {
+        self.parse_wrapper__alt0__item1__alts(pos)
+    }
+
+    fn parse_wrapper__alt0__item2(&mut self, pos: i64) -> Option<ApplyResult<Span>> {
+        self.consume_literal(pos, "]")
+    }
+
+    fn parse_wrapper__alt0(&mut self, mut pos: i64) -> Option<ApplyResult<cst::Wrapper>> {
+        let span_start = pos;
+        let mut result = cst::Wrapper::new(Span::unknown());
+        let item0 = self.parse_wrapper__alt0__item0(pos)?;
+        pos = item0.pos;
+        let item1 = self.parse_wrapper__alt0__item1(pos)?;
+        pos = item1.pos;
+        result.extend_children(&item1.result);
+        let item2 = self.parse_wrapper__alt0__item2(pos)?;
+        pos = item2.pos;
+        result.set_span(Span::new_with_source(span_start, pos, self.terminals.source_text()));
+        Some(ApplyResult { pos, result })
+    }
+
+    fn parse_wrapper(&mut self, pos: i64) -> Option<ApplyResult<Shared<cst::Wrapper>>> {
+        if let Some(alt0) = self.parse_wrapper__alt0(pos) {
+            return Some(ApplyResult { pos: alt0.pos, result: Shared::new(alt0.result) });
+        }
+        None
+    }
+
+    pub fn apply__parse_opt_wrapper(&mut self, pos: i64) -> Option<ApplyResult<Shared<cst::OptWrapper>>> {
+        apply(self, 32u32, pos, |p| &mut p.packrat, |p| &mut p.cache__parse_opt_wrapper, Self::parse_opt_wrapper)
+    }
+
+    fn parse_opt_wrapper__alt0__item0(&mut self, pos: i64) -> Option<ApplyResult<Span>> {
+        self.consume_literal(pos, "<")
+    }
+
+    fn parse_opt_wrapper__alt0__item1__alts__alt0__item0(&mut self, pos: i64) -> Option<ApplyResult<Shared<cst::Name>>> {
+        self.apply__parse_name(pos)
+    }
+
+    fn parse_opt_wrapper__alt0__item1__alts__alt0__item1(&mut self, pos: i64) -> Option<ApplyResult<Span>> {
+        self.consume_literal(pos, "=")
+    }
+
+    fn parse_opt_wrapper__alt0__item1__alts__alt0__item2(&mut self, pos: i64) -> Option<ApplyResult<Shared<cst::Num>>> {
+        self.apply__parse_num(pos)
+    }
+
+    fn parse_opt_wrapper__alt0__item1__alts__alt0(&mut self, mut pos: i64) -> Option<ApplyResult<cst::OptWrapper>> {
+        let span_start = pos;
+        let mut result = cst::OptWrapper::new(Span::unknown());
+        let item0 = self.parse_opt_wrapper__alt0__item1__alts__alt0__item0(pos)?;
+        pos = item0.pos;
+        result.append_key(item0.result);
+        let item1 = self.parse_opt_wrapper__alt0__item1__alts__alt0__item1(pos)?;
+        pos = item1.pos;
+        let item2 = self.parse_opt_wrapper__alt0__item1__alts__alt0__item2(pos)?;
+        pos = item2.pos;
+        result.append_val(item2.result);
+        result.set_span(Span::new_with_source(span_start, pos, self.terminals.source_text()));
+        Some(ApplyResult { pos, result })
+    }
+
+    fn parse_opt_wrapper__alt0__item1__alts(&mut self, pos: i64) -> Option<ApplyResult<cst::OptWrapper>> {
+        if let Some(r) = self.parse_opt_wrapper__alt0__item1__alts__alt0(pos) {
+            return Some(r);
+        }
+        None
+    }
+
+    fn parse_opt_wrapper__alt0__item1(&mut self, pos: i64) -> Option<ApplyResult<cst::OptWrapper>> {
+        self.parse_opt_wrapper__alt0__item1__alts(pos)
+    }
+
+    fn parse_opt_wrapper__alt0__item2(&mut self, pos: i64) -> Option<ApplyResult<Span>> {
+        self.consume_literal(pos, ">")
+    }
+
+    fn parse_opt_wrapper__alt0(&mut self, mut pos: i64) -> Option<ApplyResult<cst::OptWrapper>> {
+        let span_start = pos;
+        let mut result = cst::OptWrapper::new(Span::unknown());
+        let item0 = self.parse_opt_wrapper__alt0__item0(pos)?;
+        pos = item0.pos;
+        if let Some(item1) = self.parse_opt_wrapper__alt0__item1(pos) {
+            pos = item1.pos;
+            result.extend_children(&item1.result);
+        }
+        let item2 = self.parse_opt_wrapper__alt0__item2(pos)?;
+        pos = item2.pos;
+        result.set_span(Span::new_with_source(span_start, pos, self.terminals.source_text()));
+        Some(ApplyResult { pos, result })
+    }
+
+    fn parse_opt_wrapper(&mut self, pos: i64) -> Option<ApplyResult<Shared<cst::OptWrapper>>> {
+        if let Some(alt0) = self.parse_opt_wrapper__alt0(pos) {
+            return Some(ApplyResult { pos: alt0.pos, result: Shared::new(alt0.result) });
+        }
+        None
+    }
+
+    pub fn apply__parse_rep_wrapper(&mut self, pos: i64) -> Option<ApplyResult<Shared<cst::RepWrapper>>> {
+        apply(self, 33u32, pos, |p| &mut p.packrat, |p| &mut p.cache__parse_rep_wrapper, Self::parse_rep_wrapper)
+    }
+
+    fn parse_rep_wrapper__alt0__item0(&mut self, pos: i64) -> Option<ApplyResult<Span>> {
+        self.consume_literal(pos, "{")
+    }
+
+    fn parse_rep_wrapper__alt0__item1__alts__alt0__item0__alts__alt0__item0(&mut self, pos: i64) -> Option<ApplyResult<Shared<cst::Name>>> {
+        self.apply__parse_name(pos)
+    }
+
+    fn parse_rep_wrapper__alt0__item1__alts__alt0__item0__alts__alt0__item1(&mut self, pos: i64) -> Option<ApplyResult<Span>> {
+        self.consume_literal(pos, "=")
+    }
+
+    fn parse_rep_wrapper__alt0__item1__alts__alt0__item0__alts__alt0__item2(&mut self, pos: i64) -> Option<ApplyResult<Shared<cst::Num>>> {
+        self.apply__parse_num(pos)
+    }
+
+    fn parse_rep_wrapper__alt0__item1__alts__alt0__item0__alts__alt0(&mut self, mut pos: i64) -> Option<ApplyResult<cst::RepWrapper>> {
+        let span_start = pos;
+        let mut result = cst::RepWrapper::new(Span::unknown());
+        let item0 = self.parse_rep_wrapper__alt0__item1__alts__alt0__item0__alts__alt0__item0(pos)?;
+        pos = item0.pos;
+        result.append_key(item0.result);
+        let item1 = self.parse_rep_wrapper__alt0__item1__alts__alt0__item0__alts__alt0__item1(pos)?;
+        pos = item1.pos;
+        let item2 = self.parse_rep_wrapper__alt0__item1__alts__alt0__item0__alts__alt0__item2(pos)?;
+        pos = item2.pos;
+        result.append_val(item2.result);
+        result.set_span(Span::new_with_source(span_start, pos, self.terminals.source_text()));
+        Some(ApplyResult { pos, result })
+    }
+
+    fn parse_rep_wrapper__alt0__item1__alts__alt0__item0__alts(&mut self, pos: i64) -> Option<ApplyResult<cst::RepWrapper>> {
+        if let Some(r) = self.parse_rep_wrapper__alt0__item1__alts__alt0__item0__alts__alt0(pos) {
+            return Some(r);
+        }
+        None
+    }
+
+    fn parse_rep_wrapper__alt0__item1__alts__alt0__item0(&mut self, pos: i64) -> Option<ApplyResult<cst::RepWrapper>> {
+        self.parse_rep_wrapper__alt0__item1__alts__alt0__item0__alts(pos)
+    }
+
+    fn parse_rep_wrapper__alt0__item1__alts__alt0__item1(&mut self, pos: i64) -> Option<ApplyResult<Span>> {
+        self.consume_literal(pos, ";")
+    }
+
+    fn parse_rep_wrapper__alt0__item1__alts__alt0(&mut self, mut pos: i64) -> Option<ApplyResult<cst::RepWrapper>> {
+        let span_start = pos;
+        let mut result = cst::RepWrapper::new(Span::unknown());
+        let item0 = self.parse_rep_wrapper__alt0__item1__alts__alt0__item0(pos)?;
+        pos = item0.pos;
+        result.extend_children(&item0.result);
+        let item1 = self.parse_rep_wrapper__alt0__item1__alts__alt0__item1(pos)?;
+        pos = item1.pos;
+        result.set_span(Span::new_with_source(span_start, pos, self.terminals.source_text()));
+        Some(ApplyResult { pos, result })
+    }
+
+    fn parse_rep_wrapper__alt0__item1__alts(&mut self, pos: i64) -> Option<ApplyResult<cst::RepWrapper>> {
+        if let Some(r) = self.parse_rep_wrapper__alt0__item1__alts__alt0(pos) {
+            return Some(r);
+        }
+        None
+    }
+
+    fn parse_rep_wrapper__alt0__item1(&mut self, mut pos: i64) -> Option<ApplyResult<cst::RepWrapper>> {
+        let span_start = pos;
+        let mut result = cst::RepWrapper::new(Span::unknown());
+        while let Some(one_result) = {
+            self.parse_rep_wrapper__alt0__item1__alts(pos)
+        } {
+            if one_result.pos <= pos { break; }
+            pos = one_result.pos;
+            result.extend_children(&one_result.result);
+        }
+        result.set_span(Span::new_with_source(span_start, pos, self.terminals.source_text()));
+        Some(ApplyResult { pos, result })
+    }
+
+    fn parse_rep_wrapper__alt0__item2(&mut self, pos: i64) -> Option<ApplyResult<Span>> {
+        self.consume_literal(pos, "}")
+    }
+
+    fn parse_rep_wrapper__alt0(&mut self, mut pos: i64) -> Option<ApplyResult<cst::RepWrapper>> {
+        let span_start = pos;
+        let mut result = cst::RepWrapper::new(Span::unknown());
+        let item0 = self.parse_rep_wrapper__alt0__item0(pos)?;
+        pos = item0.pos;
+        if let Some(item1) = self.parse_rep_wrapper__alt0__item1(pos) {
+            pos = item1.pos;
+            result.extend_children(&item1.result);
+        }
+        let item2 = self.parse_rep_wrapper__alt0__item2(pos)?;
+        pos = item2.pos;
+        result.set_span(Span::new_with_source(span_start, pos, self.terminals.source_text()));
+        Some(ApplyResult { pos, result })
+    }
+
+    fn parse_rep_wrapper(&mut self, pos: i64) -> Option<ApplyResult<Shared<cst::RepWrapper>>> {
+        if let Some(alt0) = self.parse_rep_wrapper__alt0(pos) {
+            return Some(ApplyResult { pos: alt0.pos, result: Shared::new(alt0.result) });
+        }
+        None
+    }
+
+    pub fn apply__parse_kw_labels(&mut self, pos: i64) -> Option<ApplyResult<Shared<cst::KwLabels>>> {
+        apply(self, 34u32, pos, |p| &mut p.packrat, |p| &mut p.cache__parse_kw_labels, Self::parse_kw_labels)
+    }
+
+    fn parse_kw_labels__alt0__item0(&mut self, pos: i64) -> Option<ApplyResult<Span>> {
+        self.consume_regex(pos, 1)
+    }
+
+    fn parse_kw_labels__alt0__item1(&mut self, pos: i64) -> Option<ApplyResult<Span>> {
+        self.consume_literal(pos, "#")
+    }
+
+    fn parse_kw_labels__alt0__item2(&mut self, pos: i64) -> Option<ApplyResult<Shared<cst::Num>>> {
+        self.apply__parse_num(pos)
+    }
+
+    fn parse_kw_labels__alt0(&mut self, mut pos: i64) -> Option<ApplyResult<cst::KwLabels>> {
+        let span_start = pos;
+        let mut result = cst::KwLabels::new(Span::unknown());
+        let item0 = self.parse_kw_labels__alt0__item0(pos)?;
+        pos = item0.pos;
+        result.append_type(item0.result);
+        let item1 = self.parse_kw_labels__alt0__item1(pos)?;
+        pos = item1.pos;
+        let item2 = self.parse_kw_labels__alt0__item2(pos)?;
+        pos = item2.pos;
+        result.append_match(item2.result);
+        result.set_span(Span::new_with_source(span_start, pos, self.terminals.source_text()));
+        Some(ApplyResult { pos, result })
+    }
+
+    fn parse_kw_labels(&mut self, pos: i64) -> Option<ApplyResult<Shared<cst::KwLabels>>> {
+        if let Some(alt0) = self.parse_kw_labels__alt0(pos) {
+            return Some(ApplyResult { pos: alt0.pos, result: Shared::new(alt0.result) });
+        }
+        None
+    }
+
+    pub fn apply__parse_quoted(&mut self, pos: i64) -> Option<ApplyResult<Shared<cst::Quoted>>> {
+        apply(self, 35u32, pos, |p| &mut p.packrat, |p| &mut p.cache__parse_quoted, Self::parse_quoted)
+    }
+
+    fn parse_quoted__alt0__item0(&mut self, pos: i64) -> Option<ApplyResult<Span>> {
+        self.consume_literal(pos, "'")
+    }
+
+    fn parse_quoted__alt0__item1(&mut self, pos: i64) -> Option<ApplyResult<Span>> {
+        self.consume_regex(pos, 1)
+    }
+
+    fn parse_quoted__alt0__item2(&mut self, pos: i64) -> Option<ApplyResult<Span>> {
+        self.consume_regex(pos, 14)
+    }
+
+    fn parse_quoted__alt0__item3(&mut self, pos: i64) -> Option<ApplyResult<Span>> {
+        self.consume_literal(pos, "'")
+    }
+
+    fn parse_quoted__alt0(&mut self, mut pos: i64) -> Option<ApplyResult<cst::Quoted>> {
+        let span_start = pos;
+        let mut result = cst::Quoted::new(Span::unknown());
+        let item0 = self.parse_quoted__alt0__item0(pos)?;
+        pos = item0.pos;
+        let item1 = self.parse_quoted__alt0__item1(pos)?;
+        pos = item1.pos;
+        result.append_value(item1.result);
+        if let Some(item2) = self.parse_quoted__alt0__item2(pos) {
+            pos = item2.pos;
+            result.append_tail(item2.result);
+        }
+        let item3 = self.parse_quoted__alt0__item3(pos)?;
+        pos = item3.pos;
+        result.set_span(Span::new_with_source(span_start, pos, self.terminals.source_text()));
+        Some(ApplyResult { pos, result })
+    }
+
+    fn parse_quoted(&mut self, pos: i64) -> Option<ApplyResult<Shared<cst::Quoted>>> {
+        if let Some(alt0) = self.parse_quoted__alt0(pos) {
+            return Some(ApplyResult { pos: alt0.pos, result: Shared::new(alt0.result) });
+        }
+        None
+    }
+
+    pub fn apply__parse_mixed_opt(&mut self, pos: i64) -> Option<ApplyResult<Shared<cst::MixedOpt>>> {
+        apply(self, 36u32, pos, |p| &mut p.packrat, |p| &mut p.cache__parse_mixed_opt, Self::parse_mixed_opt)
+    }
+
+    fn parse_mixed_opt__alt0__item0(&mut self, pos: i64) -> Option<ApplyResult<Span>> {
+        self.consume_regex(pos, 1)
+    }
+
+    fn parse_mixed_opt__alt0__item1(&mut self, pos: i64) -> Option<ApplyResult<Shared<cst::Num>>> {
+        self.apply__parse_num(pos)
+    }
+
+    fn parse_mixed_opt__alt0(&mut self, mut pos: i64) -> Option<ApplyResult<cst::MixedOpt>> {
+        let span_start = pos;
+        let mut result = cst::MixedOpt::new(Span::unknown());
+        if let Some(item0) = self.parse_mixed_opt__alt0__item0(pos) {
+            pos = item0.pos;
+            result.append_key(item0.result);
+        }
+        let item1 = self.parse_mixed_opt__alt0__item1(pos)?;
+        pos = item1.pos;
+        result.append_node(item1.result);
+        result.set_span(Span::new_with_source(span_start, pos, self.terminals.source_text()));
+        Some(ApplyResult { pos, result })
+    }
+
+    fn parse_mixed_opt(&mut self, pos: i64) -> Option<ApplyResult<Shared<cst::MixedOpt>>> {
+        if let Some(alt0) = self.parse_mixed_opt__alt0(pos) {
+            return Some(ApplyResult { pos: alt0.pos, result: Shared::new(alt0.result) });
+        }
+        None
+    }
+
     pub fn apply__parse__trivia(&mut self, pos: i64) -> Option<ApplyResult<Shared<cst::Trivia>>> {
-        apply(self, 30u32, pos, |p| &mut p.packrat, |p| &mut p.cache__parse__trivia, Self::parse__trivia)
+        apply(self, 37u32, pos, |p| &mut p.packrat, |p| &mut p.cache__parse__trivia, Self::parse__trivia)
     }
 
     fn parse__trivia__alt0__item0(&mut self, pos: i64) -> Option<ApplyResult<Span>> {
-        self.consume_regex(pos, 14)
+        self.consume_regex(pos, 15)
     }
 
     fn parse__trivia__alt0(&mut self, mut pos: i64) -> Option<ApplyResult<cst::Trivia>> {
@@ -1893,6 +2313,118 @@ mod python_bindings {
             match result {
                 Some(r) => {
                     let handle = cst::PyAnchoredWord::to_py_canonical(py, &r.result)?;
+                    Ok(Some(PyApplyResult { pos: r.pos, result: handle.into_any() }))
+                }
+                None => Ok(None),
+            }
+        }
+
+        fn apply__parse_pair(&mut self, py: Python<'_>, pos: i64) -> PyResult<Option<PyApplyResult>> {
+            self.check_pos(pos)?;
+            let result = self.inner.apply__parse_pair(pos);
+            if self.inner.depth_exceeded() {
+                return Err(PyRecursionError::new_err(format!(
+                    "parse depth limit exceeded (max_depth = {})", self.inner.max_depth())));
+            }
+            match result {
+                Some(r) => {
+                    let handle = cst::PyPair::to_py_canonical(py, &r.result)?;
+                    Ok(Some(PyApplyResult { pos: r.pos, result: handle.into_any() }))
+                }
+                None => Ok(None),
+            }
+        }
+
+        fn apply__parse_wrapper(&mut self, py: Python<'_>, pos: i64) -> PyResult<Option<PyApplyResult>> {
+            self.check_pos(pos)?;
+            let result = self.inner.apply__parse_wrapper(pos);
+            if self.inner.depth_exceeded() {
+                return Err(PyRecursionError::new_err(format!(
+                    "parse depth limit exceeded (max_depth = {})", self.inner.max_depth())));
+            }
+            match result {
+                Some(r) => {
+                    let handle = cst::PyWrapper::to_py_canonical(py, &r.result)?;
+                    Ok(Some(PyApplyResult { pos: r.pos, result: handle.into_any() }))
+                }
+                None => Ok(None),
+            }
+        }
+
+        fn apply__parse_opt_wrapper(&mut self, py: Python<'_>, pos: i64) -> PyResult<Option<PyApplyResult>> {
+            self.check_pos(pos)?;
+            let result = self.inner.apply__parse_opt_wrapper(pos);
+            if self.inner.depth_exceeded() {
+                return Err(PyRecursionError::new_err(format!(
+                    "parse depth limit exceeded (max_depth = {})", self.inner.max_depth())));
+            }
+            match result {
+                Some(r) => {
+                    let handle = cst::PyOptWrapper::to_py_canonical(py, &r.result)?;
+                    Ok(Some(PyApplyResult { pos: r.pos, result: handle.into_any() }))
+                }
+                None => Ok(None),
+            }
+        }
+
+        fn apply__parse_rep_wrapper(&mut self, py: Python<'_>, pos: i64) -> PyResult<Option<PyApplyResult>> {
+            self.check_pos(pos)?;
+            let result = self.inner.apply__parse_rep_wrapper(pos);
+            if self.inner.depth_exceeded() {
+                return Err(PyRecursionError::new_err(format!(
+                    "parse depth limit exceeded (max_depth = {})", self.inner.max_depth())));
+            }
+            match result {
+                Some(r) => {
+                    let handle = cst::PyRepWrapper::to_py_canonical(py, &r.result)?;
+                    Ok(Some(PyApplyResult { pos: r.pos, result: handle.into_any() }))
+                }
+                None => Ok(None),
+            }
+        }
+
+        fn apply__parse_kw_labels(&mut self, py: Python<'_>, pos: i64) -> PyResult<Option<PyApplyResult>> {
+            self.check_pos(pos)?;
+            let result = self.inner.apply__parse_kw_labels(pos);
+            if self.inner.depth_exceeded() {
+                return Err(PyRecursionError::new_err(format!(
+                    "parse depth limit exceeded (max_depth = {})", self.inner.max_depth())));
+            }
+            match result {
+                Some(r) => {
+                    let handle = cst::PyKwLabels::to_py_canonical(py, &r.result)?;
+                    Ok(Some(PyApplyResult { pos: r.pos, result: handle.into_any() }))
+                }
+                None => Ok(None),
+            }
+        }
+
+        fn apply__parse_quoted(&mut self, py: Python<'_>, pos: i64) -> PyResult<Option<PyApplyResult>> {
+            self.check_pos(pos)?;
+            let result = self.inner.apply__parse_quoted(pos);
+            if self.inner.depth_exceeded() {
+                return Err(PyRecursionError::new_err(format!(
+                    "parse depth limit exceeded (max_depth = {})", self.inner.max_depth())));
+            }
+            match result {
+                Some(r) => {
+                    let handle = cst::PyQuoted::to_py_canonical(py, &r.result)?;
+                    Ok(Some(PyApplyResult { pos: r.pos, result: handle.into_any() }))
+                }
+                None => Ok(None),
+            }
+        }
+
+        fn apply__parse_mixed_opt(&mut self, py: Python<'_>, pos: i64) -> PyResult<Option<PyApplyResult>> {
+            self.check_pos(pos)?;
+            let result = self.inner.apply__parse_mixed_opt(pos);
+            if self.inner.depth_exceeded() {
+                return Err(PyRecursionError::new_err(format!(
+                    "parse depth limit exceeded (max_depth = {})", self.inner.max_depth())));
+            }
+            match result {
+                Some(r) => {
+                    let handle = cst::PyMixedOpt::to_py_canonical(py, &r.result)?;
                     Ok(Some(PyApplyResult { pos: r.pos, result: handle.into_any() }))
                 }
                 None => Ok(None),

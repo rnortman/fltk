@@ -826,8 +826,7 @@ class ParserGenerator:
         # Failed parses of non-optional items result in early Failure return.
         for item_idx, item in enumerate(alternative.items):
             if item.disposition == gsm.Disposition.INLINE:
-                msg = "Inline items not yet supported: {item}"
-                raise NotImplementedError(msg)
+                raise ValueError(gsm2tree.INLINE_NOT_EXPANDED_MSG)
             # Create an item parser
             item_name = f"item{item_idx}"
             item_parser = self.gen_item_parser((*path, item_name), node_type, item, current_rule)

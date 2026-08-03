@@ -506,7 +506,7 @@ mod tests {
 
     #[test]
     fn child_lbl_count_error_beats_type_error_with_wrong_types() {
-        // test-13 / design §4.3 item 2: two children with wrong type → ChildCount wins.
+        // test-13: two children with wrong type — ChildCount wins.
         let lit1 = Shared::new(Literal::new(Span::unknown()));
         let lit2 = Shared::new(Literal::new(Span::new_sourceless(1, 2)));
         let mut entry = Entry::new(Span::unknown());
@@ -683,7 +683,7 @@ mod tests {
         assert_eq!(n.children().len(), 2);
     }
 
-    // ── §4.4 Native mutators: insert_child / remove_child / replace_child / clear_children ──
+    // ── Native mutators: insert_child / remove_child / replace_child / clear_children ──
 
     #[test]
     fn insert_child_at_head() {

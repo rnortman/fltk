@@ -32,8 +32,8 @@ impl std::error::Error for SpanError {}
 
 /// Cached reference to `fltk.fegen.pyrt.terminalsrc.SpanKind.SPAN`.
 /// Fetched once on first `Span.kind` access; avoids a Python import per call.
-/// ACYCLICITY: `terminalsrc` must never import `fltk._native` (verified at design time;
-/// see design.md §2.2). If that invariant breaks, this import becomes a cycle.
+/// ACYCLICITY: `terminalsrc` must never import `fltk._native`.
+/// If that invariant breaks, this import becomes a cycle.
 #[cfg(feature = "python")]
 static SPAN_KIND_SPAN_CACHE: PyOnceLock<Py<PyAny>> = PyOnceLock::new();
 
@@ -110,7 +110,7 @@ impl SourceText {
     /// version exposes this identical string on its locally-registered ``SourceText`` type.
     /// ``extract_source_text`` (``cross_cdylib.rs``) reads this classattr to gate
     /// ``downcast_unchecked`` across the cdylib boundary without relying on type-object
-    /// identity (which is not available in the canonical→consumer direction; see design §2.1).
+    /// identity (which is not available in the canonical→consumer direction).
     ///
     /// The marker is a plain string (debuggable, mismatch message trivially constructible).
     /// It is deliberately *not* a PyCapsule: anything readable from Python is replayable,
@@ -214,7 +214,7 @@ impl LineColPos {
 /// The `line_ends` cache is built lazily on first call and reused thereafter.
 /// It stores codepoint indices of `\n` characters plus a final sentinel equal to `len`
 /// (exclusive end of the last line) for non-empty text without a trailing `\n`, or `-1`
-/// for empty input (preserving the `col = -1` corner case documented in §3 of the design).
+/// for empty input (preserving the `col = -1` corner case).
 ///
 /// Returns a `LineColPos` with a **sourceless** `line_span`; callers that need a source-bearing
 /// `line_span` (e.g. `Span::line_col_inner`) must attach the source themselves after calling.
@@ -234,8 +234,7 @@ pub fn resolve_line_col(text: &str, pos: i64, line_ends: &OnceLock<Vec<i64>>) ->
         // - Normal text without trailing '\n': sentinel = `len` so that
         //   `Span(line_start, len)` covers all characters including the last one.
         // - Empty text (len=0): sentinel = -1, which makes `pos=-1` (from the EOF clamp)
-        //   land in the sentinel entry and yield `col=-1` — the inherited corner case
-        //   documented in the design (§3 "empty-source note").
+        //   land in the sentinel entry and yield `col=-1` — the inherited corner case.
         let ends_with_newline = ends.last() == Some(&(len - 1));
         if !ends_with_newline {
             // For non-empty text: push `len` (exclusive end past last char).
@@ -460,14 +459,63 @@ impl Span {
         if byte_end.is_none() && char_count == end {
             byte_end = Some(src.len());
         }
-        // Handle start == 0 on an empty source string (char_count stays 0, byte_start not set).
-        if byte_start.is_none() && start == 0 && end == 0 {
-            return Some("");
+        // A start index sitting exactly at the end of the source has no char_indices entry, so
+        // the loop above leaves byte_start unset; the span slices empty there. Covers a rule that
+        // matched nothing at end of input (Span(n, n)) and the empty span on an empty source.
+        // The loop only exits without setting byte_start when it ran to completion, so char_count
+        // is the full codepoint count at this point.
+        if byte_start.is_none() && start == char_count {
+            byte_start = Some(src.len());
         }
         match (byte_start, byte_end) {
             (Some(bs), Some(be)) => Some(&src[bs..be]),
             _ => None,
         }
+    }
+
+    /// Return the source text slice ``[start, end)``, or a message explaining why it is
+    /// unavailable.
+    ///
+    /// The message is the one ``text_or_raise`` raises to Python.  The sourceless,
+    /// negative-index and inverted-range wordings are identical to the pure-Python
+    /// ``terminalsrc.Span``; the out-of-bounds wording names the codepoint count and differs
+    /// from it.  The success value borrows from ``&self``, which holds the source ``Arc`` alive.
+    ///
+    /// The success path is exactly [`text_str`](Self::text_str) — no whole-source scan is
+    /// performed to pre-validate.  Diagnosis (and the `char_count` cache fill it needs)
+    /// happens only once `text_str` has already declined.
+    pub fn text_or_message(&self) -> Result<&str, String> {
+        if let Some(text) = self.text_str() {
+            return Ok(text);
+        }
+        Err(self.text_failure_message())
+    }
+
+    /// Explain why [`text_str`](Self::text_str) returned ``None`` for this span.
+    #[cold]
+    fn text_failure_message(&self) -> String {
+        let Some(inner) = self.source.as_ref() else {
+            return format!("Span({}, {}) has no source", self.start, self.end);
+        };
+        if self.start < 0 || self.end < 0 {
+            return format!("Span({}, {}) has negative indices", self.start, self.end);
+        }
+        if self.start > self.end {
+            return format!("Span({}, {}) has inverted range", self.start, self.end);
+        }
+        let char_count = *inner
+            .char_count
+            .get_or_init(|| inner.text.chars().count() as i64);
+        if self.end > char_count {
+            return format!(
+                "Span({}, {}) is out of bounds for source with {} codepoints",
+                self.start, self.end, char_count
+            );
+        }
+        format!(
+            "Span({}, {}) start index out of bounds for source with {} codepoints",
+            self.start, self.end, char_count
+        )
     }
 
     /// Return ``True`` if a source string is attached to this span.
@@ -667,42 +715,9 @@ impl Span {
     ///
     /// ``start`` and ``end`` are codepoint (Unicode character) indices.
     fn text_or_raise(&self) -> PyResult<String> {
-        if self.source.is_none() {
-            return Err(PyValueError::new_err(format!(
-                "Span({}, {}) has no source",
-                self.start, self.end
-            )));
-        }
-        if self.start < 0 || self.end < 0 {
-            return Err(PyValueError::new_err(format!(
-                "Span({}, {}) has negative indices",
-                self.start, self.end
-            )));
-        }
-        if self.start > self.end {
-            return Err(PyValueError::new_err(format!(
-                "Span({}, {}) has inverted range",
-                self.start, self.end
-            )));
-        }
-        // Validate end <= char_count before delegating, to emit a specific OOB message.
-        let inner = self.source.as_ref()
-            .expect("invariant: source is Some — is_none() guard above returned Err already");
-        let end = self.end as usize;
-        let char_count = inner.text.chars().count();
-        if end > char_count {
-            return Err(PyValueError::new_err(format!(
-                "Span({}, {}) is out of bounds for source with {} codepoints",
-                self.start, self.end, char_count
-            )));
-        }
-        // Pre-conditions confirmed; delegate to native text() which handles byte-offset translation.
-        self.text().ok_or_else(|| {
-            PyValueError::new_err(format!(
-                "Span({}, {}) start index out of bounds for source with {} codepoints",
-                self.start, self.end, char_count
-            ))
-        })
+        self.text_or_message()
+            .map(str::to_owned)
+            .map_err(PyValueError::new_err)
     }
 
     /// Return ``True`` if a source string is attached to this span.
@@ -902,5 +917,53 @@ mod text_str_tests {
         let span = Span::new_with_source(0, 4, &src);
         let count = span.text_str().map(|t| t.matches('\n').count()).unwrap_or(0);
         assert_eq!(count, 2);
+    }
+
+    #[test]
+    fn text_or_message_returns_slice() {
+        let src = SourceText::from_str("hello world", None);
+        let span = Span::new_with_source(6, 11, &src);
+        assert_eq!(span.text_or_message(), Ok("world"));
+    }
+
+    #[test]
+    fn text_or_message_names_the_reason() {
+        assert_eq!(
+            Span::new_sourceless(0, 3).text_or_message(),
+            Err("Span(0, 3) has no source".to_owned())
+        );
+        let src = SourceText::from_str("abc", None);
+        assert_eq!(
+            Span::new_with_source(-1, 3, &src).text_or_message(),
+            Err("Span(-1, 3) has negative indices".to_owned())
+        );
+        assert_eq!(
+            Span::new_with_source(3, 1, &src).text_or_message(),
+            Err("Span(3, 1) has inverted range".to_owned())
+        );
+        assert_eq!(
+            Span::new_with_source(0, 9, &src).text_or_message(),
+            Err("Span(0, 9) is out of bounds for source with 3 codepoints".to_owned())
+        );
+    }
+
+    #[test]
+    fn text_str_empty_span_at_end_of_source() {
+        // A rule that matched nothing at end of input carries Span(n, n): an empty slice, not a
+        // failure. The pure-Python Span returns "" here too.
+        let src = SourceText::from_str("abc", None);
+        assert_eq!(Span::new_with_source(3, 3, &src).text_str(), Some(""));
+        assert_eq!(Span::new_with_source(1, 1, &src).text_or_message(), Ok(""));
+    }
+
+    #[test]
+    fn text_or_message_agrees_with_text_str() {
+        let src = SourceText::from_str("héllo wörld", None);
+        for start in 0..12i64 {
+            for end in 0..12i64 {
+                let span = Span::new_with_source(start, end, &src);
+                assert_eq!(span.text_or_message().ok(), span.text_str());
+            }
+        }
     }
 }

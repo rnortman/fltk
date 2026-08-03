@@ -146,7 +146,7 @@ mod tests {
     }
 
     /// Test 5: parser-produced deep-tree.  Left-recursive seed-grow creates trees whose
-    /// depth scales with input length (evaluation-drop-depth-reachability.md §2), independently
+    /// depth scales with input length, independently
     /// of the parse-depth-limit.  This test pins reachability via actual parsing in CI.
     #[test]
     fn test_parser_produced_deep_tree_debug_and_drop() {
@@ -984,7 +984,7 @@ mod tests {
         assert!(first_label.is_none(), "first child of tagged must be unlabeled ($-included literal)");
     }
 
-    // ── native (GIL-free) unparser tests (design §4) ──────────────────────
+    // ── native (GIL-free) unparser tests ──────────────────────────────────
     //
     // Build a CST via the native Rust parser API (spans carry their own source),
     // then run the pure-Rust `Unparser` + `resolve_spacing_specs` + `Renderer`
@@ -1047,8 +1047,8 @@ mod tests {
 
     /// The default-config unparser module (`unparser_default.rs`) is otherwise only
     /// reached through the `python` feature. This native test proves it also links
-    /// and runs against `fltk-unparser-core` with no `python` feature and no GIL
-    /// (design §4), independent of the fltkfmt-baked `unparser` module the macro
+    /// and runs against `fltk-unparser-core` with no `python` feature and no GIL,
+    /// independent of the fltkfmt-baked `unparser` module the macro
     /// above uses. `num "123"` renders verbatim under default spacing.
     #[test]
     fn native_unparse_default_config_links() {
@@ -1121,5 +1121,166 @@ mod tests {
     #[test]
     fn native_unparse_zero_items_empty() {
         assert_eq!(render_native!("", apply__parse_zero_items, unparse_zero_items, 80, 4), "");
+    }
+
+    // ── inline (!) splicing ───────────────────────────────────────────────
+    //
+    // `pair := key:name . "=" . val:num` is spliced into three callers. The
+    // callers' children ARE pair's children; no Pair node is built at those
+    // sites, and pair itself is still independently parseable.
+
+    /// Parse `$src` with `$parse` and return the resulting node handle, asserting
+    /// the whole input was consumed.
+    macro_rules! parse_native {
+        ($src:expr, $parse:ident) => {{
+            let src: &str = $src;
+            let mut parser = Parser::new(src, None, false);
+            let parsed = parser
+                .$parse(0)
+                .unwrap_or_else(|| panic!("native parse failed for {src:?}: {}", parser.error_message()));
+            assert_eq!(
+                parsed.pos,
+                src.chars().count() as i64,
+                "parser must consume all of {src:?}"
+            );
+            parsed.result
+        }};
+    }
+
+    #[test]
+    fn native_inline_splices_callee_children_into_caller() {
+        let wrapper = parse_native!("[a=1]", apply__parse_wrapper);
+        let node = wrapper.read();
+
+        assert_eq!(node.children().len(), 2);
+        assert_eq!(node.children()[0].0, Some(cst::WrapperLabel::Key));
+        assert_eq!(node.children()[1].0, Some(cst::WrapperLabel::Val));
+        assert_eq!(node.key().read().value_text(), "a");
+        assert_eq!(node.val().read().value_text(), "1");
+    }
+
+    #[test]
+    fn native_inline_rule_is_still_independently_parseable() {
+        let pair = parse_native!("a=1", apply__parse_pair);
+        let node = pair.read();
+        assert_eq!(node.key().read().value_text(), "a");
+        assert_eq!(node.val().read().value_text(), "1");
+    }
+
+    #[test]
+    fn native_inline_quantifier_applies_to_the_whole_body() {
+        let empty = parse_native!("<>", apply__parse_opt_wrapper);
+        assert!(empty.read().key().is_none());
+        assert!(empty.read().val().is_none());
+
+        let present = parse_native!("<a=1>", apply__parse_opt_wrapper);
+        let node = present.read();
+        assert_eq!(node.key().expect("key spliced").read().value_text(), "a");
+        assert_eq!(node.val().expect("val spliced").read().value_text(), "1");
+    }
+
+    #[test]
+    fn native_inline_repetition_yields_collections() {
+        let rep = parse_native!("{a=1;b=2;}", apply__parse_rep_wrapper);
+        let node = rep.read();
+
+        let keys: Vec<String> = node.key().map(|k| k.read().value_text().to_owned()).collect();
+        assert_eq!(keys, ["a", "b"]);
+        let vals: Vec<i64> = node.val().map(|v| v.read().value_text().parse().expect("digits")).collect();
+        assert_eq!(vals, [1, 2]);
+    }
+
+    #[test]
+    fn native_unparse_inline_round_trips() {
+        assert_eq!(render_native!("[a=1]", apply__parse_wrapper, unparse_wrapper, 80, 4), "[a=1]");
+        assert_eq!(
+            render_native!("{a=1;b=2;}", apply__parse_rep_wrapper, unparse_rep_wrapper, 80, 4),
+            "{a=1;b=2;}"
+        );
+    }
+
+    // ── ergonomic accessors: happy path ───────────────────────────────────
+
+    #[test]
+    fn native_text_accessors_borrow_from_the_source() {
+        let num = parse_native!("123", apply__parse_num);
+        let node = num.read();
+        // Label text shortcut and the rule-level node-span shortcut agree here:
+        // `num` is terminal-only and its sole child covers the whole node span.
+        assert_eq!(node.value_text(), "123");
+        assert_eq!(node.text(), "123");
+    }
+
+    #[test]
+    fn native_variant_names_the_matched_alternative() {
+        assert_eq!(parse_native!("42", apply__parse_atom).read().variant(), cst::AtomLabel::Num);
+        assert_eq!(parse_native!("xy", apply__parse_atom).read().variant(), cst::AtomLabel::Name);
+    }
+
+    #[test]
+    fn native_rule_text_covers_suppressed_delimiters() {
+        let quoted = parse_native!("'ab5'", apply__parse_quoted);
+        let node = quoted.read();
+        // The node's own span runs from quote to quote; the label shortcuts do not.
+        assert_eq!(node.text(), "'ab5'");
+        assert_eq!(node.value_text(), "ab");
+        assert_eq!(node.tail_text(), Some("5"));
+
+        let bare = parse_native!("'ab'", apply__parse_quoted);
+        let bare_node = bare.read();
+        assert_eq!(bare_node.text(), "'ab'");
+        assert_eq!(bare_node.tail_text(), None);
+    }
+
+    #[test]
+    fn native_keyword_labels_are_raw_identifiers() {
+        let node_handle = parse_native!("abc#7", apply__parse_kw_labels);
+        let node = node_handle.read();
+        assert_eq!(node.r#type().text_or_message(), Ok("abc"));
+        assert_eq!(node.type_text(), "abc");
+        assert_eq!(node.r#match().read().value_text(), "7");
+    }
+
+    // ── ergonomic accessors: the panic contract ─────────────────────────────
+    //
+    // These accessors trade the quintet's `Result` for a bare value; a violated
+    // parser invariant — only reachable by hand construction or mutation — panics.
+
+    #[test]
+    #[should_panic(expected = "Pair.key")]
+    fn native_required_accessor_panics_when_child_absent() {
+        let node = cst::Pair::new(fltk_cst_core::Span::unknown());
+        let _ = node.key();
+    }
+
+    #[test]
+    #[should_panic(expected = "Atom.name")]
+    fn native_optional_accessor_panics_when_child_duplicated() {
+        let mut node = cst::Atom::new(fltk_cst_core::Span::unknown());
+        node.append_name(cst::Name::new(fltk_cst_core::Span::unknown()));
+        node.append_name(cst::Name::new(fltk_cst_core::Span::unknown()));
+        let _ = node.name();
+    }
+
+    #[test]
+    #[should_panic(expected = "Num.value_text: Span(0, 3) has no source")]
+    fn native_label_text_panics_on_sourceless_span() {
+        let mut node = cst::Num::new(fltk_cst_core::Span::unknown());
+        node.append_value(fltk_cst_core::Span::new_sourceless(0, 3));
+        let _ = node.value_text();
+    }
+
+    #[test]
+    #[should_panic(expected = "Num.text")]
+    fn native_rule_text_panics_on_sourceless_node_span() {
+        let node = cst::Num::new(fltk_cst_core::Span::new_sourceless(0, 3));
+        let _ = node.text();
+    }
+
+    #[test]
+    #[should_panic(expected = "Atom.variant: node has no labeled child")]
+    fn native_variant_panics_without_a_labeled_child() {
+        let node = cst::Atom::new(fltk_cst_core::Span::unknown());
+        let _ = node.variant();
     }
 }

@@ -69,8 +69,8 @@ _ALL_CORPUS: list[tuple[str, str]] = _FEGEN_CORPUS + _REGEX_CORPUS
 
 # The class_char terminal of regex.fltkg itself contains '&' in its excluded set, so
 # the grammar intentionally rejects it (& is excluded from class_char to close the &&
-# set-intersection door, design §4.2 / F6).  The validator's own terminals run on Python
-# re only and are exempt from the portability constraint (design §3 item 4 / §4.3).
+# set-intersection door).  The validator's own terminals run on Python re only and are
+# exempt from the portability constraint.
 # Skip this one known non-portable validator-internal terminal in the corpus sweep.
 _REGEX_CORPUS_SKIP = frozenset(
     {
@@ -91,10 +91,10 @@ def test_corpus_pattern_is_accepted(pattern: str, grammar_name: str) -> None:
     Exception: the ``class_char`` terminal of regex.fltkg itself contains ``&`` in its
     excluded set.  The grammar correctly rejects it (& is excluded to close the &&
     set-intersection door), but this is a known, intentional exception for the
-    validator's own internal terminal, which runs on Python re only (design §3/4).
+    validator's own internal terminal, which runs on Python re only.
     """
     if pattern in _REGEX_CORPUS_SKIP:
-        pytest.skip(f"Known validator-internal non-portable terminal (design §3/4): {pattern!r}")
+        pytest.skip(f"Known validator-internal non-portable terminal: {pattern!r}")
     accepted = classify_pattern(pattern)
     assert accepted, (
         f"Pattern {pattern!r} from {grammar_name!r} was REJECTED by the regex grammar. "
@@ -103,7 +103,7 @@ def test_corpus_pattern_is_accepted(pattern: str, grammar_name: str) -> None:
 
 
 # ---------------------------------------------------------------------------
-# Risk-point pins (§3.3 of the design)
+# Risk-point pins
 #
 # These pins are separate from the parametric sweep so that each documented
 # risk point has a name, an explaining comment, and a direct assertion.
@@ -197,8 +197,7 @@ def test_cli_entry_point_accepts_fegen_grammar() -> None:
     Note: regex.fltkg itself exits 1 because its own ``class_char`` terminal
     (``[^\\\\\\]\\[\\-\\n&]``) contains ``&``, which is now correctly rejected as
     non-portable (the grammar excludes ``&`` from class_char to close the ``&&`` door).
-    That terminal runs on Python re only and is exempt from the portability constraint
-    (design §3/4).
+    That terminal runs on Python re only and is exempt from the portability constraint.
     The fegen.fltkg grammar has no such validator-internal terminals, so it is the right
     smoke-test target.
 
@@ -245,12 +244,12 @@ def test_regex_fltkg_self_referential() -> None:
     r"""regex.fltkg terminal patterns must all be in the known expected set.
 
     The regex grammar uses regexes to parse regexes; its own terminals run on Python re
-    only (design.md §3 item 4) and need not be cross-engine portable.  One terminal
-    is intentionally non-portable: the ``class_char`` terminal ``[^\\\\\\]\\[\\-\\n&]``
-    contains ``&`` inside a character class, which the grammar correctly rejects as
-    non-portable (& excluded to close the && set-intersection door, design §4.2 / F6).
-    The validator's own terminals are exempt from the portability constraint -- they are
-    hand-audited and never passed through the Rust generator.
+    only and need not be cross-engine portable.  One terminal is intentionally
+    non-portable: the ``class_char`` terminal ``[^\\\\\\]\\[\\-\\n&]`` contains ``&``
+    inside a character class, which the grammar correctly rejects as non-portable
+    (& excluded to close the && set-intersection door).  The validator's own terminals
+    are exempt from the portability constraint -- they are hand-audited and never passed
+    through the Rust generator.
 
     This test asserts the exact set of terminals matches what we expect (change-detector),
     and separately asserts that all terminals except the known non-portable one are accepted.
@@ -268,7 +267,7 @@ def test_regex_fltkg_self_referential() -> None:
             "[0-9]+",  # number digits
             "[Az]",  # anchor_escape: A or z (for \A, \z anchors)
             "[^.*+?()\\[|^$\\\\{\\n]",  # literal_char: ordinary non-metachar chars (top-level)
-            "[^\\\\\\]\\[\\-\\n&]",  # class_char: & excluded to close the && door (design §4.2 / F6)
+            "[^\\\\\\]\\[\\-\\n&]",  # class_char: & excluded to close the && door
             "[bB]",  # assertion: b or B (for \b, \B word-boundary)
             "[dDwWsS]",  # class_shorthand: d/D/w/W/s/S shorthand escapes
             "[imsU]+",  # flag_chars: one or more regex flags
@@ -284,7 +283,7 @@ def test_regex_fltkg_self_referential() -> None:
     # The class_char terminal contains '&' in its excluded set, which the grammar
     # intentionally rejects (& is excluded from class_char to close the && door).
     # This is the ONE known self-referential exception -- the validator's own terminals
-    # run on Python re only and are exempt from the portability constraint (design §3/4).
+    # run on Python re only and are exempt from the portability constraint.
     known_nonportable = frozenset(
         {
             "[^\\\\\\]\\[\\-\\n&]",  # class_char: contains & in excluded set

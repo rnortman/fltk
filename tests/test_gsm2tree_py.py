@@ -53,7 +53,7 @@ def _annotation_source(annotation: ast.expr | None) -> str:
 class TestLabelFreeConcreteClass:
     """py_class_for_model with a zero-label rule must match the Protocol/Rust reference.
 
-    Required shape (per design §B):
+    Required shape:
     - No nested Label ClassDef.
     - children: list[tuple[None, T]]
     - child() -> tuple[None, T]
@@ -527,7 +527,7 @@ class TestMutatorsEmittedPyProtocol:
         assert ret.startswith("tuple["), f"Protocol remove_at must return a tuple; got: {ret}"
 
     def test_mutators_between_child_and_per_label(self, protocol_klass: ast.ClassDef) -> None:
-        """Protocol mutators appear between child and the per-label quintet (§2.4 ordering)."""
+        """Protocol mutators appear between child and the per-label quintet."""
         klass = protocol_klass
         method_names = [stmt.name for stmt in klass.body if isinstance(stmt, ast.FunctionDef)]
         # child, insert, remove_at, replace_at, clear must all precede the per-label methods

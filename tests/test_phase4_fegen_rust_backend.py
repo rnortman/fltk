@@ -187,8 +187,8 @@ class TestRustParserSelfHosting:
       4. Run fltk2gsm.Cst2Gsm(text).visit_grammar(result.result)
       5. Compare to plumbing.parse_grammar(text) (pure-Python reference path)
 
-    Satisfies §5 item 4 of the controlling design: Rust-parser → Rust-CST → real Cst2Gsm
-    over fegen.fltkg, equal to the Python path's GSM.
+    The self-hosting requirement: Rust-parser → Rust-CST → real Cst2Gsm
+    over fegen.fltkg must equal the Python path's GSM.
     """
 
     def _assert_rust_parser_equals_python(self, text: str) -> None:
@@ -215,8 +215,8 @@ class TestRustParserSelfHosting:
     def test_fegen_grammar_self_hosted(self):
         """fegen.fltkg self-hosted through the Rust parser; GSM must equal Python path.
 
-        This is the §5 item 4 requirement: the grammar that parses all user grammars,
-        parsed by the Rust parser it generated, producing a GSM equal to the Python path.
+        The grammar that parses all user grammars, parsed by the Rust parser it generated,
+        must produce a GSM equal to the Python path.
         """
         assert _FEGEN_FLTKG_PATH.exists(), f"fegen.fltkg not found at {_FEGEN_FLTKG_PATH}"
         text = _FEGEN_FLTKG_PATH.read_text(encoding="utf-8")

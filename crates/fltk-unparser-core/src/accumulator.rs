@@ -20,8 +20,7 @@ use crate::doc::{concat, Doc};
 /// [`Drop`] impl): a long flat sibling list at one nesting level tracks the number of
 /// items added there, which is attacker-controlled for unparsers over untrusted input,
 /// so a recursive drop of the `Rc<DocNode>` chain would risk an uncatchable stack
-/// overflow — the same happy-path hazard that forced iterative teardown for [`Doc`]
-/// (design §3).
+/// overflow — the same happy-path hazard that forced iterative teardown for [`Doc`].
 #[derive(Debug)]
 struct DocNode {
     doc: Doc,

@@ -97,7 +97,7 @@ def test_parity(rule, text, expected, capture_trivia):
 
 
 # ---------------------------------------------------------------------------
-# Comparator self-tests (§4.4)
+# Comparator self-tests
 # ---------------------------------------------------------------------------
 
 
@@ -135,7 +135,7 @@ def test_assert_error_equiv_fails_for_different_positions():
         assert_error_equiv(py_p, rust_p, ts)
 
 
-# Targeted comparator self-tests (§4.4)
+# Targeted comparator self-tests
 
 
 def test_assert_cst_equal_fails_kind_mismatch():

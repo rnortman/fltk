@@ -1,4 +1,4 @@
-"""Binding surface tests for fegen_rust_cst.Parser (§2.6 of Phase 3 design).
+"""Binding surface tests for fegen_rust_cst.Parser.
 
 These tests check the Python-visible surface of the Rust-backed parser,
 with no Python-backend counterpart.

@@ -1,8 +1,8 @@
-"""Binding-level depth-limit tests for rust_parser_fixture.Parser (§4, §5, §6 of depth-limit design).
+"""Binding-level depth-limit tests for rust_parser_fixture.Parser.
 
-Tests T5, T6, T7 from the design's test plan. Uses the nest/nest_sum rules (§5) which have
-apply-depth proportional to input nesting — unlike other fixture rules which are left-recursive
-(seed-grow handles them at constant depth).
+Tests T5, T6, T7 exercise the nest/nest_sum rules, which have apply-depth proportional
+to input nesting — unlike other fixture rules which are left-recursive (seed-grow handles
+them at constant depth).
 
 Requires rust_parser_fixture to be built: run 'make build-rust-parser-fixture' first.
 """
@@ -48,7 +48,7 @@ def test_t5_nest_succeeds_with_larger_limit():
 
 
 def test_t5_nest_sum_raises_recursion_error_flag_outranks_some():
-    """nest_sum on '1+<deeply-nested>' raises RecursionError despite in-flight Some (§2 flag-outranks-result)."""
+    """nest_sum on '1+<deeply-nested>' raises RecursionError despite in-flight Some (flag outranks result)."""
     rhs = _make_nest(50)
     text = "1+" + rhs
     p = rust_parser_fixture.parser.Parser(text, max_depth=10)
@@ -93,7 +93,7 @@ def test_t5_spent_instance_raises_on_subsequent_call():
 
 
 # T6: default Parser on input nested DEFAULT_MAX_DEPTH + 100 raises RecursionError
-#     without crashing the process (empirically pins §6 decision rule).
+#     without crashing the process.
 
 
 def test_t6_default_limit_fires_before_native_overflow():

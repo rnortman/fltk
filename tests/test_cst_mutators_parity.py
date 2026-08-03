@@ -1,4 +1,4 @@
-"""Cross-backend parity tests for named CST mutators (§4.2 of cst-named-mutators design).
+"""Cross-backend parity tests for named CST mutators.
 
 Asserts identical resulting trees (kind/label/span sequences) and — for errors — identical
 exception type and message text across the Python dataclass backend and the Rust backend.
@@ -13,7 +13,7 @@ Items: multi-label node; children are Spans and sub-nodes.
 
 Note on span equality: terminalsrc.Span (Python) and fltk._native.Span (Rust) are not ==
 even for matching start/end. Parity helpers compare span .start/.end directly, and label
-equality is cross-backend (by design — §2.1).
+equality is cross-backend.
 
 Span hand-in asymmetry: Python backend accepts both terminalsrc.Span and native Span;
 Rust backend accepts only native Span. Tests that verify span hand-in separately
@@ -84,7 +84,7 @@ def _children_equal(py_ch: list, rust_ch: list) -> bool:
 
 
 # ---------------------------------------------------------------------------
-# §4.2: insert — head / middle / tail / negative / clamping / labeled / unlabeled
+# insert — head / middle / tail / negative / clamping / labeled / unlabeled
 # ---------------------------------------------------------------------------
 
 
@@ -217,7 +217,7 @@ class TestInsert:
 
 
 # ---------------------------------------------------------------------------
-# §4.2: remove_at — positive / negative / return value / out-of-range / empty
+# remove_at — positive / negative / return value / out-of-range / empty
 # ---------------------------------------------------------------------------
 
 
@@ -320,7 +320,7 @@ class TestRemoveAt:
 
 
 # ---------------------------------------------------------------------------
-# §4.2: replace_at — order/length preservation / label=None clears / out-of-range
+# replace_at — order/length preservation / label=None clears / out-of-range
 # ---------------------------------------------------------------------------
 
 
@@ -413,7 +413,7 @@ class TestReplaceAt:
 
 
 # ---------------------------------------------------------------------------
-# §4.2: clear — populated and empty nodes
+# clear — populated and empty nodes
 # ---------------------------------------------------------------------------
 
 
@@ -447,7 +447,7 @@ class TestClear:
 
 
 # ---------------------------------------------------------------------------
-# §4.2: Error behavior — bad label type, bad child type, non-index-able index
+# Error behavior — bad label type, bad child type, non-index-able index
 # ---------------------------------------------------------------------------
 
 
@@ -511,14 +511,14 @@ class TestErrorBehavior:
             node.insert("not_an_int", _span(backend, 0, 1))  # type: ignore[arg-type]
 
     def test_bad_child_wins_over_bad_label_insert(self, backend: str) -> None:
-        """insert: when both child and label are invalid, child TypeError is raised first (§3)."""
+        """insert: when both child and label are invalid, child TypeError is raised first."""
         mod = _mod(backend)
         node = mod.Identifier()
         with pytest.raises(TypeError, match="unsupported child type"):
             node.insert(0, "not_a_span", label="bad_label")  # type: ignore[arg-type]
 
     def test_bad_child_wins_over_bad_label_replace_at(self, backend: str) -> None:
-        """replace_at: when both child and label are invalid, child TypeError is raised first (§3)."""
+        """replace_at: when both child and label are invalid, child TypeError is raised first."""
         mod = _mod(backend)
         node = mod.Identifier()
         node.append_name(_span(backend, 0, 1))
@@ -535,7 +535,7 @@ class TestErrorBehavior:
 
 
 # ---------------------------------------------------------------------------
-# §4.2: Cross-backend message parity (exact equality)
+# Cross-backend message parity (exact equality)
 # ---------------------------------------------------------------------------
 
 
@@ -610,7 +610,7 @@ class TestMessageParity:
 
 
 # ---------------------------------------------------------------------------
-# §4.2: Mixed operation sequences — identical trees both backends
+# Mixed operation sequences — identical trees both backends
 # ---------------------------------------------------------------------------
 
 
@@ -665,7 +665,7 @@ class TestMixedOperationsParity:
 
 
 # ---------------------------------------------------------------------------
-# §4.2: Span hand-in per-backend (excluded from exact-parity matrix, §2.2 asymmetry)
+# Span hand-in per-backend (excluded from exact-parity matrix; span types differ across backends)
 # ---------------------------------------------------------------------------
 
 
@@ -700,7 +700,7 @@ class TestSpanHandInPerBackend:
 
 
 # ---------------------------------------------------------------------------
-# §4.2: Multi-label node (Items) — label-specific operations
+# Multi-label node (Items) — label-specific operations
 # ---------------------------------------------------------------------------
 
 
@@ -747,7 +747,7 @@ class TestItemsMultiLabel:
 
 
 # ---------------------------------------------------------------------------
-# §4.2: Mixed operations with node-typed children (test-4 gap)
+# Mixed operations with node-typed children
 # ---------------------------------------------------------------------------
 
 
@@ -824,7 +824,7 @@ class TestMixedOpsNodeChildren:
 
 
 # ---------------------------------------------------------------------------
-# §4.2: Label-free node — non-None label raises TypeError (test-2 gap)
+# Label-free node — non-None label raises TypeError
 # ---------------------------------------------------------------------------
 
 

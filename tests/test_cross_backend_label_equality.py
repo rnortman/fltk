@@ -182,7 +182,7 @@ class TestAC8PyRustCross:
 
 @pytest.mark.parametrize("a_key,b_key", _BACKEND_PAIRS)
 class TestNodeKindCrossBackend:
-    """NodeKind members carry the same §2.1 cross-backend eq/hash contract as Label."""
+    """NodeKind members carry the same cross-backend eq/hash contract as Label."""
 
     def test_equal_same_member_both_directions(self, a_key: str, b_key: str) -> None:
         """A.NodeKind.ITEMS == B.NodeKind.ITEMS both directions."""
@@ -257,7 +257,7 @@ class TestNodeKindCrossBackend:
 
 
 class TestMarkerScope:
-    """Design §2.1: the _fltk_canonical_name marker must not appear on node objects.
+    """The _fltk_canonical_name marker must not appear on node objects.
 
     If a node exposed the marker, `node == label` could accidentally return True
     (if their canonical strings coincided), breaking the invariant that node==label is False.
@@ -297,7 +297,7 @@ class TestMarkerScope:
 #
 # This function is type-checked by pyright (via make check) and confirms that
 # `node.kind == NodeKind.X` narrows correctly over a homogeneous union of
-# kind-bearing node Protocols (§2.4 validation, design §4).
+# kind-bearing node Protocols.
 #
 # The fixture uses the Protocol types from fltk_cst_protocol — the same
 # Protocol surface out-of-tree consumers program against.

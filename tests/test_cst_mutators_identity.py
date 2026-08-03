@@ -1,4 +1,4 @@
-"""Rust identity tests for named mutators (§4.3 of cst-named-mutators design).
+"""Rust identity tests for named mutators.
 
 Verifies registry / handle-identity properties for insert / remove_at /
 replace_at / clear on Rust CST nodes:
@@ -63,7 +63,7 @@ def _addr_of(node) -> int:
 
 
 # ---------------------------------------------------------------------------
-# §4.3 identity tests
+# Identity tests
 # ---------------------------------------------------------------------------
 
 
@@ -161,7 +161,7 @@ class TestClearRegistryEviction:
 
         Pins two things:
         1. clear() holds no strong reference to removed children.
-        2. The registry self-evicts after removal (§2.5 of design).
+        2. The registry self-evicts after removal.
         """
         parent = Entry()
         child = Identifier()
@@ -188,7 +188,7 @@ class TestClearRegistryEviction:
         """remove_at() + discard return + drop handle + GC → registry entry absent.
 
         Pins that remove_at holds no strong reference to the removed child after
-        the return value is itself discarded (§2.5 of design).
+        the return value is itself discarded.
         """
         parent = Entry()
         child = Identifier()

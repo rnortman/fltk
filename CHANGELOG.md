@@ -7,6 +7,69 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.4.0] - 2026-08-03
+
+This release is about the shape of the tree you get back. The `!` (inline) disposition
+finally works, so a grammar can flatten a helper rule into its caller instead of forcing
+consumers to walk through a wrapper node, and generated CST classes gained a short,
+typed accessor surface — `foo()`, `foo_text()`, `text()`, `variant()` — so reading a
+child no longer means picking the right `child_*`/`maybe_*` method by hand. Both land on
+the Python and the Rust backend. Everything here is additive: no existing generated
+symbol, signature, node shape or error message changed.
+
+### Added
+
+- The `!` (inline) grammar disposition is now implemented in both parser backends. `!inner`
+  splices `inner`'s children into the calling node instead of nesting an `Inner` node; the
+  quantifier applies to the whole spliced body. The inlined rule keeps its own node class,
+  parser entry point and `RULE_NAMES` entry. `!` on a literal, regex or sub-expression, a
+  labeled `x:!inner`, a reference to a trivia-reachable rule, and `!` cycles are all errors
+  at grammar-load time. See `docs/cst-structure.md`. Grammars using `!` previously could not
+  generate a parser at all, so no working grammar changes behavior.
+- Generated CST node classes gained an ergonomic accessor surface on both backends,
+  documented in `docs/cst-structure.md`:
+  - a bare `foo()` per label, typed by the label's whole-rule multiplicity (`T`,
+    `T | None`, or `list[T]`);
+  - `foo_text()` for single-valued span labels, and `text()` on terminal-only rules;
+  - `variant()` on dispatch rules (every alternative a single labeled item), returning the
+    `Label` of the matched alternative.
+
+  These are purely additive. Where a new member's name would collide with an existing one —
+  a label named `text` or `children`, a label that duplicates another label's
+  `append_*`/`child_*` name, a `__`-leading label, a keyword — the new member is skipped
+  rather than renamed, and generation logs the rule, member and reason. Existing members are
+  never displaced, so a grammar that generates today still generates.
+
+### Changed
+
+- The new Rust **native** accessors panic on a tree that violates the grammar's guarantees
+  (wrong child count, sourceless span) rather than returning `Result`. This is a deliberate
+  departure from the "no accessor ever panics" rule that governs the `child_*`/`maybe_*`
+  family, which is unchanged and remains the checked surface for code that builds or mutates
+  trees. The Python-facing bindings never panic — they raise `ValueError`, matching the
+  Python backend message for message.
+
+### Fixed
+
+- Rust `Span.text()` / `text_str()` no longer decline a valid empty span whose start sits at
+  the end of the source (`Span(n, n)` for a rule that matched nothing at end of input). They
+  now return an empty slice, matching both the documented contract and the pure-Python
+  `Span`, where they previously returned `None` — which made the new `text()` accessor panic
+  on the Rust native surface for a perfectly ordinary parse result.
+
+### Notes for downstream consumers
+
+- Every new member is additive; no existing generated symbol, signature, error message,
+  node shape or `RULE_NAMES` entry changed.
+- Two error wordings on the new text accessors are backend-specific, inherited from the
+  surfaces they report: the `maybe_*` duplicate-child count message and the out-of-range
+  span message. Match on the exception type rather than the message if you switch backends.
+- If you **subclass** a generated node class, a method of yours named like a new member
+  (`text`, `variant`, a bare label name) will now shadow the generated one. Generated
+  classes are not intended to be subclassed.
+- If you **hand-implement** a generated `*_cst_protocol` class, it will no longer conform:
+  the protocol grows the new members along with the classes it describes.
+
 ## [0.3.0] - 2026-07-24
 
 This release adds two major capabilities on top of a year of hardening: an optional
@@ -194,7 +257,8 @@ cleanups and modernization.
 - Support for left-recursive grammars
 - Development tooling with ruff, pyright, and pytest
 
-[Unreleased]: https://github.com/rnortman/fltk/compare/v0.3.0...HEAD
+[Unreleased]: https://github.com/rnortman/fltk/compare/v0.4.0...HEAD
+[0.4.0]: https://github.com/rnortman/fltk/compare/v0.3.0...v0.4.0
 [0.3.0]: https://github.com/rnortman/fltk/compare/v0.2.0...v0.3.0
 [0.2.0]: https://github.com/rnortman/fltk/compare/v0.1.1...v0.2.0
 [0.1.1]: https://github.com/rnortman/fltk/compare/v0.1.0...v0.1.1

@@ -764,17 +764,56 @@ def test_identifier_term_body_unit_single_variant() -> None:
 
 
 def test_inline_identifier_rejected_at_generation() -> None:
-    """An inlined (`!`) rule reference is rejected at generation time, matching the Python backend.
+    """An unexpanded inlined (`!`) rule reference is rejected before any Rust is emitted."""
+    other = gsm.Rule(
+        name="other",
+        alternatives=[
+            gsm.Items(
+                items=[
+                    gsm.Item(
+                        label="mark",
+                        disposition=gsm.Disposition.INCLUDE,
+                        term=gsm.Literal("x"),
+                        quantifier=gsm.REQUIRED,
+                    )
+                ],
+                sep_after=[gsm.Separator.NO_WS],
+            )
+        ],
+    )
+    r = gsm.Rule(
+        name="r",
+        alternatives=[
+            gsm.Items(
+                items=[
+                    gsm.Item(
+                        label="keep",
+                        disposition=gsm.Disposition.INCLUDE,
+                        term=gsm.Literal("k"),
+                        quantifier=gsm.REQUIRED,
+                    ),
+                    gsm.Item(
+                        label=None,
+                        disposition=gsm.Disposition.INLINE,
+                        term=gsm.Identifier("other"),
+                        quantifier=gsm.REQUIRED,
+                    ),
+                ],
+                sep_after=[gsm.Separator.NO_WS, gsm.Separator.NO_WS],
+            )
+        ],
+    )
+    grammar = gsm.Grammar(rules=[r, other], identifiers={"r": r, "other": other})
+    with pytest.raises(ValueError, match="expand_inline_dispositions"):
+        RustUnparserGenerator(grammar).generate()
 
-    An inline identifier is incorporated into the parent's model rather than emitted as a CST
-    child, so there is no child position to extract. Emitting INCLUDE-shaped extraction would
-    reference nonexistent enum variants. The Python backend raises in
-    ``_extract_and_validate_nonsequence_child`` for non-INCLUDE identifiers; the Rust backend
-    must reject identically for cross-backend parity.
-    """
-    gen = RustUnparserGenerator(parse_grammar('r := keep:"k" . !other; other := "x";'))
-    with pytest.raises(RuntimeError, match="only INCLUDE identifier references"):
-        gen.generate()
+
+def test_expanded_inline_identifier_generates() -> None:
+    """After expansion the same construct is an ordinary sub-expression the unparser handles."""
+    gen = RustUnparserGenerator(parse_grammar('r := keep:"k" . !other; other := mark:"x";'))
+    src = gen.generate()
+
+    assert "fn unparse_r(" in src
 
 
 def test_identifier_term_body_rejects_non_identifier_term() -> None:

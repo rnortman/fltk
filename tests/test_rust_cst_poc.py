@@ -49,7 +49,7 @@ class TestLabelSemantics:
 class TestChildrenListSemantics:
     def test_children_rebuilt_each_call(self):
         """Native children: node.children is rebuilt from the Vec on each call.
-        The returned list need not be the same object on every access (§2.3 design)."""
+        The returned list need not be the same object on every access."""
         node = Identifier()
         a = node.children
         b = node.children
@@ -234,7 +234,7 @@ class TestSpanField:
         assert node.span is not UnknownSpan
 
     def test_span_setter_rejects_non_span(self):
-        """§4 item 3: Setting node.span to a non-Span Python object raises TypeError."""
+        """Setting node.span to a non-Span Python object raises TypeError."""
         node = Identifier()
         with pytest.raises(TypeError):
             node.span = object()  # type: ignore[assignment]
@@ -244,7 +244,7 @@ class TestSpanField:
             node.span = 42  # type: ignore[assignment]
 
     def test_span_getter_returns_native_span(self):
-        """§4 item 3: node.span returns a fltk._native.Span (not terminalsrc.Span)."""
+        """node.span returns a fltk._native.Span (not terminalsrc.Span)."""
         node = Identifier()
         s = _span(3, 7)
         node.span = s

@@ -1,10 +1,10 @@
-"""Generated Python parser constructs pure-Python terminalsrc spans (design §2.1).
+"""Generated Python parser constructs pure-Python terminalsrc spans.
 
 A generated Python parser must produce pure-Python ``terminalsrc.Span`` /
 ``terminalsrc.SourceText`` objects at runtime, regardless of whether ``fltk._native`` is
-importable in the process.  Before §2.1 the construction sites resolved through the type
+importable in the process.  Before the fix the construction sites resolved through the type
 registry's ``span``-module entry, so with native built they silently produced
-``fltk._native.Span`` — the core bug.  These tests would fail on that pre-§2.1 code (when
+``fltk._native.Span`` — the core bug.  These tests would fail on the pre-fix code (when
 native is importable) and pass after the construction sites are retargeted to ``terminalsrc``.
 """
 
@@ -90,19 +90,18 @@ def test_not_native_span_when_native_present() -> None:
 
 
 def test_native_present_unparse_round_trip() -> None:
-    """Native-present unparse round-trip regression (design §4 / delta D6).
+    """Native-present unparse round-trip regression.
 
-    This is the §2.1-exposed gap (edge case 7): before §2.6 the generated unparser's probe-bound
-    span guards rejected ``terminalsrc.Span`` children whenever ``fltk._native`` was importable, so
+    Before the unparser fix, the generated unparser's probe-bound span guards rejected
+    ``terminalsrc.Span`` children whenever ``fltk._native`` was importable, so
     ``unparse_cst`` raised ``ValueError("Unparsing failed")``.  ``is_span`` recognizes
     ``terminalsrc.Span`` regardless of native presence, so the round-trip succeeds.
 
     The three properties — native importable (the precondition that triggers the original bug), the
     parser still produces a pure-Python ``terminalsrc.Span``, and unparse→render succeeds with the
-    expected text — are asserted together so the regression is pinned in one native-present test
-    (the design's "the case that raises ValueError on the §2.1-only tree").  Split across files, the
-    unparse path carries no native-present precondition and passes trivially where the bug cannot
-    manifest.
+    expected text — are asserted together so the regression is pinned in one native-present test.
+    Split across files, the unparse path carries no native-present precondition and passes trivially
+    where the bug cannot manifest.
     """
     if NativeSpan is None:
         pytest.skip("fltk._native not built in this environment")

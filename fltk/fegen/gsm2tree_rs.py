@@ -9,8 +9,8 @@ from __future__ import annotations
 import re
 from collections.abc import Iterable
 
-from fltk.fegen import gsm, naming
-from fltk.fegen.gsm2tree import CstGenerator, ModelType
+from fltk.fegen import cst_ergonomics, gsm, naming
+from fltk.fegen.gsm2tree import CstGenerator, ItemsModel, ModelType
 from fltk.iir.context import create_default_context
 from fltk.iir.py import reg as pyreg
 
@@ -156,6 +156,8 @@ def _escape_source_name(s: str) -> str:
 
 def _rust_variant_name(label: str) -> str:
     """Label -> CamelCase Rust enum variant. 'no_ws' -> 'NoWs'."""
+    # TODO(rust-codegen-self-keyword): a label whose camel form is `Self` emits a
+    # reserved-word enum variant, which rustc rejects.
     return naming.snake_to_upper_camel(label)
 
 
@@ -195,27 +197,36 @@ class RustCstGenerator:
                 msg = f"Rule name {rule.name!r} is not a valid identifier (must match {_IDENTIFIER_RE.pattern!r})"
                 raise ValueError(msg)
             class_name = self._py_gen.class_name_for_rule_node(rule.name)
+            # TODO(rust-codegen-self-keyword): a rule whose class name is `Self` is not caught
+            # here and emits `pub struct Self` / `NodeKind::Self`, which rustc rejects.
             collision_target = _RESERVED_CLASS_NAMES.get(class_name) or _RESERVED_CLASS_NAMES_SEEDED.get(class_name)
             if collision_target:
                 msg = f"Rule {rule.name!r} derives class name {class_name!r}, which collides with {collision_target}"
                 raise ValueError(msg)
+
+            # Walk sub-expression terms too: labels nested inside `( ... )` reach the emitted
+            # Rust surface exactly like top-level ones.  A suppressed item contributes no child
+            # and no label to any surface, so its label names nothing and is not validated.
+            def check_label(_idx: int, item: gsm.Item, rule_name: str = rule.name) -> None:
+                if item.label is None or item.disposition == gsm.Disposition.SUPPRESS:
+                    return
+                if not _IDENTIFIER_RE.match(item.label):
+                    msg = (
+                        f"Item label {item.label!r} in rule {rule_name!r} is not a valid identifier "
+                        f"(must match {_IDENTIFIER_RE.pattern!r})"
+                    )
+                    raise ValueError(msg)
+                if item.label in _RESERVED_LABELS:
+                    colliding_method = _RESERVED_LABELS[item.label]
+                    msg = (
+                        f"Item label {item.label!r} in rule {rule_name!r} is reserved: "
+                        f"it would generate a method 'extend_{item.label}' that collides with "
+                        f"the fixed method '{colliding_method}'"
+                    )
+                    raise ValueError(msg)
+
             for alt in rule.alternatives:
-                for item in alt.items:
-                    if item.label is not None:
-                        if not _IDENTIFIER_RE.match(item.label):
-                            msg = (
-                                f"Item label {item.label!r} in rule {rule.name!r} is not a valid identifier "
-                                f"(must match {_IDENTIFIER_RE.pattern!r})"
-                            )
-                            raise ValueError(msg)
-                        if item.label in _RESERVED_LABELS:
-                            colliding_method = _RESERVED_LABELS[item.label]
-                            msg = (
-                                f"Item label {item.label!r} in rule {rule.name!r} is reserved: "
-                                f"it would generate a method 'extend_{item.label}' that collides with "
-                                f"the fixed method '{colliding_method}'"
-                            )
-                            raise ValueError(msg)
+                gsm.for_each_item(alt, check_label)
 
         # Cross-rule identifier collision check.
         # Detects cases where two rules derive the same Rust module-level identifier (e.g.
@@ -324,12 +335,12 @@ class RustCstGenerator:
         protocol_module: import path of the committed protocol module for this grammar,
         e.g. 'fltk.fegen.fltk_cst_protocol'. All type identities in annotations reference
         it under the alias '_proto', so the stub cannot satisfy pyright with stub-local
-        nominal types (§1 of the design).
+        nominal types.
 
         Callers write this string to <name>/cst.pyi inside a stub-package directory
         (i.e. <name>/__init__.pyi + <name>/cst.pyi), or to a custom path via --pyi-output.
         The stub-package directory must never gain an __init__.py or it will shadow the
-        compiled extension at runtime. See design §2.8.
+        compiled extension at runtime.
         """
         lines: list[str] = []
 
@@ -406,12 +417,14 @@ class RustCstGenerator:
                 lann = self._pyi_annotation_for_model_types(model.labels[label], class_name=f"{class_name}.{label}")
                 lines.append(f"    def append_{label}(self, child: {lann}) -> None: ...")
                 lines.append(f"    def extend_{label}(self, children: typing.Iterable[{lann}]) -> None: ...")
-                # children_<label>: typed Iterator[T] (§3 of design: Rust returns list but
+                # children_<label>: typed Iterator[T] (Rust returns list but
                 # Iterator is the protocol's declared return type; stub uses narrower declaration
                 # so conformance fixtures pass. Callers only ever iterate.)
                 lines.append(f"    def children_{label}(self) -> typing.Iterator[{lann}]: ...")  # stub/runtime diverge
                 lines.append(f"    def child_{label}(self) -> {lann}: ...")
                 lines.append(f"    def maybe_{label}(self) -> typing.Optional[{lann}]: ...")
+
+            lines.extend(self._pyi_ergonomic_lines(class_name, rule_name, model))
 
             lines.append("")
 
@@ -422,6 +435,39 @@ class RustCstGenerator:
         # directly as module attributes.
 
         return "\n".join(lines)
+
+    def _pyi_ergonomic_lines(self, class_name: str, rule_name: str, model: ItemsModel) -> list[str]:
+        """Emit the .pyi declarations for a rule's ergonomic pymethods.
+
+        Return types mirror the protocol's, so a stub class stays assignable to its protocol
+        counterpart: ``variant`` is annotated with the protocol's own nested ``Label`` class.
+        """
+        plan = self.plan_for_rule(rule_name)
+        lines: list[str] = []
+
+        for label in self._planned_labels(plan):
+            arity = plan.bare_accessors.get(label)
+            if arity is not None:
+                lann = self._pyi_annotation_for_model_types(model.labels[label], class_name=f"{class_name}.{label}")
+                if arity == cst_ergonomics.ArityClass.REQUIRED_SINGLE:
+                    ret = lann
+                elif arity == cst_ergonomics.ArityClass.OPTIONAL_SINGLE:
+                    ret = f"typing.Optional[{lann}]"
+                else:
+                    ret = f"list[{lann}]"
+                lines.append(f"    def {label}(self) -> {ret}: ...")
+
+            text_arity = plan.text_accessors.get(label)
+            if text_arity is not None:
+                ret = "str" if text_arity == cst_ergonomics.ArityClass.REQUIRED_SINGLE else "typing.Optional[str]"
+                lines.append(f"    def {label}_text(self) -> {ret}: ...")
+
+        if plan.rule_text:
+            lines.append("    def text(self) -> str: ...")
+        if plan.variant:
+            lines.append(f"    def variant(self) -> _proto.{class_name}.Label: ...")
+
+        return lines
 
     def generate_protocol(self) -> str:
         """Return the protocol-module source text for this grammar.
@@ -1243,6 +1289,9 @@ class RustCstGenerator:
         # Per-label native accessors (read side)
         lines.extend(self._native_per_label_methods(rule_name, labels, enum_name, label_enum_name))
 
+        # Arity-aware ergonomic accessors (read side)
+        lines.extend(self._native_ergonomic_methods(class_name, rule_name, label_enum_name))
+
         # Native mutators: insert_child, remove_child, replace_child, clear_children
         lines.extend(self._native_mutators(label_type, enum_name))
         lines.append("}")
@@ -1310,6 +1359,8 @@ class RustCstGenerator:
 
         for label in labels:
             lines.extend(self._per_label_methods(class_name, label, enum_name))
+
+        lines.extend(self._ergonomic_pymethods(class_name, rule_name, enum_name))
 
         lines.extend(self._eq_method(class_name, py_handle))
         lines.extend(self._hash_method(class_name))
@@ -1397,8 +1448,7 @@ class RustCstGenerator:
         The returned list is a per-call snapshot; in-place mutation of the list is a
         silent no-op on the tree.  The Python backend returns the node's actual internal
         list, so there is a known backend divergence on list-level identity.
-        Named mutators (insert/remove_at/replace_at/clear) are the supported mutation path;
-        see ADR docs/adr/2026/06/11-cst-named-mutators/design.md.
+        Named mutators (insert/remove_at/replace_at/clear) are the supported mutation path.
 
         Node-typed children are routed through the registry so element identity is stable
         (the same child read twice returns the same Python handle object).
@@ -1611,7 +1661,7 @@ class RustCstGenerator:
             "        child: &Bound<'_, pyo3::PyAny>,",
             "        label: Option<Py<pyo3::PyAny>>,",
             "    ) -> pyo3::PyResult<()> {",
-            "        // Validate child and label BEFORE taking the write lock (§2.3 lock discipline).",
+            "        // Validate child and label BEFORE taking the write lock.",
             "        let span_type = get_span_type(py)?;",
             f"        let native_child = {enum_name}::extract_from_pyobject(py, child, &span_type)?;",
             "        let native_label = match label {",
@@ -1619,7 +1669,7 @@ class RustCstGenerator:
             "        };",
             "        // Index normalization via operator.index (PyNumber_Index semantics).",
             "        // This raises TypeError (not AttributeError) for non-indexable inputs, matching Python's",
-            "        // operator.index contract. Must be done BEFORE taking any lock (§2.3 lock discipline).",
+            "        // operator.index contract. Must be done BEFORE taking any lock.",
             "        // Overflow by sign: positive overflow clamps to len; negative overflow clamps to 0.",
             "        let raw_idx = py",
             '            .import(pyo3::intern!(py, "operator"))?',
@@ -1690,7 +1740,7 @@ class RustCstGenerator:
             "        let orig_str = index.str()?.to_string_lossy().into_owned();",
             "        // Normalize via operator.index: raises TypeError (not AttributeError) for",
             "        // non-indexable inputs, matching Python's operator.index contract.",
-            "        // All Python work must happen before any lock (§2.3 lock discipline).",
+            "        // All Python work must happen before any lock.",
             "        let raw_idx = py",
             '            .import(pyo3::intern!(py, "operator"))?',
             '            .getattr(pyo3::intern!(py, "index"))?',
@@ -1714,7 +1764,7 @@ class RustCstGenerator:
             "                orig_str, n",
             "            ))",
             "        })?;",
-            "        // Python wrap-out happens after the guard is released (§2.3 lock discipline).",
+            "        // Python wrap-out happens after the guard is released.",
             "        let label_obj: Py<pyo3::PyAny> = match label {",
             "            None => py.None(),",
             "            Some(lbl) => lbl.into_pyobject(py)?.into_any().unbind(),",
@@ -1740,7 +1790,7 @@ class RustCstGenerator:
             "        child: &Bound<'_, pyo3::PyAny>,",
             "        label: Option<Py<pyo3::PyAny>>,",
             "    ) -> pyo3::PyResult<()> {",
-            "        // Validate child and label BEFORE taking the write lock (§2.3 lock discipline).",
+            "        // Validate child and label BEFORE taking the write lock.",
             "        let span_type = get_span_type(py)?;",
             f"        let native_child = {enum_name}::extract_from_pyobject(py, child, &span_type)?;",
             "        let native_label = match label {",
@@ -1749,7 +1799,7 @@ class RustCstGenerator:
             "        // Capture the caller's original string representation BEFORE normalization.",
             "        let orig_str = index.str()?.to_string_lossy().into_owned();",
             "        // Normalize via operator.index: raises TypeError for non-indexable inputs.",
-            "        // All Python work must happen before any lock (§2.3 lock discipline).",
+            "        // All Python work must happen before any lock.",
             "        let raw_idx = py",
             '            .import(pyo3::intern!(py, "operator"))?',
             '            .getattr(pyo3::intern!(py, "index"))?',
@@ -2100,6 +2150,310 @@ class RustCstGenerator:
                 )
                 lines.append("    }")
 
+        return lines
+
+    def plan_for_rule(self, rule_name: str) -> cst_ergonomics.RulePlan:
+        """Return the ergonomic member plan for a rule.
+
+        The returned plan is authoritative: all surfaces (Rust native, pymethods, stub,
+        protocol) must emit exactly the members it names.
+        """
+        plan = self._py_gen.plan_for_rule(rule_name)
+        if plan is None:
+            msg = f"No ergonomic member plan for rule {rule_name!r}"
+            raise RuntimeError(msg)
+        return plan
+
+    @staticmethod
+    def _planned_labels(plan: cst_ergonomics.RulePlan) -> list[str]:
+        """Labels carrying at least one ergonomic member, in emission order."""
+        return sorted(set(plan.bare_accessors) | set(plan.text_accessors))
+
+    def _native_ergonomic_methods(self, class_name: str, rule_name: str, label_enum_name: str) -> list[str]:
+        """Emit the native (GIL-free) ergonomic accessors on the data struct.
+
+        Per label: the bare accessor typed by whole-rule arity and, for single-arity span
+        labels, ``<label>_text``.  Then the rule-level ``text`` and ``variant``.
+
+        These panic where the checked quintet returns ``Err``: the point of ``foo()`` next to
+        ``child_foo()`` is the absence of ceremony on a parser-produced tree, and a parser never
+        produces a tree that violates the arity the grammar guarantees.  Defensive code (hand-built
+        trees, mutators, formatters) keeps using the quintet.
+        """
+        plan = self.plan_for_rule(rule_name)
+        lines: list[str] = []
+
+        for label in self._planned_labels(plan):
+            ref_type, _single_node_cls, _total_variants = self._label_type_info(rule_name, label)
+            method = cst_ergonomics.rust_method_ident(label)
+            arity = plan.bare_accessors.get(label)
+
+            if arity == cst_ergonomics.ArityClass.REQUIRED_SINGLE:
+                lines.extend(
+                    [
+                        "",
+                        f"    /// Return the child labelled `{label}`.",
+                        "    ///",
+                        f"    /// Panics unless exactly one is present; use `child_{label}` for the checked form.",
+                        f"    pub fn {method}(&self) -> {ref_type} {{",
+                        f"        self.child_{label}()",
+                        f'            .unwrap_or_else(|e| panic!("{class_name}.{label}: {{e}}"))',
+                        "    }",
+                    ]
+                )
+            elif arity == cst_ergonomics.ArityClass.OPTIONAL_SINGLE:
+                lines.extend(
+                    [
+                        "",
+                        f"    /// Return the optional child labelled `{label}`.",
+                        "    ///",
+                        f"    /// Panics if more than one is present; use `maybe_{label}` for the checked form.",
+                        f"    pub fn {method}(&self) -> Option<{ref_type}> {{",
+                        f"        self.maybe_{label}()",
+                        f'            .unwrap_or_else(|e| panic!("{class_name}.{label}: {{e}}"))',
+                        "    }",
+                    ]
+                )
+            elif arity == cst_ergonomics.ArityClass.COLLECTION:
+                lines.extend(
+                    [
+                        "",
+                        f"    /// Return an iterator over the children labelled `{label}`.",
+                        "    ///",
+                        f"    /// Arity-named alias of `children_{label}`.",
+                        f"    pub fn {method}(&self) -> impl Iterator<Item = {ref_type}> + '_ {{",
+                        f"        self.children_{label}()",
+                        "    }",
+                    ]
+                )
+
+            text_arity = plan.text_accessors.get(label)
+            if text_arity is None:
+                continue
+            text_name = cst_ergonomics.rust_method_ident(f"{label}_text")
+            if text_arity == cst_ergonomics.ArityClass.REQUIRED_SINGLE:
+                lines.extend(
+                    [
+                        "",
+                        f"    /// Return the source text of the child labelled `{label}`.",
+                        "    ///",
+                        "    /// Borrows from the span's source; panics if the child is absent or its span",
+                        "    /// carries no usable source.",
+                        f"    pub fn {text_name}(&self) -> &str {{",
+                        f"        self.child_{label}()",
+                        f'            .unwrap_or_else(|e| panic!("{class_name}.{label}_text: {{e}}"))',
+                        "            .text_or_message()",
+                        f'            .unwrap_or_else(|e| panic!("{class_name}.{label}_text: {{e}}"))',
+                        "    }",
+                    ]
+                )
+            else:
+                lines.extend(
+                    [
+                        "",
+                        f"    /// Return the source text of the optional child labelled `{label}`.",
+                        "    ///",
+                        "    /// `None` when the child is absent; panics if more than one is present or the",
+                        "    /// span carries no usable source.",
+                        f"    pub fn {text_name}(&self) -> Option<&str> {{",
+                        "        Some(",
+                        f"            self.maybe_{label}()",
+                        f'                .unwrap_or_else(|e| panic!("{class_name}.{label}_text: {{e}}"))?',
+                        "                .text_or_message()",
+                        f'                .unwrap_or_else(|e| panic!("{class_name}.{label}_text: {{e}}")),',
+                        "        )",
+                    ]
+                )
+                lines.append("    }")
+
+        if plan.rule_text:
+            lines.extend(
+                [
+                    "",
+                    "    /// Return this node's own source text.",
+                    "    ///",
+                    "    /// Covers suppressed content inside the node's span; panics if the span carries no",
+                    "    /// usable source.",
+                    "    pub fn text(&self) -> &str {",
+                    "        self.span",
+                    "            .text_or_message()",
+                    f'            .unwrap_or_else(|e| panic!("{class_name}.text: {{e}}"))',
+                    "    }",
+                ]
+            )
+
+        if plan.variant:
+            lines.extend(
+                [
+                    "",
+                    "    /// Return the label of this node's sole labelled child.",
+                    "    ///",
+                    "    /// Every alternative of this rule is a single labelled item, so the label identifies",
+                    "    /// which one matched.  Panics when no child carries a label.",
+                    f"    pub fn variant(&self) -> {label_enum_name} {{",
+                    "        self.children",
+                    "            .iter()",
+                    "            .find_map(|(lbl, _)| lbl.as_ref())",
+                    "            .cloned()",
+                    f'            .expect("{class_name}.variant: node has no labeled child")',
+                    "    }",
+                ]
+            )
+
+        return lines
+
+    def _ergonomic_pymethods(self, class_name: str, rule_name: str, enum_name: str) -> list[str]:
+        """Emit the Python-visible ergonomic accessors on the handle pyclass.
+
+        Signatures and error messages mirror the Python backend: the bare accessors delegate to
+        the quintet pymethods, so their ``ValueError`` text is identical by construction.  Nothing
+        here panics — the native surface owns that contract.
+        """
+        plan = self.plan_for_rule(rule_name)
+        label_enum_name = self._label_enum_rust_name(class_name)
+        lines: list[str] = []
+
+        for label in self._planned_labels(plan):
+            method = cst_ergonomics.rust_method_ident(label)
+            arity = plan.bare_accessors.get(label)
+            if arity is not None:
+                if method != label:
+                    lines.append(f'    #[pyo3(name = "{label}")]')
+                if arity == cst_ergonomics.ArityClass.REQUIRED_SINGLE:
+                    lines.extend(
+                        [
+                            f"    fn {method}(&self, py: Python<'_>) -> pyo3::PyResult<Py<pyo3::PyAny>> {{",
+                            f"        self.child_{label}(py)",
+                            "    }",
+                            "",
+                        ]
+                    )
+                elif arity == cst_ergonomics.ArityClass.OPTIONAL_SINGLE:
+                    lines.extend(
+                        [
+                            f"    fn {method}(&self, py: Python<'_>) -> pyo3::PyResult<Option<Py<pyo3::PyAny>>> {{",
+                            f"        self.maybe_{label}(py)",
+                            "    }",
+                            "",
+                        ]
+                    )
+                else:
+                    lines.extend(
+                        [
+                            f"    fn {method}(&self, py: Python<'_>) -> pyo3::PyResult<Py<pyo3::types::PyList>> {{",
+                            f"        self.children_{label}(py)",
+                            "    }",
+                            "",
+                        ]
+                    )
+
+            text_arity = plan.text_accessors.get(label)
+            if text_arity is not None:
+                lines.extend(self._label_text_pymethod(class_name, rule_name, label, enum_name, text_arity))
+
+        if plan.rule_text:
+            lines.extend(
+                [
+                    "    fn text(&self) -> pyo3::PyResult<String> {",
+                    "        // Clone the span under the read guard, then release it before raising.",
+                    "        let span = self.inner.read().span.clone();",
+                    "        span.text_or_message()",
+                    "            .map(str::to_owned)",
+                    "            .map_err(PyValueError::new_err)",
+                    "    }",
+                    "",
+                ]
+            )
+
+        if plan.variant:
+            lines.extend(
+                [
+                    f"    fn variant(&self) -> pyo3::PyResult<{label_enum_name}> {{",
+                    "        // Lock scope: read the first label out, drop the guard before raising.",
+                    "        let found = {",
+                    "            let guard = self.inner.read();",
+                    "            guard.children.iter().find_map(|(lbl, _)| lbl.as_ref()).cloned()",
+                    "        };",
+                    "        found.ok_or_else(|| PyValueError::new_err(",
+                    f'            "{class_name}.variant: node has no labeled child",',
+                    "        ))",
+                    "    }",
+                    "",
+                ]
+            )
+
+        return lines
+
+    def _label_text_pymethod(
+        self,
+        class_name: str,
+        rule_name: str,
+        label: str,
+        enum_name: str,
+        arity: cst_ergonomics.ArityClass,
+    ) -> list[str]:
+        """Emit ``<label>_text`` on the handle pyclass.
+
+        The count check reproduces the ``child_<lbl>`` / ``maybe_<lbl>`` pymethod messages; the
+        text lookup reproduces ``Span.text_or_raise``.  A child of the wrong variant stored under
+        the label is only reachable through the untyped mutators and raises ``TypeError``.
+        """
+        label_enum_name = self._label_enum_rust_name(class_name)
+        rust_variant = _rust_variant_name(label)
+        method = cst_ergonomics.rust_method_ident(f"{label}_text")
+        needs_wrong_type_arm = self.num_child_variants(rule_name) > 1
+        wrong_type_err = (
+            f"Err(PyTypeError::new_err(\"{class_name}.{label}_text: child labelled '{label}' is not a Span\"))"
+        )
+        lines: list[str] = []
+
+        if arity == cst_ergonomics.ArityClass.REQUIRED_SINGLE:
+            lines.append(f"    fn {method}(&self) -> pyo3::PyResult<String> {{")
+            lines.extend(self._emit_count_first_scan_block(label_enum_name, rust_variant))
+            lines.extend(
+                [
+                    "        if count != 1 {",
+                    "            return Err(PyValueError::new_err(format!(",
+                    f'                "Expected one {label} child but have {{count}}"',
+                    "            )));",
+                    "        }",
+                    "        match first",
+                    (
+                        f'            .expect("invariant: {class_name}.{label}_text:'
+                        ' count==1 but first==None; logic error")'
+                    ),
+                    "        {",
+                    f"            {enum_name}::Span(s) => s",
+                    "                .text_or_message()",
+                    "                .map(str::to_owned)",
+                    "                .map_err(PyValueError::new_err),",
+                ]
+            )
+            if needs_wrong_type_arm:
+                lines.append(f"            _ => {wrong_type_err},")
+            lines.extend(["        }", "    }", ""])
+            return lines
+
+        lines.append(f"    fn {method}(&self) -> pyo3::PyResult<Option<String>> {{")
+        lines.extend(self._emit_count_first_scan_block(label_enum_name, rust_variant))
+        lines.extend(
+            [
+                "        if count > 1 {",
+                "            return Err(PyValueError::new_err(",
+                f'                "Expected at most one {label} child but have at least 2",',
+                "            ));",
+                "        }",
+                "        match first {",
+                "            None => Ok(None),",
+                f"            Some({enum_name}::Span(s)) => s",
+                "                .text_or_message()",
+                "                .map(|t| Some(t.to_owned()))",
+                "                .map_err(PyValueError::new_err),",
+            ]
+        )
+        if needs_wrong_type_arm:
+            lines.append(f"            Some(_) => {wrong_type_err},")
+        lines.extend(["        }", "    }", ""])
         return lines
 
     def _emit_count_first_scan_block(self, label_enum_name: str, rust_variant: str) -> list[str]:

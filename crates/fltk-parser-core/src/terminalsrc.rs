@@ -40,7 +40,7 @@ impl TerminalSource {
         Self::from_source_text(SourceText::from_str(text, filename))
     }
 
-    /// Construct from an existing `SourceText` (no copy; borrows text via the §2.2 accessor).
+    /// Construct from an existing `SourceText` (no copy).
     pub fn from_source_text(source: SourceText) -> Self {
         let text = source.text();
         // Build cp_to_byte: cp_to_byte[i] is the byte index of the i-th codepoint.
@@ -114,8 +114,6 @@ impl TerminalSource {
     }
 
     /// Try to match a compiled regex at codepoint position `pos`.
-    ///
-    /// Port of the `consume_regex` design (controlling design §3.1).
     ///
     /// Performs an anchored search over the full haystack with the search span starting at
     /// the byte offset corresponding to `pos`. The full haystack is passed (not a slice

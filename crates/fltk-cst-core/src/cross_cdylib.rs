@@ -11,7 +11,7 @@ use pyo3::PyTypeInfo;
 /// `SourceText._fltk_cst_core_abi` and `Span._fltk_cst_core_abi` via `#[classattr]`s.
 /// Used by `extract_source_text` and `get_span_type` (below) to gate `cast_unchecked`
 /// without relying on type-object identity (unavailable in the canonical→consumer
-/// direction; see design §2.1–2.2).
+/// direction).
 ///
 /// The string alone does NOT cover pyo3-resolution skew. The companion
 /// `_fltk_cst_core_abi_layout` classattr (`size_of::<<T as PyClassImpl>::Layout>()`) detects
@@ -282,7 +282,7 @@ fn check_abi_pair<T: pyo3::PyClass>(
 ///
 /// `type_label` is the logical class name used in error prefixes (e.g. "SourceText"),
 /// matching the convention of `check_abi_pair`.  The helper is generic so it can later be
-/// reused for other types (e.g. `Span` in §2.C) without message confusion.
+/// reused for other types (e.g. `Span`) without message confusion.
 ///
 /// **Residual**: a `__slots__`-padded forge whose `tp_basicsize` exactly matches the expected
 /// value and whose metaclass is `type` (default for plain Python classes) passes both steps.

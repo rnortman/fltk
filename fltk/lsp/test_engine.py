@@ -5,6 +5,7 @@ from __future__ import annotations
 import pytest
 
 from fltk import plumbing
+from fltk.fegen import gsm
 from fltk.lsp.conftest import HELLO_GRAMMAR as _GRAMMAR
 from fltk.lsp.conftest import HELLO_LSP as _LSP
 from fltk.lsp.conftest import build_hello_engine
@@ -102,12 +103,87 @@ def test_highlight_reused_across_calls() -> None:
     assert _type_of(ok2.tokens, "hello there !", "there") == "type"
 
 
+def _grammar_with_unexpanded_inline() -> gsm.Grammar:
+    """A grammar retaining an INLINE item, as only a programmatic caller can produce.
+
+    `plumbing.parse_grammar` expands `!` away, so the engine's INLINE rejection is
+    reachable only by bypassing that boundary.
+    """
+    word = gsm.Rule(
+        name="word",
+        alternatives=[
+            gsm.Items(
+                items=[
+                    gsm.Item(
+                        label="name",
+                        disposition=gsm.Disposition.INCLUDE,
+                        term=gsm.Regex(r"[a-z]+"),
+                        quantifier=gsm.REQUIRED,
+                    )
+                ],
+                sep_after=[gsm.Separator.NO_WS],
+            )
+        ],
+    )
+    tail = gsm.Rule(
+        name="tail",
+        alternatives=[
+            gsm.Items(
+                items=[
+                    gsm.Item(
+                        label="mark",
+                        disposition=gsm.Disposition.INCLUDE,
+                        term=gsm.Identifier("word"),
+                        quantifier=gsm.REQUIRED,
+                    )
+                ],
+                sep_after=[gsm.Separator.NO_WS],
+            )
+        ],
+    )
+    top = gsm.Rule(
+        name="top",
+        alternatives=[
+            gsm.Items(
+                items=[
+                    gsm.Item(
+                        label=None,
+                        disposition=gsm.Disposition.INLINE,
+                        term=gsm.Identifier("tail"),
+                        quantifier=gsm.REQUIRED,
+                    )
+                ],
+                sep_after=[gsm.Separator.NO_WS],
+            )
+        ],
+    )
+    rules = [top, tail, word]
+    return gsm.Grammar(rules=rules, identifiers={rule.name: rule for rule in rules})
+
+
 def test_inline_grammar_rejected_at_construction() -> None:
-    grammar = plumbing.parse_grammar(r"""
-top := a:word . !tail ;
-tail := "x" . mark:word ;
-word := /[a-z]+/ ;
-""")
+    grammar = _grammar_with_unexpanded_inline()
     resolved = load_lsp_config("", grammar)
     with pytest.raises(ValueError, match="inline"):
         AnalysisEngine(grammar, resolved, start_rule="top")
+
+
+def test_inline_grammar_accepted_after_expansion() -> None:
+    """An inline-using grammar reaches the engine already expanded and highlights normally."""
+    grammar = plumbing.parse_grammar(r"""
+top := a:num . !tail ;
+tail := op:"+" . mark:num ;
+num := name:/[0-9]+/ ;
+""")
+    resolved = load_lsp_config("", grammar)
+    engine = AnalysisEngine(grammar, resolved, start_rule="top")
+
+    text = "1+2"
+    result = engine.highlight(text)
+    assert result.error is None
+    assert result.tokens is not None
+    # The spliced literal is a child of the `top` node and is classified against `top`'s
+    # terminal table, which carries it only because expansion moved `tail`'s items there.
+    assert _type_of(result.tokens, text, "+") == "operator"
+    # The spliced `mark:num` is tokenized exactly like the caller's own `a:num`.
+    assert _type_of(result.tokens, text, "2") == _type_of(result.tokens, text, "1") == "number"

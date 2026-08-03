@@ -28,7 +28,7 @@ def _parse_fails(text: str) -> bool:
     return not result or result.pos != len(terminals.terminals)
 
 
-# The worked clockwork example, verbatim from fltklsp-spec.md §4.
+# The worked clockwork example, verbatim from fltklsp-spec.md.
 WORKED_EXAMPLE = """// clockwork.fltklsp
 scope doc: comment;
 
@@ -152,7 +152,7 @@ def test_unclosed_rule_body_fails():
     assert _parse_fails("rule bar {\n  scope baz: type;\n")
 
 
-# --- the label/rule-named-anchor flush-against-colon quirk (design §4.1) ---
+# --- the label/rule-named-anchor flush-against-colon quirk ---
 #
 # An anchor whose *name* is literally `label` or `rule`, written flush against the
 # scope-token colon, misparses: the optional qualifier group commits on `label:` and

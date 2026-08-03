@@ -18,8 +18,7 @@ use std::rc::Rc;
 /// `Clone` is cheap: cloning an `Rc<Doc>` field is a refcount bump, never a deep
 /// copy. The custom [`Drop`] impl tears the tree down iteratively (see below);
 /// the derived `Debug`/`PartialEq` still recurse, but they are debugging/test
-/// aids off the happy path, and deep-tree hardening of those is out of scope for
-/// this milestone (design §3, open question 1).
+/// aids off the happy path; deep-tree hardening of those is out of scope.
 #[derive(Clone, Debug, PartialEq)]
 pub enum Doc {
     /// Literal text content.

@@ -421,16 +421,8 @@ def test_invocation_raises_not_implemented() -> None:
         gen.generate()
 
 
-def test_inline_disposition_raises_at_some_point() -> None:
-    """INLINE disposition on a non-Identifier term must raise an error.
-
-    CstGenerator rejects INLINE on non-Identifier terms with an AssertionError.
-    RustParserGenerator raises NotImplementedError for INLINE on Identifiers (see
-    test_inline_disposition_identifier_raises_not_implemented). The exact exception
-    type here depends on which layer rejects it first; both are correct rejections,
-    so both are accepted. The Identifier-INLINE case is tested separately with a
-    pinned exception type.
-    """
+def test_inline_disposition_non_identifier_rejected() -> None:
+    """INLINE disposition on a non-Identifier term must be rejected before generation."""
     rule = gsm.Rule(
         name="inl",
         alternatives=[
@@ -448,17 +440,13 @@ def test_inline_disposition_raises_at_some_point() -> None:
         ],
     )
     grammar = gsm.Grammar(rules=[rule], identifiers={"inl": rule})
-    with pytest.raises((NotImplementedError, AssertionError)):
+    with pytest.raises(ValueError, match="expand_inline_dispositions"):
         gen = RustParserGenerator(grammar)
         gen.generate()
 
 
-def test_inline_disposition_identifier_raises_not_implemented() -> None:
-    """INLINE disposition on an Identifier term must raise NotImplementedError at generate time.
-
-    CstGenerator supports INLINE on Identifiers (for inlining child rule's children),
-    but the Rust parser generator does not.
-    """
+def test_inline_disposition_identifier_rejected() -> None:
+    """An unexpanded INLINE item reaching the Rust generator is a loud error, never a misparse."""
     child_rule = gsm.Rule(
         name="child",
         alternatives=[
@@ -495,9 +483,51 @@ def test_inline_disposition_identifier_raises_not_implemented() -> None:
         rules=[parent_rule, child_rule],
         identifiers={"parent": parent_rule, "child": child_rule},
     )
-    with pytest.raises(NotImplementedError, match="INLINE"):
+    with pytest.raises(ValueError, match="expand_inline_dispositions"):
         gen = RustParserGenerator(grammar)
         gen.generate()
+
+
+def test_expanded_inline_generates() -> None:
+    """The same grammar generates cleanly once inline dispositions are expanded."""
+    child_rule = gsm.Rule(
+        name="child",
+        alternatives=[
+            gsm.Items(
+                items=[
+                    gsm.Item(
+                        label="v",
+                        disposition=gsm.Disposition.INCLUDE,
+                        term=gsm.Regex(r"[a-z]+"),
+                        quantifier=gsm.REQUIRED,
+                    )
+                ],
+                sep_after=[gsm.Separator.NO_WS],
+            )
+        ],
+    )
+    parent_rule = gsm.Rule(
+        name="parent",
+        alternatives=[
+            gsm.Items(
+                items=[
+                    gsm.Item(
+                        label=None,
+                        disposition=gsm.Disposition.INLINE,
+                        term=gsm.Identifier("child"),
+                        quantifier=gsm.REQUIRED,
+                    )
+                ],
+                sep_after=[gsm.Separator.NO_WS],
+            )
+        ],
+    )
+    grammar = gsm.expand_inline_dispositions(
+        gsm.Grammar(rules=[parent_rule, child_rule], identifiers={"parent": parent_rule, "child": child_rule})
+    )
+    src = RustParserGenerator(grammar).generate()
+
+    assert "pub fn apply__parse_parent(" in src
 
 
 def test_parser_struct_has_cache_fields() -> None:

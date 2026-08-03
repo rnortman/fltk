@@ -179,7 +179,7 @@ def _generate_rust_srcs_impl(ctx):
     protocol = ctx.attr.protocol
 
     # Mirror the CLI's `--protocol-output requires --protocol-module` check,
-    # surfacing the misconfiguration at analysis time (§2.5).
+    # surfacing the misconfiguration at analysis time.
     _require_protocol_module(protocol, protocol_module)
 
     # The output subdirectory and the --extension-name CLI flag are both driven
@@ -187,7 +187,7 @@ def _generate_rust_srcs_impl(ctx):
     # name when it is empty (preserving today's pure-Rust behavior).  This
     # decouples the stub-package directory / extension name from the rule's
     # target name: the wrapping macro sets extension_name to the single owner
-    # module name so the stub package is named after the compiled module (§2).
+    # module name so the stub package is named after the compiled module.
     out_subdir = ctx.attr.extension_name or ctx.attr.name
 
     # Declare the two output files in the output subdirectory.
@@ -202,7 +202,7 @@ def _generate_rust_srcs_impl(ctx):
     # stub_outputs collects the files that ride along on the compiled Python
     # module (the .pyi stub package and, when protocol = True, the protocol .py).
     # It stays empty when protocol_module is empty; it feeds the stub_srcs output
-    # group returned below (§2 "Output routing").
+    # group returned below.
     stub_outputs = []
 
     # --- Action 1: gen-rust-cst ---
@@ -214,9 +214,9 @@ def _generate_rust_srcs_impl(ctx):
     if protocol_module:
         # Expose the .pyi stub plus the stub-package __init__.pyi marker through
         # the same gen-rust-cst action, so <name>/ is a complete stub package in
-        # the Bazel output tree (§2.5-§2.6).  The marker is generator-produced via
+        # the Bazel output tree.  The marker is generator-produced via
         # --init-pyi-output (not a ctx.actions.write fixed body), keeping it on the
-        # same dogfooded path as the in-tree markers (§2.2).
+        # same dogfooded path as the in-tree markers.
         cst_pyi = ctx.actions.declare_file(out_subdir + "/cst.pyi")
         init_pyi = ctx.actions.declare_file(out_subdir + "/__init__.pyi")
         cst_args.add("--protocol-module")
@@ -268,7 +268,7 @@ def _generate_rust_srcs_impl(ctx):
 
     # Expose outputs both as DefaultInfo (all declared files) and as two named
     # output groups so the wrapping macro can route heterogeneous outputs without
-    # addressing individual declared files by label (§2 "Output routing"):
+    # addressing individual declared files by label:
     #   rust_srcs — always the two .rs files (fed to crate assembly).
     #   stub_srcs — the .pyi stub package + optional protocol .py (fed to
     #               py_library.data); an empty depset when protocol_module is empty.
