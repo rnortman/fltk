@@ -54,6 +54,9 @@ test = [
   "coverage[toml]>=6.5",
   "pytest",
   "pytest-lsp",
+  # `tomllib` is stdlib from 3.11; the floor is 3.10, and the manifest-mirror guard in
+  # tests/ has to parse TOML on every supported interpreter rather than skip on the oldest.
+  "tomli>=2; python_version < '3.11'",
 ]
 lint = [
   "pyright>=1.1.0",

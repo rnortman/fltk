@@ -15,13 +15,16 @@ from fltk.plumbing import (
 )
 from fltk.unparse.combinators import NIL, Concat, Text
 
-# Test grammar with various elements that can be omitted
+# Test grammar with various elements that can be omitted.
+# Each operator spelling carries its own label: a label states which value was written, and the
+# CST records the matched position rather than the text, so two spellings under one label would
+# make the two operators indistinguishable (and unparse "1-2" as "1+2").
 TEST_GRAMMAR = """
 // A simple expression grammar with operators and parentheses
 expr := term , (add_op , term)*;
-add_op := op:"+" | op:"-";
+add_op := plus:"+" | minus:"-";
 term := factor , (mul_op , factor)*;
-mul_op := op:"*" | op:"/";
+mul_op := times:"*" | divide:"/";
 factor := number | "(" , expr , ")";
 number := value:/[0-9]+/;
 
@@ -95,9 +98,11 @@ def test_omit_labeled_operators(omit_parser_unparser):
     """Test omitting operators by their labels."""
     parser_result = omit_parser_unparser
 
-    # Formatter config that omits items with label "op"
     formatter_config_text = """
-    omit op;
+    omit plus;
+    omit minus;
+    omit times;
+    omit divide;
     """
 
     formatter_config = parse_format_config(formatter_config_text)
@@ -111,7 +116,6 @@ def test_omit_labeled_operators(omit_parser_unparser):
 
     doc = unparse_cst(unparser_result, cst, input_text, "expr")
 
-    # All operators (labeled as "op") should be omitted
     expected = Concat((Text("1"), Text("2"), Text("3"), Text("4"), Text("5")))
     assert doc == expected, f"Expected {expected}, got {doc}"
 

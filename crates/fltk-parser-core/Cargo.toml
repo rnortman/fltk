@@ -14,14 +14,4 @@ crate-type = ["rlib"]
 
 [dependencies]
 fltk-cst-core = { path = "../fltk-cst-core", default-features = false }
-regex-automata = { version = "0.4", default-features = false, features = [
-    "std",
-    "syntax",
-    "perf",
-    "unicode",
-    "meta",
-    "nfa-backtrack",
-    "nfa-pikevm",
-    "hybrid",
-    "dfa-onepass",
-] }
+regex-automata = { workspace = true }

@@ -38,21 +38,19 @@ pip.parse(
 )
 use_repo(pip, "pypi")
 
-# Third-party Rust dependencies (pyo3, regex-automata, and transitive graph).
+# Third-party Rust dependencies (pyo3, regex-automata, indexmap, and transitive graph).
 # This hub is module-private: FLTK's macros reference it as internal labels.
 # Clockwork and other consumers do NOT need a use_repo for this hub.
 #
-# Membership note: `from_cargo` seeds from the workspace root Cargo.toml, whose
-# [workspace] members include ".", "crates/fltk-cst-core", and "crates/fltk-parser-core".
-# The tests/* fixture crates have their own [workspace] declarations and are excluded.
+# Membership note: only the workspace root Cargo.toml belongs in `manifests` — from_cargo
+# reads its [workspace] members (".", "crates/fltk-cst-core", "crates/fltk-parser-core",
+# "crates/fltk-unparser-core", "crates/fltk-ast-core", "crates/fltk-fmt-cli") itself, and
+# rules_rust reports listing them again as removable.  The tests/* fixture crates have their
+# own [workspace] declarations and are excluded from this hub.
 crate = use_extension("@rules_rust//crate_universe:extensions.bzl", "crate")
 crate.from_cargo(
     name = "fltk_crates",
     cargo_lockfile = "//:Cargo.lock",
-    manifests = [
-        "//:Cargo.toml",
-        "//crates/fltk-cst-core:Cargo.toml",
-        "//crates/fltk-parser-core:Cargo.toml",
-    ],
+    manifests = ["//:Cargo.toml"],
 )
 use_repo(crate, "fltk_crates")

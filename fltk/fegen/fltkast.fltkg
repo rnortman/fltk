@@ -1,0 +1,37 @@
+// fltkast.fltkg — grammar for .fltkast AST-shaping sidecar files
+ast_spec := , statement* ;
+statement := option_stmt | rule_config ;
+
+option_stmt := "option" : key:identifier , "=" , value:option_value , ";" , ;
+option_value := true:"true" | false:"false" | string:string ;
+
+rule_config := "rule" : rule_name:identifier , "{" , ( rule_statement , )* , "}" , ;
+rule_statement := type_stmt | bool_stmt | transparent_stmt | text_from_stmt
+                | key_stmt | fold_stmt | flatten_stmt | custom_stmt
+                | name_stmt | variant_stmt | field_stmt
+                | sum_stmt | product_stmt ;
+
+type_stmt        := "type" , ":" , spec:type_spec , ";" , ;
+type_spec        := custom:custom_spec | builtin:identifier ;
+custom_spec      := "custom" , "(" , arg:custom_arg , ( "," , arg:custom_arg )* , ","? , ")" ;
+custom_arg       := key:identifier , ":" , value:string ;
+bool_stmt        := "bool" , ":" , truthy:identifier , ";" , ;
+transparent_stmt := "transparent" , ";" , ;
+text_from_stmt   := "text_from" , ":" , label:identifier , ";" , ;
+key_stmt         := "key" , ":" , label:identifier , ";" , ;
+fold_stmt        := dir:fold_dir , ":" , op:identifier , ";" , ;
+fold_dir         := left:"fold_left" | right:"fold_right" ;
+flatten_stmt     := "flatten" , ";" , ;
+custom_stmt      := "custom" , "(" , arg:custom_arg , ( "," , arg:custom_arg )* , ","? , ")" , ";" , ;
+name_stmt        := "name" , ":" , new_name:identifier , ";" , ;
+variant_stmt     := "variant" : selector:identifier , ":" , new_name:identifier , ";" , ;
+field_stmt       := "field" : label:identifier , "{" , ( field_statement , )* , "}" , ;
+field_statement  := name_stmt ;
+sum_stmt         := "sum" , ";" , ;
+product_stmt     := "product" , ";" , ;
+
+identifier := name:/[a-zA-Z_][a-zA-Z0-9_]*/ ;
+string     := value:/"([^"\n\\]|\\.)*"/ ;
+
+_trivia := ( line_comment | line_comment? : )+ ;
+line_comment := prefix:"//" . content:/[^\n]*/ . newline:"\n" ;

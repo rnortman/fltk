@@ -22,6 +22,7 @@ from fltk.unparse.combinators import (
     Text,
 )
 from fltk.unparse.fmt_config import FormatterConfig, ItemSelector, Normal, Omit, OperationType, RenderAs
+from fltk.unparse.literal_labels import check_labeled_literal_texts, spellings_for
 
 if TYPE_CHECKING:
     from fltk.iir.context import CompilerContext
@@ -42,6 +43,10 @@ class UnparserGenerator:
         cst_module: str,
         formatter_config: FormatterConfig | None = None,
     ):
+        # A labeled literal whose spelling cannot survive the round trip is refused before any
+        # emission, so the diagnostic names the grammar rather than surfacing as wrong output.
+        check_labeled_literal_texts(grammar)
+
         self.grammar: Final = grammar
         self.context = context
         self.cst_module = cst_module
@@ -336,6 +341,19 @@ class UnparserGenerator:
             type_check_condition = iir.LogicalNegation(operand=isinstance_check)
         if_wrong_type = method.block.if_(type_check_condition)
         if_wrong_type.block.return_(iir.LiteralNull())
+
+        spellings = spellings_for(self.grammar.identifiers[rule_name], item)
+        if spellings:
+            # A labeled literal accepts a span child only when its text is one of the label's
+            # spellings (or the span is sourceless). Rendering still emits the grammar's text, so
+            # this changes which trial branch wins, never what a winning branch produces: a rival
+            # regex under the same label now takes the child whose text the literal cannot spell.
+            matches_call = self._get_pyrt_module().method.literal_span_matches.call(
+                child_var.load(),
+                iir.LiteralSequence(values=[iir.LiteralString(text) for text in spellings]),
+            )
+            if_wrong_text = method.block.if_(iir.LogicalNegation(operand=matches_call))
+            if_wrong_text.block.return_(iir.LiteralNull())
 
         return child_var
 

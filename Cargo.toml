@@ -1,6 +1,24 @@
 [workspace]
-members = [".", "crates/fltk-cst-core", "crates/fltk-parser-core", "crates/fltk-unparser-core", "crates/fltk-fmt-cli"]
+members = [".", "crates/fltk-cst-core", "crates/fltk-parser-core", "crates/fltk-unparser-core", "crates/fltk-ast-core", "crates/fltk-fmt-cli"]
 resolver = "2"
+
+# Single writer for the regex engine.  fltk-parser-core compiles a grammar's terminals for
+# anchored prefix matching and fltk-ast-core compiles the same terminals for full-match
+# validation, so the two must agree on version *and* feature set: a pattern the generated
+# parser accepts has to compile in the AST layer too.  Two hand-maintained copies of the pin
+# would drift with no diagnostic, so members inherit it with `workspace = true`.
+[workspace.dependencies]
+regex-automata = { version = "0.4", default-features = false, features = [
+    "std",
+    "syntax",
+    "perf",
+    "unicode",
+    "meta",
+    "nfa-backtrack",
+    "nfa-pikevm",
+    "hybrid",
+    "dfa-onepass",
+] }
 
 [package]
 name = "fltk-native"

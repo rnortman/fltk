@@ -174,6 +174,17 @@ _CORPUS = [
     # optional span label beside a node label, present and absent
     ("mixed_opt", "ab7"),
     ("mixed_opt", "7"),
+    # Rules the AST sidecar shapes — the AST layer is not in play here; these are the
+    # ordinary CST unparsers for the same rules.
+    ("uuid_val", "550e8400-e29b-41d4-a716-446655440000"),
+    ("decimal_val", "-12.50"),
+    # colour: "grey" is the non-canonical spelling of a shared label.
+    ("colour", "gray"),
+    ("colour", "grey"),
+    ("colour", "black"),
+    # sum_chain: WS_ALLOWED separators over a repetition, tight and spaced
+    ("sum_chain", "1+2-3"),
+    ("sum_chain", "1 + 2 - 3"),
 ]
 
 _CORPUS_IDS = [f"{rule}-{n}" for n, (rule, _) in enumerate(_CORPUS)]

@@ -737,9 +737,12 @@ impl Unparser {
         if child_tuple.0 != Some(cst::ItemsLabel::NoWs) {
             return None;
         }
-        match &child_tuple.1 {
-            cst::ItemsChild::Span(_) => {}
+        let span = match &child_tuple.1 {
+            cst::ItemsChild::Span(span) => span,
             _ => return None,
+        };
+        if span.text_str().is_some_and(|t| !matches!(t, ".")) {
+            return None;
         }
         let acc = acc.add_non_trivia(fltk_unparser_core::text("."));
         Some(UnparseResult::new(acc, pos + 1))
@@ -765,9 +768,12 @@ impl Unparser {
         if child_tuple.0 != Some(cst::ItemsLabel::WsAllowed) {
             return None;
         }
-        match &child_tuple.1 {
-            cst::ItemsChild::Span(_) => {}
+        let span = match &child_tuple.1 {
+            cst::ItemsChild::Span(span) => span,
             _ => return None,
+        };
+        if span.text_str().is_some_and(|t| !matches!(t, ",")) {
+            return None;
         }
         let acc = acc.add_non_trivia(fltk_unparser_core::text(","));
         Some(UnparseResult::new(acc, pos + 1))
@@ -793,9 +799,12 @@ impl Unparser {
         if child_tuple.0 != Some(cst::ItemsLabel::WsRequired) {
             return None;
         }
-        match &child_tuple.1 {
-            cst::ItemsChild::Span(_) => {}
+        let span = match &child_tuple.1 {
+            cst::ItemsChild::Span(span) => span,
             _ => return None,
+        };
+        if span.text_str().is_some_and(|t| !matches!(t, ":")) {
+            return None;
         }
         let acc = acc.add_non_trivia(fltk_unparser_core::text(":"));
         Some(UnparseResult::new(acc, pos + 1))
@@ -956,9 +965,12 @@ impl Unparser {
         if child_tuple.0 != Some(cst::ItemsLabel::NoWs) {
             return None;
         }
-        match &child_tuple.1 {
-            cst::ItemsChild::Span(_) => {}
+        let span = match &child_tuple.1 {
+            cst::ItemsChild::Span(span) => span,
             _ => return None,
+        };
+        if span.text_str().is_some_and(|t| !matches!(t, ".")) {
+            return None;
         }
         let acc = acc.add_non_trivia(fltk_unparser_core::text("."));
         Some(UnparseResult::new(acc, pos + 1))
@@ -984,9 +996,12 @@ impl Unparser {
         if child_tuple.0 != Some(cst::ItemsLabel::WsAllowed) {
             return None;
         }
-        match &child_tuple.1 {
-            cst::ItemsChild::Span(_) => {}
+        let span = match &child_tuple.1 {
+            cst::ItemsChild::Span(span) => span,
             _ => return None,
+        };
+        if span.text_str().is_some_and(|t| !matches!(t, ",")) {
+            return None;
         }
         let acc = acc.add_non_trivia(fltk_unparser_core::text(","));
         Some(UnparseResult::new(acc, pos + 1))
@@ -1012,9 +1027,12 @@ impl Unparser {
         if child_tuple.0 != Some(cst::ItemsLabel::WsRequired) {
             return None;
         }
-        match &child_tuple.1 {
-            cst::ItemsChild::Span(_) => {}
+        let span = match &child_tuple.1 {
+            cst::ItemsChild::Span(span) => span,
             _ => return None,
+        };
+        if span.text_str().is_some_and(|t| !matches!(t, ":")) {
+            return None;
         }
         let acc = acc.add_non_trivia(fltk_unparser_core::text(":"));
         Some(UnparseResult::new(acc, pos + 1))
@@ -1076,9 +1094,12 @@ impl Unparser {
         if child_tuple.0 != Some(cst::ItemsLabel::NoWs) {
             return None;
         }
-        match &child_tuple.1 {
-            cst::ItemsChild::Span(_) => {}
+        let span = match &child_tuple.1 {
+            cst::ItemsChild::Span(span) => span,
             _ => return None,
+        };
+        if span.text_str().is_some_and(|t| !matches!(t, ".")) {
+            return None;
         }
         let acc = acc.add_non_trivia(fltk_unparser_core::text("."));
         Some(UnparseResult::new(acc, pos + 1))
@@ -1104,9 +1125,12 @@ impl Unparser {
         if child_tuple.0 != Some(cst::ItemsLabel::WsAllowed) {
             return None;
         }
-        match &child_tuple.1 {
-            cst::ItemsChild::Span(_) => {}
+        let span = match &child_tuple.1 {
+            cst::ItemsChild::Span(span) => span,
             _ => return None,
+        };
+        if span.text_str().is_some_and(|t| !matches!(t, ",")) {
+            return None;
         }
         let acc = acc.add_non_trivia(fltk_unparser_core::text(","));
         Some(UnparseResult::new(acc, pos + 1))
@@ -1132,9 +1156,12 @@ impl Unparser {
         if child_tuple.0 != Some(cst::ItemsLabel::WsRequired) {
             return None;
         }
-        match &child_tuple.1 {
-            cst::ItemsChild::Span(_) => {}
+        let span = match &child_tuple.1 {
+            cst::ItemsChild::Span(span) => span,
             _ => return None,
+        };
+        if span.text_str().is_some_and(|t| !matches!(t, ":")) {
+            return None;
         }
         let acc = acc.add_non_trivia(fltk_unparser_core::text(":"));
         Some(UnparseResult::new(acc, pos + 1))
@@ -1571,6 +1598,10 @@ impl Unparser {
         if child_tuple.0 != Some(cst::DispositionLabel::Suppress) {
             return None;
         }
+        let cst::DispositionChild::Span(span) = &child_tuple.1;
+        if span.text_str().is_some_and(|t| !matches!(t, "%")) {
+            return None;
+        }
         let acc = acc.add_non_trivia(fltk_unparser_core::text("%"));
         Some(UnparseResult::new(acc, pos + 1))
     }
@@ -1593,6 +1624,10 @@ impl Unparser {
         if child_tuple.0 != Some(cst::DispositionLabel::Include) {
             return None;
         }
+        let cst::DispositionChild::Span(span) = &child_tuple.1;
+        if span.text_str().is_some_and(|t| !matches!(t, "$")) {
+            return None;
+        }
         let acc = acc.add_non_trivia(fltk_unparser_core::text("$"));
         Some(UnparseResult::new(acc, pos + 1))
     }
@@ -1613,6 +1648,10 @@ impl Unparser {
         }
         let child_tuple = &children[pos];
         if child_tuple.0 != Some(cst::DispositionLabel::Inline) {
+            return None;
+        }
+        let cst::DispositionChild::Span(span) = &child_tuple.1;
+        if span.text_str().is_some_and(|t| !matches!(t, "!")) {
             return None;
         }
         let acc = acc.add_non_trivia(fltk_unparser_core::text("!"));
@@ -1650,6 +1689,10 @@ impl Unparser {
         if child_tuple.0 != Some(cst::QuantifierLabel::Optional) {
             return None;
         }
+        let cst::QuantifierChild::Span(span) = &child_tuple.1;
+        if span.text_str().is_some_and(|t| !matches!(t, "?")) {
+            return None;
+        }
         let acc = acc.add_non_trivia(fltk_unparser_core::text("?"));
         Some(UnparseResult::new(acc, pos + 1))
     }
@@ -1672,6 +1715,10 @@ impl Unparser {
         if child_tuple.0 != Some(cst::QuantifierLabel::OneOrMore) {
             return None;
         }
+        let cst::QuantifierChild::Span(span) = &child_tuple.1;
+        if span.text_str().is_some_and(|t| !matches!(t, "+")) {
+            return None;
+        }
         let acc = acc.add_non_trivia(fltk_unparser_core::text("+"));
         Some(UnparseResult::new(acc, pos + 1))
     }
@@ -1692,6 +1739,10 @@ impl Unparser {
         }
         let child_tuple = &children[pos];
         if child_tuple.0 != Some(cst::QuantifierLabel::ZeroOrMore) {
+            return None;
+        }
+        let cst::QuantifierChild::Span(span) = &child_tuple.1;
+        if span.text_str().is_some_and(|t| !matches!(t, "*")) {
             return None;
         }
         let acc = acc.add_non_trivia(fltk_unparser_core::text("*"));
@@ -1981,6 +2032,10 @@ impl Unparser {
         if child_tuple.0 != Some(cst::LineCommentLabel::Prefix) {
             return None;
         }
+        let cst::LineCommentChild::Span(span) = &child_tuple.1;
+        if span.text_str().is_some_and(|t| !matches!(t, "//")) {
+            return None;
+        }
         let acc = acc.add_non_trivia(fltk_unparser_core::text("//"));
         Some(UnparseResult::new(acc, pos + 1))
     }
@@ -2036,6 +2091,10 @@ impl Unparser {
         }
         let child_tuple = &children[pos];
         if child_tuple.0 != Some(cst::BlockCommentLabel::Start) {
+            return None;
+        }
+        let cst::BlockCommentChild::Span(span) = &child_tuple.1;
+        if span.text_str().is_some_and(|t| !matches!(t, "/*")) {
             return None;
         }
         let acc = acc.add_non_trivia(fltk_unparser_core::text("/*"));

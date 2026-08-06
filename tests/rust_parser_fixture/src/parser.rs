@@ -20,10 +20,10 @@ use fltk_parser_core::{apply, ApplyResult, Cache, ErrorTracker, PackratState, Te
 
 use super::cst;
 
-pub const RULE_NAMES: [&str; 38] = ["num", "name", "atom", "paren_expr", "stmt", "items", "opt_item", "zero_items", "expr", "lval", "rval", "arrow", "latin_word", "tagged", "val", "leading_ws", "grouped", "rec_via_sub", "nest", "nest_sum", "digit_seq", "word_seq", "ws_seq", "three_to_five_digits", "exactly_two_digits", "escaped_metas", "latin_range", "nc_group_alt", "case_insensitive", "anchored_word", "pair", "wrapper", "opt_wrapper", "rep_wrapper", "kw_labels", "quoted", "mixed_opt", "_trivia"];
+pub const RULE_NAMES: [&str; 42] = ["num", "name", "atom", "paren_expr", "stmt", "items", "opt_item", "zero_items", "expr", "lval", "rval", "arrow", "latin_word", "tagged", "val", "leading_ws", "grouped", "rec_via_sub", "nest", "nest_sum", "digit_seq", "word_seq", "ws_seq", "three_to_five_digits", "exactly_two_digits", "escaped_metas", "latin_range", "nc_group_alt", "case_insensitive", "anchored_word", "pair", "wrapper", "opt_wrapper", "rep_wrapper", "kw_labels", "quoted", "mixed_opt", "uuid_val", "decimal_val", "colour", "sum_chain", "_trivia"];
 
-const REGEX_PATTERNS: [&str; 16] = ["[0-9]+", "[a-z]+", "[À-ÿ]+", "[!@#$]+", "\\d+", "\\w+", "\\s+", "[0-9]{3,5}", "[0-9]{2}", "\\.\\*\\+", "[À-Ö]+", "(?:ab|cd)+", "(?i)[a-z]+", "^[a-z]+$", "[0-9]", "[\\s]+"];
-static REGEX_CELLS: [OnceLock<Regex>; 16] = [OnceLock::new(), OnceLock::new(), OnceLock::new(), OnceLock::new(), OnceLock::new(), OnceLock::new(), OnceLock::new(), OnceLock::new(), OnceLock::new(), OnceLock::new(), OnceLock::new(), OnceLock::new(), OnceLock::new(), OnceLock::new(), OnceLock::new(), OnceLock::new()];
+const REGEX_PATTERNS: [&str; 19] = ["[0-9]+", "[a-z]+", "[À-ÿ]+", "[!@#$]+", "\\d+", "\\w+", "\\s+", "[0-9]{3,5}", "[0-9]{2}", "\\.\\*\\+", "[À-Ö]+", "(?:ab|cd)+", "(?i)[a-z]+", "^[a-z]+$", "[0-9]", "[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}", "-?[0-9]+\\.[0-9]+", "[-+]", "[\\s]+"];
+static REGEX_CELLS: [OnceLock<Regex>; 19] = [OnceLock::new(), OnceLock::new(), OnceLock::new(), OnceLock::new(), OnceLock::new(), OnceLock::new(), OnceLock::new(), OnceLock::new(), OnceLock::new(), OnceLock::new(), OnceLock::new(), OnceLock::new(), OnceLock::new(), OnceLock::new(), OnceLock::new(), OnceLock::new(), OnceLock::new(), OnceLock::new(), OnceLock::new()];
 
 fn regex_at(idx: usize) -> &'static Regex {
     REGEX_CELLS[idx].get_or_init(|| {
@@ -74,6 +74,10 @@ pub struct Parser {
     cache__parse_kw_labels: Cache<Shared<cst::KwLabels>>,
     cache__parse_quoted: Cache<Shared<cst::Quoted>>,
     cache__parse_mixed_opt: Cache<Shared<cst::MixedOpt>>,
+    cache__parse_uuid_val: Cache<Shared<cst::UuidVal>>,
+    cache__parse_decimal_val: Cache<Shared<cst::DecimalVal>>,
+    cache__parse_colour: Cache<Shared<cst::Colour>>,
+    cache__parse_sum_chain: Cache<Shared<cst::SumChain>>,
     cache__parse__trivia: Cache<Shared<cst::Trivia>>,
 }
 
@@ -126,6 +130,10 @@ impl Parser {
             cache__parse_kw_labels: Cache::new(),
             cache__parse_quoted: Cache::new(),
             cache__parse_mixed_opt: Cache::new(),
+            cache__parse_uuid_val: Cache::new(),
+            cache__parse_decimal_val: Cache::new(),
+            cache__parse_colour: Cache::new(),
+            cache__parse_sum_chain: Cache::new(),
             cache__parse__trivia: Cache::new(),
         }
     }
@@ -1730,12 +1738,210 @@ impl Parser {
         None
     }
 
+    pub fn apply__parse_uuid_val(&mut self, pos: i64) -> Option<ApplyResult<Shared<cst::UuidVal>>> {
+        apply(self, 37u32, pos, |p| &mut p.packrat, |p| &mut p.cache__parse_uuid_val, Self::parse_uuid_val)
+    }
+
+    fn parse_uuid_val__alt0__item0(&mut self, pos: i64) -> Option<ApplyResult<Span>> {
+        self.consume_regex(pos, 15)
+    }
+
+    fn parse_uuid_val__alt0(&mut self, mut pos: i64) -> Option<ApplyResult<cst::UuidVal>> {
+        let span_start = pos;
+        let mut result = cst::UuidVal::new(Span::unknown());
+        let item0 = self.parse_uuid_val__alt0__item0(pos)?;
+        pos = item0.pos;
+        result.append_value(item0.result);
+        result.set_span(Span::new_with_source(span_start, pos, self.terminals.source_text()));
+        Some(ApplyResult { pos, result })
+    }
+
+    fn parse_uuid_val(&mut self, pos: i64) -> Option<ApplyResult<Shared<cst::UuidVal>>> {
+        if let Some(alt0) = self.parse_uuid_val__alt0(pos) {
+            return Some(ApplyResult { pos: alt0.pos, result: Shared::new(alt0.result) });
+        }
+        None
+    }
+
+    pub fn apply__parse_decimal_val(&mut self, pos: i64) -> Option<ApplyResult<Shared<cst::DecimalVal>>> {
+        apply(self, 38u32, pos, |p| &mut p.packrat, |p| &mut p.cache__parse_decimal_val, Self::parse_decimal_val)
+    }
+
+    fn parse_decimal_val__alt0__item0(&mut self, pos: i64) -> Option<ApplyResult<Span>> {
+        self.consume_regex(pos, 16)
+    }
+
+    fn parse_decimal_val__alt0(&mut self, mut pos: i64) -> Option<ApplyResult<cst::DecimalVal>> {
+        let span_start = pos;
+        let mut result = cst::DecimalVal::new(Span::unknown());
+        let item0 = self.parse_decimal_val__alt0__item0(pos)?;
+        pos = item0.pos;
+        result.append_value(item0.result);
+        result.set_span(Span::new_with_source(span_start, pos, self.terminals.source_text()));
+        Some(ApplyResult { pos, result })
+    }
+
+    fn parse_decimal_val(&mut self, pos: i64) -> Option<ApplyResult<Shared<cst::DecimalVal>>> {
+        if let Some(alt0) = self.parse_decimal_val__alt0(pos) {
+            return Some(ApplyResult { pos: alt0.pos, result: Shared::new(alt0.result) });
+        }
+        None
+    }
+
+    pub fn apply__parse_colour(&mut self, pos: i64) -> Option<ApplyResult<Shared<cst::Colour>>> {
+        apply(self, 39u32, pos, |p| &mut p.packrat, |p| &mut p.cache__parse_colour, Self::parse_colour)
+    }
+
+    fn parse_colour__alt0__item0(&mut self, pos: i64) -> Option<ApplyResult<Span>> {
+        self.consume_literal(pos, "gray")
+    }
+
+    fn parse_colour__alt0(&mut self, mut pos: i64) -> Option<ApplyResult<cst::Colour>> {
+        let span_start = pos;
+        let mut result = cst::Colour::new(Span::unknown());
+        let item0 = self.parse_colour__alt0__item0(pos)?;
+        pos = item0.pos;
+        result.append_shade(item0.result);
+        result.set_span(Span::new_with_source(span_start, pos, self.terminals.source_text()));
+        Some(ApplyResult { pos, result })
+    }
+
+    fn parse_colour__alt1__item0(&mut self, pos: i64) -> Option<ApplyResult<Span>> {
+        self.consume_literal(pos, "grey")
+    }
+
+    fn parse_colour__alt1(&mut self, mut pos: i64) -> Option<ApplyResult<cst::Colour>> {
+        let span_start = pos;
+        let mut result = cst::Colour::new(Span::unknown());
+        let item0 = self.parse_colour__alt1__item0(pos)?;
+        pos = item0.pos;
+        result.append_shade(item0.result);
+        result.set_span(Span::new_with_source(span_start, pos, self.terminals.source_text()));
+        Some(ApplyResult { pos, result })
+    }
+
+    fn parse_colour__alt2__item0(&mut self, pos: i64) -> Option<ApplyResult<Span>> {
+        self.consume_literal(pos, "black")
+    }
+
+    fn parse_colour__alt2(&mut self, mut pos: i64) -> Option<ApplyResult<cst::Colour>> {
+        let span_start = pos;
+        let mut result = cst::Colour::new(Span::unknown());
+        let item0 = self.parse_colour__alt2__item0(pos)?;
+        pos = item0.pos;
+        result.append_dark(item0.result);
+        result.set_span(Span::new_with_source(span_start, pos, self.terminals.source_text()));
+        Some(ApplyResult { pos, result })
+    }
+
+    fn parse_colour(&mut self, pos: i64) -> Option<ApplyResult<Shared<cst::Colour>>> {
+        if let Some(alt0) = self.parse_colour__alt0(pos) {
+            return Some(ApplyResult { pos: alt0.pos, result: Shared::new(alt0.result) });
+        }
+        if let Some(alt1) = self.parse_colour__alt1(pos) {
+            return Some(ApplyResult { pos: alt1.pos, result: Shared::new(alt1.result) });
+        }
+        if let Some(alt2) = self.parse_colour__alt2(pos) {
+            return Some(ApplyResult { pos: alt2.pos, result: Shared::new(alt2.result) });
+        }
+        None
+    }
+
+    pub fn apply__parse_sum_chain(&mut self, pos: i64) -> Option<ApplyResult<Shared<cst::SumChain>>> {
+        apply(self, 40u32, pos, |p| &mut p.packrat, |p| &mut p.cache__parse_sum_chain, Self::parse_sum_chain)
+    }
+
+    fn parse_sum_chain__alt0__item0(&mut self, pos: i64) -> Option<ApplyResult<Shared<cst::Num>>> {
+        self.apply__parse_num(pos)
+    }
+
+    fn parse_sum_chain__alt0__item1__alts__alt0__item0(&mut self, pos: i64) -> Option<ApplyResult<Span>> {
+        self.consume_regex(pos, 17)
+    }
+
+    fn parse_sum_chain__alt0__item1__alts__alt0__item1(&mut self, pos: i64) -> Option<ApplyResult<Shared<cst::Num>>> {
+        self.apply__parse_num(pos)
+    }
+
+    fn parse_sum_chain__alt0__item1__alts__alt0(&mut self, mut pos: i64) -> Option<ApplyResult<cst::SumChain>> {
+        let span_start = pos;
+        let mut result = cst::SumChain::new(Span::unknown());
+        if let Some(ws) = self.apply__parse__trivia(pos) {
+            pos = ws.pos;
+            if self.capture_trivia {
+                result.push_child(None, cst::SumChainChild::Trivia(ws.result));
+            }
+        }
+        let item0 = self.parse_sum_chain__alt0__item1__alts__alt0__item0(pos)?;
+        pos = item0.pos;
+        result.append_op(item0.result);
+        if let Some(ws) = self.apply__parse__trivia(pos) {
+            pos = ws.pos;
+            if self.capture_trivia {
+                result.push_child(None, cst::SumChainChild::Trivia(ws.result));
+            }
+        }
+        let item1 = self.parse_sum_chain__alt0__item1__alts__alt0__item1(pos)?;
+        pos = item1.pos;
+        result.append_term(item1.result);
+        result.set_span(Span::new_with_source(span_start, pos, self.terminals.source_text()));
+        Some(ApplyResult { pos, result })
+    }
+
+    fn parse_sum_chain__alt0__item1__alts(&mut self, pos: i64) -> Option<ApplyResult<cst::SumChain>> {
+        if let Some(r) = self.parse_sum_chain__alt0__item1__alts__alt0(pos) {
+            return Some(r);
+        }
+        None
+    }
+
+    fn parse_sum_chain__alt0__item1(&mut self, mut pos: i64) -> Option<ApplyResult<cst::SumChain>> {
+        let span_start = pos;
+        let mut result = cst::SumChain::new(Span::unknown());
+        while let Some(one_result) = {
+            self.parse_sum_chain__alt0__item1__alts(pos)
+        } {
+            if one_result.pos <= pos { break; }
+            pos = one_result.pos;
+            result.extend_children(&one_result.result);
+        }
+        result.set_span(Span::new_with_source(span_start, pos, self.terminals.source_text()));
+        Some(ApplyResult { pos, result })
+    }
+
+    fn parse_sum_chain__alt0(&mut self, mut pos: i64) -> Option<ApplyResult<cst::SumChain>> {
+        let span_start = pos;
+        let mut result = cst::SumChain::new(Span::unknown());
+        let item0 = self.parse_sum_chain__alt0__item0(pos)?;
+        pos = item0.pos;
+        result.append_term(item0.result);
+        if let Some(ws) = self.apply__parse__trivia(pos) {
+            pos = ws.pos;
+            if self.capture_trivia {
+                result.push_child(None, cst::SumChainChild::Trivia(ws.result));
+            }
+        }
+        if let Some(item1) = self.parse_sum_chain__alt0__item1(pos) {
+            pos = item1.pos;
+            result.extend_children(&item1.result);
+        }
+        result.set_span(Span::new_with_source(span_start, pos, self.terminals.source_text()));
+        Some(ApplyResult { pos, result })
+    }
+
+    fn parse_sum_chain(&mut self, pos: i64) -> Option<ApplyResult<Shared<cst::SumChain>>> {
+        if let Some(alt0) = self.parse_sum_chain__alt0(pos) {
+            return Some(ApplyResult { pos: alt0.pos, result: Shared::new(alt0.result) });
+        }
+        None
+    }
+
     pub fn apply__parse__trivia(&mut self, pos: i64) -> Option<ApplyResult<Shared<cst::Trivia>>> {
-        apply(self, 37u32, pos, |p| &mut p.packrat, |p| &mut p.cache__parse__trivia, Self::parse__trivia)
+        apply(self, 41u32, pos, |p| &mut p.packrat, |p| &mut p.cache__parse__trivia, Self::parse__trivia)
     }
 
     fn parse__trivia__alt0__item0(&mut self, pos: i64) -> Option<ApplyResult<Span>> {
-        self.consume_regex(pos, 15)
+        self.consume_regex(pos, 18)
     }
 
     fn parse__trivia__alt0(&mut self, mut pos: i64) -> Option<ApplyResult<cst::Trivia>> {
@@ -2425,6 +2631,70 @@ mod python_bindings {
             match result {
                 Some(r) => {
                     let handle = cst::PyMixedOpt::to_py_canonical(py, &r.result)?;
+                    Ok(Some(PyApplyResult { pos: r.pos, result: handle.into_any() }))
+                }
+                None => Ok(None),
+            }
+        }
+
+        fn apply__parse_uuid_val(&mut self, py: Python<'_>, pos: i64) -> PyResult<Option<PyApplyResult>> {
+            self.check_pos(pos)?;
+            let result = self.inner.apply__parse_uuid_val(pos);
+            if self.inner.depth_exceeded() {
+                return Err(PyRecursionError::new_err(format!(
+                    "parse depth limit exceeded (max_depth = {})", self.inner.max_depth())));
+            }
+            match result {
+                Some(r) => {
+                    let handle = cst::PyUuidVal::to_py_canonical(py, &r.result)?;
+                    Ok(Some(PyApplyResult { pos: r.pos, result: handle.into_any() }))
+                }
+                None => Ok(None),
+            }
+        }
+
+        fn apply__parse_decimal_val(&mut self, py: Python<'_>, pos: i64) -> PyResult<Option<PyApplyResult>> {
+            self.check_pos(pos)?;
+            let result = self.inner.apply__parse_decimal_val(pos);
+            if self.inner.depth_exceeded() {
+                return Err(PyRecursionError::new_err(format!(
+                    "parse depth limit exceeded (max_depth = {})", self.inner.max_depth())));
+            }
+            match result {
+                Some(r) => {
+                    let handle = cst::PyDecimalVal::to_py_canonical(py, &r.result)?;
+                    Ok(Some(PyApplyResult { pos: r.pos, result: handle.into_any() }))
+                }
+                None => Ok(None),
+            }
+        }
+
+        fn apply__parse_colour(&mut self, py: Python<'_>, pos: i64) -> PyResult<Option<PyApplyResult>> {
+            self.check_pos(pos)?;
+            let result = self.inner.apply__parse_colour(pos);
+            if self.inner.depth_exceeded() {
+                return Err(PyRecursionError::new_err(format!(
+                    "parse depth limit exceeded (max_depth = {})", self.inner.max_depth())));
+            }
+            match result {
+                Some(r) => {
+                    let handle = cst::PyColour::to_py_canonical(py, &r.result)?;
+                    Ok(Some(PyApplyResult { pos: r.pos, result: handle.into_any() }))
+                }
+                None => Ok(None),
+            }
+        }
+
+        fn apply__parse_sum_chain(&mut self, py: Python<'_>, pos: i64) -> PyResult<Option<PyApplyResult>> {
+            self.check_pos(pos)?;
+            let result = self.inner.apply__parse_sum_chain(pos);
+            if self.inner.depth_exceeded() {
+                return Err(PyRecursionError::new_err(format!(
+                    "parse depth limit exceeded (max_depth = {})", self.inner.max_depth())));
+            }
+            match result {
+                Some(r) => {
+                    let handle = cst::PySumChain::to_py_canonical(py, &r.result)?;
                     Ok(Some(PyApplyResult { pos: r.pos, result: handle.into_any() }))
                 }
                 None => Ok(None),

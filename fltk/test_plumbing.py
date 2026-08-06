@@ -1,6 +1,7 @@
 """Unit tests for the FLTK plumbing module."""
 
 import sys
+import types
 from typing import TYPE_CHECKING, cast
 
 import pytest
@@ -8,12 +9,17 @@ import pytest
 if TYPE_CHECKING:
     from fltk.fegen import fltk_cst_protocol as cst
 from fltk.fegen import fltk_parser as _fltk_parser
+from fltk.fegen.ast_config import AstConfigError, Backend
 from fltk.fegen.fltk2gsm import Cst2Gsm
 from fltk.fegen.pyrt import terminalsrc as _terminalsrc
 from fltk.plumbing import (
+    generate_ast,
+    generate_ast_source,
     generate_parser,
     generate_unparser,
     generate_unparser_source,
+    parse_ast_config,
+    parse_ast_config_file,
     parse_format_config,
     parse_grammar,
     parse_text,
@@ -94,6 +100,17 @@ class TestParserGeneration:
         # Module should be in sys.modules
         assert parser_result.cst_module_name in sys.modules
         assert sys.modules[parser_result.cst_module_name] is parser_result.cst_module
+
+    def test_each_generated_cst_module_gets_its_own_name(self):
+        """Names come from a monotonic counter, so regenerating one grammar clobbers nothing."""
+        grammar = parse_grammar('test := value:"hello";')
+
+        first = generate_parser(grammar)
+        second = generate_parser(grammar)
+
+        assert first.cst_module_name != second.cst_module_name
+        assert sys.modules[first.cst_module_name] is first.cst_module
+        assert sys.modules[second.cst_module_name] is second.cst_module
 
 
 class TestParsing:
@@ -311,6 +328,219 @@ class TestUnparserSource:
         # With ws_allowed=Nbsp the "," separator renders as a space; default (NIL) would render "ab".
         rendered = render_doc(unparse_cst(source_result, parse_result.cst, parse_result.terminals, "expr"))
         assert rendered == "a b"
+
+
+_AST_GRAMMAR = """
+config := , entry* ;
+entry := key:identifier , "=" , value:number , ";" , ;
+identifier := name:/[a-z_][a-z0-9_]*/ ;
+number := val:/-?[0-9]+/ ;
+"""
+
+
+class TestAstGeneration:
+    """Test AST module generation."""
+
+    @staticmethod
+    def _generate(goal_rule=None, parser_module_name=None, unparser_module_name=None):
+        """Return (parser_result, ast_result) for the small config grammar above."""
+        parser_result = generate_parser(parse_grammar(_AST_GRAMMAR), capture_trivia=False)
+        ast_result = generate_ast(
+            parser_result.grammar,
+            parser_result.cst_module_name,
+            parser_module_name,
+            unparser_module_name,
+            goal_rule,
+        )
+        return parser_result, ast_result
+
+    def test_generate_ast_defines_node_classes(self):
+        """Every non-trivia rule gets a class carrying the converters in both directions."""
+        _parser_result, ast_result = self._generate()
+
+        for class_name in ("Config", "Entry", "Identifier", "Number"):
+            node_class = getattr(ast_result.ast_module, class_name)
+            assert hasattr(node_class, "from_cst")
+            assert hasattr(node_class, "to_cst")
+        assert hasattr(ast_result.ast_module, "config_from_cst")
+        assert hasattr(ast_result.ast_module, "config_to_cst")
+        assert set(ast_result.model.nodes) == {"config", "entry", "identifier", "number"}
+
+    def test_returned_grammar_carries_the_trivia_processing(self):
+        """AstResult.grammar is the processed grammar, ready to feed a second generator."""
+        parser_result, ast_result = self._generate()
+
+        assert "_trivia" in ast_result.grammar.identifiers
+        assert any(rule.is_trivia_rule for rule in ast_result.grammar.rules)
+        # Feeding it back is the use the field exists for; the pipeline is idempotent.
+        again = generate_ast(ast_result.grammar, parser_result.cst_module_name)
+        assert set(again.model.nodes) == set(ast_result.model.nodes)
+
+    def test_generate_ast_converts_a_parsed_cst(self):
+        """The generated converters run against a CST from the paired parser."""
+        parser_result, ast_result = self._generate()
+        parse_result = parse_text(parser_result, "port = 8080;\n", "config")
+        assert parse_result.success, parse_result.error_message
+
+        config = ast_result.ast_module.config_from_cst(parse_result.cst)
+
+        assert [entry.key.text for entry in config.entry] == ["port"]
+        assert [entry.value.text for entry in config.entry] == ["8080"]
+        # Synthesising a CST needs no unparser module.
+        assert ast_result.ast_module.config_to_cst(config) is not None
+
+    def test_generate_ast_accepts_a_raw_grammar(self):
+        """A grammar straight from parse_grammar works: trivia processing is applied and idempotent."""
+        raw_grammar = parse_grammar(_AST_GRAMMAR)
+        parser_result = generate_parser(raw_grammar, capture_trivia=False)
+
+        ast_result = generate_ast(raw_grammar, parser_result.cst_module_name)
+
+        parse_result = parse_text(parser_result, "a = 1;", "config")
+        config = ast_result.ast_module.config_from_cst(parse_result.cst)
+        assert [entry.key.text for entry in config.entry] == ["a"]
+
+    def test_goal_rule_defaults_to_first_rule(self):
+        """With no goal_rule the grammar's first rule is recorded, matching parse_text's default."""
+        _parser_result, ast_result = self._generate()
+
+        assert ast_result.goal_rule == "config"
+
+    def test_explicit_goal_rule_is_recorded(self):
+        """An explicit goal_rule is reported back on the result."""
+        _parser_result, ast_result = self._generate(goal_rule="entry")
+
+        assert ast_result.goal_rule == "entry"
+
+    def test_unknown_goal_rule_is_an_error(self):
+        """A goal rule with no AST node fails with the available rules listed."""
+        parser_result = generate_parser(parse_grammar(_AST_GRAMMAR), capture_trivia=False)
+
+        with pytest.raises(ValueError, match="goal rule 'nope' has no AST node"):
+            generate_ast(parser_result.grammar, parser_result.cst_module_name, goal_rule="nope")
+
+    def test_conveniences_are_gated_on_module_names(self):
+        """parse()/unparse() appear only when a parser/unparser module is named."""
+        parser_result = generate_parser(parse_grammar(_AST_GRAMMAR), capture_trivia=False)
+
+        bare = generate_ast_source(parser_result.grammar, parser_result.cst_module_name)
+        wired = generate_ast_source(
+            parser_result.grammar, parser_result.cst_module_name, "some.parser_mod", "some.unparser_mod"
+        )
+
+        assert "def parse(" not in bare
+        assert "def unparse(" not in bare
+        assert "def parse(" in wired
+        assert "def unparse(" in wired
+        assert "import some.parser_mod as _parser" in wired
+        assert "import some.unparser_mod as _unparser" in wired
+
+    def test_generate_ast_matches_source_output(self):
+        """generate_ast execs exactly what generate_ast_source returns.
+
+        Both entry points route through _assemble_ast_module; converting the same CST through
+        each must give equal AST values (equality is by value, so the two module instances'
+        distinct classes are compared field-by-field via their reprs).
+        """
+        parser_result, ast_result = self._generate()
+        parse_result = parse_text(parser_result, "x = 5;", "config")
+
+        source = generate_ast_source(parser_result.grammar, parser_result.cst_module_name)
+        module_name = "fltk_ast_source_path_test"
+        module = types.ModuleType(module_name)
+        # dataclasses resolves a class's defining module out of sys.modules while building fields.
+        sys.modules[module_name] = module
+        try:
+            exec(compile(source, "<ast_source>", "exec"), module.__dict__)  # noqa: S102
+        finally:
+            del sys.modules[module_name]
+
+        from_source = module.config_from_cst(parse_result.cst)
+        from_exec = ast_result.ast_module.config_from_cst(parse_result.cst)
+        assert repr(from_source) == repr(from_exec)
+
+    def test_ast_module_is_importable_by_name(self):
+        """The exec'd module is registered in sys.modules under its reported name."""
+        _parser_result, ast_result = self._generate()
+
+        assert sys.modules[ast_result.ast_module_name] is ast_result.ast_module
+
+    def test_each_generated_module_gets_its_own_name(self):
+        """Names come from a monotonic counter, so no result can clobber another's entry."""
+        _first_parser, first = self._generate()
+        _second_parser, second = self._generate()
+
+        assert first.ast_module_name != second.ast_module_name
+        assert sys.modules[first.ast_module_name] is first.ast_module
+        assert sys.modules[second.ast_module_name] is second.ast_module
+
+
+_AST_SIDECAR = """
+// shape the small config grammar above
+rule config { field entry { name: entries; } }
+rule entry  { name: Setting; }
+"""
+
+
+class TestAstConfig:
+    """The .fltkast sidecar entry points and the shaping they hand to generate_ast."""
+
+    def test_parse_ast_config_resolves_against_the_grammar(self):
+        """A raw grammar works: the entry point applies the same trivia processing the model does."""
+        config = parse_ast_config(_AST_SIDECAR, parse_grammar(_AST_GRAMMAR))
+
+        assert config.for_rule("entry").type_name == "Setting"
+        assert config.for_rule("config").field_names == {"entry": "entries"}
+        assert config.for_rule("number").type_name is None
+
+    def test_empty_text_is_an_empty_config(self):
+        assert parse_ast_config("", parse_grammar(_AST_GRAMMAR)).rules == {}
+
+    def test_unknown_rule_is_reported(self):
+        with pytest.raises(AstConfigError, match="unknown grammar rule 'nope'"):
+            parse_ast_config("rule nope { transparent; }", parse_grammar(_AST_GRAMMAR))
+
+    def test_backends_gate_the_custom_entries(self):
+        """Generating Python alone does not require the Rust entries of a custom(...) list."""
+        sidecar = 'rule number { custom(python: "pkg.mod.Number"); }'
+
+        config = parse_ast_config(sidecar, parse_grammar(_AST_GRAMMAR), {Backend.PYTHON})
+        assert config.for_rule("number").custom is not None
+
+        with pytest.raises(AstConfigError, match="missing the rust entries"):
+            parse_ast_config(sidecar, parse_grammar(_AST_GRAMMAR), {Backend.RUST})
+
+    def test_parse_ast_config_file(self, tmp_path):
+        config_path = tmp_path / "grammar.fltkast"
+        config_path.write_text(_AST_SIDECAR)
+
+        config = parse_ast_config_file(config_path, parse_grammar(_AST_GRAMMAR))
+
+        assert config.for_rule("entry").type_name == "Setting"
+
+    def test_missing_config_file(self, tmp_path):
+        with pytest.raises(FileNotFoundError, match="AST config file not found"):
+            parse_ast_config_file(tmp_path / "absent.fltkast", parse_grammar(_AST_GRAMMAR))
+
+    def test_generate_ast_applies_the_config(self):
+        """The resolved config reaches the model and the emitted module."""
+        parser_result = generate_parser(parse_grammar(_AST_GRAMMAR), capture_trivia=False)
+        config = parse_ast_config(_AST_SIDECAR, parser_result.grammar)
+
+        ast_result = generate_ast(parser_result.grammar, parser_result.cst_module_name, ast_config=config)
+
+        parse_result = parse_text(parser_result, "port = 8080;\n", "config")
+        value = ast_result.ast_module.config_from_cst(parse_result.cst)
+        assert [setting.key.text for setting in value.entries] == ["port"]
+        assert type(value.entries[0]).__name__ == "Setting"
+
+    def test_generate_ast_without_a_config_is_tier_zero(self):
+        parser_result = generate_parser(parse_grammar(_AST_GRAMMAR), capture_trivia=False)
+
+        source = generate_ast_source(parser_result.grammar, parser_result.cst_module_name)
+
+        assert "class Entry:" in source
+        assert "class Setting:" not in source
 
 
 class TestUnparsing:

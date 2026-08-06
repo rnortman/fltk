@@ -11,7 +11,7 @@ from dataclasses import dataclass
 import pytest
 
 from fltk.fegen.pyrt import terminalsrc
-from fltk.unparse.pyrt import count_whitespace_newlines, raise_preserved_trivia_failure
+from fltk.unparse.pyrt import count_whitespace_newlines, literal_span_matches, raise_preserved_trivia_failure
 
 
 @dataclass
@@ -49,6 +49,32 @@ class TestCountWhitespaceNewlines:
         # newlines is not whitespace-only and contributes 0 -- matching Rust's
         # char::is_whitespace gate (str.isspace() alone would wrongly count 2 here).
         assert count_whitespace_newlines(_FakeNode(_span("\n\x1c\n")), "") == 0
+
+
+class TestLiteralSpanMatches:
+    """A labeled literal item accepts a span child by text, or unconditionally when sourceless."""
+
+    def test_the_items_own_spelling_matches(self):
+        assert literal_span_matches(_span("gray"), ["gray", "grey"]) is True
+
+    def test_a_sibling_spelling_of_the_same_label_matches(self):
+        assert literal_span_matches(_span("grey"), ["gray", "grey"]) is True
+
+    def test_other_text_does_not_match(self):
+        # The rival-regex case: the literal declines, so the regex branch takes the child.
+        assert literal_span_matches(_span("42"), ["null"]) is False
+
+    def test_a_sourceless_span_matches(self):
+        # Synthesized children (to_cst) carry no source; rendering emits the canonical spelling.
+        assert literal_span_matches(terminalsrc.Span(0, 4), ["gray", "grey"]) is True
+
+    def test_a_child_that_is_not_a_span_raises(self):
+        # The generated type check runs before this one, so a non-span cannot reach it. Should
+        # some other child kind ever get here, accepting it would render the literal over that
+        # child's text -- exactly the corruption the text check exists to stop -- so the missing
+        # text() is left to raise.
+        with pytest.raises(AttributeError):
+            literal_span_matches(object(), ["gray"])  # type: ignore[arg-type]
 
 
 def test_raise_preserved_trivia_failure_names_rule_and_pos() -> None:

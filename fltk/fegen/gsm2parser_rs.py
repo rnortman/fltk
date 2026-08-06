@@ -75,16 +75,25 @@ def rust_str_lit(s: str) -> str:
     return "".join(out)
 
 
+def module_import(mod_path: str, alias: str) -> str:
+    """Return the Rust ``use`` line importing ``mod_path`` under ``alias``.
+
+    If the path's last segment already is ``alias`` it is imported directly; otherwise it is
+    aliased (``use <path> as <alias>;``). Shared Rust-codegen helper: the CST, parser and
+    unparser modules a generated file reaches are all named this way.
+    """
+    if mod_path.rsplit("::", maxsplit=1)[-1] == alias:
+        return f"use {mod_path};"
+    return f"use {mod_path} as {alias};"
+
+
 def cst_module_import(cst_mod_path: str) -> str:
     """Return the Rust ``use`` line importing the CST module as ``cst``.
 
-    If the path's last segment is already ``cst`` it is imported directly; otherwise
-    it is aliased (``use <path> as cst;``). Shared Rust-codegen helper: also used by
-    ``fltk.unparse.gsm2unparser_rs`` so the two generators cannot drift.
+    Shared Rust-codegen helper: also used by ``fltk.unparse.gsm2unparser_rs`` and
+    ``fltk.fegen.gsm2ast_rs`` so the generators cannot drift.
     """
-    if cst_mod_path.rsplit("::", maxsplit=1)[-1] == "cst":
-        return f"use {cst_mod_path};"
-    return f"use {cst_mod_path} as cst;"
+    return module_import(cst_mod_path, "cst")
 
 
 @dataclass

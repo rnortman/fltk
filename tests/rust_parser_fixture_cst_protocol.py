@@ -13,7 +13,9 @@ __all__ = [
     "Arrow",
     "Atom",
     "CaseInsensitive",
+    "Colour",
     "CstModule",
+    "DecimalVal",
     "DigitSeq",
     "EscapedMetas",
     "ExactlyTwoDigits",
@@ -42,9 +44,11 @@ __all__ = [
     "Rval",
     "Span",
     "Stmt",
+    "SumChain",
     "Tagged",
     "ThreeToFiveDigits",
     "Trivia",
+    "UuidVal",
     "Val",
     "WordSeq",
     "Wrapper",
@@ -91,6 +95,10 @@ class NodeKind(enum.Enum):
     KWLABELS = enum.auto()
     QUOTED = enum.auto()
     MIXEDOPT = enum.auto()
+    UUIDVAL = enum.auto()
+    DECIMALVAL = enum.auto()
+    COLOUR = enum.auto()
+    SUMCHAIN = enum.auto()
     TRIVIA = enum.auto()
     _fltk_canonical_name: str
 
@@ -145,6 +153,10 @@ NodeKind.REPWRAPPER._fltk_canonical_name = "NodeKind.REPWRAPPER"
 NodeKind.KWLABELS._fltk_canonical_name = "NodeKind.KWLABELS"
 NodeKind.QUOTED._fltk_canonical_name = "NodeKind.QUOTED"
 NodeKind.MIXEDOPT._fltk_canonical_name = "NodeKind.MIXEDOPT"
+NodeKind.UUIDVAL._fltk_canonical_name = "NodeKind.UUIDVAL"
+NodeKind.DECIMALVAL._fltk_canonical_name = "NodeKind.DECIMALVAL"
+NodeKind.COLOUR._fltk_canonical_name = "NodeKind.COLOUR"
+NodeKind.SUMCHAIN._fltk_canonical_name = "NodeKind.SUMCHAIN"
 NodeKind.TRIVIA._fltk_canonical_name = "NodeKind.TRIVIA"
 
 
@@ -2073,6 +2085,240 @@ MixedOpt.Label.KEY = _ProtocolLabelMember("MixedOpt.Label.KEY")
 MixedOpt.Label.NODE = _ProtocolLabelMember("MixedOpt.Label.NODE")
 
 
+class UuidVal(typing.Protocol):
+    class Label:
+        VALUE: typing.ClassVar[object]
+
+    kind: typing.Literal[NodeKind.UUIDVAL] = NodeKind.UUIDVAL
+    span: fltk.fegen.pyrt.span_protocol.SpanProtocol
+    children: list[tuple[Label | None, fltk.fegen.pyrt.span_protocol.SpanProtocol]]
+
+    def append(self, child: fltk.fegen.pyrt.span_protocol.SpanProtocol, label: Label | None = None) -> None: ...
+
+    def extend(
+        self, children: typing.Iterable[fltk.fegen.pyrt.span_protocol.SpanProtocol], label: Label | None = None
+    ) -> None: ...
+
+    def extend_children(self, other: UuidVal) -> None: ...
+
+    def child(self) -> tuple[Label | None, fltk.fegen.pyrt.span_protocol.SpanProtocol]: ...
+
+    def insert(
+        self, index: int, child: fltk.fegen.pyrt.span_protocol.SpanProtocol, label: Label | None = None
+    ) -> None: ...
+
+    def remove_at(self, index: int) -> tuple[Label | None, fltk.fegen.pyrt.span_protocol.SpanProtocol]: ...
+
+    def replace_at(
+        self, index: int, child: fltk.fegen.pyrt.span_protocol.SpanProtocol, label: Label | None = None
+    ) -> None: ...
+
+    def clear(self) -> None: ...
+
+    def append_value(self, child: fltk.fegen.pyrt.span_protocol.SpanProtocol) -> None: ...
+
+    def extend_value(self, children: typing.Iterable[fltk.fegen.pyrt.span_protocol.SpanProtocol]) -> None: ...
+
+    def children_value(self) -> typing.Iterator[fltk.fegen.pyrt.span_protocol.SpanProtocol]: ...
+
+    def child_value(self) -> fltk.fegen.pyrt.span_protocol.SpanProtocol: ...
+
+    def maybe_value(self) -> fltk.fegen.pyrt.span_protocol.SpanProtocol | None: ...
+
+    def value(self) -> fltk.fegen.pyrt.span_protocol.SpanProtocol: ...
+
+    def value_text(self) -> str: ...
+
+    def text(self) -> str: ...
+
+
+UuidVal.Label.VALUE = _ProtocolLabelMember("UuidVal.Label.VALUE")
+
+
+class DecimalVal(typing.Protocol):
+    class Label:
+        VALUE: typing.ClassVar[object]
+
+    kind: typing.Literal[NodeKind.DECIMALVAL] = NodeKind.DECIMALVAL
+    span: fltk.fegen.pyrt.span_protocol.SpanProtocol
+    children: list[tuple[Label | None, fltk.fegen.pyrt.span_protocol.SpanProtocol]]
+
+    def append(self, child: fltk.fegen.pyrt.span_protocol.SpanProtocol, label: Label | None = None) -> None: ...
+
+    def extend(
+        self, children: typing.Iterable[fltk.fegen.pyrt.span_protocol.SpanProtocol], label: Label | None = None
+    ) -> None: ...
+
+    def extend_children(self, other: DecimalVal) -> None: ...
+
+    def child(self) -> tuple[Label | None, fltk.fegen.pyrt.span_protocol.SpanProtocol]: ...
+
+    def insert(
+        self, index: int, child: fltk.fegen.pyrt.span_protocol.SpanProtocol, label: Label | None = None
+    ) -> None: ...
+
+    def remove_at(self, index: int) -> tuple[Label | None, fltk.fegen.pyrt.span_protocol.SpanProtocol]: ...
+
+    def replace_at(
+        self, index: int, child: fltk.fegen.pyrt.span_protocol.SpanProtocol, label: Label | None = None
+    ) -> None: ...
+
+    def clear(self) -> None: ...
+
+    def append_value(self, child: fltk.fegen.pyrt.span_protocol.SpanProtocol) -> None: ...
+
+    def extend_value(self, children: typing.Iterable[fltk.fegen.pyrt.span_protocol.SpanProtocol]) -> None: ...
+
+    def children_value(self) -> typing.Iterator[fltk.fegen.pyrt.span_protocol.SpanProtocol]: ...
+
+    def child_value(self) -> fltk.fegen.pyrt.span_protocol.SpanProtocol: ...
+
+    def maybe_value(self) -> fltk.fegen.pyrt.span_protocol.SpanProtocol | None: ...
+
+    def value(self) -> fltk.fegen.pyrt.span_protocol.SpanProtocol: ...
+
+    def value_text(self) -> str: ...
+
+    def text(self) -> str: ...
+
+
+DecimalVal.Label.VALUE = _ProtocolLabelMember("DecimalVal.Label.VALUE")
+
+
+class Colour(typing.Protocol):
+    class Label:
+        DARK: typing.ClassVar[object]
+        SHADE: typing.ClassVar[object]
+
+    kind: typing.Literal[NodeKind.COLOUR] = NodeKind.COLOUR
+    span: fltk.fegen.pyrt.span_protocol.SpanProtocol
+    children: list[tuple[Label | None, fltk.fegen.pyrt.span_protocol.SpanProtocol]]
+
+    def append(self, child: fltk.fegen.pyrt.span_protocol.SpanProtocol, label: Label | None = None) -> None: ...
+
+    def extend(
+        self, children: typing.Iterable[fltk.fegen.pyrt.span_protocol.SpanProtocol], label: Label | None = None
+    ) -> None: ...
+
+    def extend_children(self, other: Colour) -> None: ...
+
+    def child(self) -> tuple[Label | None, fltk.fegen.pyrt.span_protocol.SpanProtocol]: ...
+
+    def insert(
+        self, index: int, child: fltk.fegen.pyrt.span_protocol.SpanProtocol, label: Label | None = None
+    ) -> None: ...
+
+    def remove_at(self, index: int) -> tuple[Label | None, fltk.fegen.pyrt.span_protocol.SpanProtocol]: ...
+
+    def replace_at(
+        self, index: int, child: fltk.fegen.pyrt.span_protocol.SpanProtocol, label: Label | None = None
+    ) -> None: ...
+
+    def clear(self) -> None: ...
+
+    def append_dark(self, child: fltk.fegen.pyrt.span_protocol.SpanProtocol) -> None: ...
+
+    def extend_dark(self, children: typing.Iterable[fltk.fegen.pyrt.span_protocol.SpanProtocol]) -> None: ...
+
+    def children_dark(self) -> typing.Iterator[fltk.fegen.pyrt.span_protocol.SpanProtocol]: ...
+
+    def child_dark(self) -> fltk.fegen.pyrt.span_protocol.SpanProtocol: ...
+
+    def maybe_dark(self) -> fltk.fegen.pyrt.span_protocol.SpanProtocol | None: ...
+
+    def append_shade(self, child: fltk.fegen.pyrt.span_protocol.SpanProtocol) -> None: ...
+
+    def extend_shade(self, children: typing.Iterable[fltk.fegen.pyrt.span_protocol.SpanProtocol]) -> None: ...
+
+    def children_shade(self) -> typing.Iterator[fltk.fegen.pyrt.span_protocol.SpanProtocol]: ...
+
+    def child_shade(self) -> fltk.fegen.pyrt.span_protocol.SpanProtocol: ...
+
+    def maybe_shade(self) -> fltk.fegen.pyrt.span_protocol.SpanProtocol | None: ...
+
+    def dark(self) -> fltk.fegen.pyrt.span_protocol.SpanProtocol | None: ...
+
+    def dark_text(self) -> str | None: ...
+
+    def shade(self) -> fltk.fegen.pyrt.span_protocol.SpanProtocol | None: ...
+
+    def shade_text(self) -> str | None: ...
+
+    def text(self) -> str: ...
+
+    def variant(self) -> Label: ...
+
+
+Colour.Label.DARK = _ProtocolLabelMember("Colour.Label.DARK")
+Colour.Label.SHADE = _ProtocolLabelMember("Colour.Label.SHADE")
+
+
+class SumChain(typing.Protocol):
+    class Label:
+        OP: typing.ClassVar[object]
+        TERM: typing.ClassVar[object]
+
+    kind: typing.Literal[NodeKind.SUMCHAIN] = NodeKind.SUMCHAIN
+    span: fltk.fegen.pyrt.span_protocol.SpanProtocol
+    children: list[tuple[Label | None, Num | Trivia | fltk.fegen.pyrt.span_protocol.SpanProtocol]]
+
+    def append(
+        self, child: Num | Trivia | fltk.fegen.pyrt.span_protocol.SpanProtocol, label: Label | None = None
+    ) -> None: ...
+
+    def extend(
+        self,
+        children: typing.Iterable[Num | Trivia | fltk.fegen.pyrt.span_protocol.SpanProtocol],
+        label: Label | None = None,
+    ) -> None: ...
+
+    def extend_children(self, other: SumChain) -> None: ...
+
+    def child(self) -> tuple[Label | None, Num | Trivia | fltk.fegen.pyrt.span_protocol.SpanProtocol]: ...
+
+    def insert(
+        self, index: int, child: Num | Trivia | fltk.fegen.pyrt.span_protocol.SpanProtocol, label: Label | None = None
+    ) -> None: ...
+
+    def remove_at(
+        self, index: int
+    ) -> tuple[Label | None, Num | Trivia | fltk.fegen.pyrt.span_protocol.SpanProtocol]: ...
+
+    def replace_at(
+        self, index: int, child: Num | Trivia | fltk.fegen.pyrt.span_protocol.SpanProtocol, label: Label | None = None
+    ) -> None: ...
+
+    def clear(self) -> None: ...
+
+    def append_op(self, child: fltk.fegen.pyrt.span_protocol.SpanProtocol) -> None: ...
+
+    def extend_op(self, children: typing.Iterable[fltk.fegen.pyrt.span_protocol.SpanProtocol]) -> None: ...
+
+    def children_op(self) -> typing.Iterator[fltk.fegen.pyrt.span_protocol.SpanProtocol]: ...
+
+    def child_op(self) -> fltk.fegen.pyrt.span_protocol.SpanProtocol: ...
+
+    def maybe_op(self) -> fltk.fegen.pyrt.span_protocol.SpanProtocol | None: ...
+
+    def append_term(self, child: Num) -> None: ...
+
+    def extend_term(self, children: typing.Iterable[Num]) -> None: ...
+
+    def children_term(self) -> typing.Iterator[Num]: ...
+
+    def child_term(self) -> Num: ...
+
+    def maybe_term(self) -> Num | None: ...
+
+    def op(self) -> list[fltk.fegen.pyrt.span_protocol.SpanProtocol]: ...
+
+    def term(self) -> list[Num]: ...
+
+
+SumChain.Label.OP = _ProtocolLabelMember("SumChain.Label.OP")
+SumChain.Label.TERM = _ProtocolLabelMember("SumChain.Label.TERM")
+
+
 class Trivia(typing.Protocol):
     class Label:
         CONTENT: typing.ClassVar[object]
@@ -2238,6 +2484,18 @@ class CstModule(typing.Protocol):
 
     @property
     def MixedOpt(self) -> type[MixedOpt]: ...
+
+    @property
+    def UuidVal(self) -> type[UuidVal]: ...
+
+    @property
+    def DecimalVal(self) -> type[DecimalVal]: ...
+
+    @property
+    def Colour(self) -> type[Colour]: ...
+
+    @property
+    def SumChain(self) -> type[SumChain]: ...
 
     @property
     def Trivia(self) -> type[Trivia]: ...

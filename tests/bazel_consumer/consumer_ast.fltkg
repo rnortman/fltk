@@ -1,0 +1,13 @@
+// Grammar for the consumer-lane AST smoke target.
+//
+// Deliberately tiny: this lane's job is the cross-module build path, not generator breadth.
+//
+// The sidecar coerces `ident` to a UUID and `money` to a decimal, so the generated AST
+// names ::fltk_ast_core::Uuid and ::fltk_ast_core::Decimal — types that exist only when
+// @fltk//crates/fltk-ast-core has its "uuid" and "decimal" features on.
+
+payment := id:ident , amount:money ;
+
+ident := $/[0-9a-fA-F-]+/ ;
+
+money := $/[0-9.]+/ ;

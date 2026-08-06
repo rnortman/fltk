@@ -96,7 +96,7 @@ def _combine_sequence(left: Mapping[str, LabelCount], right: Mapping[str, LabelC
     return combined
 
 
-def _combine_alternatives(maps: Sequence[Mapping[str, LabelCount]]) -> dict[str, LabelCount]:
+def combine_alternatives(maps: Sequence[Mapping[str, LabelCount]]) -> dict[str, LabelCount]:
     """Combine counts across mutually exclusive alternatives.
 
     A label absent from an alternative contributes zero to that alternative, so it comes
@@ -136,7 +136,7 @@ def _arities_for_item(item: gsm.Item, rule_name: str, idx: int) -> dict[str, Lab
                 f"single child for the outer label to name."
             )
             raise ValueError(msg)
-        counts = _combine_alternatives([_arities_for_items(alt, rule_name) for alt in item.term])
+        counts = combine_alternatives([arities_for_alternative(alt, rule_name) for alt in item.term])
     else:
         msg = f"Unsupported term type {type(item.term).__name__} in {context}"
         raise ValueError(msg)
@@ -144,7 +144,16 @@ def _arities_for_item(item: gsm.Item, rule_name: str, idx: int) -> dict[str, Lab
     return {label: _quantify(count, item.quantifier) for label, count in counts.items()}
 
 
-def _arities_for_items(items: gsm.Items, rule_name: str) -> dict[str, LabelCount]:
+def arities_for_alternative(items: gsm.Items, rule_name: str) -> dict[str, LabelCount]:
+    """Return each label's multiplicity within a single alternative.
+
+    The per-alternative view keeps the distinctions ``compute_label_arities`` folds away
+    when it combines alternatives: a label required in one alternative and absent from
+    another is required here and optional there.
+
+    Raises ``ValueError`` for an INLINE item (expand the grammar first) and for a labeled
+    sub-expression item.
+    """
     counts: dict[str, LabelCount] = {}
     for idx, item in enumerate(items.items):
         counts = _combine_sequence(counts, _arities_for_item(item, rule_name, idx))
@@ -161,7 +170,7 @@ def compute_label_arities(rule: gsm.Rule) -> Mapping[str, LabelCount]:
     Raises ``ValueError`` for an INLINE item (expand the grammar first) and for a labeled
     sub-expression item.
     """
-    return _combine_alternatives([_arities_for_items(alt, rule.name) for alt in rule.alternatives])
+    return combine_alternatives([arities_for_alternative(alt, rule.name) for alt in rule.alternatives])
 
 
 # --- Member planning -------------------------------------------------------------------

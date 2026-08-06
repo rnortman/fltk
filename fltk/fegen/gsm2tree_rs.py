@@ -292,6 +292,8 @@ class RustCstGenerator:
                     f"available rules: {sorted(self._py_gen.rule_models)}"
                 )
                 raise RuntimeError(msg) from exc
+            # TODO(rust-cst-memberless-nodes): the Python backend emits such a node; this refuses
+            # it, which puts marker products and unlabeled-unincluded terminals out of reach here.
             if not model.types:
                 class_name = self._py_gen.class_name_for_rule_node(rule.name)
                 msg = (

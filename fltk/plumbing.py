@@ -8,19 +8,21 @@ Think of it as the pipes that connect your grammar to formatted output.
 from __future__ import annotations
 
 import ast
+import itertools
 import sys
 import types
 from pathlib import Path
 from typing import TYPE_CHECKING, Optional, cast
 
 import fltk
-from fltk.fegen import fltk2gsm, fltk_parser, gsm, gsm2parser, gsm2tree
+from fltk.fegen import ast_model, fltk2gsm, fltk_parser, gsm, gsm2ast, gsm2ast_rs, gsm2parser, gsm2tree
+from fltk.fegen.ast_config import ALL_BACKENDS, Backend, ResolvedAstConfig, load_ast_config
 from fltk.fegen.pyrt import errors, memo, terminalsrc
 from fltk.iir.context import create_default_context
 from fltk.iir.py import compiler
 from fltk.iir.py import reg as pyreg
 from fltk.lsp.lsp_config import ResolvedLspConfig, load_lsp_config
-from fltk.plumbing_types import ParseResult, ParserResult, UnparserResult
+from fltk.plumbing_types import AstResult, ParseResult, ParserResult, UnparserResult
 from fltk.unparse import gsm2unparser
 from fltk.unparse.combinators import Doc
 from fltk.unparse.fmt_config import FormatterConfig, TriviaConfig, fmt_cst_to_config
@@ -29,9 +31,19 @@ from fltk.unparse.resolve_specs import resolve_spacing_specs
 from fltk.unparse.unparsefmt_parser import Parser as FmtParser
 
 if TYPE_CHECKING:
+    from collections.abc import Collection
     from typing import Any
 
     from fltk.fegen import fltk_cst_protocol as cst
+
+
+_module_counter = itertools.count()
+"""Names the in-memory modules ``generate_parser`` and ``generate_ast`` register in ``sys.modules``.
+
+A process-wide counter rather than object ids: an id is only unique while its object lives, so a
+recycled one could name a second module over an earlier one's ``sys.modules`` entry while that
+module's classes still resolve their string annotations through it.
+"""
 
 
 def parse_grammar(grammar_text: str) -> gsm.Grammar:
@@ -112,7 +124,7 @@ def generate_parser(
 
     cstgen = gsm2tree.CstGenerator(grammar=grammar_with_trivia, py_module=pyreg.Builtins, context=context)
 
-    module_name = f"fltk_grammar_{id(grammar)}"
+    module_name = f"fltk_grammar_{next(_module_counter)}"
     cst_module = types.ModuleType(module_name)
 
     # Python backend: generate and exec CST dataclass module
@@ -158,7 +170,7 @@ def generate_parser(
         raise RuntimeError(msg)
 
     # Register in sys.modules only after successful parser generation, so a codegen
-    # failure does not leave a stale module entry under fltk_grammar_{id(grammar)}.
+    # failure does not leave a stale module entry under module_name.
     sys.modules[module_name] = cst_module
 
     return ParserResult(
@@ -194,18 +206,12 @@ def parse_text(parser_result: ParserResult, text: str, rule_name: str | None = N
     result = getattr(parser, method_name)(0)
 
     if not result or result.pos != len(terminals.terminals):
-        error_msg = errors.format_error_message(
+        error_msg, error_pos = errors.failure_details(
             parser.error_tracker,
             terminals,
             lambda rule_id: parser.rule_names[rule_id],
+            result.pos if result else None,
         )
-        tracker_pos = parser.error_tracker.longest_parse_len
-        if tracker_pos >= 0:
-            error_pos = tracker_pos
-        elif result:
-            error_pos = result.pos
-        else:
-            error_pos = 0
         # Early success without full consumption: the start rule assembled a real CST for
         # [0, result.pos) but input remained. Keep that prefix tree; leave both fields None on
         # hard failure (result is None), where nothing was assembled.
@@ -399,6 +405,223 @@ def generate_unparser(
         grammar=grammar_with_trivia,
         formatter_config=formatter_config,
         trivia_config=formatter_config.trivia_config or TriviaConfig(),
+    )
+
+
+def _ast_grammar(grammar: gsm.Grammar) -> gsm.Grammar:
+    """The trivia-processed grammar the AST model and the sidecar index are both built from.
+
+    Both steps are idempotent, so a raw grammar and a ParserResult's already-processed one
+    give the same result.  That is also why resolving a sidecar and then generating runs
+    this twice on the same grammar: the second pass rebuilds the same result, at the cost
+    of one generation-time walk, rather than making callers thread the processed grammar.
+    """
+    return gsm.classify_trivia_rules(gsm.add_trivia_rule_to_grammar(grammar, create_default_context()))
+
+
+def parse_ast_config(
+    config_text: str,
+    grammar: gsm.Grammar,
+    backends: Collection[Backend] = ALL_BACKENDS,
+) -> ResolvedAstConfig:
+    """Parse .fltkast text into a resolved config against ``grammar``.
+
+    Args:
+        config_text: AST-shaping sidecar text
+        grammar: The target grammar the rule and label names resolve against
+        backends: The code-generation targets whose ``custom(...)`` entries are required
+
+    Returns:
+        The resolved AST config (empty for empty/whitespace-only text)
+
+    Raises:
+        AstConfigError: If parsing or validation fails
+    """
+    return load_ast_config(config_text, _ast_grammar(grammar), backends)
+
+
+def parse_ast_config_file(
+    config_path: Path,
+    grammar: gsm.Grammar,
+    backends: Collection[Backend] = ALL_BACKENDS,
+) -> ResolvedAstConfig:
+    """Parse a .fltkast file into a resolved config against ``grammar``.
+
+    Args:
+        config_path: Path to the AST-shaping sidecar file
+        grammar: The target grammar the rule and label names resolve against
+        backends: The code-generation targets whose ``custom(...)`` entries are required
+
+    Returns:
+        The resolved AST config
+
+    Raises:
+        AstConfigError: If parsing or validation fails
+        FileNotFoundError: If the config file doesn't exist
+        OSError: If the file cannot be read (e.g. permissions)
+        UnicodeDecodeError: If the file is not valid text in the default encoding
+    """
+    if not config_path.exists():
+        msg = f"AST config file not found: {config_path}"
+        raise FileNotFoundError(msg)
+
+    with config_path.open() as f:
+        config_text = f.read()
+
+    return parse_ast_config(config_text, grammar, backends)
+
+
+def _assemble_ast_module(
+    grammar: gsm.Grammar,
+    cst_module_name: str,
+    parser_module_name: str | None,
+    unparser_module_name: str | None,
+    goal_rule: str | None,
+    *,
+    ast_config: ResolvedAstConfig | None,
+) -> tuple[str, ast_model.AstModel, gsm.Grammar, str]:
+    """Run the AST assembly pipeline; return (source, model, grammar_with_trivia, goal_rule).
+
+    Single source of truth for the steps shared by generate_ast (which exec's the returned
+    source) and generate_ast_source (which returns it).
+    """
+    grammar_with_trivia = _ast_grammar(grammar)
+    model = ast_model.build_ast_model(grammar_with_trivia, ast_config)
+    goal = ast_model.resolve_goal_rule(model, goal_rule)
+    source = gsm2ast.generate_ast_module(model, cst_module_name, parser_module_name, unparser_module_name, goal)
+    return source, model, grammar_with_trivia, goal
+
+
+def generate_ast_source(
+    grammar: gsm.Grammar,
+    cst_module_name: str,
+    parser_module_name: str | None = None,
+    unparser_module_name: str | None = None,
+    goal_rule: str | None = None,
+    *,
+    ast_config: ResolvedAstConfig | None = None,
+) -> str:
+    """Generate the AST module source from grammar without executing it.
+
+    generate_ast exec's exactly this source.
+
+    Args:
+        grammar: The grammar to generate the AST layer for
+        cst_module_name: Importable name of the grammar's generated CST module
+        parser_module_name: Importable name of a generated parser module; enables ``parse()``
+        unparser_module_name: Importable name of a generated unparser module; enables ``unparse()``
+        goal_rule: Rule the conveniences target; defaults to the grammar's first rule
+        ast_config: Resolved .fltkast sidecar shaping the AST; None is pure Tier 0
+
+    Returns:
+        The generated AST module source as a string
+
+    Raises:
+        AstModelError: If the grammar cannot be modelled as an AST
+        ValueError: If goal_rule is not a rule of the grammar
+    """
+    source, _model, _grammar_with_trivia, _goal = _assemble_ast_module(
+        grammar, cst_module_name, parser_module_name, unparser_module_name, goal_rule, ast_config=ast_config
+    )
+    return source
+
+
+def generate_ast(
+    grammar: gsm.Grammar,
+    cst_module_name: str,
+    parser_module_name: str | None = None,
+    unparser_module_name: str | None = None,
+    goal_rule: str | None = None,
+    *,
+    ast_config: ResolvedAstConfig | None = None,
+) -> AstResult:
+    """Generate AST node classes and CST converters from grammar.
+
+    The CST module named by ``cst_module_name`` must be importable (in ``sys.modules``)
+    when this function runs.
+
+    Args:
+        grammar: The grammar to generate the AST layer for
+        cst_module_name: Importable name of the grammar's generated CST module
+        parser_module_name: Importable name of a generated parser module; enables ``parse()``
+        unparser_module_name: Importable name of a generated unparser module; enables ``unparse()``
+        goal_rule: Rule the conveniences target; defaults to the grammar's first rule
+        ast_config: Resolved .fltkast sidecar shaping the AST; None is pure Tier 0
+
+    Returns:
+        AstResult containing the executed AST module
+
+    Raises:
+        AstModelError: If the grammar cannot be modelled as an AST
+        ValueError: If goal_rule is not a rule of the grammar
+    """
+    source, model, grammar_with_trivia, goal = _assemble_ast_module(
+        grammar, cst_module_name, parser_module_name, unparser_module_name, goal_rule, ast_config=ast_config
+    )
+
+    module_name = f"fltk_ast_{next(_module_counter)}"
+    module = types.ModuleType(module_name)
+    module.__dict__["__name__"] = module_name
+    # Registered before exec, not after: dataclasses resolves a class's defining module out of
+    # sys.modules while building its fields, so the entry has to exist by then.  A failed exec
+    # takes the entry back out rather than leaving a half-built module behind.
+    sys.modules[module_name] = module
+    try:
+        exec(compile(source, f"<{module_name}>", "exec"), module.__dict__)  # noqa: S102
+    except Exception:
+        del sys.modules[module_name]
+        raise
+
+    return AstResult(
+        ast_module=module,
+        ast_module_name=module_name,
+        model=model,
+        grammar=grammar_with_trivia,
+        goal_rule=goal,
+    )
+
+
+def generate_rust_ast_source(
+    grammar: gsm.Grammar,
+    cst_mod_path: str = "super::cst",
+    *,
+    parser_mod_path: str | None = None,
+    unparser_mod_path: str | None = None,
+    goal_rule: str | None = None,
+    ast_config: ResolvedAstConfig | None = None,
+    source_name: str | None = None,
+) -> str:
+    """Generate the Rust AST module source (``ast.rs``) for ``grammar``.
+
+    The Rust counterpart of ``generate_ast_source``: same model, same sidecar, a different
+    emitter.  There is no ``generate_rust_ast`` beside it — Rust source is compiled by the
+    consumer's build, not exec'd here.
+
+    Args:
+        grammar: The grammar to generate the AST layer for
+        cst_mod_path: Rust module path of the grammar's generated CST module, imported as ``cst``
+        parser_mod_path: Rust module path of a generated parser module; enables ``parse_str``
+        unparser_mod_path: Rust module path of a generated unparser module; enables ``unparse_str``
+        goal_rule: Rule the conveniences target; defaults to the grammar's first rule with a type
+        ast_config: Resolved .fltkast sidecar shaping the AST; None is pure Tier 0
+        source_name: Names the grammar in the module's header comment when it is known
+
+    Returns:
+        The generated Rust AST module source as a string
+
+    Raises:
+        AstModelError: If the grammar cannot be modelled as an AST
+        ValueError: If goal_rule is not a rule of the grammar, or a rule the module must
+            reference names no Rust type
+    """
+    model = ast_model.build_ast_model(_ast_grammar(grammar), ast_config)
+    return gsm2ast_rs.generate_ast_rs(
+        model,
+        cst_mod_path,
+        source_name,
+        parser_mod_path=parser_mod_path,
+        unparser_mod_path=unparser_mod_path,
+        goal_rule=goal_rule,
     )
 
 

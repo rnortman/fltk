@@ -8,6 +8,7 @@ from typing import TYPE_CHECKING, Any
 
 if TYPE_CHECKING:
     from fltk.fegen import gsm
+    from fltk.fegen.ast_model import AstModel
     from fltk.unparse.fmt_config import FormatterConfig, TriviaConfig
 
 
@@ -43,6 +44,19 @@ class ParseResult:
     prefix_pos: int | None = None
     """Codepoint length consumed by ``prefix_cst`` (may be ``0``); ``None`` whenever ``prefix_cst``
     is ``None``."""
+
+
+@dataclass
+class AstResult:
+    """Result of generating an AST module from a grammar."""
+
+    ast_module: types.ModuleType
+    ast_module_name: str
+    model: AstModel
+    grammar: gsm.Grammar
+    """The trivia-classified grammar the model was built from."""
+    goal_rule: str
+    """The rule the module's ``parse``/``unparse`` conveniences target."""
 
 
 @dataclass

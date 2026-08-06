@@ -5,7 +5,37 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [Unreleased]
+## [0.5.0] - 2026-08-06
+
+### Added
+
+- Generated AST layer. A grammar can now be given a `.fltkast` sidecar and generate typed AST
+  node classes beside its CST: plain owned data (dataclasses on Python, structs and enums on
+  Rust), one type per rule, with converters in both directions (`from_cst` / `to_cst`) and
+  one-call entry points (`parse`/`unparse` on Python, `parse_str`/`unparse_str` on Rust) that
+  carry text in and out. Spans never take part in equality, so values converted from identical
+  text at different offsets compare equal. The sidecar shapes the result: `transparent;` erases a
+  rule to its payload, `flatten;` splices a wrapper's fields into its parents, `type:` coerces a
+  terminal to a scalar (integers, floats, `uuid`, `decimal`, or a `custom(...)` type of your own),
+  `key:` turns a collection into an insertion-ordered map, `fold_left:`/`fold_right:` folds a
+  repetition into a binary chain, and `name:`/`field`/`variant` rename anything generated.
+  Details will land with the AST documentation.
+
+### Changed
+
+- The formatter's labeled-literal trial matching is now text-aware. A CST child whose text one
+  spelling of a label cannot produce is declined by that spelling instead of being rendered
+  through it, so trees that previously rendered *wrongly* now render the branch that matches, or
+  fail loudly.
+- Unparser generation now rejects an always-present labeled literal with more than one spelling
+  under one label: the unparser cannot know which spelling a value came from. The error message
+  names the rule, the label and the spellings, and is the migration path.
+- AST generation rejects two indistinguishable branches of one alternation (values of the two
+  cannot be told apart at runtime, so one branch would render every one of them) and a capture
+  group named more than once in the pattern that rebuilds a terminal-only rule's text. Both were
+  previously silent corruption or a panic at the first serialize.
+- Python generated converters raise `AstError` on a child of the wrong kind, where they
+  previously failed incidentally further down.
 
 ## [0.4.0] - 2026-08-03
 
