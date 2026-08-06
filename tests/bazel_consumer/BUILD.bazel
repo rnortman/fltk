@@ -1,9 +1,11 @@
 # Downstream-consumer smoke targets.  Every load below uses the cross-module @fltk//
 # path a real consumer uses, NOT the same-repo // path the root BUILD.bazel uses —
 # that difference is the whole point of this module.
+load("@bazel_skylib//rules:build_test.bzl", "build_test")
 load("@fltk//:rules.bzl", "generate_parser")
 load("@fltk//:rust.bzl", "fltk_pyo3_cdylib", "generate_rust_parser")
 load("@rules_python//python:defs.bzl", "py_library", "py_test")
+load("@rules_rust//rust:defs.bzl", "rust_library")
 
 # ── Python-parser path ────────────────────────────────────────────────────────
 # Pure-Python path: no @fltk//:native_py dependency.
@@ -48,4 +50,56 @@ py_test(
     name = "consumer_rust_test",
     srcs = ["consumer_rust_test.py"],
     deps = [":consumer_native"],
+)
+
+# ── AST path ──────────────────────────────────────────────────────────────────
+# A consumer generating a Rust AST and compiling it against @fltk//crates/fltk-ast-core.
+# The wide scalar builtins are the point: `type: uuid` and `type: decimal` make the emitted
+# module name ::fltk_ast_core::Uuid and ::fltk_ast_core::Decimal, which resolve only when
+# that target enables its "uuid" and "decimal" features — so this crate failing to compile
+# is how a regression in the runtime target's feature list surfaces.
+#
+# No rust.bzl macro emits AST sources, so this drives the genparser CLI directly.  The
+# generated ast.rs reads its CST types as `super::cst` (the CLI default), so ast.rs and
+# cst.rs must be sibling modules under one crate root.
+genrule(
+    name = "consumer_ast_crate_srcs",
+    srcs = [
+        "consumer_ast.fltkast",
+        "consumer_ast.fltkg",
+        "consumer_ast_lib.rs",
+    ],
+    outs = [
+        "consumer_ast_crate/ast.rs",
+        "consumer_ast_crate/cst.rs",
+        "consumer_ast_crate/lib.rs",
+    ],
+    cmd = """
+        cp $(execpath consumer_ast_lib.rs) $(execpath consumer_ast_crate/lib.rs)
+        $(execpath @fltk//:genparser) gen-rust-cst \
+            $(execpath consumer_ast.fltkg) $(execpath consumer_ast_crate/cst.rs)
+        $(execpath @fltk//:genparser) gen-rust-ast \
+            $(execpath consumer_ast.fltkg) $(execpath consumer_ast_crate/ast.rs) \
+            --ast-config $(execpath consumer_ast.fltkast)
+    """,
+    tools = ["@fltk//:genparser"],
+)
+
+rust_library(
+    name = "consumer_ast",
+    srcs = [":consumer_ast_crate_srcs"],
+    crate_name = "consumer_ast",
+    crate_root = "consumer_ast_crate/lib.rs",
+    edition = "2021",
+    deps = [
+        "@fltk//crates/fltk-ast-core",
+        "@fltk//crates/fltk-cst-core",
+    ],
+)
+
+# `bazel test //...` builds every matched target, but a library that is nobody's dependency
+# is easy to drop by accident; this states the coverage as a test.
+build_test(
+    name = "consumer_ast_build_test",
+    targets = [":consumer_ast"],
 )

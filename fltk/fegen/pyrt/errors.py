@@ -150,3 +150,21 @@ def format_error_message(
         for context in rule_tokens[rule_id]:
             result += f"    {context.token_type.name}: {context.token!r}\n"
     return result
+
+
+def failure_details(
+    tracker: ErrorTracker,
+    terminals: terminalsrc.TerminalSource,
+    rule_name_lookup: Callable[[int], str],
+    result_pos: int | None,
+) -> tuple[str, int]:
+    """The diagnostic and the source position for a parse that did not consume all input.
+
+    ``result_pos`` is how far a partially successful parse got, or None when the start rule
+    matched nothing.  The tracker's longest attempt is the better position whenever it
+    recorded one, since it survives backtracking past the real error.
+    """
+    message = format_error_message(tracker, terminals, rule_name_lookup)
+    if tracker.longest_parse_len >= 0:
+        return message, tracker.longest_parse_len
+    return message, result_pos if result_pos is not None else 0

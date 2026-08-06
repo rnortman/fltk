@@ -2,13 +2,20 @@
 
 from __future__ import annotations
 
+import importlib
 import pathlib
+import sys
 
 import pytest
 from typer.testing import CliRunner
 
-from fltk.fegen import gsm
+from fltk.fegen import ast_config as ac
+from fltk.fegen import ast_model as am
+from fltk.fegen import ast_test_grammars as fixtures
+from fltk.fegen import gsm, gsm2ast_rs
 from fltk.fegen.genparser import _parse_grammar_raw, app
+from fltk.fegen.pyrt import astrt
+from fltk.plumbing import parse_grammar
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -903,13 +910,20 @@ def test_gen_rust_parser_inline_disposition(tmp_path: pathlib.Path) -> None:
     assert "pub fn apply__parse_parent(" in output_rs.read_text()
 
 
-def test_gen_rust_parser_invalid_cst_mod_path(simple_grammar_file: pathlib.Path, tmp_path: pathlib.Path) -> None:
-    """gen-rust-parser rejects invalid --cst-mod-path with exit 1 and no output file."""
+@pytest.mark.parametrize("value", ["123bad", "not a path", "super::cst\n"])
+def test_gen_rust_parser_invalid_cst_mod_path(
+    simple_grammar_file: pathlib.Path, tmp_path: pathlib.Path, value: str
+) -> None:
+    """gen-rust-parser rejects invalid --cst-mod-path with exit 1 and no output file.
+
+    The trailing-newline spelling is the one the shared regex's anchors decide: with ``$`` it
+    reached the generated ``use`` line intact, so it is the case that pins the anchors here too.
+    """
     output_rs = tmp_path / "parser.rs"
     runner = CliRunner()
     result = runner.invoke(
         app,
-        ["gen-rust-parser", str(simple_grammar_file), str(output_rs), "--cst-mod-path", "123bad"],
+        ["gen-rust-parser", str(simple_grammar_file), str(output_rs), "--cst-mod-path", value],
     )
 
     assert result.exit_code != 0, "Expected non-zero exit for invalid --cst-mod-path"
@@ -974,13 +988,16 @@ def test_gen_rust_unparser_generation_error_no_partial_file(tmp_path: pathlib.Pa
     assert not output_rs.exists(), "No partial output file should be created on generation error"
 
 
-def test_gen_rust_unparser_invalid_cst_mod_path(simple_grammar_file: pathlib.Path, tmp_path: pathlib.Path) -> None:
+@pytest.mark.parametrize("value", ["123bad", "not a path", "super::cst\n"])
+def test_gen_rust_unparser_invalid_cst_mod_path(
+    simple_grammar_file: pathlib.Path, tmp_path: pathlib.Path, value: str
+) -> None:
     """gen-rust-unparser rejects invalid --cst-mod-path with exit 1 and no output file."""
     output_rs = tmp_path / "unparser.rs"
     runner = CliRunner()
     result = runner.invoke(
         app,
-        ["gen-rust-unparser", str(simple_grammar_file), str(output_rs), "--cst-mod-path", "123bad"],
+        ["gen-rust-unparser", str(simple_grammar_file), str(output_rs), "--cst-mod-path", value],
     )
 
     assert result.exit_code != 0, "Expected non-zero exit for invalid --cst-mod-path"
@@ -1637,3 +1654,538 @@ def test_gen_rust_lib_span_and_submodules_fails(tmp_path: pathlib.Path) -> None:
 
     assert result.exit_code != 0, "Expected non-zero exit for --register-span-types without --no-cst"
     assert not output_rs.exists(), "No output file should be created on error"
+
+
+# ---------------------------------------------------------------------------
+# gen-ast (Python AST module)
+# ---------------------------------------------------------------------------
+
+_AST_GRAMMAR_SRC = """\
+config := , entry* ;
+entry := key:identifier , "=" , value:number , ";" , ;
+identifier := name:/[a-z_][a-z0-9_]*/ ;
+number := val:/-?[0-9]+/ ;
+"""
+
+# A rule labelled `span` collides with the reserved member every node carries, which the model
+# builder reports as a generation error.
+_AST_BAD_GRAMMAR_SRC = """\
+holder := span:word , ";" , ;
+word := text:/[a-z]+/ ;
+"""
+
+
+@pytest.fixture
+def ast_grammar_file(tmp_path: pathlib.Path) -> pathlib.Path:
+    """Write the small config grammar used by the gen-ast tests."""
+    p = tmp_path / "conf.fltkg"
+    p.write_text(_AST_GRAMMAR_SRC)
+    return p
+
+
+def test_gen_ast_emits_module(ast_grammar_file: pathlib.Path, tmp_path: pathlib.Path) -> None:
+    """gen-ast writes {base}_ast.py holding the node classes and both converter directions."""
+    out_dir = tmp_path / "out"
+    runner = CliRunner()
+    result = runner.invoke(app, ["gen-ast", str(ast_grammar_file), "conf", "conf_cst", "--output-dir", str(out_dir)])
+
+    assert result.exit_code == 0, f"gen-ast failed:\n{result.output}\n{result.exception}"
+    module_file = out_dir / "conf_ast.py"
+    assert module_file.exists(), "Expected {base}_ast.py output file was not created"
+
+    src = module_file.read_text()
+    assert "import conf_cst as cst" in src
+    for class_name in ("class Config:", "class Entry:", "class Identifier:", "class Number:"):
+        assert class_name in src
+    assert "def config_from_cst(" in src
+    assert "def config_to_cst(" in src
+    assert "def parse(" not in src
+    assert "def unparse(" not in src
+
+
+def test_gen_ast_conveniences_follow_module_options(ast_grammar_file: pathlib.Path, tmp_path: pathlib.Path) -> None:
+    """--parser-module and --unparser-module add parse()/unparse() and their imports."""
+    runner = CliRunner()
+    result = runner.invoke(
+        app,
+        [
+            "gen-ast",
+            str(ast_grammar_file),
+            "conf",
+            "conf_cst",
+            "--parser-module",
+            "conf_parser",
+            "--unparser-module",
+            "conf_unparser",
+            "--goal",
+            "entry",
+            "--output-dir",
+            str(tmp_path),
+        ],
+    )
+
+    assert result.exit_code == 0, f"gen-ast failed:\n{result.output}\n{result.exception}"
+    src = (tmp_path / "conf_ast.py").read_text()
+    assert "import conf_parser as _parser" in src
+    assert "import conf_unparser as _unparser" in src
+    assert "def parse(source: str, filename: str | None = None) -> Entry:" in src
+    assert "def unparse(value: Entry" in src
+
+
+def test_gen_ast_unknown_goal_fails(ast_grammar_file: pathlib.Path, tmp_path: pathlib.Path) -> None:
+    """An unknown --goal is a CLI error naming the available rules, and writes nothing."""
+    runner = CliRunner()
+    result = runner.invoke(
+        app,
+        ["gen-ast", str(ast_grammar_file), "conf", "conf_cst", "--goal", "nope", "--output-dir", str(tmp_path)],
+    )
+
+    assert result.exit_code != 0, "Expected non-zero exit for an unknown --goal"
+    assert "nope" in result.output
+    assert "config" in result.output
+    assert not (tmp_path / "conf_ast.py").exists(), "No output file should be created on error"
+
+
+def test_gen_ast_invalid_module_path_fails(ast_grammar_file: pathlib.Path, tmp_path: pathlib.Path) -> None:
+    """A malformed --parser-module is rejected before anything is generated."""
+    runner = CliRunner()
+    result = runner.invoke(
+        app,
+        [
+            "gen-ast",
+            str(ast_grammar_file),
+            "conf",
+            "conf_cst",
+            "--parser-module",
+            "not a module",
+            "--output-dir",
+            str(tmp_path),
+        ],
+    )
+
+    assert result.exit_code != 0, "Expected non-zero exit for a malformed --parser-module"
+    assert "--parser-module" in result.output
+    assert not (tmp_path / "conf_ast.py").exists(), "No output file should be created on error"
+
+
+def test_gen_ast_module_path_with_a_trailing_newline_fails(
+    ast_grammar_file: pathlib.Path, tmp_path: pathlib.Path
+) -> None:
+    """The guard is anchored at the very end: a trailing newline is not a valid module path."""
+    runner = CliRunner()
+    result = runner.invoke(
+        app,
+        [
+            "gen-ast",
+            str(ast_grammar_file),
+            "conf",
+            "conf_cst",
+            "--parser-module",
+            "conf_parser\n",
+            "--output-dir",
+            str(tmp_path),
+        ],
+    )
+
+    assert result.exit_code != 0, "Expected non-zero exit for a --parser-module ending in a newline"
+    assert "--parser-module" in result.output
+    assert not (tmp_path / "conf_ast.py").exists(), "No output file should be created on error"
+
+
+def test_gen_ast_model_error_fails(tmp_path: pathlib.Path) -> None:
+    """A grammar the model rejects exits non-zero with the collected errors, writing nothing."""
+    grammar_file = tmp_path / "bad.fltkg"
+    grammar_file.write_text(_AST_BAD_GRAMMAR_SRC)
+    runner = CliRunner()
+    result = runner.invoke(app, ["gen-ast", str(grammar_file), "bad", "bad_cst", "--output-dir", str(tmp_path)])
+
+    assert result.exit_code != 0, "Expected non-zero exit for a grammar with a reserved label"
+    assert "span" in result.output
+    assert not (tmp_path / "bad_ast.py").exists(), "No output file should be created on error"
+
+
+def test_gen_ast_module_parses_through_generated_parser(
+    ast_grammar_file: pathlib.Path, tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """End to end over the CLI: generate CST + parser + AST, import them, parse text to an AST.
+
+    This is the only test that exercises the generated import lines against the real import
+    system — everything else drives generated modules from in-memory exec.
+    """
+    runner = CliRunner()
+    generated = runner.invoke(
+        app, ["generate", str(ast_grammar_file), "conf", "conf_cst", "--output-dir", str(tmp_path)]
+    )
+    assert generated.exit_code == 0, f"generate failed:\n{generated.output}\n{generated.exception}"
+
+    ast_generated = runner.invoke(
+        app,
+        [
+            "gen-ast",
+            str(ast_grammar_file),
+            "conf",
+            "conf_cst",
+            "--parser-module",
+            "conf_parser",
+            "--output-dir",
+            str(tmp_path),
+        ],
+    )
+    assert ast_generated.exit_code == 0, f"gen-ast failed:\n{ast_generated.output}\n{ast_generated.exception}"
+
+    monkeypatch.syspath_prepend(str(tmp_path))
+    importlib.invalidate_caches()
+    try:
+        conf_ast = importlib.import_module("conf_ast")
+
+        config = conf_ast.parse("port = 8080;\nhost = 1;\n")
+
+        assert [entry.key.text for entry in config.entry] == ["port", "host"]
+        assert [entry.value.text for entry in config.entry] == ["8080", "1"]
+        with pytest.raises(astrt.ParseError):
+            conf_ast.parse("port = ;")
+    finally:
+        # The imported modules live in a tmp_path that is about to disappear; leaving them in
+        # sys.modules would hand a later importer a module whose source file is gone.
+        for name in ("conf_ast", "conf_parser", "conf_cst"):
+            sys.modules.pop(name, None)
+
+
+_AST_SIDECAR_SRC = """\
+// rename the entry type and the collection field that holds it
+rule config { field entry { name: entries; } }
+rule entry  { name: Setting; }
+"""
+
+
+def test_gen_ast_applies_an_ast_config(ast_grammar_file: pathlib.Path, tmp_path: pathlib.Path) -> None:
+    """--ast-config shapes the emitted module."""
+    config_file = tmp_path / "conf.fltkast"
+    config_file.write_text(_AST_SIDECAR_SRC)
+    out_dir = tmp_path / "out"
+    runner = CliRunner()
+    result = runner.invoke(
+        app,
+        [
+            "gen-ast",
+            str(ast_grammar_file),
+            "conf",
+            "conf_cst",
+            "--ast-config",
+            str(config_file),
+            "--output-dir",
+            str(out_dir),
+        ],
+    )
+
+    assert result.exit_code == 0, f"gen-ast failed:\n{result.output}\n{result.exception}"
+    src = (out_dir / "conf_ast.py").read_text()
+    assert "class Setting:" in src
+    assert "class Entry:" not in src
+    assert "    entries: list[Setting]" in src
+
+
+def test_gen_ast_config_only_needs_the_python_custom_entries(
+    ast_grammar_file: pathlib.Path, tmp_path: pathlib.Path
+) -> None:
+    """gen-ast generates Python alone, so a custom(...) list may omit its Rust entries."""
+    config_file = tmp_path / "conf.fltkast"
+    config_file.write_text('rule number { custom(python: "pkg.mod.Number"); }\n')
+    out_dir = tmp_path / "out"
+    runner = CliRunner()
+    result = runner.invoke(
+        app,
+        [
+            "gen-ast",
+            str(ast_grammar_file),
+            "conf",
+            "conf_cst",
+            "--ast-config",
+            str(config_file),
+            "--output-dir",
+            str(out_dir),
+        ],
+    )
+
+    assert result.exit_code == 0, f"gen-ast failed:\n{result.output}\n{result.exception}"
+    src = (out_dir / "conf_ast.py").read_text()
+    assert "import pkg.mod" in src
+    assert "class Number:" not in src
+    assert "value: pkg.mod.Number" in src
+
+
+def test_gen_ast_invalid_config_fails(ast_grammar_file: pathlib.Path, tmp_path: pathlib.Path) -> None:
+    """A validation offense is a CLI error, and no module file is written."""
+    config_file = tmp_path / "conf.fltkast"
+    config_file.write_text("rule nope { transparent; }\n")
+    out_dir = tmp_path / "out"
+    runner = CliRunner()
+    result = runner.invoke(
+        app,
+        [
+            "gen-ast",
+            str(ast_grammar_file),
+            "conf",
+            "conf_cst",
+            "--ast-config",
+            str(config_file),
+            "--output-dir",
+            str(out_dir),
+        ],
+    )
+
+    assert result.exit_code == 1
+    assert "unknown grammar rule 'nope'" in result.output
+    assert not out_dir.exists()
+
+
+def test_gen_ast_missing_config_file_fails(ast_grammar_file: pathlib.Path, tmp_path: pathlib.Path) -> None:
+    out_dir = tmp_path / "out"
+    runner = CliRunner()
+    result = runner.invoke(
+        app,
+        [
+            "gen-ast",
+            str(ast_grammar_file),
+            "conf",
+            "conf_cst",
+            "--ast-config",
+            str(tmp_path / "absent.fltkast"),
+            "--output-dir",
+            str(out_dir),
+        ],
+    )
+
+    assert result.exit_code == 1
+    assert "AST config file not found" in result.output
+    assert not out_dir.exists()
+
+
+# ---------------------------------------------------------------------------
+# gen-rust-ast (Rust AST module)
+# ---------------------------------------------------------------------------
+
+
+def test_gen_rust_ast_emits_source(ast_grammar_file: pathlib.Path, tmp_path: pathlib.Path) -> None:
+    """gen-rust-ast writes the .rs holding the node types and both converter directions."""
+    output_rs = tmp_path / "ast.rs"
+    runner = CliRunner()
+    result = runner.invoke(app, ["gen-rust-ast", str(ast_grammar_file), str(output_rs)])
+
+    assert result.exit_code == 0, f"gen-rust-ast failed:\n{result.output}\n{result.exception}"
+    assert output_rs.exists(), "Expected .rs output file was not created"
+
+    src = output_rs.read_text()
+    assert src.startswith("//! Generated by fltk gen-rust-ast from ")
+    assert str(ast_grammar_file) in src.splitlines()[0]
+    assert "use super::cst;" in src
+    for type_name in ("pub struct Config {", "pub struct Entry {", "pub struct Identifier {", "pub struct Number {"):
+        assert type_name in src
+    assert "fn from_cst(" in src
+    assert "fn to_cst(" in src
+    assert "pub fn parse_str(" not in src
+    assert "pub fn unparse_str(" not in src
+
+
+def test_gen_rust_ast_entry_points_follow_module_paths(ast_grammar_file: pathlib.Path, tmp_path: pathlib.Path) -> None:
+    """--parser-mod-path and --unparser-mod-path add parse_str/unparse_str and their imports."""
+    output_rs = tmp_path / "ast.rs"
+    runner = CliRunner()
+    result = runner.invoke(
+        app,
+        [
+            "gen-rust-ast",
+            str(ast_grammar_file),
+            str(output_rs),
+            "--parser-mod-path",
+            "super::parser",
+            "--unparser-mod-path",
+            "super::unparser",
+            "--goal",
+            "entry",
+        ],
+    )
+
+    assert result.exit_code == 0, f"gen-rust-ast failed:\n{result.output}\n{result.exception}"
+    src = output_rs.read_text()
+    assert "use super::parser;" in src
+    assert "use super::unparser;" in src
+    assert "pub fn parse_str(src: &str, filename: Option<&str>) -> Result<Entry," in src
+    assert "pub fn unparse_str(value: &Entry, max_width: usize, indent_width: usize)" in src
+
+
+def test_gen_rust_ast_cst_mod_path_override(ast_grammar_file: pathlib.Path, tmp_path: pathlib.Path) -> None:
+    """--cst-mod-path lands in the generated `use` line, aliased when its tail is not `cst`."""
+    output_rs = tmp_path / "ast.rs"
+    runner = CliRunner()
+    result = runner.invoke(
+        app,
+        ["gen-rust-ast", str(ast_grammar_file), str(output_rs), "--cst-mod-path", "crate::generated::conf_cst"],
+    )
+
+    assert result.exit_code == 0, f"gen-rust-ast failed:\n{result.output}\n{result.exception}"
+    assert "use crate::generated::conf_cst as cst;" in output_rs.read_text()
+
+
+@pytest.mark.parametrize(
+    ("option", "value"),
+    [
+        ("--cst-mod-path", "not a path"),
+        ("--cst-mod-path", "super::cst\n"),
+        ("--parser-mod-path", "super::parser;"),
+        ("--unparser-mod-path", "super::unparser\n"),
+    ],
+)
+def test_gen_rust_ast_invalid_mod_path_fails(
+    ast_grammar_file: pathlib.Path, tmp_path: pathlib.Path, option: str, value: str
+) -> None:
+    """A malformed module path is rejected before anything is generated or written."""
+    output_rs = tmp_path / "ast.rs"
+    runner = CliRunner()
+    result = runner.invoke(app, ["gen-rust-ast", str(ast_grammar_file), str(output_rs), option, value])
+
+    assert result.exit_code != 0, f"Expected non-zero exit for a malformed {option}"
+    assert option in result.output
+    assert not output_rs.exists(), "No output file should be created on error"
+
+
+def test_gen_rust_ast_unknown_goal_fails(ast_grammar_file: pathlib.Path, tmp_path: pathlib.Path) -> None:
+    """An unknown --goal is a CLI error naming the available rules, and writes nothing."""
+    output_rs = tmp_path / "ast.rs"
+    runner = CliRunner()
+    result = runner.invoke(app, ["gen-rust-ast", str(ast_grammar_file), str(output_rs), "--goal", "nope"])
+
+    assert result.exit_code != 0, "Expected non-zero exit for an unknown --goal"
+    assert "nope" in result.output
+    assert "config" in result.output
+    assert not output_rs.exists(), "No output file should be created on error"
+
+
+def test_gen_rust_ast_model_error_fails(tmp_path: pathlib.Path) -> None:
+    """A grammar the model rejects exits non-zero with the collected errors, writing nothing."""
+    grammar_file = tmp_path / "bad.fltkg"
+    grammar_file.write_text(_AST_BAD_GRAMMAR_SRC)
+    output_rs = tmp_path / "ast.rs"
+    runner = CliRunner()
+    result = runner.invoke(app, ["gen-rust-ast", str(grammar_file), str(output_rs)])
+
+    assert result.exit_code != 0, "Expected non-zero exit for a grammar with a reserved label"
+    assert "span" in result.output
+    assert not output_rs.exists(), "No output file should be created on error"
+
+
+def test_gen_rust_ast_applies_an_ast_config(ast_grammar_file: pathlib.Path, tmp_path: pathlib.Path) -> None:
+    """--ast-config shapes the emitted module."""
+    config_file = tmp_path / "conf.fltkast"
+    config_file.write_text(_AST_SIDECAR_SRC)
+    output_rs = tmp_path / "ast.rs"
+    runner = CliRunner()
+    result = runner.invoke(
+        app, ["gen-rust-ast", str(ast_grammar_file), str(output_rs), "--ast-config", str(config_file)]
+    )
+
+    assert result.exit_code == 0, f"gen-rust-ast failed:\n{result.output}\n{result.exception}"
+    src = output_rs.read_text()
+    assert "pub struct Setting {" in src
+    assert "pub struct Entry {" not in src
+    assert "pub entries: Vec<Setting>," in src
+
+
+def test_gen_rust_ast_config_only_needs_the_rust_custom_entries(
+    ast_grammar_file: pathlib.Path, tmp_path: pathlib.Path
+) -> None:
+    """gen-rust-ast generates Rust alone, so a custom(...) list may omit its Python entries."""
+    config_file = tmp_path / "conf.fltkast"
+    config_file.write_text('rule number { custom(rust: "crate::support::Number"); }\n')
+    output_rs = tmp_path / "ast.rs"
+    runner = CliRunner()
+    result = runner.invoke(
+        app, ["gen-rust-ast", str(ast_grammar_file), str(output_rs), "--ast-config", str(config_file)]
+    )
+
+    assert result.exit_code == 0, f"gen-rust-ast failed:\n{result.output}\n{result.exception}"
+    src = output_rs.read_text()
+    assert "pub value: crate::support::Number," in src
+    assert "pub struct Number {" not in src
+
+
+def test_gen_rust_ast_header_names_the_runtime_features(ast_grammar_file: pathlib.Path, tmp_path: pathlib.Path) -> None:
+    """The scalar builtins are opt-in fltk-ast-core features, so the header names the ones needed."""
+    config_file = tmp_path / "conf.fltkast"
+    config_file.write_text("rule identifier { type: uuid; }\nrule number { type: decimal; }\n")
+    output_rs = tmp_path / "ast.rs"
+    runner = CliRunner()
+    result = runner.invoke(
+        app, ["gen-rust-ast", str(ast_grammar_file), str(output_rs), "--ast-config", str(config_file)]
+    )
+
+    assert result.exit_code == 0, f"gen-rust-ast failed:\n{result.output}\n{result.exception}"
+    src = output_rs.read_text()
+    assert "//! Requires these `fltk-ast-core` features: uuid, decimal." in src
+    assert "::fltk_ast_core::Uuid" in src
+    assert "::fltk_ast_core::Decimal" in src
+
+
+def test_gen_rust_ast_invalid_config_fails(ast_grammar_file: pathlib.Path, tmp_path: pathlib.Path) -> None:
+    """A validation offense is a CLI error, and no .rs is written."""
+    config_file = tmp_path / "conf.fltkast"
+    config_file.write_text("rule nope { transparent; }\n")
+    output_rs = tmp_path / "ast.rs"
+    runner = CliRunner()
+    result = runner.invoke(
+        app, ["gen-rust-ast", str(ast_grammar_file), str(output_rs), "--ast-config", str(config_file)]
+    )
+
+    assert result.exit_code == 1
+    assert "unknown grammar rule 'nope'" in result.output
+    assert not output_rs.exists()
+
+
+def test_gen_rust_ast_missing_config_file_fails(ast_grammar_file: pathlib.Path, tmp_path: pathlib.Path) -> None:
+    output_rs = tmp_path / "ast.rs"
+    runner = CliRunner()
+    result = runner.invoke(
+        app,
+        ["gen-rust-ast", str(ast_grammar_file), str(output_rs), "--ast-config", str(tmp_path / "absent.fltkast")],
+    )
+
+    assert result.exit_code == 1
+    assert "AST config file not found" in result.output
+    assert not output_rs.exists()
+
+
+def test_gen_rust_ast_matches_the_generator_it_wraps(ast_grammar_file: pathlib.Path, tmp_path: pathlib.Path) -> None:
+    """The CLI is a thin wrapper: its output is what the emitter produces for the same model.
+
+    Pins the CLI's own pipeline — trivia processing, sidecar resolution, source naming — against
+    the one the Rust gate and the emitter tests drive directly, so the committed artifacts the
+    Makefile wrapper regenerates cannot diverge from what those suites cover.
+    """
+    config_file = tmp_path / "conf.fltkast"
+    config_file.write_text(_AST_SIDECAR_SRC)
+    output_rs = tmp_path / "ast.rs"
+    runner = CliRunner()
+    result = runner.invoke(
+        app,
+        [
+            "gen-rust-ast",
+            str(ast_grammar_file),
+            str(output_rs),
+            "--ast-config",
+            str(config_file),
+            "--parser-mod-path",
+            "super::parser",
+        ],
+    )
+    assert result.exit_code == 0, f"gen-rust-ast failed:\n{result.output}\n{result.exception}"
+
+    grammar = fixtures.classify(parse_grammar(ast_grammar_file.read_text()))
+    config = ac.load_ast_config(config_file.read_text(), grammar, {ac.Backend.RUST})
+    expected = gsm2ast_rs.generate_ast_rs(
+        am.build_ast_model(grammar, config),
+        "super::cst",
+        str(ast_grammar_file),
+        parser_mod_path="super::parser",
+    )
+
+    assert output_rs.read_text() == expected

@@ -1,0 +1,11 @@
+// `val := item:num | item:name | item:/[!@#$]+/` labels all three alternatives `item`, which
+// as a sum would mint three variants called `Item`.  One product with a union-typed field is
+// what the union label means anyway.
+rule val { product; }
+
+// The two wide scalar builtins, each behind its own cargo feature of fltk-ast-core.
+rule uuid_val { type: uuid; }
+rule decimal_val { type: decimal; }
+
+// `op` is the operator label; `term` is the operand.
+rule sum_chain { fold_left: op; }

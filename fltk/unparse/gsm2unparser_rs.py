@@ -28,6 +28,7 @@ from fltk.fegen.gsm2parser_rs import cst_module_import, rust_str_lit
 from fltk.fegen.gsm2tree_rs import RustCstGenerator
 from fltk.unparse.combinators import Concat, Doc, HardLine, Line, Nbsp, Nil, SoftLine, Text
 from fltk.unparse.fmt_config import AnchorConfig, FormatterConfig, ItemSelector, Normal, Omit, OperationType, RenderAs
+from fltk.unparse.literal_labels import check_labeled_literal_texts, spellings_for
 
 
 class RustUnparserGenerator:
@@ -74,6 +75,10 @@ class RustUnparserGenerator:
         """
         if self._generated is not None:
             return self._generated
+
+        # A labeled literal whose spelling cannot survive the round trip is refused before
+        # emission, so the diagnostic names the grammar rather than surfacing as wrong output.
+        check_labeled_literal_texts(self._grammar)
 
         # Generate the body sections first: _gen_rule_methods runs _doc_to_rust_expr, which sets
         # self._uses_doc_type as a side effect.  The header's conditional ``Doc`` import then
@@ -1159,18 +1164,43 @@ class RustUnparserGenerator:
         statically guaranteed, so only the bounds (and any label) check remain -- emitting
         an unconditional ``match`` there would either be a vacuous single-arm match or, with
         a catch-all, an ``unreachable_patterns`` error.
+
+        A *labeled* literal item additionally accepts the child only when the span's text is
+        one of the label's literal spellings (:func:`fltk.unparse.literal_labels.spellings_for`),
+        a sourceless span being accepted unconditionally.  The span is then bound (rather than
+        discarded by a ``Span(_)`` arm) so the text check has an operand.  Rendering is
+        unchanged -- the grammar's literal text is always emitted -- so this decides only which
+        trial branch wins: a rival regex under the same label takes a child whose text no
+        spelling of the literal matches, instead of having that text replaced by the literal.
         """
         num_variants = self._cst.num_child_variants(rule_name)
+        spellings = spellings_for(self._grammar.identifiers[rule_name], item)
         # _gen_child_prelude binds child_tuple on its own whenever the item is labeled, so we
-        # only need to request it here for the variant match (num_variants > 1).
+        # only need to request it here for the variant match (num_variants > 1). A text check
+        # implies a labeled item, so the tuple is bound for it either way.
         need_tuple = num_variants > 1
 
         lines = self._gen_child_prelude(class_name, item, need_tuple=need_tuple)
+        child_enum = self._cst.child_enum_name(class_name)
         if num_variants > 1:
-            child_enum = self._cst.child_enum_name(class_name)
-            lines.append("        match &child_tuple.1 {")
-            lines.append(f"            cst::{child_enum}::Span(_) => {{}}")
-            lines.append("            _ => return None,")
+            if spellings:
+                lines.append("        let span = match &child_tuple.1 {")
+                lines.append(f"            cst::{child_enum}::Span(span) => span,")
+                lines.append("            _ => return None,")
+                lines.append("        };")
+            else:
+                lines.append("        match &child_tuple.1 {")
+                lines.append(f"            cst::{child_enum}::Span(_) => {{}}")
+                lines.append("            _ => return None,")
+                lines.append("        }")
+        elif spellings:
+            # Single-variant child enum: irrefutable destructure via `let` (clippy
+            # ::infallible_destructuring_match rejects a single-arm match here).
+            lines.append(f"        let cst::{child_enum}::Span(span) = &child_tuple.1;")
+        if spellings:
+            patterns = " | ".join(f'"{rust_str_lit(text)}"' for text in spellings)
+            lines.append(f"        if span.text_str().is_some_and(|t| !matches!(t, {patterns})) {{")
+            lines.append("            return None;")
             lines.append("        }")
         return lines
 

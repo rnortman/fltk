@@ -5,7 +5,13 @@ crates/fltk-cst-core/src/escape.rs to verify byte-identical output.
 """
 
 from fltk.fegen.pyrt import terminalsrc
-from fltk.fegen.pyrt.errors import ErrorTracker, _needs_escape, escape_control_chars, format_error_message
+from fltk.fegen.pyrt.errors import (
+    ErrorTracker,
+    _needs_escape,
+    escape_control_chars,
+    failure_details,
+    format_error_message,
+)
 
 # ── escape_control_chars ──────────────────────────────────────────────────────
 
@@ -244,6 +250,31 @@ def test_format_error_message_empty_input():
     msg = format_error_message(t, ts, _rule_name)
     expected = "Syntax error at line 1 col 0:\n\n^\nExpected:\n"
     assert msg == expected, f"got: {msg!r}"
+
+
+def test_failure_details_prefers_the_trackers_longest_attempt():
+    # The tracker reached col 5; a partial parse stopped earlier. The tracker wins.
+    ts = _ts("hello world")
+    t = ErrorTracker()
+    t.fail_literal(5, 0, "!")
+    message, position = failure_details(t, ts, _rule_name, 2)
+    assert position == 5
+    assert message == format_error_message(t, ts, _rule_name)
+
+
+def test_failure_details_falls_back_to_the_partial_parse_position():
+    # Nothing recorded (longest_parse_len == -1): how far the parse got is the best guess.
+    ts = _ts("hello world")
+    t = ErrorTracker()
+    _message, position = failure_details(t, ts, _rule_name, 4)
+    assert position == 4
+
+
+def test_failure_details_position_is_zero_when_nothing_parsed():
+    ts = _ts("hello world")
+    t = ErrorTracker()
+    _message, position = failure_details(t, ts, _rule_name, None)
+    assert position == 0
 
 
 def test_format_error_message_ascii_clean_unchanged():

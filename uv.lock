@@ -202,6 +202,7 @@ test = [
     { name = "coverage", extra = ["toml"] },
     { name = "pytest" },
     { name = "pytest-lsp" },
+    { name = "tomli", marker = "python_full_version < '3.11'" },
 ]
 
 [package.metadata]
@@ -222,6 +223,7 @@ test = [
     { name = "coverage", extras = ["toml"], specifier = ">=6.5" },
     { name = "pytest" },
     { name = "pytest-lsp" },
+    { name = "tomli", marker = "python_full_version < '3.11'", specifier = ">=2" },
 ]
 
 [[package]]

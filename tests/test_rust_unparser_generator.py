@@ -611,10 +611,10 @@ def test_generate_required_suppressed_identifier_raises() -> None:
 
 
 def test_include_labeled_literal_single_variant_emits_extraction_and_advance() -> None:
-    """A labeled INCLUDE literal validates the Span child (bounds + label) and advances pos.
+    """A labeled INCLUDE literal validates the Span child (bounds + label + text) and advances pos.
 
-    Rule `r := foo:"x";` -> RChild has only the Span variant (single variant), so the
-    variant `match` is omitted (statically guaranteed) but the bounds and label checks
+    Rule `r := foo:"x";` -> RChild has only the Span variant (single variant), so the span is
+    bound by an irrefutable `let` rather than a `match`; the bounds, label, and spelling checks
     remain, and the literal text is re-emitted with `pos + 1`.
     """
     src = RustUnparserGenerator(parse_grammar('r := foo:"x";')).generate()
@@ -622,10 +622,11 @@ def test_include_labeled_literal_single_variant_emits_extraction_and_advance() -
     assert "if pos >= children.len() {" in src
     assert "let child_tuple = &children[pos];" in src
     assert "if child_tuple.0 != Some(cst::RLabel::Foo) {" in src
+    assert "let cst::RChild::Span(span) = &child_tuple.1;" in src
+    assert 'if span.text_str().is_some_and(|t| !matches!(t, "x")) {' in src
     assert 'let acc = acc.add_non_trivia(fltk_unparser_core::text("x"));' in src
     assert "Some(UnparseResult::new(acc, pos + 1))" in src
     # Single-variant (Span-only) enum: no variant match / catch-all is emitted.
-    assert "cst::RChild::Span" not in src
     assert "_ => return None," not in src
 
 
@@ -634,13 +635,15 @@ def test_include_labeled_literal_multi_variant_emits_span_match_with_catchall() 
 
     Rule `r := foo:"x" . bar:other;` -> RChild = {Other, Span} (two variants), so the
     literal item validates the variant via `match` with a `_ => return None` catch-all,
-    mirroring the CST generator's num_variants>1 guard.
+    mirroring the CST generator's num_variants>1 guard.  A labeled literal binds the span in
+    that match, because its text is checked against the label's spellings.
     """
     src = RustUnparserGenerator(parse_grammar('r := foo:"x" . bar:other; other := "y";')).generate()
     assert "if child_tuple.0 != Some(cst::RLabel::Foo) {" in src
-    assert "match &child_tuple.1 {" in src
-    assert "cst::RChild::Span(_) => {}" in src
+    assert "let span = match &child_tuple.1 {" in src
+    assert "cst::RChild::Span(span) => span," in src
     assert "_ => return None," in src
+    assert 'if span.text_str().is_some_and(|t| !matches!(t, "x")) {' in src
     assert 'let acc = acc.add_non_trivia(fltk_unparser_core::text("x"));' in src
     assert "Some(UnparseResult::new(acc, pos + 1))" in src
 

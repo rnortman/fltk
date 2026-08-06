@@ -2434,6 +2434,349 @@ impl Unparser {
         let acc = acc.add_accumulator(&child_result.accumulator);
         Some(UnparseResult::new(acc, pos + 1))
     }
+    pub fn unparse_uuid_val(&self, node: &cst::UuidVal) -> Option<UnparseResult> {
+        let acc = DocAccumulator::new();
+        if let Some(r) = self.unparse_uuid_val__alt0(node, 0, acc) {
+            return Some(r);
+        }
+        None
+    }
+
+    fn unparse_uuid_val__alt0(&self, node: &cst::UuidVal, pos: usize, acc: DocAccumulator) -> Option<UnparseResult> {
+        let mut pos = pos;
+        let mut acc = acc;
+        let r = self.unparse_uuid_val__alt0__item0(node, pos, acc)?;
+        pos = r.new_pos;
+        acc = r.accumulator;
+        Some(UnparseResult::new(acc, pos))
+    }
+
+    fn unparse_uuid_val__alt0__item0(&self, node: &cst::UuidVal, pos: usize, acc: DocAccumulator) -> Option<UnparseResult> {
+        let children = node.children();
+        if pos >= children.len() {
+            return None;
+        }
+        let child_tuple = &children[pos];
+        if child_tuple.0 != Some(cst::UuidValLabel::Value) {
+            return None;
+        }
+        let cst::UuidValChild::Span(span) = &child_tuple.1;
+        let Some(text) = span.text() else {
+            panic!("unparse_uuid_val: cannot extract text for regex term label `value` at child position {}: span.text() returned None for {:?}", pos, span);
+        };
+        let acc = acc.add_non_trivia(fltk_unparser_core::text(text));
+        Some(UnparseResult::new(acc, pos + 1))
+    }
+    pub fn unparse_decimal_val(&self, node: &cst::DecimalVal) -> Option<UnparseResult> {
+        let acc = DocAccumulator::new();
+        if let Some(r) = self.unparse_decimal_val__alt0(node, 0, acc) {
+            return Some(r);
+        }
+        None
+    }
+
+    fn unparse_decimal_val__alt0(&self, node: &cst::DecimalVal, pos: usize, acc: DocAccumulator) -> Option<UnparseResult> {
+        let mut pos = pos;
+        let mut acc = acc;
+        let r = self.unparse_decimal_val__alt0__item0(node, pos, acc)?;
+        pos = r.new_pos;
+        acc = r.accumulator;
+        Some(UnparseResult::new(acc, pos))
+    }
+
+    fn unparse_decimal_val__alt0__item0(&self, node: &cst::DecimalVal, pos: usize, acc: DocAccumulator) -> Option<UnparseResult> {
+        let children = node.children();
+        if pos >= children.len() {
+            return None;
+        }
+        let child_tuple = &children[pos];
+        if child_tuple.0 != Some(cst::DecimalValLabel::Value) {
+            return None;
+        }
+        let cst::DecimalValChild::Span(span) = &child_tuple.1;
+        let Some(text) = span.text() else {
+            panic!("unparse_decimal_val: cannot extract text for regex term label `value` at child position {}: span.text() returned None for {:?}", pos, span);
+        };
+        let acc = acc.add_non_trivia(fltk_unparser_core::text(text));
+        Some(UnparseResult::new(acc, pos + 1))
+    }
+    pub fn unparse_colour(&self, node: &cst::Colour) -> Option<UnparseResult> {
+        let acc = DocAccumulator::new();
+        if let Some(r) = self.unparse_colour__alt0(node, 0, acc.clone()) {
+            return Some(r);
+        }
+        if let Some(r) = self.unparse_colour__alt1(node, 0, acc.clone()) {
+            return Some(r);
+        }
+        if let Some(r) = self.unparse_colour__alt2(node, 0, acc) {
+            return Some(r);
+        }
+        None
+    }
+
+    fn unparse_colour__alt0(&self, node: &cst::Colour, pos: usize, acc: DocAccumulator) -> Option<UnparseResult> {
+        let mut pos = pos;
+        let mut acc = acc;
+        let r = self.unparse_colour__alt0__item0(node, pos, acc)?;
+        pos = r.new_pos;
+        acc = r.accumulator;
+        Some(UnparseResult::new(acc, pos))
+    }
+
+    fn unparse_colour__alt0__item0(&self, node: &cst::Colour, pos: usize, acc: DocAccumulator) -> Option<UnparseResult> {
+        let children = node.children();
+        if pos >= children.len() {
+            return None;
+        }
+        let child_tuple = &children[pos];
+        if child_tuple.0 != Some(cst::ColourLabel::Shade) {
+            return None;
+        }
+        let cst::ColourChild::Span(span) = &child_tuple.1;
+        if span.text_str().is_some_and(|t| !matches!(t, "gray" | "grey")) {
+            return None;
+        }
+        let acc = acc.add_non_trivia(fltk_unparser_core::text("gray"));
+        Some(UnparseResult::new(acc, pos + 1))
+    }
+
+    fn unparse_colour__alt1(&self, node: &cst::Colour, pos: usize, acc: DocAccumulator) -> Option<UnparseResult> {
+        let mut pos = pos;
+        let mut acc = acc;
+        let r = self.unparse_colour__alt1__item0(node, pos, acc)?;
+        pos = r.new_pos;
+        acc = r.accumulator;
+        Some(UnparseResult::new(acc, pos))
+    }
+
+    fn unparse_colour__alt1__item0(&self, node: &cst::Colour, pos: usize, acc: DocAccumulator) -> Option<UnparseResult> {
+        let children = node.children();
+        if pos >= children.len() {
+            return None;
+        }
+        let child_tuple = &children[pos];
+        if child_tuple.0 != Some(cst::ColourLabel::Shade) {
+            return None;
+        }
+        let cst::ColourChild::Span(span) = &child_tuple.1;
+        if span.text_str().is_some_and(|t| !matches!(t, "gray" | "grey")) {
+            return None;
+        }
+        let acc = acc.add_non_trivia(fltk_unparser_core::text("grey"));
+        Some(UnparseResult::new(acc, pos + 1))
+    }
+
+    fn unparse_colour__alt2(&self, node: &cst::Colour, pos: usize, acc: DocAccumulator) -> Option<UnparseResult> {
+        let mut pos = pos;
+        let mut acc = acc;
+        let r = self.unparse_colour__alt2__item0(node, pos, acc)?;
+        pos = r.new_pos;
+        acc = r.accumulator;
+        Some(UnparseResult::new(acc, pos))
+    }
+
+    fn unparse_colour__alt2__item0(&self, node: &cst::Colour, pos: usize, acc: DocAccumulator) -> Option<UnparseResult> {
+        let children = node.children();
+        if pos >= children.len() {
+            return None;
+        }
+        let child_tuple = &children[pos];
+        if child_tuple.0 != Some(cst::ColourLabel::Dark) {
+            return None;
+        }
+        let cst::ColourChild::Span(span) = &child_tuple.1;
+        if span.text_str().is_some_and(|t| !matches!(t, "black")) {
+            return None;
+        }
+        let acc = acc.add_non_trivia(fltk_unparser_core::text("black"));
+        Some(UnparseResult::new(acc, pos + 1))
+    }
+    pub fn unparse_sum_chain(&self, node: &cst::SumChain) -> Option<UnparseResult> {
+        let acc = DocAccumulator::new();
+        if let Some(r) = self.unparse_sum_chain__alt0(node, 0, acc) {
+            return Some(r);
+        }
+        None
+    }
+
+    fn unparse_sum_chain__alt0(&self, node: &cst::SumChain, pos: usize, acc: DocAccumulator) -> Option<UnparseResult> {
+        let mut pos = pos;
+        let mut acc = acc;
+        let r = self.unparse_sum_chain__alt0__item0(node, pos, acc)?;
+        pos = r.new_pos;
+        acc = r.accumulator;
+        if !acc.last_was_trivia() {
+            if pos < node.children().len() {
+                match &node.children()[pos].1 {
+                    cst::SumChainChild::Trivia(trivia_shared) => {
+                        let trivia_node = trivia_shared.read();
+                        if self._has_preservable_trivia(&trivia_node) {
+                            if let Some(trivia_result) = self.unparse__trivia(&trivia_node) {
+                                acc = acc.add_trivia(fltk_unparser_core::separator_spec(None, Some(trivia_result.accumulator.doc()), false));
+                            } else {
+                                panic!("unparse_sum_chain: trivia at child position {} has preservable comments but unparse__trivia returned None; refusing to silently drop comments", pos);
+                            }
+                        } else {
+                            acc = acc.add_trivia(fltk_unparser_core::separator_spec(Some(Doc::Line), None, false));
+                        }
+                        pos += 1;
+                    }
+                    _ => {
+                        acc = acc.add_trivia(fltk_unparser_core::separator_spec(Some(Doc::Line), None, false));
+                    }
+                }
+            } else {
+                acc = acc.add_trivia(fltk_unparser_core::separator_spec(Some(Doc::Line), None, false));
+            }
+        }
+        if let Some(r) = self.unparse_sum_chain__alt0__item1(node, pos, acc.clone()) {
+            pos = r.new_pos;
+            acc = r.accumulator;
+        }
+        Some(UnparseResult::new(acc, pos))
+    }
+
+    fn unparse_sum_chain__alt0__item0(&self, node: &cst::SumChain, pos: usize, acc: DocAccumulator) -> Option<UnparseResult> {
+        let children = node.children();
+        if pos >= children.len() {
+            return None;
+        }
+        let child_tuple = &children[pos];
+        if child_tuple.0 != Some(cst::SumChainLabel::Term) {
+            return None;
+        }
+        let shared = match &child_tuple.1 {
+            cst::SumChainChild::Num(shared) => shared,
+            _ => return None,
+        };
+        let guard = shared.read();
+        let child_result = self.unparse_num(&guard)?;
+        let acc = acc.add_accumulator(&child_result.accumulator);
+        Some(UnparseResult::new(acc, pos + 1))
+    }
+
+    fn unparse_sum_chain__alt0__item1(&self, node: &cst::SumChain, pos: usize, acc: DocAccumulator) -> Option<UnparseResult> {
+        let mut current_pos = pos;
+        let mut acc = acc;
+        while current_pos < node.children().len() {
+            let Some(r) = self.unparse_sum_chain__alt0__item1__inner(node, current_pos, acc.clone()) else {
+                break;
+            };
+            acc = r.accumulator;
+            current_pos = r.new_pos;
+        }
+        Some(UnparseResult::new(acc, current_pos))
+    }
+
+    fn unparse_sum_chain__alt0__item1__inner(&self, node: &cst::SumChain, pos: usize, acc: DocAccumulator) -> Option<UnparseResult> {
+        self.unparse_sum_chain__alt0__item1__inner__alts(node, pos, acc)
+    }
+
+    fn unparse_sum_chain__alt0__item1__inner__alts(&self, node: &cst::SumChain, pos: usize, acc: DocAccumulator) -> Option<UnparseResult> {
+        if let Some(r) = self.unparse_sum_chain__alt0__item1__inner__alts__alt0(node, pos, acc) {
+            return Some(r);
+        }
+        None
+    }
+
+    fn unparse_sum_chain__alt0__item1__inner__alts__alt0(&self, node: &cst::SumChain, pos: usize, acc: DocAccumulator) -> Option<UnparseResult> {
+        let mut pos = pos;
+        let mut acc = acc;
+        if !acc.last_was_trivia() {
+            if pos < node.children().len() {
+                match &node.children()[pos].1 {
+                    cst::SumChainChild::Trivia(trivia_shared) => {
+                        let trivia_node = trivia_shared.read();
+                        if self._has_preservable_trivia(&trivia_node) {
+                            if let Some(trivia_result) = self.unparse__trivia(&trivia_node) {
+                                acc = acc.add_trivia(fltk_unparser_core::separator_spec(None, Some(trivia_result.accumulator.doc()), false));
+                            } else {
+                                panic!("unparse_sum_chain: trivia at child position {} has preservable comments but unparse__trivia returned None; refusing to silently drop comments", pos);
+                            }
+                        } else {
+                            acc = acc.add_trivia(fltk_unparser_core::separator_spec(Some(Doc::Line), None, false));
+                        }
+                        pos += 1;
+                    }
+                    _ => {
+                        acc = acc.add_trivia(fltk_unparser_core::separator_spec(Some(Doc::Line), None, false));
+                    }
+                }
+            } else {
+                acc = acc.add_trivia(fltk_unparser_core::separator_spec(Some(Doc::Line), None, false));
+            }
+        }
+        let r = self.unparse_sum_chain__alt0__item1__inner__alts__alt0__item0(node, pos, acc)?;
+        pos = r.new_pos;
+        acc = r.accumulator;
+        if !acc.last_was_trivia() {
+            if pos < node.children().len() {
+                match &node.children()[pos].1 {
+                    cst::SumChainChild::Trivia(trivia_shared) => {
+                        let trivia_node = trivia_shared.read();
+                        if self._has_preservable_trivia(&trivia_node) {
+                            if let Some(trivia_result) = self.unparse__trivia(&trivia_node) {
+                                acc = acc.add_trivia(fltk_unparser_core::separator_spec(None, Some(trivia_result.accumulator.doc()), false));
+                            } else {
+                                panic!("unparse_sum_chain: trivia at child position {} has preservable comments but unparse__trivia returned None; refusing to silently drop comments", pos);
+                            }
+                        } else {
+                            acc = acc.add_trivia(fltk_unparser_core::separator_spec(Some(Doc::Line), None, false));
+                        }
+                        pos += 1;
+                    }
+                    _ => {
+                        acc = acc.add_trivia(fltk_unparser_core::separator_spec(Some(Doc::Line), None, false));
+                    }
+                }
+            } else {
+                acc = acc.add_trivia(fltk_unparser_core::separator_spec(Some(Doc::Line), None, false));
+            }
+        }
+        let r = self.unparse_sum_chain__alt0__item1__inner__alts__alt0__item1(node, pos, acc)?;
+        pos = r.new_pos;
+        acc = r.accumulator;
+        Some(UnparseResult::new(acc, pos))
+    }
+
+    fn unparse_sum_chain__alt0__item1__inner__alts__alt0__item0(&self, node: &cst::SumChain, pos: usize, acc: DocAccumulator) -> Option<UnparseResult> {
+        let children = node.children();
+        if pos >= children.len() {
+            return None;
+        }
+        let child_tuple = &children[pos];
+        if child_tuple.0 != Some(cst::SumChainLabel::Op) {
+            return None;
+        }
+        let span = match &child_tuple.1 {
+            cst::SumChainChild::Span(span) => span,
+            _ => return None,
+        };
+        let Some(text) = span.text() else {
+            panic!("unparse_sum_chain: cannot extract text for regex term label `op` at child position {}: span.text() returned None for {:?}", pos, span);
+        };
+        let acc = acc.add_non_trivia(fltk_unparser_core::text(text));
+        Some(UnparseResult::new(acc, pos + 1))
+    }
+
+    fn unparse_sum_chain__alt0__item1__inner__alts__alt0__item1(&self, node: &cst::SumChain, pos: usize, acc: DocAccumulator) -> Option<UnparseResult> {
+        let children = node.children();
+        if pos >= children.len() {
+            return None;
+        }
+        let child_tuple = &children[pos];
+        if child_tuple.0 != Some(cst::SumChainLabel::Term) {
+            return None;
+        }
+        let shared = match &child_tuple.1 {
+            cst::SumChainChild::Num(shared) => shared,
+            _ => return None,
+        };
+        let guard = shared.read();
+        let child_result = self.unparse_num(&guard)?;
+        let acc = acc.add_accumulator(&child_result.accumulator);
+        Some(UnparseResult::new(acc, pos + 1))
+    }
     pub fn unparse__trivia(&self, node: &cst::Trivia) -> Option<UnparseResult> {
         let acc = DocAccumulator::new();
         if let Some(r) = self.unparse__trivia__alt0(node, 0, acc) {
@@ -3251,6 +3594,86 @@ mod python_bindings {
         fn unparse_mixed_opt_doc(&self, node: PyRef<'_, cst::PyMixedOpt>) -> PyResult<Option<PyDoc>> {
             let guard = node.shared().read();
             let Some(r) = self.inner.unparse_mixed_opt(&guard) else {
+                return Ok(None);
+            };
+            let resolved = resolve_spacing_specs(r.accumulator.doc());
+            Ok(Some(PyDoc { resolved }))
+        }
+
+        #[pyo3(signature = (node, max_width = 80, indent_width = 4))]
+        fn unparse_uuid_val(&self, node: PyRef<'_, cst::PyUuidVal>, max_width: usize, indent_width: usize) -> PyResult<Option<String>> {
+            let guard = node.shared().read();
+            let Some(r) = self.inner.unparse_uuid_val(&guard) else {
+                return Ok(None);
+            };
+            let resolved = resolve_spacing_specs(r.accumulator.doc());
+            let cfg = RendererConfig { indent_width, max_width };
+            Ok(Some(Renderer::new(cfg).render(&resolved)))
+        }
+
+        fn unparse_uuid_val_doc(&self, node: PyRef<'_, cst::PyUuidVal>) -> PyResult<Option<PyDoc>> {
+            let guard = node.shared().read();
+            let Some(r) = self.inner.unparse_uuid_val(&guard) else {
+                return Ok(None);
+            };
+            let resolved = resolve_spacing_specs(r.accumulator.doc());
+            Ok(Some(PyDoc { resolved }))
+        }
+
+        #[pyo3(signature = (node, max_width = 80, indent_width = 4))]
+        fn unparse_decimal_val(&self, node: PyRef<'_, cst::PyDecimalVal>, max_width: usize, indent_width: usize) -> PyResult<Option<String>> {
+            let guard = node.shared().read();
+            let Some(r) = self.inner.unparse_decimal_val(&guard) else {
+                return Ok(None);
+            };
+            let resolved = resolve_spacing_specs(r.accumulator.doc());
+            let cfg = RendererConfig { indent_width, max_width };
+            Ok(Some(Renderer::new(cfg).render(&resolved)))
+        }
+
+        fn unparse_decimal_val_doc(&self, node: PyRef<'_, cst::PyDecimalVal>) -> PyResult<Option<PyDoc>> {
+            let guard = node.shared().read();
+            let Some(r) = self.inner.unparse_decimal_val(&guard) else {
+                return Ok(None);
+            };
+            let resolved = resolve_spacing_specs(r.accumulator.doc());
+            Ok(Some(PyDoc { resolved }))
+        }
+
+        #[pyo3(signature = (node, max_width = 80, indent_width = 4))]
+        fn unparse_colour(&self, node: PyRef<'_, cst::PyColour>, max_width: usize, indent_width: usize) -> PyResult<Option<String>> {
+            let guard = node.shared().read();
+            let Some(r) = self.inner.unparse_colour(&guard) else {
+                return Ok(None);
+            };
+            let resolved = resolve_spacing_specs(r.accumulator.doc());
+            let cfg = RendererConfig { indent_width, max_width };
+            Ok(Some(Renderer::new(cfg).render(&resolved)))
+        }
+
+        fn unparse_colour_doc(&self, node: PyRef<'_, cst::PyColour>) -> PyResult<Option<PyDoc>> {
+            let guard = node.shared().read();
+            let Some(r) = self.inner.unparse_colour(&guard) else {
+                return Ok(None);
+            };
+            let resolved = resolve_spacing_specs(r.accumulator.doc());
+            Ok(Some(PyDoc { resolved }))
+        }
+
+        #[pyo3(signature = (node, max_width = 80, indent_width = 4))]
+        fn unparse_sum_chain(&self, node: PyRef<'_, cst::PySumChain>, max_width: usize, indent_width: usize) -> PyResult<Option<String>> {
+            let guard = node.shared().read();
+            let Some(r) = self.inner.unparse_sum_chain(&guard) else {
+                return Ok(None);
+            };
+            let resolved = resolve_spacing_specs(r.accumulator.doc());
+            let cfg = RendererConfig { indent_width, max_width };
+            Ok(Some(Renderer::new(cfg).render(&resolved)))
+        }
+
+        fn unparse_sum_chain_doc(&self, node: PyRef<'_, cst::PySumChain>) -> PyResult<Option<PyDoc>> {
+            let guard = node.shared().read();
+            let Some(r) = self.inner.unparse_sum_chain(&guard) else {
                 return Ok(None);
             };
             let resolved = resolve_spacing_specs(r.accumulator.doc());

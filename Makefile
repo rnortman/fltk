@@ -1,9 +1,10 @@
 .PHONY: check check-ci check-common lint format-check typecheck test cargo-check cargo-test cargo-clippy \
         cargo-test-no-python cargo-clippy-no-python check-no-pyo3 cargo-deny \
-        cargo-test-python-features check-locks regen-locks bazel-toolchain-guard \
+        cargo-test-python-features check-locks check-bazel-locks regen-locks bazel-toolchain-guard \
         bazel-check bazel-consumer-check \
         build-native build-test-user-ext build-fegen-rust-cst build-rust-parser-fixture \
         build-test-fixtures build-poc-cst gen-rust-cst gen-rust-parser gen-rust-unparser \
+        gen-ast gen-rust-ast \
         build-fegen-rust-parser test-native-parser test-rust-parser-fixture fix gencode
 
 # ══════════════════════════════════════════════════════════════════════════════
@@ -40,13 +41,20 @@
 # DO NOT add new steps directly to `check` or `check-ci` — they inherit via this target.
 #
 # Single source for the step list, consumed by both the loop and the success echo
-# (no duplicated literal to drift).  ORDER IS LOAD-BEARING: check-locks must run
-# AFTER test.  The maturin builds under `test` re-resolve a stale Cargo.lock in
-# place (cargo without --locked), and the check-locks git diff is what catches
-# that rewrite — so it has to run afterward to see it.
+# (no duplicated literal to drift).  ORDER IS LOAD-BEARING, and the rule behind it is
+# general: a step that only DIFFS a generated file must run after the step that REWRITES
+# it, or it passes vacuously on the stale committed copy.
+#   - check-locks must run AFTER test.  The maturin builds under `test` re-resolve a stale
+#     Cargo.lock in place (cargo without --locked), and the check-locks git diff is what
+#     catches that rewrite — so it has to run afterward to see it.
+#   - check-bazel-locks must run AFTER bazel-check and bazel-consumer-check, and therefore
+#     stays LAST.  Those two lanes are the writer that repairs a stale MODULE.bazel.lock in
+#     place (bzlmod's default lockfile_mode is `update`), exactly as the maturin builds are
+#     for Cargo.lock.  A new step appended after it that rewrites a lockfile would reopen
+#     the blind spot; put such a step before it.
 CHECK_STEPS := lint format-check typecheck test cargo-check cargo-clippy cargo-test \
                cargo-test-python-features cargo-test-no-python cargo-clippy-no-python \
-               check-no-pyo3 check-locks bazel-check bazel-consumer-check
+               check-no-pyo3 check-locks bazel-check bazel-consumer-check check-bazel-locks
 
 check-common:
 	@steps="$(CHECK_STEPS)"; \
@@ -157,6 +165,13 @@ cargo-clippy:
 cargo-test-no-python:
 	cargo test -q --locked -p fltk-cst-core --no-default-features
 	cargo test -q --locked -p fltk-parser-core
+	# fltk-ast-core three times: the workspace lanes above cover its default (indexmap-on)
+	# feature set, the --no-default-features line is what keeps "a consumer with no keyed
+	# collections can drop indexmap" compiling, and --all-features is the only lane that
+	# compiles the uuid and decimal scalar builtins at all.
+	cargo test -q --locked -p fltk-ast-core
+	cargo test -q --locked -p fltk-ast-core --no-default-features
+	cargo test -q --locked -p fltk-ast-core --all-features
 	cargo test -q --locked --manifest-path tests/rust_parser_fixture/Cargo.toml
 	cargo test -q --locked --manifest-path crates/fegen-rust/Cargo.toml --no-default-features
 	cargo test -q --locked --manifest-path tests/rust_poc_cst/Cargo.toml --no-default-features
@@ -165,6 +180,8 @@ cargo-test-no-python:
 cargo-clippy-no-python:
 	cargo clippy -q --locked -p fltk-cst-core --no-default-features --all-targets -- -D warnings
 	cargo clippy -q --locked -p fltk-parser-core --all-targets -- -D warnings
+	cargo clippy -q --locked -p fltk-ast-core --no-default-features --all-targets -- -D warnings
+	cargo clippy -q --locked -p fltk-ast-core --all-features --all-targets -- -D warnings
 	cargo clippy -q --locked --manifest-path tests/rust_parser_fixture/Cargo.toml --all-targets -- -D warnings
 	cargo clippy -q --locked --manifest-path crates/fegen-rust/Cargo.toml --no-default-features --all-targets -- -D warnings
 	cargo clippy -q --locked --manifest-path tests/rust_poc_cst/Cargo.toml --no-default-features --all-targets -- -D warnings
@@ -182,6 +199,12 @@ check-no-pyo3:
 	parser="$$(cargo tree --locked -p fltk-parser-core --edges normal,build)"; \
 	echo "$$parser" | grep -q fltk-cst-core || { echo "FAIL: check-no-pyo3 broken: cargo tree output lacks fltk-cst-core"; exit 1; }; \
 	! echo "$$parser" | grep -q pyo3 || { echo "FAIL: pyo3 present in fltk-parser-core dependency graph"; exit 1; }; \
+	ast="$$(cargo tree --locked -p fltk-ast-core --edges normal,build)"; \
+	echo "$$ast" | grep -q fltk-cst-core || { echo "FAIL: check-no-pyo3 broken: cargo tree output lacks fltk-cst-core"; exit 1; }; \
+	! echo "$$ast" | grep -q pyo3 || { echo "FAIL: pyo3 present in fltk-ast-core dependency graph"; exit 1; }; \
+	ast_all="$$(cargo tree --locked -p fltk-ast-core --all-features --edges normal,build)"; \
+	echo "$$ast_all" | grep -q fltk-cst-core || { echo "FAIL: check-no-pyo3 broken: cargo tree output lacks fltk-cst-core"; exit 1; }; \
+	! echo "$$ast_all" | grep -q pyo3 || { echo "FAIL: pyo3 present in fltk-ast-core --all-features graph"; exit 1; }; \
 	fixture="$$(cargo tree --locked --manifest-path tests/rust_parser_fixture/Cargo.toml --edges normal,build)"; \
 	echo "$$fixture" | grep -q fltk-parser-core || { echo "FAIL: check-no-pyo3 broken: cargo tree output lacks fltk-parser-core"; exit 1; }; \
 	! echo "$$fixture" | grep -q pyo3 || { echo "FAIL: pyo3 present in rust_parser_fixture default-features graph"; exit 1; }; \
@@ -218,6 +241,18 @@ check-locks:
 		tests/rust_cst_fixture/Cargo.lock tests/rust_parser_fixture/Cargo.lock \
 		tests/rust_poc_cst/Cargo.lock \
 		|| { echo "FAIL: lockfiles drifted; commit the regenerated files"; exit 1; }
+
+# Bazel lock drift gate.  MODULE.bazel.lock and tests/bazel_consumer/MODULE.bazel.lock are
+# tracked, generated files, and bzlmod's default lockfile_mode is `update`: a Bazel run
+# rewrites a stale one in place and still reports green, so nothing ever demands the repair
+# be committed.  The Bazel lanes above are the regenerating half of the usual
+# regenerate-in-place + diff pattern, which is why this step is a pure diff and why it runs
+# last (see the CHECK_STEPS comment).  Run standalone without a prior Bazel run it passes
+# vacuously, exactly as check-locks does for a Cargo.lock no maturin build has rewritten;
+# `make check` is the gate that clears these.
+check-bazel-locks:
+	git diff --exit-code -- MODULE.bazel.lock tests/bazel_consumer/MODULE.bazel.lock \
+		|| { echo "FAIL: Bazel lockfiles drifted; commit the regenerated files"; exit 1; }
 
 # Drift detector for the Rust version: rust-toolchain.toml is the single source of
 # truth, but bzlmod cannot read TOML, so every Bazel module that pulls in rules_rust
@@ -308,6 +343,23 @@ gen-rust-parser:
 gen-rust-unparser:
 	uv run python -m fltk.fegen.genparser gen-rust-unparser $(GRAMMAR) $(RS_OUT) $(EXTRA_ARGS)
 
+# Emit a Python AST module (BASE_ast.py) from a grammar.
+# CST_MODULE is the import path of the grammar's generated CST module (make it with
+# `genparser generate` first).  EXTRA_ARGS carries --parser-module / --unparser-module / --goal.
+# Usage: make gen-ast GRAMMAR=path/to/grammar.fltkg BASE=mylang CST_MODULE=pkg.mylang_cst \
+#            OUT_DIR=pkg [EXTRA_ARGS=...]
+gen-ast:
+	uv run python -m fltk.fegen.genparser gen-ast $(GRAMMAR) $(BASE) $(CST_MODULE) \
+		--output-dir $(OUT_DIR) $(EXTRA_ARGS)
+
+# Emit a Rust AST module (ast.rs) from a grammar (no compilation).
+# The module references the grammar's generated Rust CST module (--cst-mod-path, default
+# super::cst), so emit that with gen-rust-cst first.  EXTRA_ARGS carries --ast-config /
+# --parser-mod-path / --unparser-mod-path / --goal.
+# Usage: make gen-rust-ast GRAMMAR=path/to/grammar.fltkg RS_OUT=path/to/ast.rs [EXTRA_ARGS=...]
+gen-rust-ast:
+	uv run python -m fltk.fegen.genparser gen-rust-ast $(GRAMMAR) $(RS_OUT) $(EXTRA_ARGS)
+
 # Regenerate the parser for the fegen grammar into the fegen-rust crate.
 build-fegen-rust-parser:
 	uv run python -m fltk.fegen.genparser gen-rust-parser \
@@ -348,6 +400,10 @@ gencode:
 	# Python: regex grammar (regex_cst.py, regex_cst_protocol.py, regex_parser.py, regex_trivia_parser.py)
 	uv run python -m fltk.fegen.genparser generate --protocol \
 		fltk/fegen/regex.fltkg regex fltk.fegen.regex_cst \
+		--output-dir fltk/fegen
+	# Python: fltkast grammar (fltkast_cst.py, fltkast_cst_protocol.py, fltkast_parser.py, fltkast_trivia_parser.py)
+	uv run python -m fltk.fegen.genparser generate --protocol \
+		fltk/fegen/fltkast.fltkg fltkast fltk.fegen.fltkast_cst \
 		--output-dir fltk/fegen
 	# Python: fltklsp grammar (fltklsp_cst.py, fltklsp_cst_protocol.py, fltklsp_parser.py, fltklsp_trivia_parser.py)
 	uv run python -m fltk.fegen.genparser generate --protocol \
@@ -393,6 +449,13 @@ gencode:
 		            --init-pyi-output fltk/_stubs/rust_parser_fixture/__init__.pyi --extension-name rust_parser_fixture --submodules cst,parser,unparser,unparser_default,collision_cst,collision_parser"
 	# Default-FormatterConfig variant (no --format-config) for default-config cross-backend parity.
 	$(MAKE) gen-rust-unparser GRAMMAR=fltk/fegen/test_data/rust_parser_fixture.fltkg RS_OUT=tests/rust_parser_fixture/src/unparser_default.rs
+	# Rust: tests/rust_parser_fixture/src/ast.rs (rust_parser_fixture.fltkg, shaped by
+	# tests/rust_parser_fixture/rust_parser_fixture.fltkast).  Committed artifact: entry points
+	# run against the generated parser and the .fltkfmt-baked unparser above.
+	# Emitted after both, since it imports them.
+	$(MAKE) gen-rust-ast GRAMMAR=fltk/fegen/test_data/rust_parser_fixture.fltkg RS_OUT=tests/rust_parser_fixture/src/ast.rs \
+		EXTRA_ARGS="--ast-config tests/rust_parser_fixture/rust_parser_fixture.fltkast \
+		            --parser-mod-path super::parser --unparser-mod-path super::unparser --goal nest_sum"
 	# Rust: tests/rust_parser_fixture/src/collision_cst.rs and collision_parser.rs (collision_fixture.fltkg)
 	# Demonstrates that a cdylib can host multiple grammars; proves Parser/ApplyResult CST
 	# classes and the parser machinery coexist without collision after the cst/parser split.

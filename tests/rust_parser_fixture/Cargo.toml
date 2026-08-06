@@ -16,6 +16,9 @@ extension-module = ["python", "pyo3/extension-module"]
 test-introspection = ["python", "fltk-cst-core/test-introspection"]
 
 [dependencies]
+# The two wide scalar features: `ast.rs` names `::fltk_ast_core::Uuid` and `::Decimal`,
+# which the runtime re-exports only under them.
+fltk-ast-core = { path = "../../crates/fltk-ast-core", features = ["uuid", "decimal"] }
 fltk-cst-core = { path = "../../crates/fltk-cst-core", default-features = false }
 fltk-parser-core = { path = "../../crates/fltk-parser-core" }
 fltk-unparser-core = { path = "../../crates/fltk-unparser-core" }

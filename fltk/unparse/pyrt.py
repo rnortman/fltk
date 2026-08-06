@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import sys
+from collections.abc import Sequence
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, NoReturn, cast
 
@@ -48,6 +49,26 @@ def extract_span_text(span: Span, terminals: str) -> str:
         msg = f"span.text() returned None for source-bearing span {span!r}; codepoint offsets may be out of range"
         raise ValueError(msg)
     return terminals[span.start : span.end]
+
+
+def literal_span_matches(span: Span, allowed: Sequence[str]) -> bool:
+    """True iff a labeled literal item may accept this span child.
+
+    ``allowed`` is the set of literal texts the item's label carries in its rule, computed at
+    generation time and always including the item's own text. A sourceless span (a
+    synthesized child, which no parse produces) is accepted: rendering emits the grammar's
+    literal text, so the canonical spelling is what comes out. A source-bearing span is
+    accepted only when its text is one of those spellings, which is what lets a rival regex
+    branch under the same label win the trial instead of having its text replaced.
+
+    The caller has already established that the child is a span (the generated type check
+    precedes this one), so ``text()`` is read without a guard: a child that has none is a
+    contract violation and should fail loudly rather than be accepted.
+    """
+    text = span.text()
+    if text is None:
+        return True
+    return text in allowed
 
 
 def raise_preserved_trivia_failure(rule_name: str, pos: int) -> NoReturn:

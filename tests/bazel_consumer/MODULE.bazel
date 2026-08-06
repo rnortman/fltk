@@ -18,6 +18,11 @@ local_path_override(
 bazel_dep(name = "rules_python", version = "1.5.0")  # py_test + Python toolchain
 bazel_dep(name = "rules_rust", version = "0.70.0")   # rust extension for the toolchain pin
 
+# Test-only: build_test states the AST codegen target's coverage as a test rather than
+# leaving it to `bazel test //...` incidentally building it.  dev_dependency = True because
+# nothing this module exports carries skylib into another module graph.
+bazel_dep(name = "bazel_skylib", version = "1.8.2", dev_dependency = True)
+
 python = use_extension("@rules_python//python/extensions:python.bzl", "python")
 python.toolchain(
     is_default = True,

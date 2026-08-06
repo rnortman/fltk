@@ -1,0 +1,6 @@
+// AST sidecar for consumer_ast.fltkg: the two wide scalar builtins, whose Rust types come
+// from feature-gated re-exports of the fltk-ast-core runtime.
+
+rule ident { type: uuid; }
+
+rule money { type: decimal; }

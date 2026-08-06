@@ -12,11 +12,17 @@ import typer
 
 from fltk import pygen
 from fltk.fegen import fltk2gsm, fltk_parser, gsm, gsm2lib_rs, gsm2parser, gsm2parser_rs, gsm2tree, gsm2tree_rs
+from fltk.fegen.ast_config import Backend
 from fltk.fegen.pyrt import errors, terminalsrc
 from fltk.iir.context import CompilerContext, create_default_context
 from fltk.iir.py import compiler
 from fltk.iir.py import reg as pyreg
-from fltk.plumbing import parse_format_config_file
+from fltk.plumbing import (
+    generate_ast_source,
+    generate_rust_ast_source,
+    parse_ast_config_file,
+    parse_format_config_file,
+)
 from fltk.unparse import gsm2unparser_rs
 
 if TYPE_CHECKING:
@@ -308,6 +314,133 @@ def generate(
             typer.echo(f"Trivia parser: {output_dir / f'{base_name}_trivia_parser.py'}")
 
 
+@app.command(name="gen-ast")
+def gen_ast(
+    grammar_file: Annotated[Path, typer.Argument(help="Path to the FLTK grammar file (.fltkg)")],
+    base_name: Annotated[str, typer.Argument(help="Base name for the output file (writes {base_name}_ast.py)")],
+    cst_module_name: Annotated[
+        str, typer.Argument(help='Module import name for CST classes (usually "<base_name>_cst")')
+    ],
+    *,
+    ast_config: Annotated[
+        Path | None,
+        typer.Option(
+            "--ast-config",
+            help=(
+                "Path to a .fltkast sidecar shaping the generated AST (type coercions, "
+                "transparency, naming and shape overrides, custom rules). Validated against "
+                "the grammar at generation time. When omitted, the AST is pure Tier 0 — "
+                "derived from the grammar alone."
+            ),
+        ),
+    ] = None,
+    parser_module: Annotated[
+        str | None,
+        typer.Option(
+            "--parser-module",
+            help=(
+                "Import path of the generated parser module for this grammar "
+                "(e.g. 'mylang.mylang_parser'). When given, the AST module gains a "
+                "parse(source, filename=None) convenience returning the goal rule's AST. "
+                "When omitted, no parse() is emitted."
+            ),
+        ),
+    ] = None,
+    unparser_module: Annotated[
+        str | None,
+        typer.Option(
+            "--unparser-module",
+            help=(
+                "Import path of the generated unparser module for this grammar "
+                "(e.g. 'mylang.mylang_unparser'). When given, the AST module gains an "
+                "unparse(value, renderer_config=None) convenience rendering an AST to source "
+                "text. When omitted, no unparse() is emitted."
+            ),
+        ),
+    ] = None,
+    goal: Annotated[
+        str | None,
+        typer.Option(
+            "--goal",
+            help=(
+                "Rule the parse()/unparse() conveniences target. Defaults to the grammar's "
+                "first rule, matching the Python parse_text default."
+            ),
+        ),
+    ] = None,
+    output_dir: Annotated[
+        Path | None,
+        typer.Option("--output-dir", "-o", help="Output directory for the generated module"),
+    ] = None,
+    verbose: Annotated[bool, typer.Option("--verbose", "-v", help="Enable verbose output")] = False,
+) -> None:
+    """Emit Python AST node classes and CST converters ({base_name}_ast.py) from a grammar.
+
+    The generated module holds one dataclass per rule (plus payload classes, union aliases
+    and value enums as the rule shapes require) and the converters in both directions:
+    from_cst/to_cst members on every class and module-level {rule}_from_cst / {rule}_to_cst
+    functions. It imports the CST module named by CST_MODULE, so generate that module first
+    with the `generate` command.
+
+    Naming a parser module adds parse(); naming an unparser module adds unparse(), closing
+    the text -> AST -> text loop. A .fltkast sidecar passed with --ast-config shapes the
+    result beyond the grammar-derived default.
+
+    Examples:
+        genparser gen-ast grammar.fltkg mylang mylang.mylang_cst -o mylang/
+        genparser gen-ast grammar.fltkg mylang mylang.mylang_cst \\
+            --ast-config grammar.fltkast \\
+            --parser-module mylang.mylang_parser \\
+            --unparser-module mylang.mylang_unparser --goal config -o mylang/
+    """
+    _validate_python_module(cst_module_name, "CST_MODULE")
+    if parser_module is not None:
+        _validate_python_module(parser_module, "--parser-module")
+    if unparser_module is not None:
+        _validate_python_module(unparser_module, "--unparser-module")
+
+    if output_dir is None:
+        output_dir = Path(".")
+
+    if verbose:
+        typer.echo(f"Parsing grammar file: {grammar_file}")
+
+    grammar = parse_grammar_file(grammar_file)
+
+    resolved_config = None
+    if ast_config is not None:
+        if verbose:
+            typer.echo(f"Parsing AST config file: {ast_config}")
+        try:
+            # Only the Python backend is generated here, so a `custom(...)` list may omit its
+            # Rust entries.  AstConfigError is a ValueError; OSError covers an unreadable path.
+            resolved_config = parse_ast_config_file(ast_config, grammar, {Backend.PYTHON})
+        except (ValueError, OSError) as e:
+            typer.echo(f"Error: {e}", err=True)
+            raise typer.Exit(1) from e
+
+    if verbose:
+        typer.echo("Generating AST module...")
+
+    # Generate before creating the output directory or opening the file so a model error leaves
+    # no artifacts behind.  AstModelError is a ValueError, as is the unknown-goal error.
+    try:
+        src = generate_ast_source(
+            grammar, cst_module_name, parser_module, unparser_module, goal, ast_config=resolved_config
+        )
+    except ValueError as e:
+        typer.echo(f"Error: {e}", err=True)
+        raise typer.Exit(1) from e
+
+    output_dir.mkdir(parents=True, exist_ok=True)
+    output_file = output_dir / f"{base_name}_ast.py"
+    _write_output_file(output_file, src, "AST module")
+
+    if verbose:
+        typer.echo("✓ AST generation completed successfully")
+        typer.echo(f"AST module: {output_file}")
+
+
 def _parse_grammar_raw(grammar_file: Path) -> gsm.Grammar:
     """Parse a grammar file and return the raw GSM without trivia processing.
 
@@ -515,37 +648,59 @@ def gen_rust_cst(
         _write_output_file(init_pyi_output, init_pyi_text, "stub-package __init__.pyi")
 
 
-_CST_MOD_PATH_RE = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*(::[A-Za-z_][A-Za-z0-9_]*)*$")
+# ``\Z`` rather than ``$``: ``$`` also matches before a trailing newline, which would let a
+# value carrying one through into a ``use`` line.
+_RUST_MOD_PATH_RE = re.compile(r"\A[A-Za-z_][A-Za-z0-9_]*(::[A-Za-z_][A-Za-z0-9_]*)*\Z")
+
+
+def _validate_rust_mod_path(mod_path: str, option: str) -> None:
+    """Exit with a CLI error when ``mod_path`` is not a valid Rust module path.
+
+    ``option`` names the CLI option in the message.  Every caller interpolates the value verbatim
+    into a generated ``use``/``mod`` line, so a malformed value would otherwise reach disk and fail
+    only when rustc reads it.
+    """
+    if not _RUST_MOD_PATH_RE.match(mod_path):
+        typer.echo(f"Error: {option} {mod_path!r} is not a valid Rust module path", err=True)
+        raise typer.Exit(1)
 
 
 def _validate_cst_mod_path(cst_mod_path: str) -> None:
-    """Exit with a CLI error when ``cst_mod_path`` is not a valid Rust module path.
+    """Exit with a CLI error when ``--cst-mod-path`` is not a valid Rust module path.
 
-    Shared by gen-rust-parser / gen-rust-unparser, which both accept ``--cst-mod-path`` and
-    interpolate it into the generated ``use``/``mod`` lines, so the validation error stays a
-    single maintenance point.
+    Shared by gen-rust-parser / gen-rust-unparser / gen-rust-ast, which all accept
+    ``--cst-mod-path``.
     """
-    if not _CST_MOD_PATH_RE.match(cst_mod_path):
-        typer.echo(f"Error: --cst-mod-path {cst_mod_path!r} is not a valid Rust module path", err=True)
+    _validate_rust_mod_path(cst_mod_path, "--cst-mod-path")
+
+
+# ``\Z`` rather than ``$``: ``$`` also matches before a trailing newline, which would let a
+# value carrying one through into an ``import`` line.
+_PROTOCOL_MODULE_RE = re.compile(r"\A[A-Za-z_][A-Za-z0-9_]*(\.[A-Za-z_][A-Za-z0-9_]*)*\Z")
+
+
+def _validate_python_module(module: str, option: str) -> None:
+    """Exit with a CLI error when ``module`` is not a valid Python dotted module path.
+
+    ``option`` names the CLI option or argument in the message.  Every caller interpolates the
+    value verbatim into generated source — a ``.pyi`` stub's ``import <module> as _proto`` line,
+    or an AST module's ``import <module> as cst``.  Without this guard a malformed value (empty,
+    embedded spaces, leading/trailing dot) raises no exception: the generator exits 0 and writes
+    a file that only fails later when something parses it.  Validating up front turns that into
+    an immediate, diagnosable CLI error before any file is written.
+    """
+    if not _PROTOCOL_MODULE_RE.match(module):
+        typer.echo(f"Error: {option} {module!r} is not a valid Python module path", err=True)
         raise typer.Exit(1)
-
-
-_PROTOCOL_MODULE_RE = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*(\.[A-Za-z_][A-Za-z0-9_]*)*$")
 
 
 def _validate_protocol_module(protocol_module: str) -> None:
-    """Exit with a CLI error when ``protocol_module`` is not a valid Python dotted module path.
+    """Exit with a CLI error when ``--protocol-module`` is not a valid Python dotted module path.
 
-    Shared by gen-rust-cst / gen-rust-unparser, which both interpolate ``--protocol-module``
-    verbatim into the generated ``.pyi`` stub's ``import <module> as _proto`` line.  Without this
-    guard a malformed value (empty, embedded spaces, leading/trailing dot) raises no exception:
-    the generator exits 0 and writes a ``.pyi`` that only fails later when a downstream type
-    checker parses it.  Validating up front turns that into an immediate, diagnosable CLI error
-    before any file is written.
+    Shared by gen-rust-cst / gen-rust-unparser, which both interpolate the value into the
+    generated ``.pyi`` stub.
     """
-    if not _PROTOCOL_MODULE_RE.match(protocol_module):
-        typer.echo(f"Error: --protocol-module {protocol_module!r} is not a valid Python module path", err=True)
-        raise typer.Exit(1)
+    _validate_python_module(protocol_module, "--protocol-module")
 
 
 def _render_init_pyi(
@@ -766,6 +921,121 @@ def gen_rust_unparser(
         # and narrows the type for the writer below.
         assert init_pyi_text is not None
         _write_output_file(init_pyi_output, init_pyi_text, "stub-package __init__.pyi")
+
+
+@app.command(name="gen-rust-ast")
+def gen_rust_ast(
+    grammar_file: Annotated[Path, typer.Argument(help="Path to the FLTK grammar file (.fltkg)")],
+    output_file: Annotated[Path, typer.Argument(help="Path to write the .rs source")],
+    *,
+    ast_config: Annotated[
+        Path | None,
+        typer.Option(
+            "--ast-config",
+            help=(
+                "Path to a .fltkast sidecar shaping the generated AST (type coercions, "
+                "transparency, naming and shape overrides, custom rules). Validated against "
+                "the grammar at generation time. When omitted, the AST is pure Tier 0 — "
+                "derived from the grammar alone."
+            ),
+        ),
+    ] = None,
+    cst_mod_path: Annotated[
+        str,
+        typer.Option(
+            "--cst-mod-path",
+            help="Rust module path to the generated CST module (e.g. 'super::cst')",
+        ),
+    ] = "super::cst",
+    parser_mod_path: Annotated[
+        str | None,
+        typer.Option(
+            "--parser-mod-path",
+            help=(
+                "Rust module path to the generated parser module (e.g. 'super::parser'). When "
+                "given, the AST module gains a parse_str(src, filename) entry point returning the "
+                "goal rule's AST. When omitted, no parse_str is emitted."
+            ),
+        ),
+    ] = None,
+    unparser_mod_path: Annotated[
+        str | None,
+        typer.Option(
+            "--unparser-mod-path",
+            help=(
+                "Rust module path to the generated unparser module (e.g. 'super::unparser'). When "
+                "given, the AST module gains an unparse_str(value, max_width, indent_width) entry "
+                "point rendering an AST back to source text. When omitted, no unparse_str is emitted."
+            ),
+        ),
+    ] = None,
+    goal: Annotated[
+        str | None,
+        typer.Option(
+            "--goal",
+            help=(
+                "Rule the parse_str/unparse_str entry points target. Defaults to the grammar's "
+                "first rule carrying an AST type."
+            ),
+        ),
+    ] = None,
+) -> None:
+    """Emit Rust AST source (.rs) from a grammar file.
+
+    The generated module holds one Rust type per rule (plus payload structs, sums and value
+    enums as the rule shapes require) and the converters in both directions: from_cst/to_cst
+    associated functions on every type. It references the generated Rust CST module named by
+    --cst-mod-path, so generate that module first with gen-rust-cst.
+
+    Naming a parser module adds parse_str; naming an unparser module adds unparse_str, closing
+    the text -> AST -> text loop. A .fltkast sidecar passed with --ast-config shapes the result
+    beyond the grammar-derived default.
+
+    The emitted module's header names the `fltk-ast-core` features it needs (indexmap for keyed
+    collections, uuid / decimal for those scalar builtins); enable them on the runtime crate.
+
+    Examples:
+        genparser gen-rust-ast grammar.fltkg src/ast.rs
+        genparser gen-rust-ast grammar.fltkg src/ast.rs \\
+            --ast-config grammar.fltkast \\
+            --parser-mod-path super::parser \\
+            --unparser-mod-path super::unparser --goal config
+    """
+    _validate_cst_mod_path(cst_mod_path)
+    if parser_mod_path is not None:
+        _validate_rust_mod_path(parser_mod_path, "--parser-mod-path")
+    if unparser_mod_path is not None:
+        _validate_rust_mod_path(unparser_mod_path, "--unparser-mod-path")
+
+    grammar = parse_grammar_file(grammar_file)
+
+    resolved_config = None
+    if ast_config is not None:
+        try:
+            # Only the Rust backend is generated here, so a `custom(...)` list may omit its
+            # Python entries.  AstConfigError is a ValueError; OSError covers an unreadable path.
+            resolved_config = parse_ast_config_file(ast_config, grammar, {Backend.RUST})
+        except (ValueError, OSError) as e:
+            typer.echo(f"Error: {e}", err=True)
+            raise typer.Exit(1) from e
+
+    # Generate before opening the file so a model error leaves no artifact behind.  AstModelError
+    # is a ValueError, as are the unknown-goal and missing-Rust-type errors.
+    try:
+        src = generate_rust_ast_source(
+            grammar,
+            cst_mod_path,
+            parser_mod_path=parser_mod_path,
+            unparser_mod_path=unparser_mod_path,
+            goal_rule=goal,
+            ast_config=resolved_config,
+            source_name=str(grammar_file),
+        )
+    except (ValueError, RuntimeError) as e:
+        typer.echo(f"Error: {e}", err=True)
+        raise typer.Exit(1) from e
+
+    _write_output_file(output_file, src)
 
 
 @app.command(name="gen-rust-lib")

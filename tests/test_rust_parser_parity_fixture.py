@@ -180,6 +180,23 @@ _CORPUS = [
     # rhs:atom fails at pos 4 ('@'); two \u2028 escapes before the caret are produced.
     # Also pins that the parity comparator's str.splitlines() sees no raw LS in the message.
     ("stmt", "x\u2028=\u2028@", FAIL),
+    # Rules the AST sidecar shapes: the two wide scalars, the multi-spelling label, the fold.
+    # uuid_val: bounded hex quantifiers ({8}-{4}-{4}-{4}-{12}) with both cases in the class
+    ("uuid_val", "550e8400-e29b-41d4-a716-446655440000", SUCCESS),
+    ("uuid_val", "550E8400-E29B-41D4-A716-446655440000", SUCCESS),
+    ("uuid_val", "550e8400", FAIL),
+    # decimal_val: optional sign, required fractional part
+    ("decimal_val", "-12.50", SUCCESS),
+    ("decimal_val", "12", FAIL),
+    # colour: two spellings of one label, plus a label of its own
+    ("colour", "gray", SUCCESS),
+    ("colour", "grey", SUCCESS),
+    ("colour", "black", SUCCESS),
+    ("colour", "red", FAIL),
+    # sum_chain: WS_ALLOWED separators around the repeated (op, operand) pair
+    ("sum_chain", "1+2-3", SUCCESS),
+    ("sum_chain", "1 + 2", SUCCESS),
+    ("sum_chain", "1", SUCCESS),
 ]
 
 _CORPUS_IDS = [f"{r}-{i}" for i, (r, _, _) in enumerate(_CORPUS)]

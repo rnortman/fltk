@@ -155,3 +155,96 @@ chosen, cover both the label path and the rule-name path, and add a fixture case
 grammar has keyword labels (`type`, `match`) but nothing that camels to `Self`. Location:
 `fltk/fegen/gsm2tree_rs.py` (`_rust_variant_name`, and the class-name collision check in
 `RustCstGenerator.__init__`).
+
+## `ast-terminal-repeat-synthesis`
+
+`to_cst` on a terminal-only AST node rebuilds the CST by matching the node's `text` against one
+regex per alternative, with a named capture group per included item
+(`fltk/fegen/ast_model.py`, `_terminal_plan`). That construction cannot express an item whose
+quantifier admits more than one occurrence — a single group would capture the whole run rather
+than each occurrence — so `_terminal_plan` marks such an alternative unsynthesisable
+(`pattern=None`), and `astrt.terminal_to_cst` raises `AstError` for it. The parse direction is
+unaffected: `from_cst` reads the node's own span, so a rule like `word := c:/[a-z]/+ ;` converts
+fine and only fails on the way back out. Closing this means splitting the text per occurrence
+(walk the alternative's items left to right, matching each pattern at the current offset with
+backtracking) and mirroring the algorithm in the Rust emitter so both backends synthesise the same
+children. Location: `fltk/fegen/ast_model.py` (`_terminal_plan`'s `bounds != (1, 1)` return),
+`fltk/fegen/pyrt/astrt.py` (`terminal_to_cst`).
+
+## `ast-dispatch-order`
+
+`alternatives_are_disjoint` (`fltk/fegen/grammar_shape.py`) decides whether two alternatives of a
+rule can be told apart in the CST from their labeled children's occurrence counts and kinds alone.
+It cannot use child *order*, so `x := a:num , b:name | b:name , a:num ;` reads as non-disjoint even
+though the child order distinguishes the two, and the rule classifies as a merged product where a
+sum would be sound. Closing this means an order-sensitive signature (the sequence of labeled item
+positions per alternative, matched against the children in source order) in both the classifier and
+the generated dispatch, on both backends. It must ship opt-in or with a major version: rules that
+default to a merged product today would silently become sums, which is a breaking change to
+generated public API for every downstream consumer of such a grammar. Location:
+`fltk/fegen/grammar_shape.py` (`alternatives_are_disjoint`, and `alternatives_are_sum` /
+`AltSignature` with it), `fltk/fegen/pyrt/astrt.py` (`AltSignature.accepts`).
+
+## `ast-transparent-container-payload`
+
+`transparent;` on a single-field product erases the rule to the type of its one field, but only
+when that field occurs exactly once: an optional or repeated field is a generation error
+(`_ModelBuilder.erased_product_payload`). Design §5.4 states the payload as "the field's type"
+without restricting arity, so `list := "[" , (value , ("," , value)* , ","?)? , "]" ;` marked
+`transparent;` should erase to `Vec<Value>` / `list[Value]` rather than being refused. Closing this
+means composing two container levels: `FieldType` carries one `Container`, so a use site of an
+erased collection payload needs `list[list[T]]` annotations, and `astrt.cursor` — which tells a
+single value from a collection by `isinstance(value, list)` — would take a list-valued single field
+for several values, so the emitter must construct the cursor explicitly at such positions.  Both
+halves have to land in the Rust emitter the same way, or the two ASTs stop being shape-equivalent.
+Location: `fltk/fegen/ast_model.py` (`_ModelBuilder.erased_product_payload`'s arity check),
+`fltk/fegen/gsm2ast.py` (`field_annotation`, `cursor_expression`).
+
+## `rust-cst-memberless-nodes`
+
+The Rust CST generator refuses any rule whose model has no members (`gsm2tree_rs.py`,
+`_rule_info`: "Model class ... would have no members"), while the Python CST generator accepts one.
+Two AST-modelable shapes are therefore unreachable on the Rust backend: a marker product spelled
+with `.` separators (`marker := $"!" . $"?" ;` — a rule whose included items are all unlabeled
+literals, which the AST models as a span-only node) and an unlabeled-unincluded terminal rule. This
+is pre-existing CST-generator behavior, not AST-layer debt, and the workaround is to `$`-include a
+terminal so the node has one member. Closing it means teaching the Rust CST generator to emit a
+memberless node — the node struct, its child and label enums (which have no variants), and the
+parser plumbing that appends nothing — which is its own bounded design. Until it is closed, the
+Python/Rust AST parity suite must carve these two shapes out as a known divergence rather than
+reporting them as a backend bug. Location: `fltk/fegen/gsm2tree_rs.py` (the `if not model.types:`
+guard in `_rule_info`).
+
+## `ast-deep-clone-debug`
+
+Generated Rust fold types derive `Clone` and `Debug` (`gsm2ast_rs.py`, `_NODE_DERIVES`), and both
+derives recurse once per chain link, so cloning or `{:?}`-formatting a fold chain of some tens of
+thousands of operands overflows the stack — the same hazard the emitted iterative `Drop` closes for
+teardown and the emitted `eq_walk` closes for comparison. Unlike those two, `Clone` and `Debug` are
+explicit consumer calls: they are avoidable, no design law rests on them, and a consumer who needs
+neither pays nothing. So v1 documents the limit rather than emitting worklist implementations.
+Closing it means emitting a written-out `Clone` (build the new chain bottom-up from a worklist over
+the old one) and `Debug` (render iteratively, or bound the depth) for the types the recursion
+analysis marks `deep`, in place of the derives. Do it when a consumer actually hits it — the
+`PartialEq` walk is the shape to copy. Location: `fltk/fegen/gsm2ast_rs.py` (`_NODE_DERIVES`).
+
+
+## `ast-select-literal-content`
+
+Kind-aware `to_cst` alternative selection tests a value's *kind*, and a labeled literal's kind is
+the same TEXT a regex position contributes (`element_types` maps a literal to SPAN, which
+`field_type` coerces to TEXT wherever the label carries anything else). So for a rule whose
+alternatives split a label between a literal and something else — `x := v:"lit" | v:item ;` under a
+`rule x { product; }` sidecar — the literal alternative's selection guard admits *any* string, and
+the literal position then renders the grammar's own text: a hand-built `X(v="xyz")` unparses to
+`lit` on both backends, silently replacing the value. Pre-existing (name-only first-fit chose the
+same alternative and swapped the same way); the kind test narrowed it to strings but not to the
+literal's own string. Closing it means a content test at selection time — `Guard(GuardKind.LITERAL)`
+where the accepted TEXT of a label is contributed by literal positions alone, which Python already
+spells as `astrt.LiteralText` — *and* the matching content test on the Rust side, whose selection
+conjunct is a `matches!` over field enum variants and carries no content today. That second half is
+the design work: `AcceptedKind.guard` is currently the untagged backend's test only, so making
+selection content-aware changes what the tagged backend reads, and it has to be decided against the
+multi-spelling doctrine (`rival_signature` deliberately does not record which literal a value came
+from, so alternatives differing only in literal spelling stay first-fit). Location:
+`fltk/fegen/ast_model.py` (`_kind_guard`), `fltk/fegen/gsm2ast_rs.py` (`kind_condition`).
