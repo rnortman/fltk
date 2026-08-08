@@ -157,6 +157,102 @@ def test_with_unparser_registration_order() -> None:
 
 
 # ---------------------------------------------------------------------------
+# plain_modules (the Rust-only generated modules: ast, de)
+# ---------------------------------------------------------------------------
+
+
+def test_default_omits_plain_modules() -> None:
+    """plain_modules defaults to empty: no ast/de declarations."""
+    spec = LibSpec.standard("my_module")
+    src = RustLibGenerator(spec).generate()
+
+    assert "mod ast;" not in src
+    assert "mod de;" not in src
+
+
+def test_plain_modules_are_declared_pub_and_unregistered() -> None:
+    """A plain module gets `pub mod <name>;` and no register_submodule call."""
+    spec = LibSpec.standard("my_module", plain_modules=("ast", "de"))
+    src = RustLibGenerator(spec).generate()
+
+    assert "pub mod ast;" in src
+    assert "pub mod de;" in src
+    assert '"ast"' not in src
+    assert '"de"' not in src
+
+
+def test_plain_modules_follow_the_registered_ones() -> None:
+    """Plain declarations are emitted after the registered submodules."""
+    spec = LibSpec.standard("my_module", plain_modules=("ast",))
+    src = RustLibGenerator(spec).generate()
+
+    assert src.index("mod parser;") < src.index("pub mod ast;")
+
+
+def test_plain_module_colliding_with_submodule_raises_value_error() -> None:
+    """A plain module naming a registered submodule would emit two `mod cst;` lines."""
+    with pytest.raises(ValueError, match="already declared"):
+        LibSpec.standard("my_module", plain_modules=("cst",)).validate()
+
+
+def test_plain_module_colliding_with_span_raises_value_error() -> None:
+    """`span` is declared under register_span_types, so a plain `span` would be a second `mod span;`."""
+    spec = LibSpec(
+        module_name="my_module",
+        submodules=(),
+        plain_modules=("span",),
+        register_span_types=True,
+    )
+    with pytest.raises(ValueError, match="already declared"):
+        spec.validate()
+
+
+def test_plain_module_named_span_allowed_without_span_types() -> None:
+    """Without register_span_types nothing else declares `span`, so a plain module may take it."""
+    spec = LibSpec(
+        module_name="my_module",
+        submodules=(Submodule("cst", "cst"),),
+        plain_modules=("span",),
+    )
+    src = RustLibGenerator(spec).generate()
+
+    assert "pub mod span;" in src
+    assert "\nmod span;" not in src
+
+
+def test_repeated_plain_module_raises_value_error() -> None:
+    """A repeated plain module would emit the same declaration twice."""
+    with pytest.raises(ValueError, match="repeats"):
+        LibSpec.standard("my_module", plain_modules=("ast", "ast")).validate()
+
+
+@pytest.mark.parametrize("bad_name", ["", "1bad", "has space", "a-b"])
+def test_invalid_plain_module_raises_value_error(bad_name: str) -> None:
+    """Plain module names are validated as Rust identifiers like every other name."""
+    with pytest.raises(ValueError, match="plain_module"):
+        LibSpec.standard("my_module", plain_modules=(bad_name,)).validate()
+
+
+@pytest.mark.parametrize("keyword", ["type", "mod", "use", "crate", "self", "super", "_"])
+def test_rust_keyword_plain_module_raises_value_error(keyword: str) -> None:
+    """`pub mod type;` is a rustc syntax error, so the keyword is refused at generation time."""
+    with pytest.raises(ValueError, match="is a Rust keyword"):
+        LibSpec.standard("my_module", plain_modules=(keyword,)).validate()
+
+
+def test_rust_keyword_module_name_raises_value_error() -> None:
+    """The #[pymodule] fn name is emitted bare too."""
+    with pytest.raises(ValueError, match="is a Rust keyword"):
+        LibSpec.standard("match").validate()
+
+
+def test_rust_keyword_mod_name_raises_value_error() -> None:
+    """A submodule's `mod <name>;` is emitted bare; its Python-facing name is unconstrained."""
+    with pytest.raises(ValueError, match="is a Rust keyword"):
+        LibSpec(module_name="my_module", submodules=(Submodule("loop", "loop_"),)).validate()
+
+
+# ---------------------------------------------------------------------------
 # Validation
 # ---------------------------------------------------------------------------
 

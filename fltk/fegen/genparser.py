@@ -20,6 +20,7 @@ from fltk.iir.py import reg as pyreg
 from fltk.plumbing import (
     generate_ast_source,
     generate_rust_ast_source,
+    generate_rust_serde_source,
     parse_ast_config_file,
     parse_format_config_file,
 )
@@ -1038,6 +1039,124 @@ def gen_rust_ast(
     _write_output_file(output_file, src)
 
 
+@app.command(name="gen-rust-serde")
+def gen_rust_serde(
+    grammar_file: Annotated[Path, typer.Argument(help="Path to the FLTK grammar file (.fltkg)")],
+    output_file: Annotated[Path, typer.Argument(help="Path to write the .rs source")],
+    *,
+    ast_config: Annotated[
+        Path,
+        typer.Option(
+            "--ast-config",
+            help=(
+                "Path to the .fltkast sidecar shaping the tree (keyed regions, transparency, "
+                "flattening, renames). Required: the shaping statements are what tell the serde "
+                "frontend a repetition is a keyed map and what keys it, and there is no "
+                "serde-specific directive — one sidecar serves the AST emitters and this one."
+            ),
+        ),
+    ],
+    cst_mod_path: Annotated[
+        str,
+        typer.Option(
+            "--cst-mod-path",
+            help="Rust module path to the generated CST module (e.g. 'super::cst')",
+        ),
+    ] = "super::cst",
+    parser_mod_path: Annotated[
+        str | None,
+        typer.Option(
+            "--parser-mod-path",
+            help=(
+                "Rust module path to the generated parser module (e.g. 'super::parser'). When "
+                "given, the serde module gains a from_str(src, filename) entry point parsing and "
+                "deserializing in one call. When omitted, no from_str is emitted."
+            ),
+        ),
+    ] = None,
+    goal: Annotated[
+        str | None,
+        typer.Option(
+            "--goal",
+            help=(
+                "Rule the from_str entry point targets. Defaults to the grammar's first rule; "
+                "every rule gets a from_<rule>_cst entry point either way."
+            ),
+        ),
+    ] = None,
+    ast_mod_path: Annotated[
+        str | None,
+        typer.Option(
+            "--ast-mod-path",
+            help=(
+                "Rust module path to the generated AST module (e.g. 'super::ast'), generated "
+                "from the same grammar and sidecar. When given, the serde module also emits a "
+                "Deserialize impl for every generated AST type, so a target can declare one as "
+                "a field type (configs: IndexMap<String, ast::Expr>). When omitted, the "
+                "frontend generates no types at all."
+            ),
+        ),
+    ] = None,
+) -> None:
+    """Emit the Rust serde frontend (.rs) for a grammar file.
+
+    The generated module describes this grammar's tree to the fltk-serde-core Deserializer —
+    one shape per rule, one NodeShape impl per CST node type — and emits the entry points that
+    run it: from_<rule>_cst for every rule, plus from_str when a parser module is named. It
+    generates no types at all: the consumer's own #[derive(Deserialize)] structs are the schema,
+    and serde's unknown-field / missing-field / invalid-type errors come back positioned by CST
+    span. Naming an AST module adds a Deserialize impl per generated AST type, which is how an
+    expression sub-language becomes a field of a hand-written target.
+
+    It references the generated Rust CST module named by --cst-mod-path, so generate that module
+    first with gen-rust-cst. A consumer crate depending on it needs exactly two crates: `serde`
+    and `fltk-serde-core`.
+
+    Name the output `de.rs` rather than `serde.rs`: a crate-root `mod serde` makes every
+    `use serde::...` in the crate ambiguous.
+
+    Examples:
+        genparser gen-rust-serde grammar.fltkg src/de.rs --ast-config grammar.fltkast
+        genparser gen-rust-serde grammar.fltkg src/de.rs \\
+            --ast-config grammar.fltkast \\
+            --parser-mod-path super::parser --goal config \\
+            --ast-mod-path super::ast
+    """
+    _validate_cst_mod_path(cst_mod_path)
+    if parser_mod_path is not None:
+        _validate_rust_mod_path(parser_mod_path, "--parser-mod-path")
+    if ast_mod_path is not None:
+        _validate_rust_mod_path(ast_mod_path, "--ast-mod-path")
+
+    grammar = parse_grammar_file(grammar_file)
+
+    try:
+        # Only the Rust backend is generated here, so a `custom(...)` list may omit its Python
+        # entries.  AstConfigError is a ValueError; OSError covers an unreadable path.
+        resolved_config = parse_ast_config_file(ast_config, grammar, {Backend.RUST})
+    except (ValueError, OSError) as e:
+        typer.echo(f"Error: {e}", err=True)
+        raise typer.Exit(1) from e
+
+    # Generate before opening the file so a model, name-collision or unknown-goal error leaves no
+    # artifact behind.  All of them are ValueErrors.
+    try:
+        src = generate_rust_serde_source(
+            grammar,
+            cst_mod_path,
+            parser_mod_path=parser_mod_path,
+            goal_rule=goal,
+            ast_mod_path=ast_mod_path,
+            ast_config=resolved_config,
+            source_name=str(grammar_file),
+        )
+    except (ValueError, RuntimeError) as e:
+        typer.echo(f"Error: {e}", err=True)
+        raise typer.Exit(1) from e
+
+    _write_output_file(output_file, src)
+
+
 @app.command(name="gen-rust-lib")
 def gen_rust_lib(
     output_file: Annotated[Path, typer.Argument(help="Path to write the lib.rs source")],
@@ -1065,6 +1184,21 @@ def gen_rust_lib(
             "Use with --register-span-types/--unknown-span-static for runtime-only libs.",
         ),
     ] = False,
+    plain_module: Annotated[
+        list[str] | None,
+        typer.Option(
+            "--plain-module",
+            help=(
+                "Declare a module that is NOT registered as a Python submodule (repeatable). "
+                "The generated 'ast' and 'de' modules are Rust-only — they hold no pyclasses "
+                "and have no register_classes — so they need `pub mod <name>;` in the crate "
+                "root and nothing else. Each name must be a valid Rust identifier that is not a "
+                "keyword (the generated lib.rs spells it bare, never as r#name) and must not "
+                "name a module the generator already declares (a registered submodule, or 'span' "
+                "under --register-span-types)."
+            ),
+        ),
+    ] = None,
     register_span_types: Annotated[
         bool,
         typer.Option(
@@ -1099,8 +1233,10 @@ def gen_rust_lib(
         genparser gen-rust-lib lib.rs --module-name clockwork_native
         genparser gen-rust-lib lib.rs --module-name my_module --no-parser
         genparser gen-rust-lib lib.rs --module-name my_module --unparser
+        genparser gen-rust-lib lib.rs --module-name my_module --plain-module ast --plain-module de
         genparser gen-rust-lib src/lib.rs --module-name _native --no-cst --register-span-types --unknown-span-static
     """
+    plain_modules = tuple(plain_module or ())
     if not no_cst and (register_span_types or unknown_span_static):
         typer.echo(
             "Error: --register-span-types and --unknown-span-static require --no-cst. "
@@ -1112,11 +1248,17 @@ def gen_rust_lib(
         spec = gsm2lib_rs.LibSpec(
             module_name=module_name,
             submodules=(),
+            plain_modules=plain_modules,
             register_span_types=register_span_types,
             unknown_span_static=unknown_span_static,
         )
     else:
-        spec = gsm2lib_rs.LibSpec.standard(module_name, with_parser=not no_parser, with_unparser=unparser)
+        spec = gsm2lib_rs.LibSpec.standard(
+            module_name,
+            with_parser=not no_parser,
+            with_unparser=unparser,
+            plain_modules=plain_modules,
+        )
     try:
         gen = gsm2lib_rs.RustLibGenerator(spec)
         src = gen.generate()

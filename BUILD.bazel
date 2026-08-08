@@ -129,6 +129,18 @@ generate_rust_parser(
     # default cst_mod_path = "super::cst"; python_extension defaults to False
 )
 
+# Pure-Rust smoke target for the ast / serde codegen actions (ast.rs + de.rs
+# beside cst.rs + parser.rs), over the same fixture grammar the cargo fixture
+# crate uses.
+generate_rust_parser(
+    name = "bootstrap_rust_ast_srcs",
+    src = "fltk/fegen/test_data/rust_parser_fixture.fltkg",
+    ast = True,
+    ast_config = "tests/rust_parser_fixture/rust_parser_fixture.fltkast",
+    goal = "nest_sum",
+    serde = True,
+)
+
 # Python-extension smoke target for the generate_rust_parser macro
 # (python_extension = True) exercising the full Python path — crate assembly +
 # rust_shared_library cdylib + abi3 rename + py_library — AND stub-package
@@ -145,4 +157,32 @@ generate_rust_parser(
     python_extension = True,
     protocol_module = "bootstrap_native.cst_protocol",
     protocol = True,
+)
+
+# Compile test for the ast / serde path: a generated module that does not compile, or
+# a runtime dep the macro forgets to plumb, fails here rather than in a consumer's build.
+# Separate from bootstrap_native so the stub-package regression guard above keeps its
+# minimal configuration.
+generate_rust_parser(
+    name = "bootstrap_ast_native",
+    src = "fltk/fegen/test_data/rust_parser_fixture.fltkg",
+    ast = True,
+    ast_config = "tests/rust_parser_fixture/rust_parser_fixture.fltkast",
+    goal = "nest_sum",
+    python_extension = True,
+    serde = True,
+)
+
+# Compile test for the serde-without-ast mode — the pure bring-your-own-structs
+# configuration the guide leads with, where de.rs carries no Deserialize impls for
+# generated AST types and the crate never links fltk-ast-core. Every other Bazel
+# target sets ast = True, so a dep the serde-only crate needs and does not get, or
+# a guard that over-refuses this combination, would ship undetected.
+generate_rust_parser(
+    name = "bootstrap_serde_only_native",
+    src = "fltk/fegen/test_data/rust_parser_fixture.fltkg",
+    ast_config = "tests/rust_parser_fixture/rust_parser_fixture.fltkast",
+    goal = "nest_sum",
+    python_extension = True,
+    serde = True,
 )

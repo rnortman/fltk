@@ -1,0 +1,30 @@
+[package]
+name = "fltk-serde-core"
+version = "0.4.0"
+edition = "2021"
+license = "MIT"
+
+[lib]
+name = "fltk_serde_core"
+crate-type = ["rlib"]
+
+# No `python` feature, and no features at all: pyo3-freedom is structural absence here as it
+# is in fltk-ast-core, and a generated `de.rs` names every item this crate exports
+# unconditionally, so there is nothing for a consumer to switch off.
+#
+# fltk-ast-core is taken with default-features = false: the only thing reached through it is
+# `scalar`, whose integer/float coercions are unconditional. The two feature-gated coercions
+# (uuid, decimal) are no part of the serde read path — a self-parsing target type
+# deserializes from the string this crate's Deserializer serves and applies its own parse
+# rules — so nothing here would name them.
+[dependencies]
+fltk-ast-core = { path = "../fltk-ast-core", default-features = false }
+fltk-cst-core = { path = "../fltk-cst-core", default-features = false }
+serde = "1"
+
+# serde's derive is the consumer-side half of everything this crate exists for, and
+# serde_json is a foreign Deserializer: the wrapper types must fail loudly under one rather
+# than degrade, and only a real second implementation proves it.
+[dev-dependencies]
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"

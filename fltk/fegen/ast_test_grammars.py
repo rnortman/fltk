@@ -68,6 +68,9 @@ rule metric_def     { field type    { name: metric_kind; } }
 KEYED_SIDECAR = CONFIG_SIDECAR + "rule setting { key: key; }\n"
 """``CONFIG_SIDECAR`` with the setting list keyed, so ``ServerDef.settings`` is a map."""
 
+MULTI_SIDECAR = CONFIG_SIDECAR + "rule setting { key: key multi; }\n"
+"""``KEYED_SIDECAR``'s accumulating form: one key of ``ServerDef.settings`` holds a run."""
+
 # Each repetition carries a leading separator, which is what lets a second operator follow
 # whitespace.
 FOLD_GRAMMAR = """

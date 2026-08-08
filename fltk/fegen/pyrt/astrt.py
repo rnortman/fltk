@@ -198,6 +198,19 @@ def keyed(elements: Sequence[Any], key_field: str, rule: str) -> dict[Any, Any]:
     return result
 
 
+def keyed_multi(elements: Sequence[Any], key_field: str) -> dict[Any, list[Any]]:
+    """Group a collection's elements by one of their own fields, in source order.
+
+    The accumulating half of :func:`keyed`, for ``key: <label> multi;``: elements sharing a key
+    are collected under it rather than refused, and a key takes its place in the map where its
+    first element occurred.
+    """
+    result: dict[Any, list[Any]] = {}
+    for element in elements:
+        result.setdefault(getattr(element, key_field), []).append(element)
+    return result
+
+
 def child_kind(child: Any) -> Any:
     """The child's ``NodeKind``, or ``TEXT`` for a span child.
 
@@ -692,6 +705,28 @@ def field_values(value: Any) -> Sequence[Any]:
 def cursor(value: Any) -> Cursor:
     """A cursor over one field: absent, single, collection or keyed map alike."""
     return Cursor(field_values(value))
+
+
+def multi_values(grouped: Mapping[Any, Sequence[Any]], rule: str) -> list[Any]:
+    """One ``multi`` keyed field's elements, its keys' groups in insertion order.
+
+    Grouping is what the map records, so the elements come out grouped and the source order
+    that interleaved two keys is not recoverable.  A key whose group is empty carries no
+    element to render — the key lives on the element, not on the map — so it is refused rather
+    than dropped silently.
+    """
+    values: list[Any] = []
+    for key, elements in grouped.items():
+        if not elements:
+            msg = f"rule {rule!r}: the {key!r} key has no element to render it on"
+            raise AstError(msg, terminalsrc.UnknownSpan)
+        values.extend(elements)
+    return values
+
+
+def multi_cursor(grouped: Mapping[Any, Sequence[Any]], rule: str) -> Cursor:
+    """A cursor over one ``multi`` keyed field, in grouped order."""
+    return Cursor(multi_values(grouped, rule))
 
 
 def flag_cursor(flag: bool) -> Cursor:  # noqa: FBT001

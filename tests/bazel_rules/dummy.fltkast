@@ -1,0 +1,3 @@
+// Minimal sidecar for the analysistest target-under-test's ast_config attribute.
+// The test only reads the action command lines, so this file is never parsed.
+rule word { transparent; }

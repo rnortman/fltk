@@ -1376,10 +1376,15 @@ class Parser:
             pos = ws_after__item2.pos
         if item3 := self.parse_key_stmt__alt0__item3(pos=pos):
             pos = item3.pos
-        else:
-            return None
+            result.append_multi(child=item3.result)
         if ws_after__item3 := self.apply__parse__trivia(pos=pos):
             pos = ws_after__item3.pos
+        if item4 := self.parse_key_stmt__alt0__item4(pos=pos):
+            pos = item4.pos
+        else:
+            return None
+        if ws_after__item4 := self.apply__parse__trivia(pos=pos):
+            pos = ws_after__item4.pos
         result.span = fltk.fegen.pyrt.terminalsrc.Span.with_source(_span_start, pos, self._source_text)
         return fltk.fegen.pyrt.memo.ApplyResult(pos=pos, result=result)
 
@@ -1399,6 +1404,11 @@ class Parser:
         return self.apply__parse_identifier(pos=pos)
 
     def parse_key_stmt__alt0__item3(
+        self, pos: int
+    ) -> fltk.fegen.pyrt.memo.ApplyResult[int, fltk.fegen.pyrt.terminalsrc.Span] | None:
+        return self.consume_literal(pos=pos, literal="multi")
+
+    def parse_key_stmt__alt0__item4(
         self, pos: int
     ) -> fltk.fegen.pyrt.memo.ApplyResult[int, fltk.fegen.pyrt.terminalsrc.Span] | None:
         return self.consume_literal(pos=pos, literal=";")

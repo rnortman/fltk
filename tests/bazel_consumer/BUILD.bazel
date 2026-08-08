@@ -53,36 +53,40 @@ py_test(
 )
 
 # ── AST path ──────────────────────────────────────────────────────────────────
-# A consumer generating a Rust AST and compiling it against @fltk//crates/fltk-ast-core.
-# The wide scalar builtins are the point: `type: uuid` and `type: decimal` make the emitted
-# module name ::fltk_ast_core::Uuid and ::fltk_ast_core::Decimal, which resolve only when
-# that target enables its "uuid" and "decimal" features — so this crate failing to compile
-# is how a regression in the runtime target's feature list surfaces.
-#
-# No rust.bzl macro emits AST sources, so this drives the genparser CLI directly.  The
-# generated ast.rs reads its CST types as `super::cst` (the CLI default), so ast.rs and
-# cst.rs must be sibling modules under one crate root.
+# A consumer generating a Rust AST through the macro's ast attrs and compiling it against
+# @fltk//crates/fltk-ast-core.  The wide scalar builtins are the point: `type: uuid` and
+# `type: decimal` make the emitted module name ::fltk_ast_core::Uuid and
+# ::fltk_ast_core::Decimal, which resolve only when that target enables its "uuid" and
+# "decimal" features — so this crate failing to compile is how a regression in the runtime
+# target's feature list surfaces.
+generate_rust_parser(
+    name = "consumer_ast_srcs",
+    src = "consumer_ast.fltkg",
+    ast = True,
+    ast_config = "consumer_ast.fltkast",
+)
+
+# The generated modules are siblings (super::cst, super::parser) and must sit
+# next to the hand-authored crate root, hence the copy into one directory.
 genrule(
     name = "consumer_ast_crate_srcs",
     srcs = [
-        "consumer_ast.fltkast",
-        "consumer_ast.fltkg",
         "consumer_ast_lib.rs",
+        ":consumer_ast_srcs",
     ],
     outs = [
         "consumer_ast_crate/ast.rs",
         "consumer_ast_crate/cst.rs",
         "consumer_ast_crate/lib.rs",
+        "consumer_ast_crate/parser.rs",
     ],
     cmd = """
-        cp $(execpath consumer_ast_lib.rs) $(execpath consumer_ast_crate/lib.rs)
-        $(execpath @fltk//:genparser) gen-rust-cst \
-            $(execpath consumer_ast.fltkg) $(execpath consumer_ast_crate/cst.rs)
-        $(execpath @fltk//:genparser) gen-rust-ast \
-            $(execpath consumer_ast.fltkg) $(execpath consumer_ast_crate/ast.rs) \
-            --ast-config $(execpath consumer_ast.fltkast)
+        OUTDIR=$$(dirname $(execpath consumer_ast_crate/lib.rs))
+        cp $(execpath consumer_ast_lib.rs) $$OUTDIR/lib.rs
+        for f in $(locations :consumer_ast_srcs); do
+            cp $$f $$OUTDIR/$$(basename $$f)
+        done
     """,
-    tools = ["@fltk//:genparser"],
 )
 
 rust_library(
@@ -94,6 +98,7 @@ rust_library(
     deps = [
         "@fltk//crates/fltk-ast-core",
         "@fltk//crates/fltk-cst-core",
+        "@fltk//crates/fltk-parser-core",
     ],
 )
 
@@ -102,4 +107,22 @@ rust_library(
 build_test(
     name = "consumer_ast_build_test",
     targets = [":consumer_ast"],
+)
+
+# ── serde path ────────────────────────────────────────────────────────────────
+# The serde frontend across the module boundary: ast.rs + de.rs compiled into a
+# cdylib.  Uses python_extension mode because `serde` lives in fltk's module-private
+# crate hub, which a downstream module cannot name directly.
+generate_rust_parser(
+    name = "consumer_serde_native",
+    src = "consumer_ast.fltkg",
+    ast = True,
+    ast_config = "consumer_ast.fltkast",
+    python_extension = True,
+    serde = True,
+)
+
+build_test(
+    name = "consumer_serde_build_test",
+    targets = [":consumer_serde_native"],
 )

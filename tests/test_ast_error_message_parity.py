@@ -142,6 +142,11 @@ _CASES: list[tuple[str, Any, dict[str, Any]]] = [
         {"rule": "setting", "key": "host"},
     ),
     (
+        "a key of a multi map with no element to carry it",
+        lambda: astrt.multi_values({"host": []}, "setting"),
+        {"rule": "setting", "key": "host"},
+    ),
+    (
         "a fold with no operand",
         lambda: astrt.check_fold_arity(0, 0, "expr", _SPAN),
         {"rule": "expr"},

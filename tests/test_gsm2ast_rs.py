@@ -26,6 +26,25 @@ KEYED_TREE_GRAMMAR = "node := key:word , kid:node? , kids:node* ;\nword := w:/[a
 KEYED_TREE_SIDECAR = "rule word { transparent; }\nrule node { key: key; }\n"
 """``TREE_GRAMMAR`` with the repeated position keyed, so the recursive container is a map."""
 
+MULTI_TREE_SIDECAR = "rule word { transparent; }\nrule node { key: key multi; }\n"
+"""``KEYED_TREE_SIDECAR`` accumulating, so each key of the recursive map holds a run."""
+
+MULTI_FLATTEN_GRAMMAR = (
+    'doc   := "doc" : box:group ;\n'
+    'group := "{" , entry* , "}" ;\n'
+    'entry := key:word , "=" , v:num , ";" , ;\n'
+    "word  := w:/[a-z]+/ ;\n"
+    "num   := d:/[0-9]+/ ;\n"
+)
+MULTI_FLATTEN_SIDECAR = (
+    "rule word  { transparent; }\n"
+    "rule num   { type: i64; transparent; }\n"
+    "rule entry { key: key multi; }\n"
+    "rule group { flatten; }\n"
+)
+"""A ``flatten;`` wrapper whose hoisted field is a ``multi`` map: the reverse helper's parameter
+type is the one place a keyed field's type is spelled outside the owning struct."""
+
 
 def model_for(grammar_text: str, sidecar: str | None = None) -> am.AstModel:
     return fixtures.model_for(grammar_text, sidecar, ac.Backend.RUST)
@@ -77,6 +96,11 @@ def has_span_method(src: str, type_name: str) -> bool:
 @pytest.fixture(scope="module")
 def config_src() -> str:
     return generate(fixtures.CONFIG_GRAMMAR, fixtures.KEYED_SIDECAR)
+
+
+@pytest.fixture(scope="module")
+def multi_config_src() -> str:
+    return generate(fixtures.CONFIG_GRAMMAR, fixtures.MULTI_SIDECAR)
 
 
 @pytest.fixture(scope="module")
@@ -135,6 +159,11 @@ class TestConfigLanguage:
 
     def test_a_keyed_collection_is_an_index_map(self, config_src: str) -> None:
         assert "pub settings: ::fltk_ast_core::IndexMap<String, Setting>," in block(config_src, "pub struct ServerDef")
+
+    def test_a_multi_keyed_collection_holds_a_run_per_key(self, multi_config_src: str) -> None:
+        assert "pub settings: ::fltk_ast_core::IndexMap<String, Vec<Setting>>," in block(
+            multi_config_src, "pub struct ServerDef"
+        )
 
     def test_an_erased_rule_leaves_its_payload_at_the_use_site(self, config_src: str) -> None:
         assert "pub name: String," in block(config_src, "pub struct ServerDef")
@@ -551,6 +580,15 @@ class TestEqualityWalk:
         assert "            let Some(b) = other.kids.get(key) else {\n" in body
         assert "            worklist.push(eq_walk::Item::Node(a, b));\n" in body
 
+    def test_a_multi_keyed_collection_compares_each_key_s_run_elementwise(self) -> None:
+        """A key holds a ``Vec``, which the worklist cannot carry: the run is zipped instead."""
+        body = block(generate(KEYED_TREE_GRAMMAR, MULTI_TREE_SIDECAR), "impl Node {")
+        assert "        for (key, a) in &self.kids {\n" in body
+        assert "            let Some(b) = other.kids.get(key) else {\n" in body
+        assert "            if a.len() != b.len() {\n" in body
+        assert "            for (a, b) in a.iter().zip(b.iter()) {\n" in body
+        assert "                worklist.push(eq_walk::Item::Node(a, b));\n" in body
+
 
 _WITNESS_HEADER = "fn _expr_drop_witness() -> Expr {"
 
@@ -739,6 +777,14 @@ class TestConverters:
             "the two-span diagnostic is the point of a keyed collection"
         )
 
+    def test_a_multi_keyed_collection_accumulates_instead_of_rejecting(self, multi_config_src: str) -> None:
+        body = block(multi_config_src, "impl ServerDef {")
+        assert (
+            "let mut keyed: ::fltk_ast_core::IndexMap<String, Vec<Setting>> = ::fltk_ast_core::IndexMap::new();" in body
+        )
+        assert "keyed.entry(key).or_default().push(element);" in body
+        assert "duplicate_key" not in body, "a repeated key is what `multi` is for"
+
     def test_an_optional_field_stays_absent_when_no_child_carries_it(self, config_src: str) -> None:
         body = block(config_src, "impl MetricDef {")
         assert 'if let Some(child) = ::fltk_ast_core::optional(&children_interval, "metric_def", "interval"' in body
@@ -798,36 +844,66 @@ class TestConverters:
         assert "return Ok(Self { value: true, span: cst_node.span().clone() });" in body
         assert "return Ok(Self { value: false, span: cst_node.span().clone() });" in body
 
-    def test_a_sum_counts_its_children_and_takes_the_first_alternative_that_fits(self, config_src: str) -> None:
+    def test_a_sum_classifies_its_children_and_hands_them_to_the_shared_evaluator(self, config_src: str) -> None:
         assert block(config_src, "fn _stanza_alternative") == (
             "fn _stanza_alternative(node: &cst::Stanza) -> Option<usize> {\n"
-            "    let mut counts = [0usize; 2];\n"
-            "    for (label, child) in node.children() {\n"
-            "        if matches!(label, Some(cst::StanzaLabel::ServerDef)) {\n"
-            "            if matches!(child, cst::StanzaChild::ServerDef(_)) {\n"
-            "                counts[0] += 1;\n"
-            "            } else {\n"
-            "                return None;\n"
-            "            }\n"
+            "    _STANZA_SIGNATURES.select(node.children().iter().map(|(label, child)| {\n"
+            "        let label = if matches!(label, Some(cst::StanzaLabel::ServerDef)) {\n"
+            '            Some("server_def")\n'
             "        } else if matches!(label, Some(cst::StanzaLabel::MetricDef)) {\n"
-            "            if matches!(child, cst::StanzaChild::MetricDef(_)) {\n"
-            "                counts[1] += 1;\n"
-            "            } else {\n"
-            "                return None;\n"
-            "            }\n"
+            '            Some("metric_def")\n'
             "        } else if label.is_some() {\n"
-            "            return None;\n"
-            "        }\n"
-            "    }\n"
-            "    if counts[0] == 1 && counts[1] == 0 {\n"
-            "        return Some(0);\n"
-            "    }\n"
-            "    if counts[1] == 1 && counts[0] == 0 {\n"
-            "        return Some(1);\n"
-            "    }\n"
-            "    None\n"
+            '            Some("")\n'
+            "        } else {\n"
+            "            None\n"
+            "        };\n"
+            "        let kind = if matches!(child, cst::StanzaChild::ServerDef(_)) {\n"
+            '            "server_def"\n'
+            "        } else if matches!(child, cst::StanzaChild::MetricDef(_)) {\n"
+            '            "metric_def"\n'
+            "        } else {\n"
+            '            ""\n'
+            "        };\n"
+            "        (label, kind)\n"
+            "    }))\n"
             "}"
         )
+
+    def test_a_sum_describes_its_alternatives_as_one_static_table(self, config_src: str) -> None:
+        assert (
+            "static _STANZA_SIGNATURES: ::fltk_ast_core::dispatch::Table = ::fltk_ast_core::dispatch::Table {\n"
+            "    pairs: &[\n"
+            '        ::fltk_ast_core::dispatch::Pair { label: "server_def", kind: "server_def" },\n'
+            '        ::fltk_ast_core::dispatch::Pair { label: "metric_def", kind: "metric_def" },\n'
+            "    ],\n"
+            "    alternatives: &[\n"
+            "        ::fltk_ast_core::dispatch::Alt {\n"
+            "            variant: 0,\n"
+            "            bounds: &[\n"
+            "                ::fltk_ast_core::dispatch::Bound "
+            '{ label: "server_def", pairs: &[0], minimum: 1, maximum: 1 },\n'
+            "            ],\n"
+            "            forbidden: &[1],\n"
+            "        },\n"
+            "        ::fltk_ast_core::dispatch::Alt {\n"
+            "            variant: 1,\n"
+            "            bounds: &[\n"
+            "                ::fltk_ast_core::dispatch::Bound "
+            '{ label: "metric_def", pairs: &[1], minimum: 1, maximum: 1 },\n'
+            "            ],\n"
+            "            forbidden: &[0],\n"
+            "        },\n"
+            "    ],\n"
+            "};\n"
+        ) in config_src
+
+    def test_a_span_child_is_named_by_the_runtime_s_own_sentinel(self) -> None:
+        """The model's text kind and the runtime's constant must not drift into two spellings."""
+        src = generate('s := a:/[0-9]+/ . "!" | b:word ;\nword := w:/[a-z]+/ ;\n')
+        assert (
+            '        ::fltk_ast_core::dispatch::Pair { label: "a", kind: ::fltk_ast_core::dispatch::TEXT_KIND },\n'
+        ) in src
+        assert "            ::fltk_ast_core::dispatch::TEXT_KIND\n" in block(src, "fn _s_alternative")
 
     def test_a_sum_variant_delegates_to_its_payload(self, config_src: str) -> None:
         body = block(config_src, "impl Stanza {\n    /// Convert")
@@ -1085,48 +1161,67 @@ class TestFoldConverters:
         assert "cst: None," not in block(fold_src, "impl Expr {\n    /// Convert")
 
 
-class TestDispatchConditions:
-    """The comparison a count bound renders as, which is what picks the alternative at runtime.
+class TestDispatchBounds:
+    """The count bounds a table records, which are what pick the alternative at runtime.
 
-    A wrong operator here is legal Rust that selects the wrong alternative for a CST the parser
-    just produced, so no compile gate can catch it.
+    A wrong bound here is legal Rust that selects the wrong alternative for a CST the parser just
+    produced, so no compile gate can catch it.
     """
 
     LEAVES = "word := w:/[a-z]+/ ;\nother := o:/[0-9]+/ ;\n"
 
-    def conditions(self, body: str) -> list[str]:
+    def bounds(self, body: str) -> list[str]:
+        """The first alternative's bound entries, as the table spells them."""
         src = generate(f"s := {body} ;\n{self.LEAVES}")
-        return [line.strip() for line in block(src, "fn _s_alternative").splitlines() if line.startswith("    if ")]
+        start = src.index("::fltk_ast_core::dispatch::Alt {")
+        end = src.index("forbidden:", start)
+        return [line.strip() for line in src[start:end].splitlines() if "::Bound {" in line]
 
-    def test_a_repeated_label_compares_against_its_minimum(self) -> None:
-        assert self.conditions("a:word+ . b:other | c:word")[0] == (
-            "if counts[0] >= 1 && counts[1] == 1 && counts[2] == 0 {"
-        )
+    def test_a_repeated_label_carries_an_unbounded_maximum(self) -> None:
+        assert self.bounds("a:word+ . b:other | c:word") == [
+            (
+                '::fltk_ast_core::dispatch::Bound { label: "a", pairs: &[0], '
+                "minimum: 1, maximum: ::fltk_ast_core::UNBOUNDED },"
+            ),
+            '::fltk_ast_core::dispatch::Bound { label: "b", pairs: &[1], minimum: 1, maximum: 1 },',
+        ]
 
-    def test_an_optional_label_compares_against_its_maximum(self) -> None:
-        assert self.conditions("a:word . b:word? | c:other")[0] == (
-            "if counts[0] == 1 && counts[1] <= 1 && counts[2] == 0 {"
-        )
+    def test_an_optional_label_carries_a_minimum_of_zero(self) -> None:
+        assert self.bounds("a:word . b:word? | c:other") == [
+            '::fltk_ast_core::dispatch::Bound { label: "a", pairs: &[0], minimum: 1, maximum: 1 },',
+            '::fltk_ast_core::dispatch::Bound { label: "b", pairs: &[1], minimum: 0, maximum: 1 },',
+        ]
 
-    def test_a_label_present_exactly_once_compares_for_equality(self, config_src: str) -> None:
-        assert "if counts[0] == 1 && counts[1] == 0 {" in block(config_src, "fn _stanza_alternative")
+    def test_a_label_carrying_two_kinds_bounds_the_sum_of_both_pairs(self) -> None:
+        """A union label occupies one pair per kind, and the label's own count is their sum.
 
-    def test_a_rule_holding_one_kind_of_child_counts_without_a_kind_test(self) -> None:
-        """No clause reads the child, so it must not be bound by name: that is a warning."""
+        Rendering only the first index would select a different alternative for a CST the parser
+        just produced, and the fixture carries no such shape to witness it.
+        """
+        assert self.bounds("a:word . a:other | b:word") == [
+            (
+                '::fltk_ast_core::dispatch::Bound { label: "a", pairs: &[0, 1], '
+                "minimum: 2, maximum: ::fltk_ast_core::UNBOUNDED },"
+            ),
+        ]
+
+    def test_a_label_present_exactly_once_bounds_both_sides_at_one(self, config_src: str) -> None:
+        assert (
+            '::fltk_ast_core::dispatch::Bound { label: "server_def", pairs: &[0], minimum: 1, maximum: 1 },'
+        ) in config_src
+
+    def test_a_rule_holding_one_kind_of_child_classifies_without_a_kind_test(self) -> None:
+        """Nothing reads the child, so it must not be bound by name: that is a warning."""
         src = generate(f's := a:word . "!" | b:word . c:word ;\n{self.LEAVES}')
         body = block(src, "fn _s_alternative")
-        assert "for (label, _child) in node.children() {" in body
+        assert "|(label, _child)| {" in body
         assert "matches!(child" not in body
-        assert (
-            "        if matches!(label, Some(cst::SLabel::A)) {\n"
-            "            counts[0] += 1;\n"
-            "        } else if matches!(label, Some(cst::SLabel::B)) {\n"
-        ) in body
+        assert '        let kind = "word";\n' in body
 
     def test_a_rule_holding_several_kinds_binds_the_child_it_tests(self, config_src: str) -> None:
         body = block(config_src, "fn _stanza_alternative")
-        assert "for (label, child) in node.children() {" in body
-        assert "if matches!(child, cst::StanzaChild::ServerDef(_)) {" in body
+        assert "|(label, child)| {" in body
+        assert "let kind = if matches!(child, cst::StanzaChild::ServerDef(_)) {" in body
 
 
 class TestFlattenShapes:
@@ -1396,6 +1491,14 @@ class TestReverseProducts:
         body = block(config_src, "impl ServerDef {\n    /// Synthesise")
         assert "let mut cursor_setting = ::fltk_ast_core::Cursor::new(self.settings.values().collect());" in body
 
+    def test_a_multi_keyed_collection_is_iterated_group_by_group(self, multi_config_src: str) -> None:
+        """Grouped order is the canonical one, and a key with no element is refused there."""
+        body = block(multi_config_src, "impl ServerDef {\n    /// Synthesise")
+        assert (
+            "let mut cursor_setting = ::fltk_ast_core::Cursor::new("
+            '::fltk_ast_core::multi_values(self.settings.iter(), "setting")?);' in body
+        )
+
     def test_a_merged_product_delegates_to_the_first_alternative_that_fits(self) -> None:
         src = generate(MERGED_GRAMMAR)
         assert block(src, "impl Import {\n    /// Synthesise a") == (
@@ -1556,6 +1659,15 @@ class TestReverseProducts:
         helper = block(task_src, "fn _flat_schedule_to_cst")
         assert "let mut cursor_interval = ::fltk_ast_core::Cursor::new(vec![v0]);" in helper
         assert "cst::ScheduleChild::Number(_erased_number_to_cst(item)?)," in helper
+
+    def test_a_hoisted_keyed_field_is_taken_as_the_map_the_owner_holds(self) -> None:
+        """The reverse helper is the one place a keyed field's type is written as a parameter."""
+        src = generate(MULTI_FLATTEN_GRAMMAR, MULTI_FLATTEN_SIDECAR)
+        assert (
+            "fn _flat_group_to_cst(v0: &::fltk_ast_core::IndexMap<String, Vec<Entry>>)"
+            " -> Result<::fltk_cst_core::Shared<cst::Group>, ::fltk_ast_core::AstError> {" in src
+        )
+        assert "_flat_group_to_cst(&self.entry)?" in src
 
     def test_a_fold_walks_down_its_own_nesting_side(self, fold_src: str) -> None:
         """The operands come off the chain in source order, which a left fold sees back to front."""

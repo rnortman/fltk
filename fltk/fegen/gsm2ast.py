@@ -287,7 +287,8 @@ class AstGenerator:
             return f"list[{inner}]"
         if field_type.container is am.Container.MAP:
             assert field_type.key is not None
-            return f"dict[{self.element_annotation(field_type.key.element)}, {inner}]"
+            held = f"list[{inner}]" if field_type.key.multi else inner
+            return f"dict[{self.element_annotation(field_type.key.element)}, {held}]"
         return inner
 
     def generate(self) -> str:
@@ -480,12 +481,12 @@ class AstGenerator:
         prelude: list[str] = []
         for hoist in hoists:
             prelude.extend(self.hoist_forward_lines(rule_name, hoist))
-        indices = {(hoist.label, field.name): index for hoist in hoists for index, field in enumerate(hoist.fields)}
+        indices = {(field.wrapper, field.name): index for hoist in hoists for index, field in enumerate(hoist.fields)}
         values: list[tuple[str, str]] = []
         for field in fields:
-            if field.hoist is not None:
-                index = indices[(field.hoist, field.name)]
-                values.append((field.name, f"{self.hoist_variable(field.hoist)}[{index}]"))
+            if field.wrapper is not None:
+                index = indices[(field.wrapper, field.name)]
+                values.append((field.name, f"{self.hoist_variable(field.wrapper)}[{index}]"))
                 continue
             lines, expression = self.field_code(rule_name, field)
             prelude.extend(lines)
@@ -536,6 +537,8 @@ class AstGenerator:
             assert map_key is not None
             converted = self.convert("_child", field_type.element, rule_name, field.label)
             elements = f'[{converted} for _child in buckets.get("{key}", ())]'
+            if map_key.multi:
+                return [], f'astrt.keyed_multi({elements}, "{map_key.field_name}")'
             return [], f'astrt.keyed({elements}, "{map_key.field_name}", "{map_key.rule_name}")'
 
         if field_type.container is am.Container.COLLECTION:
@@ -633,9 +636,9 @@ class AstGenerator:
         the alternatives that accept different ones of them indistinguishable by name, so an
         alternative accepting fewer kinds than the field holds carries a kind test as well.
         """
-        by_label = {field.label: field for field in fields if field.hoist is None}
+        by_label = {field.label: field for field in fields if field.wrapper is None}
         entries = [
-            f'"{field.label}": {self.populated_expression(field, values)}' for field in fields if field.hoist is None
+            f'"{field.label}": {self.populated_expression(field, values)}' for field in fields if field.wrapper is None
         ]
         entries.extend(f'"{hoist.label}": {self.hoist_present(hoist, values)}' for hoist in hoists)
         populated = ", ".join(entries)
@@ -678,7 +681,7 @@ class AstGenerator:
         flattened wrapper's.  A hoisted field is not distributed over this rule's item positions:
         its wrapper occupies one position, and the wrapper's own helper places the fields inside.
         """
-        own = [field for field in fields if field.hoist is None]
+        own = [field for field in fields if field.wrapper is None]
         by_label = {field.label: field for field in own}
         by_hoist = {hoist.label: hoist for hoist in hoists}
         checks = am.group_checks(plan, fields, hoists)
@@ -780,6 +783,11 @@ class AstGenerator:
     def cursor_expression(self, field: am.Field, value: str) -> str:
         if field.type.element == am.BOOL:
             return f"astrt.flag_cursor({value})"
+        key = field.type.key
+        if key is not None and key.multi:
+            # A grouped map hands its elements out group by group, so a key holding none is
+            # refused here rather than dropped on the way to the item positions.
+            return f'astrt.multi_cursor({value}, "{key.rule_name}")'
         return f"astrt.cursor({value})"
 
     def dispatch_lines(self, rule_name: str, run: am.SlotRun, by_label: dict[str, am.Field]) -> list[str]:

@@ -162,6 +162,12 @@ class TestRuleStatements:
     def test_key(self) -> None:
         statement = _only_rule_statement("rule setting { key: key; }\n")
         assert _identifier(statement.child_key_stmt().child_label()) == "key"
+        assert statement.child_key_stmt().maybe_multi() is None
+
+    def test_key_multi(self) -> None:
+        statement = _only_rule_statement("rule setting { key: key multi; }\n")
+        assert _identifier(statement.child_key_stmt().child_label()) == "key"
+        assert statement.child_key_stmt().maybe_multi() is not None
 
     def test_fold_left(self) -> None:
         fold = _only_rule_statement("rule expr { fold_left: op; }\n").child_fold_stmt()
@@ -603,7 +609,14 @@ class TestResolution:
         assert _rule("rule number { text_from: val; }").text_from == "val"
 
     def test_key(self) -> None:
-        assert _rule(f"rule setting {{ key: key; }}\n{TRANSPARENT_IDENTIFIER}", "setting").key == "key"
+        assert _rule(
+            f"rule setting {{ key: key; }}\n{TRANSPARENT_IDENTIFIER}", "setting"
+        ).key == ast_config.ResolvedKey(label="key")
+
+    def test_key_multi(self) -> None:
+        """``multi`` is the same statement, accumulating instead of refusing a repeated key."""
+        rule = _rule(f"rule setting {{ key: key multi; }}\n{TRANSPARENT_IDENTIFIER}", "setting")
+        assert rule.key == ast_config.ResolvedKey(label="key", multi=True)
 
     def test_fold(self) -> None:
         rule = _rule("rule expr { fold_right: op; }", "expr")
@@ -908,11 +921,11 @@ class TestShapeCompatibility:
         assert _rule("rule metric_type { bool: gauge; }", "metric_type").bool_truthy == "gauge"
 
     def test_key_naming_a_text_field(self) -> None:
-        assert _rule("rule entry { key: name; }", "entry").key == "name"
+        assert _rule("rule entry { key: name; }", "entry").key == ast_config.ResolvedKey(label="name")
 
     def test_key_through_an_integer_coercion(self) -> None:
         text = "rule setting { key: key; }\nrule identifier { transparent; type: u32; }"
-        assert _rule(text, "setting").key == "key"
+        assert _rule(text, "setting").key == ast_config.ResolvedKey(label="key")
 
     def test_fold_on_the_precedence_level_shape(self) -> None:
         assert _rule("rule expr { fold_left: op; }", "expr").fold is not None
@@ -1038,6 +1051,20 @@ class TestShapeErrors:
         message = _errors("rule server_def { key: setting; }")
         assert "`key:` needs a field that occurs exactly once" in message
         assert "'setting' in rule 'server_def' is collection" in message
+
+    def test_key_multi_needs_a_required_single_field_too(self) -> None:
+        """`multi` alters what a key holds, not what may be one, so the arity rule is unchanged."""
+        message = _errors("rule server_def { key: setting multi; }")
+        assert "`key:` needs a field that occurs exactly once" in message
+        assert "'setting' in rule 'server_def' is collection" in message
+
+    def test_key_multi_is_still_a_singular_statement(self) -> None:
+        message = _errors("rule setting { key: key multi; key: value multi; }")
+        assert "duplicate `key:` statement in `rule setting`" in message
+
+    def test_key_multi_still_conflicts_with_transparent(self) -> None:
+        message = _errors("rule setting { transparent; key: key multi; }")
+        assert "`key:` conflicts with `transparent;`" in message
 
     def test_key_rejects_a_node_typed_field(self) -> None:
         message = _errors("rule setting { key: key; }")

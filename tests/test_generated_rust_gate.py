@@ -19,6 +19,13 @@ the leaf forms' text synthesis, the labeled-literal trial matching — whose who
 silent-corruption fix — the flattened wrapper's two hoisted fields, the span-child positions at
 every arity, and the merged-product trial with its per-alternative erased and flattened helpers.
 
+Four cases carry the serde frontend as well, three over the same generation inputs as their AST
+half: the emitted `de.rs` is a description of the tree written against `fltk-serde-core`'s
+vocabulary, and only a compiler says the two halves still agree — a renamed member, a mis-rendered
+match arm or a warning that is a hard build failure downstream is invisible to a substring
+assertion. The fourth carries no AST module at all, because a `de.rs` generated without one is a
+different module and the frontend's headline mode.
+
 One shape is one module, so a case exists per *generation input*: a shape whose grammar and sidecar
 match another's belongs in that module, because a case of its own compiles a second copy of the
 whole language.
@@ -146,6 +153,40 @@ fn text_the_rules_terminal_cannot_match_is_refused() {
         error.message,
         "rule \\"identifier\\": text \\"Not An Identifier\\" is not something the rule could have matched"
     );
+}
+
+/// A `boolean` node standing for one of its two alternatives, with no source text behind it.
+fn boolean_node(truthy: bool) -> ::fltk_cst_core::Shared<cst::Boolean> {
+    let label = if truthy {
+        cst::BooleanLabel::True
+    } else {
+        cst::BooleanLabel::False
+    };
+    let mut node = cst::Boolean::new(::fltk_cst_core::Span::unknown());
+    node.push_child(Some(label), cst::BooleanChild::Span(::fltk_cst_core::Span::unknown()));
+    node.into()
+}
+
+#[test]
+fn a_child_no_alternative_accepts_under_its_label_matches_no_alternative() {
+    // The parser cannot produce this: the label decides the kind of child under it. A hand-built
+    // node can, and the dispatch table has no pair for the combination, so nothing claims it.
+    let mut node = cst::Value::new(::fltk_cst_core::Span::unknown());
+    node.push_child(Some(cst::ValueLabel::String), cst::ValueChild::Boolean(boolean_node(true)));
+    let error = Value::from_cst(&node.into()).expect_err("no alternative carries a boolean under `string`");
+    assert_eq!(
+        error.message,
+        "rule \\"value\\": no alternative matches the node's labeled children"
+    );
+}
+
+#[test]
+fn an_unlabeled_child_is_not_counted_against_any_alternative() {
+    let mut node = cst::Value::new(::fltk_cst_core::Span::unknown());
+    node.push_child(Some(cst::ValueLabel::Flag), cst::ValueChild::Boolean(boolean_node(true)));
+    node.push_child(None, cst::ValueChild::Boolean(boolean_node(false)));
+    let value = Value::from_cst(&node.into()).expect("an unlabeled child constrains no alternative");
+    assert_eq!(value, Value::Flag(true));
 }
 
 #[test]
@@ -763,6 +804,527 @@ fn text_no_terminal_accepts_is_refused_before_anything_is_rendered() {
 }
 """
 
+# The serde frontend over the same document.
+CONFIG_SERDE_RUNTIME = """
+// --- the serde frontend, over the same language --------------------------------------------
+
+use super::de;
+use serde::Deserialize;
+use std::collections::BTreeMap;
+
+const SERVER_ONLY: &str = r#"server web {
+  host = "localhost";
+}
+"#;
+
+#[derive(Debug, Deserialize, PartialEq)]
+#[serde(deny_unknown_fields)]
+struct Document {
+    stanzas: Vec<Entry>,
+}
+
+#[derive(Debug, Deserialize, PartialEq)]
+enum Entry {
+    ServerDef(Server),
+    MetricDef(Metric),
+}
+
+#[derive(Debug, Deserialize, PartialEq)]
+#[serde(deny_unknown_fields)]
+struct Server {
+    name: String,
+    settings: BTreeMap<String, SettingValue>,
+}
+
+/// The element of a keyed region, minus the field that keys it.
+#[derive(Debug, Deserialize, PartialEq)]
+#[serde(deny_unknown_fields)]
+struct SettingValue {
+    value: Val,
+}
+
+#[derive(Debug, Deserialize, PartialEq)]
+enum Val {
+    String(String),
+    Number(i64),
+    Flag(bool),
+    List(ListValue),
+}
+
+#[derive(Debug, Deserialize, PartialEq)]
+#[serde(deny_unknown_fields)]
+struct ListValue {
+    value: Vec<Val>,
+}
+
+#[derive(Debug, Deserialize, PartialEq)]
+#[serde(deny_unknown_fields)]
+struct Metric {
+    name: String,
+    metric_kind: Kind,
+    interval: Option<u32>,
+}
+
+#[derive(Debug, Deserialize, PartialEq)]
+enum Kind {
+    Counter,
+    Gauge,
+    Histogram,
+}
+
+fn document(text: &str) -> Document {
+    de::from_str(text, Some("app.conf")).expect("the document must parse and deserialize")
+}
+
+fn refused(text: &str) -> ::fltk_serde_core::DeserializeError {
+    let error = de::from_str::<Document>(text, Some("app.conf")).expect_err("the target must refuse this");
+    match error {
+        ::fltk_serde_core::ParseToTargetError::Deserialize(inner) => inner,
+        ::fltk_serde_core::ParseToTargetError::Parse(message) => panic!("the text parses: {message}"),
+    }
+}
+
+#[test]
+fn one_call_turns_source_text_into_the_targets_the_consumer_declared() {
+    assert_eq!(
+        document(TEXT),
+        Document {
+            stanzas: vec![
+                Entry::ServerDef(Server {
+                    name: "web".to_string(),
+                    settings: BTreeMap::from([
+                        (
+                            "host".to_string(),
+                            SettingValue {
+                                value: Val::String("localhost".to_string()),
+                            },
+                        ),
+                        ("port".to_string(), SettingValue { value: Val::Number(8080) }),
+                        ("debug".to_string(), SettingValue { value: Val::Flag(true) }),
+                        (
+                            "tags".to_string(),
+                            SettingValue {
+                                value: Val::List(ListValue {
+                                    value: vec![Val::Number(1), Val::Number(2)],
+                                }),
+                            },
+                        ),
+                    ]),
+                }),
+                Entry::MetricDef(Metric {
+                    name: "hits".to_string(),
+                    metric_kind: Kind::Counter,
+                    interval: Some(30),
+                }),
+            ],
+        }
+    );
+}
+
+#[test]
+fn the_same_keyed_region_is_a_sequence_where_the_target_asks_for_one() {
+    #[derive(Debug, Deserialize, PartialEq)]
+    #[serde(deny_unknown_fields)]
+    struct Rows {
+        name: String,
+        settings: Vec<Row>,
+    }
+    #[derive(Debug, Deserialize, PartialEq)]
+    #[serde(deny_unknown_fields)]
+    struct Row {
+        key: String,
+        value: Val,
+    }
+    #[derive(Debug, Deserialize, PartialEq)]
+    struct RowDoc {
+        stanzas: Vec<RowEntry>,
+    }
+    #[derive(Debug, Deserialize, PartialEq)]
+    enum RowEntry {
+        ServerDef(Rows),
+    }
+
+    let parsed: RowDoc = de::from_str(SERVER_ONLY, None).expect("the document must deserialize");
+    let RowEntry::ServerDef(server) = &parsed.stanzas[0];
+    assert_eq!(
+        server.settings,
+        vec![Row {
+            key: "host".to_string(),
+            value: Val::String("localhost".to_string()),
+        }]
+    );
+}
+
+#[test]
+fn an_unknown_field_is_serdes_own_message_at_the_offending_child() {
+    // Nothing here is ever built — the point is the refusal — so the whole target opts out of
+    // the dead-code lint rather than each member of it.
+    #[allow(dead_code)]
+    #[derive(Debug, Deserialize)]
+    #[serde(deny_unknown_fields)]
+    struct JustName {
+        name: String,
+    }
+    #[allow(dead_code)]
+    #[derive(Debug, Deserialize)]
+    struct NameDoc {
+        stanzas: Vec<NameEntry>,
+    }
+    #[allow(dead_code)]
+    #[derive(Debug, Deserialize)]
+    enum NameEntry {
+        ServerDef(JustName),
+    }
+
+    let error = de::from_str::<NameDoc>(SERVER_ONLY, Some("app.conf")).expect_err("the target has no settings");
+    // The message is serde's, the position is the CST's: the first setting the target has no
+    // field for.
+    assert_eq!(
+        error.to_string(),
+        "unknown field `settings`, expected `name` at line 2, column 3"
+    );
+}
+
+#[test]
+fn a_field_the_target_needs_and_the_source_omits_is_missing_at_the_node() {
+    #[allow(dead_code)]
+    #[derive(Debug, Deserialize)]
+    struct Strict {
+        name: String,
+        metric_kind: Kind,
+        interval: u32,
+    }
+    #[allow(dead_code)]
+    #[derive(Debug, Deserialize)]
+    struct StrictDoc {
+        stanzas: Vec<StrictEntry>,
+    }
+    #[allow(dead_code)]
+    #[derive(Debug, Deserialize)]
+    enum StrictEntry {
+        MetricDef(Strict),
+    }
+
+    let error = de::from_str::<StrictDoc>("metric hits : counter ;", None).expect_err("the interval is optional here");
+    assert_eq!(error.to_string(), "missing field `interval` at line 1, column 1");
+}
+
+#[test]
+fn a_scalar_target_runs_the_gate_its_type_names_over_the_source_text() {
+    #[allow(dead_code)]
+    #[derive(Debug, Deserialize)]
+    enum Narrow {
+        Number(u8),
+    }
+    #[allow(dead_code)]
+    #[derive(Debug, Deserialize)]
+    struct NarrowSetting {
+        value: Narrow,
+    }
+    #[allow(dead_code)]
+    #[derive(Debug, Deserialize)]
+    struct NarrowServer {
+        name: String,
+        settings: BTreeMap<String, NarrowSetting>,
+    }
+    #[allow(dead_code)]
+    #[derive(Debug, Deserialize)]
+    struct NarrowDoc {
+        stanzas: Vec<NarrowEntry>,
+    }
+    #[allow(dead_code)]
+    #[derive(Debug, Deserialize)]
+    enum NarrowEntry {
+        ServerDef(NarrowServer),
+    }
+
+    let error = de::from_str::<NarrowDoc>("server web { port = 8080; }", None).expect_err("8080 is no u8");
+    let ::fltk_serde_core::ParseToTargetError::Deserialize(inner) = &error else {
+        panic!("a coercion failure is a deserialize failure");
+    };
+    assert_eq!(
+        inner.message,
+        "rule \\"number\\": \\"8080\\" is not in range for u8 (0 to 255)"
+    );
+    assert_eq!(inner.span.text().as_deref(), Some("8080"), "positioned at the value itself");
+}
+
+#[test]
+fn a_repeated_key_is_refused_by_the_frontend_rather_than_left_to_the_container() {
+    // A `BTreeMap` would last-write-win; the map form answers the duplicate before the target
+    // sees either element.
+    let error = refused(&TEXT.replace("port = 8080;", "host = \\"other\\";"));
+    assert_eq!(error.message, "duplicate setting key \\"host\\"");
+    assert_eq!(error.related.len(), 1);
+    assert_eq!(error.related[0].0, "previously defined here");
+    assert_ne!(error.span, error.related[0].1);
+}
+
+#[test]
+fn a_target_can_position_a_field_and_hold_a_subtree_as_cst() {
+    #[derive(Debug, Deserialize)]
+    #[serde(deny_unknown_fields)]
+    struct Located {
+        name: ::fltk_serde_core::Spanned<String>,
+        settings: BTreeMap<String, Held>,
+    }
+    #[derive(Debug, Deserialize)]
+    #[serde(deny_unknown_fields)]
+    struct Held {
+        value: ::fltk_serde_core::Raw<cst::Value>,
+    }
+    #[derive(Debug, Deserialize)]
+    struct LocatedDoc {
+        stanzas: Vec<LocatedEntry>,
+    }
+    #[derive(Debug, Deserialize)]
+    enum LocatedEntry {
+        ServerDef(Located),
+    }
+
+    let parsed: LocatedDoc = de::from_str(SERVER_ONLY, None).expect("the document must deserialize");
+    let LocatedEntry::ServerDef(server) = &parsed.stanzas[0];
+    assert_eq!(server.name.value(), "web");
+    let position = server.name.span().line_col_inner().expect("a parsed span locates itself");
+    assert_eq!((position.line + 1, position.col + 1), (1, 8));
+
+    let held = &server.settings["host"].value;
+    let value: Val = de::from_value_cst(held.node()).expect("a held node deserializes on demand");
+    assert_eq!(value, Val::String("localhost".to_string()));
+}
+
+#[test]
+fn a_field_declared_as_a_generated_ast_type_is_what_from_cst_builds() {
+    #[derive(Debug, Deserialize, PartialEq)]
+    #[serde(deny_unknown_fields)]
+    struct Typed {
+        value: ast::Value,
+    }
+    #[derive(Debug, Deserialize, PartialEq)]
+    #[serde(deny_unknown_fields)]
+    struct TypedServer {
+        name: String,
+        settings: BTreeMap<String, Typed>,
+    }
+    #[derive(Debug, Deserialize, PartialEq)]
+    struct TypedDoc {
+        stanzas: Vec<TypedEntry>,
+    }
+    #[derive(Debug, Deserialize, PartialEq)]
+    enum TypedEntry {
+        ServerDef(TypedServer),
+        MetricDef(Metric),
+    }
+
+    let parsed: TypedDoc = de::from_str(TEXT, None).expect("the document must deserialize");
+    let TypedEntry::ServerDef(server) = &parsed.stanzas[0] else {
+        panic!("the first stanza is a server definition");
+    };
+    let converted = Config::from_cst(&parse(TEXT)).expect("the same document converts");
+    let Stanza::ServerDef(expected) = &converted.stanzas[0] else {
+        panic!("the first stanza is a server definition");
+    };
+    assert_eq!(server.settings["tags"].value, expected.settings["tags"].value);
+    assert_eq!(server.settings["port"].value, ast::Value::Number(8080));
+}
+
+#[test]
+fn an_ast_typed_field_can_be_positioned_like_any_other() {
+    #[derive(Debug, Deserialize)]
+    #[serde(deny_unknown_fields)]
+    struct Located {
+        value: ::fltk_serde_core::Spanned<ast::Value>,
+    }
+    // `name` is there because the target must cover every field the source carries; only the
+    // positioned value is read.
+    #[allow(dead_code)]
+    #[derive(Debug, Deserialize)]
+    #[serde(deny_unknown_fields)]
+    struct LocatedServer {
+        name: String,
+        settings: BTreeMap<String, Located>,
+    }
+    #[derive(Debug, Deserialize)]
+    struct LocatedDoc {
+        stanzas: Vec<LocatedEntry>,
+    }
+    #[derive(Debug, Deserialize)]
+    enum LocatedEntry {
+        ServerDef(LocatedServer),
+    }
+
+    let parsed: LocatedDoc = de::from_str(SERVER_ONLY, None).expect("the document must deserialize");
+    let LocatedEntry::ServerDef(server) = &parsed.stanzas[0];
+    let host = &server.settings["host"].value;
+    assert_eq!(**host, ast::Value::String("localhost".to_string()));
+    let position = host.span().line_col_inner().expect("a parsed span locates itself");
+    assert_eq!((position.line + 1, position.col + 1), (2, 10));
+}
+
+#[test]
+fn an_ast_type_at_another_rules_position_names_both_rules() {
+    // The keyed region's elements are `setting` nodes, so `ast::Value` is not the type of what
+    // is there — a target-shape disagreement, reported where it is.
+    #[allow(dead_code)]
+    #[derive(Debug, Deserialize)]
+    struct MistypedServer {
+        name: String,
+        settings: BTreeMap<String, ast::Value>,
+    }
+    #[allow(dead_code)]
+    #[derive(Debug, Deserialize)]
+    struct MistypedDoc {
+        stanzas: Vec<MistypedEntry>,
+    }
+    #[allow(dead_code)]
+    #[derive(Debug, Deserialize)]
+    enum MistypedEntry {
+        ServerDef(MistypedServer),
+    }
+
+    let error = de::from_str::<MistypedDoc>(SERVER_ONLY, Some("app.conf")).expect_err("a setting is no value");
+    assert_eq!(
+        error.to_string(),
+        "expected a `value` node for its AST type, found rule `setting` at line 2, column 3"
+    );
+}
+
+#[test]
+fn a_conversion_failure_under_an_ast_typed_field_keeps_its_own_position() {
+    #[allow(dead_code)]
+    #[derive(Debug, Deserialize)]
+    struct Typed {
+        value: ast::Value,
+    }
+    #[allow(dead_code)]
+    #[derive(Debug, Deserialize)]
+    struct TypedServer {
+        name: String,
+        settings: BTreeMap<String, Typed>,
+    }
+    #[allow(dead_code)]
+    #[derive(Debug, Deserialize)]
+    struct TypedDoc {
+        stanzas: Vec<TypedEntry>,
+    }
+    #[allow(dead_code)]
+    #[derive(Debug, Deserialize)]
+    enum TypedEntry {
+        ServerDef(TypedServer),
+    }
+
+    // `number` coerces to i64 in this sidecar, and `from_cst` is what refuses the overflow: the
+    // message and the span are the AST layer's own, not a second wording on this path.
+    let error = de::from_str::<TypedDoc>("server web { port = 99999999999999999999; }", None)
+        .expect_err("the number does not fit an i64");
+    let ::fltk_serde_core::ParseToTargetError::Deserialize(inner) = &error else {
+        panic!("a conversion failure is a deserialize failure");
+    };
+    assert!(inner.message.contains("i64"), "{}", inner.message);
+    assert_eq!(inner.span.text().as_deref(), Some("99999999999999999999"));
+}
+
+#[test]
+fn a_conversion_failure_keeps_its_own_span_under_a_node_that_covers_more_than_it() {
+    // The element is the whole `port = ...;` statement and the overflow is one child of it, so
+    // a frame that filled the span unconditionally would widen the diagnostic to the statement.
+    #[allow(dead_code)]
+    #[derive(Debug, Deserialize)]
+    struct ElementServer {
+        name: String,
+        settings: BTreeMap<String, ast::Setting>,
+    }
+    #[allow(dead_code)]
+    #[derive(Debug, Deserialize)]
+    struct ElementDoc {
+        stanzas: Vec<ElementEntry>,
+    }
+    #[allow(dead_code)]
+    #[derive(Debug, Deserialize)]
+    enum ElementEntry {
+        ServerDef(ElementServer),
+    }
+
+    let error = de::from_str::<ElementDoc>("server web { port = 99999999999999999999; }", None)
+        .expect_err("the number does not fit an i64");
+    let ::fltk_serde_core::ParseToTargetError::Deserialize(inner) = &error else {
+        panic!("a conversion failure is a deserialize failure");
+    };
+    assert_eq!(
+        inner.span.text().as_deref(),
+        Some("99999999999999999999"),
+        "the AST layer's own position, not the setting the frame ran over"
+    );
+}
+
+#[test]
+fn an_ast_typed_field_reaches_every_container_the_model_has() {
+    // The single-field case is above; these are the three containers whose serde frames sit
+    // between the impl handing its conversion in and the frame that runs it.
+    #[derive(Debug, Deserialize, PartialEq)]
+    struct StanzaDoc {
+        stanzas: Vec<ast::Stanza>,
+    }
+    #[derive(Debug, Deserialize, PartialEq)]
+    #[serde(deny_unknown_fields)]
+    struct ElementServer {
+        name: String,
+        settings: BTreeMap<String, ast::Setting>,
+    }
+    #[derive(Debug, Deserialize, PartialEq)]
+    struct ElementDoc {
+        stanzas: Vec<ElementEntry>,
+    }
+    #[derive(Debug, Deserialize, PartialEq)]
+    enum ElementEntry {
+        ServerDef(ElementServer),
+    }
+    #[derive(Debug, Deserialize, PartialEq)]
+    #[serde(deny_unknown_fields)]
+    struct MaybeValue {
+        value: Option<ast::Value>,
+    }
+    #[derive(Debug, Deserialize, PartialEq)]
+    #[serde(deny_unknown_fields)]
+    struct MaybeServer {
+        name: String,
+        settings: BTreeMap<String, MaybeValue>,
+    }
+    #[derive(Debug, Deserialize, PartialEq)]
+    struct MaybeDoc {
+        stanzas: Vec<MaybeEntry>,
+    }
+    #[derive(Debug, Deserialize, PartialEq)]
+    enum MaybeEntry {
+        ServerDef(MaybeServer),
+    }
+
+    // A collection of AST types: every stanza of the whole document, equal to what the AST
+    // layer builds for the same parse.
+    let listed: StanzaDoc = de::from_str(TEXT, None).expect("the document must deserialize");
+    let whole = Config::from_cst(&parse(TEXT)).expect("the same document converts");
+    assert_eq!(listed.stanzas, whole.stanzas);
+
+    // A map whose value type is an AST type directly: the element node converts whole, key
+    // field included, because that is what the element rule's AST type has.
+    let converted = Config::from_cst(&parse(SERVER_ONLY)).expect("the same document converts");
+    let Stanza::ServerDef(expected) = &converted.stanzas[0] else {
+        panic!("the first stanza is a server definition");
+    };
+    let mapped: ElementDoc = de::from_str(SERVER_ONLY, None).expect("the document must deserialize");
+    let ElementEntry::ServerDef(server) = &mapped.stanzas[0];
+    assert_eq!(server.settings["host"], expected.settings["host"]);
+
+    // An AST type under an `Option`, at a field the grammar always fills.
+    let optional: MaybeDoc = de::from_str(SERVER_ONLY, None).expect("the document must deserialize");
+    let MaybeEntry::ServerDef(server) = &optional.stanzas[0];
+    assert_eq!(
+        server.settings["host"].value,
+        Some(ast::Value::String("localhost".to_string()))
+    );
+}
+"""
+
 # `parse_str` where the goal rule can fail to match at all, which the config language's
 # zero-or-more goal cannot: the arm that reports the parser's `None`.
 FOLD_ENTRY_POINT_RUNTIME = """
@@ -779,6 +1341,137 @@ fn a_text_the_goal_rule_cannot_match_is_a_parse_error() {
 fn the_convenience_folds_the_chain_it_parsed() {
     let parsed = super::ast::parse_str("1+2", None).expect("the expression must parse and convert");
     assert_eq!(parsed, expr("1 + 2"));
+}
+"""
+
+# A fold chain through the serde frontend: the nesting a target sees, and the two arms a tagged
+# variant can refuse. Appended to the fold case because it is the same generation input.
+FOLD_SERDE_RUNTIME = """
+// --- the serde frontend, over the same chain ------------------------------------------------
+
+use super::de;
+use serde::Deserialize;
+
+/// A chain of `expr`, externally tagged: the shape a fold rule serves.
+#[derive(Debug, Deserialize, PartialEq)]
+enum Sum {
+    Operand(Product),
+    Binary {
+        op: AddOp,
+        lhs: Box<Sum>,
+        rhs: Box<Sum>,
+    },
+}
+
+#[derive(Debug, Deserialize, PartialEq)]
+enum Product {
+    Operand(Atom),
+    Binary {
+        op: MulOp,
+        lhs: Box<Product>,
+        rhs: Box<Product>,
+    },
+}
+
+/// `factor`, a sum rule: a number, or the erased paren wrapper holding a chain again.
+#[derive(Debug, Deserialize, PartialEq)]
+enum Atom {
+    Num(i64),
+    Paren(Box<Sum>),
+}
+
+#[derive(Debug, Deserialize, PartialEq)]
+enum AddOp {
+    Plus,
+    Minus,
+}
+
+#[derive(Debug, Deserialize, PartialEq)]
+enum MulOp {
+    Times,
+    Divide,
+}
+
+fn target(text: &str) -> Sum {
+    de::from_str(text, None).expect("the expression must parse and deserialize")
+}
+
+fn atom(value: i64) -> Sum {
+    Sum::Operand(Product::Operand(Atom::Num(value)))
+}
+
+#[test]
+fn a_chain_reaches_a_derived_enum_with_the_nesting_the_fold_gives_it() {
+    assert_eq!(target("7"), atom(7));
+    assert_eq!(
+        target("1+2*3"),
+        Sum::Binary {
+            op: AddOp::Plus,
+            lhs: Box::new(atom(1)),
+            rhs: Box::new(Sum::Operand(Product::Binary {
+                op: MulOp::Times,
+                lhs: Box::new(Product::Operand(Atom::Num(2))),
+                rhs: Box::new(Product::Operand(Atom::Num(3))),
+            })),
+        }
+    );
+}
+
+#[test]
+fn a_transparent_wrapper_hands_the_target_what_it_holds() {
+    assert_eq!(
+        target("(1-2)"),
+        Sum::Operand(Product::Operand(Atom::Paren(Box::new(Sum::Binary {
+            op: AddOp::Minus,
+            lhs: Box::new(atom(1)),
+            rhs: Box::new(atom(2)),
+        }))))
+    );
+}
+
+#[test]
+fn a_variant_the_target_declares_as_a_unit_one_is_refused_not_emptied() {
+    // Every alternative carries something, so declaring one as a unit variant is a target-shape
+    // disagreement — reported, rather than silently dropping what was parsed.
+    #[derive(Debug, Deserialize)]
+    enum Tagless {
+        Operand,
+    }
+
+    let error = de::from_str::<Tagless>("7", None).expect_err("the operand carries a value");
+    assert_eq!(
+        error.to_string(),
+        "variant \\"Operand\\" carries content, found a map, expected a unit variant at line 1, column 1"
+    );
+}
+
+#[test]
+fn a_generated_ast_type_is_a_target_like_any_other() {
+    let served: super::ast::Expr = de::from_str("1+2*3", None).expect("the chain must deserialize");
+    let converted = super::ast::parse_str("1+2*3", None).expect("the same text converts");
+    assert_eq!(served, converted);
+}
+
+#[test]
+fn a_chain_held_as_syntax_converts_through_its_own_entry_point_later() {
+    let node = {
+        let mut parser = super::parser::Parser::new("4*5", None, false);
+        let parsed = parser.apply__parse_expr(0).expect("the expression must parse");
+        parsed.result
+    };
+    let held: ::fltk_serde_core::Raw<super::cst::Expr> =
+        de::from_expr_cst(&node).expect("`Raw` holds the node it is positioned at");
+    let served: super::ast::Expr = de::from_expr_cst(held.node()).expect("the held node converts");
+    assert_eq!(served, super::ast::parse_str("4*5", None).expect("the same text converts"));
+}
+
+#[test]
+fn text_the_goal_rule_cannot_match_is_the_parse_arm_of_from_str() {
+    let error = de::from_str::<Sum>("", None).expect_err("an expression needs an operand");
+    let ::fltk_serde_core::ParseToTargetError::Parse(message) = &error else {
+        panic!("a start rule that matched nothing is a parse failure");
+    };
+    assert!(message.starts_with("Syntax error at line 1"), "{message}");
 }
 """
 
@@ -1144,6 +1837,75 @@ fn a_flattened_wrapper_with_nothing_to_carry_collapses() {
 }
 """
 
+# The hoist path through the serde frontend, over nodes the AST layer synthesised: a field two
+# names away from the node it is served on, and the optional wrapper that empties both of them.
+TASK_SERDE_RUNTIME = """
+// --- the serde frontend, over the same wrapper ----------------------------------------------
+
+use super::de;
+use serde::Deserialize;
+
+#[derive(Debug, Deserialize, PartialEq)]
+#[serde(deny_unknown_fields)]
+struct TaskTarget {
+    name: String,
+    interval: Option<i64>,
+    unit: Option<Unit>,
+    settings: Vec<SettingTarget>,
+}
+
+#[derive(Debug, Deserialize, PartialEq)]
+enum Unit {
+    Sec,
+    Min,
+    Hour,
+}
+
+#[derive(Debug, Deserialize, PartialEq)]
+#[serde(deny_unknown_fields)]
+struct SettingTarget {
+    key: String,
+    value: i64,
+}
+
+fn deserialized(value: &TaskDef) -> TaskTarget {
+    let node = value.to_cst().expect("a hand-built task must synthesise");
+    de::from_task_def_cst(&node).expect("a synthesised CST must deserialize")
+}
+
+#[test]
+fn a_hoisted_field_is_read_down_the_wrapper_the_grammar_spells_it_in() {
+    assert_eq!(
+        deserialized(&task(Some(5), Some(TimeUnitValue::Min))),
+        TaskTarget {
+            name: "nightly".to_string(),
+            interval: Some(5),
+            unit: Some(Unit::Min),
+            settings: vec![SettingTarget {
+                key: "retries".to_string(),
+                value: 3,
+            }],
+        }
+    );
+}
+
+#[test]
+fn an_absent_optional_wrapper_leaves_out_every_field_it_carried() {
+    assert_eq!(
+        deserialized(&task(None, None)),
+        TaskTarget {
+            name: "nightly".to_string(),
+            interval: None,
+            unit: None,
+            settings: vec![SettingTarget {
+                key: "retries".to_string(),
+                value: 3,
+            }],
+        }
+    );
+}
+"""
+
 BOXED_LINK_GRAMMAR = (
     "expr := d:atom , ( , op:sub , d:atom)* ;\n"
     'sub := "[" . e:expr . "]" ;\n'
@@ -1341,6 +2103,203 @@ fn a_union_field_held_through_a_box_is_tested_where_it_lies() {
 }
 """
 
+# A `multi` keyed collection whose element is the recursive type: the accumulating `from_cst`,
+# the grouped synthesis, and the equality walk's key-then-run arm, which is the one shape a
+# `Vec`-valued map makes the plain map arm unable to compile.
+MULTI_TREE_GRAMMAR = 'doc := , node* ;\nnode := key:word , "{" , node* , "}" , ;\nword := w:/[a-z]+/ ;\n'
+MULTI_TREE_SIDECAR = "rule word { transparent; }\nrule node { key: key multi; }\n"
+
+MULTI_TREE_RUNTIME = """//! `key: <label> multi;` over a recursive element, run against real parses.
+
+use super::ast::{Doc, Node};
+use super::parser::Parser;
+
+const TEXT: &str = "a { } b { } a { x { } }";
+
+fn doc(text: &str) -> Doc {
+    let mut parser = Parser::new(text, None, false);
+    let parsed = parser.apply__parse_doc(0).expect("the document must parse");
+    assert!(parsed.pos as usize == text.len(), "the parse must consume the whole document");
+    Doc::from_cst(&parsed.result).expect("a parser-produced CST must convert")
+}
+
+#[test]
+fn elements_sharing_a_key_accumulate_in_source_order() {
+    let parsed = doc(TEXT);
+    // Insertion order is where each key first occurred, and the run is source order within it.
+    assert_eq!(parsed.node.keys().collect::<Vec<_>>(), vec!["a", "b"]);
+    assert_eq!(parsed.node["a"].len(), 2);
+    assert_eq!(parsed.node["b"].len(), 1);
+    assert!(parsed.node["a"][0].node.is_empty());
+    assert_eq!(parsed.node["a"][1].node["x"].len(), 1);
+}
+
+#[test]
+fn the_key_stays_a_field_of_each_element() {
+    let parsed = doc(TEXT);
+    assert_eq!(parsed.node["a"][0].key, "a");
+    assert_eq!(parsed.node["a"][1].key, "a");
+}
+
+#[test]
+fn a_multi_map_of_a_recursive_element_compares_by_key_then_elementwise() {
+    let parsed = doc(TEXT);
+    assert_eq!(doc("  a { }  b { }  a { x { } }  "), parsed);
+    // A difference inside one key's run, which only an elementwise comparison can see.
+    assert_ne!(doc("a { } b { } a { y { } }"), parsed);
+    // A shorter run under a key both values carry.
+    assert_ne!(doc("a { } b { }"), parsed);
+    // A key one value does not carry at all.
+    assert_ne!(doc("a { } c { } a { x { } }"), parsed);
+}
+
+#[test]
+fn a_parsed_value_synthesises_the_cst_it_was_read_from() {
+    let parsed = doc(TEXT);
+    let node = parsed.to_cst().expect("a parsed value must synthesise");
+    assert_eq!(Doc::from_cst(&node).expect("a synthesised CST must convert"), parsed);
+}
+
+#[test]
+fn a_key_with_no_element_cannot_be_rendered() {
+    // The key lives on the element, so a group holding none has nothing to carry it.
+    let mut node = ::fltk_ast_core::IndexMap::new();
+    node.insert("a".to_string(), Vec::<Node>::new());
+    let value = Doc {
+        node,
+        span: ::fltk_cst_core::Span::unknown(),
+    };
+    let error = value.to_cst().expect_err("an empty group is unrenderable");
+    assert_eq!(error.message, "rule \\"node\\": the \\"a\\" key has no element to render it on");
+}
+"""
+
+# The pure bring-your-own-structs mode: a serde module generated with no AST module beside it,
+# which emits zero public types and is what the CLI's `--ast-mod-path`-less invocation produces.
+# Every other serde case names an AST module, so nothing else compiles the
+# no-AST form — and an unused import or a dangling `ast::` reference in it is a hard build
+# failure in a consumer denying warnings.
+NO_AST_GRAMMAR = 'doc := name:word , "=" , count:num , ";" , ;\nword := w:/[a-z]+/ ;\nnum := d:/[0-9]+/ ;\n'
+NO_AST_SIDECAR = "rule word { transparent; }\nrule num  { transparent; }\n"
+
+NO_AST_SERDE_RUNTIME = """//! A generated `de.rs` with no AST module behind it.
+
+use super::de;
+use serde::Deserialize;
+
+#[derive(Debug, Deserialize, PartialEq)]
+#[serde(deny_unknown_fields)]
+struct Doc {
+    name: String,
+    count: u16,
+}
+
+#[test]
+fn a_serde_module_generated_without_an_ast_module_deserializes_on_its_own() {
+    let doc: Doc = de::from_str("port = 8080;", None).expect("the document must parse and deserialize");
+    assert_eq!(
+        doc,
+        Doc {
+            name: "port".to_string(),
+            count: 8080,
+        }
+    );
+}
+
+#[test]
+fn its_errors_are_positioned_by_the_same_frames() {
+    let error = de::from_str::<Doc>("port = 99999;", None).expect_err("99999 is no u16");
+    assert_eq!(
+        error.to_string(),
+        "rule \\"num\\": \\"99999\\" is not in range for u16 (0 to 65535) at line 1, column 8"
+    );
+}
+"""
+
+# `docs/rust-serde-guide.md`'s worked example — the before/after that sells the layer's
+# motivating shape — as generation input. A guide example is public instruction for out-of-tree
+# consumers and rots silently: this one shipped a sidecar that failed at generation time.
+# `tests/test_doc_guide_cli_examples.py` holds these two strings to what the guide prints,
+# so the printed example is the compiled one.
+SERDE_GUIDE_GRAMMAR = """channel_def    := "channel" : name:identifier , "{" , channel_option* , "}" , ;
+channel_option := key:identifier , ":" , (value:boolean | value:word) , ";" , ;
+identifier     := text:/[a-z_][a-z0-9_]*/ ;
+word           := text:/[a-zA-Z0-9_.]+/ ;
+boolean        := true:"true" | false:"false" ;
+"""
+
+SERDE_GUIDE_SIDECAR = """rule identifier    { transparent; }
+rule word          { transparent; }
+rule boolean       { bool: true; transparent; }
+rule channel_option { key: key; }
+"""
+
+SERDE_GUIDE_RUNTIME = """//! The serde guide's worked example: a generic keyed region, keys named by the target.
+
+use super::de;
+use serde::Deserialize;
+
+/// A keyed entry's value is the element minus the field that keys it — here, `value`.
+#[derive(Debug, Deserialize, PartialEq)]
+#[serde(deny_unknown_fields)]
+struct Value<T> {
+    value: T,
+}
+
+#[derive(Debug, Deserialize, PartialEq)]
+#[serde(deny_unknown_fields)]
+struct ChannelOptions {
+    protocol: Value<String>,
+    port: Value<u16>,
+    verbose: Option<Value<bool>>,
+}
+
+/// The guide prints the options struct alone; the goal rule is the channel it sits in.
+#[derive(Debug, Deserialize, PartialEq)]
+#[serde(deny_unknown_fields)]
+struct ChannelDef {
+    name: String,
+    channel_option: ChannelOptions,
+}
+
+const TEXT: &str = "channel main {\\n    protocol: tcp;\\n    port: 8080;\\n    verbose: true;\\n}\\n";
+
+#[test]
+fn the_keys_the_target_names_are_read_out_of_the_generic_region() {
+    let channel: ChannelDef = de::from_str(TEXT, Some("app.conf")).expect("the channel must deserialize");
+    assert_eq!(
+        channel,
+        ChannelDef {
+            name: "main".to_string(),
+            channel_option: ChannelOptions {
+                protocol: Value {
+                    value: "tcp".to_string()
+                },
+                port: Value { value: 8080 },
+                verbose: Some(Value { value: true }),
+            },
+        }
+    );
+}
+
+#[test]
+fn an_option_the_document_omits_is_none() {
+    let text = "channel main {\\n    protocol: tcp;\\n    port: 8080;\\n}\\n";
+    let channel: ChannelDef = de::from_str(text, None).expect("verbose is optional in the target");
+    assert_eq!(channel.channel_option.verbose, None);
+}
+
+#[test]
+fn a_misspelled_key_is_serdes_message_at_the_offending_keys_position() {
+    let text = "channel main {\\n    protocol: tcp;\\n    port: 8080;\\n    prot: tcp;\\n}\\n";
+    let error = de::from_str::<ChannelDef>(text, None).expect_err("`prot` is not a key of the target");
+    assert_eq!(
+        error.to_string(),
+        "unknown field `prot`, expected one of `protocol`, `port`, `verbose` at line 4, column 5"
+    );
+}
+"""
+
 CASES = [
     # A sum, a keyed collection, every scalar erasure, a coercion, a renamed field, and a
     # label spelled `type` (so `r#type` is exercised). Carries the entry-point tests too, which
@@ -1349,9 +2308,10 @@ CASES = [
         "config",
         fixtures.CONFIG_GRAMMAR,
         fixtures.KEYED_SIDECAR,
-        runtime=CONFIG_RUNTIME + ENTRY_POINT_RUNTIME,
+        runtime=CONFIG_RUNTIME + ENTRY_POINT_RUNTIME + CONFIG_SERDE_RUNTIME,
         parser=True,
         unparser=True,
+        serde=True,
     ),
     # Two precedence folds over an operand that reaches the whole expression again, so the chain
     # links, the by-value cycle and the bounded-stack equality all land in one module.
@@ -1359,8 +2319,9 @@ CASES = [
         "fold",
         fixtures.FOLD_GRAMMAR,
         fixtures.FOLD_SIDECAR,
-        runtime=FOLD_RUNTIME + FOLD_ENTRY_POINT_RUNTIME,
+        runtime=FOLD_RUNTIME + FOLD_ENTRY_POINT_RUNTIME + FOLD_SERDE_RUNTIME,
         parser=True,
+        serde=True,
     ),
     Case(
         "literal_labels",
@@ -1372,7 +2333,13 @@ CASES = [
     # The leaf node forms of the serialize direction, built by hand and read back.
     Case("serialize", fixtures.LEAF_GRAMMAR, fixtures.LEAF_SIDECAR, runtime=SERIALIZE_RUNTIME),
     # A flattened wrapper at an optional use site, hoisting two fields into its parent.
-    Case("task", fixtures.TASK_GRAMMAR, fixtures.TASK_SIDECAR, runtime=TASK_RUNTIME),
+    Case(
+        "task",
+        fixtures.TASK_GRAMMAR,
+        fixtures.TASK_SIDECAR,
+        runtime=TASK_RUNTIME + TASK_SERDE_RUNTIME,
+        serde=True,
+    ),
     # Two alternatives one of which extends the other, plus the multi-alternative erased and
     # flattened reverse helpers and a custom coercion — the branches no other case compiles.
     Case(
@@ -1407,12 +2374,31 @@ CASES = [
         "node := key:word , kid:node? , kids:node* ;\nword := w:/[a-z]+/ ;\n",
         "rule word { transparent; }\nrule node { key: key; }\n",
     ),
+    # The same map accumulating instead: `Vec`-valued keys through `from_cst`, `to_cst` and the
+    # equality walk, over an element type that reaches itself.
+    Case(
+        "multi_tree",
+        MULTI_TREE_GRAMMAR,
+        MULTI_TREE_SIDECAR,
+        runtime=MULTI_TREE_RUNTIME,
+        parser=True,
+    ),
     # A flattened wrapper whose hoisted field closes the cycle: without the `Box` the containing
     # type is infinitely sized.
     Case(
         "cycle_flatten",
         'tree := name:word . wrap? ;\nwrap := "(" . t:tree . ")" ;\nword := w:/[a-z]+/ ;\n',
         "rule wrap { flatten; }\n",
+    ),
+    # A flattened wrapper hoisting a `multi` map, which is the one place the emitted parameter
+    # type of a keyed field is written: a helper taking `&IndexMap<K, T>` where the field is
+    # `&IndexMap<K, Vec<T>>` compiles nowhere else, so the compiler is the witness.
+    Case(
+        "multi_flatten",
+        'doc := "doc" : box:group ;\ngroup := "{" , entry* , "}" ;\n'
+        'entry := key:word , "=" , v:num , ";" , ;\nword := w:/[a-z]+/ ;\nnum := d:/[0-9]+/ ;\n',
+        "rule word  { transparent; }\nrule num   { type: i64; transparent; }\n"
+        "rule entry { key: key multi; }\nrule group { flatten; }\n",
     ),
     # The two builtins whose value type comes from the runtime's feature-gated re-exports.
     Case(
@@ -1438,6 +2424,28 @@ CASES = [
         UNION_LABEL_GRAMMAR,
         UNION_LABEL_SIDECAR,
         runtime=UNION_LABEL_RUNTIME,
+    ),
+    # A serde module with no AST module beside it, which is the frontend's headline mode and the
+    # one configuration no other case compiles.
+    Case(
+        "no_ast",
+        NO_AST_GRAMMAR,
+        NO_AST_SIDECAR,
+        runtime=NO_AST_SERDE_RUNTIME,
+        ast=False,
+        serde=True,
+        parser=True,
+    ),
+    # The serde guide's worked example, compiled and run as printed.
+    Case(
+        "serde_guide",
+        SERDE_GUIDE_GRAMMAR,
+        SERDE_GUIDE_SIDECAR,
+        runtime=SERDE_GUIDE_RUNTIME,
+        ast=False,
+        serde=True,
+        parser=True,
+        goal="channel_def",
     ),
     # A marker product and a `custom(...)` rule reached through the `FromCst` trait.
     Case(
@@ -1506,7 +2514,9 @@ def test_every_declared_shape_is_in_the_crate(gate: Path) -> None:
     declared = gate.parent.joinpath("src", "lib.rs").read_text()
     for case in CASES:
         assert f"pub mod {case.name};" in declared
-        assert gate.parent.joinpath("src", case.name, "ast.rs").is_file()
+        assert gate.parent.joinpath("src", case.name, "ast.rs").is_file() == case.ast
+        assert gate.parent.joinpath("src", case.name, "de.rs").is_file() == case.serde
+    assert any(case.serde and not case.ast for case in CASES), "the no-AST serde mode has a compiled witness"
 
 
 def _ran(output: str, case: str) -> set[str]:
@@ -1538,6 +2548,9 @@ def test_the_converters_convert_a_real_parse_and_carry_text_in_and_out(
         "a_parsed_value_synthesises_the_cst_it_was_read_from",
         "a_mutated_value_round_trips_and_keeps_its_map_in_order",
         "text_the_rules_terminal_cannot_match_is_refused",
+        # Sum dispatch over a hand-built node, which is the only way to reach either case.
+        "a_child_no_alternative_accepts_under_its_label_matches_no_alternative",
+        "an_unlabeled_child_is_not_counted_against_any_alternative",
         "a_repeated_key_reports_both_locations",
         # The entry points, either side of a round trip through text.
         "one_call_turns_source_text_into_an_ast",
@@ -1547,6 +2560,21 @@ def test_the_converters_convert_a_real_parse_and_carry_text_in_and_out(
         "input_the_goal_rule_did_not_consume_is_the_parse_arm",
         "a_conversion_failure_is_the_ast_arm",
         "text_no_terminal_accepts_is_refused_before_anything_is_rendered",
+        # The serde frontend over the same document, against the emitted descriptions.
+        "one_call_turns_source_text_into_the_targets_the_consumer_declared",
+        "the_same_keyed_region_is_a_sequence_where_the_target_asks_for_one",
+        "an_unknown_field_is_serdes_own_message_at_the_offending_child",
+        "a_field_the_target_needs_and_the_source_omits_is_missing_at_the_node",
+        "a_scalar_target_runs_the_gate_its_type_names_over_the_source_text",
+        "a_repeated_key_is_refused_by_the_frontend_rather_than_left_to_the_container",
+        "a_target_can_position_a_field_and_hold_a_subtree_as_cst",
+        # Generated AST types as fields of hand-written targets.
+        "a_field_declared_as_a_generated_ast_type_is_what_from_cst_builds",
+        "an_ast_typed_field_can_be_positioned_like_any_other",
+        "an_ast_type_at_another_rules_position_names_both_rules",
+        "a_conversion_failure_under_an_ast_typed_field_keeps_its_own_position",
+        "a_conversion_failure_keeps_its_own_span_under_a_node_that_covers_more_than_it",
+        "an_ast_typed_field_reaches_every_container_the_model_has",
     }, cargo_test.stdout
 
 
@@ -1567,6 +2595,14 @@ def test_a_fold_rule_nests_its_operands_and_merges_their_spans(
         "a_chain_of_two_hundred_thousand_links_tears_down_without_recursing",
         "a_text_the_goal_rule_cannot_match_is_a_parse_error",
         "the_convenience_folds_the_chain_it_parsed",
+        # The same chain through the serde frontend.
+        "a_chain_reaches_a_derived_enum_with_the_nesting_the_fold_gives_it",
+        "a_transparent_wrapper_hands_the_target_what_it_holds",
+        "a_variant_the_target_declares_as_a_unit_one_is_refused_not_emptied",
+        "text_the_goal_rule_cannot_match_is_the_parse_arm_of_from_str",
+        # The chain into the generated AST type instead of a hand-written enum.
+        "a_generated_ast_type_is_a_target_like_any_other",
+        "a_chain_held_as_syntax_converts_through_its_own_entry_point_later",
     }, cargo_test.stdout
 
 
@@ -1606,6 +2642,23 @@ def test_a_flattened_wrapper_is_rebuilt_from_the_fields_hoisted_out_of_it(
         "a_wrapper_with_nothing_to_carry_is_not_rebuilt",
         "a_populated_wrapper_is_rebuilt_where_the_grammar_spells_it",
         "a_half_populated_wrapper_names_the_field_it_still_needs",
+        # The hoisted fields read back through the serde frontend.
+        "a_hoisted_field_is_read_down_the_wrapper_the_grammar_spells_it_in",
+        "an_absent_optional_wrapper_leaves_out_every_field_it_carried",
+    }, cargo_test.stdout
+
+
+def test_a_multi_keyed_collection_accumulates_groups_and_compares_them_elementwise(
+    cargo_test: subprocess.CompletedProcess[str],
+) -> None:
+    """`Vec`-valued keys through both directions, over an element type that reaches itself."""
+    assert cargo_test.returncode == 0, cargo_test.stdout + cargo_test.stderr
+    assert _ran(cargo_test.stdout, "multi_tree") == {
+        "elements_sharing_a_key_accumulate_in_source_order",
+        "the_key_stays_a_field_of_each_element",
+        "a_multi_map_of_a_recursive_element_compares_by_key_then_elementwise",
+        "a_parsed_value_synthesises_the_cst_it_was_read_from",
+        "a_key_with_no_element_cannot_be_rendered",
     }, cargo_test.stdout
 
 
@@ -1649,6 +2702,29 @@ def test_a_trial_picks_the_alternative_the_values_kinds_fit(
         "an_optional_union_field_constrains_nothing_while_it_is_absent",
         "every_value_of_a_repeated_union_field_has_to_be_an_accepted_kind",
         "a_union_field_held_through_a_box_is_tested_where_it_lies",
+    }, cargo_test.stdout
+
+
+def test_a_serde_module_stands_on_its_own_without_an_ast_module(
+    cargo_test: subprocess.CompletedProcess[str],
+) -> None:
+    """The bring-your-own-structs mode: no AST module, no generated public types, still a frontend."""
+    assert cargo_test.returncode == 0, cargo_test.stdout + cargo_test.stderr
+    assert _ran(cargo_test.stdout, "no_ast") == {
+        "a_serde_module_generated_without_an_ast_module_deserializes_on_its_own",
+        "its_errors_are_positioned_by_the_same_frames",
+    }, cargo_test.stdout
+
+
+def test_the_serde_guides_worked_example_works_as_printed(
+    cargo_test: subprocess.CompletedProcess[str],
+) -> None:
+    """The guide's motivating before/after, generated from its own grammar and sidecar and run."""
+    assert cargo_test.returncode == 0, cargo_test.stdout + cargo_test.stderr
+    assert _ran(cargo_test.stdout, "serde_guide") == {
+        "the_keys_the_target_names_are_read_out_of_the_generic_region",
+        "an_option_the_document_omits_is_none",
+        "a_misspelled_key_is_serdes_message_at_the_offending_keys_position",
     }, cargo_test.stdout
 
 

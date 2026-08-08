@@ -109,11 +109,15 @@ class TextFromStmt:
 
 @dataclasses.dataclass(frozen=True)
 class KeyStmt:
-    """``key: <label>;`` — the field keying this rule's collection use sites."""
+    """``key: <label> [multi];`` — the field keying this rule's collection use sites.
+
+    ``multi`` accumulates the elements sharing a key instead of refusing the second of them.
+    """
 
     label: str
     label_span: span_protocol.SpanProtocol
     span: span_protocol.SpanProtocol
+    multi: bool = False
 
 
 class FoldDirection(enum.Enum):
@@ -380,7 +384,12 @@ def _rule_statement(rule_statement: cst.RuleStatement, mapper: _Mapper) -> RuleS
         return TextFromStmt(label=_identifier(label, mapper), label_span=label.span, span=text_from_stmt.span)
     if (key_stmt := rule_statement.maybe_key_stmt()) is not None:
         label = key_stmt.child_label()
-        return KeyStmt(label=_identifier(label, mapper), label_span=label.span, span=key_stmt.span)
+        return KeyStmt(
+            label=_identifier(label, mapper),
+            label_span=label.span,
+            span=key_stmt.span,
+            multi=key_stmt.maybe_multi() is not None,
+        )
     if (fold_stmt := rule_statement.maybe_fold_stmt()) is not None:
         op = fold_stmt.child_op()
         direction = FoldDirection.LEFT if fold_stmt.child_dir().maybe_left() is not None else FoldDirection.RIGHT
@@ -725,6 +734,18 @@ class Fold:
     op_label: str
 
 
+@dataclasses.dataclass(frozen=True)
+class ResolvedKey:
+    """A resolved ``key:`` statement: the keying label, and whether it accumulates.
+
+    One member rather than two on :class:`ResolvedRule`, because a ``multi`` with no label
+    keys nothing: the pair is one fact about one statement.
+    """
+
+    label: str
+    multi: bool = False
+
+
 class Shape(enum.Enum):
     """A forced multi-alternative classification."""
 
@@ -741,7 +762,7 @@ class ResolvedRule:
     bool_truthy: str | None = None
     transparent: bool = False
     text_from: str | None = None
-    key: str | None = None
+    key: ResolvedKey | None = None
     fold: Fold | None = None
     flatten: bool = False
     custom: CustomRule | None = None
@@ -996,7 +1017,7 @@ class _Resolver:
             bool_truthy=None if bool_stmt is None else bool_stmt.truthy_label,
             transparent=TransparentStmt in statements,
             text_from=None if text_from_stmt is None else text_from_stmt.label,
-            key=None if key_stmt is None else key_stmt.label,
+            key=None if key_stmt is None else ResolvedKey(label=key_stmt.label, multi=key_stmt.multi),
             fold=None if fold_stmt is None else Fold(direction=fold_stmt.direction, op_label=fold_stmt.op_label),
             flatten=FlattenStmt in statements,
             custom=None if custom_stmt is None else self.resolve_custom_rule(block, custom_stmt),
@@ -1435,8 +1456,9 @@ class _Resolver:
 
     def check_key_type(self, rule_name: str, block: RuleBlock, resolved: ResolvedAstConfig) -> None:
         """A map key must come out as a string or an integer once the element rule is resolved."""
-        label = resolved.rules[rule_name].key
-        assert label is not None
+        key = resolved.rules[rule_name].key
+        assert key is not None
+        label = key.label
         info = self.index.rules[rule_name].label_index.get(label)
         if info is None:
             return

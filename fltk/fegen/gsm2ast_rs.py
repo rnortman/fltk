@@ -26,15 +26,14 @@ Runtime types are named by absolute path (``::fltk_cst_core::Span``,
 from __future__ import annotations
 
 import dataclasses
-import math
-from collections.abc import Callable, Iterable, Mapping, Sequence
+from collections.abc import Callable, Mapping, Sequence
 from typing import TypeAlias
 
 from fltk.fegen import ast_config as ac
 from fltk.fegen import ast_model as am
 from fltk.fegen import cst_ergonomics as ce
 from fltk.fegen import grammar_shape as gshape
-from fltk.fegen import naming
+from fltk.fegen import naming, rust_emit
 from fltk.fegen.gsm2parser_rs import cst_module_import, module_import, rust_str_lit
 from fltk.fegen.gsm2tree_rs import RustCstGenerator
 
@@ -143,8 +142,8 @@ _PUSH_COLUMNS = 12
 """How far in a synthesised ``push_child`` sits: a converter body, one alternative deep."""
 
 
-def _indent(lines: Iterable[str], columns: int) -> list[str]:
-    return [" " * columns + line for line in lines]
+_indent = rust_emit.indent
+"""Every line moved right by the given number of columns."""
 
 
 def _chain(parts: Sequence[str], operator: str, columns: int) -> list[str]:
@@ -173,17 +172,19 @@ class _EqMember:
     """One member that takes part in equality.
 
     ``deep`` names the type the member holds whose comparison must not recurse, and is ``None``
-    for every member that can be compared with ``==`` on the spot.
+    for every member that can be compared with ``==`` on the spot.  ``multi`` says a ``MAP``
+    member's keys hold runs of elements rather than single ones, which the walk compares
+    elementwise inside each key.
     """
 
     name: str
     container: am.Container
     deep: str | None
+    multi: bool = False
 
 
-def _string(text: str) -> str:
-    """One Rust string literal."""
-    return f'"{rust_str_lit(text)}"'
+_string = rust_emit.string
+"""One Rust string literal."""
 
 
 def _message(text: str) -> str:
@@ -203,11 +204,8 @@ def _block(lines: Sequence[str], expression: str) -> list[str]:
     return ["{", *_indent([*lines, expression], 4), "}"]
 
 
-def _member_lines(name: str, value: Sequence[str]) -> list[str]:
-    """One ``name: value,`` entry of a struct literal, whose value may run over several lines."""
-    if len(value) == 1:
-        return [f"{name}: {value[0]},"]
-    return [f"{name}: {value[0]}", *value[1:-1], f"{value[-1]},"]
+_member_lines = rust_emit.member_lines
+"""One ``name: value,`` entry of a struct literal, whose value may run over several lines."""
 
 
 @dataclasses.dataclass(frozen=True, slots=True)
@@ -240,7 +238,7 @@ def _str_slice(names: Sequence[str]) -> str:
 
 def _count(bound: float) -> str:
     """One item position's upper bound, as the cursor's own spelling of it."""
-    return f"{_RUNTIME}::UNBOUNDED" if bound == math.inf else str(int(bound))
+    return rust_emit.count(bound)
 
 
 @dataclasses.dataclass(frozen=True, slots=True)
@@ -309,6 +307,13 @@ def _if_chain(clauses: Sequence[tuple[str, Sequence[str]]], otherwise: Sequence[
         lines.extend(_indent(otherwise, 4))
     lines.append("}")
     return lines
+
+
+def _expression(target: str, lines: Sequence[str]) -> list[str]:
+    """``let <target> = <lines>;`` over lines that are one expression, block-shaped or not."""
+    if len(lines) == 1:
+        return [f"{target} = {lines[0]};"]
+    return [f"{target} = {lines[0]}", *lines[1:-1], f"{lines[-1]};"]
 
 
 def _if_block(conditions: Sequence[str], body: Sequence[str], columns: int) -> list[str]:
@@ -489,10 +494,21 @@ class RustAstGenerator:
         position only and two values converted from identical text must compare equal.
         """
         return [
-            _EqMember(self.member_name(field.name), field.type.container, self.deep_type(field.type.element))
+            _EqMember(
+                self.member_name(field.name),
+                field.type.container,
+                self.deep_type(field.type.element),
+                multi=field.type.key is not None and field.type.key.multi,
+            )
             for field in fields
             if not self.is_position_only(field.type.element)
         ]
+
+    def map_value_type(self, field_type: am.FieldType) -> str:
+        """What one key of a keyed collection holds: its element, or a run of them under ``multi``."""
+        assert field_type.key is not None
+        element = self.element_type(field_type.element)
+        return f"Vec<{element}>" if field_type.key.multi else element
 
     def field_type(self, owner: str | None, field: am.Field) -> str:
         """The Rust type of one field of ``owner``."""
@@ -502,7 +518,7 @@ class RustAstGenerator:
         if container is am.Container.MAP:
             assert field.type.key is not None
             key = self.element_type(field.type.key.element)
-            return f"{_INDEX_MAP_TYPE}<{key}, {self.element_type(field.type.element)}>"
+            return f"{_INDEX_MAP_TYPE}<{key}, {self.map_value_type(field.type)}>"
         inner = self.embedded_type(owner, field.type.element)
         return f"Option<{inner}>" if container is am.Container.OPTIONAL else inner
 
@@ -975,7 +991,8 @@ class RustAstGenerator:
 
         A collection compares element by element in order, and a map by key — the same answers
         ``Vec`` and ``IndexMap`` give when their own ``PartialEq`` does the comparing, so a member
-        whose element happens to be recursive compares no differently from one whose is not.
+        whose element happens to be recursive compares no differently from one whose is not.  A
+        ``multi`` map is both at once: the key lookup, then the run under it elementwise.
         """
         item = f"{_EQ_MODULE}::Item::{member.deep}"
         name = member.name
@@ -1005,10 +1022,22 @@ class RustAstGenerator:
                 f"    let Some(b) = other.{name}.get(key) else {{",
                 "        return false;",
                 "    };",
-                f"    worklist.push({item}(a, b));",
-                "}",
             )
         )
+        if member.multi:
+            lines.extend(
+                (
+                    "    if a.len() != b.len() {",
+                    "        return false;",
+                    "    }",
+                    "    for (a, b) in a.iter().zip(b.iter()) {",
+                    f"        worklist.push({item}(a, b));",
+                    "    }",
+                )
+            )
+        else:
+            lines.append(f"    worklist.push({item}(a, b));")
+        lines.append("}")
         return lines
 
     def emit_eq_module(self) -> None:
@@ -1112,15 +1141,15 @@ class RustAstGenerator:
         lines.extend(self.bucket_lines(rule_name, self.body_labels(fields, hoists)))
         for hoist in hoists:
             lines.extend(self.hoist_lines(type_name, rule_name, hoist))
-        positions = {(field.hoist, field.name): index for hoist in hoists for index, field in enumerate(hoist.fields)}
+        positions = {(field.wrapper, field.name): index for hoist in hoists for index, field in enumerate(hoist.fields)}
         lines.append("Ok(Self {")
         for field in fields:
             member = self.member_name(field.name)
-            if field.hoist is None:
+            if field.wrapper is None:
                 statements, held = self.field_value(type_name, rule_name, field)
                 value = _block(statements, held.expression)
             else:
-                value = [f"{self.hoist_variable(field.hoist)}.{positions[field.hoist, field.name]}"]
+                value = [f"{self.hoist_variable(field.wrapper)}.{positions[field.wrapper, field.name]}"]
             lines.extend(_indent(_member_lines(member, value), 4))
         lines.append("    span: cst_node.span().clone(),")
         lines.extend(_indent(self.backpointer_argument(), 4))
@@ -1140,7 +1169,7 @@ class RustAstGenerator:
         wrapper's own label that the body reads; a wrapper carrying no fields is never read at all.
         """
         labels = [hoist.label for hoist in hoists if hoist.fields]
-        labels.extend(field.label for field in fields if field.hoist is None)
+        labels.extend(field.label for field in fields if field.wrapper is None)
         return list(dict.fromkeys(labels))
 
     def bucket_lines(self, rule_name: str, labels: Sequence[str]) -> list[str]:
@@ -1264,10 +1293,11 @@ class RustAstGenerator:
         return lines + self.map_lines(pre, value, field_type, bucket), _Value("keyed")
 
     def map_lines(self, pre: Sequence[str], value: _Value, field_type: am.FieldType, bucket: str) -> list[str]:
-        """Statements building a keyed collection, rejecting a key two elements share.
+        """Statements building a keyed collection.
 
         The key is read off each element's own field, which is the authoritative one; the map's
-        keys are a lookup convenience.
+        keys are a lookup convenience.  A second element under one key is refused, or — under
+        ``multi`` — accumulated behind the first, which is what the two forms differ in.
         """
         key = field_type.key
         assert key is not None
@@ -1276,11 +1306,15 @@ class RustAstGenerator:
         owned = self.element_type(key.element) == _SCALAR_TYPES[am.ScalarKind.TEXT]
         # Spelled out rather than inferred: the duplicate-key arm reads a member off a value the
         # map holds, which it cannot do before the map's own type is known.
-        annotation = f"{_INDEX_MAP_TYPE}<{self.element_type(key.element)}, {self.element_type(field_type.element)}>"
+        annotation = f"{_INDEX_MAP_TYPE}<{self.element_type(key.element)}, {self.map_value_type(field_type)}>"
         lines = [f"let mut keyed: {annotation} = {_INDEX_MAP_TYPE}::new();", f"for child in &{bucket} {{"]
         lines.extend(_indent(pre, 4))
         lines.append(f"    let element = {value.expression};")
         lines.append(f"    let key = {read}.clone();" if owned else f"    let key = {read};")
+        if key.multi:
+            lines.append("    keyed.entry(key).or_default().push(element);")
+            lines.append("}")
+            return lines
         lines.append("    if let Some(previous) = keyed.get(&key) {")
         lines.append(
             f'        return Err({_RUNTIME}::duplicate_key("{key.rule_name}", &key, &element.span, &previous.span));'
@@ -1387,14 +1421,16 @@ class RustAstGenerator:
         for hoist in node.hoists:
             body.extend(self.hoist_lines(None, rule_name, hoist))
         positions = {
-            (field.hoist, field.name): index for hoist in node.hoists for index, field in enumerate(hoist.fields)
+            (field.wrapper, field.name): index for hoist in node.hoists for index, field in enumerate(hoist.fields)
         }
         # Positional locals, as in a hoist: what leaves here is read back by position.
         values: list[str] = []
         for index, field in enumerate(node.fields):
             values.append(f"v{index}")
-            if field.hoist is not None:
-                body.append(f"let v{index} = {self.hoist_variable(field.hoist)}.{positions[field.hoist, field.name]};")
+            if field.wrapper is not None:
+                body.append(
+                    f"let v{index} = {self.hoist_variable(field.wrapper)}.{positions[field.wrapper, field.name]};"
+                )
                 continue
             lines, value = self.field_value(None, rule_name, field)
             body.extend(
@@ -1683,76 +1719,57 @@ class RustAstGenerator:
         return lines
 
     def emit_dispatch(self, rule_name: str, node: am.SumNode) -> None:
-        """The function counting a node's labeled children and naming the alternative they fit."""
+        """The table one sum rule's alternatives are told apart by, and the call evaluating it."""
         dispatch = am.sum_dispatch(node)
+        constant = am.signature_constant_name(rule_name)
+        self.separate()
+        self.emit(*rust_emit.dispatch_table_lines(constant, rule_name, dispatch))
         self.separate()
         self.emit(
             f"/// Which alternative of rule `{rule_name}` the node's labeled children came from.",
             "///",
-            "/// The CST does not record it, so the children are counted per label and kind and the",
-            "/// first alternative whose signature accepts those counts wins.",
+            "/// The CST does not record it, so each child is classified into the (label, kind) pair",
+            "/// it occupies and the runtime takes the first alternative accepting those counts.",
             f"fn {self.dispatch_name(rule_name)}(node: &{self.cst_node_type(rule_name)}) -> Option<usize> {{",
         )
         self.emit(*_indent(self.dispatch_body(rule_name, dispatch), 4))
         self.emit("}")
 
     def dispatch_body(self, rule_name: str, dispatch: am.SumDispatch) -> list[str]:
-        # A rule whose nodes hold one kind of child needs no kind test anywhere in the loop
-        # (:meth:`count_lines`), so no clause reads the child and binding it by name would be an
-        # unused variable -- a warning, and a hard build failure under `-D warnings`.
+        # A rule whose nodes hold one kind of child needs no kind test (:meth:`kind_lines`), so
+        # nothing reads the child and binding it by name would be an unused variable -- a warning,
+        # and a hard build failure under `-D warnings`.
         child = "child" if self.child_variant_count(rule_name) > 1 else "_child"
-        lines = [f"let mut counts = [0usize; {len(dispatch.pairs)}];", f"for (label, {child}) in node.children() {{"]
-        lines.extend(_indent(self.count_lines(rule_name, dispatch), 4))
-        lines.append("}")
-        for alternative in dispatch.alternatives:
-            conditions = self.dispatch_conditions(alternative)
-            accept = [f"return Some({alternative.variant_index});"]
-            if not conditions:
-                # Unreachable for a rule classified as a sum: an alternative that constrains no
-                # count accepts every label freely and forbids none, so no label can tell it apart
-                # from a sibling and the rule is a merged product instead. The guard stands so an
-                # emitter change that made it reachable would not emit `if  {`.
-                lines.extend(accept)
-                return lines
-            lines.extend(_if_block(conditions, accept, 0))
-        lines.append("None")
+        return [
+            f"{am.signature_constant_name(rule_name)}.select(node.children().iter().map(|(label, {child})| {{",
+            *_indent(self.pair_lines(rule_name, dispatch), 4),
+            "}))",
+        ]
+
+    def pair_lines(self, rule_name: str, dispatch: am.SumDispatch) -> list[str]:
+        """The (label, kind) pair one child occupies, spelled as the dispatch table names them."""
+        clauses: list[tuple[str, Sequence[str]]] = [
+            (f"matches!(label, Some({self.label_variant(rule_name, label)}))", [f"Some({_string(label)})"])
+            for label in dict.fromkeys(pair.label for pair in dispatch.pairs)
+        ]
+        # A labeled child the table has no pair for belongs to no alternative; the empty spelling
+        # is a label the table cannot hold, which is the answer. An unlabeled child is not ours.
+        clauses.append(("label.is_some()", ['Some("")']))
+        lines = _expression("let label", _if_chain(clauses, ["None"]))
+        lines.extend(_expression("let kind", self.kind_lines(rule_name, dispatch)))
+        lines.append("(label, kind)")
         return lines
 
-    def count_lines(self, rule_name: str, dispatch: am.SumDispatch) -> list[str]:
-        """Statements counting one child into the (label, kind) pair it occupies."""
-        clauses: list[tuple[str, Sequence[str]]] = []
-        for label in dict.fromkeys(pair.label for pair in dispatch.pairs):
-            own = [(index, pair) for index, pair in enumerate(dispatch.pairs) if pair.label == label]
-            if len(own) == 1 and self.child_variant_count(rule_name) == 1:
-                body: list[str] = [f"counts[{own[0][0]}] += 1;"]
-            else:
-                kinds = [
-                    (f"matches!(child, {self.child_variant(rule_name, pair.kind)}(_))", [f"counts[{index}] += 1;"])
-                    for index, pair in own
-                ]
-                body = _if_chain(kinds, ["return None;"])
-            clauses.append((f"matches!(label, Some({self.label_variant(rule_name, label)}))", body))
-        # A label no alternative carries tells us nothing fits; an unlabeled child is not ours.
-        clauses.append(("label.is_some()", ["return None;"]))
-        return _if_chain(clauses)
-
-    @staticmethod
-    def dispatch_conditions(alternative: am.AltDispatch) -> list[str]:
-        """What one alternative requires of the counts, as Rust comparisons."""
-        conditions: list[str] = []
-        for bound in alternative.bounds:
-            counted = " + ".join(f"counts[{index}]" for index in bound.pairs) or "0"
-            if bound.minimum == bound.maximum:
-                conditions.append(f"{counted} == {bound.minimum}")
-            elif bound.maximum == math.inf:
-                conditions.append(f"{counted} >= {bound.minimum}")
-            else:
-                # `LabelCount` saturates both bounds at two, so a bound's maximum is 0, 1 or
-                # infinity: a finite maximum above the minimum is one over a minimum of zero.
-                assert bound.minimum == 0, bound
-                conditions.append(f"{counted} <= {int(bound.maximum)}")
-        conditions.extend(f"counts[{index}] == 0" for index in alternative.forbidden)
-        return conditions
+    def kind_lines(self, rule_name: str, dispatch: am.SumDispatch) -> list[str]:
+        """The kind of child one node holds, as the dispatch table spells it."""
+        kinds = list(dict.fromkeys(pair.kind for pair in dispatch.pairs))
+        if self.child_variant_count(rule_name) == 1:
+            return [rust_emit.dispatch_kind(kinds[0])]
+        clauses = [
+            (f"matches!(child, {self.child_variant(rule_name, kind)}(_))", [rust_emit.dispatch_kind(kind)])
+            for kind in kinds
+        ]
+        return _if_chain(clauses, ['""'])
 
     def emit_field_enum_converter(self, field_enum: am.FieldEnum) -> None:
         """The converter of a label carrying more than one type, dispatching on the child's kind."""
@@ -1949,6 +1966,11 @@ class RustAstGenerator:
         if field.type.container is am.Container.MAP:
             # Insertion order.  Each element carries its own key field, which is the authoritative
             # one, so the map's keys are never read back.
+            assert field.type.key is not None
+            if field.type.key.multi:
+                # A grouped map hands its elements out group by group, so a key holding none is
+                # refused here rather than dropped on the way to the item positions.
+                return f'{_RUNTIME}::multi_values({receiver}.iter(), "{field.type.key.rule_name}")?'
             return f"{receiver}.values().collect()"
         if field.type.container is am.Container.OPTIONAL and not owned:
             return f"{receiver}.into_iter().collect()"
@@ -1980,7 +2002,8 @@ class RustAstGenerator:
             return f"&[{element}]"
         if container is am.Container.MAP:
             assert field.type.key is not None
-            return f"&{_INDEX_MAP_TYPE}<{self.element_type(field.type.key.element)}, {element}>"
+            key = self.element_type(field.type.key.element)
+            return f"&{_INDEX_MAP_TYPE}<{key}, {self.map_value_type(field.type)}>"
         borrowed = _BORROWED_TYPES.get(element, element)
         if container is am.Container.OPTIONAL:
             return f"Option<&{borrowed}>"
@@ -2207,9 +2230,9 @@ class RustAstGenerator:
         alternatives that accept different ones of them indistinguishable by name, so an
         alternative accepting fewer kinds than the field holds carries a kind test as well.
         """
-        by_label = {field.label: field for field in fields if field.hoist is None}
+        by_label = {field.label: field for field in fields if field.wrapper is None}
         entries = [
-            f"({_string(field.label)}, {body.values(field).populated})" for field in fields if field.hoist is None
+            f"({_string(field.label)}, {body.values(field).populated})" for field in fields if field.wrapper is None
         ]
         entries.extend(f"({_string(hoist.label)}, {self.hoist_present(hoist, body.values)})" for hoist in hoists)
         lines = [f"let present = {_RUNTIME}::populated(&[{', '.join(entries)}]);"]
@@ -2267,7 +2290,7 @@ class RustAstGenerator:
         A hoisted field is not distributed over this rule's item positions: its wrapper occupies
         one position, and the wrapper's own helper places the fields inside it.
         """
-        own = [field for field in fields if field.hoist is None]
+        own = [field for field in fields if field.wrapper is None]
         by_label = {field.label: field for field in own}
         by_hoist = {hoist.label: hoist for hoist in hoists}
         served: set[str] = set()
@@ -2749,20 +2772,10 @@ class RustAstGenerator:
             "/// converter ignores unlabeled children, so there is nothing to capture it for.",
             f"pub fn {am.PARSE_STR_FUNCTION}(src: &str, filename: Option<&str>)"
             f" -> Result<{self.goal_type()}, {parse_error}> {{",
-            f"    let mut parser = {_PARSER_ALIAS}::Parser::new(src, filename, false);",
-            f"    let result = parser.apply__parse_{goal}(0);",
-            "    // A depth-rejected parse can still come back as `Some` holding a wrong tree.",
-            "    if parser.depth_exceeded() {",
-            f"        {failed}",
-            "    }",
-            "    let Some(parsed) = result else {",
-            f"        {failed}",
-            "    };",
-            "    // The whole input has to be consumed; `pos` counts characters, not bytes.",
-            "    if parsed.pos != src.chars().count() as i64 {",
-            f"        {failed}",
-            "    }",
-            f"    Ok({self.goal_from_cst('&parsed.result')})",
+            *_indent(
+                rust_emit.parse_skeleton_lines(goal or "", _PARSER_ALIAS, failed, self.goal_from_cst("&parsed.result")),
+                4,
+            ),
             "}",
         )
 

@@ -1016,36 +1016,54 @@ impl Name {
     }
 }
 
+/// How rule `atom`'s alternatives are told apart by a node's labeled children.
+static _ATOM_SIGNATURES: ::fltk_ast_core::dispatch::Table = ::fltk_ast_core::dispatch::Table {
+    pairs: &[
+        ::fltk_ast_core::dispatch::Pair { label: "num", kind: "num" },
+        ::fltk_ast_core::dispatch::Pair { label: "name", kind: "name" },
+    ],
+    alternatives: &[
+        ::fltk_ast_core::dispatch::Alt {
+            variant: 0,
+            bounds: &[
+                ::fltk_ast_core::dispatch::Bound { label: "num", pairs: &[0], minimum: 1, maximum: 1 },
+            ],
+            forbidden: &[1],
+        },
+        ::fltk_ast_core::dispatch::Alt {
+            variant: 1,
+            bounds: &[
+                ::fltk_ast_core::dispatch::Bound { label: "name", pairs: &[1], minimum: 1, maximum: 1 },
+            ],
+            forbidden: &[0],
+        },
+    ],
+};
+
 /// Which alternative of rule `atom` the node's labeled children came from.
 ///
-/// The CST does not record it, so the children are counted per label and kind and the
-/// first alternative whose signature accepts those counts wins.
+/// The CST does not record it, so each child is classified into the (label, kind) pair
+/// it occupies and the runtime takes the first alternative accepting those counts.
 fn _atom_alternative(node: &cst::Atom) -> Option<usize> {
-    let mut counts = [0usize; 2];
-    for (label, child) in node.children() {
-        if matches!(label, Some(cst::AtomLabel::Num)) {
-            if matches!(child, cst::AtomChild::Num(_)) {
-                counts[0] += 1;
-            } else {
-                return None;
-            }
+    _ATOM_SIGNATURES.select(node.children().iter().map(|(label, child)| {
+        let label = if matches!(label, Some(cst::AtomLabel::Num)) {
+            Some("num")
         } else if matches!(label, Some(cst::AtomLabel::Name)) {
-            if matches!(child, cst::AtomChild::Name(_)) {
-                counts[1] += 1;
-            } else {
-                return None;
-            }
+            Some("name")
         } else if label.is_some() {
-            return None;
-        }
-    }
-    if counts[0] == 1 && counts[1] == 0 {
-        return Some(0);
-    }
-    if counts[1] == 1 && counts[0] == 0 {
-        return Some(1);
-    }
-    None
+            Some("")
+        } else {
+            None
+        };
+        let kind = if matches!(child, cst::AtomChild::Num(_)) {
+            "num"
+        } else if matches!(child, cst::AtomChild::Name(_)) {
+            "name"
+        } else {
+            ""
+        };
+        (label, kind)
+    }))
 }
 
 impl Atom {
@@ -1250,42 +1268,58 @@ impl ExprAlt1 {
     }
 }
 
+/// How rule `expr`'s alternatives are told apart by a node's labeled children.
+static _EXPR_SIGNATURES: ::fltk_ast_core::dispatch::Table = ::fltk_ast_core::dispatch::Table {
+    pairs: &[
+        ::fltk_ast_core::dispatch::Pair { label: "lhs", kind: "expr" },
+        ::fltk_ast_core::dispatch::Pair { label: "rhs", kind: "atom" },
+        ::fltk_ast_core::dispatch::Pair { label: "atom", kind: "atom" },
+    ],
+    alternatives: &[
+        ::fltk_ast_core::dispatch::Alt {
+            variant: 0,
+            bounds: &[
+                ::fltk_ast_core::dispatch::Bound { label: "lhs", pairs: &[0], minimum: 1, maximum: 1 },
+                ::fltk_ast_core::dispatch::Bound { label: "rhs", pairs: &[1], minimum: 1, maximum: 1 },
+            ],
+            forbidden: &[2],
+        },
+        ::fltk_ast_core::dispatch::Alt {
+            variant: 1,
+            bounds: &[
+                ::fltk_ast_core::dispatch::Bound { label: "atom", pairs: &[2], minimum: 1, maximum: 1 },
+            ],
+            forbidden: &[0, 1],
+        },
+    ],
+};
+
 /// Which alternative of rule `expr` the node's labeled children came from.
 ///
-/// The CST does not record it, so the children are counted per label and kind and the
-/// first alternative whose signature accepts those counts wins.
+/// The CST does not record it, so each child is classified into the (label, kind) pair
+/// it occupies and the runtime takes the first alternative accepting those counts.
 fn _expr_alternative(node: &cst::Expr) -> Option<usize> {
-    let mut counts = [0usize; 3];
-    for (label, child) in node.children() {
-        if matches!(label, Some(cst::ExprLabel::Lhs)) {
-            if matches!(child, cst::ExprChild::Expr(_)) {
-                counts[0] += 1;
-            } else {
-                return None;
-            }
+    _EXPR_SIGNATURES.select(node.children().iter().map(|(label, child)| {
+        let label = if matches!(label, Some(cst::ExprLabel::Lhs)) {
+            Some("lhs")
         } else if matches!(label, Some(cst::ExprLabel::Rhs)) {
-            if matches!(child, cst::ExprChild::Atom(_)) {
-                counts[1] += 1;
-            } else {
-                return None;
-            }
+            Some("rhs")
         } else if matches!(label, Some(cst::ExprLabel::Atom)) {
-            if matches!(child, cst::ExprChild::Atom(_)) {
-                counts[2] += 1;
-            } else {
-                return None;
-            }
+            Some("atom")
         } else if label.is_some() {
-            return None;
-        }
-    }
-    if counts[0] == 1 && counts[1] == 1 && counts[2] == 0 {
-        return Some(0);
-    }
-    if counts[2] == 1 && counts[0] == 0 && counts[1] == 0 {
-        return Some(1);
-    }
-    None
+            Some("")
+        } else {
+            None
+        };
+        let kind = if matches!(child, cst::ExprChild::Expr(_)) {
+            "expr"
+        } else if matches!(child, cst::ExprChild::Atom(_)) {
+            "atom"
+        } else {
+            ""
+        };
+        (label, kind)
+    }))
 }
 
 impl Expr {
@@ -1339,36 +1373,54 @@ impl LvalInner {
     }
 }
 
+/// How rule `lval`'s alternatives are told apart by a node's labeled children.
+static _LVAL_SIGNATURES: ::fltk_ast_core::dispatch::Table = ::fltk_ast_core::dispatch::Table {
+    pairs: &[
+        ::fltk_ast_core::dispatch::Pair { label: "inner", kind: "rval" },
+        ::fltk_ast_core::dispatch::Pair { label: "base", kind: "name" },
+    ],
+    alternatives: &[
+        ::fltk_ast_core::dispatch::Alt {
+            variant: 0,
+            bounds: &[
+                ::fltk_ast_core::dispatch::Bound { label: "inner", pairs: &[0], minimum: 1, maximum: 1 },
+            ],
+            forbidden: &[1],
+        },
+        ::fltk_ast_core::dispatch::Alt {
+            variant: 1,
+            bounds: &[
+                ::fltk_ast_core::dispatch::Bound { label: "base", pairs: &[1], minimum: 1, maximum: 1 },
+            ],
+            forbidden: &[0],
+        },
+    ],
+};
+
 /// Which alternative of rule `lval` the node's labeled children came from.
 ///
-/// The CST does not record it, so the children are counted per label and kind and the
-/// first alternative whose signature accepts those counts wins.
+/// The CST does not record it, so each child is classified into the (label, kind) pair
+/// it occupies and the runtime takes the first alternative accepting those counts.
 fn _lval_alternative(node: &cst::Lval) -> Option<usize> {
-    let mut counts = [0usize; 2];
-    for (label, child) in node.children() {
-        if matches!(label, Some(cst::LvalLabel::Inner)) {
-            if matches!(child, cst::LvalChild::Rval(_)) {
-                counts[0] += 1;
-            } else {
-                return None;
-            }
+    _LVAL_SIGNATURES.select(node.children().iter().map(|(label, child)| {
+        let label = if matches!(label, Some(cst::LvalLabel::Inner)) {
+            Some("inner")
         } else if matches!(label, Some(cst::LvalLabel::Base)) {
-            if matches!(child, cst::LvalChild::Name(_)) {
-                counts[1] += 1;
-            } else {
-                return None;
-            }
+            Some("base")
         } else if label.is_some() {
-            return None;
-        }
-    }
-    if counts[0] == 1 && counts[1] == 0 {
-        return Some(0);
-    }
-    if counts[1] == 1 && counts[0] == 0 {
-        return Some(1);
-    }
-    None
+            Some("")
+        } else {
+            None
+        };
+        let kind = if matches!(child, cst::LvalChild::Rval(_)) {
+            "rval"
+        } else if matches!(child, cst::LvalChild::Name(_)) {
+            "name"
+        } else {
+            ""
+        };
+        (label, kind)
+    }))
 }
 
 impl Lval {
@@ -1422,36 +1474,54 @@ impl RvalInner {
     }
 }
 
+/// How rule `rval`'s alternatives are told apart by a node's labeled children.
+static _RVAL_SIGNATURES: ::fltk_ast_core::dispatch::Table = ::fltk_ast_core::dispatch::Table {
+    pairs: &[
+        ::fltk_ast_core::dispatch::Pair { label: "inner", kind: "lval" },
+        ::fltk_ast_core::dispatch::Pair { label: "base", kind: "num" },
+    ],
+    alternatives: &[
+        ::fltk_ast_core::dispatch::Alt {
+            variant: 0,
+            bounds: &[
+                ::fltk_ast_core::dispatch::Bound { label: "inner", pairs: &[0], minimum: 1, maximum: 1 },
+            ],
+            forbidden: &[1],
+        },
+        ::fltk_ast_core::dispatch::Alt {
+            variant: 1,
+            bounds: &[
+                ::fltk_ast_core::dispatch::Bound { label: "base", pairs: &[1], minimum: 1, maximum: 1 },
+            ],
+            forbidden: &[0],
+        },
+    ],
+};
+
 /// Which alternative of rule `rval` the node's labeled children came from.
 ///
-/// The CST does not record it, so the children are counted per label and kind and the
-/// first alternative whose signature accepts those counts wins.
+/// The CST does not record it, so each child is classified into the (label, kind) pair
+/// it occupies and the runtime takes the first alternative accepting those counts.
 fn _rval_alternative(node: &cst::Rval) -> Option<usize> {
-    let mut counts = [0usize; 2];
-    for (label, child) in node.children() {
-        if matches!(label, Some(cst::RvalLabel::Inner)) {
-            if matches!(child, cst::RvalChild::Lval(_)) {
-                counts[0] += 1;
-            } else {
-                return None;
-            }
+    _RVAL_SIGNATURES.select(node.children().iter().map(|(label, child)| {
+        let label = if matches!(label, Some(cst::RvalLabel::Inner)) {
+            Some("inner")
         } else if matches!(label, Some(cst::RvalLabel::Base)) {
-            if matches!(child, cst::RvalChild::Num(_)) {
-                counts[1] += 1;
-            } else {
-                return None;
-            }
+            Some("base")
         } else if label.is_some() {
-            return None;
-        }
-    }
-    if counts[0] == 1 && counts[1] == 0 {
-        return Some(0);
-    }
-    if counts[1] == 1 && counts[0] == 0 {
-        return Some(1);
-    }
-    None
+            Some("")
+        } else {
+            None
+        };
+        let kind = if matches!(child, cst::RvalChild::Lval(_)) {
+            "lval"
+        } else if matches!(child, cst::RvalChild::Num(_)) {
+            "num"
+        } else {
+            ""
+        };
+        (label, kind)
+    }))
 }
 
 impl Rval {
@@ -1641,36 +1711,54 @@ impl NestInner {
     }
 }
 
+/// How rule `nest`'s alternatives are told apart by a node's labeled children.
+static _NEST_SIGNATURES: ::fltk_ast_core::dispatch::Table = ::fltk_ast_core::dispatch::Table {
+    pairs: &[
+        ::fltk_ast_core::dispatch::Pair { label: "inner", kind: "nest" },
+        ::fltk_ast_core::dispatch::Pair { label: "leaf", kind: "num" },
+    ],
+    alternatives: &[
+        ::fltk_ast_core::dispatch::Alt {
+            variant: 0,
+            bounds: &[
+                ::fltk_ast_core::dispatch::Bound { label: "inner", pairs: &[0], minimum: 1, maximum: 1 },
+            ],
+            forbidden: &[1],
+        },
+        ::fltk_ast_core::dispatch::Alt {
+            variant: 1,
+            bounds: &[
+                ::fltk_ast_core::dispatch::Bound { label: "leaf", pairs: &[1], minimum: 1, maximum: 1 },
+            ],
+            forbidden: &[0],
+        },
+    ],
+};
+
 /// Which alternative of rule `nest` the node's labeled children came from.
 ///
-/// The CST does not record it, so the children are counted per label and kind and the
-/// first alternative whose signature accepts those counts wins.
+/// The CST does not record it, so each child is classified into the (label, kind) pair
+/// it occupies and the runtime takes the first alternative accepting those counts.
 fn _nest_alternative(node: &cst::Nest) -> Option<usize> {
-    let mut counts = [0usize; 2];
-    for (label, child) in node.children() {
-        if matches!(label, Some(cst::NestLabel::Inner)) {
-            if matches!(child, cst::NestChild::Nest(_)) {
-                counts[0] += 1;
-            } else {
-                return None;
-            }
+    _NEST_SIGNATURES.select(node.children().iter().map(|(label, child)| {
+        let label = if matches!(label, Some(cst::NestLabel::Inner)) {
+            Some("inner")
         } else if matches!(label, Some(cst::NestLabel::Leaf)) {
-            if matches!(child, cst::NestChild::Num(_)) {
-                counts[1] += 1;
-            } else {
-                return None;
-            }
+            Some("leaf")
         } else if label.is_some() {
-            return None;
-        }
-    }
-    if counts[0] == 1 && counts[1] == 0 {
-        return Some(0);
-    }
-    if counts[1] == 1 && counts[0] == 0 {
-        return Some(1);
-    }
-    None
+            Some("")
+        } else {
+            None
+        };
+        let kind = if matches!(child, cst::NestChild::Nest(_)) {
+            "nest"
+        } else if matches!(child, cst::NestChild::Num(_)) {
+            "num"
+        } else {
+            ""
+        };
+        (label, kind)
+    }))
 }
 
 impl Nest {
@@ -1734,42 +1822,58 @@ impl NestSumAlt1 {
     }
 }
 
+/// How rule `nest_sum`'s alternatives are told apart by a node's labeled children.
+static _NEST_SUM_SIGNATURES: ::fltk_ast_core::dispatch::Table = ::fltk_ast_core::dispatch::Table {
+    pairs: &[
+        ::fltk_ast_core::dispatch::Pair { label: "lhs", kind: "nest_sum" },
+        ::fltk_ast_core::dispatch::Pair { label: "rhs", kind: "nest" },
+        ::fltk_ast_core::dispatch::Pair { label: "first", kind: "nest" },
+    ],
+    alternatives: &[
+        ::fltk_ast_core::dispatch::Alt {
+            variant: 0,
+            bounds: &[
+                ::fltk_ast_core::dispatch::Bound { label: "lhs", pairs: &[0], minimum: 1, maximum: 1 },
+                ::fltk_ast_core::dispatch::Bound { label: "rhs", pairs: &[1], minimum: 1, maximum: 1 },
+            ],
+            forbidden: &[2],
+        },
+        ::fltk_ast_core::dispatch::Alt {
+            variant: 1,
+            bounds: &[
+                ::fltk_ast_core::dispatch::Bound { label: "first", pairs: &[2], minimum: 1, maximum: 1 },
+            ],
+            forbidden: &[0, 1],
+        },
+    ],
+};
+
 /// Which alternative of rule `nest_sum` the node's labeled children came from.
 ///
-/// The CST does not record it, so the children are counted per label and kind and the
-/// first alternative whose signature accepts those counts wins.
+/// The CST does not record it, so each child is classified into the (label, kind) pair
+/// it occupies and the runtime takes the first alternative accepting those counts.
 fn _nest_sum_alternative(node: &cst::NestSum) -> Option<usize> {
-    let mut counts = [0usize; 3];
-    for (label, child) in node.children() {
-        if matches!(label, Some(cst::NestSumLabel::Lhs)) {
-            if matches!(child, cst::NestSumChild::NestSum(_)) {
-                counts[0] += 1;
-            } else {
-                return None;
-            }
+    _NEST_SUM_SIGNATURES.select(node.children().iter().map(|(label, child)| {
+        let label = if matches!(label, Some(cst::NestSumLabel::Lhs)) {
+            Some("lhs")
         } else if matches!(label, Some(cst::NestSumLabel::Rhs)) {
-            if matches!(child, cst::NestSumChild::Nest(_)) {
-                counts[1] += 1;
-            } else {
-                return None;
-            }
+            Some("rhs")
         } else if matches!(label, Some(cst::NestSumLabel::First)) {
-            if matches!(child, cst::NestSumChild::Nest(_)) {
-                counts[2] += 1;
-            } else {
-                return None;
-            }
+            Some("first")
         } else if label.is_some() {
-            return None;
-        }
-    }
-    if counts[0] == 1 && counts[1] == 1 && counts[2] == 0 {
-        return Some(0);
-    }
-    if counts[2] == 1 && counts[0] == 0 && counts[1] == 0 {
-        return Some(1);
-    }
-    None
+            Some("")
+        } else {
+            None
+        };
+        let kind = if matches!(child, cst::NestSumChild::NestSum(_)) {
+            "nest_sum"
+        } else if matches!(child, cst::NestSumChild::Nest(_)) {
+            "nest"
+        } else {
+            ""
+        };
+        (label, kind)
+    }))
 }
 
 impl NestSum {

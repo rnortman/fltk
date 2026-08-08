@@ -1,5 +1,5 @@
 [workspace]
-members = [".", "crates/fltk-cst-core", "crates/fltk-parser-core", "crates/fltk-unparser-core", "crates/fltk-ast-core", "crates/fltk-fmt-cli"]
+members = [".", "crates/fltk-cst-core", "crates/fltk-parser-core", "crates/fltk-unparser-core", "crates/fltk-ast-core", "crates/fltk-serde-core", "crates/fltk-fmt-cli"]
 resolver = "2"
 
 # Single writer for the regex engine.  fltk-parser-core compiles a grammar's terminals for
