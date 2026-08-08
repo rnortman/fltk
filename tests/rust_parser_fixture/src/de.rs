@@ -1788,6 +1788,222 @@ impl ::fltk_serde_core::NodeShape for cst::SumChain {
     }
 }
 
+/// How rule `entry_key`'s nodes are served.
+static _ENTRY_KEY_SHAPE: ::fltk_serde_core::Shape = ::fltk_serde_core::Shape {
+    rule: "entry_key",
+    form: ::fltk_serde_core::Form::Terminal { text_from: None },
+};
+
+impl ::fltk_serde_core::NodeShape for cst::EntryKey {
+    fn shape() -> &'static ::fltk_serde_core::Shape {
+        &_ENTRY_KEY_SHAPE
+    }
+
+    fn node_span(&self) -> ::fltk_cst_core::Span {
+        self.span().clone()
+    }
+
+    fn labeled_children(&self) -> Vec<(Option<&'static str>, ::fltk_serde_core::Child)> {
+        let mut children = Vec::with_capacity(self.children().len());
+        for (label, child) in self.children() {
+            let label = label.as_ref().map(|label| match label {
+                cst::EntryKeyLabel::Value => "value",
+            });
+            let child = match child {
+                cst::EntryKeyChild::Span(span) => ::fltk_serde_core::Child::Text(span.clone()),
+            };
+            children.push((label, child));
+        }
+        children
+    }
+}
+
+/// How rule `entry`'s nodes are served.
+static _ENTRY_SHAPE: ::fltk_serde_core::Shape = ::fltk_serde_core::Shape {
+    rule: "entry",
+    form: ::fltk_serde_core::Form::Product {
+        fields: &[
+            ::fltk_serde_core::Field {
+                name: "key",
+                label: "key",
+                container: ::fltk_serde_core::Container::Single,
+                hoist: &[],
+            },
+            ::fltk_serde_core::Field {
+                name: "value",
+                label: "value",
+                container: ::fltk_serde_core::Container::Single,
+                hoist: &[],
+            },
+        ],
+    },
+};
+
+impl ::fltk_serde_core::NodeShape for cst::Entry {
+    fn shape() -> &'static ::fltk_serde_core::Shape {
+        &_ENTRY_SHAPE
+    }
+
+    fn node_span(&self) -> ::fltk_cst_core::Span {
+        self.span().clone()
+    }
+
+    fn labeled_children(&self) -> Vec<(Option<&'static str>, ::fltk_serde_core::Child)> {
+        let mut children = Vec::with_capacity(self.children().len());
+        for (label, child) in self.children() {
+            let label = label.as_ref().map(|label| match label {
+                cst::EntryLabel::Key => "key",
+                cst::EntryLabel::Value => "value",
+            });
+            let child = match child {
+                cst::EntryChild::Atom(node) => ::fltk_serde_core::Child::Node(::fltk_serde_core::Node::new(node.clone())),
+                cst::EntryChild::EntryKey(node) => ::fltk_serde_core::Child::Node(::fltk_serde_core::Node::new(node.clone())),
+                cst::EntryChild::Trivia(_) => continue,
+            };
+            children.push((label, child));
+        }
+        children
+    }
+}
+
+/// How rule `entries`'s nodes are served.
+static _ENTRIES_SHAPE: ::fltk_serde_core::Shape = ::fltk_serde_core::Shape {
+    rule: "entries",
+    form: ::fltk_serde_core::Form::Product {
+        fields: &[
+            ::fltk_serde_core::Field {
+                name: "entry",
+                label: "entry",
+                container: ::fltk_serde_core::Container::Map(::fltk_serde_core::Key {
+                    name: "key",
+                    label: "key",
+                    kind: ::fltk_serde_core::KeyKind::Text,
+                    multi: false,
+                }),
+                hoist: &[],
+            },
+        ],
+    },
+};
+
+impl ::fltk_serde_core::NodeShape for cst::Entries {
+    fn shape() -> &'static ::fltk_serde_core::Shape {
+        &_ENTRIES_SHAPE
+    }
+
+    fn node_span(&self) -> ::fltk_cst_core::Span {
+        self.span().clone()
+    }
+
+    fn labeled_children(&self) -> Vec<(Option<&'static str>, ::fltk_serde_core::Child)> {
+        let mut children = Vec::with_capacity(self.children().len());
+        for (label, child) in self.children() {
+            let label = label.as_ref().map(|label| match label {
+                cst::EntriesLabel::Entry => "entry",
+            });
+            let child = match child {
+                cst::EntriesChild::Entry(node) => ::fltk_serde_core::Child::Node(::fltk_serde_core::Node::new(node.clone())),
+                cst::EntriesChild::Trivia(_) => continue,
+            };
+            children.push((label, child));
+        }
+        children
+    }
+}
+
+/// How rule `multi_entry`'s nodes are served.
+static _MULTI_ENTRY_SHAPE: ::fltk_serde_core::Shape = ::fltk_serde_core::Shape {
+    rule: "multi_entry",
+    form: ::fltk_serde_core::Form::Product {
+        fields: &[
+            ::fltk_serde_core::Field {
+                name: "key",
+                label: "key",
+                container: ::fltk_serde_core::Container::Single,
+                hoist: &[],
+            },
+            ::fltk_serde_core::Field {
+                name: "value",
+                label: "value",
+                container: ::fltk_serde_core::Container::Single,
+                hoist: &[],
+            },
+        ],
+    },
+};
+
+impl ::fltk_serde_core::NodeShape for cst::MultiEntry {
+    fn shape() -> &'static ::fltk_serde_core::Shape {
+        &_MULTI_ENTRY_SHAPE
+    }
+
+    fn node_span(&self) -> ::fltk_cst_core::Span {
+        self.span().clone()
+    }
+
+    fn labeled_children(&self) -> Vec<(Option<&'static str>, ::fltk_serde_core::Child)> {
+        let mut children = Vec::with_capacity(self.children().len());
+        for (label, child) in self.children() {
+            let label = label.as_ref().map(|label| match label {
+                cst::MultiEntryLabel::Key => "key",
+                cst::MultiEntryLabel::Value => "value",
+            });
+            let child = match child {
+                cst::MultiEntryChild::Atom(node) => ::fltk_serde_core::Child::Node(::fltk_serde_core::Node::new(node.clone())),
+                cst::MultiEntryChild::EntryKey(node) => ::fltk_serde_core::Child::Node(::fltk_serde_core::Node::new(node.clone())),
+                cst::MultiEntryChild::Trivia(_) => continue,
+            };
+            children.push((label, child));
+        }
+        children
+    }
+}
+
+/// How rule `multi_entries`'s nodes are served.
+static _MULTI_ENTRIES_SHAPE: ::fltk_serde_core::Shape = ::fltk_serde_core::Shape {
+    rule: "multi_entries",
+    form: ::fltk_serde_core::Form::Product {
+        fields: &[
+            ::fltk_serde_core::Field {
+                name: "multi_entry",
+                label: "multi_entry",
+                container: ::fltk_serde_core::Container::Map(::fltk_serde_core::Key {
+                    name: "key",
+                    label: "key",
+                    kind: ::fltk_serde_core::KeyKind::Text,
+                    multi: true,
+                }),
+                hoist: &[],
+            },
+        ],
+    },
+};
+
+impl ::fltk_serde_core::NodeShape for cst::MultiEntries {
+    fn shape() -> &'static ::fltk_serde_core::Shape {
+        &_MULTI_ENTRIES_SHAPE
+    }
+
+    fn node_span(&self) -> ::fltk_cst_core::Span {
+        self.span().clone()
+    }
+
+    fn labeled_children(&self) -> Vec<(Option<&'static str>, ::fltk_serde_core::Child)> {
+        let mut children = Vec::with_capacity(self.children().len());
+        for (label, child) in self.children() {
+            let label = label.as_ref().map(|label| match label {
+                cst::MultiEntriesLabel::MultiEntry => "multi_entry",
+            });
+            let child = match child {
+                cst::MultiEntriesChild::MultiEntry(node) => ::fltk_serde_core::Child::Node(::fltk_serde_core::Node::new(node.clone())),
+                cst::MultiEntriesChild::Trivia(_) => continue,
+            };
+            children.push((label, child));
+        }
+        children
+    }
+}
+
 /// The newtype-struct name `ast::Num` is deserialized under.
 const _NUM_AST_NAME: &str = "$__fltk_private_ast::num";
 
@@ -2157,6 +2373,42 @@ impl<'de> ::serde::Deserialize<'de> for ast::SumChain {
     }
 }
 
+/// The newtype-struct name `ast::Entry` is deserialized under.
+const _ENTRY_AST_NAME: &str = "$__fltk_private_ast::entry";
+
+impl<'de> ::serde::Deserialize<'de> for ast::Entry {
+    fn deserialize<D: ::serde::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        ::fltk_serde_core::deserialize_ast(deserializer, _ENTRY_AST_NAME, ast::Entry::from_cst)
+    }
+}
+
+/// The newtype-struct name `ast::Entries` is deserialized under.
+const _ENTRIES_AST_NAME: &str = "$__fltk_private_ast::entries";
+
+impl<'de> ::serde::Deserialize<'de> for ast::Entries {
+    fn deserialize<D: ::serde::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        ::fltk_serde_core::deserialize_ast(deserializer, _ENTRIES_AST_NAME, ast::Entries::from_cst)
+    }
+}
+
+/// The newtype-struct name `ast::MultiEntry` is deserialized under.
+const _MULTI_ENTRY_AST_NAME: &str = "$__fltk_private_ast::multi_entry";
+
+impl<'de> ::serde::Deserialize<'de> for ast::MultiEntry {
+    fn deserialize<D: ::serde::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        ::fltk_serde_core::deserialize_ast(deserializer, _MULTI_ENTRY_AST_NAME, ast::MultiEntry::from_cst)
+    }
+}
+
+/// The newtype-struct name `ast::MultiEntries` is deserialized under.
+const _MULTI_ENTRIES_AST_NAME: &str = "$__fltk_private_ast::multi_entries";
+
+impl<'de> ::serde::Deserialize<'de> for ast::MultiEntries {
+    fn deserialize<D: ::serde::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        ::fltk_serde_core::deserialize_ast(deserializer, _MULTI_ENTRIES_AST_NAME, ast::MultiEntries::from_cst)
+    }
+}
+
 /// Deserialize `T` from a `num` CST node.
 pub fn from_num_cst<T: ::serde::de::DeserializeOwned>(
     node: &::fltk_cst_core::Shared<cst::Num>,
@@ -2440,6 +2692,41 @@ pub fn from_colour_cst<T: ::serde::de::DeserializeOwned>(
 /// Deserialize `T` from a `sum_chain` CST node.
 pub fn from_sum_chain_cst<T: ::serde::de::DeserializeOwned>(
     node: &::fltk_cst_core::Shared<cst::SumChain>,
+) -> Result<T, ::fltk_serde_core::DeserializeError> {
+    ::fltk_serde_core::from_node(::fltk_serde_core::Node::new(node.clone()))
+}
+
+/// Deserialize `T` from a `entry_key` CST node.
+pub fn from_entry_key_cst<T: ::serde::de::DeserializeOwned>(
+    node: &::fltk_cst_core::Shared<cst::EntryKey>,
+) -> Result<T, ::fltk_serde_core::DeserializeError> {
+    ::fltk_serde_core::from_node(::fltk_serde_core::Node::new(node.clone()))
+}
+
+/// Deserialize `T` from a `entry` CST node.
+pub fn from_entry_cst<T: ::serde::de::DeserializeOwned>(
+    node: &::fltk_cst_core::Shared<cst::Entry>,
+) -> Result<T, ::fltk_serde_core::DeserializeError> {
+    ::fltk_serde_core::from_node(::fltk_serde_core::Node::new(node.clone()))
+}
+
+/// Deserialize `T` from a `entries` CST node.
+pub fn from_entries_cst<T: ::serde::de::DeserializeOwned>(
+    node: &::fltk_cst_core::Shared<cst::Entries>,
+) -> Result<T, ::fltk_serde_core::DeserializeError> {
+    ::fltk_serde_core::from_node(::fltk_serde_core::Node::new(node.clone()))
+}
+
+/// Deserialize `T` from a `multi_entry` CST node.
+pub fn from_multi_entry_cst<T: ::serde::de::DeserializeOwned>(
+    node: &::fltk_cst_core::Shared<cst::MultiEntry>,
+) -> Result<T, ::fltk_serde_core::DeserializeError> {
+    ::fltk_serde_core::from_node(::fltk_serde_core::Node::new(node.clone()))
+}
+
+/// Deserialize `T` from a `multi_entries` CST node.
+pub fn from_multi_entries_cst<T: ::serde::de::DeserializeOwned>(
+    node: &::fltk_cst_core::Shared<cst::MultiEntries>,
 ) -> Result<T, ::fltk_serde_core::DeserializeError> {
     ::fltk_serde_core::from_node(::fltk_serde_core::Node::new(node.clone()))
 }

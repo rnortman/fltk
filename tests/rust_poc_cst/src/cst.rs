@@ -145,7 +145,7 @@ pub enum IdentifierChild {
     Span(Span),
 }
 
-impl PartialEq for IdentifierChild {
+impl ::std::cmp::PartialEq for IdentifierChild {
     fn eq(&self, other: &Self) -> bool {
         match (self, other) {
             (IdentifierChild::Span(a), IdentifierChild::Span(b)) => a == b,
@@ -154,7 +154,7 @@ impl PartialEq for IdentifierChild {
 }
 
 impl IdentifierChild {
-    fn into_drop_item(self) -> Option<DropWorklistItem> {
+    fn into_drop_item(self) -> ::std::option::Option<DropWorklistItem> {
         match self {
             Self::Span(_) => None,
         }
@@ -163,7 +163,7 @@ impl IdentifierChild {
     /// Shallow structural equality for one child pair.
     /// Span pair: compare directly. Node pair: ptr_eq short-circuit (skip enqueue)
     /// or enqueue for the worklist. Variant mismatch: return false.
-    fn eq_shallow_enqueue(&self, other: &Self, _worklist: &mut Vec<EqWorklistItem>) -> bool {
+    fn eq_shallow_enqueue(&self, other: &Self, _worklist: &mut ::std::vec::Vec<EqWorklistItem>) -> bool {
         match (self, other) {
             (Self::Span(a), Self::Span(b)) => a == b,
         }
@@ -208,7 +208,7 @@ pub struct Identifier {
     // Not pub: use span() / children() / push_child() — the stable accessor API.
     // Direct field access bypasses any future validation logic on setters.
     span: Span,
-    children: Vec<(Option<IdentifierLabel>, IdentifierChild)>,
+    children: ::std::vec::Vec<(::std::option::Option<IdentifierLabel>, IdentifierChild)>,
 }
 
 // Manual Debug: prints span + child COUNT, never recursing into children.
@@ -226,7 +226,7 @@ impl fmt::Debug for Identifier {
 }
 
 // Span-only PartialEq: no node-typed children, so this cannot recurse — depth-safe.
-impl PartialEq for Identifier {
+impl ::std::cmp::PartialEq for Identifier {
     fn eq(&self, other: &Self) -> bool {
         self.span == other.span && self.children == other.children
     }
@@ -237,7 +237,7 @@ impl Identifier {
     pub fn new(span: Span) -> Self {
         Identifier {
             span,
-            children: Vec::new(),
+            children: ::std::vec::Vec::new(),
         }
     }
 
@@ -260,7 +260,7 @@ impl Identifier {
     ///
     /// Each entry is `(label, child)`. Use the per-label accessors
     /// (`children_<lbl>`, `child_<lbl>`, `maybe_<lbl>`) for type-safe access.
-    pub fn children(&self) -> &[(Option<IdentifierLabel>, IdentifierChild)] {
+    pub fn children(&self) -> &[(::std::option::Option<IdentifierLabel>, IdentifierChild)] {
         self.children.as_slice()
     }
 
@@ -269,14 +269,14 @@ impl Identifier {
     /// No type-checking is performed: any child variant may be stored under
     /// any label. Per-label typed mutators (`append_<lbl>`, `extend_<lbl>`)
     /// provide type-constrained alternatives.
-    pub fn push_child(&mut self, label: Option<IdentifierLabel>, child: IdentifierChild) {
+    pub fn push_child(&mut self, label: ::std::option::Option<IdentifierLabel>, child: IdentifierChild) {
         self.children.push((label, child));
     }
 
     /// Return the single child (any label), or `Err` if there is not exactly one.
     ///
     /// Mirrors the Python `child()` method: count violation → `CstError::ChildCount`.
-    pub fn child(&self) -> Result<&(Option<IdentifierLabel>, IdentifierChild), CstError> {
+    pub fn child(&self) -> ::std::result::Result<&(::std::option::Option<IdentifierLabel>, IdentifierChild), CstError> {
         match self.children.as_slice() {
             [single] => Ok(single),
             slice => Err(CstError::ChildCount {
@@ -303,7 +303,7 @@ impl Identifier {
     ///
     /// Off-type variants stored under the `name` label are silently skipped.
     /// Use `children()` (the untyped slice) for a lossless view.
-    pub fn children_name(&self) -> impl Iterator<Item = &Span> + '_ {
+    pub fn children_name(&self) -> impl ::std::iter::Iterator<Item = &Span> + '_ {
         self.children.iter()
             .filter(|(lbl, _)| *lbl == Some(IdentifierLabel::Name))
             .map(|(_, child)| match child { IdentifierChild::Span(s) => s })
@@ -314,7 +314,7 @@ impl Identifier {
     /// Count is checked by label match first (`CstError::ChildCount`); if the
     /// count is valid and the surviving child has the wrong variant type,
     /// `CstError::UnexpectedChildType` is returned (single-typed labels only).
-    pub fn child_name(&self) -> Result<&Span, CstError> {
+    pub fn child_name(&self) -> ::std::result::Result<&Span, CstError> {
         let mut it = self.children.iter()
             .filter(|(lbl, _)| *lbl == Some(IdentifierLabel::Name));
         match (it.next(), it.next()) {
@@ -335,7 +335,7 @@ impl Identifier {
     ///
     /// Returns `Ok(None)` for zero, `Ok(Some(...))` for one,
     /// `Err(CstError::ChildCount)` for two or more.
-    pub fn maybe_name(&self) -> Result<Option<&Span>, CstError> {
+    pub fn maybe_name(&self) -> ::std::result::Result<::std::option::Option<&Span>, CstError> {
         let mut it = self.children.iter()
             .filter(|(lbl, _)| *lbl == Some(IdentifierLabel::Name));
         match (it.next(), it.next()) {
@@ -359,7 +359,7 @@ impl Identifier {
     }
 
     /// Append multiple `Span` children with label `name`.
-    pub fn extend_name(&mut self, spans: impl IntoIterator<Item = Span>) {
+    pub fn extend_name(&mut self, spans: impl ::std::iter::IntoIterator<Item = Span>) {
         self.children.extend(spans.into_iter().map(|s| (Some(IdentifierLabel::Name), IdentifierChild::Span(s))));
     }
 
@@ -396,14 +396,14 @@ impl Identifier {
     ///
     /// Python-facing clamping is in the `insert` pymethod; native callers must
     /// bounds-check. Unlike `list.insert`, Vec::insert panics on out-of-bounds.
-    pub fn insert_child(&mut self, index: usize, label: Option<IdentifierLabel>, child: IdentifierChild) {
+    pub fn insert_child(&mut self, index: usize, label: ::std::option::Option<IdentifierLabel>, child: IdentifierChild) {
         self.children.insert(index, (label, child));
     }
 
     /// Remove and return the child at `index` (Vec::remove semantics: panics if out of range).
     ///
     /// Panics on out-of-range. Python-facing IndexError is in the `remove_at` pymethod.
-    pub fn remove_child(&mut self, index: usize) -> (Option<IdentifierLabel>, IdentifierChild) {
+    pub fn remove_child(&mut self, index: usize) -> (::std::option::Option<IdentifierLabel>, IdentifierChild) {
         self.children.remove(index)
     }
 
@@ -411,8 +411,8 @@ impl Identifier {
     ///
     /// Panics on out-of-range. Python-facing IndexError is in the `replace_at` pymethod.
     pub fn replace_child(
-        &mut self, index: usize, label: Option<IdentifierLabel>, child: IdentifierChild,
-    ) -> (Option<IdentifierLabel>, IdentifierChild) {
+        &mut self, index: usize, label: ::std::option::Option<IdentifierLabel>, child: IdentifierChild,
+    ) -> (::std::option::Option<IdentifierLabel>, IdentifierChild) {
         std::mem::replace(&mut self.children[index], (label, child))
     }
 
@@ -456,14 +456,14 @@ impl PyIdentifier {
 impl PyIdentifier {
     #[new]
     #[pyo3(signature = (*, span = None))]
-    fn new(py: Python<'_>, span: Option<&Bound<'_, pyo3::PyAny>>) -> pyo3::PyResult<Py<PyIdentifier>> {
+    fn new(py: Python<'_>, span: ::std::option::Option<&Bound<'_, pyo3::PyAny>>) -> pyo3::PyResult<Py<PyIdentifier>> {
         let native_span = match span {
             Some(s) => extract_span(py, s)?,
             None => Span::unknown(),
         };
         let data = Identifier {
             span: native_span,
-            children: Vec::new(),
+            children: ::std::vec::Vec::new(),
         };
         let shared = Shared::new(data);
         let addr = shared.arc_ptr();
@@ -504,7 +504,7 @@ impl PyIdentifier {
     fn children(&self, py: Python<'_>) -> pyo3::PyResult<Py<pyo3::types::PyList>> {
         // Snapshot the children vec (Arc clones for node children — O(n) refcount bumps).
         // Lock scope: acquire read, snapshot, release before touching Python.
-        let snapshot: Vec<_> = {
+        let snapshot: ::std::vec::Vec<_> = {
             let guard = self.inner.read();
             guard.children.clone()
         };
@@ -523,7 +523,7 @@ impl PyIdentifier {
 
     #[pyo3(signature = (child, label = None))]
     fn append(
-        &self, py: Python<'_>, child: &Bound<'_, pyo3::PyAny>, label: Option<Py<pyo3::PyAny>>,
+        &self, py: Python<'_>, child: &Bound<'_, pyo3::PyAny>, label: ::std::option::Option<Py<pyo3::PyAny>>,
     ) -> pyo3::PyResult<()> {
         let span_type = get_span_type(py)?;
         let native_child = IdentifierChild::extract_from_pyobject(py, child, &span_type)?;
@@ -549,7 +549,7 @@ impl PyIdentifier {
         &self,
         py: Python<'_>,
         children: &Bound<'_, pyo3::PyAny>,
-        label: Option<Py<pyo3::PyAny>>,
+        label: ::std::option::Option<Py<pyo3::PyAny>>,
     ) -> pyo3::PyResult<()> {
         let span_type = get_span_type(py)?;
         let native_label = match label {
@@ -580,7 +580,7 @@ impl PyIdentifier {
         // the same node (self-extend). No ptr_eq call is needed here — the snapshot
         // approach handles self-extend structurally.
         // Lock scope: hold read only long enough to clone the Arc-based children vec.
-        let snapshot: Vec<_> = {
+        let snapshot: ::std::vec::Vec<_> = {
             let guard = other.inner.read();
             guard.children.clone()
         };
@@ -620,7 +620,7 @@ impl PyIdentifier {
         py: Python<'_>,
         index: &Bound<'_, pyo3::PyAny>,
         child: &Bound<'_, pyo3::PyAny>,
-        label: Option<Py<pyo3::PyAny>>,
+        label: ::std::option::Option<Py<pyo3::PyAny>>,
     ) -> pyo3::PyResult<()> {
         // Validate child and label BEFORE taking the write lock.
         let span_type = get_span_type(py)?;
@@ -685,13 +685,13 @@ impl PyIdentifier {
             .getattr(pyo3::intern!(py, "index"))?
             .call1((index,))?;
         // Fast path: extract i64. Beyond i64 is always OOB for real trees.
-        let maybe_i64: Option<i64> = raw_idx.extract::<i64>().ok();
+        let maybe_i64: ::std::option::Option<i64> = raw_idx.extract::<i64>().ok();
         // Single write lock: resolve + bounds-check + Vec::remove atomically (no TOCTOU).
         // On OOB, capture n and return Err after releasing the guard.
-        let result: Result<_, usize> = {
+        let result: ::std::result::Result<_, usize> = {
             let mut guard = self.inner.write();
             let n = guard.children.len();
-            let resolved: Option<usize> = match maybe_i64 {
+            let resolved: ::std::option::Option<usize> = match maybe_i64 {
                 Some(i) if i < 0 => {
                     let normalized = n as i64 + i;
                     if normalized < 0 || normalized as usize >= n { None }
@@ -726,7 +726,7 @@ impl PyIdentifier {
         py: Python<'_>,
         index: &Bound<'_, pyo3::PyAny>,
         child: &Bound<'_, pyo3::PyAny>,
-        label: Option<Py<pyo3::PyAny>>,
+        label: ::std::option::Option<Py<pyo3::PyAny>>,
     ) -> pyo3::PyResult<()> {
         // Validate child and label BEFORE taking the write lock.
         let span_type = get_span_type(py)?;
@@ -752,12 +752,12 @@ impl PyIdentifier {
             .import(pyo3::intern!(py, "operator"))?
             .getattr(pyo3::intern!(py, "index"))?
             .call1((index,))?;
-        let maybe_i64: Option<i64> = raw_idx.extract::<i64>().ok();
+        let maybe_i64: ::std::option::Option<i64> = raw_idx.extract::<i64>().ok();
         // Single write lock: resolve + bounds-check + mem::replace atomically (no TOCTOU).
         let old = {
             let mut guard = self.inner.write();
             let n = guard.children.len();
-            let resolved: Option<usize> = match maybe_i64 {
+            let resolved: ::std::option::Option<usize> = match maybe_i64 {
                 Some(i) if i < 0 => {
                     let normalized = n as i64 + i;
                     if normalized < 0 || normalized as usize >= n { None }
@@ -816,7 +816,7 @@ impl PyIdentifier {
         // Lock scope: filter by label under the read guard, cloning only matching
         // children (Arc bump or Span copy each); drop the guard before to_pyobject,
         // which performs Python work that must not happen while a node lock is held.
-        let matching: Vec<_> = {
+        let matching: ::std::vec::Vec<_> = {
             let guard = self.inner.read();
             guard.children.iter()
                 .filter(|(lbl, _)| *lbl == Some(IdentifierLabel::Name))
@@ -856,7 +856,7 @@ impl PyIdentifier {
             .to_pyobject(py)
     }
 
-    fn maybe_name(&self, py: Python<'_>) -> pyo3::PyResult<Option<Py<pyo3::PyAny>>> {
+    fn maybe_name(&self, py: Python<'_>) -> pyo3::PyResult<::std::option::Option<Py<pyo3::PyAny>>> {
         // Lock scope: count label matches and clone only the first under the guard;
         // drop the guard before to_pyobject / exception raise (Python work).
         let (count, first) = {
@@ -888,7 +888,7 @@ impl PyIdentifier {
         self.child_name(py)
     }
 
-    fn name_text(&self) -> pyo3::PyResult<String> {
+    fn name_text(&self) -> pyo3::PyResult<::std::string::String> {
         // Lock scope: count label matches and clone only the first under the guard;
         // drop the guard before to_pyobject / exception raise (Python work).
         let (count, first) = {
@@ -920,7 +920,7 @@ impl PyIdentifier {
         }
     }
 
-    fn text(&self) -> pyo3::PyResult<String> {
+    fn text(&self) -> pyo3::PyResult<::std::string::String> {
         // Clone the span under the read guard, then release it before raising.
         let span = self.inner.read().span.clone();
         span.text_or_message()
@@ -943,7 +943,7 @@ impl PyIdentifier {
         Err(PyTypeError::new_err("unhashable type: 'Identifier'"))
     }
 
-    fn __repr__(&self, _py: Python<'_>) -> String {
+    fn __repr__(&self, _py: Python<'_>) -> ::std::string::String {
         let guard = self.inner.read();
         let span_repr = format!("Span(start={}, end={})", guard.span.start(), guard.span.end());
         let children_len = guard.children.len();
@@ -1032,7 +1032,7 @@ pub enum ItemsChild {
     Trivia(Shared<Trivia>),
 }
 
-impl PartialEq for ItemsChild {
+impl ::std::cmp::PartialEq for ItemsChild {
     fn eq(&self, other: &Self) -> bool {
         match (self, other) {
             (ItemsChild::Span(a), ItemsChild::Span(b)) => a == b,
@@ -1044,7 +1044,7 @@ impl PartialEq for ItemsChild {
 }
 
 impl ItemsChild {
-    fn into_drop_item(self) -> Option<DropWorklistItem> {
+    fn into_drop_item(self) -> ::std::option::Option<DropWorklistItem> {
         match self {
             Self::Span(_) => None,
             Self::Identifier(s) => Some(DropWorklistItem::Identifier(s)),
@@ -1055,7 +1055,7 @@ impl ItemsChild {
     /// Shallow structural equality for one child pair.
     /// Span pair: compare directly. Node pair: ptr_eq short-circuit (skip enqueue)
     /// or enqueue for the worklist. Variant mismatch: return false.
-    fn eq_shallow_enqueue(&self, other: &Self, worklist: &mut Vec<EqWorklistItem>) -> bool {
+    fn eq_shallow_enqueue(&self, other: &Self, worklist: &mut ::std::vec::Vec<EqWorklistItem>) -> bool {
         match (self, other) {
             (Self::Span(a), Self::Span(b)) => a == b,
             (Self::Identifier(a), Self::Identifier(b)) => {
@@ -1153,7 +1153,7 @@ pub struct Items {
     // Not pub: use span() / children() / push_child() — the stable accessor API.
     // Direct field access bypasses any future validation logic on setters.
     span: Span,
-    children: Vec<(Option<ItemsLabel>, ItemsChild)>,
+    children: ::std::vec::Vec<(::std::option::Option<ItemsLabel>, ItemsChild)>,
 }
 
 // Manual Debug: prints span + child COUNT, never recursing into children.
@@ -1173,7 +1173,7 @@ impl fmt::Debug for Items {
 // Iterative Drop: derived drop glue would recurse through Shared children
 // one frame set per tree level (attacker-controlled depth → stack
 // exhaustion, uncatchable abort). Drains the subtree via a worklist instead.
-impl Drop for Items {
+impl ::std::ops::Drop for Items {
     fn drop(&mut self) {
         if self.children.is_empty() {
             return; // also the recursion terminator for nodes drained by the worklist
@@ -1182,7 +1182,7 @@ impl Drop for Items {
         // the first push.  drain_into pushes only when it steals (count == 1).
         // In the common backtracking case (shared/memoized children) no steal
         // occurs and no allocation happens.  Owned deep chains allocate once.
-        let mut worklist: Vec<DropWorklistItem> = Vec::new();
+        let mut worklist: ::std::vec::Vec<DropWorklistItem> = ::std::vec::Vec::new();
         for (_, child) in self.children.drain(..) {
             if let Some(item) = child.into_drop_item() {
                 item.drain_into(&mut worklist);
@@ -1197,14 +1197,14 @@ impl Drop for Items {
 // Iterative PartialEq: the recursive version would recurse through Shared children
 // one frame set per tree level (attacker-controlled depth → stack
 // exhaustion, uncatchable abort). Uses an explicit worklist of node pairs.
-impl PartialEq for Items {
+impl ::std::cmp::PartialEq for Items {
     fn eq(&self, other: &Self) -> bool {
         if self.span != other.span || self.children.len() != other.children.len() {
             return false;
         }
         // Worklist allocated lazily (Vec::new does not heap-allocate until
         // first push); shallow trees and all-ptr_eq children never allocate.
-        let mut worklist: Vec<EqWorklistItem> = Vec::new();
+        let mut worklist: ::std::vec::Vec<EqWorklistItem> = ::std::vec::Vec::new();
         for ((la, ca), (lb, cb)) in self.children.iter().zip(other.children.iter()) {
             if la != lb || !ca.eq_shallow_enqueue(cb, &mut worklist) {
                 return false;
@@ -1224,7 +1224,7 @@ impl Items {
     pub fn new(span: Span) -> Self {
         Items {
             span,
-            children: Vec::new(),
+            children: ::std::vec::Vec::new(),
         }
     }
 
@@ -1247,7 +1247,7 @@ impl Items {
     ///
     /// Each entry is `(label, child)`. Use the per-label accessors
     /// (`children_<lbl>`, `child_<lbl>`, `maybe_<lbl>`) for type-safe access.
-    pub fn children(&self) -> &[(Option<ItemsLabel>, ItemsChild)] {
+    pub fn children(&self) -> &[(::std::option::Option<ItemsLabel>, ItemsChild)] {
         self.children.as_slice()
     }
 
@@ -1256,14 +1256,14 @@ impl Items {
     /// No type-checking is performed: any child variant may be stored under
     /// any label. Per-label typed mutators (`append_<lbl>`, `extend_<lbl>`)
     /// provide type-constrained alternatives.
-    pub fn push_child(&mut self, label: Option<ItemsLabel>, child: ItemsChild) {
+    pub fn push_child(&mut self, label: ::std::option::Option<ItemsLabel>, child: ItemsChild) {
         self.children.push((label, child));
     }
 
     /// Return the single child (any label), or `Err` if there is not exactly one.
     ///
     /// Mirrors the Python `child()` method: count violation → `CstError::ChildCount`.
-    pub fn child(&self) -> Result<&(Option<ItemsLabel>, ItemsChild), CstError> {
+    pub fn child(&self) -> ::std::result::Result<&(::std::option::Option<ItemsLabel>, ItemsChild), CstError> {
         match self.children.as_slice() {
             [single] => Ok(single),
             slice => Err(CstError::ChildCount {
@@ -1290,7 +1290,7 @@ impl Items {
     ///
     /// Off-type variants stored under the `item` label are silently skipped.
     /// Use `children()` (the untyped slice) for a lossless view.
-    pub fn children_item(&self) -> impl Iterator<Item = &Shared<Identifier>> + '_ {
+    pub fn children_item(&self) -> impl ::std::iter::Iterator<Item = &Shared<Identifier>> + '_ {
         self.children.iter()
             .filter(|(lbl, _)| *lbl == Some(ItemsLabel::Item))
             .filter_map(|(_, child)| match child {
@@ -1304,7 +1304,7 @@ impl Items {
     /// Count is checked by label match first (`CstError::ChildCount`); if the
     /// count is valid and the surviving child has the wrong variant type,
     /// `CstError::UnexpectedChildType` is returned (single-typed labels only).
-    pub fn child_item(&self) -> Result<&Shared<Identifier>, CstError> {
+    pub fn child_item(&self) -> ::std::result::Result<&Shared<Identifier>, CstError> {
         let mut it = self.children.iter()
             .filter(|(lbl, _)| *lbl == Some(ItemsLabel::Item));
         match (it.next(), it.next()) {
@@ -1326,7 +1326,7 @@ impl Items {
     ///
     /// Returns `Ok(None)` for zero, `Ok(Some(...))` for one,
     /// `Err(CstError::ChildCount)` for two or more.
-    pub fn maybe_item(&self) -> Result<Option<&Shared<Identifier>>, CstError> {
+    pub fn maybe_item(&self) -> ::std::result::Result<::std::option::Option<&Shared<Identifier>>, CstError> {
         let mut it = self.children.iter()
             .filter(|(lbl, _)| *lbl == Some(ItemsLabel::Item));
         match (it.next(), it.next()) {
@@ -1346,12 +1346,12 @@ impl Items {
     }
 
     /// Append a child with label `item`, accepting `Identifier` or `Shared<Identifier>`.
-    pub fn append_item(&mut self, child: impl Into<Shared<Identifier>>) {
+    pub fn append_item(&mut self, child: impl ::std::convert::Into<Shared<Identifier>>) {
         self.children.push((Some(ItemsLabel::Item), ItemsChild::Identifier(child.into())));
     }
 
     /// Append multiple children with label `item`.
-    pub fn extend_item(&mut self, children: impl IntoIterator<Item = impl Into<Shared<Identifier>>>) {
+    pub fn extend_item(&mut self, children: impl ::std::iter::IntoIterator<Item = impl ::std::convert::Into<Shared<Identifier>>>) {
         self.children.extend(children.into_iter().map(|c| (Some(ItemsLabel::Item), ItemsChild::Identifier(c.into()))));
     }
 
@@ -1359,7 +1359,7 @@ impl Items {
     ///
     /// Off-type variants stored under the `no_ws` label are silently skipped.
     /// Use `children()` (the untyped slice) for a lossless view.
-    pub fn children_no_ws(&self) -> impl Iterator<Item = &Span> + '_ {
+    pub fn children_no_ws(&self) -> impl ::std::iter::Iterator<Item = &Span> + '_ {
         self.children.iter()
             .filter(|(lbl, _)| *lbl == Some(ItemsLabel::NoWs))
             .filter_map(|(_, child)| match child {
@@ -1373,7 +1373,7 @@ impl Items {
     /// Count is checked by label match first (`CstError::ChildCount`); if the
     /// count is valid and the surviving child has the wrong variant type,
     /// `CstError::UnexpectedChildType` is returned (single-typed labels only).
-    pub fn child_no_ws(&self) -> Result<&Span, CstError> {
+    pub fn child_no_ws(&self) -> ::std::result::Result<&Span, CstError> {
         let mut it = self.children.iter()
             .filter(|(lbl, _)| *lbl == Some(ItemsLabel::NoWs));
         match (it.next(), it.next()) {
@@ -1395,7 +1395,7 @@ impl Items {
     ///
     /// Returns `Ok(None)` for zero, `Ok(Some(...))` for one,
     /// `Err(CstError::ChildCount)` for two or more.
-    pub fn maybe_no_ws(&self) -> Result<Option<&Span>, CstError> {
+    pub fn maybe_no_ws(&self) -> ::std::result::Result<::std::option::Option<&Span>, CstError> {
         let mut it = self.children.iter()
             .filter(|(lbl, _)| *lbl == Some(ItemsLabel::NoWs));
         match (it.next(), it.next()) {
@@ -1420,7 +1420,7 @@ impl Items {
     }
 
     /// Append multiple `Span` children with label `no_ws`.
-    pub fn extend_no_ws(&mut self, spans: impl IntoIterator<Item = Span>) {
+    pub fn extend_no_ws(&mut self, spans: impl ::std::iter::IntoIterator<Item = Span>) {
         self.children.extend(spans.into_iter().map(|s| (Some(ItemsLabel::NoWs), ItemsChild::Span(s))));
     }
 
@@ -1428,7 +1428,7 @@ impl Items {
     ///
     /// Off-type variants stored under the `ws_allowed` label are silently skipped.
     /// Use `children()` (the untyped slice) for a lossless view.
-    pub fn children_ws_allowed(&self) -> impl Iterator<Item = &Span> + '_ {
+    pub fn children_ws_allowed(&self) -> impl ::std::iter::Iterator<Item = &Span> + '_ {
         self.children.iter()
             .filter(|(lbl, _)| *lbl == Some(ItemsLabel::WsAllowed))
             .filter_map(|(_, child)| match child {
@@ -1442,7 +1442,7 @@ impl Items {
     /// Count is checked by label match first (`CstError::ChildCount`); if the
     /// count is valid and the surviving child has the wrong variant type,
     /// `CstError::UnexpectedChildType` is returned (single-typed labels only).
-    pub fn child_ws_allowed(&self) -> Result<&Span, CstError> {
+    pub fn child_ws_allowed(&self) -> ::std::result::Result<&Span, CstError> {
         let mut it = self.children.iter()
             .filter(|(lbl, _)| *lbl == Some(ItemsLabel::WsAllowed));
         match (it.next(), it.next()) {
@@ -1464,7 +1464,7 @@ impl Items {
     ///
     /// Returns `Ok(None)` for zero, `Ok(Some(...))` for one,
     /// `Err(CstError::ChildCount)` for two or more.
-    pub fn maybe_ws_allowed(&self) -> Result<Option<&Span>, CstError> {
+    pub fn maybe_ws_allowed(&self) -> ::std::result::Result<::std::option::Option<&Span>, CstError> {
         let mut it = self.children.iter()
             .filter(|(lbl, _)| *lbl == Some(ItemsLabel::WsAllowed));
         match (it.next(), it.next()) {
@@ -1489,7 +1489,7 @@ impl Items {
     }
 
     /// Append multiple `Span` children with label `ws_allowed`.
-    pub fn extend_ws_allowed(&mut self, spans: impl IntoIterator<Item = Span>) {
+    pub fn extend_ws_allowed(&mut self, spans: impl ::std::iter::IntoIterator<Item = Span>) {
         self.children.extend(spans.into_iter().map(|s| (Some(ItemsLabel::WsAllowed), ItemsChild::Span(s))));
     }
 
@@ -1497,7 +1497,7 @@ impl Items {
     ///
     /// Off-type variants stored under the `ws_required` label are silently skipped.
     /// Use `children()` (the untyped slice) for a lossless view.
-    pub fn children_ws_required(&self) -> impl Iterator<Item = &Span> + '_ {
+    pub fn children_ws_required(&self) -> impl ::std::iter::Iterator<Item = &Span> + '_ {
         self.children.iter()
             .filter(|(lbl, _)| *lbl == Some(ItemsLabel::WsRequired))
             .filter_map(|(_, child)| match child {
@@ -1511,7 +1511,7 @@ impl Items {
     /// Count is checked by label match first (`CstError::ChildCount`); if the
     /// count is valid and the surviving child has the wrong variant type,
     /// `CstError::UnexpectedChildType` is returned (single-typed labels only).
-    pub fn child_ws_required(&self) -> Result<&Span, CstError> {
+    pub fn child_ws_required(&self) -> ::std::result::Result<&Span, CstError> {
         let mut it = self.children.iter()
             .filter(|(lbl, _)| *lbl == Some(ItemsLabel::WsRequired));
         match (it.next(), it.next()) {
@@ -1533,7 +1533,7 @@ impl Items {
     ///
     /// Returns `Ok(None)` for zero, `Ok(Some(...))` for one,
     /// `Err(CstError::ChildCount)` for two or more.
-    pub fn maybe_ws_required(&self) -> Result<Option<&Span>, CstError> {
+    pub fn maybe_ws_required(&self) -> ::std::result::Result<::std::option::Option<&Span>, CstError> {
         let mut it = self.children.iter()
             .filter(|(lbl, _)| *lbl == Some(ItemsLabel::WsRequired));
         match (it.next(), it.next()) {
@@ -1558,7 +1558,7 @@ impl Items {
     }
 
     /// Append multiple `Span` children with label `ws_required`.
-    pub fn extend_ws_required(&mut self, spans: impl IntoIterator<Item = Span>) {
+    pub fn extend_ws_required(&mut self, spans: impl ::std::iter::IntoIterator<Item = Span>) {
         self.children.extend(spans.into_iter().map(|s| (Some(ItemsLabel::WsRequired), ItemsChild::Span(s))));
     }
 
@@ -1631,14 +1631,14 @@ impl Items {
     ///
     /// Python-facing clamping is in the `insert` pymethod; native callers must
     /// bounds-check. Unlike `list.insert`, Vec::insert panics on out-of-bounds.
-    pub fn insert_child(&mut self, index: usize, label: Option<ItemsLabel>, child: ItemsChild) {
+    pub fn insert_child(&mut self, index: usize, label: ::std::option::Option<ItemsLabel>, child: ItemsChild) {
         self.children.insert(index, (label, child));
     }
 
     /// Remove and return the child at `index` (Vec::remove semantics: panics if out of range).
     ///
     /// Panics on out-of-range. Python-facing IndexError is in the `remove_at` pymethod.
-    pub fn remove_child(&mut self, index: usize) -> (Option<ItemsLabel>, ItemsChild) {
+    pub fn remove_child(&mut self, index: usize) -> (::std::option::Option<ItemsLabel>, ItemsChild) {
         self.children.remove(index)
     }
 
@@ -1646,8 +1646,8 @@ impl Items {
     ///
     /// Panics on out-of-range. Python-facing IndexError is in the `replace_at` pymethod.
     pub fn replace_child(
-        &mut self, index: usize, label: Option<ItemsLabel>, child: ItemsChild,
-    ) -> (Option<ItemsLabel>, ItemsChild) {
+        &mut self, index: usize, label: ::std::option::Option<ItemsLabel>, child: ItemsChild,
+    ) -> (::std::option::Option<ItemsLabel>, ItemsChild) {
         std::mem::replace(&mut self.children[index], (label, child))
     }
 
@@ -1691,14 +1691,14 @@ impl PyItems {
 impl PyItems {
     #[new]
     #[pyo3(signature = (*, span = None))]
-    fn new(py: Python<'_>, span: Option<&Bound<'_, pyo3::PyAny>>) -> pyo3::PyResult<Py<PyItems>> {
+    fn new(py: Python<'_>, span: ::std::option::Option<&Bound<'_, pyo3::PyAny>>) -> pyo3::PyResult<Py<PyItems>> {
         let native_span = match span {
             Some(s) => extract_span(py, s)?,
             None => Span::unknown(),
         };
         let data = Items {
             span: native_span,
-            children: Vec::new(),
+            children: ::std::vec::Vec::new(),
         };
         let shared = Shared::new(data);
         let addr = shared.arc_ptr();
@@ -1739,7 +1739,7 @@ impl PyItems {
     fn children(&self, py: Python<'_>) -> pyo3::PyResult<Py<pyo3::types::PyList>> {
         // Snapshot the children vec (Arc clones for node children — O(n) refcount bumps).
         // Lock scope: acquire read, snapshot, release before touching Python.
-        let snapshot: Vec<_> = {
+        let snapshot: ::std::vec::Vec<_> = {
             let guard = self.inner.read();
             guard.children.clone()
         };
@@ -1758,7 +1758,7 @@ impl PyItems {
 
     #[pyo3(signature = (child, label = None))]
     fn append(
-        &self, py: Python<'_>, child: &Bound<'_, pyo3::PyAny>, label: Option<Py<pyo3::PyAny>>,
+        &self, py: Python<'_>, child: &Bound<'_, pyo3::PyAny>, label: ::std::option::Option<Py<pyo3::PyAny>>,
     ) -> pyo3::PyResult<()> {
         let span_type = get_span_type(py)?;
         let native_child = ItemsChild::extract_from_pyobject(py, child, &span_type)?;
@@ -1784,7 +1784,7 @@ impl PyItems {
         &self,
         py: Python<'_>,
         children: &Bound<'_, pyo3::PyAny>,
-        label: Option<Py<pyo3::PyAny>>,
+        label: ::std::option::Option<Py<pyo3::PyAny>>,
     ) -> pyo3::PyResult<()> {
         let span_type = get_span_type(py)?;
         let native_label = match label {
@@ -1815,7 +1815,7 @@ impl PyItems {
         // the same node (self-extend). No ptr_eq call is needed here — the snapshot
         // approach handles self-extend structurally.
         // Lock scope: hold read only long enough to clone the Arc-based children vec.
-        let snapshot: Vec<_> = {
+        let snapshot: ::std::vec::Vec<_> = {
             let guard = other.inner.read();
             guard.children.clone()
         };
@@ -1855,7 +1855,7 @@ impl PyItems {
         py: Python<'_>,
         index: &Bound<'_, pyo3::PyAny>,
         child: &Bound<'_, pyo3::PyAny>,
-        label: Option<Py<pyo3::PyAny>>,
+        label: ::std::option::Option<Py<pyo3::PyAny>>,
     ) -> pyo3::PyResult<()> {
         // Validate child and label BEFORE taking the write lock.
         let span_type = get_span_type(py)?;
@@ -1920,13 +1920,13 @@ impl PyItems {
             .getattr(pyo3::intern!(py, "index"))?
             .call1((index,))?;
         // Fast path: extract i64. Beyond i64 is always OOB for real trees.
-        let maybe_i64: Option<i64> = raw_idx.extract::<i64>().ok();
+        let maybe_i64: ::std::option::Option<i64> = raw_idx.extract::<i64>().ok();
         // Single write lock: resolve + bounds-check + Vec::remove atomically (no TOCTOU).
         // On OOB, capture n and return Err after releasing the guard.
-        let result: Result<_, usize> = {
+        let result: ::std::result::Result<_, usize> = {
             let mut guard = self.inner.write();
             let n = guard.children.len();
-            let resolved: Option<usize> = match maybe_i64 {
+            let resolved: ::std::option::Option<usize> = match maybe_i64 {
                 Some(i) if i < 0 => {
                     let normalized = n as i64 + i;
                     if normalized < 0 || normalized as usize >= n { None }
@@ -1961,7 +1961,7 @@ impl PyItems {
         py: Python<'_>,
         index: &Bound<'_, pyo3::PyAny>,
         child: &Bound<'_, pyo3::PyAny>,
-        label: Option<Py<pyo3::PyAny>>,
+        label: ::std::option::Option<Py<pyo3::PyAny>>,
     ) -> pyo3::PyResult<()> {
         // Validate child and label BEFORE taking the write lock.
         let span_type = get_span_type(py)?;
@@ -1987,12 +1987,12 @@ impl PyItems {
             .import(pyo3::intern!(py, "operator"))?
             .getattr(pyo3::intern!(py, "index"))?
             .call1((index,))?;
-        let maybe_i64: Option<i64> = raw_idx.extract::<i64>().ok();
+        let maybe_i64: ::std::option::Option<i64> = raw_idx.extract::<i64>().ok();
         // Single write lock: resolve + bounds-check + mem::replace atomically (no TOCTOU).
         let old = {
             let mut guard = self.inner.write();
             let n = guard.children.len();
-            let resolved: Option<usize> = match maybe_i64 {
+            let resolved: ::std::option::Option<usize> = match maybe_i64 {
                 Some(i) if i < 0 => {
                     let normalized = n as i64 + i;
                     if normalized < 0 || normalized as usize >= n { None }
@@ -2051,7 +2051,7 @@ impl PyItems {
         // Lock scope: filter by label under the read guard, cloning only matching
         // children (Arc bump or Span copy each); drop the guard before to_pyobject,
         // which performs Python work that must not happen while a node lock is held.
-        let matching: Vec<_> = {
+        let matching: ::std::vec::Vec<_> = {
             let guard = self.inner.read();
             guard.children.iter()
                 .filter(|(lbl, _)| *lbl == Some(ItemsLabel::Item))
@@ -2091,7 +2091,7 @@ impl PyItems {
             .to_pyobject(py)
     }
 
-    fn maybe_item(&self, py: Python<'_>) -> pyo3::PyResult<Option<Py<pyo3::PyAny>>> {
+    fn maybe_item(&self, py: Python<'_>) -> pyo3::PyResult<::std::option::Option<Py<pyo3::PyAny>>> {
         // Lock scope: count label matches and clone only the first under the guard;
         // drop the guard before to_pyobject / exception raise (Python work).
         let (count, first) = {
@@ -2142,7 +2142,7 @@ impl PyItems {
         // Lock scope: filter by label under the read guard, cloning only matching
         // children (Arc bump or Span copy each); drop the guard before to_pyobject,
         // which performs Python work that must not happen while a node lock is held.
-        let matching: Vec<_> = {
+        let matching: ::std::vec::Vec<_> = {
             let guard = self.inner.read();
             guard.children.iter()
                 .filter(|(lbl, _)| *lbl == Some(ItemsLabel::NoWs))
@@ -2182,7 +2182,7 @@ impl PyItems {
             .to_pyobject(py)
     }
 
-    fn maybe_no_ws(&self, py: Python<'_>) -> pyo3::PyResult<Option<Py<pyo3::PyAny>>> {
+    fn maybe_no_ws(&self, py: Python<'_>) -> pyo3::PyResult<::std::option::Option<Py<pyo3::PyAny>>> {
         // Lock scope: count label matches and clone only the first under the guard;
         // drop the guard before to_pyobject / exception raise (Python work).
         let (count, first) = {
@@ -2233,7 +2233,7 @@ impl PyItems {
         // Lock scope: filter by label under the read guard, cloning only matching
         // children (Arc bump or Span copy each); drop the guard before to_pyobject,
         // which performs Python work that must not happen while a node lock is held.
-        let matching: Vec<_> = {
+        let matching: ::std::vec::Vec<_> = {
             let guard = self.inner.read();
             guard.children.iter()
                 .filter(|(lbl, _)| *lbl == Some(ItemsLabel::WsAllowed))
@@ -2273,7 +2273,7 @@ impl PyItems {
             .to_pyobject(py)
     }
 
-    fn maybe_ws_allowed(&self, py: Python<'_>) -> pyo3::PyResult<Option<Py<pyo3::PyAny>>> {
+    fn maybe_ws_allowed(&self, py: Python<'_>) -> pyo3::PyResult<::std::option::Option<Py<pyo3::PyAny>>> {
         // Lock scope: count label matches and clone only the first under the guard;
         // drop the guard before to_pyobject / exception raise (Python work).
         let (count, first) = {
@@ -2324,7 +2324,7 @@ impl PyItems {
         // Lock scope: filter by label under the read guard, cloning only matching
         // children (Arc bump or Span copy each); drop the guard before to_pyobject,
         // which performs Python work that must not happen while a node lock is held.
-        let matching: Vec<_> = {
+        let matching: ::std::vec::Vec<_> = {
             let guard = self.inner.read();
             guard.children.iter()
                 .filter(|(lbl, _)| *lbl == Some(ItemsLabel::WsRequired))
@@ -2364,7 +2364,7 @@ impl PyItems {
             .to_pyobject(py)
     }
 
-    fn maybe_ws_required(&self, py: Python<'_>) -> pyo3::PyResult<Option<Py<pyo3::PyAny>>> {
+    fn maybe_ws_required(&self, py: Python<'_>) -> pyo3::PyResult<::std::option::Option<Py<pyo3::PyAny>>> {
         // Lock scope: count label matches and clone only the first under the guard;
         // drop the guard before to_pyobject / exception raise (Python work).
         let (count, first) = {
@@ -2400,7 +2400,7 @@ impl PyItems {
         self.child_no_ws(py)
     }
 
-    fn no_ws_text(&self) -> pyo3::PyResult<String> {
+    fn no_ws_text(&self) -> pyo3::PyResult<::std::string::String> {
         // Lock scope: count label matches and clone only the first under the guard;
         // drop the guard before to_pyobject / exception raise (Python work).
         let (count, first) = {
@@ -2437,7 +2437,7 @@ impl PyItems {
         self.child_ws_allowed(py)
     }
 
-    fn ws_allowed_text(&self) -> pyo3::PyResult<String> {
+    fn ws_allowed_text(&self) -> pyo3::PyResult<::std::string::String> {
         // Lock scope: count label matches and clone only the first under the guard;
         // drop the guard before to_pyobject / exception raise (Python work).
         let (count, first) = {
@@ -2474,7 +2474,7 @@ impl PyItems {
         self.child_ws_required(py)
     }
 
-    fn ws_required_text(&self) -> pyo3::PyResult<String> {
+    fn ws_required_text(&self) -> pyo3::PyResult<::std::string::String> {
         // Lock scope: count label matches and clone only the first under the guard;
         // drop the guard before to_pyobject / exception raise (Python work).
         let (count, first) = {
@@ -2522,7 +2522,7 @@ impl PyItems {
         Err(PyTypeError::new_err("unhashable type: 'Items'"))
     }
 
-    fn __repr__(&self, _py: Python<'_>) -> String {
+    fn __repr__(&self, _py: Python<'_>) -> ::std::string::String {
         let guard = self.inner.read();
         let span_repr = format!("Span(start={}, end={})", guard.span.start(), guard.span.end());
         let children_len = guard.children.len();
@@ -2597,7 +2597,7 @@ pub enum TriviaChild {
     Span(Span),
 }
 
-impl PartialEq for TriviaChild {
+impl ::std::cmp::PartialEq for TriviaChild {
     fn eq(&self, other: &Self) -> bool {
         match (self, other) {
             (TriviaChild::Span(a), TriviaChild::Span(b)) => a == b,
@@ -2606,7 +2606,7 @@ impl PartialEq for TriviaChild {
 }
 
 impl TriviaChild {
-    fn into_drop_item(self) -> Option<DropWorklistItem> {
+    fn into_drop_item(self) -> ::std::option::Option<DropWorklistItem> {
         match self {
             Self::Span(_) => None,
         }
@@ -2615,7 +2615,7 @@ impl TriviaChild {
     /// Shallow structural equality for one child pair.
     /// Span pair: compare directly. Node pair: ptr_eq short-circuit (skip enqueue)
     /// or enqueue for the worklist. Variant mismatch: return false.
-    fn eq_shallow_enqueue(&self, other: &Self, _worklist: &mut Vec<EqWorklistItem>) -> bool {
+    fn eq_shallow_enqueue(&self, other: &Self, _worklist: &mut ::std::vec::Vec<EqWorklistItem>) -> bool {
         match (self, other) {
             (Self::Span(a), Self::Span(b)) => a == b,
         }
@@ -2660,7 +2660,7 @@ pub struct Trivia {
     // Not pub: use span() / children() / push_child() — the stable accessor API.
     // Direct field access bypasses any future validation logic on setters.
     span: Span,
-    children: Vec<(Option<TriviaLabel>, TriviaChild)>,
+    children: ::std::vec::Vec<(::std::option::Option<TriviaLabel>, TriviaChild)>,
 }
 
 // Manual Debug: prints span + child COUNT, never recursing into children.
@@ -2678,7 +2678,7 @@ impl fmt::Debug for Trivia {
 }
 
 // Span-only PartialEq: no node-typed children, so this cannot recurse — depth-safe.
-impl PartialEq for Trivia {
+impl ::std::cmp::PartialEq for Trivia {
     fn eq(&self, other: &Self) -> bool {
         self.span == other.span && self.children == other.children
     }
@@ -2689,7 +2689,7 @@ impl Trivia {
     pub fn new(span: Span) -> Self {
         Trivia {
             span,
-            children: Vec::new(),
+            children: ::std::vec::Vec::new(),
         }
     }
 
@@ -2712,7 +2712,7 @@ impl Trivia {
     ///
     /// Each entry is `(label, child)`. Use the per-label accessors
     /// (`children_<lbl>`, `child_<lbl>`, `maybe_<lbl>`) for type-safe access.
-    pub fn children(&self) -> &[(Option<TriviaLabel>, TriviaChild)] {
+    pub fn children(&self) -> &[(::std::option::Option<TriviaLabel>, TriviaChild)] {
         self.children.as_slice()
     }
 
@@ -2721,14 +2721,14 @@ impl Trivia {
     /// No type-checking is performed: any child variant may be stored under
     /// any label. Per-label typed mutators (`append_<lbl>`, `extend_<lbl>`)
     /// provide type-constrained alternatives.
-    pub fn push_child(&mut self, label: Option<TriviaLabel>, child: TriviaChild) {
+    pub fn push_child(&mut self, label: ::std::option::Option<TriviaLabel>, child: TriviaChild) {
         self.children.push((label, child));
     }
 
     /// Return the single child (any label), or `Err` if there is not exactly one.
     ///
     /// Mirrors the Python `child()` method: count violation → `CstError::ChildCount`.
-    pub fn child(&self) -> Result<&(Option<TriviaLabel>, TriviaChild), CstError> {
+    pub fn child(&self) -> ::std::result::Result<&(::std::option::Option<TriviaLabel>, TriviaChild), CstError> {
         match self.children.as_slice() {
             [single] => Ok(single),
             slice => Err(CstError::ChildCount {
@@ -2755,7 +2755,7 @@ impl Trivia {
     ///
     /// Off-type variants stored under the `content` label are silently skipped.
     /// Use `children()` (the untyped slice) for a lossless view.
-    pub fn children_content(&self) -> impl Iterator<Item = &Span> + '_ {
+    pub fn children_content(&self) -> impl ::std::iter::Iterator<Item = &Span> + '_ {
         self.children.iter()
             .filter(|(lbl, _)| *lbl == Some(TriviaLabel::Content))
             .map(|(_, child)| match child { TriviaChild::Span(s) => s })
@@ -2766,7 +2766,7 @@ impl Trivia {
     /// Count is checked by label match first (`CstError::ChildCount`); if the
     /// count is valid and the surviving child has the wrong variant type,
     /// `CstError::UnexpectedChildType` is returned (single-typed labels only).
-    pub fn child_content(&self) -> Result<&Span, CstError> {
+    pub fn child_content(&self) -> ::std::result::Result<&Span, CstError> {
         let mut it = self.children.iter()
             .filter(|(lbl, _)| *lbl == Some(TriviaLabel::Content));
         match (it.next(), it.next()) {
@@ -2787,7 +2787,7 @@ impl Trivia {
     ///
     /// Returns `Ok(None)` for zero, `Ok(Some(...))` for one,
     /// `Err(CstError::ChildCount)` for two or more.
-    pub fn maybe_content(&self) -> Result<Option<&Span>, CstError> {
+    pub fn maybe_content(&self) -> ::std::result::Result<::std::option::Option<&Span>, CstError> {
         let mut it = self.children.iter()
             .filter(|(lbl, _)| *lbl == Some(TriviaLabel::Content));
         match (it.next(), it.next()) {
@@ -2811,7 +2811,7 @@ impl Trivia {
     }
 
     /// Append multiple `Span` children with label `content`.
-    pub fn extend_content(&mut self, spans: impl IntoIterator<Item = Span>) {
+    pub fn extend_content(&mut self, spans: impl ::std::iter::IntoIterator<Item = Span>) {
         self.children.extend(spans.into_iter().map(|s| (Some(TriviaLabel::Content), TriviaChild::Span(s))));
     }
 
@@ -2848,14 +2848,14 @@ impl Trivia {
     ///
     /// Python-facing clamping is in the `insert` pymethod; native callers must
     /// bounds-check. Unlike `list.insert`, Vec::insert panics on out-of-bounds.
-    pub fn insert_child(&mut self, index: usize, label: Option<TriviaLabel>, child: TriviaChild) {
+    pub fn insert_child(&mut self, index: usize, label: ::std::option::Option<TriviaLabel>, child: TriviaChild) {
         self.children.insert(index, (label, child));
     }
 
     /// Remove and return the child at `index` (Vec::remove semantics: panics if out of range).
     ///
     /// Panics on out-of-range. Python-facing IndexError is in the `remove_at` pymethod.
-    pub fn remove_child(&mut self, index: usize) -> (Option<TriviaLabel>, TriviaChild) {
+    pub fn remove_child(&mut self, index: usize) -> (::std::option::Option<TriviaLabel>, TriviaChild) {
         self.children.remove(index)
     }
 
@@ -2863,8 +2863,8 @@ impl Trivia {
     ///
     /// Panics on out-of-range. Python-facing IndexError is in the `replace_at` pymethod.
     pub fn replace_child(
-        &mut self, index: usize, label: Option<TriviaLabel>, child: TriviaChild,
-    ) -> (Option<TriviaLabel>, TriviaChild) {
+        &mut self, index: usize, label: ::std::option::Option<TriviaLabel>, child: TriviaChild,
+    ) -> (::std::option::Option<TriviaLabel>, TriviaChild) {
         std::mem::replace(&mut self.children[index], (label, child))
     }
 
@@ -2908,14 +2908,14 @@ impl PyTrivia {
 impl PyTrivia {
     #[new]
     #[pyo3(signature = (*, span = None))]
-    fn new(py: Python<'_>, span: Option<&Bound<'_, pyo3::PyAny>>) -> pyo3::PyResult<Py<PyTrivia>> {
+    fn new(py: Python<'_>, span: ::std::option::Option<&Bound<'_, pyo3::PyAny>>) -> pyo3::PyResult<Py<PyTrivia>> {
         let native_span = match span {
             Some(s) => extract_span(py, s)?,
             None => Span::unknown(),
         };
         let data = Trivia {
             span: native_span,
-            children: Vec::new(),
+            children: ::std::vec::Vec::new(),
         };
         let shared = Shared::new(data);
         let addr = shared.arc_ptr();
@@ -2956,7 +2956,7 @@ impl PyTrivia {
     fn children(&self, py: Python<'_>) -> pyo3::PyResult<Py<pyo3::types::PyList>> {
         // Snapshot the children vec (Arc clones for node children — O(n) refcount bumps).
         // Lock scope: acquire read, snapshot, release before touching Python.
-        let snapshot: Vec<_> = {
+        let snapshot: ::std::vec::Vec<_> = {
             let guard = self.inner.read();
             guard.children.clone()
         };
@@ -2975,7 +2975,7 @@ impl PyTrivia {
 
     #[pyo3(signature = (child, label = None))]
     fn append(
-        &self, py: Python<'_>, child: &Bound<'_, pyo3::PyAny>, label: Option<Py<pyo3::PyAny>>,
+        &self, py: Python<'_>, child: &Bound<'_, pyo3::PyAny>, label: ::std::option::Option<Py<pyo3::PyAny>>,
     ) -> pyo3::PyResult<()> {
         let span_type = get_span_type(py)?;
         let native_child = TriviaChild::extract_from_pyobject(py, child, &span_type)?;
@@ -3001,7 +3001,7 @@ impl PyTrivia {
         &self,
         py: Python<'_>,
         children: &Bound<'_, pyo3::PyAny>,
-        label: Option<Py<pyo3::PyAny>>,
+        label: ::std::option::Option<Py<pyo3::PyAny>>,
     ) -> pyo3::PyResult<()> {
         let span_type = get_span_type(py)?;
         let native_label = match label {
@@ -3032,7 +3032,7 @@ impl PyTrivia {
         // the same node (self-extend). No ptr_eq call is needed here — the snapshot
         // approach handles self-extend structurally.
         // Lock scope: hold read only long enough to clone the Arc-based children vec.
-        let snapshot: Vec<_> = {
+        let snapshot: ::std::vec::Vec<_> = {
             let guard = other.inner.read();
             guard.children.clone()
         };
@@ -3072,7 +3072,7 @@ impl PyTrivia {
         py: Python<'_>,
         index: &Bound<'_, pyo3::PyAny>,
         child: &Bound<'_, pyo3::PyAny>,
-        label: Option<Py<pyo3::PyAny>>,
+        label: ::std::option::Option<Py<pyo3::PyAny>>,
     ) -> pyo3::PyResult<()> {
         // Validate child and label BEFORE taking the write lock.
         let span_type = get_span_type(py)?;
@@ -3137,13 +3137,13 @@ impl PyTrivia {
             .getattr(pyo3::intern!(py, "index"))?
             .call1((index,))?;
         // Fast path: extract i64. Beyond i64 is always OOB for real trees.
-        let maybe_i64: Option<i64> = raw_idx.extract::<i64>().ok();
+        let maybe_i64: ::std::option::Option<i64> = raw_idx.extract::<i64>().ok();
         // Single write lock: resolve + bounds-check + Vec::remove atomically (no TOCTOU).
         // On OOB, capture n and return Err after releasing the guard.
-        let result: Result<_, usize> = {
+        let result: ::std::result::Result<_, usize> = {
             let mut guard = self.inner.write();
             let n = guard.children.len();
-            let resolved: Option<usize> = match maybe_i64 {
+            let resolved: ::std::option::Option<usize> = match maybe_i64 {
                 Some(i) if i < 0 => {
                     let normalized = n as i64 + i;
                     if normalized < 0 || normalized as usize >= n { None }
@@ -3178,7 +3178,7 @@ impl PyTrivia {
         py: Python<'_>,
         index: &Bound<'_, pyo3::PyAny>,
         child: &Bound<'_, pyo3::PyAny>,
-        label: Option<Py<pyo3::PyAny>>,
+        label: ::std::option::Option<Py<pyo3::PyAny>>,
     ) -> pyo3::PyResult<()> {
         // Validate child and label BEFORE taking the write lock.
         let span_type = get_span_type(py)?;
@@ -3204,12 +3204,12 @@ impl PyTrivia {
             .import(pyo3::intern!(py, "operator"))?
             .getattr(pyo3::intern!(py, "index"))?
             .call1((index,))?;
-        let maybe_i64: Option<i64> = raw_idx.extract::<i64>().ok();
+        let maybe_i64: ::std::option::Option<i64> = raw_idx.extract::<i64>().ok();
         // Single write lock: resolve + bounds-check + mem::replace atomically (no TOCTOU).
         let old = {
             let mut guard = self.inner.write();
             let n = guard.children.len();
-            let resolved: Option<usize> = match maybe_i64 {
+            let resolved: ::std::option::Option<usize> = match maybe_i64 {
                 Some(i) if i < 0 => {
                     let normalized = n as i64 + i;
                     if normalized < 0 || normalized as usize >= n { None }
@@ -3268,7 +3268,7 @@ impl PyTrivia {
         // Lock scope: filter by label under the read guard, cloning only matching
         // children (Arc bump or Span copy each); drop the guard before to_pyobject,
         // which performs Python work that must not happen while a node lock is held.
-        let matching: Vec<_> = {
+        let matching: ::std::vec::Vec<_> = {
             let guard = self.inner.read();
             guard.children.iter()
                 .filter(|(lbl, _)| *lbl == Some(TriviaLabel::Content))
@@ -3308,7 +3308,7 @@ impl PyTrivia {
             .to_pyobject(py)
     }
 
-    fn maybe_content(&self, py: Python<'_>) -> pyo3::PyResult<Option<Py<pyo3::PyAny>>> {
+    fn maybe_content(&self, py: Python<'_>) -> pyo3::PyResult<::std::option::Option<Py<pyo3::PyAny>>> {
         // Lock scope: count label matches and clone only the first under the guard;
         // drop the guard before to_pyobject / exception raise (Python work).
         let (count, first) = {
@@ -3340,7 +3340,7 @@ impl PyTrivia {
         self.child_content(py)
     }
 
-    fn content_text(&self) -> pyo3::PyResult<String> {
+    fn content_text(&self) -> pyo3::PyResult<::std::string::String> {
         // Lock scope: count label matches and clone only the first under the guard;
         // drop the guard before to_pyobject / exception raise (Python work).
         let (count, first) = {
@@ -3372,7 +3372,7 @@ impl PyTrivia {
         }
     }
 
-    fn text(&self) -> pyo3::PyResult<String> {
+    fn text(&self) -> pyo3::PyResult<::std::string::String> {
         // Clone the span under the read guard, then release it before raising.
         let span = self.inner.read().span.clone();
         span.text_or_message()
@@ -3395,7 +3395,7 @@ impl PyTrivia {
         Err(PyTypeError::new_err("unhashable type: 'Trivia'"))
     }
 
-    fn __repr__(&self, _py: Python<'_>) -> String {
+    fn __repr__(&self, _py: Python<'_>) -> ::std::string::String {
         let guard = self.inner.read();
         let span_repr = format!("Span(start={}, end={})", guard.span.start(), guard.span.end());
         let children_len = guard.children.len();
@@ -3418,7 +3418,7 @@ enum DropWorklistItem {
 }
 
 impl DropWorklistItem {
-    fn drain_into(self, worklist: &mut Vec<DropWorklistItem>) {
+    fn drain_into(self, worklist: &mut ::std::vec::Vec<DropWorklistItem>) {
         // Each arm: if sole owner, steal children (so the node's Drop early-returns
         // instead of recursing through drop glue); then drop `shared`.
         // count==1 → childless node after steal, trivial drop;
@@ -3459,7 +3459,7 @@ enum EqWorklistItem {
 impl EqWorklistItem {
     /// Compare one node pair shallowly; enqueue node-typed child pairs for deferred comparison.
     /// Returns false on the first mismatch (span, child count, label, or child variant/value).
-    fn compare(self, worklist: &mut Vec<EqWorklistItem>) -> bool {
+    fn compare(self, worklist: &mut ::std::vec::Vec<EqWorklistItem>) -> bool {
         // Each arm: read-lock the pair, check span + child-count, then walk children
         // via eq_shallow_enqueue (Span: compare directly; node: ptr_eq short-circuit or enqueue).
         // Guards are held across the child iteration; pushes to the worklist are

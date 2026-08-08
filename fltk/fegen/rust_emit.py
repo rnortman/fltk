@@ -4,7 +4,12 @@ The AST emitter (:mod:`fltk.fegen.gsm2ast_rs`) and the serde emitter both turn f
 :mod:`fltk.fegen.ast_model` computed into Rust that the ``fltk-ast-core`` runtime consumes.  Where
 the *same* model fact is rendered by both, the rendering has one home — here — so a change to the
 runtime's vocabulary is one edit rather than one per backend, and the two emitters cannot describe
-the same tree two ways.
+the same tree two ways.  The spellings that are not tied to the AST model — the std path table
+below and :func:`rust_str_lit` — are shared more widely still: every Rust emitter, including the
+CST (:mod:`fltk.fegen.gsm2tree_rs`), parser (:mod:`fltk.fegen.gsm2parser_rs`) and unparser
+(:mod:`fltk.unparse.gsm2unparser_rs`) ones, imports them from here rather than from each other.
+
+This module imports no emitter, so every emitter can import it.
 
 Nothing here analyses anything: every function takes a value the model already computed and
 spells it as Rust.
@@ -17,7 +22,57 @@ from collections.abc import Iterable, Sequence
 
 from fltk.fegen import ast_model as am
 from fltk.fegen import grammar_shape as gshape
-from fltk.fegen.gsm2parser_rs import rust_str_lit
+
+# Code point thresholds for Rust string literal escaping
+_CTRL_MAX = 0x20  # exclusive: code points < 0x20 get \u{XX} escaping
+_DEL = 0x7F  # DEL character: also gets \u{XX} escaping
+
+
+def rust_str_lit(s: str) -> str:
+    """Return the Rust string literal content (no outer quotes) for string s."""
+    out = []
+    for ch in s:
+        cp = ord(ch)
+        if ch == "\\":
+            out.append("\\\\")
+        elif ch == '"':
+            out.append('\\"')
+        elif cp < _CTRL_MAX or cp == _DEL:
+            out.append(f"\\u{{{cp:02x}}}")
+        else:
+            out.append(ch)
+    return "".join(out)
+
+
+# ── std spellings ────────────────────────────────────────────────────────────
+# A grammar rule name becomes an UpperCamel `pub struct`/`pub enum` at module scope in the
+# generated cst.rs and ast.rs, and Rust resolves a module's own item before the prelude.  So a
+# rule named `option` turns every bare `Option<…>` in that module into a type error in a file
+# the consumer cannot edit.  Every type-namespace reference to a std item in those two modules
+# is therefore spelled absolute, through the constants below.
+#
+# `::std::` uniformly: all generated crates are std, edition 2021, so `::std` is always in the
+# extern prelude (`::alloc` is not).
+#
+# What deliberately stays bare, because no generated item can shadow it:
+#   - Value-namespace uses: `Some`/`None`/`Ok`/`Err` as expressions and patterns.  Generated
+#     types are braced structs and enums (type namespace only), generated functions are
+#     snake_case, generated constants are `_`-prefixed SCREAMING_SNAKE.
+#   - Derive lists (`#[derive(Clone, Debug, PartialEq, Eq, Hash)]`): these resolve in the macro
+#     namespace, which no generated item occupies, and the expansion is hygienic.
+#   - Lowercase spellings — primitives (`str`, `usize`, `bool`) and module paths through a
+#     `use std::fmt;` alias (`fmt::Debug`, `fmt::Result`) or a leading `std::` (`std::mem::take`).
+#     A rule name UpperCamels, so it can only ever collide with an UpperCamel item.
+STD_OPTION = "::std::option::Option"
+STD_RESULT = "::std::result::Result"
+STD_VEC = "::std::vec::Vec"
+STD_BOX = "::std::boxed::Box"
+STD_STRING = "::std::string::String"
+STD_DROP = "::std::ops::Drop"
+STD_PARTIAL_EQ = "::std::cmp::PartialEq"
+STD_ITERATOR = "::std::iter::Iterator"
+STD_INTO_ITERATOR = "::std::iter::IntoIterator"
+STD_INTO = "::std::convert::Into"
 
 RUNTIME = "::fltk_ast_core"
 """The runtime crate generated Rust names by absolute path, so a rule name cannot shadow it."""

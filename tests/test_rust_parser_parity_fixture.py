@@ -197,6 +197,19 @@ _CORPUS = [
     ("sum_chain", "1+2-3", SUCCESS),
     ("sum_chain", "1 + 2", SUCCESS),
     ("sum_chain", "1", SUCCESS),
+    # The keyed family: suppressed delimiters around a repetition of a rule reference the
+    # element labels, tight and spaced, and the empty region the `*` allows.
+    ("entry_key", "abc", SUCCESS),
+    ("entry", "a = 1;", SUCCESS),
+    ("entry", "a=1;", SUCCESS),
+    ("entries", "{ a = 1; b = x; }", SUCCESS),
+    ("entries", "{a=1;}", SUCCESS),
+    ("entries", "{ }", SUCCESS),
+    ("entries", "{", FAIL),
+    # multi_entries over a repeated key: the grouping is the AST layer's, so both backends
+    # parse the same three elements here.
+    ("multi_entries", "{ a = 1; a = 3; }", SUCCESS),
+    ("multi_entries", "{ }", SUCCESS),
 ]
 
 _CORPUS_IDS = [f"{r}-{i}" for i, (r, _, _) in enumerate(_CORPUS)]

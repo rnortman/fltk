@@ -185,6 +185,12 @@ _CORPUS = [
     # sum_chain: WS_ALLOWED separators over a repetition, tight and spaced
     ("sum_chain", "1+2-3"),
     ("sum_chain", "1 + 2 - 3"),
+    # The keyed family: both unparsers re-emit the suppressed braces around the repetition,
+    # populated and empty. Keying is the AST layer's; these are the CST unparsers.
+    ("entry", "a = 1;"),
+    ("entries", "{ a = 1; b = x; }"),
+    ("entries", "{ }"),
+    ("multi_entries", "{ a = 1; a = 3; }"),
 ]
 
 _CORPUS_IDS = [f"{rule}-{n}" for n, (rule, _) in enumerate(_CORPUS)]

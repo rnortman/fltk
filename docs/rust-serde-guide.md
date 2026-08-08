@@ -219,6 +219,7 @@ One rule is one shape. What the frontend serves for it, per node form:
 | **fold** | The nested chain, externally tagged: `{Operand: …}` / `{Binary: {op, lhs, rhs}}` |
 | `transparent;` rule | Erased — the payload's own shape is served in its place, all the way down |
 | `flatten;` wrapper | Erased — the hoisted fields appear directly on the referencing node |
+| `custom(...)` rule | Served as its own source text — a self-parsing target (`uuid::Uuid`, a date) works exactly as under serde_json; a structured target is refused by kind |
 
 Field arities come from the label's whole-rule arity, the same table the AST layer uses:
 
@@ -516,7 +517,9 @@ Three things to know:
 
 - **Impls are per *rule* with a public AST type.** A `transparent;` or `flatten;` rule has no
   public type (its use sites carry the payload) and a `custom(...)` rule's type is yours, so
-  neither gets one. The AST module's other exports — a sum variant's generated payload class, a
+  neither gets one. With no generated type to delegate to, a `custom(...)` rule's position is
+  served as text ([the data model](#the-data-model)) — deserialize it into your own type from
+  that string. The AST module's other exports — a sum variant's generated payload class, a
   value enum, a **field enum for a union label** — are not rules and get no impl either;
   declaring one is a "the trait `Deserialize` is not implemented" at your compile time. Name the
   rule's own type instead, which is the type that reaches all of them.

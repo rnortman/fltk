@@ -154,23 +154,25 @@ class TestConfigLanguage:
 
     def test_the_goal_product_holds_a_vec_of_its_sum(self, config_src: str) -> None:
         assert block(config_src, "pub struct Config") == (
-            "pub struct Config {\n    pub stanzas: Vec<Stanza>,\n    pub span: ::fltk_cst_core::Span,\n}"
+            "pub struct Config {\n    pub stanzas: ::std::vec::Vec<Stanza>,\n    pub span: ::fltk_cst_core::Span,\n}"
         )
 
     def test_a_keyed_collection_is_an_index_map(self, config_src: str) -> None:
-        assert "pub settings: ::fltk_ast_core::IndexMap<String, Setting>," in block(config_src, "pub struct ServerDef")
+        assert "pub settings: ::fltk_ast_core::IndexMap<::std::string::String, Setting>," in block(
+            config_src, "pub struct ServerDef"
+        )
 
     def test_a_multi_keyed_collection_holds_a_run_per_key(self, multi_config_src: str) -> None:
-        assert "pub settings: ::fltk_ast_core::IndexMap<String, Vec<Setting>>," in block(
+        assert "pub settings: ::fltk_ast_core::IndexMap<::std::string::String, ::std::vec::Vec<Setting>>," in block(
             multi_config_src, "pub struct ServerDef"
         )
 
     def test_an_erased_rule_leaves_its_payload_at_the_use_site(self, config_src: str) -> None:
-        assert "pub name: String," in block(config_src, "pub struct ServerDef")
+        assert "pub name: ::std::string::String," in block(config_src, "pub struct ServerDef")
         assert "pub struct Identifier" not in config_src
 
     def test_an_optional_coerced_field_is_an_option_of_the_scalar(self, config_src: str) -> None:
-        assert "pub interval: Option<i64>," in block(config_src, "pub struct MetricDef")
+        assert "pub interval: ::std::option::Option<i64>," in block(config_src, "pub struct MetricDef")
 
     def test_a_renamed_field_takes_the_new_name(self, config_src: str) -> None:
         assert "pub metric_kind: MetricTypeValue," in block(config_src, "pub struct MetricDef")
@@ -196,7 +198,8 @@ class TestConfigLanguage:
     def test_a_sum_of_erased_payloads_is_fully_plain(self, config_src: str) -> None:
         """Erased payloads carry no span, so the enum has no ``span()`` accessor."""
         assert block(config_src, "pub enum Value") == (
-            "pub enum Value {\n    String(String),\n    Number(i64),\n    Flag(bool),\n    List(List),\n}"
+            "pub enum Value {\n    String(::std::string::String),\n"
+            "    Number(i64),\n    Flag(bool),\n    List(List),\n}"
         )
         assert not has_span_method(config_src, "Value")
         # The same predicate on a sum that does have one, so a needle that stopped matching fails
@@ -231,19 +234,23 @@ class TestExpressionGrammar:
         assert block(fold_src, "pub struct ExprBinary") == (
             "pub struct ExprBinary {\n"
             "    pub op: AddOpValue,\n"
-            "    pub lhs: Box<Expr>,\n"
-            "    pub rhs: Box<Expr>,\n"
+            "    pub lhs: ::std::boxed::Box<Expr>,\n"
+            "    pub rhs: ::std::boxed::Box<Expr>,\n"
             "    pub span: ::fltk_cst_core::Span,\n"
             "}"
         )
 
     def test_the_fold_enum_boxes_the_operand_inside_the_cycle(self, fold_src: str) -> None:
         assert (
-            block(fold_src, "pub enum Expr") == "pub enum Expr {\n    Operand(Box<Term>),\n    Binary(ExprBinary),\n}"
+            block(fold_src, "pub enum Expr")
+            == "pub enum Expr {\n    Operand(::std::boxed::Box<Term>),\n    Binary(ExprBinary),\n}"
         )
 
     def test_the_sum_closing_the_cycle_boxes_only_that_edge(self, fold_src: str) -> None:
-        assert block(fold_src, "pub enum Factor") == "pub enum Factor {\n    Num(i64),\n    Paren(Box<Expr>),\n}"
+        assert (
+            block(fold_src, "pub enum Factor")
+            == "pub enum Factor {\n    Num(i64),\n    Paren(::std::boxed::Box<Expr>),\n}"
+        )
 
     def test_a_fold_over_erased_operands_has_no_span_method(self, fold_src: str, config_src: str) -> None:
         assert not has_span_method(fold_src, "Expr")
@@ -258,8 +265,8 @@ class TestFieldTypes:
     def test_a_self_reference_is_boxed_at_its_own_arity(self) -> None:
         src = generate("tree := name:word , child:tree? , kids:tree* ;\nword := w:/[a-z]+/ ;\n")
         body = block(src, "pub struct Tree")
-        assert "pub child: Option<Box<Tree>>," in body
-        assert "pub kids: Vec<Tree>," in body
+        assert "pub child: ::std::option::Option<::std::boxed::Box<Tree>>," in body
+        assert "pub kids: ::std::vec::Vec<Tree>," in body
 
     def test_a_keyword_label_becomes_a_raw_identifier(self) -> None:
         src = generate('decl := type:word , pub:"pub"? ;\nword := w:/[a-z]+/ ;\n')
@@ -270,7 +277,7 @@ class TestFieldTypes:
         src = generate('marks := bang:"!" , stars:"*"* ;')
         body = block(src, "pub struct Marks")
         assert "pub bang: ::fltk_cst_core::Span," in body
-        assert "pub stars: Vec<::fltk_cst_core::Span>," in body
+        assert "pub stars: ::std::vec::Vec<::fltk_cst_core::Span>," in body
 
     def test_a_label_free_rule_is_a_marker(self) -> None:
         src = generate('marker := "!" . "?" ;')
@@ -279,7 +286,7 @@ class TestFieldTypes:
     def test_a_terminal_rule_carries_its_text(self) -> None:
         src = generate("word := w:/[a-z]+/ ;")
         assert block(src, "pub struct Word") == (
-            "pub struct Word {\n    pub text: String,\n    pub span: ::fltk_cst_core::Span,\n}"
+            "pub struct Word {\n    pub text: ::std::string::String,\n    pub span: ::fltk_cst_core::Span,\n}"
         )
 
     def test_a_redirected_terminal_rule_says_where_its_text_comes_from(self) -> None:
@@ -319,7 +326,7 @@ class TestFieldTypes:
 
     def test_a_field_enum_holding_text_has_no_span_to_delegate_to(self) -> None:
         src = generate("wrap := ( a:num | a:/[a-z]+/ ) ;\nnum := d:/[0-9]+/ ;\n")
-        assert "Text(String)," in block(src, "pub enum WrapA")
+        assert "Text(::std::string::String)," in block(src, "pub enum WrapA")
         assert not has_span_method(src, "WrapA")
 
     def test_a_sum_over_a_span_bearing_field_enum_delegates_through_it(self) -> None:
@@ -351,15 +358,15 @@ class TestCustomAndErasedRules:
     def test_a_flattened_wrapper_has_no_type_of_its_own(self, task_src: str) -> None:
         assert "pub struct Schedule" not in task_src
         body = block(task_src, "pub struct TaskDef")
-        assert "pub interval: Option<i64>," in body
-        assert "pub unit: Option<TimeUnitValue>," in body
+        assert "pub interval: ::std::option::Option<i64>," in body
+        assert "pub unit: ::std::option::Option<TimeUnitValue>," in body
 
 
 class TestCstBackpointers:
     def test_every_type_carries_the_cst_node_it_came_from(self) -> None:
         src = generate("word := w:/[a-z]+/ ;", "option cst = true;\n")
         assert "use super::cst;" in src
-        assert "pub cst: Option<::fltk_cst_core::Shared<cst::Word>>," in block(src, "pub struct Word")
+        assert "pub cst: ::std::option::Option<::fltk_cst_core::Shared<cst::Word>>," in block(src, "pub struct Word")
 
     def test_the_cst_module_path_is_the_caller_s(self) -> None:
         src = generate("word := w:/[a-z]+/ ;", "option cst = true;\n", cst_mod_path="crate::grammar::cst")
@@ -374,8 +381,8 @@ class TestEquality:
     """``PartialEq`` over semantic data only, per node form."""
 
     def test_a_product_compares_every_semantic_member(self, config_src: str) -> None:
-        assert block(config_src, "impl PartialEq for Setting") == (
-            "impl PartialEq for Setting {\n"
+        assert block(config_src, "impl ::std::cmp::PartialEq for Setting") == (
+            "impl ::std::cmp::PartialEq for Setting {\n"
             "    fn eq(&self, other: &Self) -> bool {\n"
             "        self.key == other.key && self.value == other.value\n"
             "    }\n"
@@ -384,8 +391,8 @@ class TestEquality:
 
     def test_a_marker_product_holds_no_semantic_data_at_all(self) -> None:
         src = generate('marker := "!" . "?" ;')
-        assert block(src, "impl PartialEq for Marker") == (
-            "impl PartialEq for Marker {\n"
+        assert block(src, "impl ::std::cmp::PartialEq for Marker") == (
+            "impl ::std::cmp::PartialEq for Marker {\n"
             "    /// A marker node carries position only, so every value of it is equal to every other.\n"
             "    fn eq(&self, _other: &Self) -> bool {\n"
             "        true\n"
@@ -396,8 +403,8 @@ class TestEquality:
     def test_labeled_literal_members_carry_position_and_stay_out(self) -> None:
         """A literal's text is a grammar constant, so its member records an offset and nothing else."""
         src = generate('marks := name:word , bang:"!" , stars:"*"* ;\nword := w:/[a-z]+/ ;\n')
-        assert block(src, "impl PartialEq for Marks") == (
-            "impl PartialEq for Marks {\n"
+        assert block(src, "impl ::std::cmp::PartialEq for Marks") == (
+            "impl ::std::cmp::PartialEq for Marks {\n"
             "    fn eq(&self, other: &Self) -> bool {\n"
             "        self.name == other.name\n"
             "    }\n"
@@ -407,12 +414,14 @@ class TestEquality:
     def test_a_presence_flag_is_semantic_data(self) -> None:
         """``pub:"pub"?`` records *whether* the keyword was written, which is a datum."""
         src = generate('decl := type:word , pub:"pub"? ;\nword := w:/[a-z]+/ ;\n')
-        assert "self.r#type == other.r#type && self.r#pub == other.r#pub" in block(src, "impl PartialEq for Decl")
+        assert "self.r#type == other.r#type && self.r#pub == other.r#pub" in block(
+            src, "impl ::std::cmp::PartialEq for Decl"
+        )
 
     def test_the_cst_backpointer_stays_out(self) -> None:
         src = generate("word := w:/[a-z]+/ ;", "option cst = true;\n")
-        assert block(src, "impl PartialEq for Word") == (
-            "impl PartialEq for Word {\n"
+        assert block(src, "impl ::std::cmp::PartialEq for Word") == (
+            "impl ::std::cmp::PartialEq for Word {\n"
             "    fn eq(&self, other: &Self) -> bool {\n"
             "        self.text == other.text\n"
             "    }\n"
@@ -421,19 +430,19 @@ class TestEquality:
 
     def test_a_terminal_rule_compares_its_text(self) -> None:
         src = generate("word := w:/[a-z]+/ ;")
-        assert "        self.text == other.text\n" in block(src, "impl PartialEq for Word")
+        assert "        self.text == other.text\n" in block(src, "impl ::std::cmp::PartialEq for Word")
 
     def test_a_coerced_terminal_rule_compares_its_value(self) -> None:
         src = generate("count := d:/[0-9]+/ ;", "rule count { type: u32; }\n")
-        assert "        self.value == other.value\n" in block(src, "impl PartialEq for Count")
+        assert "        self.value == other.value\n" in block(src, "impl ::std::cmp::PartialEq for Count")
 
     def test_an_enum_shaped_node_compares_its_variant(self) -> None:
         src = generate('flag := yes:"yes" | no:"no" ;')
-        assert "        self.value == other.value\n" in block(src, "impl PartialEq for Flag")
+        assert "        self.value == other.value\n" in block(src, "impl ::std::cmp::PartialEq for Flag")
 
     def test_a_sum_compares_the_payload_of_the_matching_variant(self, config_src: str) -> None:
-        assert block(config_src, "impl PartialEq for Stanza") == (
-            "impl PartialEq for Stanza {\n"
+        assert block(config_src, "impl ::std::cmp::PartialEq for Stanza") == (
+            "impl ::std::cmp::PartialEq for Stanza {\n"
             "    fn eq(&self, other: &Self) -> bool {\n"
             "        match (self, other) {\n"
             "            (Self::ServerDef(a), Self::ServerDef(b)) => a == b,\n"
@@ -446,20 +455,20 @@ class TestEquality:
 
     def test_a_field_enum_compares_within_one_variant(self) -> None:
         src = generate('wrap := ( a:num | a:word ) . ";" ;\nnum := d:/[0-9]+/ ;\nword := w:/[a-z]+/ ;\n')
-        body = block(src, "impl PartialEq for WrapA")
+        body = block(src, "impl ::std::cmp::PartialEq for WrapA")
         assert "            (Self::Num(a), Self::Num(b)) => a == b,\n" in body
         assert "            _ => false,\n" in body
 
     def test_a_value_enum_keeps_its_derive(self, config_src: str) -> None:
         """It is a bare discriminant, so there is nothing to skip and nothing to write out."""
-        assert "impl PartialEq for MetricTypeValue" not in config_src
+        assert "impl ::std::cmp::PartialEq for MetricTypeValue" not in config_src
 
     def test_a_long_member_list_breaks_across_lines(self) -> None:
         src = generate(
             "record := first_component:word , second_component:word , third_component:word ;\nword := w:/[a-z]+/ ;\n"
         )
-        assert block(src, "impl PartialEq for Record") == (
-            "impl PartialEq for Record {\n"
+        assert block(src, "impl ::std::cmp::PartialEq for Record") == (
+            "impl ::std::cmp::PartialEq for Record {\n"
             "    fn eq(&self, other: &Self) -> bool {\n"
             "        self.first_component == other.first_component\n"
             "            && self.second_component == other.second_component\n"
@@ -477,8 +486,8 @@ class TestEqualityWalk:
         assert "mod eq_walk" not in config_src
 
     def test_a_recursive_type_seeds_the_walk_with_its_own_pair(self, fold_src: str) -> None:
-        assert block(fold_src, "impl PartialEq for Expr {") == (
-            "impl PartialEq for Expr {\n"
+        assert block(fold_src, "impl ::std::cmp::PartialEq for Expr {") == (
+            "impl ::std::cmp::PartialEq for Expr {\n"
             "    /// Bounded stack: the pending pairs live in a worklist, not in call frames.\n"
             "    fn eq(&self, other: &Self) -> bool {\n"
             "        eq_walk::run(eq_walk::Item::Expr(self, other))\n"
@@ -507,7 +516,8 @@ class TestEqualityWalk:
         assert block(fold_src, "impl ExprBinary {") == (
             "impl ExprBinary {\n"
             "    /// Compare what cannot recurse, enqueueing the pairs that can.\n"
-            "    fn eq_shallow<'a>(&'a self, other: &'a Self, worklist: &mut Vec<eq_walk::Item<'a>>) -> bool {\n"
+            "    fn eq_shallow<'a>(&'a self, other: &'a Self,"
+            " worklist: &mut ::std::vec::Vec<eq_walk::Item<'a>>) -> bool {\n"
             "        if self.op != other.op {\n"
             "            return false;\n"
             "        }\n"
@@ -522,7 +532,8 @@ class TestEqualityWalk:
         assert block(fold_src, "impl Factor {") == (
             "impl Factor {\n"
             "    /// Compare what cannot recurse, enqueueing the pairs that can.\n"
-            "    fn eq_shallow<'a>(&'a self, other: &'a Self, worklist: &mut Vec<eq_walk::Item<'a>>) -> bool {\n"
+            "    fn eq_shallow<'a>(&'a self, other: &'a Self,"
+            " worklist: &mut ::std::vec::Vec<eq_walk::Item<'a>>) -> bool {\n"
             "        match (self, other) {\n"
             "            (Self::Num(a), Self::Num(b)) => a == b,\n"
             "            (Self::Paren(a), Self::Paren(b)) => {\n"
@@ -538,8 +549,8 @@ class TestEqualityWalk:
     def test_a_type_outside_a_cycle_compares_on_the_spot(self) -> None:
         """Only the recursive types walk; a bounded one keeps the direct comparison."""
         src = generate(TREE_GRAMMAR)
-        assert block(src, "impl PartialEq for Word") == (
-            "impl PartialEq for Word {\n"
+        assert block(src, "impl ::std::cmp::PartialEq for Word") == (
+            "impl ::std::cmp::PartialEq for Word {\n"
             "    fn eq(&self, other: &Self) -> bool {\n"
             "        self.text == other.text\n"
             "    }\n"
@@ -552,7 +563,8 @@ class TestEqualityWalk:
         assert block(src, "impl Tree {") == (
             "impl Tree {\n"
             "    /// Compare what cannot recurse, enqueueing the pairs that can.\n"
-            "    fn eq_shallow<'a>(&'a self, other: &'a Self, worklist: &mut Vec<eq_walk::Item<'a>>) -> bool {\n"
+            "    fn eq_shallow<'a>(&'a self, other: &'a Self,"
+            " worklist: &mut ::std::vec::Vec<eq_walk::Item<'a>>) -> bool {\n"
             "        if self.name != other.name {\n"
             "            return false;\n"
             "        }\n"
@@ -615,7 +627,9 @@ class TestIterativeDrop:
 
     def test_the_witness_is_the_cheapest_operand_the_chain_bottoms_out_in(self, fold_src: str) -> None:
         assert block(fold_src, "fn _expr_drop_witness() -> Expr {") == (
-            "fn _expr_drop_witness() -> Expr {\n    Expr::Operand(Box::new(Term::Operand(Box::new(Factor::Num(0)))))\n}"
+            "fn _expr_drop_witness() -> Expr {\n"
+            "    Expr::Operand(::std::boxed::Box::new(Term::Operand("
+            "::std::boxed::Box::new(Factor::Num(0)))))\n}"
         )
 
     def test_each_fold_rule_gets_one_witness_function(self, fold_src: str) -> None:
@@ -623,8 +637,8 @@ class TestIterativeDrop:
         assert fold_src.count("fn _term_drop_witness() -> Term {") == 1
 
     def test_the_link_replaces_both_sides_and_drains_a_worklist(self, fold_src: str) -> None:
-        assert block(fold_src, "impl Drop for ExprBinary {") == (
-            "impl Drop for ExprBinary {\n"
+        assert block(fold_src, "impl ::std::ops::Drop for ExprBinary {") == (
+            "impl ::std::ops::Drop for ExprBinary {\n"
             "    /// Take the chain below this link apart through a worklist rather than by recursion.\n"
             "    fn drop(&mut self) {\n"
             "        // A link holding two bare operands tears down by ordinary glue: their depth is the\n"
@@ -632,7 +646,7 @@ class TestIterativeDrop:
             "        if !matches!(&*self.lhs, Expr::Binary(_)) && !matches!(&*self.rhs, Expr::Binary(_)) {\n"
             "            return;\n"
             "        }\n"
-            "        let mut stack: Vec<Expr> = vec![\n"
+            "        let mut stack: ::std::vec::Vec<Expr> = vec![\n"
             "            ::std::mem::replace(&mut *self.lhs, _expr_drop_witness()),\n"
             "            ::std::mem::replace(&mut *self.rhs, _expr_drop_witness()),\n"
             "        ];\n"
@@ -649,27 +663,27 @@ class TestIterativeDrop:
         )
 
     def test_only_the_link_struct_carries_it_so_the_enum_stays_move_matchable(self, fold_src: str) -> None:
-        assert "impl Drop for Expr {" not in fold_src
-        assert "impl Drop for Term {" not in fold_src
-        assert "impl Drop for Factor {" not in fold_src
+        assert "impl ::std::ops::Drop for Expr {" not in fold_src
+        assert "impl ::std::ops::Drop for Term {" not in fold_src
+        assert "impl ::std::ops::Drop for Factor {" not in fold_src
 
     def test_a_renamed_link_variant_reaches_both_the_guard_and_the_loop(self) -> None:
         src = generate(
             fixtures.FOLD_GRAMMAR,
             fixtures.FOLD_SIDECAR.replace("fold_left: op;", "fold_left: op; variant Binary: Link;"),
         )
-        body = block(src, "impl Drop for ExprLink {")
+        body = block(src, "impl ::std::ops::Drop for ExprLink {")
         assert "matches!(&*self.lhs, Expr::Link(_))" in body
         assert "if let Expr::Link(mut link) = below {" in body
 
     def test_a_grammar_with_no_fold_emits_neither(self, config_src: str) -> None:
-        assert "impl Drop for" not in config_src
+        assert "impl ::std::ops::Drop for" not in config_src
         assert "_drop_witness" not in config_src
 
     def test_a_chain_nothing_can_construct_an_operand_of_gets_no_drop(self) -> None:
         """The generator knows nothing about a `custom(...)` type, so it can name no sentinel."""
         src = generate(fixtures.CUSTOM_FOLD_GRAMMAR, fixtures.CUSTOM_FOLD_SIDECAR)
-        assert "impl Drop for ExprBinary {" not in src
+        assert "impl ::std::ops::Drop for ExprBinary {" not in src
         assert "_expr_drop_witness" not in src
 
     def test_the_residual_is_recorded_where_the_consumer_reads_it(self) -> None:
@@ -746,8 +760,8 @@ class TestConverters:
         """One pass, one bucket per label: a scan per field would be a pass and an allocation each."""
         body = block(config_src, "impl Setting {")
         assert (
-            "        let mut children_key: Vec<&cst::SettingChild> = Vec::new();\n"
-            "        let mut children_value: Vec<&cst::SettingChild> = Vec::new();\n"
+            "        let mut children_key: ::std::vec::Vec<&cst::SettingChild> = ::std::vec::Vec::new();\n"
+            "        let mut children_value: ::std::vec::Vec<&cst::SettingChild> = ::std::vec::Vec::new();\n"
             "        for (label, child) in cst_node.children() {\n"
             "            match label {\n"
             "                Some(cst::SettingLabel::Key) => children_key.push(child),\n"
@@ -761,17 +775,20 @@ class TestConverters:
     def test_a_body_reading_one_label_collects_it_directly(self, config_src: str) -> None:
         """A single label needs no dispatch, and a one-armed `match` is a clippy complaint."""
         body = block(config_src, "impl Config {")
-        assert "        let children_stanza: Vec<&cst::ConfigChild> = cst_node\n" in body
+        assert "        let children_stanza: ::std::vec::Vec<&cst::ConfigChild> = cst_node\n" in body
         assert "            .filter(|(label, _)| matches!(label, Some(cst::ConfigLabel::Stanza)))\n" in body
 
     def test_a_collection_field_converts_every_child(self, config_src: str) -> None:
         body = block(config_src, "impl Config {")
-        assert "let mut values = Vec::with_capacity(children_stanza.len());" in body
+        assert "let mut values = ::std::vec::Vec::with_capacity(children_stanza.len());" in body
         assert "values.push(Stanza::from_cst(child_node)?);" in body
 
     def test_a_keyed_collection_rejects_a_repeated_key(self, config_src: str) -> None:
         body = block(config_src, "impl ServerDef {")
-        assert "let mut keyed: ::fltk_ast_core::IndexMap<String, Setting> = ::fltk_ast_core::IndexMap::new();" in body
+        assert (
+            "let mut keyed: ::fltk_ast_core::IndexMap<::std::string::String, Setting>"
+            " = ::fltk_ast_core::IndexMap::new();" in body
+        )
         assert "let key = element.key.clone();" in body
         assert '::fltk_ast_core::duplicate_key("setting", &key, &element.span, &previous.span)' in body, (
             "the two-span diagnostic is the point of a keyed collection"
@@ -780,7 +797,8 @@ class TestConverters:
     def test_a_multi_keyed_collection_accumulates_instead_of_rejecting(self, multi_config_src: str) -> None:
         body = block(multi_config_src, "impl ServerDef {")
         assert (
-            "let mut keyed: ::fltk_ast_core::IndexMap<String, Vec<Setting>> = ::fltk_ast_core::IndexMap::new();" in body
+            "let mut keyed: ::fltk_ast_core::IndexMap<::std::string::String, ::std::vec::Vec<Setting>>"
+            " = ::fltk_ast_core::IndexMap::new();" in body
         )
         assert "keyed.entry(key).or_default().push(element);" in body
         assert "duplicate_key" not in body, "a repeated key is what `multi` is for"
@@ -796,7 +814,7 @@ class TestConverters:
             "impl Word {\n"
             "    /// Convert a `word` CST node.\n"
             "    pub fn from_cst(node: &::fltk_cst_core::Shared<cst::Word>)"
-            " -> Result<Self, ::fltk_ast_core::AstError> {\n"
+            " -> ::std::result::Result<Self, ::fltk_ast_core::AstError> {\n"
             "        let cst_node = node.read();\n"
             "        Ok(Self {\n"
             '            text: ::fltk_ast_core::node_text(cst_node.span(), "word")?,\n'
@@ -846,7 +864,7 @@ class TestConverters:
 
     def test_a_sum_classifies_its_children_and_hands_them_to_the_shared_evaluator(self, config_src: str) -> None:
         assert block(config_src, "fn _stanza_alternative") == (
-            "fn _stanza_alternative(node: &cst::Stanza) -> Option<usize> {\n"
+            "fn _stanza_alternative(node: &cst::Stanza) -> ::std::option::Option<usize> {\n"
             "    _STANZA_SIGNATURES.select(node.children().iter().map(|(label, child)| {\n"
             "        let label = if matches!(label, Some(cst::StanzaLabel::ServerDef)) {\n"
             '            Some("server_def")\n'
@@ -924,14 +942,16 @@ class TestConverters:
         an emitted-source assertion is the cheapest place to notice.
         """
         src = generate('sum := lhs:sum . "+" . rhs:num | first:num ;\nnum := d:/[0-9]+/ ;\n')
-        assert "    Alt1(Box<SumAlt1>),\n" in block(src, "pub enum Sum")
-        assert "Ok(Self::Alt1(Box::new(SumAlt1::from_cst(node)?)))" in block(src, "impl Sum {\n    /// Convert")
+        assert "    Alt1(::std::boxed::Box<SumAlt1>),\n" in block(src, "pub enum Sum")
+        assert "Ok(Self::Alt1(::std::boxed::Box::new(SumAlt1::from_cst(node)?)))" in block(
+            src, "impl Sum {\n    /// Convert"
+        )
 
     def test_a_field_enum_converter_dispatches_on_the_child_s_kind(self) -> None:
         src = generate('wrap := ( a:num | a:word ) . ";" ;\nnum := d:/[0-9]+/ ;\nword := w:/[a-z]+/ ;\n')
         assert block(src, "fn _wrap_a_from_cst") == (
             "fn _wrap_a_from_cst(child: &cst::WrapChild, _span: &::fltk_cst_core::Span)"
-            " -> Result<WrapA, ::fltk_ast_core::AstError> {\n"
+            " -> ::std::result::Result<WrapA, ::fltk_ast_core::AstError> {\n"
             "    match child {\n"
             "        cst::WrapChild::Num(child_node) => Ok(WrapA::Num(Num::from_cst(child_node)?)),\n"
             "        cst::WrapChild::Word(child_node) => Ok(WrapA::Word(Word::from_cst(child_node)?)),\n"
@@ -953,7 +973,7 @@ class TestConverters:
         )
         assert block(src, "fn _wrap_a_from_cst") == (
             "fn _wrap_a_from_cst(child: &cst::WrapChild, span: &::fltk_cst_core::Span)"
-            " -> Result<WrapA, ::fltk_ast_core::AstError> {\n"
+            " -> ::std::result::Result<WrapA, ::fltk_ast_core::AstError> {\n"
             "    match child {\n"
             "        cst::WrapChild::Num(child_node) => Ok(WrapA::Num(Num::from_cst(child_node)?)),\n"
             "        cst::WrapChild::Word(child_node) => Ok(WrapA::Word(Word::from_cst(child_node)?)),\n"
@@ -967,7 +987,7 @@ class TestConverters:
         src = generate('wrap := ( a:num | a:/[A-Z]+/ ) . ";" ;\nnum := d:/[0-9]+/ ;\n')
         assert block(src, "fn _wrap_a_from_cst") == (
             "fn _wrap_a_from_cst(child: &cst::WrapChild, span: &::fltk_cst_core::Span)"
-            " -> Result<WrapA, ::fltk_ast_core::AstError> {\n"
+            " -> ::std::result::Result<WrapA, ::fltk_ast_core::AstError> {\n"
             "    match child {\n"
             "        cst::WrapChild::Num(child_node) => Ok(WrapA::Num(Num::from_cst(child_node)?)),\n"
             "        cst::WrapChild::Span(span_child) =>"
@@ -996,7 +1016,7 @@ class TestConverters:
             "impl Marker {\n"
             "    /// Convert a `marker` CST node.\n"
             "    pub fn from_cst(node: &::fltk_cst_core::Shared<cst::Marker>)"
-            " -> Result<Self, ::fltk_ast_core::AstError> {\n"
+            " -> ::std::result::Result<Self, ::fltk_ast_core::AstError> {\n"
             "        let cst_node = node.read();\n"
             "        Ok(Self {\n"
             "            span: cst_node.span().clone(),\n"
@@ -1008,7 +1028,7 @@ class TestConverters:
     def test_an_erased_rule_hands_back_its_payload(self, config_src: str) -> None:
         assert block(config_src, "fn _erased_number_from_cst") == (
             "fn _erased_number_from_cst(node: &::fltk_cst_core::Shared<cst::Number>)"
-            " -> Result<i64, ::fltk_ast_core::AstError> {\n"
+            " -> ::std::result::Result<i64, ::fltk_ast_core::AstError> {\n"
             "    let cst_node = node.read();\n"
             '    let text = ::fltk_ast_core::node_text(cst_node.span(), "number")?;\n'
             '    ::fltk_ast_core::scalar::parse_i64(&text, "number", cst_node.span())\n'
@@ -1028,7 +1048,7 @@ class TestConverters:
     def test_a_flattened_wrapper_hands_its_fields_to_its_use_site(self, task_src: str) -> None:
         assert (
             "fn _flat_schedule_from_cst(node: &::fltk_cst_core::Shared<cst::Schedule>)"
-            " -> Result<(i64, TimeUnitValue)," in task_src
+            " -> ::std::result::Result<(i64, TimeUnitValue)," in task_src
         )
         body = block(task_src, "impl TaskDef {")
         assert "let hoisted_schedule = {" in body
@@ -1040,7 +1060,7 @@ class TestConverters:
     def test_a_recursive_field_is_boxed_on_the_way_in(self) -> None:
         src = generate(TREE_GRAMMAR)
         body = block(src, "impl Tree {\n    /// Convert")
-        assert "value = Some(Box::new(Tree::from_cst(child_node)?));" in body
+        assert "value = Some(::std::boxed::Box::new(Tree::from_cst(child_node)?));" in body
         assert "values.push(Tree::from_cst(child_node)?);" in body, "a collection is already an indirection"
 
     def test_the_back_pointer_is_the_node_the_value_came_from(self) -> None:
@@ -1071,8 +1091,8 @@ class TestFoldConverters:
         body = block(fold_src, "impl Expr {\n    /// Convert")
         assert "pub fn from_cst(node: &::fltk_cst_core::Shared<cst::Expr>)" in body
         assert (
-            "        let mut children_term: Vec<&cst::ExprChild> = Vec::new();\n"
-            "        let mut children_op: Vec<&cst::ExprChild> = Vec::new();\n" in body
+            "        let mut children_term: ::std::vec::Vec<&cst::ExprChild> = ::std::vec::Vec::new();\n"
+            "        let mut children_op: ::std::vec::Vec<&cst::ExprChild> = ::std::vec::Vec::new();\n" in body
         )
         assert (
             "        ::fltk_ast_core::check_fold_arity("
@@ -1083,7 +1103,7 @@ class TestFoldConverters:
         """A link's span is merged out of these, and an erased operand has none of its own."""
         body = block(fold_src, "impl Expr {\n    /// Convert")
         assert (
-            "        let mut operands = Vec::with_capacity(children_term.len());\n"
+            "        let mut operands = ::std::vec::Vec::with_capacity(children_term.len());\n"
             "        for child in &children_term {\n"
             "            let cst::ExprChild::Term(child_node) = child else {\n"
             '                return Err(::fltk_ast_core::unexpected_child("expr", "term", cst_node.span()));\n'
@@ -1096,7 +1116,7 @@ class TestFoldConverters:
     def test_the_operators_are_converted_in_source_order(self, fold_src: str) -> None:
         body = block(fold_src, "impl Expr {\n    /// Convert")
         assert (
-            "        let mut operators = Vec::with_capacity(children_op.len());\n"
+            "        let mut operators = ::std::vec::Vec::with_capacity(children_op.len());\n"
             "        for child in &children_op {\n"
             "            let cst::ExprChild::AddOp(child_node) = child else {\n"
             '                return Err(::fltk_ast_core::unexpected_child("expr", "op", cst_node.span()));\n'
@@ -1113,12 +1133,12 @@ class TestFoldConverters:
             "            cst_node.span(),\n"
             "            operands,\n"
             "            operators,\n"
-            "            |operand| Self::Operand(Box::new(operand)),\n"
+            "            |operand| Self::Operand(::std::boxed::Box::new(operand)),\n"
             "            |operator, lhs, rhs, span| {\n"
             "                Self::Binary(ExprBinary {\n"
             "                    op: operator,\n"
-            "                    lhs: Box::new(lhs),\n"
-            "                    rhs: Box::new(rhs),\n"
+            "                    lhs: ::std::boxed::Box::new(lhs),\n"
+            "                    rhs: ::std::boxed::Box::new(rhs),\n"
             "                    span,\n"
             "                })\n"
             "            },\n"
@@ -1261,7 +1281,7 @@ class TestFlattenShapes:
 
     def test_an_absent_wrapper_leaves_a_flag_false_and_a_collection_empty(self) -> None:
         src = generate(self.WRAPPER_GRAMMAR, self.LEAF_SIDECAR + "rule extra { flatten; }\n")
-        assert "None => (false, Vec::new())," in block(src, "impl Doc {")
+        assert "None => (false, ::std::vec::Vec::new())," in block(src, "impl Doc {")
 
     def test_an_absent_wrapper_leaves_a_keyed_collection_empty(self) -> None:
         src = generate(
@@ -1273,7 +1293,9 @@ class TestFlattenShapes:
     def test_a_wrapper_of_one_field_hands_back_a_one_element_tuple(self) -> None:
         """The trailing comma is the difference between a tuple and a parenthesized value."""
         src = generate(self.ONE_FIELD_GRAMMAR, self.LEAF_SIDECAR + "rule only { flatten; }\n")
-        assert "fn _flat_only_from_cst(node: &::fltk_cst_core::Shared<cst::Only>) -> Result<(i64,)," in src
+        assert (
+            "fn _flat_only_from_cst(node: &::fltk_cst_core::Shared<cst::Only>) -> ::std::result::Result<(i64,)," in src
+        )
         body = block(src, "impl Doc {")
         assert "let (v0,) = _flat_only_from_cst(child_node)?;" in body
         assert "(Some(v0),)" in body
@@ -1282,9 +1304,9 @@ class TestFlattenShapes:
     @pytest.mark.parametrize(
         ("grammar", "spelling"),
         [
-            (CYCLE_GRAMMAR, "(Some(Box::new(v0)),)"),
-            (OPTIONAL_CYCLE_GRAMMAR, "(v0.map(Box::new),)"),
-            (REQUIRED_CYCLE_GRAMMAR, "(Box::new(v0),)"),
+            (CYCLE_GRAMMAR, "(Some(::std::boxed::Box::new(v0)),)"),
+            (OPTIONAL_CYCLE_GRAMMAR, "(v0.map(::std::boxed::Box::new),)"),
+            (REQUIRED_CYCLE_GRAMMAR, "(::std::boxed::Box::new(v0),)"),
         ],
         ids=["optional site", "optional site, optional field", "required site"],
     )
@@ -1319,7 +1341,8 @@ class TestReverseConverters:
         assert block(leaf_src, "impl Num {\n    /// Synthesise") == (
             "impl Num {\n"
             "    /// Synthesise a `num` CST node from the text of `text`.\n"
-            "    pub fn to_cst(&self) -> Result<::fltk_cst_core::Shared<cst::Num>, ::fltk_ast_core::AstError> {\n"
+            "    pub fn to_cst(&self) -> ::std::result::Result<"
+            "::fltk_cst_core::Shared<cst::Num>, ::fltk_ast_core::AstError> {\n"
             "        let text = self.text.as_str();\n"
             '        let split = _NUM_TERMINALS.split(text, "num")?;\n'
             "        let mut cst_node = cst::Num::new(::fltk_ast_core::source_span(text));\n"
@@ -1386,7 +1409,8 @@ class TestReverseConverters:
         assert block(leaf_src, "impl Pick {\n    /// Synthesise") == (
             "impl Pick {\n"
             "    /// Synthesise a `pick` CST node for the alternative `value` names.\n"
-            "    pub fn to_cst(&self) -> Result<::fltk_cst_core::Shared<cst::Pick>, ::fltk_ast_core::AstError> {\n"
+            "    pub fn to_cst(&self) -> ::std::result::Result<"
+            "::fltk_cst_core::Shared<cst::Pick>, ::fltk_ast_core::AstError> {\n"
             "        let label = match self.value {\n"
             "            PickValue::A => cst::PickLabel::A,\n"
             "            PickValue::B => cst::PickLabel::B,\n"
@@ -1407,7 +1431,7 @@ class TestReverseConverters:
         """A `transparent;` rule has no type to hang a method on; its use sites call a function."""
         assert "impl Number {" not in config_src
         assert (
-            "fn _erased_number_to_cst(value: &i64) -> Result<::fltk_cst_core::Shared<cst::Number>,"
+            "fn _erased_number_to_cst(value: &i64) -> ::std::result::Result<::fltk_cst_core::Shared<cst::Number>,"
             " ::fltk_ast_core::AstError> {\n"
         ) in config_src
         # It still splits its text back across the grammar's items, so it still needs the table.
@@ -1456,7 +1480,8 @@ class TestReverseProducts:
         assert block(config_src, "impl Setting {\n    /// Synthesise") == (
             "impl Setting {\n"
             "    /// Synthesise a `setting` CST node from this value's fields.\n"
-            "    pub fn to_cst(&self) -> Result<::fltk_cst_core::Shared<cst::Setting>, ::fltk_ast_core::AstError> {\n"
+            "    pub fn to_cst(&self) -> ::std::result::Result<"
+            "::fltk_cst_core::Shared<cst::Setting>, ::fltk_ast_core::AstError> {\n"
             "        let mut cst_node = cst::Setting::new(::fltk_cst_core::Span::unknown());\n"
             "        let mut cursor_key = ::fltk_ast_core::Cursor::new(vec![&self.key]);\n"
             "        let mut cursor_value = ::fltk_ast_core::Cursor::new(vec![&self.value]);\n"
@@ -1504,7 +1529,8 @@ class TestReverseProducts:
         assert block(src, "impl Import {\n    /// Synthesise a") == (
             "impl Import {\n"
             "    /// Synthesise a `import` CST node from this value's fields.\n"
-            "    pub fn to_cst(&self) -> Result<::fltk_cst_core::Shared<cst::Import>, ::fltk_ast_core::AstError> {\n"
+            "    pub fn to_cst(&self) -> ::std::result::Result<"
+            "::fltk_cst_core::Shared<cst::Import>, ::fltk_ast_core::AstError> {\n"
             "        let present = ::fltk_ast_core::populated"
             '(&[("name", true), ("alias", self.alias.is_some())]);\n'
             '        if ::fltk_ast_core::alternative_fits(&present, &["name"], &["name"]) {\n'
@@ -1528,7 +1554,8 @@ class TestReverseProducts:
         assert block(src, "impl Val {\n    /// Synthesise a") == (
             "impl Val {\n"
             "    /// Synthesise a `val` CST node from this value's fields.\n"
-            "    pub fn to_cst(&self) -> Result<::fltk_cst_core::Shared<cst::Val>, ::fltk_ast_core::AstError> {\n"
+            "    pub fn to_cst(&self) -> ::std::result::Result<"
+            "::fltk_cst_core::Shared<cst::Val>, ::fltk_ast_core::AstError> {\n"
             '        let present = ::fltk_ast_core::populated(&[("item", true)]);\n'
             '        if ::fltk_ast_core::alternative_fits(&present, &["item"], &["item"])'
             " && matches!(self.item, ValItem::Num(_)) {\n"
@@ -1629,7 +1656,7 @@ class TestReverseProducts:
         body = block(branch_src, "impl Doc {\n    /// Synthesise")
         assert (
             "let mut cursor_pub = ::fltk_ast_core::Cursor::new"
-            "(if self.r#pub { vec![&self.r#pub] } else { Vec::new() });"
+            "(if self.r#pub { vec![&self.r#pub] } else { ::std::vec::Vec::new() });"
         ) in body
 
     def test_an_alternation_is_checked_before_the_node_is_built(self, branch_src: str) -> None:
@@ -1664,8 +1691,8 @@ class TestReverseProducts:
         """The reverse helper is the one place a keyed field's type is written as a parameter."""
         src = generate(MULTI_FLATTEN_GRAMMAR, MULTI_FLATTEN_SIDECAR)
         assert (
-            "fn _flat_group_to_cst(v0: &::fltk_ast_core::IndexMap<String, Vec<Entry>>)"
-            " -> Result<::fltk_cst_core::Shared<cst::Group>, ::fltk_ast_core::AstError> {" in src
+            "fn _flat_group_to_cst(v0: &::fltk_ast_core::IndexMap<::std::string::String, ::std::vec::Vec<Entry>>)"
+            " -> ::std::result::Result<::fltk_cst_core::Shared<cst::Group>, ::fltk_ast_core::AstError> {" in src
         )
         assert "_flat_group_to_cst(&self.entry)?" in src
 
@@ -1725,8 +1752,8 @@ class TestEntryPoints:
         src = generate("word := w:/[a-z]+/ ;", parser_mod_path="super::parser")
         failed = "        return Err(::fltk_ast_core::ParseToAstError::Parse(parser.error_message()));\n"
         assert block(src, "pub fn parse_str") == (
-            "pub fn parse_str(src: &str, filename: Option<&str>)"
-            " -> Result<Word, ::fltk_ast_core::ParseToAstError> {\n"
+            "pub fn parse_str(src: &str, filename: ::std::option::Option<&str>)"
+            " -> ::std::result::Result<Word, ::fltk_ast_core::ParseToAstError> {\n"
             # The `false` is the trivia-capture flag: a converter drops unlabeled children, so
             # there is nothing to capture trivia for.
             "    let mut parser = parser::Parser::new(src, filename, false);\n"
@@ -1750,7 +1777,7 @@ class TestEntryPoints:
         src = generate("word := w:/[a-z]+/ ;", unparser_mod_path="super::unparser")
         assert block(src, "pub fn unparse_str") == (
             "pub fn unparse_str(value: &Word, max_width: usize, indent_width: usize)"
-            " -> Result<String, ::fltk_ast_core::AstError> {\n"
+            " -> ::std::result::Result<::std::string::String, ::fltk_ast_core::AstError> {\n"
             "    let node = value.to_cst()?;\n"
             "    let guard = node.read();\n"
             "    let Some(unparsed) = unparser::Unparser::new().unparse_word(&guard) else {\n"
@@ -1767,9 +1794,11 @@ class TestEntryPoints:
 
     def test_the_goal_rule_defaults_to_the_first_rule_and_is_overridable(self) -> None:
         grammar = "doc := w:word ;\nword := w:/[a-z]+/ ;\n"
-        assert "-> Result<Doc, ::fltk_ast_core::ParseToAstError>" in generate(grammar, parser_mod_path="super::parser")
+        assert "-> ::std::result::Result<Doc, ::fltk_ast_core::ParseToAstError>" in generate(
+            grammar, parser_mod_path="super::parser"
+        )
         named = generate(grammar, parser_mod_path="super::parser", goal_rule="word")
-        assert "-> Result<Word, ::fltk_ast_core::ParseToAstError>" in named
+        assert "-> ::std::result::Result<Word, ::fltk_ast_core::ParseToAstError>" in named
         assert "parser.apply__parse_word(0)" in named
 
     def test_an_unknown_goal_rule_is_refused(self) -> None:
@@ -1789,7 +1818,9 @@ class TestEntryPoints:
             parser_mod_path="super::parser",
             unparser_mod_path="super::unparser",
         )
-        assert "-> Result<String, ::fltk_ast_core::ParseToAstError>" in block(src, "pub fn parse_str")
+        assert "-> ::std::result::Result<::std::string::String, ::fltk_ast_core::ParseToAstError>" in block(
+            src, "pub fn parse_str"
+        )
         assert "Ok(_erased_num_from_cst(&parsed.result)?)" in src
         # A `&String` parameter is a lint, so the borrowed spelling is the one emitted.
         assert "pub fn unparse_str(value: &str," in src
@@ -1802,7 +1833,7 @@ class TestEntryPoints:
             parser_mod_path="super::parser",
             unparser_mod_path="super::unparser",
         )
-        assert "-> Result<i64, ::fltk_ast_core::ParseToAstError>" in src
+        assert "-> ::std::result::Result<i64, ::fltk_ast_core::ParseToAstError>" in src
         assert "pub fn unparse_str(value: &i64," in src
 
     def test_a_custom_goal_rule_is_reached_through_the_traits(self) -> None:
@@ -1812,7 +1843,7 @@ class TestEntryPoints:
             parser_mod_path="super::parser",
             unparser_mod_path="super::unparser",
         )
-        assert "-> Result<crate::Money, ::fltk_ast_core::ParseToAstError>" in src
+        assert "-> ::std::result::Result<crate::Money, ::fltk_ast_core::ParseToAstError>" in src
         assert (
             "Ok(<crate::Money as ::fltk_ast_core::FromCst<::fltk_cst_core::Shared<cst::Money>>>"
             "::from_cst(&parsed.result)?)"

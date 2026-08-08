@@ -4,8 +4,8 @@
 #[cfg(test)]
 mod tests {
     use crate::ast::{
-        self, Colour, ColourValue, DecimalVal, Nest, NestInner, NestSum, NestSumAlt1, Num, SumChain, SumChainBinary,
-        UuidVal, Val,
+        self, Atom, Colour, ColourValue, DecimalVal, Entries, MultiEntries, Name, Nest, NestInner, NestSum, NestSumAlt1,
+        Num, SumChain, SumChainBinary, UuidVal, Val,
     };
     use crate::cst;
     use crate::unparser::Unparser;
@@ -323,6 +323,101 @@ mod tests {
             render(Unparser::new().unparse_sum_chain(&guard))
         };
         assert_eq!(parse_sum_chain(&rendered), parsed);
+    }
+
+    // ------------------------------------------------------------------
+    // The two keyed regions: `entries` holds one element per key,
+    // `multi_entries` a run per key.
+    // ------------------------------------------------------------------
+
+    fn name(text: &str) -> Name {
+        Name {
+            text: text.to_string(),
+            span: Span::unknown(),
+        }
+    }
+
+    fn parse_entries(text: &str) -> Entries {
+        parse_ast!(text, apply__parse_entries, Entries)
+    }
+
+    fn parse_multi_entries(text: &str) -> MultiEntries {
+        parse_ast!(text, apply__parse_multi_entries, MultiEntries)
+    }
+
+    #[test]
+    fn a_keyed_region_converts_to_a_map_in_first_occurrence_order() {
+        let parsed = parse_entries("{ b = 1; a = x; }");
+        // Source order, not sorted order: the map is insertion-ordered.
+        assert_eq!(parsed.entry.keys().collect::<Vec<_>>(), vec!["b", "a"]);
+        assert_eq!(parsed.entry["b"].value, Atom::Num(num("1")));
+        assert_eq!(parsed.entry["a"].value, Atom::Name(name("x")));
+        // The key is a lookup convenience, not a move: each element still carries it.
+        assert_eq!(parsed.entry["b"].key, "b");
+        assert_eq!(parsed.entry["a"].key, "a");
+    }
+
+    #[test]
+    fn a_keyed_map_compares_by_key_rather_than_by_position() {
+        let parsed = parse_entries("{ b = 1; a = x; }");
+        assert_eq!(parse_entries("{ a = x; b = 1; }"), parsed);
+        assert_ne!(parse_entries("{ b = 1; a = y; }"), parsed);
+        assert_ne!(parse_entries("{ b = 1; }"), parsed);
+    }
+
+    #[test]
+    fn a_repeated_key_in_the_plain_region_is_refused_naming_both_locations() {
+        let node = parse_cst!("{ a = 1; a = 2; }", apply__parse_entries, "entries");
+        let error = Entries::from_cst(&node).expect_err("`a` keys two elements");
+        assert_eq!(error.message, "duplicate entry key \"a\"");
+        let [(what, previous)] = &error.related[..] else {
+            panic!("a duplicate names the earlier element too: {:?}", error.related);
+        };
+        assert_eq!(what, "previously defined here");
+        // The second occurrence is where the refusal points; the first is the related span.
+        assert!(previous.start() < error.span.start(), "got {previous:?} and {:?}", error.span);
+    }
+
+    #[test]
+    fn elements_sharing_a_key_accumulate_in_the_multi_region() {
+        let parsed = parse_multi_entries("{ a = 1; b = 2; a = 3; }");
+        // A key takes its place where its first element appeared, and the run is source order.
+        assert_eq!(parsed.multi_entry.keys().collect::<Vec<_>>(), vec!["a", "b"]);
+        assert_eq!(parsed.multi_entry["a"].len(), 2);
+        assert_eq!(parsed.multi_entry["a"][0].value, Atom::Num(num("1")));
+        assert_eq!(parsed.multi_entry["a"][1].value, Atom::Num(num("3")));
+        assert_eq!(parsed.multi_entry["b"].len(), 1);
+        assert_eq!(parsed.multi_entry["b"][0].value, Atom::Num(num("2")));
+    }
+
+    #[test]
+    fn a_multi_region_round_trips_through_its_grouped_order() {
+        // Grouping loses the interleaving, so a render canonicalizes to grouped order — what
+        // has to hold is that the render parses back to the same value.
+        let parsed = parse_multi_entries("{ a = 1; b = 2; a = 3; }");
+        let node = parsed.to_cst().expect("a parsed region must synthesise");
+        let rendered = {
+            let guard = node.read();
+            render(Unparser::new().unparse_multi_entries(&guard))
+        };
+        assert_eq!(parse_multi_entries(&rendered), parsed);
+        assert_eq!(parse_multi_entries("{ a = 1; a = 3; b = 2; }"), parsed);
+    }
+
+    #[test]
+    fn a_key_with_no_element_cannot_be_rendered() {
+        // The key lives on the element, so a group holding none has nothing to carry it.
+        let mut multi_entry = ::fltk_ast_core::IndexMap::new();
+        multi_entry.insert("a".to_string(), Vec::new());
+        let value = MultiEntries {
+            multi_entry,
+            span: Span::unknown(),
+        };
+        let error = value.to_cst().expect_err("an empty group is unrenderable");
+        assert_eq!(
+            error.message,
+            "rule \"multi_entry\": the \"a\" key has no element to render it on"
+        );
     }
 
     const OPERANDS: usize = 100_000;

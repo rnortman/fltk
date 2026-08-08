@@ -2300,6 +2300,194 @@ fn a_misspelled_key_is_serdes_message_at_the_offending_keys_position() {
 }
 """
 
+# A grammar with a rule name for every std item the two shadowable emitters spell, so a respelling
+# of any construct this grammar instantiates fails the case at compile time: `option` and `result`
+# for the generic types, `vec` for a keyed region, `box` for a recursive indirection, `string` for
+# the terminal text member, `drop` for a fold rule (its `impl Drop` collides with `pub enum Drop`),
+# `partial_eq` for the equality impls both modules write out, `iterator` / `into_iterator` / `into`
+# for the accessor and mutator signatures in `cst.rs`, `clone` for a derive-list name, and a
+# sidecar rename to `Debug` — the derive-list witness on the ast side, exercised via the rename path.
+#
+# Shadowing is module-wide, so declaring a type is all a rule has to do for every spelling of that
+# name in the module to be under shadow; most of these rules therefore carry no runtime assertion
+# and compilation is the whole test. `partial_eq` and `into` carry a single-node-typed label because
+# only that label kind produces an `impl ::std::convert::Into<Shared<T>>` mutator signature.
+#
+# `tag` and `join` bear no std name: they are here because `ast.rs` has emission sites the std-named
+# rules do not reach — a union label's field-enum converter, and the text sentinel a fold's
+# iterative teardown writes back — and a site the grammar never instantiates is a site rustc never
+# sees. What compilation still cannot witness (an emission site *no* grammar in the suite reaches,
+# and the `#[cfg(feature = "python")]` half of `cst.rs`, which the gate crate never enables) is
+# covered textually by `tests/test_rust_prelude_qualification.py`.
+PRELUDE_GRAMMAR = """doc    := , vec , result , drop , box , ;
+vec    := "vec" : "{" , clone* , "}" , ;
+clone  := key:/[a-z]+/ , "=" , value:string , ";" , ;
+result := "result" : ok:string . "!" | "result" : err:string : "why" : why:string ;
+option := yes:"yes" | no:"no" ;
+box    := name:string , child:box? ;
+drop   := option , ( , op:string , option)* ;
+string := text:/[a-z_][a-z0-9_]*/ ;
+partial_eq := lhs:string , "==" , rhs:string ;
+iterator := item:string+ ;
+into_iterator := "runs" : "{" , into* , "}" , ;
+into   := key:/[a-z]+/ , "=" , value:string , ";" , ;
+tag    := item:string | item:iterator | item:/[!@#$]+/ ;
+join   := term:/[a-z]+/ , ( , op:/[-+]/ , term:/[a-z]+/)* ;
+"""
+
+# `into` is keyed `multi`, so the map value is `IndexMap<K, ::std::vec::Vec<Into>>` — the spelling a
+# singly-keyed region never emits; `tag` is a product over a union label, so its field-enum
+# converter is emitted; `join` folds over text operands, so its teardown sentinel is a `String`.
+PRELUDE_SIDECAR = """rule doc   { name: Debug; }
+rule clone { key: key; }
+rule into  { key: key multi; }
+rule tag   { product; }
+rule drop  { fold_left: op; }
+rule join  { fold_left: op; }
+"""
+
+PRELUDE_RUNTIME = """//! A document of the grammar whose rule names are the std prelude's.
+
+use super::ast;
+use super::de;
+
+const TEXT: &str = "vec { alpha = one ; beta = two ; } result ok_val! yes plus no name_a name_b\\n";
+
+#[test]
+fn a_grammar_named_after_the_prelude_parses_converts_and_deserializes() {
+    let parsed = ast::parse_str(TEXT, Some("prelude.conf")).expect("the document must parse and convert");
+    let deserialized: ast::Debug = de::from_str(TEXT, None).expect("the AST target must deserialize");
+    assert_eq!(parsed, deserialized);
+
+    // A keyed region owned by a type named `Vec`, over elements named `Clone`.
+    assert_eq!(parsed.vec.clone.len(), 2);
+    assert_eq!(parsed.vec.clone["alpha"].value.text, "one");
+    assert_eq!(parsed.vec.clone["beta"].value.text, "two");
+
+    // A sum whose matched alternative carries a payload struct.
+    let ast::Result::Ok(ok) = &parsed.result else {
+        panic!("the first alternative of `result` matched");
+    };
+    assert_eq!(ok.ok.text, "ok_val");
+
+    // A fold chain whose operands are the value enum's node type.
+    let ast::Drop::Binary(link) = &parsed.drop else {
+        panic!("the chain carries one operator");
+    };
+    assert_eq!(link.op.text, "plus");
+    let ast::Drop::Operand(lhs) = &*link.lhs else {
+        panic!("the left side is a bare operand");
+    };
+    let ast::Drop::Operand(rhs) = &*link.rhs else {
+        panic!("the right side is a bare operand");
+    };
+    assert_eq!(lhs.value, ast::OptionValue::Yes);
+    assert_eq!(rhs.value, ast::OptionValue::No);
+
+    // The recursive field its owner holds through an indirection.
+    assert_eq!(parsed.r#box.name.text, "name_a");
+    let child = parsed.r#box.child.as_ref().expect("the outer box carries a child");
+    assert_eq!(child.name.text, "name_b");
+    assert!(child.child.is_none());
+}
+"""
+
+# `docs/ast-guide.md`'s quick start — the `calc` grammar and sidecar a new consumer copies first —
+# as generation input. `tests/test_doc_guide_cli_examples.py` holds these two strings to what the
+# guide prints and runs the Python half of the same quick start, so the printed example is the
+# compiled one on both backends.
+AST_GUIDE_GRAMMAR = """expr   := term:number , ( , op:add_op , term:number)* ;
+add_op := plus:"+" | minus:"-" ;
+number := val:/[0-9]+/ ;
+"""
+
+AST_GUIDE_SIDECAR = """rule number { type: i64; transparent; }
+rule add_op { transparent; }
+rule expr   { fold_left: op; }
+"""
+
+# The Rust the guide's quick start prints, as its own constant so that the gate compiles the printed
+# bytes rather than a hand-written mirror of them: `AST_GUIDE_RUNTIME` wraps it in a function, and
+# the join test in `tests/test_doc_guide_cli_examples.py` holds it to the guide's fenced block. A
+# mirror can drift silently, which is the defect class the printed example exists to be free of.
+AST_GUIDE_SNIPPET = """// pub enum Expr { Operand(i64), Binary(ExprBinary) }
+// pub struct ExprBinary { pub op: AddOpValue, pub lhs: Box<Expr>, pub rhs: Box<Expr>, pub span: Span }
+
+let value = ast::parse_str("1 + 2 - 3", Some("calc.txt"))?;
+match value {
+    ast::Expr::Binary(link) => println!("{:?} at {:?}", link.op, link.span),
+    ast::Expr::Operand(n) => println!("{n}"),
+}
+"""
+
+AST_GUIDE_RUNTIME = (
+    """//! The AST guide's quick start: the snippet it prints, and the fold its type comments claim.
+
+use super::ast;
+
+/// The guide's printed snippet, verbatim, in the smallest wrapper that gives its `?` somewhere to
+/// go. Every path, name and match arm it prints is checked by the compiler here.
+fn the_printed_snippet() -> ::std::result::Result<(), ::fltk_ast_core::ParseToAstError> {
+"""
+    + AST_GUIDE_SNIPPET
+    + """    Ok(())
+}
+
+#[test]
+fn the_snippet_the_guide_prints_runs_over_the_input_it_prints() {
+    the_printed_snippet().expect("the printed expression must parse and convert");
+}
+
+#[test]
+fn the_printed_expression_folds_left_into_the_types_the_comment_names() {
+    let value = ast::parse_str("1 + 2 - 3", Some("calc.txt")).expect("the quick start's expression must parse");
+
+    // `pub enum Expr { Operand(i64), Binary(ExprBinary) }`, as the guide prints it.
+    let ast::Expr::Binary(link) = &value else {
+        panic!("two operators fold into a link");
+    };
+    assert_eq!(link.op, ast::AddOpValue::Minus);
+    assert_eq!(link.span.text().as_deref(), Some("1 + 2 - 3"));
+
+    // The `pub struct ExprBinary { … }` the comment prints, member by member: the annotations fail
+    // to compile if a printed name or type is not the one the emitter produces. The comment is the
+    // half of the snippet rustc would otherwise ignore.
+    let _: &ast::ExprBinary = link;
+    let _: &ast::AddOpValue = &link.op;
+    let _: &::std::boxed::Box<ast::Expr> = &link.lhs;
+    let _: &::std::boxed::Box<ast::Expr> = &link.rhs;
+    let _: &::fltk_cst_core::Span = &link.span;
+
+    // A left fold nests the earlier operator deeper, so the operands read 1, 2, 3 in source order.
+    let ast::Expr::Binary(inner) = link.lhs.as_ref() else {
+        panic!("the left side of a left fold is the deeper chain");
+    };
+    assert_eq!(inner.op, ast::AddOpValue::Plus);
+    let ast::Expr::Operand(first) = inner.lhs.as_ref() else {
+        panic!("the deepest left side is a bare operand");
+    };
+    let ast::Expr::Operand(second) = inner.rhs.as_ref() else {
+        panic!("the inner right side is a bare operand");
+    };
+    let ast::Expr::Operand(third) = link.rhs.as_ref() else {
+        panic!("the outer right side is a bare operand");
+    };
+    // The `Operand(i64)` payload the printed `pub enum Expr` claims.
+    let _: i64 = *first;
+    assert_eq!((*first, *second, *third), (1, 2, 3));
+}
+
+#[test]
+fn the_snippets_other_arm_is_the_operand_the_coercion_carries() {
+    let value = ast::parse_str("42", None).expect("one number is a whole expression");
+    let ast::Expr::Operand(n) = value else {
+        panic!("one operand does not fold into a link");
+    };
+    assert_eq!(n, 42_i64);
+}
+"""
+)
+
 CASES = [
     # A sum, a keyed collection, every scalar erasure, a coercion, a renamed field, and a
     # label spelled `type` (so `r#type` is exercised). Carries the entry-point tests too, which
@@ -2446,6 +2634,30 @@ CASES = [
         serde=True,
         parser=True,
         goal="channel_def",
+    ),
+    # Rule names that shadow the std prelude, so every emitted std spelling has to be absolute.
+    # The unparser is generated too: its emitter keeps std items bare on the argument that
+    # `unparser.rs` declares no grammar-derived module-level item, and compiling it beside a
+    # grammar that shadows every one of those names is what turns that argument into a witness.
+    Case(
+        "prelude",
+        PRELUDE_GRAMMAR,
+        PRELUDE_SIDECAR,
+        runtime=PRELUDE_RUNTIME,
+        parser=True,
+        serde=True,
+        unparser=True,
+        goal="doc",
+    ),
+    # The AST guide's quick start, generated from the grammar and sidecar the guide prints and run
+    # against the values its snippet destructures.
+    Case(
+        "ast_guide",
+        AST_GUIDE_GRAMMAR,
+        AST_GUIDE_SIDECAR,
+        runtime=AST_GUIDE_RUNTIME,
+        parser=True,
+        goal="expr",
     ),
     # A marker product and a `custom(...)` rule reached through the `FromCst` trait.
     Case(
@@ -2725,6 +2937,38 @@ def test_the_serde_guides_worked_example_works_as_printed(
         "the_keys_the_target_names_are_read_out_of_the_generic_region",
         "an_option_the_document_omits_is_none",
         "a_misspelled_key_is_serdes_message_at_the_offending_keys_position",
+    }, cargo_test.stdout
+
+
+def test_a_grammar_whose_rule_names_shadow_the_prelude_compiles_and_runs(
+    cargo_test: subprocess.CompletedProcess[str],
+) -> None:
+    """The compile witness for the absolute std spellings, plus one end-to-end run over them.
+
+    Compiling is most of the point — a bare `Option<T>` in a module declaring `pub struct Option`
+    is `E0107`, a bare `impl Drop` beside `pub enum Drop` is `E0404`, and a bare `String` member on
+    the rule named `string` is an infinitely-sized type. The run is what says the qualification
+    changed no behavior: the same document reaches the same value through both entry points.
+    """
+    assert cargo_test.returncode == 0, cargo_test.stdout + cargo_test.stderr
+    assert _ran(cargo_test.stdout, "prelude") == {
+        "a_grammar_named_after_the_prelude_parses_converts_and_deserializes",
+    }, cargo_test.stdout
+
+
+def test_the_ast_guides_quick_start_folds_as_the_guide_prints_it(
+    cargo_test: subprocess.CompletedProcess[str],
+) -> None:
+    """The AST guide's first example, generated from its printed input and run.
+
+    It is what a new consumer copies before anything else, and its printed type comments and match
+    arms are a claim about the fold the sidecar produces — a claim only a run can check.
+    """
+    assert cargo_test.returncode == 0, cargo_test.stdout + cargo_test.stderr
+    assert _ran(cargo_test.stdout, "ast_guide") == {
+        "the_snippet_the_guide_prints_runs_over_the_input_it_prints",
+        "the_printed_expression_folds_left_into_the_types_the_comment_names",
+        "the_snippets_other_arm_is_the_operand_the_coercion_carries",
     }, cargo_test.stdout
 
 

@@ -2777,6 +2777,603 @@ impl Unparser {
         let acc = acc.add_accumulator(&child_result.accumulator);
         Some(UnparseResult::new(acc, pos + 1))
     }
+    pub fn unparse_entry_key(&self, node: &cst::EntryKey) -> Option<UnparseResult> {
+        let acc = DocAccumulator::new();
+        if let Some(r) = self.unparse_entry_key__alt0(node, 0, acc) {
+            return Some(r);
+        }
+        None
+    }
+
+    fn unparse_entry_key__alt0(&self, node: &cst::EntryKey, pos: usize, acc: DocAccumulator) -> Option<UnparseResult> {
+        let mut pos = pos;
+        let mut acc = acc;
+        let r = self.unparse_entry_key__alt0__item0(node, pos, acc)?;
+        pos = r.new_pos;
+        acc = r.accumulator;
+        Some(UnparseResult::new(acc, pos))
+    }
+
+    fn unparse_entry_key__alt0__item0(&self, node: &cst::EntryKey, pos: usize, acc: DocAccumulator) -> Option<UnparseResult> {
+        let children = node.children();
+        if pos >= children.len() {
+            return None;
+        }
+        let child_tuple = &children[pos];
+        if child_tuple.0 != Some(cst::EntryKeyLabel::Value) {
+            return None;
+        }
+        let cst::EntryKeyChild::Span(span) = &child_tuple.1;
+        let Some(text) = span.text() else {
+            panic!("unparse_entry_key: cannot extract text for regex term label `value` at child position {}: span.text() returned None for {:?}", pos, span);
+        };
+        let acc = acc.add_non_trivia(fltk_unparser_core::text(text));
+        Some(UnparseResult::new(acc, pos + 1))
+    }
+    pub fn unparse_entry(&self, node: &cst::Entry) -> Option<UnparseResult> {
+        let acc = DocAccumulator::new();
+        if let Some(r) = self.unparse_entry__alt0(node, 0, acc) {
+            return Some(r);
+        }
+        None
+    }
+
+    fn unparse_entry__alt0(&self, node: &cst::Entry, pos: usize, acc: DocAccumulator) -> Option<UnparseResult> {
+        let mut pos = pos;
+        let mut acc = acc;
+        let r = self.unparse_entry__alt0__item0(node, pos, acc)?;
+        pos = r.new_pos;
+        acc = r.accumulator;
+        if !acc.last_was_trivia() {
+            if pos < node.children().len() {
+                match &node.children()[pos].1 {
+                    cst::EntryChild::Trivia(trivia_shared) => {
+                        let trivia_node = trivia_shared.read();
+                        if self._has_preservable_trivia(&trivia_node) {
+                            if let Some(trivia_result) = self.unparse__trivia(&trivia_node) {
+                                acc = acc.add_trivia(fltk_unparser_core::separator_spec(None, Some(trivia_result.accumulator.doc()), false));
+                            } else {
+                                panic!("unparse_entry: trivia at child position {} has preservable comments but unparse__trivia returned None; refusing to silently drop comments", pos);
+                            }
+                        } else {
+                            acc = acc.add_trivia(fltk_unparser_core::separator_spec(Some(Doc::Line), None, false));
+                        }
+                        pos += 1;
+                    }
+                    _ => {
+                        acc = acc.add_trivia(fltk_unparser_core::separator_spec(Some(Doc::Line), None, false));
+                    }
+                }
+            } else {
+                acc = acc.add_trivia(fltk_unparser_core::separator_spec(Some(Doc::Line), None, false));
+            }
+        }
+        let r = self.unparse_entry__alt0__item1(node, pos, acc)?;
+        pos = r.new_pos;
+        acc = r.accumulator;
+        if !acc.last_was_trivia() {
+            if pos < node.children().len() {
+                match &node.children()[pos].1 {
+                    cst::EntryChild::Trivia(trivia_shared) => {
+                        let trivia_node = trivia_shared.read();
+                        if self._has_preservable_trivia(&trivia_node) {
+                            if let Some(trivia_result) = self.unparse__trivia(&trivia_node) {
+                                acc = acc.add_trivia(fltk_unparser_core::separator_spec(None, Some(trivia_result.accumulator.doc()), false));
+                            } else {
+                                panic!("unparse_entry: trivia at child position {} has preservable comments but unparse__trivia returned None; refusing to silently drop comments", pos);
+                            }
+                        } else {
+                            acc = acc.add_trivia(fltk_unparser_core::separator_spec(Some(Doc::Line), None, false));
+                        }
+                        pos += 1;
+                    }
+                    _ => {
+                        acc = acc.add_trivia(fltk_unparser_core::separator_spec(Some(Doc::Line), None, false));
+                    }
+                }
+            } else {
+                acc = acc.add_trivia(fltk_unparser_core::separator_spec(Some(Doc::Line), None, false));
+            }
+        }
+        let r = self.unparse_entry__alt0__item2(node, pos, acc)?;
+        pos = r.new_pos;
+        acc = r.accumulator;
+        if !acc.last_was_trivia() {
+            if pos < node.children().len() {
+                match &node.children()[pos].1 {
+                    cst::EntryChild::Trivia(trivia_shared) => {
+                        let trivia_node = trivia_shared.read();
+                        if self._has_preservable_trivia(&trivia_node) {
+                            if let Some(trivia_result) = self.unparse__trivia(&trivia_node) {
+                                acc = acc.add_trivia(fltk_unparser_core::separator_spec(None, Some(trivia_result.accumulator.doc()), false));
+                            } else {
+                                panic!("unparse_entry: trivia at child position {} has preservable comments but unparse__trivia returned None; refusing to silently drop comments", pos);
+                            }
+                        } else {
+                            acc = acc.add_trivia(fltk_unparser_core::separator_spec(Some(Doc::Line), None, false));
+                        }
+                        pos += 1;
+                    }
+                    _ => {
+                        acc = acc.add_trivia(fltk_unparser_core::separator_spec(Some(Doc::Line), None, false));
+                    }
+                }
+            } else {
+                acc = acc.add_trivia(fltk_unparser_core::separator_spec(Some(Doc::Line), None, false));
+            }
+        }
+        let r = self.unparse_entry__alt0__item3(node, pos, acc)?;
+        pos = r.new_pos;
+        acc = r.accumulator;
+        if !acc.last_was_trivia() {
+            if pos < node.children().len() {
+                match &node.children()[pos].1 {
+                    cst::EntryChild::Trivia(trivia_shared) => {
+                        let trivia_node = trivia_shared.read();
+                        if self._has_preservable_trivia(&trivia_node) {
+                            if let Some(trivia_result) = self.unparse__trivia(&trivia_node) {
+                                acc = acc.add_trivia(fltk_unparser_core::separator_spec(None, Some(trivia_result.accumulator.doc()), false));
+                            } else {
+                                panic!("unparse_entry: trivia at child position {} has preservable comments but unparse__trivia returned None; refusing to silently drop comments", pos);
+                            }
+                        } else {
+                            acc = acc.add_trivia(fltk_unparser_core::separator_spec(Some(Doc::Line), None, false));
+                        }
+                        pos += 1;
+                    }
+                    _ => {
+                        acc = acc.add_trivia(fltk_unparser_core::separator_spec(Some(Doc::Line), None, false));
+                    }
+                }
+            } else {
+                acc = acc.add_trivia(fltk_unparser_core::separator_spec(Some(Doc::Line), None, false));
+            }
+        }
+        Some(UnparseResult::new(acc, pos))
+    }
+
+    fn unparse_entry__alt0__item0(&self, node: &cst::Entry, pos: usize, acc: DocAccumulator) -> Option<UnparseResult> {
+        let children = node.children();
+        if pos >= children.len() {
+            return None;
+        }
+        let child_tuple = &children[pos];
+        if child_tuple.0 != Some(cst::EntryLabel::Key) {
+            return None;
+        }
+        let shared = match &child_tuple.1 {
+            cst::EntryChild::EntryKey(shared) => shared,
+            _ => return None,
+        };
+        let guard = shared.read();
+        let child_result = self.unparse_entry_key(&guard)?;
+        let acc = acc.add_accumulator(&child_result.accumulator);
+        Some(UnparseResult::new(acc, pos + 1))
+    }
+
+    fn unparse_entry__alt0__item1(&self, _node: &cst::Entry, pos: usize, acc: DocAccumulator) -> Option<UnparseResult> {
+        let acc = acc.add_non_trivia(fltk_unparser_core::text("="));
+        Some(UnparseResult::new(acc, pos))
+    }
+
+    fn unparse_entry__alt0__item2(&self, node: &cst::Entry, pos: usize, acc: DocAccumulator) -> Option<UnparseResult> {
+        let children = node.children();
+        if pos >= children.len() {
+            return None;
+        }
+        let child_tuple = &children[pos];
+        if child_tuple.0 != Some(cst::EntryLabel::Value) {
+            return None;
+        }
+        let shared = match &child_tuple.1 {
+            cst::EntryChild::Atom(shared) => shared,
+            _ => return None,
+        };
+        let guard = shared.read();
+        let child_result = self.unparse_atom(&guard)?;
+        let acc = acc.add_accumulator(&child_result.accumulator);
+        Some(UnparseResult::new(acc, pos + 1))
+    }
+
+    fn unparse_entry__alt0__item3(&self, _node: &cst::Entry, pos: usize, acc: DocAccumulator) -> Option<UnparseResult> {
+        let acc = acc.add_non_trivia(fltk_unparser_core::text(";"));
+        Some(UnparseResult::new(acc, pos))
+    }
+    pub fn unparse_entries(&self, node: &cst::Entries) -> Option<UnparseResult> {
+        let acc = DocAccumulator::new();
+        if let Some(r) = self.unparse_entries__alt0(node, 0, acc) {
+            return Some(r);
+        }
+        None
+    }
+
+    fn unparse_entries__alt0(&self, node: &cst::Entries, pos: usize, acc: DocAccumulator) -> Option<UnparseResult> {
+        let mut pos = pos;
+        let mut acc = acc;
+        let r = self.unparse_entries__alt0__item0(node, pos, acc)?;
+        pos = r.new_pos;
+        acc = r.accumulator;
+        if !acc.last_was_trivia() {
+            if pos < node.children().len() {
+                match &node.children()[pos].1 {
+                    cst::EntriesChild::Trivia(trivia_shared) => {
+                        let trivia_node = trivia_shared.read();
+                        if self._has_preservable_trivia(&trivia_node) {
+                            if let Some(trivia_result) = self.unparse__trivia(&trivia_node) {
+                                acc = acc.add_trivia(fltk_unparser_core::separator_spec(None, Some(trivia_result.accumulator.doc()), false));
+                            } else {
+                                panic!("unparse_entries: trivia at child position {} has preservable comments but unparse__trivia returned None; refusing to silently drop comments", pos);
+                            }
+                        } else {
+                            acc = acc.add_trivia(fltk_unparser_core::separator_spec(Some(Doc::Line), None, false));
+                        }
+                        pos += 1;
+                    }
+                    _ => {
+                        acc = acc.add_trivia(fltk_unparser_core::separator_spec(Some(Doc::Line), None, false));
+                    }
+                }
+            } else {
+                acc = acc.add_trivia(fltk_unparser_core::separator_spec(Some(Doc::Line), None, false));
+            }
+        }
+        if let Some(r) = self.unparse_entries__alt0__item1(node, pos, acc.clone()) {
+            pos = r.new_pos;
+            acc = r.accumulator;
+        }
+        if !acc.last_was_trivia() {
+            if pos < node.children().len() {
+                match &node.children()[pos].1 {
+                    cst::EntriesChild::Trivia(trivia_shared) => {
+                        let trivia_node = trivia_shared.read();
+                        if self._has_preservable_trivia(&trivia_node) {
+                            if let Some(trivia_result) = self.unparse__trivia(&trivia_node) {
+                                acc = acc.add_trivia(fltk_unparser_core::separator_spec(None, Some(trivia_result.accumulator.doc()), false));
+                            } else {
+                                panic!("unparse_entries: trivia at child position {} has preservable comments but unparse__trivia returned None; refusing to silently drop comments", pos);
+                            }
+                        } else {
+                            acc = acc.add_trivia(fltk_unparser_core::separator_spec(Some(Doc::Line), None, false));
+                        }
+                        pos += 1;
+                    }
+                    _ => {
+                        acc = acc.add_trivia(fltk_unparser_core::separator_spec(Some(Doc::Line), None, false));
+                    }
+                }
+            } else {
+                acc = acc.add_trivia(fltk_unparser_core::separator_spec(Some(Doc::Line), None, false));
+            }
+        }
+        let r = self.unparse_entries__alt0__item2(node, pos, acc)?;
+        pos = r.new_pos;
+        acc = r.accumulator;
+        Some(UnparseResult::new(acc, pos))
+    }
+
+    fn unparse_entries__alt0__item0(&self, _node: &cst::Entries, pos: usize, acc: DocAccumulator) -> Option<UnparseResult> {
+        let acc = acc.add_non_trivia(fltk_unparser_core::text("{"));
+        Some(UnparseResult::new(acc, pos))
+    }
+
+    fn unparse_entries__alt0__item1(&self, node: &cst::Entries, pos: usize, acc: DocAccumulator) -> Option<UnparseResult> {
+        let mut current_pos = pos;
+        let mut acc = acc;
+        while current_pos < node.children().len() {
+            let Some(r) = self.unparse_entries__alt0__item1__inner(node, current_pos, acc.clone()) else {
+                break;
+            };
+            acc = r.accumulator;
+            current_pos = r.new_pos;
+        }
+        Some(UnparseResult::new(acc, current_pos))
+    }
+
+    fn unparse_entries__alt0__item1__inner(&self, node: &cst::Entries, pos: usize, acc: DocAccumulator) -> Option<UnparseResult> {
+        let children = node.children();
+        if pos >= children.len() {
+            return None;
+        }
+        let child_tuple = &children[pos];
+        if child_tuple.0 != Some(cst::EntriesLabel::Entry) {
+            return None;
+        }
+        let shared = match &child_tuple.1 {
+            cst::EntriesChild::Entry(shared) => shared,
+            _ => return None,
+        };
+        let guard = shared.read();
+        let child_result = self.unparse_entry(&guard)?;
+        let acc = acc.add_accumulator(&child_result.accumulator);
+        Some(UnparseResult::new(acc, pos + 1))
+    }
+
+    fn unparse_entries__alt0__item2(&self, _node: &cst::Entries, pos: usize, acc: DocAccumulator) -> Option<UnparseResult> {
+        let acc = acc.add_non_trivia(fltk_unparser_core::text("}"));
+        Some(UnparseResult::new(acc, pos))
+    }
+    pub fn unparse_multi_entry(&self, node: &cst::MultiEntry) -> Option<UnparseResult> {
+        let acc = DocAccumulator::new();
+        if let Some(r) = self.unparse_multi_entry__alt0(node, 0, acc) {
+            return Some(r);
+        }
+        None
+    }
+
+    fn unparse_multi_entry__alt0(&self, node: &cst::MultiEntry, pos: usize, acc: DocAccumulator) -> Option<UnparseResult> {
+        let mut pos = pos;
+        let mut acc = acc;
+        let r = self.unparse_multi_entry__alt0__item0(node, pos, acc)?;
+        pos = r.new_pos;
+        acc = r.accumulator;
+        if !acc.last_was_trivia() {
+            if pos < node.children().len() {
+                match &node.children()[pos].1 {
+                    cst::MultiEntryChild::Trivia(trivia_shared) => {
+                        let trivia_node = trivia_shared.read();
+                        if self._has_preservable_trivia(&trivia_node) {
+                            if let Some(trivia_result) = self.unparse__trivia(&trivia_node) {
+                                acc = acc.add_trivia(fltk_unparser_core::separator_spec(None, Some(trivia_result.accumulator.doc()), false));
+                            } else {
+                                panic!("unparse_multi_entry: trivia at child position {} has preservable comments but unparse__trivia returned None; refusing to silently drop comments", pos);
+                            }
+                        } else {
+                            acc = acc.add_trivia(fltk_unparser_core::separator_spec(Some(Doc::Line), None, false));
+                        }
+                        pos += 1;
+                    }
+                    _ => {
+                        acc = acc.add_trivia(fltk_unparser_core::separator_spec(Some(Doc::Line), None, false));
+                    }
+                }
+            } else {
+                acc = acc.add_trivia(fltk_unparser_core::separator_spec(Some(Doc::Line), None, false));
+            }
+        }
+        let r = self.unparse_multi_entry__alt0__item1(node, pos, acc)?;
+        pos = r.new_pos;
+        acc = r.accumulator;
+        if !acc.last_was_trivia() {
+            if pos < node.children().len() {
+                match &node.children()[pos].1 {
+                    cst::MultiEntryChild::Trivia(trivia_shared) => {
+                        let trivia_node = trivia_shared.read();
+                        if self._has_preservable_trivia(&trivia_node) {
+                            if let Some(trivia_result) = self.unparse__trivia(&trivia_node) {
+                                acc = acc.add_trivia(fltk_unparser_core::separator_spec(None, Some(trivia_result.accumulator.doc()), false));
+                            } else {
+                                panic!("unparse_multi_entry: trivia at child position {} has preservable comments but unparse__trivia returned None; refusing to silently drop comments", pos);
+                            }
+                        } else {
+                            acc = acc.add_trivia(fltk_unparser_core::separator_spec(Some(Doc::Line), None, false));
+                        }
+                        pos += 1;
+                    }
+                    _ => {
+                        acc = acc.add_trivia(fltk_unparser_core::separator_spec(Some(Doc::Line), None, false));
+                    }
+                }
+            } else {
+                acc = acc.add_trivia(fltk_unparser_core::separator_spec(Some(Doc::Line), None, false));
+            }
+        }
+        let r = self.unparse_multi_entry__alt0__item2(node, pos, acc)?;
+        pos = r.new_pos;
+        acc = r.accumulator;
+        if !acc.last_was_trivia() {
+            if pos < node.children().len() {
+                match &node.children()[pos].1 {
+                    cst::MultiEntryChild::Trivia(trivia_shared) => {
+                        let trivia_node = trivia_shared.read();
+                        if self._has_preservable_trivia(&trivia_node) {
+                            if let Some(trivia_result) = self.unparse__trivia(&trivia_node) {
+                                acc = acc.add_trivia(fltk_unparser_core::separator_spec(None, Some(trivia_result.accumulator.doc()), false));
+                            } else {
+                                panic!("unparse_multi_entry: trivia at child position {} has preservable comments but unparse__trivia returned None; refusing to silently drop comments", pos);
+                            }
+                        } else {
+                            acc = acc.add_trivia(fltk_unparser_core::separator_spec(Some(Doc::Line), None, false));
+                        }
+                        pos += 1;
+                    }
+                    _ => {
+                        acc = acc.add_trivia(fltk_unparser_core::separator_spec(Some(Doc::Line), None, false));
+                    }
+                }
+            } else {
+                acc = acc.add_trivia(fltk_unparser_core::separator_spec(Some(Doc::Line), None, false));
+            }
+        }
+        let r = self.unparse_multi_entry__alt0__item3(node, pos, acc)?;
+        pos = r.new_pos;
+        acc = r.accumulator;
+        if !acc.last_was_trivia() {
+            if pos < node.children().len() {
+                match &node.children()[pos].1 {
+                    cst::MultiEntryChild::Trivia(trivia_shared) => {
+                        let trivia_node = trivia_shared.read();
+                        if self._has_preservable_trivia(&trivia_node) {
+                            if let Some(trivia_result) = self.unparse__trivia(&trivia_node) {
+                                acc = acc.add_trivia(fltk_unparser_core::separator_spec(None, Some(trivia_result.accumulator.doc()), false));
+                            } else {
+                                panic!("unparse_multi_entry: trivia at child position {} has preservable comments but unparse__trivia returned None; refusing to silently drop comments", pos);
+                            }
+                        } else {
+                            acc = acc.add_trivia(fltk_unparser_core::separator_spec(Some(Doc::Line), None, false));
+                        }
+                        pos += 1;
+                    }
+                    _ => {
+                        acc = acc.add_trivia(fltk_unparser_core::separator_spec(Some(Doc::Line), None, false));
+                    }
+                }
+            } else {
+                acc = acc.add_trivia(fltk_unparser_core::separator_spec(Some(Doc::Line), None, false));
+            }
+        }
+        Some(UnparseResult::new(acc, pos))
+    }
+
+    fn unparse_multi_entry__alt0__item0(&self, node: &cst::MultiEntry, pos: usize, acc: DocAccumulator) -> Option<UnparseResult> {
+        let children = node.children();
+        if pos >= children.len() {
+            return None;
+        }
+        let child_tuple = &children[pos];
+        if child_tuple.0 != Some(cst::MultiEntryLabel::Key) {
+            return None;
+        }
+        let shared = match &child_tuple.1 {
+            cst::MultiEntryChild::EntryKey(shared) => shared,
+            _ => return None,
+        };
+        let guard = shared.read();
+        let child_result = self.unparse_entry_key(&guard)?;
+        let acc = acc.add_accumulator(&child_result.accumulator);
+        Some(UnparseResult::new(acc, pos + 1))
+    }
+
+    fn unparse_multi_entry__alt0__item1(&self, _node: &cst::MultiEntry, pos: usize, acc: DocAccumulator) -> Option<UnparseResult> {
+        let acc = acc.add_non_trivia(fltk_unparser_core::text("="));
+        Some(UnparseResult::new(acc, pos))
+    }
+
+    fn unparse_multi_entry__alt0__item2(&self, node: &cst::MultiEntry, pos: usize, acc: DocAccumulator) -> Option<UnparseResult> {
+        let children = node.children();
+        if pos >= children.len() {
+            return None;
+        }
+        let child_tuple = &children[pos];
+        if child_tuple.0 != Some(cst::MultiEntryLabel::Value) {
+            return None;
+        }
+        let shared = match &child_tuple.1 {
+            cst::MultiEntryChild::Atom(shared) => shared,
+            _ => return None,
+        };
+        let guard = shared.read();
+        let child_result = self.unparse_atom(&guard)?;
+        let acc = acc.add_accumulator(&child_result.accumulator);
+        Some(UnparseResult::new(acc, pos + 1))
+    }
+
+    fn unparse_multi_entry__alt0__item3(&self, _node: &cst::MultiEntry, pos: usize, acc: DocAccumulator) -> Option<UnparseResult> {
+        let acc = acc.add_non_trivia(fltk_unparser_core::text(";"));
+        Some(UnparseResult::new(acc, pos))
+    }
+    pub fn unparse_multi_entries(&self, node: &cst::MultiEntries) -> Option<UnparseResult> {
+        let acc = DocAccumulator::new();
+        if let Some(r) = self.unparse_multi_entries__alt0(node, 0, acc) {
+            return Some(r);
+        }
+        None
+    }
+
+    fn unparse_multi_entries__alt0(&self, node: &cst::MultiEntries, pos: usize, acc: DocAccumulator) -> Option<UnparseResult> {
+        let mut pos = pos;
+        let mut acc = acc;
+        let r = self.unparse_multi_entries__alt0__item0(node, pos, acc)?;
+        pos = r.new_pos;
+        acc = r.accumulator;
+        if !acc.last_was_trivia() {
+            if pos < node.children().len() {
+                match &node.children()[pos].1 {
+                    cst::MultiEntriesChild::Trivia(trivia_shared) => {
+                        let trivia_node = trivia_shared.read();
+                        if self._has_preservable_trivia(&trivia_node) {
+                            if let Some(trivia_result) = self.unparse__trivia(&trivia_node) {
+                                acc = acc.add_trivia(fltk_unparser_core::separator_spec(None, Some(trivia_result.accumulator.doc()), false));
+                            } else {
+                                panic!("unparse_multi_entries: trivia at child position {} has preservable comments but unparse__trivia returned None; refusing to silently drop comments", pos);
+                            }
+                        } else {
+                            acc = acc.add_trivia(fltk_unparser_core::separator_spec(Some(Doc::Line), None, false));
+                        }
+                        pos += 1;
+                    }
+                    _ => {
+                        acc = acc.add_trivia(fltk_unparser_core::separator_spec(Some(Doc::Line), None, false));
+                    }
+                }
+            } else {
+                acc = acc.add_trivia(fltk_unparser_core::separator_spec(Some(Doc::Line), None, false));
+            }
+        }
+        if let Some(r) = self.unparse_multi_entries__alt0__item1(node, pos, acc.clone()) {
+            pos = r.new_pos;
+            acc = r.accumulator;
+        }
+        if !acc.last_was_trivia() {
+            if pos < node.children().len() {
+                match &node.children()[pos].1 {
+                    cst::MultiEntriesChild::Trivia(trivia_shared) => {
+                        let trivia_node = trivia_shared.read();
+                        if self._has_preservable_trivia(&trivia_node) {
+                            if let Some(trivia_result) = self.unparse__trivia(&trivia_node) {
+                                acc = acc.add_trivia(fltk_unparser_core::separator_spec(None, Some(trivia_result.accumulator.doc()), false));
+                            } else {
+                                panic!("unparse_multi_entries: trivia at child position {} has preservable comments but unparse__trivia returned None; refusing to silently drop comments", pos);
+                            }
+                        } else {
+                            acc = acc.add_trivia(fltk_unparser_core::separator_spec(Some(Doc::Line), None, false));
+                        }
+                        pos += 1;
+                    }
+                    _ => {
+                        acc = acc.add_trivia(fltk_unparser_core::separator_spec(Some(Doc::Line), None, false));
+                    }
+                }
+            } else {
+                acc = acc.add_trivia(fltk_unparser_core::separator_spec(Some(Doc::Line), None, false));
+            }
+        }
+        let r = self.unparse_multi_entries__alt0__item2(node, pos, acc)?;
+        pos = r.new_pos;
+        acc = r.accumulator;
+        Some(UnparseResult::new(acc, pos))
+    }
+
+    fn unparse_multi_entries__alt0__item0(&self, _node: &cst::MultiEntries, pos: usize, acc: DocAccumulator) -> Option<UnparseResult> {
+        let acc = acc.add_non_trivia(fltk_unparser_core::text("{"));
+        Some(UnparseResult::new(acc, pos))
+    }
+
+    fn unparse_multi_entries__alt0__item1(&self, node: &cst::MultiEntries, pos: usize, acc: DocAccumulator) -> Option<UnparseResult> {
+        let mut current_pos = pos;
+        let mut acc = acc;
+        while current_pos < node.children().len() {
+            let Some(r) = self.unparse_multi_entries__alt0__item1__inner(node, current_pos, acc.clone()) else {
+                break;
+            };
+            acc = r.accumulator;
+            current_pos = r.new_pos;
+        }
+        Some(UnparseResult::new(acc, current_pos))
+    }
+
+    fn unparse_multi_entries__alt0__item1__inner(&self, node: &cst::MultiEntries, pos: usize, acc: DocAccumulator) -> Option<UnparseResult> {
+        let children = node.children();
+        if pos >= children.len() {
+            return None;
+        }
+        let child_tuple = &children[pos];
+        if child_tuple.0 != Some(cst::MultiEntriesLabel::MultiEntry) {
+            return None;
+        }
+        let shared = match &child_tuple.1 {
+            cst::MultiEntriesChild::MultiEntry(shared) => shared,
+            _ => return None,
+        };
+        let guard = shared.read();
+        let child_result = self.unparse_multi_entry(&guard)?;
+        let acc = acc.add_accumulator(&child_result.accumulator);
+        Some(UnparseResult::new(acc, pos + 1))
+    }
+
+    fn unparse_multi_entries__alt0__item2(&self, _node: &cst::MultiEntries, pos: usize, acc: DocAccumulator) -> Option<UnparseResult> {
+        let acc = acc.add_non_trivia(fltk_unparser_core::text("}"));
+        Some(UnparseResult::new(acc, pos))
+    }
     pub fn unparse__trivia(&self, node: &cst::Trivia) -> Option<UnparseResult> {
         let acc = DocAccumulator::new();
         if let Some(r) = self.unparse__trivia__alt0(node, 0, acc) {
@@ -3674,6 +4271,106 @@ mod python_bindings {
         fn unparse_sum_chain_doc(&self, node: PyRef<'_, cst::PySumChain>) -> PyResult<Option<PyDoc>> {
             let guard = node.shared().read();
             let Some(r) = self.inner.unparse_sum_chain(&guard) else {
+                return Ok(None);
+            };
+            let resolved = resolve_spacing_specs(r.accumulator.doc());
+            Ok(Some(PyDoc { resolved }))
+        }
+
+        #[pyo3(signature = (node, max_width = 80, indent_width = 4))]
+        fn unparse_entry_key(&self, node: PyRef<'_, cst::PyEntryKey>, max_width: usize, indent_width: usize) -> PyResult<Option<String>> {
+            let guard = node.shared().read();
+            let Some(r) = self.inner.unparse_entry_key(&guard) else {
+                return Ok(None);
+            };
+            let resolved = resolve_spacing_specs(r.accumulator.doc());
+            let cfg = RendererConfig { indent_width, max_width };
+            Ok(Some(Renderer::new(cfg).render(&resolved)))
+        }
+
+        fn unparse_entry_key_doc(&self, node: PyRef<'_, cst::PyEntryKey>) -> PyResult<Option<PyDoc>> {
+            let guard = node.shared().read();
+            let Some(r) = self.inner.unparse_entry_key(&guard) else {
+                return Ok(None);
+            };
+            let resolved = resolve_spacing_specs(r.accumulator.doc());
+            Ok(Some(PyDoc { resolved }))
+        }
+
+        #[pyo3(signature = (node, max_width = 80, indent_width = 4))]
+        fn unparse_entry(&self, node: PyRef<'_, cst::PyEntry>, max_width: usize, indent_width: usize) -> PyResult<Option<String>> {
+            let guard = node.shared().read();
+            let Some(r) = self.inner.unparse_entry(&guard) else {
+                return Ok(None);
+            };
+            let resolved = resolve_spacing_specs(r.accumulator.doc());
+            let cfg = RendererConfig { indent_width, max_width };
+            Ok(Some(Renderer::new(cfg).render(&resolved)))
+        }
+
+        fn unparse_entry_doc(&self, node: PyRef<'_, cst::PyEntry>) -> PyResult<Option<PyDoc>> {
+            let guard = node.shared().read();
+            let Some(r) = self.inner.unparse_entry(&guard) else {
+                return Ok(None);
+            };
+            let resolved = resolve_spacing_specs(r.accumulator.doc());
+            Ok(Some(PyDoc { resolved }))
+        }
+
+        #[pyo3(signature = (node, max_width = 80, indent_width = 4))]
+        fn unparse_entries(&self, node: PyRef<'_, cst::PyEntries>, max_width: usize, indent_width: usize) -> PyResult<Option<String>> {
+            let guard = node.shared().read();
+            let Some(r) = self.inner.unparse_entries(&guard) else {
+                return Ok(None);
+            };
+            let resolved = resolve_spacing_specs(r.accumulator.doc());
+            let cfg = RendererConfig { indent_width, max_width };
+            Ok(Some(Renderer::new(cfg).render(&resolved)))
+        }
+
+        fn unparse_entries_doc(&self, node: PyRef<'_, cst::PyEntries>) -> PyResult<Option<PyDoc>> {
+            let guard = node.shared().read();
+            let Some(r) = self.inner.unparse_entries(&guard) else {
+                return Ok(None);
+            };
+            let resolved = resolve_spacing_specs(r.accumulator.doc());
+            Ok(Some(PyDoc { resolved }))
+        }
+
+        #[pyo3(signature = (node, max_width = 80, indent_width = 4))]
+        fn unparse_multi_entry(&self, node: PyRef<'_, cst::PyMultiEntry>, max_width: usize, indent_width: usize) -> PyResult<Option<String>> {
+            let guard = node.shared().read();
+            let Some(r) = self.inner.unparse_multi_entry(&guard) else {
+                return Ok(None);
+            };
+            let resolved = resolve_spacing_specs(r.accumulator.doc());
+            let cfg = RendererConfig { indent_width, max_width };
+            Ok(Some(Renderer::new(cfg).render(&resolved)))
+        }
+
+        fn unparse_multi_entry_doc(&self, node: PyRef<'_, cst::PyMultiEntry>) -> PyResult<Option<PyDoc>> {
+            let guard = node.shared().read();
+            let Some(r) = self.inner.unparse_multi_entry(&guard) else {
+                return Ok(None);
+            };
+            let resolved = resolve_spacing_specs(r.accumulator.doc());
+            Ok(Some(PyDoc { resolved }))
+        }
+
+        #[pyo3(signature = (node, max_width = 80, indent_width = 4))]
+        fn unparse_multi_entries(&self, node: PyRef<'_, cst::PyMultiEntries>, max_width: usize, indent_width: usize) -> PyResult<Option<String>> {
+            let guard = node.shared().read();
+            let Some(r) = self.inner.unparse_multi_entries(&guard) else {
+                return Ok(None);
+            };
+            let resolved = resolve_spacing_specs(r.accumulator.doc());
+            let cfg = RendererConfig { indent_width, max_width };
+            Ok(Some(Renderer::new(cfg).render(&resolved)))
+        }
+
+        fn unparse_multi_entries_doc(&self, node: PyRef<'_, cst::PyMultiEntries>) -> PyResult<Option<PyDoc>> {
+            let guard = node.shared().read();
+            let Some(r) = self.inner.unparse_multi_entries(&guard) else {
                 return Ok(None);
             };
             let resolved = resolve_spacing_specs(r.accumulator.doc());

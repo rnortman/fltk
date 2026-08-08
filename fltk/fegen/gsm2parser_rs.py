@@ -50,29 +50,7 @@ from dataclasses import dataclass
 from fltk.fegen import gsm, gsm2tree
 from fltk.fegen.gsm2tree_rs import RustCstGenerator
 from fltk.fegen.regex_portability import check_regex_portable
-
-# Code point thresholds for Rust string literal escaping
-_CTRL_MAX = 0x20  # exclusive: code points < 0x20 get \u{XX} escaping
-_DEL = 0x7F  # DEL character: also gets \u{XX} escaping
-
-
-def rust_str_lit(s: str) -> str:
-    """Return the Rust string literal content (no outer quotes) for string s.
-
-    Shared Rust-codegen helper: also imported by ``fltk.unparse.gsm2unparser_rs``.
-    """
-    out = []
-    for ch in s:
-        cp = ord(ch)
-        if ch == "\\":
-            out.append("\\\\")
-        elif ch == '"':
-            out.append('\\"')
-        elif cp < _CTRL_MAX or cp == _DEL:
-            out.append(f"\\u{{{cp:02x}}}")
-        else:
-            out.append(ch)
-    return "".join(out)
+from fltk.fegen.rust_emit import rust_str_lit
 
 
 def module_import(mod_path: str, alias: str) -> str:

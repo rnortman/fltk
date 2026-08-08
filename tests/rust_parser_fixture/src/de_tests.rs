@@ -8,6 +8,8 @@
 
 #[cfg(test)]
 mod tests {
+    use std::collections::BTreeMap;
+
     use crate::parser::Parser;
     use crate::{ast, cst, de};
     use fltk_cst_core::{Shared, Span};
@@ -190,6 +192,149 @@ mod tests {
 
         let error = de::from_pair_cst::<Extra>(&parse_pair("a=1")).expect_err("the grammar has no `missing` label");
         assert_eq!(error.to_string(), "missing field `missing` at line 1, column 1");
+    }
+
+    /// Two entries whose keys are not in sorted order, so a source-order read is visible.
+    const REGION: &str = "{ b = 1; a = x; }";
+
+    /// `entries` read as a map: the key is the map key, so the value is the element's shape
+    /// minus the key field.
+    #[derive(Debug, Deserialize, PartialEq)]
+    #[serde(deny_unknown_fields)]
+    struct Region {
+        entry: BTreeMap<String, EntryValue>,
+    }
+
+    #[derive(Debug, Deserialize, PartialEq)]
+    #[serde(deny_unknown_fields)]
+    struct EntryValue {
+        value: Atom,
+    }
+
+    /// `atom := num:num | name:name` — externally tagged, one variant per alternative.
+    #[derive(Debug, Deserialize, PartialEq)]
+    enum Atom {
+        Num(u32),
+        Name(String),
+    }
+
+    /// The same region read as a sequence: source order, with the key an ordinary field.
+    #[derive(Debug, Deserialize, PartialEq)]
+    #[serde(deny_unknown_fields)]
+    struct Rows {
+        entry: Vec<Row>,
+    }
+
+    #[derive(Debug, Deserialize, PartialEq)]
+    #[serde(deny_unknown_fields)]
+    struct Row {
+        key: String,
+        value: Atom,
+    }
+
+    /// `multi_entries`, whose elements sharing a key arrive as one run.
+    #[derive(Debug, Deserialize, PartialEq)]
+    #[serde(deny_unknown_fields)]
+    struct MultiRegion {
+        multi_entry: BTreeMap<String, Vec<EntryValue>>,
+    }
+
+    fn parse_entries(src: &str) -> Shared<cst::Entries> {
+        let mut parser = Parser::new(src, Some("fixture.txt"), false);
+        let parsed = parser.apply__parse_entries(0).expect("the fixture text must parse");
+        assert_eq!(parsed.pos, src.chars().count() as i64, "the whole input must be consumed");
+        parsed.result
+    }
+
+    fn parse_multi_entries(src: &str) -> Shared<cst::MultiEntries> {
+        let mut parser = Parser::new(src, Some("fixture.txt"), false);
+        let parsed = parser.apply__parse_multi_entries(0).expect("the fixture text must parse");
+        assert_eq!(parsed.pos, src.chars().count() as i64, "the whole input must be consumed");
+        parsed.result
+    }
+
+    #[test]
+    fn a_keyed_region_serves_a_map_whose_values_omit_the_key() {
+        let value: Region = de::from_entries_cst(&parse_entries(REGION)).expect("the region must deserialize");
+        assert_eq!(
+            value,
+            Region {
+                entry: BTreeMap::from([
+                    (
+                        "b".to_string(),
+                        EntryValue {
+                            value: Atom::Num(1),
+                        }
+                    ),
+                    (
+                        "a".to_string(),
+                        EntryValue {
+                            value: Atom::Name("x".to_string()),
+                        }
+                    ),
+                ]),
+            }
+        );
+    }
+
+    #[test]
+    fn the_same_region_serves_a_sequence_when_the_target_asks_for_one() {
+        // The sequence form is the interleaving-preserving read: source order, key included.
+        let value: Rows = de::from_entries_cst(&parse_entries(REGION)).expect("the region must deserialize");
+        assert_eq!(
+            value,
+            Rows {
+                entry: vec![
+                    Row {
+                        key: "b".to_string(),
+                        value: Atom::Num(1),
+                    },
+                    Row {
+                        key: "a".to_string(),
+                        value: Atom::Name("x".to_string()),
+                    },
+                ],
+            }
+        );
+    }
+
+    #[test]
+    fn a_repeated_key_is_refused_before_the_target_sees_either_element() {
+        // A map target's own `Deserialize` would silently last-write-win; the frontend refuses
+        // first, with the AST layer's template.
+        let error = de::from_entries_cst::<Region>(&parse_entries("{ a = 1; a = 2; }"))
+            .expect_err("`a` keys two elements");
+        assert_eq!(error.to_string(), "duplicate entry key \"a\" at line 1, column 10");
+    }
+
+    #[test]
+    fn a_multi_region_serves_one_run_per_key() {
+        let value: MultiRegion = de::from_multi_entries_cst(&parse_multi_entries("{ a = 1; b = 2; a = 3; }"))
+            .expect("the region must deserialize");
+        assert_eq!(
+            value,
+            MultiRegion {
+                multi_entry: BTreeMap::from([
+                    (
+                        "a".to_string(),
+                        vec![
+                            EntryValue {
+                                value: Atom::Num(1),
+                            },
+                            EntryValue {
+                                value: Atom::Num(3),
+                            },
+                        ]
+                    ),
+                    (
+                        "b".to_string(),
+                        vec![EntryValue {
+                            value: Atom::Num(2),
+                        }]
+                    ),
+                ]),
+            }
+        );
     }
 
     #[test]

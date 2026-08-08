@@ -10,4 +10,10 @@ rule decimal_val { type: decimal; }
 // `op` is the operator label; `term` is the operand.
 rule sum_chain { fold_left: op; }
 
-// TODO(fixture-keyed-region): no keyed-entry rule, so no `key:` statement here.
+// The key leaf: erased, so `entry`'s and `multi_entry`'s `key` resolves to text and the
+// containing collections can be keyed by it.
+rule entry_key { transparent; }
+
+// `entries` holds one element per key; `multi_entries` groups the elements sharing one.
+rule entry       { key: key; }
+rule multi_entry { key: key multi; }

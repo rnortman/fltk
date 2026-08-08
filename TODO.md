@@ -248,39 +248,3 @@ selection content-aware changes what the tagged backend reads, and it has to be 
 multi-spelling doctrine (`rival_signature` deliberately does not record which literal a value came
 from, so alternatives differing only in literal spelling stay first-fit). Location:
 `fltk/fegen/ast_model.py` (`_kind_guard`), `fltk/fegen/gsm2ast_rs.py` (`kind_condition`).
-
-## `fixture-keyed-region`
-
-`tests/rust_parser_fixture` has no keyed collection: its grammar has no rule shaped for a sidecar
-`key:` statement, so the committed `src/ast.rs` carries no `IndexMap` field and the committed
-`src/de.rs` describes no map container. That is the one shape family the fixture crate neither
-compiles nor executes. The keyed and `multi` paths are covered elsewhere — the `config` and
-`multi_tree` cases of the generated-Rust compile gate (`tests/test_generated_rust_gate.py`) build
-and run both — so no capability is unverified; what is missing is the witness on the tracked
-fixture artifacts, which are what a downstream consumer's own regen most closely resembles.
-Closing it means adding a small keyed region to the fixture grammar (a container rule over an
-entry rule carrying a key label), a `key: <label> multi;` statement in the fixture sidecar,
-regenerating the whole fixture artifact set (`cst.rs`, `parser.rs`, both unparsers, `ast.rs`, the
-protocol module, the `.pyi` stubs, `de.rs`), and native tests over the new region on the AST and
-serde sides. Deferred because a two-line generation-input change costs a few thousand regenerated
-lines across every backend — its own slice, not a rider on another. Location:
-`tests/rust_parser_fixture/rust_parser_fixture.fltkast` (the `TODO(fixture-keyed-region)`
-comment), `fltk/fegen/test_data/rust_parser_fixture.fltkg`.
-
-## `rust-type-names-shadow-the-prelude`
-
-A grammar rule whose Rust type name collides with a prelude name — `option`, `result`, `string`,
-`vec`, `box` — generates Rust that does not compile. The rule name is UpperCamel'd into a node
-type (`rule option` → `pub struct Option`), and the generated CST module spells the prelude types
-bare (132 `Option<…>` occurrences in a small fixture), so the rule's own struct shadows
-`std::option::Option` inside the module it is declared in and every generic use of it is a type
-error. `ast.rs` and `de.rs` inherit the failure through `cst::` and through their own bare
-spellings. Found while compiling a documentation example whose entry rule was called `option`;
-`option` is an entirely plausible rule name for a config DSL, and the failure is a wall of
-`E0107`/`E0277` inside generated code the consumer cannot edit, with nothing naming the cause.
-Closing it means either qualifying the prelude spellings the Rust emitters emit
-(`::std::option::Option`, `::std::result::Result`, …) or refusing prelude-colliding type names at
-generation time with a message naming the rule and the `name:` sidecar statement that renames it
-— the same discipline the name checks already apply to Rust keywords. Deferred because it is
-pre-existing in the oldest Rust emitter and unrelated to the work that found it. Location:
-`fltk/fegen/gsm2tree_rs.py` (the `TODO(rust-type-names-shadow-the-prelude)` comment).

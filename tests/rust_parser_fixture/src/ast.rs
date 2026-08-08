@@ -5,7 +5,7 @@
 //! compare equal. The types are plain owned data: build them by hand, mutate them in place,
 //! compare them by value.
 //!
-//! Requires these `fltk-ast-core` features: uuid, decimal.
+//! Requires these `fltk-ast-core` features: indexmap, uuid, decimal.
 
 use super::cst;
 use super::parser;
@@ -14,11 +14,11 @@ use super::unparser;
 /// AST node for terminal-only rule `num`, over the text of its own span.
 #[derive(Debug, Clone)]
 pub struct Num {
-    pub text: String,
+    pub text: ::std::string::String,
     pub span: ::fltk_cst_core::Span,
 }
 
-impl PartialEq for Num {
+impl ::std::cmp::PartialEq for Num {
     fn eq(&self, other: &Self) -> bool {
         self.text == other.text
     }
@@ -27,11 +27,11 @@ impl PartialEq for Num {
 /// AST node for terminal-only rule `name`, over the text of its own span.
 #[derive(Debug, Clone)]
 pub struct Name {
-    pub text: String,
+    pub text: ::std::string::String,
     pub span: ::fltk_cst_core::Span,
 }
 
-impl PartialEq for Name {
+impl ::std::cmp::PartialEq for Name {
     fn eq(&self, other: &Self) -> bool {
         self.text == other.text
     }
@@ -44,7 +44,7 @@ pub enum Atom {
     Name(Name),
 }
 
-impl PartialEq for Atom {
+impl ::std::cmp::PartialEq for Atom {
     fn eq(&self, other: &Self) -> bool {
         match (self, other) {
             (Self::Num(a), Self::Num(b)) => a == b,
@@ -71,7 +71,7 @@ pub struct ParenExpr {
     pub span: ::fltk_cst_core::Span,
 }
 
-impl PartialEq for ParenExpr {
+impl ::std::cmp::PartialEq for ParenExpr {
     fn eq(&self, other: &Self) -> bool {
         self.inner == other.inner
     }
@@ -85,7 +85,7 @@ pub struct Stmt {
     pub span: ::fltk_cst_core::Span,
 }
 
-impl PartialEq for Stmt {
+impl ::std::cmp::PartialEq for Stmt {
     fn eq(&self, other: &Self) -> bool {
         self.lhs == other.lhs && self.rhs == other.rhs
     }
@@ -94,11 +94,11 @@ impl PartialEq for Stmt {
 /// AST node for rule `items`.
 #[derive(Debug, Clone)]
 pub struct Items {
-    pub item: Vec<Atom>,
+    pub item: ::std::vec::Vec<Atom>,
     pub span: ::fltk_cst_core::Span,
 }
 
-impl PartialEq for Items {
+impl ::std::cmp::PartialEq for Items {
     fn eq(&self, other: &Self) -> bool {
         self.item == other.item
     }
@@ -107,11 +107,11 @@ impl PartialEq for Items {
 /// AST node for rule `opt_item`.
 #[derive(Debug, Clone)]
 pub struct OptItem {
-    pub item: Option<Atom>,
+    pub item: ::std::option::Option<Atom>,
     pub span: ::fltk_cst_core::Span,
 }
 
-impl PartialEq for OptItem {
+impl ::std::cmp::PartialEq for OptItem {
     fn eq(&self, other: &Self) -> bool {
         self.item == other.item
     }
@@ -120,11 +120,11 @@ impl PartialEq for OptItem {
 /// AST node for rule `zero_items`.
 #[derive(Debug, Clone)]
 pub struct ZeroItems {
-    pub item: Vec<Atom>,
+    pub item: ::std::vec::Vec<Atom>,
     pub span: ::fltk_cst_core::Span,
 }
 
-impl PartialEq for ZeroItems {
+impl ::std::cmp::PartialEq for ZeroItems {
     fn eq(&self, other: &Self) -> bool {
         self.item == other.item
     }
@@ -133,12 +133,12 @@ impl PartialEq for ZeroItems {
 /// The `Alt1` alternative of rule `expr`.
 #[derive(Debug, Clone)]
 pub struct ExprAlt1 {
-    pub lhs: Box<Expr>,
+    pub lhs: ::std::boxed::Box<Expr>,
     pub rhs: Atom,
     pub span: ::fltk_cst_core::Span,
 }
 
-impl PartialEq for ExprAlt1 {
+impl ::std::cmp::PartialEq for ExprAlt1 {
     /// Bounded stack: the pending pairs live in a worklist, not in call frames.
     fn eq(&self, other: &Self) -> bool {
         eq_walk::run(eq_walk::Item::ExprAlt1(self, other))
@@ -147,7 +147,7 @@ impl PartialEq for ExprAlt1 {
 
 impl ExprAlt1 {
     /// Compare what cannot recurse, enqueueing the pairs that can.
-    fn eq_shallow<'a>(&'a self, other: &'a Self, worklist: &mut Vec<eq_walk::Item<'a>>) -> bool {
+    fn eq_shallow<'a>(&'a self, other: &'a Self, worklist: &mut ::std::vec::Vec<eq_walk::Item<'a>>) -> bool {
         if self.rhs != other.rhs {
             return false;
         }
@@ -159,11 +159,11 @@ impl ExprAlt1 {
 /// AST node for rule `expr`: whichever alternative matched.
 #[derive(Debug, Clone)]
 pub enum Expr {
-    Alt1(Box<ExprAlt1>),
+    Alt1(::std::boxed::Box<ExprAlt1>),
     Atom(Atom),
 }
 
-impl PartialEq for Expr {
+impl ::std::cmp::PartialEq for Expr {
     /// Bounded stack: the pending pairs live in a worklist, not in call frames.
     fn eq(&self, other: &Self) -> bool {
         eq_walk::run(eq_walk::Item::Expr(self, other))
@@ -172,7 +172,7 @@ impl PartialEq for Expr {
 
 impl Expr {
     /// Compare what cannot recurse, enqueueing the pairs that can.
-    fn eq_shallow<'a>(&'a self, other: &'a Self, worklist: &mut Vec<eq_walk::Item<'a>>) -> bool {
+    fn eq_shallow<'a>(&'a self, other: &'a Self, worklist: &mut ::std::vec::Vec<eq_walk::Item<'a>>) -> bool {
         match (self, other) {
             (Self::Alt1(a), Self::Alt1(b)) => {
                 worklist.push(eq_walk::Item::ExprAlt1(a, b));
@@ -197,11 +197,11 @@ impl Expr {
 /// The `Inner` alternative of rule `lval`.
 #[derive(Debug, Clone)]
 pub struct LvalInner {
-    pub inner: Box<Rval>,
+    pub inner: ::std::boxed::Box<Rval>,
     pub span: ::fltk_cst_core::Span,
 }
 
-impl PartialEq for LvalInner {
+impl ::std::cmp::PartialEq for LvalInner {
     /// Bounded stack: the pending pairs live in a worklist, not in call frames.
     fn eq(&self, other: &Self) -> bool {
         eq_walk::run(eq_walk::Item::LvalInner(self, other))
@@ -210,7 +210,7 @@ impl PartialEq for LvalInner {
 
 impl LvalInner {
     /// Compare what cannot recurse, enqueueing the pairs that can.
-    fn eq_shallow<'a>(&'a self, other: &'a Self, worklist: &mut Vec<eq_walk::Item<'a>>) -> bool {
+    fn eq_shallow<'a>(&'a self, other: &'a Self, worklist: &mut ::std::vec::Vec<eq_walk::Item<'a>>) -> bool {
         worklist.push(eq_walk::Item::Rval(&self.inner, &other.inner));
         true
     }
@@ -219,11 +219,11 @@ impl LvalInner {
 /// AST node for rule `lval`: whichever alternative matched.
 #[derive(Debug, Clone)]
 pub enum Lval {
-    Inner(Box<LvalInner>),
+    Inner(::std::boxed::Box<LvalInner>),
     Base(Name),
 }
 
-impl PartialEq for Lval {
+impl ::std::cmp::PartialEq for Lval {
     /// Bounded stack: the pending pairs live in a worklist, not in call frames.
     fn eq(&self, other: &Self) -> bool {
         eq_walk::run(eq_walk::Item::Lval(self, other))
@@ -232,7 +232,7 @@ impl PartialEq for Lval {
 
 impl Lval {
     /// Compare what cannot recurse, enqueueing the pairs that can.
-    fn eq_shallow<'a>(&'a self, other: &'a Self, worklist: &mut Vec<eq_walk::Item<'a>>) -> bool {
+    fn eq_shallow<'a>(&'a self, other: &'a Self, worklist: &mut ::std::vec::Vec<eq_walk::Item<'a>>) -> bool {
         match (self, other) {
             (Self::Inner(a), Self::Inner(b)) => {
                 worklist.push(eq_walk::Item::LvalInner(a, b));
@@ -257,11 +257,11 @@ impl Lval {
 /// The `Inner` alternative of rule `rval`.
 #[derive(Debug, Clone)]
 pub struct RvalInner {
-    pub inner: Box<Lval>,
+    pub inner: ::std::boxed::Box<Lval>,
     pub span: ::fltk_cst_core::Span,
 }
 
-impl PartialEq for RvalInner {
+impl ::std::cmp::PartialEq for RvalInner {
     /// Bounded stack: the pending pairs live in a worklist, not in call frames.
     fn eq(&self, other: &Self) -> bool {
         eq_walk::run(eq_walk::Item::RvalInner(self, other))
@@ -270,7 +270,7 @@ impl PartialEq for RvalInner {
 
 impl RvalInner {
     /// Compare what cannot recurse, enqueueing the pairs that can.
-    fn eq_shallow<'a>(&'a self, other: &'a Self, worklist: &mut Vec<eq_walk::Item<'a>>) -> bool {
+    fn eq_shallow<'a>(&'a self, other: &'a Self, worklist: &mut ::std::vec::Vec<eq_walk::Item<'a>>) -> bool {
         worklist.push(eq_walk::Item::Lval(&self.inner, &other.inner));
         true
     }
@@ -279,11 +279,11 @@ impl RvalInner {
 /// AST node for rule `rval`: whichever alternative matched.
 #[derive(Debug, Clone)]
 pub enum Rval {
-    Inner(Box<RvalInner>),
+    Inner(::std::boxed::Box<RvalInner>),
     Base(Num),
 }
 
-impl PartialEq for Rval {
+impl ::std::cmp::PartialEq for Rval {
     /// Bounded stack: the pending pairs live in a worklist, not in call frames.
     fn eq(&self, other: &Self) -> bool {
         eq_walk::run(eq_walk::Item::Rval(self, other))
@@ -292,7 +292,7 @@ impl PartialEq for Rval {
 
 impl Rval {
     /// Compare what cannot recurse, enqueueing the pairs that can.
-    fn eq_shallow<'a>(&'a self, other: &'a Self, worklist: &mut Vec<eq_walk::Item<'a>>) -> bool {
+    fn eq_shallow<'a>(&'a self, other: &'a Self, worklist: &mut ::std::vec::Vec<eq_walk::Item<'a>>) -> bool {
         match (self, other) {
             (Self::Inner(a), Self::Inner(b)) => {
                 worklist.push(eq_walk::Item::RvalInner(a, b));
@@ -321,7 +321,7 @@ pub struct Arrow {
     pub span: ::fltk_cst_core::Span,
 }
 
-impl PartialEq for Arrow {
+impl ::std::cmp::PartialEq for Arrow {
     fn eq(&self, other: &Self) -> bool {
         self.target == other.target
     }
@@ -330,11 +330,11 @@ impl PartialEq for Arrow {
 /// AST node for terminal-only rule `latin_word`, over the text of its own span.
 #[derive(Debug, Clone)]
 pub struct LatinWord {
-    pub text: String,
+    pub text: ::std::string::String,
     pub span: ::fltk_cst_core::Span,
 }
 
-impl PartialEq for LatinWord {
+impl ::std::cmp::PartialEq for LatinWord {
     fn eq(&self, other: &Self) -> bool {
         self.text == other.text
     }
@@ -343,11 +343,11 @@ impl PartialEq for LatinWord {
 /// AST node for terminal-only rule `tagged`, over the text of its own span.
 #[derive(Debug, Clone)]
 pub struct Tagged {
-    pub text: String,
+    pub text: ::std::string::String,
     pub span: ::fltk_cst_core::Span,
 }
 
-impl PartialEq for Tagged {
+impl ::std::cmp::PartialEq for Tagged {
     fn eq(&self, other: &Self) -> bool {
         self.text == other.text
     }
@@ -360,7 +360,7 @@ pub struct Val {
     pub span: ::fltk_cst_core::Span,
 }
 
-impl PartialEq for Val {
+impl ::std::cmp::PartialEq for Val {
     fn eq(&self, other: &Self) -> bool {
         self.item == other.item
     }
@@ -373,7 +373,7 @@ pub struct LeadingWs {
     pub span: ::fltk_cst_core::Span,
 }
 
-impl PartialEq for LeadingWs {
+impl ::std::cmp::PartialEq for LeadingWs {
     fn eq(&self, other: &Self) -> bool {
         self.num == other.num
     }
@@ -386,7 +386,7 @@ pub struct Grouped {
     pub span: ::fltk_cst_core::Span,
 }
 
-impl PartialEq for Grouped {
+impl ::std::cmp::PartialEq for Grouped {
     fn eq(&self, other: &Self) -> bool {
         self.left == other.left
     }
@@ -395,12 +395,12 @@ impl PartialEq for Grouped {
 /// AST node for rule `rec_via_sub`.
 #[derive(Debug, Clone)]
 pub struct RecViaSub {
-    pub inner: Box<RecViaSubInner>,
+    pub inner: ::std::boxed::Box<RecViaSubInner>,
     pub suffix: Name,
     pub span: ::fltk_cst_core::Span,
 }
 
-impl PartialEq for RecViaSub {
+impl ::std::cmp::PartialEq for RecViaSub {
     /// Bounded stack: the pending pairs live in a worklist, not in call frames.
     fn eq(&self, other: &Self) -> bool {
         eq_walk::run(eq_walk::Item::RecViaSub(self, other))
@@ -409,7 +409,7 @@ impl PartialEq for RecViaSub {
 
 impl RecViaSub {
     /// Compare what cannot recurse, enqueueing the pairs that can.
-    fn eq_shallow<'a>(&'a self, other: &'a Self, worklist: &mut Vec<eq_walk::Item<'a>>) -> bool {
+    fn eq_shallow<'a>(&'a self, other: &'a Self, worklist: &mut ::std::vec::Vec<eq_walk::Item<'a>>) -> bool {
         if self.suffix != other.suffix {
             return false;
         }
@@ -421,11 +421,11 @@ impl RecViaSub {
 /// The `Inner` alternative of rule `nest`.
 #[derive(Debug, Clone)]
 pub struct NestInner {
-    pub inner: Box<Nest>,
+    pub inner: ::std::boxed::Box<Nest>,
     pub span: ::fltk_cst_core::Span,
 }
 
-impl PartialEq for NestInner {
+impl ::std::cmp::PartialEq for NestInner {
     /// Bounded stack: the pending pairs live in a worklist, not in call frames.
     fn eq(&self, other: &Self) -> bool {
         eq_walk::run(eq_walk::Item::NestInner(self, other))
@@ -434,7 +434,7 @@ impl PartialEq for NestInner {
 
 impl NestInner {
     /// Compare what cannot recurse, enqueueing the pairs that can.
-    fn eq_shallow<'a>(&'a self, other: &'a Self, worklist: &mut Vec<eq_walk::Item<'a>>) -> bool {
+    fn eq_shallow<'a>(&'a self, other: &'a Self, worklist: &mut ::std::vec::Vec<eq_walk::Item<'a>>) -> bool {
         worklist.push(eq_walk::Item::Nest(&self.inner, &other.inner));
         true
     }
@@ -443,11 +443,11 @@ impl NestInner {
 /// AST node for rule `nest`: whichever alternative matched.
 #[derive(Debug, Clone)]
 pub enum Nest {
-    Inner(Box<NestInner>),
+    Inner(::std::boxed::Box<NestInner>),
     Leaf(Num),
 }
 
-impl PartialEq for Nest {
+impl ::std::cmp::PartialEq for Nest {
     /// Bounded stack: the pending pairs live in a worklist, not in call frames.
     fn eq(&self, other: &Self) -> bool {
         eq_walk::run(eq_walk::Item::Nest(self, other))
@@ -456,7 +456,7 @@ impl PartialEq for Nest {
 
 impl Nest {
     /// Compare what cannot recurse, enqueueing the pairs that can.
-    fn eq_shallow<'a>(&'a self, other: &'a Self, worklist: &mut Vec<eq_walk::Item<'a>>) -> bool {
+    fn eq_shallow<'a>(&'a self, other: &'a Self, worklist: &mut ::std::vec::Vec<eq_walk::Item<'a>>) -> bool {
         match (self, other) {
             (Self::Inner(a), Self::Inner(b)) => {
                 worklist.push(eq_walk::Item::NestInner(a, b));
@@ -481,12 +481,12 @@ impl Nest {
 /// The `Alt1` alternative of rule `nest_sum`.
 #[derive(Debug, Clone)]
 pub struct NestSumAlt1 {
-    pub lhs: Box<NestSum>,
+    pub lhs: ::std::boxed::Box<NestSum>,
     pub rhs: Nest,
     pub span: ::fltk_cst_core::Span,
 }
 
-impl PartialEq for NestSumAlt1 {
+impl ::std::cmp::PartialEq for NestSumAlt1 {
     /// Bounded stack: the pending pairs live in a worklist, not in call frames.
     fn eq(&self, other: &Self) -> bool {
         eq_walk::run(eq_walk::Item::NestSumAlt1(self, other))
@@ -495,7 +495,7 @@ impl PartialEq for NestSumAlt1 {
 
 impl NestSumAlt1 {
     /// Compare what cannot recurse, enqueueing the pairs that can.
-    fn eq_shallow<'a>(&'a self, other: &'a Self, worklist: &mut Vec<eq_walk::Item<'a>>) -> bool {
+    fn eq_shallow<'a>(&'a self, other: &'a Self, worklist: &mut ::std::vec::Vec<eq_walk::Item<'a>>) -> bool {
         worklist.push(eq_walk::Item::NestSum(&self.lhs, &other.lhs));
         worklist.push(eq_walk::Item::Nest(&self.rhs, &other.rhs));
         true
@@ -505,11 +505,11 @@ impl NestSumAlt1 {
 /// AST node for rule `nest_sum`: whichever alternative matched.
 #[derive(Debug, Clone)]
 pub enum NestSum {
-    Alt1(Box<NestSumAlt1>),
+    Alt1(::std::boxed::Box<NestSumAlt1>),
     First(Nest),
 }
 
-impl PartialEq for NestSum {
+impl ::std::cmp::PartialEq for NestSum {
     /// Bounded stack: the pending pairs live in a worklist, not in call frames.
     fn eq(&self, other: &Self) -> bool {
         eq_walk::run(eq_walk::Item::NestSum(self, other))
@@ -518,7 +518,7 @@ impl PartialEq for NestSum {
 
 impl NestSum {
     /// Compare what cannot recurse, enqueueing the pairs that can.
-    fn eq_shallow<'a>(&'a self, other: &'a Self, worklist: &mut Vec<eq_walk::Item<'a>>) -> bool {
+    fn eq_shallow<'a>(&'a self, other: &'a Self, worklist: &mut ::std::vec::Vec<eq_walk::Item<'a>>) -> bool {
         match (self, other) {
             (Self::Alt1(a), Self::Alt1(b)) => {
                 worklist.push(eq_walk::Item::NestSumAlt1(a, b));
@@ -546,11 +546,11 @@ impl NestSum {
 /// AST node for terminal-only rule `digit_seq`, over the text of its own span.
 #[derive(Debug, Clone)]
 pub struct DigitSeq {
-    pub text: String,
+    pub text: ::std::string::String,
     pub span: ::fltk_cst_core::Span,
 }
 
-impl PartialEq for DigitSeq {
+impl ::std::cmp::PartialEq for DigitSeq {
     fn eq(&self, other: &Self) -> bool {
         self.text == other.text
     }
@@ -559,11 +559,11 @@ impl PartialEq for DigitSeq {
 /// AST node for terminal-only rule `word_seq`, over the text of its own span.
 #[derive(Debug, Clone)]
 pub struct WordSeq {
-    pub text: String,
+    pub text: ::std::string::String,
     pub span: ::fltk_cst_core::Span,
 }
 
-impl PartialEq for WordSeq {
+impl ::std::cmp::PartialEq for WordSeq {
     fn eq(&self, other: &Self) -> bool {
         self.text == other.text
     }
@@ -572,11 +572,11 @@ impl PartialEq for WordSeq {
 /// AST node for terminal-only rule `ws_seq`, over the text of its own span.
 #[derive(Debug, Clone)]
 pub struct WsSeq {
-    pub text: String,
+    pub text: ::std::string::String,
     pub span: ::fltk_cst_core::Span,
 }
 
-impl PartialEq for WsSeq {
+impl ::std::cmp::PartialEq for WsSeq {
     fn eq(&self, other: &Self) -> bool {
         self.text == other.text
     }
@@ -585,11 +585,11 @@ impl PartialEq for WsSeq {
 /// AST node for terminal-only rule `three_to_five_digits`, over the text of its own span.
 #[derive(Debug, Clone)]
 pub struct ThreeToFiveDigits {
-    pub text: String,
+    pub text: ::std::string::String,
     pub span: ::fltk_cst_core::Span,
 }
 
-impl PartialEq for ThreeToFiveDigits {
+impl ::std::cmp::PartialEq for ThreeToFiveDigits {
     fn eq(&self, other: &Self) -> bool {
         self.text == other.text
     }
@@ -598,11 +598,11 @@ impl PartialEq for ThreeToFiveDigits {
 /// AST node for terminal-only rule `exactly_two_digits`, over the text of its own span.
 #[derive(Debug, Clone)]
 pub struct ExactlyTwoDigits {
-    pub text: String,
+    pub text: ::std::string::String,
     pub span: ::fltk_cst_core::Span,
 }
 
-impl PartialEq for ExactlyTwoDigits {
+impl ::std::cmp::PartialEq for ExactlyTwoDigits {
     fn eq(&self, other: &Self) -> bool {
         self.text == other.text
     }
@@ -611,11 +611,11 @@ impl PartialEq for ExactlyTwoDigits {
 /// AST node for terminal-only rule `escaped_metas`, over the text of its own span.
 #[derive(Debug, Clone)]
 pub struct EscapedMetas {
-    pub text: String,
+    pub text: ::std::string::String,
     pub span: ::fltk_cst_core::Span,
 }
 
-impl PartialEq for EscapedMetas {
+impl ::std::cmp::PartialEq for EscapedMetas {
     fn eq(&self, other: &Self) -> bool {
         self.text == other.text
     }
@@ -624,11 +624,11 @@ impl PartialEq for EscapedMetas {
 /// AST node for terminal-only rule `latin_range`, over the text of its own span.
 #[derive(Debug, Clone)]
 pub struct LatinRange {
-    pub text: String,
+    pub text: ::std::string::String,
     pub span: ::fltk_cst_core::Span,
 }
 
-impl PartialEq for LatinRange {
+impl ::std::cmp::PartialEq for LatinRange {
     fn eq(&self, other: &Self) -> bool {
         self.text == other.text
     }
@@ -637,11 +637,11 @@ impl PartialEq for LatinRange {
 /// AST node for terminal-only rule `nc_group_alt`, over the text of its own span.
 #[derive(Debug, Clone)]
 pub struct NcGroupAlt {
-    pub text: String,
+    pub text: ::std::string::String,
     pub span: ::fltk_cst_core::Span,
 }
 
-impl PartialEq for NcGroupAlt {
+impl ::std::cmp::PartialEq for NcGroupAlt {
     fn eq(&self, other: &Self) -> bool {
         self.text == other.text
     }
@@ -650,11 +650,11 @@ impl PartialEq for NcGroupAlt {
 /// AST node for terminal-only rule `case_insensitive`, over the text of its own span.
 #[derive(Debug, Clone)]
 pub struct CaseInsensitive {
-    pub text: String,
+    pub text: ::std::string::String,
     pub span: ::fltk_cst_core::Span,
 }
 
-impl PartialEq for CaseInsensitive {
+impl ::std::cmp::PartialEq for CaseInsensitive {
     fn eq(&self, other: &Self) -> bool {
         self.text == other.text
     }
@@ -663,11 +663,11 @@ impl PartialEq for CaseInsensitive {
 /// AST node for terminal-only rule `anchored_word`, over the text of its own span.
 #[derive(Debug, Clone)]
 pub struct AnchoredWord {
-    pub text: String,
+    pub text: ::std::string::String,
     pub span: ::fltk_cst_core::Span,
 }
 
-impl PartialEq for AnchoredWord {
+impl ::std::cmp::PartialEq for AnchoredWord {
     fn eq(&self, other: &Self) -> bool {
         self.text == other.text
     }
@@ -681,7 +681,7 @@ pub struct Pair {
     pub span: ::fltk_cst_core::Span,
 }
 
-impl PartialEq for Pair {
+impl ::std::cmp::PartialEq for Pair {
     fn eq(&self, other: &Self) -> bool {
         self.key == other.key && self.val == other.val
     }
@@ -695,7 +695,7 @@ pub struct Wrapper {
     pub span: ::fltk_cst_core::Span,
 }
 
-impl PartialEq for Wrapper {
+impl ::std::cmp::PartialEq for Wrapper {
     fn eq(&self, other: &Self) -> bool {
         self.key == other.key && self.val == other.val
     }
@@ -704,12 +704,12 @@ impl PartialEq for Wrapper {
 /// AST node for rule `opt_wrapper`.
 #[derive(Debug, Clone)]
 pub struct OptWrapper {
-    pub key: Option<Name>,
-    pub val: Option<Num>,
+    pub key: ::std::option::Option<Name>,
+    pub val: ::std::option::Option<Num>,
     pub span: ::fltk_cst_core::Span,
 }
 
-impl PartialEq for OptWrapper {
+impl ::std::cmp::PartialEq for OptWrapper {
     fn eq(&self, other: &Self) -> bool {
         self.key == other.key && self.val == other.val
     }
@@ -718,12 +718,12 @@ impl PartialEq for OptWrapper {
 /// AST node for rule `rep_wrapper`.
 #[derive(Debug, Clone)]
 pub struct RepWrapper {
-    pub key: Vec<Name>,
-    pub val: Vec<Num>,
+    pub key: ::std::vec::Vec<Name>,
+    pub val: ::std::vec::Vec<Num>,
     pub span: ::fltk_cst_core::Span,
 }
 
-impl PartialEq for RepWrapper {
+impl ::std::cmp::PartialEq for RepWrapper {
     fn eq(&self, other: &Self) -> bool {
         self.key == other.key && self.val == other.val
     }
@@ -732,12 +732,12 @@ impl PartialEq for RepWrapper {
 /// AST node for rule `kw_labels`.
 #[derive(Debug, Clone)]
 pub struct KwLabels {
-    pub r#type: String,
+    pub r#type: ::std::string::String,
     pub r#match: Num,
     pub span: ::fltk_cst_core::Span,
 }
 
-impl PartialEq for KwLabels {
+impl ::std::cmp::PartialEq for KwLabels {
     fn eq(&self, other: &Self) -> bool {
         self.r#type == other.r#type && self.r#match == other.r#match
     }
@@ -746,11 +746,11 @@ impl PartialEq for KwLabels {
 /// AST node for terminal-only rule `quoted`, over the text of its own span.
 #[derive(Debug, Clone)]
 pub struct Quoted {
-    pub text: String,
+    pub text: ::std::string::String,
     pub span: ::fltk_cst_core::Span,
 }
 
-impl PartialEq for Quoted {
+impl ::std::cmp::PartialEq for Quoted {
     fn eq(&self, other: &Self) -> bool {
         self.text == other.text
     }
@@ -759,12 +759,12 @@ impl PartialEq for Quoted {
 /// AST node for rule `mixed_opt`.
 #[derive(Debug, Clone)]
 pub struct MixedOpt {
-    pub key: Option<String>,
+    pub key: ::std::option::Option<::std::string::String>,
     pub node: Num,
     pub span: ::fltk_cst_core::Span,
 }
 
-impl PartialEq for MixedOpt {
+impl ::std::cmp::PartialEq for MixedOpt {
     fn eq(&self, other: &Self) -> bool {
         self.key == other.key && self.node == other.node
     }
@@ -777,7 +777,7 @@ pub struct UuidVal {
     pub span: ::fltk_cst_core::Span,
 }
 
-impl PartialEq for UuidVal {
+impl ::std::cmp::PartialEq for UuidVal {
     fn eq(&self, other: &Self) -> bool {
         self.value == other.value
     }
@@ -790,7 +790,7 @@ pub struct DecimalVal {
     pub span: ::fltk_cst_core::Span,
 }
 
-impl PartialEq for DecimalVal {
+impl ::std::cmp::PartialEq for DecimalVal {
     fn eq(&self, other: &Self) -> bool {
         self.value == other.value
     }
@@ -810,7 +810,7 @@ pub struct Colour {
     pub span: ::fltk_cst_core::Span,
 }
 
-impl PartialEq for Colour {
+impl ::std::cmp::PartialEq for Colour {
     fn eq(&self, other: &Self) -> bool {
         self.value == other.value
     }
@@ -819,13 +819,13 @@ impl PartialEq for Colour {
 /// One link of the left-nested chain rule `sum_chain` folds into. `span` covers everything below the link.
 #[derive(Debug, Clone)]
 pub struct SumChainBinary {
-    pub op: String,
-    pub lhs: Box<SumChain>,
-    pub rhs: Box<SumChain>,
+    pub op: ::std::string::String,
+    pub lhs: ::std::boxed::Box<SumChain>,
+    pub rhs: ::std::boxed::Box<SumChain>,
     pub span: ::fltk_cst_core::Span,
 }
 
-impl PartialEq for SumChainBinary {
+impl ::std::cmp::PartialEq for SumChainBinary {
     /// Bounded stack: the pending pairs live in a worklist, not in call frames.
     fn eq(&self, other: &Self) -> bool {
         eq_walk::run(eq_walk::Item::SumChainBinary(self, other))
@@ -834,7 +834,7 @@ impl PartialEq for SumChainBinary {
 
 impl SumChainBinary {
     /// Compare what cannot recurse, enqueueing the pairs that can.
-    fn eq_shallow<'a>(&'a self, other: &'a Self, worklist: &mut Vec<eq_walk::Item<'a>>) -> bool {
+    fn eq_shallow<'a>(&'a self, other: &'a Self, worklist: &mut ::std::vec::Vec<eq_walk::Item<'a>>) -> bool {
         if self.op != other.op {
             return false;
         }
@@ -851,7 +851,7 @@ pub enum SumChain {
     Binary(SumChainBinary),
 }
 
-impl PartialEq for SumChain {
+impl ::std::cmp::PartialEq for SumChain {
     /// Bounded stack: the pending pairs live in a worklist, not in call frames.
     fn eq(&self, other: &Self) -> bool {
         eq_walk::run(eq_walk::Item::SumChain(self, other))
@@ -860,7 +860,7 @@ impl PartialEq for SumChain {
 
 impl SumChain {
     /// Compare what cannot recurse, enqueueing the pairs that can.
-    fn eq_shallow<'a>(&'a self, other: &'a Self, worklist: &mut Vec<eq_walk::Item<'a>>) -> bool {
+    fn eq_shallow<'a>(&'a self, other: &'a Self, worklist: &mut ::std::vec::Vec<eq_walk::Item<'a>>) -> bool {
         match (self, other) {
             (Self::Operand(a), Self::Operand(b)) => a == b,
             (Self::Binary(a), Self::Binary(b)) => {
@@ -884,10 +884,10 @@ impl SumChain {
 
 /// A cheap `SumChain` for a chain link to leave behind where it took a child out.
 fn _sum_chain_drop_witness() -> SumChain {
-    SumChain::Operand(Num { text: String::new(), span: ::fltk_cst_core::Span::unknown() })
+    SumChain::Operand(Num { text: ::std::string::String::new(), span: ::fltk_cst_core::Span::unknown() })
 }
 
-impl Drop for SumChainBinary {
+impl ::std::ops::Drop for SumChainBinary {
     /// Take the chain below this link apart through a worklist rather than by recursion.
     fn drop(&mut self) {
         // A link holding two bare operands tears down by ordinary glue: their depth is the
@@ -895,7 +895,7 @@ impl Drop for SumChainBinary {
         if !matches!(&*self.lhs, SumChain::Binary(_)) && !matches!(&*self.rhs, SumChain::Binary(_)) {
             return;
         }
-        let mut stack: Vec<SumChain> = vec![
+        let mut stack: ::std::vec::Vec<SumChain> = vec![
             ::std::mem::replace(&mut *self.lhs, _sum_chain_drop_witness()),
             ::std::mem::replace(&mut *self.rhs, _sum_chain_drop_witness()),
         ];
@@ -910,15 +910,69 @@ impl Drop for SumChainBinary {
     }
 }
 
+/// AST node for rule `entry`.
+#[derive(Debug, Clone)]
+pub struct Entry {
+    pub key: ::std::string::String,
+    pub value: Atom,
+    pub span: ::fltk_cst_core::Span,
+}
+
+impl ::std::cmp::PartialEq for Entry {
+    fn eq(&self, other: &Self) -> bool {
+        self.key == other.key && self.value == other.value
+    }
+}
+
+/// AST node for rule `entries`.
+#[derive(Debug, Clone)]
+pub struct Entries {
+    pub entry: ::fltk_ast_core::IndexMap<::std::string::String, Entry>,
+    pub span: ::fltk_cst_core::Span,
+}
+
+impl ::std::cmp::PartialEq for Entries {
+    fn eq(&self, other: &Self) -> bool {
+        self.entry == other.entry
+    }
+}
+
+/// AST node for rule `multi_entry`.
+#[derive(Debug, Clone)]
+pub struct MultiEntry {
+    pub key: ::std::string::String,
+    pub value: Atom,
+    pub span: ::fltk_cst_core::Span,
+}
+
+impl ::std::cmp::PartialEq for MultiEntry {
+    fn eq(&self, other: &Self) -> bool {
+        self.key == other.key && self.value == other.value
+    }
+}
+
+/// AST node for rule `multi_entries`.
+#[derive(Debug, Clone)]
+pub struct MultiEntries {
+    pub multi_entry: ::fltk_ast_core::IndexMap<::std::string::String, ::std::vec::Vec<MultiEntry>>,
+    pub span: ::fltk_cst_core::Span,
+}
+
+impl ::std::cmp::PartialEq for MultiEntries {
+    fn eq(&self, other: &Self) -> bool {
+        self.multi_entry == other.multi_entry
+    }
+}
+
 /// The `item` label of rule `val`, which carries more than one type.
 #[derive(Debug, Clone)]
 pub enum ValItem {
     Num(Num),
     Name(Name),
-    Text(String),
+    Text(::std::string::String),
 }
 
-impl PartialEq for ValItem {
+impl ::std::cmp::PartialEq for ValItem {
     fn eq(&self, other: &Self) -> bool {
         match (self, other) {
             (Self::Num(a), Self::Num(b)) => a == b,
@@ -936,7 +990,7 @@ pub enum GroupedLeft {
     Name(Name),
 }
 
-impl PartialEq for GroupedLeft {
+impl ::std::cmp::PartialEq for GroupedLeft {
     fn eq(&self, other: &Self) -> bool {
         match (self, other) {
             (Self::Num(a), Self::Num(b)) => a == b,
@@ -959,11 +1013,11 @@ impl GroupedLeft {
 /// The `inner` label of rule `rec_via_sub`, which carries more than one type.
 #[derive(Debug, Clone)]
 pub enum RecViaSubInner {
-    RecViaSub(Box<RecViaSub>),
+    RecViaSub(::std::boxed::Box<RecViaSub>),
     Atom(Atom),
 }
 
-impl PartialEq for RecViaSubInner {
+impl ::std::cmp::PartialEq for RecViaSubInner {
     /// Bounded stack: the pending pairs live in a worklist, not in call frames.
     fn eq(&self, other: &Self) -> bool {
         eq_walk::run(eq_walk::Item::RecViaSubInner(self, other))
@@ -972,7 +1026,7 @@ impl PartialEq for RecViaSubInner {
 
 impl RecViaSubInner {
     /// Compare what cannot recurse, enqueueing the pairs that can.
-    fn eq_shallow<'a>(&'a self, other: &'a Self, worklist: &mut Vec<eq_walk::Item<'a>>) -> bool {
+    fn eq_shallow<'a>(&'a self, other: &'a Self, worklist: &mut ::std::vec::Vec<eq_walk::Item<'a>>) -> bool {
         match (self, other) {
             (Self::RecViaSub(a), Self::RecViaSub(b)) => {
                 worklist.push(eq_walk::Item::RecViaSub(a, b));
@@ -996,7 +1050,7 @@ impl RecViaSubInner {
 
 impl Num {
     /// Convert a `num` CST node.
-    pub fn from_cst(node: &::fltk_cst_core::Shared<cst::Num>) -> Result<Self, ::fltk_ast_core::AstError> {
+    pub fn from_cst(node: &::fltk_cst_core::Shared<cst::Num>) -> ::std::result::Result<Self, ::fltk_ast_core::AstError> {
         let cst_node = node.read();
         Ok(Self {
             text: ::fltk_ast_core::node_text(cst_node.span(), "num")?,
@@ -1007,7 +1061,7 @@ impl Num {
 
 impl Name {
     /// Convert a `name` CST node.
-    pub fn from_cst(node: &::fltk_cst_core::Shared<cst::Name>) -> Result<Self, ::fltk_ast_core::AstError> {
+    pub fn from_cst(node: &::fltk_cst_core::Shared<cst::Name>) -> ::std::result::Result<Self, ::fltk_ast_core::AstError> {
         let cst_node = node.read();
         Ok(Self {
             text: ::fltk_ast_core::node_text(cst_node.span(), "name")?,
@@ -1044,7 +1098,7 @@ static _ATOM_SIGNATURES: ::fltk_ast_core::dispatch::Table = ::fltk_ast_core::dis
 ///
 /// The CST does not record it, so each child is classified into the (label, kind) pair
 /// it occupies and the runtime takes the first alternative accepting those counts.
-fn _atom_alternative(node: &cst::Atom) -> Option<usize> {
+fn _atom_alternative(node: &cst::Atom) -> ::std::option::Option<usize> {
     _ATOM_SIGNATURES.select(node.children().iter().map(|(label, child)| {
         let label = if matches!(label, Some(cst::AtomLabel::Num)) {
             Some("num")
@@ -1068,7 +1122,7 @@ fn _atom_alternative(node: &cst::Atom) -> Option<usize> {
 
 impl Atom {
     /// Convert a `atom` CST node, dispatching on the matched alternative.
-    pub fn from_cst(node: &::fltk_cst_core::Shared<cst::Atom>) -> Result<Self, ::fltk_ast_core::AstError> {
+    pub fn from_cst(node: &::fltk_cst_core::Shared<cst::Atom>) -> ::std::result::Result<Self, ::fltk_ast_core::AstError> {
         let (alternative, span) = {
             let cst_node = node.read();
             (_atom_alternative(&cst_node), cst_node.span().clone())
@@ -1076,7 +1130,7 @@ impl Atom {
         match alternative {
             Some(0) => {
                 let cst_node = node.read();
-                let children_num: Vec<&cst::AtomChild> = cst_node
+                let children_num: ::std::vec::Vec<&cst::AtomChild> = cst_node
                     .children()
                     .iter()
                     .filter(|(label, _)| matches!(label, Some(cst::AtomLabel::Num)))
@@ -1090,7 +1144,7 @@ impl Atom {
             }
             Some(1) => {
                 let cst_node = node.read();
-                let children_name: Vec<&cst::AtomChild> = cst_node
+                let children_name: ::std::vec::Vec<&cst::AtomChild> = cst_node
                     .children()
                     .iter()
                     .filter(|(label, _)| matches!(label, Some(cst::AtomLabel::Name)))
@@ -1109,9 +1163,9 @@ impl Atom {
 
 impl ParenExpr {
     /// Convert a `paren_expr` CST node.
-    pub fn from_cst(node: &::fltk_cst_core::Shared<cst::ParenExpr>) -> Result<Self, ::fltk_ast_core::AstError> {
+    pub fn from_cst(node: &::fltk_cst_core::Shared<cst::ParenExpr>) -> ::std::result::Result<Self, ::fltk_ast_core::AstError> {
         let cst_node = node.read();
-        let children_inner: Vec<&cst::ParenExprChild> = cst_node
+        let children_inner: ::std::vec::Vec<&cst::ParenExprChild> = cst_node
             .children()
             .iter()
             .filter(|(label, _)| matches!(label, Some(cst::ParenExprLabel::Inner)))
@@ -1132,10 +1186,10 @@ impl ParenExpr {
 
 impl Stmt {
     /// Convert a `stmt` CST node.
-    pub fn from_cst(node: &::fltk_cst_core::Shared<cst::Stmt>) -> Result<Self, ::fltk_ast_core::AstError> {
+    pub fn from_cst(node: &::fltk_cst_core::Shared<cst::Stmt>) -> ::std::result::Result<Self, ::fltk_ast_core::AstError> {
         let cst_node = node.read();
-        let mut children_lhs: Vec<&cst::StmtChild> = Vec::new();
-        let mut children_rhs: Vec<&cst::StmtChild> = Vec::new();
+        let mut children_lhs: ::std::vec::Vec<&cst::StmtChild> = ::std::vec::Vec::new();
+        let mut children_rhs: ::std::vec::Vec<&cst::StmtChild> = ::std::vec::Vec::new();
         for (label, child) in cst_node.children() {
             match label {
                 Some(cst::StmtLabel::Lhs) => children_lhs.push(child),
@@ -1165,9 +1219,9 @@ impl Stmt {
 
 impl Items {
     /// Convert a `items` CST node.
-    pub fn from_cst(node: &::fltk_cst_core::Shared<cst::Items>) -> Result<Self, ::fltk_ast_core::AstError> {
+    pub fn from_cst(node: &::fltk_cst_core::Shared<cst::Items>) -> ::std::result::Result<Self, ::fltk_ast_core::AstError> {
         let cst_node = node.read();
-        let children_item: Vec<&cst::ItemsChild> = cst_node
+        let children_item: ::std::vec::Vec<&cst::ItemsChild> = cst_node
             .children()
             .iter()
             .filter(|(label, _)| matches!(label, Some(cst::ItemsLabel::Item)))
@@ -1175,7 +1229,7 @@ impl Items {
             .collect();
         Ok(Self {
             item: {
-                let mut values = Vec::with_capacity(children_item.len());
+                let mut values = ::std::vec::Vec::with_capacity(children_item.len());
                 for child in &children_item {
                     let cst::ItemsChild::Atom(child_node) = child;
                     values.push(Atom::from_cst(child_node)?);
@@ -1189,9 +1243,9 @@ impl Items {
 
 impl OptItem {
     /// Convert a `opt_item` CST node.
-    pub fn from_cst(node: &::fltk_cst_core::Shared<cst::OptItem>) -> Result<Self, ::fltk_ast_core::AstError> {
+    pub fn from_cst(node: &::fltk_cst_core::Shared<cst::OptItem>) -> ::std::result::Result<Self, ::fltk_ast_core::AstError> {
         let cst_node = node.read();
-        let children_item: Vec<&cst::OptItemChild> = cst_node
+        let children_item: ::std::vec::Vec<&cst::OptItemChild> = cst_node
             .children()
             .iter()
             .filter(|(label, _)| matches!(label, Some(cst::OptItemLabel::Item)))
@@ -1213,9 +1267,9 @@ impl OptItem {
 
 impl ZeroItems {
     /// Convert a `zero_items` CST node.
-    pub fn from_cst(node: &::fltk_cst_core::Shared<cst::ZeroItems>) -> Result<Self, ::fltk_ast_core::AstError> {
+    pub fn from_cst(node: &::fltk_cst_core::Shared<cst::ZeroItems>) -> ::std::result::Result<Self, ::fltk_ast_core::AstError> {
         let cst_node = node.read();
-        let children_item: Vec<&cst::ZeroItemsChild> = cst_node
+        let children_item: ::std::vec::Vec<&cst::ZeroItemsChild> = cst_node
             .children()
             .iter()
             .filter(|(label, _)| matches!(label, Some(cst::ZeroItemsLabel::Item)))
@@ -1223,7 +1277,7 @@ impl ZeroItems {
             .collect();
         Ok(Self {
             item: {
-                let mut values = Vec::with_capacity(children_item.len());
+                let mut values = ::std::vec::Vec::with_capacity(children_item.len());
                 for child in &children_item {
                     let cst::ZeroItemsChild::Atom(child_node) = child;
                     values.push(Atom::from_cst(child_node)?);
@@ -1237,10 +1291,10 @@ impl ZeroItems {
 
 impl ExprAlt1 {
     /// Convert the `Alt1` alternative of a `expr` CST node.
-    pub fn from_cst(node: &::fltk_cst_core::Shared<cst::Expr>) -> Result<Self, ::fltk_ast_core::AstError> {
+    pub fn from_cst(node: &::fltk_cst_core::Shared<cst::Expr>) -> ::std::result::Result<Self, ::fltk_ast_core::AstError> {
         let cst_node = node.read();
-        let mut children_lhs: Vec<&cst::ExprChild> = Vec::new();
-        let mut children_rhs: Vec<&cst::ExprChild> = Vec::new();
+        let mut children_lhs: ::std::vec::Vec<&cst::ExprChild> = ::std::vec::Vec::new();
+        let mut children_rhs: ::std::vec::Vec<&cst::ExprChild> = ::std::vec::Vec::new();
         for (label, child) in cst_node.children() {
             match label {
                 Some(cst::ExprLabel::Lhs) => children_lhs.push(child),
@@ -1254,7 +1308,7 @@ impl ExprAlt1 {
                 let cst::ExprChild::Expr(child_node) = child else {
                     return Err(::fltk_ast_core::unexpected_child("expr", "lhs", cst_node.span()));
                 };
-                Box::new(Expr::from_cst(child_node)?)
+                ::std::boxed::Box::new(Expr::from_cst(child_node)?)
             },
             rhs: {
                 let child = ::fltk_ast_core::one(&children_rhs, "expr", "rhs", cst_node.span())?;
@@ -1298,7 +1352,7 @@ static _EXPR_SIGNATURES: ::fltk_ast_core::dispatch::Table = ::fltk_ast_core::dis
 ///
 /// The CST does not record it, so each child is classified into the (label, kind) pair
 /// it occupies and the runtime takes the first alternative accepting those counts.
-fn _expr_alternative(node: &cst::Expr) -> Option<usize> {
+fn _expr_alternative(node: &cst::Expr) -> ::std::option::Option<usize> {
     _EXPR_SIGNATURES.select(node.children().iter().map(|(label, child)| {
         let label = if matches!(label, Some(cst::ExprLabel::Lhs)) {
             Some("lhs")
@@ -1324,16 +1378,16 @@ fn _expr_alternative(node: &cst::Expr) -> Option<usize> {
 
 impl Expr {
     /// Convert a `expr` CST node, dispatching on the matched alternative.
-    pub fn from_cst(node: &::fltk_cst_core::Shared<cst::Expr>) -> Result<Self, ::fltk_ast_core::AstError> {
+    pub fn from_cst(node: &::fltk_cst_core::Shared<cst::Expr>) -> ::std::result::Result<Self, ::fltk_ast_core::AstError> {
         let (alternative, span) = {
             let cst_node = node.read();
             (_expr_alternative(&cst_node), cst_node.span().clone())
         };
         match alternative {
-            Some(0) => Ok(Self::Alt1(Box::new(ExprAlt1::from_cst(node)?))),
+            Some(0) => Ok(Self::Alt1(::std::boxed::Box::new(ExprAlt1::from_cst(node)?))),
             Some(1) => {
                 let cst_node = node.read();
-                let children_atom: Vec<&cst::ExprChild> = cst_node
+                let children_atom: ::std::vec::Vec<&cst::ExprChild> = cst_node
                     .children()
                     .iter()
                     .filter(|(label, _)| matches!(label, Some(cst::ExprLabel::Atom)))
@@ -1352,9 +1406,9 @@ impl Expr {
 
 impl LvalInner {
     /// Convert the `Inner` alternative of a `lval` CST node.
-    pub fn from_cst(node: &::fltk_cst_core::Shared<cst::Lval>) -> Result<Self, ::fltk_ast_core::AstError> {
+    pub fn from_cst(node: &::fltk_cst_core::Shared<cst::Lval>) -> ::std::result::Result<Self, ::fltk_ast_core::AstError> {
         let cst_node = node.read();
-        let children_inner: Vec<&cst::LvalChild> = cst_node
+        let children_inner: ::std::vec::Vec<&cst::LvalChild> = cst_node
             .children()
             .iter()
             .filter(|(label, _)| matches!(label, Some(cst::LvalLabel::Inner)))
@@ -1366,7 +1420,7 @@ impl LvalInner {
                 let cst::LvalChild::Rval(child_node) = child else {
                     return Err(::fltk_ast_core::unexpected_child("lval", "inner", cst_node.span()));
                 };
-                Box::new(Rval::from_cst(child_node)?)
+                ::std::boxed::Box::new(Rval::from_cst(child_node)?)
             },
             span: cst_node.span().clone(),
         })
@@ -1401,7 +1455,7 @@ static _LVAL_SIGNATURES: ::fltk_ast_core::dispatch::Table = ::fltk_ast_core::dis
 ///
 /// The CST does not record it, so each child is classified into the (label, kind) pair
 /// it occupies and the runtime takes the first alternative accepting those counts.
-fn _lval_alternative(node: &cst::Lval) -> Option<usize> {
+fn _lval_alternative(node: &cst::Lval) -> ::std::option::Option<usize> {
     _LVAL_SIGNATURES.select(node.children().iter().map(|(label, child)| {
         let label = if matches!(label, Some(cst::LvalLabel::Inner)) {
             Some("inner")
@@ -1425,16 +1479,16 @@ fn _lval_alternative(node: &cst::Lval) -> Option<usize> {
 
 impl Lval {
     /// Convert a `lval` CST node, dispatching on the matched alternative.
-    pub fn from_cst(node: &::fltk_cst_core::Shared<cst::Lval>) -> Result<Self, ::fltk_ast_core::AstError> {
+    pub fn from_cst(node: &::fltk_cst_core::Shared<cst::Lval>) -> ::std::result::Result<Self, ::fltk_ast_core::AstError> {
         let (alternative, span) = {
             let cst_node = node.read();
             (_lval_alternative(&cst_node), cst_node.span().clone())
         };
         match alternative {
-            Some(0) => Ok(Self::Inner(Box::new(LvalInner::from_cst(node)?))),
+            Some(0) => Ok(Self::Inner(::std::boxed::Box::new(LvalInner::from_cst(node)?))),
             Some(1) => {
                 let cst_node = node.read();
-                let children_base: Vec<&cst::LvalChild> = cst_node
+                let children_base: ::std::vec::Vec<&cst::LvalChild> = cst_node
                     .children()
                     .iter()
                     .filter(|(label, _)| matches!(label, Some(cst::LvalLabel::Base)))
@@ -1453,9 +1507,9 @@ impl Lval {
 
 impl RvalInner {
     /// Convert the `Inner` alternative of a `rval` CST node.
-    pub fn from_cst(node: &::fltk_cst_core::Shared<cst::Rval>) -> Result<Self, ::fltk_ast_core::AstError> {
+    pub fn from_cst(node: &::fltk_cst_core::Shared<cst::Rval>) -> ::std::result::Result<Self, ::fltk_ast_core::AstError> {
         let cst_node = node.read();
-        let children_inner: Vec<&cst::RvalChild> = cst_node
+        let children_inner: ::std::vec::Vec<&cst::RvalChild> = cst_node
             .children()
             .iter()
             .filter(|(label, _)| matches!(label, Some(cst::RvalLabel::Inner)))
@@ -1467,7 +1521,7 @@ impl RvalInner {
                 let cst::RvalChild::Lval(child_node) = child else {
                     return Err(::fltk_ast_core::unexpected_child("rval", "inner", cst_node.span()));
                 };
-                Box::new(Lval::from_cst(child_node)?)
+                ::std::boxed::Box::new(Lval::from_cst(child_node)?)
             },
             span: cst_node.span().clone(),
         })
@@ -1502,7 +1556,7 @@ static _RVAL_SIGNATURES: ::fltk_ast_core::dispatch::Table = ::fltk_ast_core::dis
 ///
 /// The CST does not record it, so each child is classified into the (label, kind) pair
 /// it occupies and the runtime takes the first alternative accepting those counts.
-fn _rval_alternative(node: &cst::Rval) -> Option<usize> {
+fn _rval_alternative(node: &cst::Rval) -> ::std::option::Option<usize> {
     _RVAL_SIGNATURES.select(node.children().iter().map(|(label, child)| {
         let label = if matches!(label, Some(cst::RvalLabel::Inner)) {
             Some("inner")
@@ -1526,16 +1580,16 @@ fn _rval_alternative(node: &cst::Rval) -> Option<usize> {
 
 impl Rval {
     /// Convert a `rval` CST node, dispatching on the matched alternative.
-    pub fn from_cst(node: &::fltk_cst_core::Shared<cst::Rval>) -> Result<Self, ::fltk_ast_core::AstError> {
+    pub fn from_cst(node: &::fltk_cst_core::Shared<cst::Rval>) -> ::std::result::Result<Self, ::fltk_ast_core::AstError> {
         let (alternative, span) = {
             let cst_node = node.read();
             (_rval_alternative(&cst_node), cst_node.span().clone())
         };
         match alternative {
-            Some(0) => Ok(Self::Inner(Box::new(RvalInner::from_cst(node)?))),
+            Some(0) => Ok(Self::Inner(::std::boxed::Box::new(RvalInner::from_cst(node)?))),
             Some(1) => {
                 let cst_node = node.read();
-                let children_base: Vec<&cst::RvalChild> = cst_node
+                let children_base: ::std::vec::Vec<&cst::RvalChild> = cst_node
                     .children()
                     .iter()
                     .filter(|(label, _)| matches!(label, Some(cst::RvalLabel::Base)))
@@ -1554,9 +1608,9 @@ impl Rval {
 
 impl Arrow {
     /// Convert a `arrow` CST node.
-    pub fn from_cst(node: &::fltk_cst_core::Shared<cst::Arrow>) -> Result<Self, ::fltk_ast_core::AstError> {
+    pub fn from_cst(node: &::fltk_cst_core::Shared<cst::Arrow>) -> ::std::result::Result<Self, ::fltk_ast_core::AstError> {
         let cst_node = node.read();
-        let children_target: Vec<&cst::ArrowChild> = cst_node
+        let children_target: ::std::vec::Vec<&cst::ArrowChild> = cst_node
             .children()
             .iter()
             .filter(|(label, _)| matches!(label, Some(cst::ArrowLabel::Target)))
@@ -1575,7 +1629,7 @@ impl Arrow {
 
 impl LatinWord {
     /// Convert a `latin_word` CST node.
-    pub fn from_cst(node: &::fltk_cst_core::Shared<cst::LatinWord>) -> Result<Self, ::fltk_ast_core::AstError> {
+    pub fn from_cst(node: &::fltk_cst_core::Shared<cst::LatinWord>) -> ::std::result::Result<Self, ::fltk_ast_core::AstError> {
         let cst_node = node.read();
         Ok(Self {
             text: ::fltk_ast_core::node_text(cst_node.span(), "latin_word")?,
@@ -1586,7 +1640,7 @@ impl LatinWord {
 
 impl Tagged {
     /// Convert a `tagged` CST node.
-    pub fn from_cst(node: &::fltk_cst_core::Shared<cst::Tagged>) -> Result<Self, ::fltk_ast_core::AstError> {
+    pub fn from_cst(node: &::fltk_cst_core::Shared<cst::Tagged>) -> ::std::result::Result<Self, ::fltk_ast_core::AstError> {
         let cst_node = node.read();
         Ok(Self {
             text: ::fltk_ast_core::node_text(cst_node.span(), "tagged")?,
@@ -1597,9 +1651,9 @@ impl Tagged {
 
 impl Val {
     /// Convert a `val` CST node.
-    pub fn from_cst(node: &::fltk_cst_core::Shared<cst::Val>) -> Result<Self, ::fltk_ast_core::AstError> {
+    pub fn from_cst(node: &::fltk_cst_core::Shared<cst::Val>) -> ::std::result::Result<Self, ::fltk_ast_core::AstError> {
         let cst_node = node.read();
-        let children_item: Vec<&cst::ValChild> = cst_node
+        let children_item: ::std::vec::Vec<&cst::ValChild> = cst_node
             .children()
             .iter()
             .filter(|(label, _)| matches!(label, Some(cst::ValLabel::Item)))
@@ -1617,9 +1671,9 @@ impl Val {
 
 impl LeadingWs {
     /// Convert a `leading_ws` CST node.
-    pub fn from_cst(node: &::fltk_cst_core::Shared<cst::LeadingWs>) -> Result<Self, ::fltk_ast_core::AstError> {
+    pub fn from_cst(node: &::fltk_cst_core::Shared<cst::LeadingWs>) -> ::std::result::Result<Self, ::fltk_ast_core::AstError> {
         let cst_node = node.read();
-        let children_num: Vec<&cst::LeadingWsChild> = cst_node
+        let children_num: ::std::vec::Vec<&cst::LeadingWsChild> = cst_node
             .children()
             .iter()
             .filter(|(label, _)| matches!(label, Some(cst::LeadingWsLabel::Num)))
@@ -1640,9 +1694,9 @@ impl LeadingWs {
 
 impl Grouped {
     /// Convert a `grouped` CST node.
-    pub fn from_cst(node: &::fltk_cst_core::Shared<cst::Grouped>) -> Result<Self, ::fltk_ast_core::AstError> {
+    pub fn from_cst(node: &::fltk_cst_core::Shared<cst::Grouped>) -> ::std::result::Result<Self, ::fltk_ast_core::AstError> {
         let cst_node = node.read();
-        let children_left: Vec<&cst::GroupedChild> = cst_node
+        let children_left: ::std::vec::Vec<&cst::GroupedChild> = cst_node
             .children()
             .iter()
             .filter(|(label, _)| matches!(label, Some(cst::GroupedLabel::Left)))
@@ -1660,10 +1714,10 @@ impl Grouped {
 
 impl RecViaSub {
     /// Convert a `rec_via_sub` CST node.
-    pub fn from_cst(node: &::fltk_cst_core::Shared<cst::RecViaSub>) -> Result<Self, ::fltk_ast_core::AstError> {
+    pub fn from_cst(node: &::fltk_cst_core::Shared<cst::RecViaSub>) -> ::std::result::Result<Self, ::fltk_ast_core::AstError> {
         let cst_node = node.read();
-        let mut children_inner: Vec<&cst::RecViaSubChild> = Vec::new();
-        let mut children_suffix: Vec<&cst::RecViaSubChild> = Vec::new();
+        let mut children_inner: ::std::vec::Vec<&cst::RecViaSubChild> = ::std::vec::Vec::new();
+        let mut children_suffix: ::std::vec::Vec<&cst::RecViaSubChild> = ::std::vec::Vec::new();
         for (label, child) in cst_node.children() {
             match label {
                 Some(cst::RecViaSubLabel::Inner) => children_inner.push(child),
@@ -1674,7 +1728,7 @@ impl RecViaSub {
         Ok(Self {
             inner: {
                 let child = ::fltk_ast_core::one(&children_inner, "rec_via_sub", "inner", cst_node.span())?;
-                Box::new(_rec_via_sub_inner_from_cst(child, cst_node.span())?)
+                ::std::boxed::Box::new(_rec_via_sub_inner_from_cst(child, cst_node.span())?)
             },
             suffix: {
                 let child = ::fltk_ast_core::one(&children_suffix, "rec_via_sub", "suffix", cst_node.span())?;
@@ -1690,9 +1744,9 @@ impl RecViaSub {
 
 impl NestInner {
     /// Convert the `Inner` alternative of a `nest` CST node.
-    pub fn from_cst(node: &::fltk_cst_core::Shared<cst::Nest>) -> Result<Self, ::fltk_ast_core::AstError> {
+    pub fn from_cst(node: &::fltk_cst_core::Shared<cst::Nest>) -> ::std::result::Result<Self, ::fltk_ast_core::AstError> {
         let cst_node = node.read();
-        let children_inner: Vec<&cst::NestChild> = cst_node
+        let children_inner: ::std::vec::Vec<&cst::NestChild> = cst_node
             .children()
             .iter()
             .filter(|(label, _)| matches!(label, Some(cst::NestLabel::Inner)))
@@ -1704,7 +1758,7 @@ impl NestInner {
                 let cst::NestChild::Nest(child_node) = child else {
                     return Err(::fltk_ast_core::unexpected_child("nest", "inner", cst_node.span()));
                 };
-                Box::new(Nest::from_cst(child_node)?)
+                ::std::boxed::Box::new(Nest::from_cst(child_node)?)
             },
             span: cst_node.span().clone(),
         })
@@ -1739,7 +1793,7 @@ static _NEST_SIGNATURES: ::fltk_ast_core::dispatch::Table = ::fltk_ast_core::dis
 ///
 /// The CST does not record it, so each child is classified into the (label, kind) pair
 /// it occupies and the runtime takes the first alternative accepting those counts.
-fn _nest_alternative(node: &cst::Nest) -> Option<usize> {
+fn _nest_alternative(node: &cst::Nest) -> ::std::option::Option<usize> {
     _NEST_SIGNATURES.select(node.children().iter().map(|(label, child)| {
         let label = if matches!(label, Some(cst::NestLabel::Inner)) {
             Some("inner")
@@ -1763,16 +1817,16 @@ fn _nest_alternative(node: &cst::Nest) -> Option<usize> {
 
 impl Nest {
     /// Convert a `nest` CST node, dispatching on the matched alternative.
-    pub fn from_cst(node: &::fltk_cst_core::Shared<cst::Nest>) -> Result<Self, ::fltk_ast_core::AstError> {
+    pub fn from_cst(node: &::fltk_cst_core::Shared<cst::Nest>) -> ::std::result::Result<Self, ::fltk_ast_core::AstError> {
         let (alternative, span) = {
             let cst_node = node.read();
             (_nest_alternative(&cst_node), cst_node.span().clone())
         };
         match alternative {
-            Some(0) => Ok(Self::Inner(Box::new(NestInner::from_cst(node)?))),
+            Some(0) => Ok(Self::Inner(::std::boxed::Box::new(NestInner::from_cst(node)?))),
             Some(1) => {
                 let cst_node = node.read();
-                let children_leaf: Vec<&cst::NestChild> = cst_node
+                let children_leaf: ::std::vec::Vec<&cst::NestChild> = cst_node
                     .children()
                     .iter()
                     .filter(|(label, _)| matches!(label, Some(cst::NestLabel::Leaf)))
@@ -1791,10 +1845,10 @@ impl Nest {
 
 impl NestSumAlt1 {
     /// Convert the `Alt1` alternative of a `nest_sum` CST node.
-    pub fn from_cst(node: &::fltk_cst_core::Shared<cst::NestSum>) -> Result<Self, ::fltk_ast_core::AstError> {
+    pub fn from_cst(node: &::fltk_cst_core::Shared<cst::NestSum>) -> ::std::result::Result<Self, ::fltk_ast_core::AstError> {
         let cst_node = node.read();
-        let mut children_lhs: Vec<&cst::NestSumChild> = Vec::new();
-        let mut children_rhs: Vec<&cst::NestSumChild> = Vec::new();
+        let mut children_lhs: ::std::vec::Vec<&cst::NestSumChild> = ::std::vec::Vec::new();
+        let mut children_rhs: ::std::vec::Vec<&cst::NestSumChild> = ::std::vec::Vec::new();
         for (label, child) in cst_node.children() {
             match label {
                 Some(cst::NestSumLabel::Lhs) => children_lhs.push(child),
@@ -1808,7 +1862,7 @@ impl NestSumAlt1 {
                 let cst::NestSumChild::NestSum(child_node) = child else {
                     return Err(::fltk_ast_core::unexpected_child("nest_sum", "lhs", cst_node.span()));
                 };
-                Box::new(NestSum::from_cst(child_node)?)
+                ::std::boxed::Box::new(NestSum::from_cst(child_node)?)
             },
             rhs: {
                 let child = ::fltk_ast_core::one(&children_rhs, "nest_sum", "rhs", cst_node.span())?;
@@ -1852,7 +1906,7 @@ static _NEST_SUM_SIGNATURES: ::fltk_ast_core::dispatch::Table = ::fltk_ast_core:
 ///
 /// The CST does not record it, so each child is classified into the (label, kind) pair
 /// it occupies and the runtime takes the first alternative accepting those counts.
-fn _nest_sum_alternative(node: &cst::NestSum) -> Option<usize> {
+fn _nest_sum_alternative(node: &cst::NestSum) -> ::std::option::Option<usize> {
     _NEST_SUM_SIGNATURES.select(node.children().iter().map(|(label, child)| {
         let label = if matches!(label, Some(cst::NestSumLabel::Lhs)) {
             Some("lhs")
@@ -1878,16 +1932,16 @@ fn _nest_sum_alternative(node: &cst::NestSum) -> Option<usize> {
 
 impl NestSum {
     /// Convert a `nest_sum` CST node, dispatching on the matched alternative.
-    pub fn from_cst(node: &::fltk_cst_core::Shared<cst::NestSum>) -> Result<Self, ::fltk_ast_core::AstError> {
+    pub fn from_cst(node: &::fltk_cst_core::Shared<cst::NestSum>) -> ::std::result::Result<Self, ::fltk_ast_core::AstError> {
         let (alternative, span) = {
             let cst_node = node.read();
             (_nest_sum_alternative(&cst_node), cst_node.span().clone())
         };
         match alternative {
-            Some(0) => Ok(Self::Alt1(Box::new(NestSumAlt1::from_cst(node)?))),
+            Some(0) => Ok(Self::Alt1(::std::boxed::Box::new(NestSumAlt1::from_cst(node)?))),
             Some(1) => {
                 let cst_node = node.read();
-                let children_first: Vec<&cst::NestSumChild> = cst_node
+                let children_first: ::std::vec::Vec<&cst::NestSumChild> = cst_node
                     .children()
                     .iter()
                     .filter(|(label, _)| matches!(label, Some(cst::NestSumLabel::First)))
@@ -1906,7 +1960,7 @@ impl NestSum {
 
 impl DigitSeq {
     /// Convert a `digit_seq` CST node.
-    pub fn from_cst(node: &::fltk_cst_core::Shared<cst::DigitSeq>) -> Result<Self, ::fltk_ast_core::AstError> {
+    pub fn from_cst(node: &::fltk_cst_core::Shared<cst::DigitSeq>) -> ::std::result::Result<Self, ::fltk_ast_core::AstError> {
         let cst_node = node.read();
         Ok(Self {
             text: ::fltk_ast_core::node_text(cst_node.span(), "digit_seq")?,
@@ -1917,7 +1971,7 @@ impl DigitSeq {
 
 impl WordSeq {
     /// Convert a `word_seq` CST node.
-    pub fn from_cst(node: &::fltk_cst_core::Shared<cst::WordSeq>) -> Result<Self, ::fltk_ast_core::AstError> {
+    pub fn from_cst(node: &::fltk_cst_core::Shared<cst::WordSeq>) -> ::std::result::Result<Self, ::fltk_ast_core::AstError> {
         let cst_node = node.read();
         Ok(Self {
             text: ::fltk_ast_core::node_text(cst_node.span(), "word_seq")?,
@@ -1928,7 +1982,7 @@ impl WordSeq {
 
 impl WsSeq {
     /// Convert a `ws_seq` CST node.
-    pub fn from_cst(node: &::fltk_cst_core::Shared<cst::WsSeq>) -> Result<Self, ::fltk_ast_core::AstError> {
+    pub fn from_cst(node: &::fltk_cst_core::Shared<cst::WsSeq>) -> ::std::result::Result<Self, ::fltk_ast_core::AstError> {
         let cst_node = node.read();
         Ok(Self {
             text: ::fltk_ast_core::node_text(cst_node.span(), "ws_seq")?,
@@ -1939,7 +1993,7 @@ impl WsSeq {
 
 impl ThreeToFiveDigits {
     /// Convert a `three_to_five_digits` CST node.
-    pub fn from_cst(node: &::fltk_cst_core::Shared<cst::ThreeToFiveDigits>) -> Result<Self, ::fltk_ast_core::AstError> {
+    pub fn from_cst(node: &::fltk_cst_core::Shared<cst::ThreeToFiveDigits>) -> ::std::result::Result<Self, ::fltk_ast_core::AstError> {
         let cst_node = node.read();
         Ok(Self {
             text: ::fltk_ast_core::node_text(cst_node.span(), "three_to_five_digits")?,
@@ -1950,7 +2004,7 @@ impl ThreeToFiveDigits {
 
 impl ExactlyTwoDigits {
     /// Convert a `exactly_two_digits` CST node.
-    pub fn from_cst(node: &::fltk_cst_core::Shared<cst::ExactlyTwoDigits>) -> Result<Self, ::fltk_ast_core::AstError> {
+    pub fn from_cst(node: &::fltk_cst_core::Shared<cst::ExactlyTwoDigits>) -> ::std::result::Result<Self, ::fltk_ast_core::AstError> {
         let cst_node = node.read();
         Ok(Self {
             text: ::fltk_ast_core::node_text(cst_node.span(), "exactly_two_digits")?,
@@ -1961,7 +2015,7 @@ impl ExactlyTwoDigits {
 
 impl EscapedMetas {
     /// Convert a `escaped_metas` CST node.
-    pub fn from_cst(node: &::fltk_cst_core::Shared<cst::EscapedMetas>) -> Result<Self, ::fltk_ast_core::AstError> {
+    pub fn from_cst(node: &::fltk_cst_core::Shared<cst::EscapedMetas>) -> ::std::result::Result<Self, ::fltk_ast_core::AstError> {
         let cst_node = node.read();
         Ok(Self {
             text: ::fltk_ast_core::node_text(cst_node.span(), "escaped_metas")?,
@@ -1972,7 +2026,7 @@ impl EscapedMetas {
 
 impl LatinRange {
     /// Convert a `latin_range` CST node.
-    pub fn from_cst(node: &::fltk_cst_core::Shared<cst::LatinRange>) -> Result<Self, ::fltk_ast_core::AstError> {
+    pub fn from_cst(node: &::fltk_cst_core::Shared<cst::LatinRange>) -> ::std::result::Result<Self, ::fltk_ast_core::AstError> {
         let cst_node = node.read();
         Ok(Self {
             text: ::fltk_ast_core::node_text(cst_node.span(), "latin_range")?,
@@ -1983,7 +2037,7 @@ impl LatinRange {
 
 impl NcGroupAlt {
     /// Convert a `nc_group_alt` CST node.
-    pub fn from_cst(node: &::fltk_cst_core::Shared<cst::NcGroupAlt>) -> Result<Self, ::fltk_ast_core::AstError> {
+    pub fn from_cst(node: &::fltk_cst_core::Shared<cst::NcGroupAlt>) -> ::std::result::Result<Self, ::fltk_ast_core::AstError> {
         let cst_node = node.read();
         Ok(Self {
             text: ::fltk_ast_core::node_text(cst_node.span(), "nc_group_alt")?,
@@ -1994,7 +2048,7 @@ impl NcGroupAlt {
 
 impl CaseInsensitive {
     /// Convert a `case_insensitive` CST node.
-    pub fn from_cst(node: &::fltk_cst_core::Shared<cst::CaseInsensitive>) -> Result<Self, ::fltk_ast_core::AstError> {
+    pub fn from_cst(node: &::fltk_cst_core::Shared<cst::CaseInsensitive>) -> ::std::result::Result<Self, ::fltk_ast_core::AstError> {
         let cst_node = node.read();
         Ok(Self {
             text: ::fltk_ast_core::node_text(cst_node.span(), "case_insensitive")?,
@@ -2005,7 +2059,7 @@ impl CaseInsensitive {
 
 impl AnchoredWord {
     /// Convert a `anchored_word` CST node.
-    pub fn from_cst(node: &::fltk_cst_core::Shared<cst::AnchoredWord>) -> Result<Self, ::fltk_ast_core::AstError> {
+    pub fn from_cst(node: &::fltk_cst_core::Shared<cst::AnchoredWord>) -> ::std::result::Result<Self, ::fltk_ast_core::AstError> {
         let cst_node = node.read();
         Ok(Self {
             text: ::fltk_ast_core::node_text(cst_node.span(), "anchored_word")?,
@@ -2016,10 +2070,10 @@ impl AnchoredWord {
 
 impl Pair {
     /// Convert a `pair` CST node.
-    pub fn from_cst(node: &::fltk_cst_core::Shared<cst::Pair>) -> Result<Self, ::fltk_ast_core::AstError> {
+    pub fn from_cst(node: &::fltk_cst_core::Shared<cst::Pair>) -> ::std::result::Result<Self, ::fltk_ast_core::AstError> {
         let cst_node = node.read();
-        let mut children_key: Vec<&cst::PairChild> = Vec::new();
-        let mut children_val: Vec<&cst::PairChild> = Vec::new();
+        let mut children_key: ::std::vec::Vec<&cst::PairChild> = ::std::vec::Vec::new();
+        let mut children_val: ::std::vec::Vec<&cst::PairChild> = ::std::vec::Vec::new();
         for (label, child) in cst_node.children() {
             match label {
                 Some(cst::PairLabel::Key) => children_key.push(child),
@@ -2049,10 +2103,10 @@ impl Pair {
 
 impl Wrapper {
     /// Convert a `wrapper` CST node.
-    pub fn from_cst(node: &::fltk_cst_core::Shared<cst::Wrapper>) -> Result<Self, ::fltk_ast_core::AstError> {
+    pub fn from_cst(node: &::fltk_cst_core::Shared<cst::Wrapper>) -> ::std::result::Result<Self, ::fltk_ast_core::AstError> {
         let cst_node = node.read();
-        let mut children_key: Vec<&cst::WrapperChild> = Vec::new();
-        let mut children_val: Vec<&cst::WrapperChild> = Vec::new();
+        let mut children_key: ::std::vec::Vec<&cst::WrapperChild> = ::std::vec::Vec::new();
+        let mut children_val: ::std::vec::Vec<&cst::WrapperChild> = ::std::vec::Vec::new();
         for (label, child) in cst_node.children() {
             match label {
                 Some(cst::WrapperLabel::Key) => children_key.push(child),
@@ -2082,10 +2136,10 @@ impl Wrapper {
 
 impl OptWrapper {
     /// Convert a `opt_wrapper` CST node.
-    pub fn from_cst(node: &::fltk_cst_core::Shared<cst::OptWrapper>) -> Result<Self, ::fltk_ast_core::AstError> {
+    pub fn from_cst(node: &::fltk_cst_core::Shared<cst::OptWrapper>) -> ::std::result::Result<Self, ::fltk_ast_core::AstError> {
         let cst_node = node.read();
-        let mut children_key: Vec<&cst::OptWrapperChild> = Vec::new();
-        let mut children_val: Vec<&cst::OptWrapperChild> = Vec::new();
+        let mut children_key: ::std::vec::Vec<&cst::OptWrapperChild> = ::std::vec::Vec::new();
+        let mut children_val: ::std::vec::Vec<&cst::OptWrapperChild> = ::std::vec::Vec::new();
         for (label, child) in cst_node.children() {
             match label {
                 Some(cst::OptWrapperLabel::Key) => children_key.push(child),
@@ -2121,10 +2175,10 @@ impl OptWrapper {
 
 impl RepWrapper {
     /// Convert a `rep_wrapper` CST node.
-    pub fn from_cst(node: &::fltk_cst_core::Shared<cst::RepWrapper>) -> Result<Self, ::fltk_ast_core::AstError> {
+    pub fn from_cst(node: &::fltk_cst_core::Shared<cst::RepWrapper>) -> ::std::result::Result<Self, ::fltk_ast_core::AstError> {
         let cst_node = node.read();
-        let mut children_key: Vec<&cst::RepWrapperChild> = Vec::new();
-        let mut children_val: Vec<&cst::RepWrapperChild> = Vec::new();
+        let mut children_key: ::std::vec::Vec<&cst::RepWrapperChild> = ::std::vec::Vec::new();
+        let mut children_val: ::std::vec::Vec<&cst::RepWrapperChild> = ::std::vec::Vec::new();
         for (label, child) in cst_node.children() {
             match label {
                 Some(cst::RepWrapperLabel::Key) => children_key.push(child),
@@ -2134,7 +2188,7 @@ impl RepWrapper {
         }
         Ok(Self {
             key: {
-                let mut values = Vec::with_capacity(children_key.len());
+                let mut values = ::std::vec::Vec::with_capacity(children_key.len());
                 for child in &children_key {
                     let cst::RepWrapperChild::Name(child_node) = child else {
                         return Err(::fltk_ast_core::unexpected_child("rep_wrapper", "key", cst_node.span()));
@@ -2144,7 +2198,7 @@ impl RepWrapper {
                 values
             },
             val: {
-                let mut values = Vec::with_capacity(children_val.len());
+                let mut values = ::std::vec::Vec::with_capacity(children_val.len());
                 for child in &children_val {
                     let cst::RepWrapperChild::Num(child_node) = child else {
                         return Err(::fltk_ast_core::unexpected_child("rep_wrapper", "val", cst_node.span()));
@@ -2160,10 +2214,10 @@ impl RepWrapper {
 
 impl KwLabels {
     /// Convert a `kw_labels` CST node.
-    pub fn from_cst(node: &::fltk_cst_core::Shared<cst::KwLabels>) -> Result<Self, ::fltk_ast_core::AstError> {
+    pub fn from_cst(node: &::fltk_cst_core::Shared<cst::KwLabels>) -> ::std::result::Result<Self, ::fltk_ast_core::AstError> {
         let cst_node = node.read();
-        let mut children_type: Vec<&cst::KwLabelsChild> = Vec::new();
-        let mut children_match: Vec<&cst::KwLabelsChild> = Vec::new();
+        let mut children_type: ::std::vec::Vec<&cst::KwLabelsChild> = ::std::vec::Vec::new();
+        let mut children_match: ::std::vec::Vec<&cst::KwLabelsChild> = ::std::vec::Vec::new();
         for (label, child) in cst_node.children() {
             match label {
                 Some(cst::KwLabelsLabel::Type) => children_type.push(child),
@@ -2193,7 +2247,7 @@ impl KwLabels {
 
 impl Quoted {
     /// Convert a `quoted` CST node.
-    pub fn from_cst(node: &::fltk_cst_core::Shared<cst::Quoted>) -> Result<Self, ::fltk_ast_core::AstError> {
+    pub fn from_cst(node: &::fltk_cst_core::Shared<cst::Quoted>) -> ::std::result::Result<Self, ::fltk_ast_core::AstError> {
         let cst_node = node.read();
         Ok(Self {
             text: ::fltk_ast_core::node_text(cst_node.span(), "quoted")?,
@@ -2204,10 +2258,10 @@ impl Quoted {
 
 impl MixedOpt {
     /// Convert a `mixed_opt` CST node.
-    pub fn from_cst(node: &::fltk_cst_core::Shared<cst::MixedOpt>) -> Result<Self, ::fltk_ast_core::AstError> {
+    pub fn from_cst(node: &::fltk_cst_core::Shared<cst::MixedOpt>) -> ::std::result::Result<Self, ::fltk_ast_core::AstError> {
         let cst_node = node.read();
-        let mut children_key: Vec<&cst::MixedOptChild> = Vec::new();
-        let mut children_node: Vec<&cst::MixedOptChild> = Vec::new();
+        let mut children_key: ::std::vec::Vec<&cst::MixedOptChild> = ::std::vec::Vec::new();
+        let mut children_node: ::std::vec::Vec<&cst::MixedOptChild> = ::std::vec::Vec::new();
         for (label, child) in cst_node.children() {
             match label {
                 Some(cst::MixedOptLabel::Key) => children_key.push(child),
@@ -2240,7 +2294,7 @@ impl MixedOpt {
 
 impl UuidVal {
     /// Convert a `uuid_val` CST node.
-    pub fn from_cst(node: &::fltk_cst_core::Shared<cst::UuidVal>) -> Result<Self, ::fltk_ast_core::AstError> {
+    pub fn from_cst(node: &::fltk_cst_core::Shared<cst::UuidVal>) -> ::std::result::Result<Self, ::fltk_ast_core::AstError> {
         let cst_node = node.read();
         let text = ::fltk_ast_core::node_text(cst_node.span(), "uuid_val")?;
         Ok(Self {
@@ -2252,7 +2306,7 @@ impl UuidVal {
 
 impl DecimalVal {
     /// Convert a `decimal_val` CST node.
-    pub fn from_cst(node: &::fltk_cst_core::Shared<cst::DecimalVal>) -> Result<Self, ::fltk_ast_core::AstError> {
+    pub fn from_cst(node: &::fltk_cst_core::Shared<cst::DecimalVal>) -> ::std::result::Result<Self, ::fltk_ast_core::AstError> {
         let cst_node = node.read();
         let text = ::fltk_ast_core::node_text(cst_node.span(), "decimal_val")?;
         Ok(Self {
@@ -2264,7 +2318,7 @@ impl DecimalVal {
 
 impl Colour {
     /// Convert a `colour` CST node.
-    pub fn from_cst(node: &::fltk_cst_core::Shared<cst::Colour>) -> Result<Self, ::fltk_ast_core::AstError> {
+    pub fn from_cst(node: &::fltk_cst_core::Shared<cst::Colour>) -> ::std::result::Result<Self, ::fltk_ast_core::AstError> {
         let cst_node = node.read();
         if cst_node.children().iter().any(|(label, _)| matches!(label, Some(cst::ColourLabel::Shade))) {
             return Ok(Self { value: ColourValue::Shade, span: cst_node.span().clone() });
@@ -2278,10 +2332,10 @@ impl Colour {
 
 impl SumChain {
     /// Convert a `sum_chain` CST node, folding its operands into a chain.
-    pub fn from_cst(node: &::fltk_cst_core::Shared<cst::SumChain>) -> Result<Self, ::fltk_ast_core::AstError> {
+    pub fn from_cst(node: &::fltk_cst_core::Shared<cst::SumChain>) -> ::std::result::Result<Self, ::fltk_ast_core::AstError> {
         let cst_node = node.read();
-        let mut children_term: Vec<&cst::SumChainChild> = Vec::new();
-        let mut children_op: Vec<&cst::SumChainChild> = Vec::new();
+        let mut children_term: ::std::vec::Vec<&cst::SumChainChild> = ::std::vec::Vec::new();
+        let mut children_op: ::std::vec::Vec<&cst::SumChainChild> = ::std::vec::Vec::new();
         for (label, child) in cst_node.children() {
             match label {
                 Some(cst::SumChainLabel::Term) => children_term.push(child),
@@ -2290,7 +2344,7 @@ impl SumChain {
             }
         }
         ::fltk_ast_core::check_fold_arity(children_term.len(), children_op.len(), "sum_chain", cst_node.span())?;
-        let mut operands = Vec::with_capacity(children_term.len());
+        let mut operands = ::std::vec::Vec::with_capacity(children_term.len());
         for child in &children_term {
             let cst::SumChainChild::Num(child_node) = child else {
                 return Err(::fltk_ast_core::unexpected_child("sum_chain", "term", cst_node.span()));
@@ -2298,7 +2352,7 @@ impl SumChain {
             let operand_span = child_node.read().span().clone();
             operands.push((Num::from_cst(child_node)?, operand_span));
         }
-        let mut operators = Vec::with_capacity(children_op.len());
+        let mut operators = ::std::vec::Vec::with_capacity(children_op.len());
         for child in &children_op {
             let cst::SumChainChild::Span(span_child) = child else {
                 return Err(::fltk_ast_core::unexpected_child("sum_chain", "op", cst_node.span()));
@@ -2314,8 +2368,8 @@ impl SumChain {
             |operator, lhs, rhs, span| {
                 Self::Binary(SumChainBinary {
                     op: operator,
-                    lhs: Box::new(lhs),
-                    rhs: Box::new(rhs),
+                    lhs: ::std::boxed::Box::new(lhs),
+                    rhs: ::std::boxed::Box::new(rhs),
                     span,
                 })
             },
@@ -2323,8 +2377,139 @@ impl SumChain {
     }
 }
 
+/// Convert a `entry_key` CST node to the payload its type erases to.
+fn _erased_entry_key_from_cst(node: &::fltk_cst_core::Shared<cst::EntryKey>) -> ::std::result::Result<::std::string::String, ::fltk_ast_core::AstError> {
+    let cst_node = node.read();
+    ::fltk_ast_core::node_text(cst_node.span(), "entry_key")
+}
+
+impl Entry {
+    /// Convert a `entry` CST node.
+    pub fn from_cst(node: &::fltk_cst_core::Shared<cst::Entry>) -> ::std::result::Result<Self, ::fltk_ast_core::AstError> {
+        let cst_node = node.read();
+        let mut children_key: ::std::vec::Vec<&cst::EntryChild> = ::std::vec::Vec::new();
+        let mut children_value: ::std::vec::Vec<&cst::EntryChild> = ::std::vec::Vec::new();
+        for (label, child) in cst_node.children() {
+            match label {
+                Some(cst::EntryLabel::Key) => children_key.push(child),
+                Some(cst::EntryLabel::Value) => children_value.push(child),
+                _ => {}
+            }
+        }
+        Ok(Self {
+            key: {
+                let child = ::fltk_ast_core::one(&children_key, "entry", "key", cst_node.span())?;
+                let cst::EntryChild::EntryKey(child_node) = child else {
+                    return Err(::fltk_ast_core::unexpected_child("entry", "key", cst_node.span()));
+                };
+                _erased_entry_key_from_cst(child_node)?
+            },
+            value: {
+                let child = ::fltk_ast_core::one(&children_value, "entry", "value", cst_node.span())?;
+                let cst::EntryChild::Atom(child_node) = child else {
+                    return Err(::fltk_ast_core::unexpected_child("entry", "value", cst_node.span()));
+                };
+                Atom::from_cst(child_node)?
+            },
+            span: cst_node.span().clone(),
+        })
+    }
+}
+
+impl Entries {
+    /// Convert a `entries` CST node.
+    pub fn from_cst(node: &::fltk_cst_core::Shared<cst::Entries>) -> ::std::result::Result<Self, ::fltk_ast_core::AstError> {
+        let cst_node = node.read();
+        let children_entry: ::std::vec::Vec<&cst::EntriesChild> = cst_node
+            .children()
+            .iter()
+            .filter(|(label, _)| matches!(label, Some(cst::EntriesLabel::Entry)))
+            .map(|(_, child)| child)
+            .collect();
+        Ok(Self {
+            entry: {
+                let mut keyed: ::fltk_ast_core::IndexMap<::std::string::String, Entry> = ::fltk_ast_core::IndexMap::new();
+                for child in &children_entry {
+                    let cst::EntriesChild::Entry(child_node) = child else {
+                        return Err(::fltk_ast_core::unexpected_child("entries", "entry", cst_node.span()));
+                    };
+                    let element = Entry::from_cst(child_node)?;
+                    let key = element.key.clone();
+                    if let Some(previous) = keyed.get(&key) {
+                        return Err(::fltk_ast_core::duplicate_key("entry", &key, &element.span, &previous.span));
+                    }
+                    keyed.insert(key, element);
+                }
+                keyed
+            },
+            span: cst_node.span().clone(),
+        })
+    }
+}
+
+impl MultiEntry {
+    /// Convert a `multi_entry` CST node.
+    pub fn from_cst(node: &::fltk_cst_core::Shared<cst::MultiEntry>) -> ::std::result::Result<Self, ::fltk_ast_core::AstError> {
+        let cst_node = node.read();
+        let mut children_key: ::std::vec::Vec<&cst::MultiEntryChild> = ::std::vec::Vec::new();
+        let mut children_value: ::std::vec::Vec<&cst::MultiEntryChild> = ::std::vec::Vec::new();
+        for (label, child) in cst_node.children() {
+            match label {
+                Some(cst::MultiEntryLabel::Key) => children_key.push(child),
+                Some(cst::MultiEntryLabel::Value) => children_value.push(child),
+                _ => {}
+            }
+        }
+        Ok(Self {
+            key: {
+                let child = ::fltk_ast_core::one(&children_key, "multi_entry", "key", cst_node.span())?;
+                let cst::MultiEntryChild::EntryKey(child_node) = child else {
+                    return Err(::fltk_ast_core::unexpected_child("multi_entry", "key", cst_node.span()));
+                };
+                _erased_entry_key_from_cst(child_node)?
+            },
+            value: {
+                let child = ::fltk_ast_core::one(&children_value, "multi_entry", "value", cst_node.span())?;
+                let cst::MultiEntryChild::Atom(child_node) = child else {
+                    return Err(::fltk_ast_core::unexpected_child("multi_entry", "value", cst_node.span()));
+                };
+                Atom::from_cst(child_node)?
+            },
+            span: cst_node.span().clone(),
+        })
+    }
+}
+
+impl MultiEntries {
+    /// Convert a `multi_entries` CST node.
+    pub fn from_cst(node: &::fltk_cst_core::Shared<cst::MultiEntries>) -> ::std::result::Result<Self, ::fltk_ast_core::AstError> {
+        let cst_node = node.read();
+        let children_multi_entry: ::std::vec::Vec<&cst::MultiEntriesChild> = cst_node
+            .children()
+            .iter()
+            .filter(|(label, _)| matches!(label, Some(cst::MultiEntriesLabel::MultiEntry)))
+            .map(|(_, child)| child)
+            .collect();
+        Ok(Self {
+            multi_entry: {
+                let mut keyed: ::fltk_ast_core::IndexMap<::std::string::String, ::std::vec::Vec<MultiEntry>> = ::fltk_ast_core::IndexMap::new();
+                for child in &children_multi_entry {
+                    let cst::MultiEntriesChild::MultiEntry(child_node) = child else {
+                        return Err(::fltk_ast_core::unexpected_child("multi_entries", "multi_entry", cst_node.span()));
+                    };
+                    let element = MultiEntry::from_cst(child_node)?;
+                    let key = element.key.clone();
+                    keyed.entry(key).or_default().push(element);
+                }
+                keyed
+            },
+            span: cst_node.span().clone(),
+        })
+    }
+}
+
 /// Convert an `item` child of rule `val`, whichever of its types it carries.
-fn _val_item_from_cst(child: &cst::ValChild, span: &::fltk_cst_core::Span) -> Result<ValItem, ::fltk_ast_core::AstError> {
+fn _val_item_from_cst(child: &cst::ValChild, span: &::fltk_cst_core::Span) -> ::std::result::Result<ValItem, ::fltk_ast_core::AstError> {
     match child {
         cst::ValChild::Num(child_node) => Ok(ValItem::Num(Num::from_cst(child_node)?)),
         cst::ValChild::Name(child_node) => Ok(ValItem::Name(Name::from_cst(child_node)?)),
@@ -2333,7 +2518,7 @@ fn _val_item_from_cst(child: &cst::ValChild, span: &::fltk_cst_core::Span) -> Re
 }
 
 /// Convert an `left` child of rule `grouped`, whichever of its types it carries.
-fn _grouped_left_from_cst(child: &cst::GroupedChild, span: &::fltk_cst_core::Span) -> Result<GroupedLeft, ::fltk_ast_core::AstError> {
+fn _grouped_left_from_cst(child: &cst::GroupedChild, span: &::fltk_cst_core::Span) -> ::std::result::Result<GroupedLeft, ::fltk_ast_core::AstError> {
     match child {
         cst::GroupedChild::Num(child_node) => Ok(GroupedLeft::Num(Num::from_cst(child_node)?)),
         cst::GroupedChild::Name(child_node) => Ok(GroupedLeft::Name(Name::from_cst(child_node)?)),
@@ -2342,9 +2527,9 @@ fn _grouped_left_from_cst(child: &cst::GroupedChild, span: &::fltk_cst_core::Spa
 }
 
 /// Convert an `inner` child of rule `rec_via_sub`, whichever of its types it carries.
-fn _rec_via_sub_inner_from_cst(child: &cst::RecViaSubChild, span: &::fltk_cst_core::Span) -> Result<RecViaSubInner, ::fltk_ast_core::AstError> {
+fn _rec_via_sub_inner_from_cst(child: &cst::RecViaSubChild, span: &::fltk_cst_core::Span) -> ::std::result::Result<RecViaSubInner, ::fltk_ast_core::AstError> {
     match child {
-        cst::RecViaSubChild::RecViaSub(child_node) => Ok(RecViaSubInner::RecViaSub(Box::new(RecViaSub::from_cst(child_node)?))),
+        cst::RecViaSubChild::RecViaSub(child_node) => Ok(RecViaSubInner::RecViaSub(::std::boxed::Box::new(RecViaSub::from_cst(child_node)?))),
         cst::RecViaSubChild::Atom(child_node) => Ok(RecViaSubInner::Atom(Atom::from_cst(child_node)?)),
         _ => Err(::fltk_ast_core::unexpected_child("rec_via_sub", "inner", span)),
     }
@@ -2361,7 +2546,7 @@ static _NUM_TERMINALS: ::fltk_ast_core::TerminalShape =
 
 impl Num {
     /// Synthesise a `num` CST node from the text of `text`.
-    pub fn to_cst(&self) -> Result<::fltk_cst_core::Shared<cst::Num>, ::fltk_ast_core::AstError> {
+    pub fn to_cst(&self) -> ::std::result::Result<::fltk_cst_core::Shared<cst::Num>, ::fltk_ast_core::AstError> {
         let text = self.text.as_str();
         let split = _NUM_TERMINALS.split(text, "num")?;
         let mut cst_node = cst::Num::new(::fltk_ast_core::source_span(text));
@@ -2381,7 +2566,7 @@ static _NAME_TERMINALS: ::fltk_ast_core::TerminalShape =
 
 impl Name {
     /// Synthesise a `name` CST node from the text of `text`.
-    pub fn to_cst(&self) -> Result<::fltk_cst_core::Shared<cst::Name>, ::fltk_ast_core::AstError> {
+    pub fn to_cst(&self) -> ::std::result::Result<::fltk_cst_core::Shared<cst::Name>, ::fltk_ast_core::AstError> {
         let text = self.text.as_str();
         let split = _NAME_TERMINALS.split(text, "name")?;
         let mut cst_node = cst::Name::new(::fltk_ast_core::source_span(text));
@@ -2392,7 +2577,7 @@ impl Name {
 
 impl Atom {
     /// Synthesise a `atom` CST node for whichever alternative this value is.
-    pub fn to_cst(&self) -> Result<::fltk_cst_core::Shared<cst::Atom>, ::fltk_ast_core::AstError> {
+    pub fn to_cst(&self) -> ::std::result::Result<::fltk_cst_core::Shared<cst::Atom>, ::fltk_ast_core::AstError> {
         match self {
             Self::Num(payload) => {
                 let mut cst_node = cst::Atom::new(::fltk_cst_core::Span::unknown());
@@ -2410,7 +2595,7 @@ impl Atom {
 
 impl ParenExpr {
     /// Synthesise a `paren_expr` CST node from this value's fields.
-    pub fn to_cst(&self) -> Result<::fltk_cst_core::Shared<cst::ParenExpr>, ::fltk_ast_core::AstError> {
+    pub fn to_cst(&self) -> ::std::result::Result<::fltk_cst_core::Shared<cst::ParenExpr>, ::fltk_ast_core::AstError> {
         let mut cst_node = cst::ParenExpr::new(::fltk_cst_core::Span::unknown());
         let mut cursor_inner = ::fltk_ast_core::Cursor::new(vec![&self.inner]);
         let taken = cursor_inner.take(1, 0);
@@ -2425,7 +2610,7 @@ impl ParenExpr {
 
 impl Stmt {
     /// Synthesise a `stmt` CST node from this value's fields.
-    pub fn to_cst(&self) -> Result<::fltk_cst_core::Shared<cst::Stmt>, ::fltk_ast_core::AstError> {
+    pub fn to_cst(&self) -> ::std::result::Result<::fltk_cst_core::Shared<cst::Stmt>, ::fltk_ast_core::AstError> {
         let mut cst_node = cst::Stmt::new(::fltk_cst_core::Span::unknown());
         let mut cursor_lhs = ::fltk_ast_core::Cursor::new(vec![&self.lhs]);
         let mut cursor_rhs = ::fltk_ast_core::Cursor::new(vec![&self.rhs]);
@@ -2447,7 +2632,7 @@ impl Stmt {
 
 impl Items {
     /// Synthesise a `items` CST node from this value's fields.
-    pub fn to_cst(&self) -> Result<::fltk_cst_core::Shared<cst::Items>, ::fltk_ast_core::AstError> {
+    pub fn to_cst(&self) -> ::std::result::Result<::fltk_cst_core::Shared<cst::Items>, ::fltk_ast_core::AstError> {
         let mut cst_node = cst::Items::new(::fltk_cst_core::Span::unknown());
         let mut cursor_item = ::fltk_ast_core::Cursor::new(self.item.iter().collect());
         let taken = cursor_item.take(::fltk_ast_core::UNBOUNDED, 0);
@@ -2462,7 +2647,7 @@ impl Items {
 
 impl OptItem {
     /// Synthesise a `opt_item` CST node from this value's fields.
-    pub fn to_cst(&self) -> Result<::fltk_cst_core::Shared<cst::OptItem>, ::fltk_ast_core::AstError> {
+    pub fn to_cst(&self) -> ::std::result::Result<::fltk_cst_core::Shared<cst::OptItem>, ::fltk_ast_core::AstError> {
         let mut cst_node = cst::OptItem::new(::fltk_cst_core::Span::unknown());
         let mut cursor_item = ::fltk_ast_core::Cursor::new(self.item.iter().collect());
         let taken = cursor_item.take(1, 0);
@@ -2476,7 +2661,7 @@ impl OptItem {
 
 impl ZeroItems {
     /// Synthesise a `zero_items` CST node from this value's fields.
-    pub fn to_cst(&self) -> Result<::fltk_cst_core::Shared<cst::ZeroItems>, ::fltk_ast_core::AstError> {
+    pub fn to_cst(&self) -> ::std::result::Result<::fltk_cst_core::Shared<cst::ZeroItems>, ::fltk_ast_core::AstError> {
         let mut cst_node = cst::ZeroItems::new(::fltk_cst_core::Span::unknown());
         let mut cursor_item = ::fltk_ast_core::Cursor::new(self.item.iter().collect());
         let taken = cursor_item.take(::fltk_ast_core::UNBOUNDED, 0);
@@ -2490,7 +2675,7 @@ impl ZeroItems {
 
 impl ExprAlt1 {
     /// Synthesise the `Alt1` alternative of rule `expr`.
-    pub fn to_cst(&self) -> Result<::fltk_cst_core::Shared<cst::Expr>, ::fltk_ast_core::AstError> {
+    pub fn to_cst(&self) -> ::std::result::Result<::fltk_cst_core::Shared<cst::Expr>, ::fltk_ast_core::AstError> {
         let mut cst_node = cst::Expr::new(::fltk_cst_core::Span::unknown());
         let mut cursor_lhs = ::fltk_ast_core::Cursor::new(vec![&self.lhs]);
         let mut cursor_rhs = ::fltk_ast_core::Cursor::new(vec![&self.rhs]);
@@ -2512,7 +2697,7 @@ impl ExprAlt1 {
 
 impl Expr {
     /// Synthesise a `expr` CST node for whichever alternative this value is.
-    pub fn to_cst(&self) -> Result<::fltk_cst_core::Shared<cst::Expr>, ::fltk_ast_core::AstError> {
+    pub fn to_cst(&self) -> ::std::result::Result<::fltk_cst_core::Shared<cst::Expr>, ::fltk_ast_core::AstError> {
         match self {
             Self::Alt1(payload) => payload.to_cst(),
             Self::Atom(payload) => {
@@ -2526,7 +2711,7 @@ impl Expr {
 
 impl LvalInner {
     /// Synthesise the `Inner` alternative of rule `lval`.
-    pub fn to_cst(&self) -> Result<::fltk_cst_core::Shared<cst::Lval>, ::fltk_ast_core::AstError> {
+    pub fn to_cst(&self) -> ::std::result::Result<::fltk_cst_core::Shared<cst::Lval>, ::fltk_ast_core::AstError> {
         let mut cst_node = cst::Lval::new(::fltk_cst_core::Span::unknown());
         let mut cursor_inner = ::fltk_ast_core::Cursor::new(vec![&self.inner]);
         let taken = cursor_inner.take(1, 0);
@@ -2541,7 +2726,7 @@ impl LvalInner {
 
 impl Lval {
     /// Synthesise a `lval` CST node for whichever alternative this value is.
-    pub fn to_cst(&self) -> Result<::fltk_cst_core::Shared<cst::Lval>, ::fltk_ast_core::AstError> {
+    pub fn to_cst(&self) -> ::std::result::Result<::fltk_cst_core::Shared<cst::Lval>, ::fltk_ast_core::AstError> {
         match self {
             Self::Inner(payload) => payload.to_cst(),
             Self::Base(payload) => {
@@ -2555,7 +2740,7 @@ impl Lval {
 
 impl RvalInner {
     /// Synthesise the `Inner` alternative of rule `rval`.
-    pub fn to_cst(&self) -> Result<::fltk_cst_core::Shared<cst::Rval>, ::fltk_ast_core::AstError> {
+    pub fn to_cst(&self) -> ::std::result::Result<::fltk_cst_core::Shared<cst::Rval>, ::fltk_ast_core::AstError> {
         let mut cst_node = cst::Rval::new(::fltk_cst_core::Span::unknown());
         let mut cursor_inner = ::fltk_ast_core::Cursor::new(vec![&self.inner]);
         let taken = cursor_inner.take(1, 0);
@@ -2570,7 +2755,7 @@ impl RvalInner {
 
 impl Rval {
     /// Synthesise a `rval` CST node for whichever alternative this value is.
-    pub fn to_cst(&self) -> Result<::fltk_cst_core::Shared<cst::Rval>, ::fltk_ast_core::AstError> {
+    pub fn to_cst(&self) -> ::std::result::Result<::fltk_cst_core::Shared<cst::Rval>, ::fltk_ast_core::AstError> {
         match self {
             Self::Inner(payload) => payload.to_cst(),
             Self::Base(payload) => {
@@ -2584,7 +2769,7 @@ impl Rval {
 
 impl Arrow {
     /// Synthesise a `arrow` CST node from this value's fields.
-    pub fn to_cst(&self) -> Result<::fltk_cst_core::Shared<cst::Arrow>, ::fltk_ast_core::AstError> {
+    pub fn to_cst(&self) -> ::std::result::Result<::fltk_cst_core::Shared<cst::Arrow>, ::fltk_ast_core::AstError> {
         let mut cst_node = cst::Arrow::new(::fltk_cst_core::Span::unknown());
         let mut cursor_target = ::fltk_ast_core::Cursor::new(vec![&self.target]);
         let taken = cursor_target.take(1, 0);
@@ -2608,7 +2793,7 @@ static _LATIN_WORD_TERMINALS: ::fltk_ast_core::TerminalShape =
 
 impl LatinWord {
     /// Synthesise a `latin_word` CST node from the text of `text`.
-    pub fn to_cst(&self) -> Result<::fltk_cst_core::Shared<cst::LatinWord>, ::fltk_ast_core::AstError> {
+    pub fn to_cst(&self) -> ::std::result::Result<::fltk_cst_core::Shared<cst::LatinWord>, ::fltk_ast_core::AstError> {
         let text = self.text.as_str();
         let split = _LATIN_WORD_TERMINALS.split(text, "latin_word")?;
         let mut cst_node = cst::LatinWord::new(::fltk_ast_core::source_span(text));
@@ -2631,7 +2816,7 @@ static _TAGGED_TERMINALS: ::fltk_ast_core::TerminalShape =
 
 impl Tagged {
     /// Synthesise a `tagged` CST node from the text of `text`.
-    pub fn to_cst(&self) -> Result<::fltk_cst_core::Shared<cst::Tagged>, ::fltk_ast_core::AstError> {
+    pub fn to_cst(&self) -> ::std::result::Result<::fltk_cst_core::Shared<cst::Tagged>, ::fltk_ast_core::AstError> {
         let text = self.text.as_str();
         let split = _TAGGED_TERMINALS.split(text, "tagged")?;
         let mut cst_node = cst::Tagged::new(::fltk_ast_core::source_span(text));
@@ -2643,7 +2828,7 @@ impl Tagged {
 
 impl Val {
     /// Synthesise a `val` CST node from this value's fields.
-    pub fn to_cst(&self) -> Result<::fltk_cst_core::Shared<cst::Val>, ::fltk_ast_core::AstError> {
+    pub fn to_cst(&self) -> ::std::result::Result<::fltk_cst_core::Shared<cst::Val>, ::fltk_ast_core::AstError> {
         let present = ::fltk_ast_core::populated(&[("item", true)]);
         if ::fltk_ast_core::alternative_fits(&present, &["item"], &["item"]) && matches!(self.item, ValItem::Num(_)) {
             return self.to_cst_alt0();
@@ -2660,7 +2845,7 @@ impl Val {
 
 impl Val {
     /// Synthesise alternative 0 of rule `val`.
-    fn to_cst_alt0(&self) -> Result<::fltk_cst_core::Shared<cst::Val>, ::fltk_ast_core::AstError> {
+    fn to_cst_alt0(&self) -> ::std::result::Result<::fltk_cst_core::Shared<cst::Val>, ::fltk_ast_core::AstError> {
         let mut cst_node = cst::Val::new(::fltk_cst_core::Span::unknown());
         let mut cursor_item = ::fltk_ast_core::Cursor::new(vec![&self.item]);
         let taken = cursor_item.take(1, 0);
@@ -2675,7 +2860,7 @@ impl Val {
         Ok(cst_node.into())
     }
     /// Synthesise alternative 1 of rule `val`.
-    fn to_cst_alt1(&self) -> Result<::fltk_cst_core::Shared<cst::Val>, ::fltk_ast_core::AstError> {
+    fn to_cst_alt1(&self) -> ::std::result::Result<::fltk_cst_core::Shared<cst::Val>, ::fltk_ast_core::AstError> {
         let mut cst_node = cst::Val::new(::fltk_cst_core::Span::unknown());
         let mut cursor_item = ::fltk_ast_core::Cursor::new(vec![&self.item]);
         let taken = cursor_item.take(1, 0);
@@ -2690,7 +2875,7 @@ impl Val {
         Ok(cst_node.into())
     }
     /// Synthesise alternative 2 of rule `val`.
-    fn to_cst_alt2(&self) -> Result<::fltk_cst_core::Shared<cst::Val>, ::fltk_ast_core::AstError> {
+    fn to_cst_alt2(&self) -> ::std::result::Result<::fltk_cst_core::Shared<cst::Val>, ::fltk_ast_core::AstError> {
         static TERMINAL_0: ::fltk_ast_core::LazyTerminal = ::fltk_ast_core::LazyTerminal::new("[!@#$]+");
         let mut cst_node = cst::Val::new(::fltk_cst_core::Span::unknown());
         let mut cursor_item = ::fltk_ast_core::Cursor::new(vec![&self.item]);
@@ -2712,7 +2897,7 @@ impl Val {
 
 impl LeadingWs {
     /// Synthesise a `leading_ws` CST node from this value's fields.
-    pub fn to_cst(&self) -> Result<::fltk_cst_core::Shared<cst::LeadingWs>, ::fltk_ast_core::AstError> {
+    pub fn to_cst(&self) -> ::std::result::Result<::fltk_cst_core::Shared<cst::LeadingWs>, ::fltk_ast_core::AstError> {
         let mut cst_node = cst::LeadingWs::new(::fltk_cst_core::Span::unknown());
         let mut cursor_num = ::fltk_ast_core::Cursor::new(vec![&self.num]);
         let taken = cursor_num.take(1, 0);
@@ -2727,7 +2912,7 @@ impl LeadingWs {
 
 impl Grouped {
     /// Synthesise a `grouped` CST node from this value's fields.
-    pub fn to_cst(&self) -> Result<::fltk_cst_core::Shared<cst::Grouped>, ::fltk_ast_core::AstError> {
+    pub fn to_cst(&self) -> ::std::result::Result<::fltk_cst_core::Shared<cst::Grouped>, ::fltk_ast_core::AstError> {
         ::fltk_ast_core::check_group(
             "grouped",
             &::fltk_ast_core::populated(&[("left", true)]),
@@ -2761,7 +2946,7 @@ impl Grouped {
 
 impl RecViaSub {
     /// Synthesise a `rec_via_sub` CST node from this value's fields.
-    pub fn to_cst(&self) -> Result<::fltk_cst_core::Shared<cst::RecViaSub>, ::fltk_ast_core::AstError> {
+    pub fn to_cst(&self) -> ::std::result::Result<::fltk_cst_core::Shared<cst::RecViaSub>, ::fltk_ast_core::AstError> {
         ::fltk_ast_core::check_group(
             "rec_via_sub",
             &::fltk_ast_core::populated(&[("inner", true)]),
@@ -2802,7 +2987,7 @@ impl RecViaSub {
 
 impl NestInner {
     /// Synthesise the `Inner` alternative of rule `nest`.
-    pub fn to_cst(&self) -> Result<::fltk_cst_core::Shared<cst::Nest>, ::fltk_ast_core::AstError> {
+    pub fn to_cst(&self) -> ::std::result::Result<::fltk_cst_core::Shared<cst::Nest>, ::fltk_ast_core::AstError> {
         let mut cst_node = cst::Nest::new(::fltk_cst_core::Span::unknown());
         let mut cursor_inner = ::fltk_ast_core::Cursor::new(vec![&self.inner]);
         let taken = cursor_inner.take(1, 0);
@@ -2817,7 +3002,7 @@ impl NestInner {
 
 impl Nest {
     /// Synthesise a `nest` CST node for whichever alternative this value is.
-    pub fn to_cst(&self) -> Result<::fltk_cst_core::Shared<cst::Nest>, ::fltk_ast_core::AstError> {
+    pub fn to_cst(&self) -> ::std::result::Result<::fltk_cst_core::Shared<cst::Nest>, ::fltk_ast_core::AstError> {
         match self {
             Self::Inner(payload) => payload.to_cst(),
             Self::Leaf(payload) => {
@@ -2831,7 +3016,7 @@ impl Nest {
 
 impl NestSumAlt1 {
     /// Synthesise the `Alt1` alternative of rule `nest_sum`.
-    pub fn to_cst(&self) -> Result<::fltk_cst_core::Shared<cst::NestSum>, ::fltk_ast_core::AstError> {
+    pub fn to_cst(&self) -> ::std::result::Result<::fltk_cst_core::Shared<cst::NestSum>, ::fltk_ast_core::AstError> {
         let mut cst_node = cst::NestSum::new(::fltk_cst_core::Span::unknown());
         let mut cursor_lhs = ::fltk_ast_core::Cursor::new(vec![&self.lhs]);
         let mut cursor_rhs = ::fltk_ast_core::Cursor::new(vec![&self.rhs]);
@@ -2853,7 +3038,7 @@ impl NestSumAlt1 {
 
 impl NestSum {
     /// Synthesise a `nest_sum` CST node for whichever alternative this value is.
-    pub fn to_cst(&self) -> Result<::fltk_cst_core::Shared<cst::NestSum>, ::fltk_ast_core::AstError> {
+    pub fn to_cst(&self) -> ::std::result::Result<::fltk_cst_core::Shared<cst::NestSum>, ::fltk_ast_core::AstError> {
         match self {
             Self::Alt1(payload) => payload.to_cst(),
             Self::First(payload) => {
@@ -2876,7 +3061,7 @@ static _DIGIT_SEQ_TERMINALS: ::fltk_ast_core::TerminalShape =
 
 impl DigitSeq {
     /// Synthesise a `digit_seq` CST node from the text of `text`.
-    pub fn to_cst(&self) -> Result<::fltk_cst_core::Shared<cst::DigitSeq>, ::fltk_ast_core::AstError> {
+    pub fn to_cst(&self) -> ::std::result::Result<::fltk_cst_core::Shared<cst::DigitSeq>, ::fltk_ast_core::AstError> {
         let text = self.text.as_str();
         let split = _DIGIT_SEQ_TERMINALS.split(text, "digit_seq")?;
         let mut cst_node = cst::DigitSeq::new(::fltk_ast_core::source_span(text));
@@ -2896,7 +3081,7 @@ static _WORD_SEQ_TERMINALS: ::fltk_ast_core::TerminalShape =
 
 impl WordSeq {
     /// Synthesise a `word_seq` CST node from the text of `text`.
-    pub fn to_cst(&self) -> Result<::fltk_cst_core::Shared<cst::WordSeq>, ::fltk_ast_core::AstError> {
+    pub fn to_cst(&self) -> ::std::result::Result<::fltk_cst_core::Shared<cst::WordSeq>, ::fltk_ast_core::AstError> {
         let text = self.text.as_str();
         let split = _WORD_SEQ_TERMINALS.split(text, "word_seq")?;
         let mut cst_node = cst::WordSeq::new(::fltk_ast_core::source_span(text));
@@ -2916,7 +3101,7 @@ static _WS_SEQ_TERMINALS: ::fltk_ast_core::TerminalShape =
 
 impl WsSeq {
     /// Synthesise a `ws_seq` CST node from the text of `text`.
-    pub fn to_cst(&self) -> Result<::fltk_cst_core::Shared<cst::WsSeq>, ::fltk_ast_core::AstError> {
+    pub fn to_cst(&self) -> ::std::result::Result<::fltk_cst_core::Shared<cst::WsSeq>, ::fltk_ast_core::AstError> {
         let text = self.text.as_str();
         let split = _WS_SEQ_TERMINALS.split(text, "ws_seq")?;
         let mut cst_node = cst::WsSeq::new(::fltk_ast_core::source_span(text));
@@ -2936,7 +3121,7 @@ static _THREE_TO_FIVE_DIGITS_TERMINALS: ::fltk_ast_core::TerminalShape =
 
 impl ThreeToFiveDigits {
     /// Synthesise a `three_to_five_digits` CST node from the text of `text`.
-    pub fn to_cst(&self) -> Result<::fltk_cst_core::Shared<cst::ThreeToFiveDigits>, ::fltk_ast_core::AstError> {
+    pub fn to_cst(&self) -> ::std::result::Result<::fltk_cst_core::Shared<cst::ThreeToFiveDigits>, ::fltk_ast_core::AstError> {
         let text = self.text.as_str();
         let split = _THREE_TO_FIVE_DIGITS_TERMINALS.split(text, "three_to_five_digits")?;
         let mut cst_node = cst::ThreeToFiveDigits::new(::fltk_ast_core::source_span(text));
@@ -2959,7 +3144,7 @@ static _EXACTLY_TWO_DIGITS_TERMINALS: ::fltk_ast_core::TerminalShape =
 
 impl ExactlyTwoDigits {
     /// Synthesise a `exactly_two_digits` CST node from the text of `text`.
-    pub fn to_cst(&self) -> Result<::fltk_cst_core::Shared<cst::ExactlyTwoDigits>, ::fltk_ast_core::AstError> {
+    pub fn to_cst(&self) -> ::std::result::Result<::fltk_cst_core::Shared<cst::ExactlyTwoDigits>, ::fltk_ast_core::AstError> {
         let text = self.text.as_str();
         let split = _EXACTLY_TWO_DIGITS_TERMINALS.split(text, "exactly_two_digits")?;
         let mut cst_node = cst::ExactlyTwoDigits::new(::fltk_ast_core::source_span(text));
@@ -2982,7 +3167,7 @@ static _ESCAPED_METAS_TERMINALS: ::fltk_ast_core::TerminalShape =
 
 impl EscapedMetas {
     /// Synthesise a `escaped_metas` CST node from the text of `text`.
-    pub fn to_cst(&self) -> Result<::fltk_cst_core::Shared<cst::EscapedMetas>, ::fltk_ast_core::AstError> {
+    pub fn to_cst(&self) -> ::std::result::Result<::fltk_cst_core::Shared<cst::EscapedMetas>, ::fltk_ast_core::AstError> {
         let text = self.text.as_str();
         let split = _ESCAPED_METAS_TERMINALS.split(text, "escaped_metas")?;
         let mut cst_node = cst::EscapedMetas::new(::fltk_ast_core::source_span(text));
@@ -3005,7 +3190,7 @@ static _LATIN_RANGE_TERMINALS: ::fltk_ast_core::TerminalShape =
 
 impl LatinRange {
     /// Synthesise a `latin_range` CST node from the text of `text`.
-    pub fn to_cst(&self) -> Result<::fltk_cst_core::Shared<cst::LatinRange>, ::fltk_ast_core::AstError> {
+    pub fn to_cst(&self) -> ::std::result::Result<::fltk_cst_core::Shared<cst::LatinRange>, ::fltk_ast_core::AstError> {
         let text = self.text.as_str();
         let split = _LATIN_RANGE_TERMINALS.split(text, "latin_range")?;
         let mut cst_node = cst::LatinRange::new(::fltk_ast_core::source_span(text));
@@ -3028,7 +3213,7 @@ static _NC_GROUP_ALT_TERMINALS: ::fltk_ast_core::TerminalShape =
 
 impl NcGroupAlt {
     /// Synthesise a `nc_group_alt` CST node from the text of `text`.
-    pub fn to_cst(&self) -> Result<::fltk_cst_core::Shared<cst::NcGroupAlt>, ::fltk_ast_core::AstError> {
+    pub fn to_cst(&self) -> ::std::result::Result<::fltk_cst_core::Shared<cst::NcGroupAlt>, ::fltk_ast_core::AstError> {
         let text = self.text.as_str();
         let split = _NC_GROUP_ALT_TERMINALS.split(text, "nc_group_alt")?;
         let mut cst_node = cst::NcGroupAlt::new(::fltk_ast_core::source_span(text));
@@ -3051,7 +3236,7 @@ static _CASE_INSENSITIVE_TERMINALS: ::fltk_ast_core::TerminalShape =
 
 impl CaseInsensitive {
     /// Synthesise a `case_insensitive` CST node from the text of `text`.
-    pub fn to_cst(&self) -> Result<::fltk_cst_core::Shared<cst::CaseInsensitive>, ::fltk_ast_core::AstError> {
+    pub fn to_cst(&self) -> ::std::result::Result<::fltk_cst_core::Shared<cst::CaseInsensitive>, ::fltk_ast_core::AstError> {
         let text = self.text.as_str();
         let split = _CASE_INSENSITIVE_TERMINALS.split(text, "case_insensitive")?;
         let mut cst_node = cst::CaseInsensitive::new(::fltk_ast_core::source_span(text));
@@ -3074,7 +3259,7 @@ static _ANCHORED_WORD_TERMINALS: ::fltk_ast_core::TerminalShape =
 
 impl AnchoredWord {
     /// Synthesise a `anchored_word` CST node from the text of `text`.
-    pub fn to_cst(&self) -> Result<::fltk_cst_core::Shared<cst::AnchoredWord>, ::fltk_ast_core::AstError> {
+    pub fn to_cst(&self) -> ::std::result::Result<::fltk_cst_core::Shared<cst::AnchoredWord>, ::fltk_ast_core::AstError> {
         let text = self.text.as_str();
         let split = _ANCHORED_WORD_TERMINALS.split(text, "anchored_word")?;
         let mut cst_node = cst::AnchoredWord::new(::fltk_ast_core::source_span(text));
@@ -3088,7 +3273,7 @@ impl AnchoredWord {
 
 impl Pair {
     /// Synthesise a `pair` CST node from this value's fields.
-    pub fn to_cst(&self) -> Result<::fltk_cst_core::Shared<cst::Pair>, ::fltk_ast_core::AstError> {
+    pub fn to_cst(&self) -> ::std::result::Result<::fltk_cst_core::Shared<cst::Pair>, ::fltk_ast_core::AstError> {
         let mut cst_node = cst::Pair::new(::fltk_cst_core::Span::unknown());
         let mut cursor_key = ::fltk_ast_core::Cursor::new(vec![&self.key]);
         let mut cursor_val = ::fltk_ast_core::Cursor::new(vec![&self.val]);
@@ -3110,7 +3295,7 @@ impl Pair {
 
 impl Wrapper {
     /// Synthesise a `wrapper` CST node from this value's fields.
-    pub fn to_cst(&self) -> Result<::fltk_cst_core::Shared<cst::Wrapper>, ::fltk_ast_core::AstError> {
+    pub fn to_cst(&self) -> ::std::result::Result<::fltk_cst_core::Shared<cst::Wrapper>, ::fltk_ast_core::AstError> {
         let mut cst_node = cst::Wrapper::new(::fltk_cst_core::Span::unknown());
         let mut cursor_key = ::fltk_ast_core::Cursor::new(vec![&self.key]);
         let mut cursor_val = ::fltk_ast_core::Cursor::new(vec![&self.val]);
@@ -3132,7 +3317,7 @@ impl Wrapper {
 
 impl OptWrapper {
     /// Synthesise a `opt_wrapper` CST node from this value's fields.
-    pub fn to_cst(&self) -> Result<::fltk_cst_core::Shared<cst::OptWrapper>, ::fltk_ast_core::AstError> {
+    pub fn to_cst(&self) -> ::std::result::Result<::fltk_cst_core::Shared<cst::OptWrapper>, ::fltk_ast_core::AstError> {
         let mut cst_node = cst::OptWrapper::new(::fltk_cst_core::Span::unknown());
         let mut cursor_key = ::fltk_ast_core::Cursor::new(self.key.iter().collect());
         let mut cursor_val = ::fltk_ast_core::Cursor::new(self.val.iter().collect());
@@ -3152,7 +3337,7 @@ impl OptWrapper {
 
 impl RepWrapper {
     /// Synthesise a `rep_wrapper` CST node from this value's fields.
-    pub fn to_cst(&self) -> Result<::fltk_cst_core::Shared<cst::RepWrapper>, ::fltk_ast_core::AstError> {
+    pub fn to_cst(&self) -> ::std::result::Result<::fltk_cst_core::Shared<cst::RepWrapper>, ::fltk_ast_core::AstError> {
         let mut cst_node = cst::RepWrapper::new(::fltk_cst_core::Span::unknown());
         let mut cursor_key = ::fltk_ast_core::Cursor::new(self.key.iter().collect());
         let mut cursor_val = ::fltk_ast_core::Cursor::new(self.val.iter().collect());
@@ -3172,7 +3357,7 @@ impl RepWrapper {
 
 impl KwLabels {
     /// Synthesise a `kw_labels` CST node from this value's fields.
-    pub fn to_cst(&self) -> Result<::fltk_cst_core::Shared<cst::KwLabels>, ::fltk_ast_core::AstError> {
+    pub fn to_cst(&self) -> ::std::result::Result<::fltk_cst_core::Shared<cst::KwLabels>, ::fltk_ast_core::AstError> {
         static TERMINAL_0: ::fltk_ast_core::LazyTerminal = ::fltk_ast_core::LazyTerminal::new("[a-z]+");
         let mut cst_node = cst::KwLabels::new(::fltk_cst_core::Span::unknown());
         let mut cursor_type = ::fltk_ast_core::Cursor::new(vec![&self.r#type]);
@@ -3207,7 +3392,7 @@ static _QUOTED_TERMINALS: ::fltk_ast_core::TerminalShape =
 
 impl Quoted {
     /// Synthesise a `quoted` CST node from the text of `text`.
-    pub fn to_cst(&self) -> Result<::fltk_cst_core::Shared<cst::Quoted>, ::fltk_ast_core::AstError> {
+    pub fn to_cst(&self) -> ::std::result::Result<::fltk_cst_core::Shared<cst::Quoted>, ::fltk_ast_core::AstError> {
         let text = self.text.as_str();
         let _split = _QUOTED_TERMINALS.split(text, "quoted")?;
         let cst_node = cst::Quoted::new(::fltk_ast_core::source_span(text));
@@ -3217,7 +3402,7 @@ impl Quoted {
 
 impl MixedOpt {
     /// Synthesise a `mixed_opt` CST node from this value's fields.
-    pub fn to_cst(&self) -> Result<::fltk_cst_core::Shared<cst::MixedOpt>, ::fltk_ast_core::AstError> {
+    pub fn to_cst(&self) -> ::std::result::Result<::fltk_cst_core::Shared<cst::MixedOpt>, ::fltk_ast_core::AstError> {
         static TERMINAL_0: ::fltk_ast_core::LazyTerminal = ::fltk_ast_core::LazyTerminal::new("[a-z]+");
         let mut cst_node = cst::MixedOpt::new(::fltk_cst_core::Span::unknown());
         let mut cursor_key = ::fltk_ast_core::Cursor::new(self.key.iter().collect());
@@ -3251,7 +3436,7 @@ static _UUID_VAL_TERMINALS: ::fltk_ast_core::TerminalShape =
 
 impl UuidVal {
     /// Synthesise a `uuid_val` CST node from the text of `value`.
-    pub fn to_cst(&self) -> Result<::fltk_cst_core::Shared<cst::UuidVal>, ::fltk_ast_core::AstError> {
+    pub fn to_cst(&self) -> ::std::result::Result<::fltk_cst_core::Shared<cst::UuidVal>, ::fltk_ast_core::AstError> {
         let rendered = ::fltk_ast_core::scalar::render_uuid(&self.value);
         let text = rendered.as_str();
         let split = _UUID_VAL_TERMINALS.split(text, "uuid_val")?;
@@ -3272,7 +3457,7 @@ static _DECIMAL_VAL_TERMINALS: ::fltk_ast_core::TerminalShape =
 
 impl DecimalVal {
     /// Synthesise a `decimal_val` CST node from the text of `value`.
-    pub fn to_cst(&self) -> Result<::fltk_cst_core::Shared<cst::DecimalVal>, ::fltk_ast_core::AstError> {
+    pub fn to_cst(&self) -> ::std::result::Result<::fltk_cst_core::Shared<cst::DecimalVal>, ::fltk_ast_core::AstError> {
         let rendered = ::fltk_ast_core::scalar::render_decimal(&self.value);
         let text = rendered.as_str();
         let split = _DECIMAL_VAL_TERMINALS.split(text, "decimal_val")?;
@@ -3287,7 +3472,7 @@ impl DecimalVal {
 
 impl Colour {
     /// Synthesise a `colour` CST node for the alternative `value` names.
-    pub fn to_cst(&self) -> Result<::fltk_cst_core::Shared<cst::Colour>, ::fltk_ast_core::AstError> {
+    pub fn to_cst(&self) -> ::std::result::Result<::fltk_cst_core::Shared<cst::Colour>, ::fltk_ast_core::AstError> {
         let label = match self.value {
             ColourValue::Shade => cst::ColourLabel::Shade,
             ColourValue::Dark => cst::ColourLabel::Dark,
@@ -3300,10 +3485,10 @@ impl Colour {
 
 impl SumChain {
     /// Synthesise a `sum_chain` CST node by unfolding this chain.
-    pub fn to_cst(&self) -> Result<::fltk_cst_core::Shared<cst::SumChain>, ::fltk_ast_core::AstError> {
+    pub fn to_cst(&self) -> ::std::result::Result<::fltk_cst_core::Shared<cst::SumChain>, ::fltk_ast_core::AstError> {
         static TERMINAL_0: ::fltk_ast_core::LazyTerminal = ::fltk_ast_core::LazyTerminal::new("[-+]");
-        let mut operands = Vec::new();
-        let mut operators = Vec::new();
+        let mut operands = ::std::vec::Vec::new();
+        let mut operators = ::std::vec::Vec::new();
         let mut chain = self;
         loop {
             match chain {
@@ -3338,11 +3523,110 @@ impl SumChain {
     }
 }
 
+/// How each alternative of rule `entry_key` splits the node's text back into children.
+static _ENTRY_KEY_TERMINALS: ::fltk_ast_core::TerminalShape =
+    ::fltk_ast_core::TerminalShape::new(&[
+        ::fltk_ast_core::TerminalAlt {
+            pattern: Some("(?P<_ast_g0>[a-z]+)"),
+            groups: &[Some("_ast_g0")],
+        },
+    ]);
+
+/// Synthesise a `entry_key` CST node from the payload its type erases to.
+fn _erased_entry_key_to_cst(value: &str) -> ::std::result::Result<::fltk_cst_core::Shared<cst::EntryKey>, ::fltk_ast_core::AstError> {
+    let text = value;
+    let split = _ENTRY_KEY_TERMINALS.split(text, "entry_key")?;
+    let mut cst_node = cst::EntryKey::new(::fltk_ast_core::source_span(text));
+    cst_node.push_child(Some(cst::EntryKeyLabel::Value), cst::EntryKeyChild::Span(split.spans[0].clone()));
+    Ok(cst_node.into())
+}
+
+impl Entry {
+    /// Synthesise a `entry` CST node from this value's fields.
+    pub fn to_cst(&self) -> ::std::result::Result<::fltk_cst_core::Shared<cst::Entry>, ::fltk_ast_core::AstError> {
+        let mut cst_node = cst::Entry::new(::fltk_cst_core::Span::unknown());
+        let mut cursor_key = ::fltk_ast_core::Cursor::new(vec![&self.key]);
+        let mut cursor_value = ::fltk_ast_core::Cursor::new(vec![&self.value]);
+        let taken = cursor_key.take(1, 0);
+        ::fltk_ast_core::filled(taken.len(), 1, "entry", "key")?;
+        for item in taken {
+            cst_node.push_child(
+                Some(cst::EntryLabel::Key),
+                cst::EntryChild::EntryKey(_erased_entry_key_to_cst(item)?),
+            );
+        }
+        let taken = cursor_value.take(1, 0);
+        ::fltk_ast_core::filled(taken.len(), 1, "entry", "value")?;
+        for item in taken {
+            cst_node.push_child(Some(cst::EntryLabel::Value), cst::EntryChild::Atom(item.to_cst()?));
+        }
+        ::fltk_ast_core::check_consumed("entry", "key", cursor_key.remaining())?;
+        ::fltk_ast_core::check_consumed("entry", "value", cursor_value.remaining())?;
+        Ok(cst_node.into())
+    }
+}
+
+impl Entries {
+    /// Synthesise a `entries` CST node from this value's fields.
+    pub fn to_cst(&self) -> ::std::result::Result<::fltk_cst_core::Shared<cst::Entries>, ::fltk_ast_core::AstError> {
+        let mut cst_node = cst::Entries::new(::fltk_cst_core::Span::unknown());
+        let mut cursor_entry = ::fltk_ast_core::Cursor::new(self.entry.values().collect());
+        let taken = cursor_entry.take(::fltk_ast_core::UNBOUNDED, 0);
+        for item in taken {
+            cst_node.push_child(Some(cst::EntriesLabel::Entry), cst::EntriesChild::Entry(item.to_cst()?));
+        }
+        ::fltk_ast_core::check_consumed("entries", "entry", cursor_entry.remaining())?;
+        Ok(cst_node.into())
+    }
+}
+
+impl MultiEntry {
+    /// Synthesise a `multi_entry` CST node from this value's fields.
+    pub fn to_cst(&self) -> ::std::result::Result<::fltk_cst_core::Shared<cst::MultiEntry>, ::fltk_ast_core::AstError> {
+        let mut cst_node = cst::MultiEntry::new(::fltk_cst_core::Span::unknown());
+        let mut cursor_key = ::fltk_ast_core::Cursor::new(vec![&self.key]);
+        let mut cursor_value = ::fltk_ast_core::Cursor::new(vec![&self.value]);
+        let taken = cursor_key.take(1, 0);
+        ::fltk_ast_core::filled(taken.len(), 1, "multi_entry", "key")?;
+        for item in taken {
+            cst_node.push_child(
+                Some(cst::MultiEntryLabel::Key),
+                cst::MultiEntryChild::EntryKey(_erased_entry_key_to_cst(item)?),
+            );
+        }
+        let taken = cursor_value.take(1, 0);
+        ::fltk_ast_core::filled(taken.len(), 1, "multi_entry", "value")?;
+        for item in taken {
+            cst_node.push_child(Some(cst::MultiEntryLabel::Value), cst::MultiEntryChild::Atom(item.to_cst()?));
+        }
+        ::fltk_ast_core::check_consumed("multi_entry", "key", cursor_key.remaining())?;
+        ::fltk_ast_core::check_consumed("multi_entry", "value", cursor_value.remaining())?;
+        Ok(cst_node.into())
+    }
+}
+
+impl MultiEntries {
+    /// Synthesise a `multi_entries` CST node from this value's fields.
+    pub fn to_cst(&self) -> ::std::result::Result<::fltk_cst_core::Shared<cst::MultiEntries>, ::fltk_ast_core::AstError> {
+        let mut cst_node = cst::MultiEntries::new(::fltk_cst_core::Span::unknown());
+        let mut cursor_multi_entry = ::fltk_ast_core::Cursor::new(::fltk_ast_core::multi_values(self.multi_entry.iter(), "multi_entry")?);
+        let taken = cursor_multi_entry.take(::fltk_ast_core::UNBOUNDED, 0);
+        for item in taken {
+            cst_node.push_child(
+                Some(cst::MultiEntriesLabel::MultiEntry),
+                cst::MultiEntriesChild::MultiEntry(item.to_cst()?),
+            );
+        }
+        ::fltk_ast_core::check_consumed("multi_entries", "multi_entry", cursor_multi_entry.remaining())?;
+        Ok(cst_node.into())
+    }
+}
+
 /// Parse `src` as `nest_sum` and convert the result to its AST.
 ///
 /// `filename` names the source in the parser's diagnostics. Trivia is not captured: a
 /// converter ignores unlabeled children, so there is nothing to capture it for.
-pub fn parse_str(src: &str, filename: Option<&str>) -> Result<NestSum, ::fltk_ast_core::ParseToAstError> {
+pub fn parse_str(src: &str, filename: ::std::option::Option<&str>) -> ::std::result::Result<NestSum, ::fltk_ast_core::ParseToAstError> {
     let mut parser = parser::Parser::new(src, filename, false);
     let result = parser.apply__parse_nest_sum(0);
     // A depth-rejected parse can still come back as `Some` holding a wrong tree.
@@ -3363,7 +3647,7 @@ pub fn parse_str(src: &str, filename: Option<&str>) -> Result<NestSum, ::fltk_as
 ///
 /// The layout is whatever that formatter was generated with — the grammar's `.fltkfmt`,
 /// or the default separator spacing; `max_width` and `indent_width` are the renderer's.
-pub fn unparse_str(value: &NestSum, max_width: usize, indent_width: usize) -> Result<String, ::fltk_ast_core::AstError> {
+pub fn unparse_str(value: &NestSum, max_width: usize, indent_width: usize) -> ::std::result::Result<::std::string::String, ::fltk_ast_core::AstError> {
     let node = value.to_cst()?;
     let guard = node.read();
     let Some(unparsed) = unparser::Unparser::new().unparse_nest_sum(&guard) else {
@@ -3402,7 +3686,7 @@ mod eq_walk {
     }
 
     impl<'a> Item<'a> {
-        fn compare(self, worklist: &mut Vec<Self>) -> bool {
+        fn compare(self, worklist: &mut ::std::vec::Vec<Self>) -> bool {
             match self {
                 Self::ExprAlt1(a, b) => a.eq_shallow(b, worklist),
                 Self::Expr(a, b) => a.eq_shallow(b, worklist),

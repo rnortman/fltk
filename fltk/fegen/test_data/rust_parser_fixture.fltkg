@@ -173,3 +173,25 @@ colour := shade:"gray" | shade:"grey" | dark:"black" ;
 // Fold shape `operand , (op , operand)*`: the sidecar folds it left, so the AST
 // is a chain of links whose teardown must not recurse.
 sum_chain := term:num , ( , op:/[-+]/ , term:num)* ;
+
+// ---------------------------------------------------------------------------
+// Keyed collections.  Each element rule carries one `key` label, and the sidecar
+// keys the containing collection by it: `entries` becomes a map of entries and
+// `multi_entries` a map of runs.  `entry_key` is erased in the sidecar, so the
+// key resolves to text rather than to a node type.
+// ---------------------------------------------------------------------------
+
+// The key leaf, erased so the key is a string.
+entry_key := value:/[a-z]+/ ;
+
+// One keyed element: `a = 1;`.
+entry := key:entry_key , "=" , value:atom , ";" , ;
+
+// A region whose entries are unique: a repeated key is refused.
+entries := %"{" , entry* , %"}" ;
+
+// The accumulating twin of `entry`, keyed the same way.
+multi_entry := key:entry_key , "=" , value:atom , ";" , ;
+
+// A region whose entries accumulate: elements sharing a key form a run.
+multi_entries := %"{" , multi_entry* , %"}" ;
