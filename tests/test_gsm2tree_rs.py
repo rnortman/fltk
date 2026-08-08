@@ -394,7 +394,7 @@ class TestNodeStructure:
     def test_children_field_native_vec(self, poc_source: str) -> None:
         """Children field is a native Vec, not Py<PyList>."""
         # Phase 2: label enum is IdentifierLabel (CamelCase Rust name).
-        assert "children: Vec<(Option<IdentifierLabel>, IdentifierChild)>," in poc_source
+        assert "children: ::std::vec::Vec<(::std::option::Option<IdentifierLabel>, IdentifierChild)>," in poc_source
         assert "children: Py<PyList>," not in poc_source
         assert "#[pyo3(get)]\n    children:" not in poc_source
 
@@ -468,11 +468,11 @@ class TestNodeDebugDrop:
 
     def test_drop_impl_emitted_for_node_with_node_typed_children(self, poc_source: str) -> None:
         """impl Drop is emitted for Items (has Identifier node-typed child)."""
-        assert "impl Drop for Items {" in poc_source
+        assert "impl ::std::ops::Drop for Items {" in poc_source
 
     def test_drop_impl_not_emitted_for_span_only_node(self, poc_source: str) -> None:
         """impl Drop is NOT emitted for Identifier (span-only children, no recursion risk)."""
-        assert "impl Drop for Identifier {" not in poc_source
+        assert "impl ::std::ops::Drop for Identifier {" not in poc_source
 
 
 # ---------------------------------------------------------------------------
@@ -586,7 +586,7 @@ class TestCfgFeatureGate:
         lines = poc_source.splitlines()
         for child_type in ("IdentifierChild", "TriviaChild"):
             for i, line in enumerate(lines):
-                if f"impl PartialEq for {child_type}" in line:
+                if f"impl ::std::cmp::PartialEq for {child_type}" in line:
                     j = i - 1
                     while j >= 0 and lines[j].strip() == "":
                         j -= 1
@@ -1018,7 +1018,7 @@ class TestNoPyObjectAudit:
         """Children field is a native Vec, not Py<PyList>."""
         assert "children: Py<PyList>," not in poc_source
         # Native Vec storage for children
-        assert "Vec<(Option<" in poc_source
+        assert "::std::vec::Vec<(::std::option::Option<" in poc_source
 
     def test_no_unknown_span_cache_in_fegen(self, fegen_source: str) -> None:
         """UNKNOWN_SPAN_CACHE not emitted for fegen grammar either."""
@@ -1448,21 +1448,22 @@ class TestNativeMutatorsEmittedRs:
     def test_insert_child_signature(self, poc_source: str) -> None:
         """insert_child takes (index: usize, label: Option<...Label>, child: ...Child)."""
         assert (
-            "pub fn insert_child(&mut self, index: usize, label: Option<IdentifierLabel>, child: IdentifierChild)"
-            in poc_source
+            "pub fn insert_child(&mut self, index: usize, "
+            "label: ::std::option::Option<IdentifierLabel>, child: IdentifierChild)" in poc_source
         )
 
     def test_remove_child_signature(self, poc_source: str) -> None:
         """remove_child takes (index: usize) and returns (Option<...Label>, ...Child)."""
         assert (
-            "pub fn remove_child(&mut self, index: usize) -> (Option<IdentifierLabel>, IdentifierChild)" in poc_source
+            "pub fn remove_child(&mut self, index: usize) "
+            "-> (::std::option::Option<IdentifierLabel>, IdentifierChild)" in poc_source
         )
 
     def test_replace_child_signature(self, poc_source: str) -> None:
         """replace_child takes (index: usize, label, child) and returns (label, child) old entry."""
         assert "pub fn replace_child(" in poc_source
         # Verify at minimum the return type is present (replaces and returns old entry)
-        assert "-> (Option<IdentifierLabel>, IdentifierChild)" in poc_source
+        assert "-> (::std::option::Option<IdentifierLabel>, IdentifierChild)" in poc_source
 
     def test_clear_children_signature(self, poc_source: str) -> None:
         """clear_children takes only &mut self."""
@@ -2218,7 +2219,7 @@ class TestUnionLabelNativeAccessors:
 
     def test_child_union_lbl_returns_child_enum_ref(self, union_label_source: str) -> None:
         """child_operand returns &ValueNodeChild (the whole child enum), not a typed Shared<T>."""
-        assert "pub fn child_operand(&self) -> Result<&ValueNodeChild, CstError>" in union_label_source
+        assert "pub fn child_operand(&self) -> ::std::result::Result<&ValueNodeChild, CstError>" in union_label_source
 
     def test_child_union_lbl_no_unexpected_child_type_arm(self, union_label_source: str) -> None:
         """Union branch has no UnexpectedChildType arm — no type check is needed."""
@@ -2237,11 +2238,16 @@ class TestUnionLabelNativeAccessors:
 
     def test_maybe_union_lbl_signature(self, union_label_source: str) -> None:
         """maybe_operand returns Result<Option<&ValueNodeChild>, CstError>."""
-        assert "pub fn maybe_operand(&self) -> Result<Option<&ValueNodeChild>, CstError>" in union_label_source
+        assert (
+            "pub fn maybe_operand(&self) "
+            "-> ::std::result::Result<::std::option::Option<&ValueNodeChild>, CstError>" in union_label_source
+        )
 
     def test_children_union_lbl_signature(self, union_label_source: str) -> None:
         """children_operand yields &ValueNodeChild items (no type filter on union label)."""
-        assert "pub fn children_operand(&self) -> impl Iterator<Item = &ValueNodeChild>" in union_label_source
+        assert (
+            "pub fn children_operand(&self) -> impl ::std::iter::Iterator<Item = &ValueNodeChild>" in union_label_source
+        )
 
     def test_children_union_lbl_uses_map_not_filter_map(self, union_label_source: str) -> None:
         """children_operand uses .map() directly — no filter_map because no type guard needed."""
@@ -2264,7 +2270,8 @@ class TestUnionLabelNativeAccessors:
     def test_extend_union_lbl_accepts_child_enum_iter(self, union_label_source: str) -> None:
         """extend_operand accepts impl IntoIterator<Item = ValueNodeChild>."""
         assert (
-            "pub fn extend_operand(&mut self, children: impl IntoIterator<Item = ValueNodeChild>)" in union_label_source
+            "pub fn extend_operand(&mut self, "
+            "children: impl ::std::iter::IntoIterator<Item = ValueNodeChild>)" in union_label_source
         )
 
 

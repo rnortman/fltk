@@ -149,11 +149,11 @@ class TestNativeBareAccessors:
         assert "self.child_name()" in block
 
     def test_optional_single_node_label(self, rust_src: str) -> None:
-        assert "pub fn body(&self) -> Option<&Shared<Block>> {" in native_block(rust_src, "Doc")
+        assert "pub fn body(&self) -> ::std::option::Option<&Shared<Block>> {" in native_block(rust_src, "Doc")
 
     def test_collection_label_is_an_iterator(self, rust_src: str) -> None:
         block = native_block(rust_src, "Doc")
-        assert "pub fn tags(&self) -> impl Iterator<Item = &Shared<Tag>> + '_ {" in block
+        assert "pub fn tags(&self) -> impl ::std::iter::Iterator<Item = &Shared<Tag>> + '_ {" in block
         assert "        self.children_tags()" in block
 
     def test_union_typed_label_returns_the_child_enum(self, rust_src: str) -> None:
@@ -182,7 +182,7 @@ class TestNativeTextAccessors:
         assert ".text_or_message()" in block
 
     def test_optional_single_borrows_an_option(self, rust_src: str) -> None:
-        assert "pub fn plus_text(&self) -> Option<&str> {" in native_block(rust_src, "Op")
+        assert "pub fn plus_text(&self) -> ::std::option::Option<&str> {" in native_block(rust_src, "Op")
 
     def test_absent_for_node_labels(self, rust_src: str) -> None:
         assert "pub fn name_text" not in native_block(rust_src, "Doc")
@@ -222,7 +222,7 @@ class TestPymethodDelegation:
 
     def test_optional_single_delegates_to_maybe(self, rust_src: str) -> None:
         block = pymethods_block(rust_src, "Doc")
-        assert "-> pyo3::PyResult<Option<Py<pyo3::PyAny>>> {\n        self.maybe_body(py)" in block
+        assert "-> pyo3::PyResult<::std::option::Option<Py<pyo3::PyAny>>> {\n        self.maybe_body(py)" in block
 
     def test_collection_delegates_to_children_and_returns_a_list(self, rust_src: str) -> None:
         block = pymethods_block(rust_src, "Doc")
@@ -249,12 +249,12 @@ class TestPymethodDelegation:
 class TestPymethodTextAccessors:
     def test_required_single_mirrors_the_child_count_message(self, rust_src: str) -> None:
         block = pymethods_block(rust_src, "Tag")
-        assert "    fn name_text(&self) -> pyo3::PyResult<String> {" in block
+        assert "    fn name_text(&self) -> pyo3::PyResult<::std::string::String> {" in block
         assert '"Expected one name child but have {count}"' in block
 
     def test_optional_single_mirrors_the_maybe_count_message(self, rust_src: str) -> None:
         block = pymethods_block(rust_src, "Op")
-        assert "    fn plus_text(&self) -> pyo3::PyResult<Option<String>> {" in block
+        assert "    fn plus_text(&self) -> pyo3::PyResult<::std::option::Option<::std::string::String>> {" in block
         assert '"Expected at most one plus child but have at least 2",' in block
 
     def test_wrong_child_variant_raises_type_error(self, rust_src: str) -> None:
@@ -264,7 +264,7 @@ class TestPymethodTextAccessors:
     def test_optional_single_wrong_child_variant_raises_type_error(self, rust_src: str) -> None:
         """The optional arity carries the arm too, under `Some(_)` rather than `_`."""
         block = pymethods_block(rust_src, "Optmix")
-        assert "    fn key_text(&self) -> pyo3::PyResult<Option<String>> {" in block
+        assert "    fn key_text(&self) -> pyo3::PyResult<::std::option::Option<::std::string::String>> {" in block
         arm = "Some(_) => Err(PyTypeError::new_err(\"Optmix.key_text: child labelled 'key' is not a Span\")),"
         assert arm in block
 
@@ -275,7 +275,7 @@ class TestPymethodTextAccessors:
 class TestPymethodRuleMembers:
     def test_text_reads_the_nodes_own_span(self, rust_src: str) -> None:
         block = pymethods_block(rust_src, "Pair")
-        assert "    fn text(&self) -> pyo3::PyResult<String> {" in block
+        assert "    fn text(&self) -> pyo3::PyResult<::std::string::String> {" in block
         assert "let span = self.inner.read().span.clone();" in block
 
     def test_variant_returns_the_label_enum(self, rust_src: str) -> None:

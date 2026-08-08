@@ -5,7 +5,8 @@ from __future__ import annotations
 import pytest
 
 from fltk.fegen import gsm
-from fltk.fegen.gsm2parser_rs import RustParserGenerator, rust_str_lit
+from fltk.fegen.gsm2parser_rs import RustParserGenerator
+from fltk.fegen.rust_emit import rust_str_lit
 
 # ---------------------------------------------------------------------------
 # Helper: build minimal test grammars

@@ -17,6 +17,9 @@ __all__ = [
     "CstModule",
     "DecimalVal",
     "DigitSeq",
+    "Entries",
+    "Entry",
+    "EntryKey",
     "EscapedMetas",
     "ExactlyTwoDigits",
     "Expr",
@@ -28,6 +31,8 @@ __all__ = [
     "LeadingWs",
     "Lval",
     "MixedOpt",
+    "MultiEntries",
+    "MultiEntry",
     "Name",
     "NcGroupAlt",
     "Nest",
@@ -99,6 +104,11 @@ class NodeKind(enum.Enum):
     DECIMALVAL = enum.auto()
     COLOUR = enum.auto()
     SUMCHAIN = enum.auto()
+    ENTRYKEY = enum.auto()
+    ENTRY = enum.auto()
+    ENTRIES = enum.auto()
+    MULTIENTRY = enum.auto()
+    MULTIENTRIES = enum.auto()
     TRIVIA = enum.auto()
     _fltk_canonical_name: str
 
@@ -157,6 +167,11 @@ NodeKind.UUIDVAL._fltk_canonical_name = "NodeKind.UUIDVAL"
 NodeKind.DECIMALVAL._fltk_canonical_name = "NodeKind.DECIMALVAL"
 NodeKind.COLOUR._fltk_canonical_name = "NodeKind.COLOUR"
 NodeKind.SUMCHAIN._fltk_canonical_name = "NodeKind.SUMCHAIN"
+NodeKind.ENTRYKEY._fltk_canonical_name = "NodeKind.ENTRYKEY"
+NodeKind.ENTRY._fltk_canonical_name = "NodeKind.ENTRY"
+NodeKind.ENTRIES._fltk_canonical_name = "NodeKind.ENTRIES"
+NodeKind.MULTIENTRY._fltk_canonical_name = "NodeKind.MULTIENTRY"
+NodeKind.MULTIENTRIES._fltk_canonical_name = "NodeKind.MULTIENTRIES"
 NodeKind.TRIVIA._fltk_canonical_name = "NodeKind.TRIVIA"
 
 
@@ -2319,6 +2334,244 @@ SumChain.Label.OP = _ProtocolLabelMember("SumChain.Label.OP")
 SumChain.Label.TERM = _ProtocolLabelMember("SumChain.Label.TERM")
 
 
+class EntryKey(typing.Protocol):
+    class Label:
+        VALUE: typing.ClassVar[object]
+
+    kind: typing.Literal[NodeKind.ENTRYKEY] = NodeKind.ENTRYKEY
+    span: fltk.fegen.pyrt.span_protocol.SpanProtocol
+    children: list[tuple[Label | None, fltk.fegen.pyrt.span_protocol.SpanProtocol]]
+
+    def append(self, child: fltk.fegen.pyrt.span_protocol.SpanProtocol, label: Label | None = None) -> None: ...
+
+    def extend(
+        self, children: typing.Iterable[fltk.fegen.pyrt.span_protocol.SpanProtocol], label: Label | None = None
+    ) -> None: ...
+
+    def extend_children(self, other: EntryKey) -> None: ...
+
+    def child(self) -> tuple[Label | None, fltk.fegen.pyrt.span_protocol.SpanProtocol]: ...
+
+    def insert(
+        self, index: int, child: fltk.fegen.pyrt.span_protocol.SpanProtocol, label: Label | None = None
+    ) -> None: ...
+
+    def remove_at(self, index: int) -> tuple[Label | None, fltk.fegen.pyrt.span_protocol.SpanProtocol]: ...
+
+    def replace_at(
+        self, index: int, child: fltk.fegen.pyrt.span_protocol.SpanProtocol, label: Label | None = None
+    ) -> None: ...
+
+    def clear(self) -> None: ...
+
+    def append_value(self, child: fltk.fegen.pyrt.span_protocol.SpanProtocol) -> None: ...
+
+    def extend_value(self, children: typing.Iterable[fltk.fegen.pyrt.span_protocol.SpanProtocol]) -> None: ...
+
+    def children_value(self) -> typing.Iterator[fltk.fegen.pyrt.span_protocol.SpanProtocol]: ...
+
+    def child_value(self) -> fltk.fegen.pyrt.span_protocol.SpanProtocol: ...
+
+    def maybe_value(self) -> fltk.fegen.pyrt.span_protocol.SpanProtocol | None: ...
+
+    def value(self) -> fltk.fegen.pyrt.span_protocol.SpanProtocol: ...
+
+    def value_text(self) -> str: ...
+
+    def text(self) -> str: ...
+
+
+EntryKey.Label.VALUE = _ProtocolLabelMember("EntryKey.Label.VALUE")
+
+
+class Entry(typing.Protocol):
+    class Label:
+        KEY: typing.ClassVar[object]
+        VALUE: typing.ClassVar[object]
+
+    kind: typing.Literal[NodeKind.ENTRY] = NodeKind.ENTRY
+    span: fltk.fegen.pyrt.span_protocol.SpanProtocol
+    children: list[tuple[Label | None, Atom | EntryKey | Trivia]]
+
+    def append(self, child: Atom | EntryKey | Trivia, label: Label | None = None) -> None: ...
+
+    def extend(self, children: typing.Iterable[Atom | EntryKey | Trivia], label: Label | None = None) -> None: ...
+
+    def extend_children(self, other: Entry) -> None: ...
+
+    def child(self) -> tuple[Label | None, Atom | EntryKey | Trivia]: ...
+
+    def insert(self, index: int, child: Atom | EntryKey | Trivia, label: Label | None = None) -> None: ...
+
+    def remove_at(self, index: int) -> tuple[Label | None, Atom | EntryKey | Trivia]: ...
+
+    def replace_at(self, index: int, child: Atom | EntryKey | Trivia, label: Label | None = None) -> None: ...
+
+    def clear(self) -> None: ...
+
+    def append_key(self, child: EntryKey) -> None: ...
+
+    def extend_key(self, children: typing.Iterable[EntryKey]) -> None: ...
+
+    def children_key(self) -> typing.Iterator[EntryKey]: ...
+
+    def child_key(self) -> EntryKey: ...
+
+    def maybe_key(self) -> EntryKey | None: ...
+
+    def append_value(self, child: Atom) -> None: ...
+
+    def extend_value(self, children: typing.Iterable[Atom]) -> None: ...
+
+    def children_value(self) -> typing.Iterator[Atom]: ...
+
+    def child_value(self) -> Atom: ...
+
+    def maybe_value(self) -> Atom | None: ...
+
+    def key(self) -> EntryKey: ...
+
+    def value(self) -> Atom: ...
+
+
+Entry.Label.KEY = _ProtocolLabelMember("Entry.Label.KEY")
+Entry.Label.VALUE = _ProtocolLabelMember("Entry.Label.VALUE")
+
+
+class Entries(typing.Protocol):
+    class Label:
+        ENTRY: typing.ClassVar[object]
+
+    kind: typing.Literal[NodeKind.ENTRIES] = NodeKind.ENTRIES
+    span: fltk.fegen.pyrt.span_protocol.SpanProtocol
+    children: list[tuple[Label | None, Entry | Trivia]]
+
+    def append(self, child: Entry | Trivia, label: Label | None = None) -> None: ...
+
+    def extend(self, children: typing.Iterable[Entry | Trivia], label: Label | None = None) -> None: ...
+
+    def extend_children(self, other: Entries) -> None: ...
+
+    def child(self) -> tuple[Label | None, Entry | Trivia]: ...
+
+    def insert(self, index: int, child: Entry | Trivia, label: Label | None = None) -> None: ...
+
+    def remove_at(self, index: int) -> tuple[Label | None, Entry | Trivia]: ...
+
+    def replace_at(self, index: int, child: Entry | Trivia, label: Label | None = None) -> None: ...
+
+    def clear(self) -> None: ...
+
+    def append_entry(self, child: Entry) -> None: ...
+
+    def extend_entry(self, children: typing.Iterable[Entry]) -> None: ...
+
+    def children_entry(self) -> typing.Iterator[Entry]: ...
+
+    def child_entry(self) -> Entry: ...
+
+    def maybe_entry(self) -> Entry | None: ...
+
+    def entry(self) -> list[Entry]: ...
+
+
+Entries.Label.ENTRY = _ProtocolLabelMember("Entries.Label.ENTRY")
+
+
+class MultiEntry(typing.Protocol):
+    class Label:
+        KEY: typing.ClassVar[object]
+        VALUE: typing.ClassVar[object]
+
+    kind: typing.Literal[NodeKind.MULTIENTRY] = NodeKind.MULTIENTRY
+    span: fltk.fegen.pyrt.span_protocol.SpanProtocol
+    children: list[tuple[Label | None, Atom | EntryKey | Trivia]]
+
+    def append(self, child: Atom | EntryKey | Trivia, label: Label | None = None) -> None: ...
+
+    def extend(self, children: typing.Iterable[Atom | EntryKey | Trivia], label: Label | None = None) -> None: ...
+
+    def extend_children(self, other: MultiEntry) -> None: ...
+
+    def child(self) -> tuple[Label | None, Atom | EntryKey | Trivia]: ...
+
+    def insert(self, index: int, child: Atom | EntryKey | Trivia, label: Label | None = None) -> None: ...
+
+    def remove_at(self, index: int) -> tuple[Label | None, Atom | EntryKey | Trivia]: ...
+
+    def replace_at(self, index: int, child: Atom | EntryKey | Trivia, label: Label | None = None) -> None: ...
+
+    def clear(self) -> None: ...
+
+    def append_key(self, child: EntryKey) -> None: ...
+
+    def extend_key(self, children: typing.Iterable[EntryKey]) -> None: ...
+
+    def children_key(self) -> typing.Iterator[EntryKey]: ...
+
+    def child_key(self) -> EntryKey: ...
+
+    def maybe_key(self) -> EntryKey | None: ...
+
+    def append_value(self, child: Atom) -> None: ...
+
+    def extend_value(self, children: typing.Iterable[Atom]) -> None: ...
+
+    def children_value(self) -> typing.Iterator[Atom]: ...
+
+    def child_value(self) -> Atom: ...
+
+    def maybe_value(self) -> Atom | None: ...
+
+    def key(self) -> EntryKey: ...
+
+    def value(self) -> Atom: ...
+
+
+MultiEntry.Label.KEY = _ProtocolLabelMember("MultiEntry.Label.KEY")
+MultiEntry.Label.VALUE = _ProtocolLabelMember("MultiEntry.Label.VALUE")
+
+
+class MultiEntries(typing.Protocol):
+    class Label:
+        MULTI_ENTRY: typing.ClassVar[object]
+
+    kind: typing.Literal[NodeKind.MULTIENTRIES] = NodeKind.MULTIENTRIES
+    span: fltk.fegen.pyrt.span_protocol.SpanProtocol
+    children: list[tuple[Label | None, MultiEntry | Trivia]]
+
+    def append(self, child: MultiEntry | Trivia, label: Label | None = None) -> None: ...
+
+    def extend(self, children: typing.Iterable[MultiEntry | Trivia], label: Label | None = None) -> None: ...
+
+    def extend_children(self, other: MultiEntries) -> None: ...
+
+    def child(self) -> tuple[Label | None, MultiEntry | Trivia]: ...
+
+    def insert(self, index: int, child: MultiEntry | Trivia, label: Label | None = None) -> None: ...
+
+    def remove_at(self, index: int) -> tuple[Label | None, MultiEntry | Trivia]: ...
+
+    def replace_at(self, index: int, child: MultiEntry | Trivia, label: Label | None = None) -> None: ...
+
+    def clear(self) -> None: ...
+
+    def append_multi_entry(self, child: MultiEntry) -> None: ...
+
+    def extend_multi_entry(self, children: typing.Iterable[MultiEntry]) -> None: ...
+
+    def children_multi_entry(self) -> typing.Iterator[MultiEntry]: ...
+
+    def child_multi_entry(self) -> MultiEntry: ...
+
+    def maybe_multi_entry(self) -> MultiEntry | None: ...
+
+    def multi_entry(self) -> list[MultiEntry]: ...
+
+
+MultiEntries.Label.MULTI_ENTRY = _ProtocolLabelMember("MultiEntries.Label.MULTI_ENTRY")
+
+
 class Trivia(typing.Protocol):
     class Label:
         CONTENT: typing.ClassVar[object]
@@ -2496,6 +2749,21 @@ class CstModule(typing.Protocol):
 
     @property
     def SumChain(self) -> type[SumChain]: ...
+
+    @property
+    def EntryKey(self) -> type[EntryKey]: ...
+
+    @property
+    def Entry(self) -> type[Entry]: ...
+
+    @property
+    def Entries(self) -> type[Entries]: ...
+
+    @property
+    def MultiEntry(self) -> type[MultiEntry]: ...
+
+    @property
+    def MultiEntries(self) -> type[MultiEntries]: ...
 
     @property
     def Trivia(self) -> type[Trivia]: ...

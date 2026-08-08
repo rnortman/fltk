@@ -20,7 +20,7 @@ use fltk_parser_core::{apply, ApplyResult, Cache, ErrorTracker, PackratState, Te
 
 use super::cst;
 
-pub const RULE_NAMES: [&str; 42] = ["num", "name", "atom", "paren_expr", "stmt", "items", "opt_item", "zero_items", "expr", "lval", "rval", "arrow", "latin_word", "tagged", "val", "leading_ws", "grouped", "rec_via_sub", "nest", "nest_sum", "digit_seq", "word_seq", "ws_seq", "three_to_five_digits", "exactly_two_digits", "escaped_metas", "latin_range", "nc_group_alt", "case_insensitive", "anchored_word", "pair", "wrapper", "opt_wrapper", "rep_wrapper", "kw_labels", "quoted", "mixed_opt", "uuid_val", "decimal_val", "colour", "sum_chain", "_trivia"];
+pub const RULE_NAMES: [&str; 47] = ["num", "name", "atom", "paren_expr", "stmt", "items", "opt_item", "zero_items", "expr", "lval", "rval", "arrow", "latin_word", "tagged", "val", "leading_ws", "grouped", "rec_via_sub", "nest", "nest_sum", "digit_seq", "word_seq", "ws_seq", "three_to_five_digits", "exactly_two_digits", "escaped_metas", "latin_range", "nc_group_alt", "case_insensitive", "anchored_word", "pair", "wrapper", "opt_wrapper", "rep_wrapper", "kw_labels", "quoted", "mixed_opt", "uuid_val", "decimal_val", "colour", "sum_chain", "entry_key", "entry", "entries", "multi_entry", "multi_entries", "_trivia"];
 
 const REGEX_PATTERNS: [&str; 19] = ["[0-9]+", "[a-z]+", "[À-ÿ]+", "[!@#$]+", "\\d+", "\\w+", "\\s+", "[0-9]{3,5}", "[0-9]{2}", "\\.\\*\\+", "[À-Ö]+", "(?:ab|cd)+", "(?i)[a-z]+", "^[a-z]+$", "[0-9]", "[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}", "-?[0-9]+\\.[0-9]+", "[-+]", "[\\s]+"];
 static REGEX_CELLS: [OnceLock<Regex>; 19] = [OnceLock::new(), OnceLock::new(), OnceLock::new(), OnceLock::new(), OnceLock::new(), OnceLock::new(), OnceLock::new(), OnceLock::new(), OnceLock::new(), OnceLock::new(), OnceLock::new(), OnceLock::new(), OnceLock::new(), OnceLock::new(), OnceLock::new(), OnceLock::new(), OnceLock::new(), OnceLock::new(), OnceLock::new()];
@@ -78,6 +78,11 @@ pub struct Parser {
     cache__parse_decimal_val: Cache<Shared<cst::DecimalVal>>,
     cache__parse_colour: Cache<Shared<cst::Colour>>,
     cache__parse_sum_chain: Cache<Shared<cst::SumChain>>,
+    cache__parse_entry_key: Cache<Shared<cst::EntryKey>>,
+    cache__parse_entry: Cache<Shared<cst::Entry>>,
+    cache__parse_entries: Cache<Shared<cst::Entries>>,
+    cache__parse_multi_entry: Cache<Shared<cst::MultiEntry>>,
+    cache__parse_multi_entries: Cache<Shared<cst::MultiEntries>>,
     cache__parse__trivia: Cache<Shared<cst::Trivia>>,
 }
 
@@ -134,6 +139,11 @@ impl Parser {
             cache__parse_decimal_val: Cache::new(),
             cache__parse_colour: Cache::new(),
             cache__parse_sum_chain: Cache::new(),
+            cache__parse_entry_key: Cache::new(),
+            cache__parse_entry: Cache::new(),
+            cache__parse_entries: Cache::new(),
+            cache__parse_multi_entry: Cache::new(),
+            cache__parse_multi_entries: Cache::new(),
             cache__parse__trivia: Cache::new(),
         }
     }
@@ -1936,8 +1946,289 @@ impl Parser {
         None
     }
 
+    pub fn apply__parse_entry_key(&mut self, pos: i64) -> Option<ApplyResult<Shared<cst::EntryKey>>> {
+        apply(self, 41u32, pos, |p| &mut p.packrat, |p| &mut p.cache__parse_entry_key, Self::parse_entry_key)
+    }
+
+    fn parse_entry_key__alt0__item0(&mut self, pos: i64) -> Option<ApplyResult<Span>> {
+        self.consume_regex(pos, 1)
+    }
+
+    fn parse_entry_key__alt0(&mut self, mut pos: i64) -> Option<ApplyResult<cst::EntryKey>> {
+        let span_start = pos;
+        let mut result = cst::EntryKey::new(Span::unknown());
+        let item0 = self.parse_entry_key__alt0__item0(pos)?;
+        pos = item0.pos;
+        result.append_value(item0.result);
+        result.set_span(Span::new_with_source(span_start, pos, self.terminals.source_text()));
+        Some(ApplyResult { pos, result })
+    }
+
+    fn parse_entry_key(&mut self, pos: i64) -> Option<ApplyResult<Shared<cst::EntryKey>>> {
+        if let Some(alt0) = self.parse_entry_key__alt0(pos) {
+            return Some(ApplyResult { pos: alt0.pos, result: Shared::new(alt0.result) });
+        }
+        None
+    }
+
+    pub fn apply__parse_entry(&mut self, pos: i64) -> Option<ApplyResult<Shared<cst::Entry>>> {
+        apply(self, 42u32, pos, |p| &mut p.packrat, |p| &mut p.cache__parse_entry, Self::parse_entry)
+    }
+
+    fn parse_entry__alt0__item0(&mut self, pos: i64) -> Option<ApplyResult<Shared<cst::EntryKey>>> {
+        self.apply__parse_entry_key(pos)
+    }
+
+    fn parse_entry__alt0__item1(&mut self, pos: i64) -> Option<ApplyResult<Span>> {
+        self.consume_literal(pos, "=")
+    }
+
+    fn parse_entry__alt0__item2(&mut self, pos: i64) -> Option<ApplyResult<Shared<cst::Atom>>> {
+        self.apply__parse_atom(pos)
+    }
+
+    fn parse_entry__alt0__item3(&mut self, pos: i64) -> Option<ApplyResult<Span>> {
+        self.consume_literal(pos, ";")
+    }
+
+    fn parse_entry__alt0(&mut self, mut pos: i64) -> Option<ApplyResult<cst::Entry>> {
+        let span_start = pos;
+        let mut result = cst::Entry::new(Span::unknown());
+        let item0 = self.parse_entry__alt0__item0(pos)?;
+        pos = item0.pos;
+        result.append_key(item0.result);
+        if let Some(ws) = self.apply__parse__trivia(pos) {
+            pos = ws.pos;
+            if self.capture_trivia {
+                result.push_child(None, cst::EntryChild::Trivia(ws.result));
+            }
+        }
+        let item1 = self.parse_entry__alt0__item1(pos)?;
+        pos = item1.pos;
+        if let Some(ws) = self.apply__parse__trivia(pos) {
+            pos = ws.pos;
+            if self.capture_trivia {
+                result.push_child(None, cst::EntryChild::Trivia(ws.result));
+            }
+        }
+        let item2 = self.parse_entry__alt0__item2(pos)?;
+        pos = item2.pos;
+        result.append_value(item2.result);
+        if let Some(ws) = self.apply__parse__trivia(pos) {
+            pos = ws.pos;
+            if self.capture_trivia {
+                result.push_child(None, cst::EntryChild::Trivia(ws.result));
+            }
+        }
+        let item3 = self.parse_entry__alt0__item3(pos)?;
+        pos = item3.pos;
+        if let Some(ws) = self.apply__parse__trivia(pos) {
+            pos = ws.pos;
+            if self.capture_trivia {
+                result.push_child(None, cst::EntryChild::Trivia(ws.result));
+            }
+        }
+        result.set_span(Span::new_with_source(span_start, pos, self.terminals.source_text()));
+        Some(ApplyResult { pos, result })
+    }
+
+    fn parse_entry(&mut self, pos: i64) -> Option<ApplyResult<Shared<cst::Entry>>> {
+        if let Some(alt0) = self.parse_entry__alt0(pos) {
+            return Some(ApplyResult { pos: alt0.pos, result: Shared::new(alt0.result) });
+        }
+        None
+    }
+
+    pub fn apply__parse_entries(&mut self, pos: i64) -> Option<ApplyResult<Shared<cst::Entries>>> {
+        apply(self, 43u32, pos, |p| &mut p.packrat, |p| &mut p.cache__parse_entries, Self::parse_entries)
+    }
+
+    fn parse_entries__alt0__item0(&mut self, pos: i64) -> Option<ApplyResult<Span>> {
+        self.consume_literal(pos, "{")
+    }
+
+    fn parse_entries__alt0__item1(&mut self, mut pos: i64) -> Option<ApplyResult<cst::Entries>> {
+        let span_start = pos;
+        let mut result = cst::Entries::new(Span::unknown());
+        while let Some(one_result) = {
+            self.apply__parse_entry(pos)
+        } {
+            if one_result.pos <= pos { break; }
+            pos = one_result.pos;
+            result.append_entry(one_result.result);
+        }
+        result.set_span(Span::new_with_source(span_start, pos, self.terminals.source_text()));
+        Some(ApplyResult { pos, result })
+    }
+
+    fn parse_entries__alt0__item2(&mut self, pos: i64) -> Option<ApplyResult<Span>> {
+        self.consume_literal(pos, "}")
+    }
+
+    fn parse_entries__alt0(&mut self, mut pos: i64) -> Option<ApplyResult<cst::Entries>> {
+        let span_start = pos;
+        let mut result = cst::Entries::new(Span::unknown());
+        let item0 = self.parse_entries__alt0__item0(pos)?;
+        pos = item0.pos;
+        if let Some(ws) = self.apply__parse__trivia(pos) {
+            pos = ws.pos;
+            if self.capture_trivia {
+                result.push_child(None, cst::EntriesChild::Trivia(ws.result));
+            }
+        }
+        if let Some(item1) = self.parse_entries__alt0__item1(pos) {
+            pos = item1.pos;
+            result.extend_children(&item1.result);
+        }
+        if let Some(ws) = self.apply__parse__trivia(pos) {
+            pos = ws.pos;
+            if self.capture_trivia {
+                result.push_child(None, cst::EntriesChild::Trivia(ws.result));
+            }
+        }
+        let item2 = self.parse_entries__alt0__item2(pos)?;
+        pos = item2.pos;
+        result.set_span(Span::new_with_source(span_start, pos, self.terminals.source_text()));
+        Some(ApplyResult { pos, result })
+    }
+
+    fn parse_entries(&mut self, pos: i64) -> Option<ApplyResult<Shared<cst::Entries>>> {
+        if let Some(alt0) = self.parse_entries__alt0(pos) {
+            return Some(ApplyResult { pos: alt0.pos, result: Shared::new(alt0.result) });
+        }
+        None
+    }
+
+    pub fn apply__parse_multi_entry(&mut self, pos: i64) -> Option<ApplyResult<Shared<cst::MultiEntry>>> {
+        apply(self, 44u32, pos, |p| &mut p.packrat, |p| &mut p.cache__parse_multi_entry, Self::parse_multi_entry)
+    }
+
+    fn parse_multi_entry__alt0__item0(&mut self, pos: i64) -> Option<ApplyResult<Shared<cst::EntryKey>>> {
+        self.apply__parse_entry_key(pos)
+    }
+
+    fn parse_multi_entry__alt0__item1(&mut self, pos: i64) -> Option<ApplyResult<Span>> {
+        self.consume_literal(pos, "=")
+    }
+
+    fn parse_multi_entry__alt0__item2(&mut self, pos: i64) -> Option<ApplyResult<Shared<cst::Atom>>> {
+        self.apply__parse_atom(pos)
+    }
+
+    fn parse_multi_entry__alt0__item3(&mut self, pos: i64) -> Option<ApplyResult<Span>> {
+        self.consume_literal(pos, ";")
+    }
+
+    fn parse_multi_entry__alt0(&mut self, mut pos: i64) -> Option<ApplyResult<cst::MultiEntry>> {
+        let span_start = pos;
+        let mut result = cst::MultiEntry::new(Span::unknown());
+        let item0 = self.parse_multi_entry__alt0__item0(pos)?;
+        pos = item0.pos;
+        result.append_key(item0.result);
+        if let Some(ws) = self.apply__parse__trivia(pos) {
+            pos = ws.pos;
+            if self.capture_trivia {
+                result.push_child(None, cst::MultiEntryChild::Trivia(ws.result));
+            }
+        }
+        let item1 = self.parse_multi_entry__alt0__item1(pos)?;
+        pos = item1.pos;
+        if let Some(ws) = self.apply__parse__trivia(pos) {
+            pos = ws.pos;
+            if self.capture_trivia {
+                result.push_child(None, cst::MultiEntryChild::Trivia(ws.result));
+            }
+        }
+        let item2 = self.parse_multi_entry__alt0__item2(pos)?;
+        pos = item2.pos;
+        result.append_value(item2.result);
+        if let Some(ws) = self.apply__parse__trivia(pos) {
+            pos = ws.pos;
+            if self.capture_trivia {
+                result.push_child(None, cst::MultiEntryChild::Trivia(ws.result));
+            }
+        }
+        let item3 = self.parse_multi_entry__alt0__item3(pos)?;
+        pos = item3.pos;
+        if let Some(ws) = self.apply__parse__trivia(pos) {
+            pos = ws.pos;
+            if self.capture_trivia {
+                result.push_child(None, cst::MultiEntryChild::Trivia(ws.result));
+            }
+        }
+        result.set_span(Span::new_with_source(span_start, pos, self.terminals.source_text()));
+        Some(ApplyResult { pos, result })
+    }
+
+    fn parse_multi_entry(&mut self, pos: i64) -> Option<ApplyResult<Shared<cst::MultiEntry>>> {
+        if let Some(alt0) = self.parse_multi_entry__alt0(pos) {
+            return Some(ApplyResult { pos: alt0.pos, result: Shared::new(alt0.result) });
+        }
+        None
+    }
+
+    pub fn apply__parse_multi_entries(&mut self, pos: i64) -> Option<ApplyResult<Shared<cst::MultiEntries>>> {
+        apply(self, 45u32, pos, |p| &mut p.packrat, |p| &mut p.cache__parse_multi_entries, Self::parse_multi_entries)
+    }
+
+    fn parse_multi_entries__alt0__item0(&mut self, pos: i64) -> Option<ApplyResult<Span>> {
+        self.consume_literal(pos, "{")
+    }
+
+    fn parse_multi_entries__alt0__item1(&mut self, mut pos: i64) -> Option<ApplyResult<cst::MultiEntries>> {
+        let span_start = pos;
+        let mut result = cst::MultiEntries::new(Span::unknown());
+        while let Some(one_result) = {
+            self.apply__parse_multi_entry(pos)
+        } {
+            if one_result.pos <= pos { break; }
+            pos = one_result.pos;
+            result.append_multi_entry(one_result.result);
+        }
+        result.set_span(Span::new_with_source(span_start, pos, self.terminals.source_text()));
+        Some(ApplyResult { pos, result })
+    }
+
+    fn parse_multi_entries__alt0__item2(&mut self, pos: i64) -> Option<ApplyResult<Span>> {
+        self.consume_literal(pos, "}")
+    }
+
+    fn parse_multi_entries__alt0(&mut self, mut pos: i64) -> Option<ApplyResult<cst::MultiEntries>> {
+        let span_start = pos;
+        let mut result = cst::MultiEntries::new(Span::unknown());
+        let item0 = self.parse_multi_entries__alt0__item0(pos)?;
+        pos = item0.pos;
+        if let Some(ws) = self.apply__parse__trivia(pos) {
+            pos = ws.pos;
+            if self.capture_trivia {
+                result.push_child(None, cst::MultiEntriesChild::Trivia(ws.result));
+            }
+        }
+        if let Some(item1) = self.parse_multi_entries__alt0__item1(pos) {
+            pos = item1.pos;
+            result.extend_children(&item1.result);
+        }
+        if let Some(ws) = self.apply__parse__trivia(pos) {
+            pos = ws.pos;
+            if self.capture_trivia {
+                result.push_child(None, cst::MultiEntriesChild::Trivia(ws.result));
+            }
+        }
+        let item2 = self.parse_multi_entries__alt0__item2(pos)?;
+        pos = item2.pos;
+        result.set_span(Span::new_with_source(span_start, pos, self.terminals.source_text()));
+        Some(ApplyResult { pos, result })
+    }
+
+    fn parse_multi_entries(&mut self, pos: i64) -> Option<ApplyResult<Shared<cst::MultiEntries>>> {
+        if let Some(alt0) = self.parse_multi_entries__alt0(pos) {
+            return Some(ApplyResult { pos: alt0.pos, result: Shared::new(alt0.result) });
+        }
+        None
+    }
+
     pub fn apply__parse__trivia(&mut self, pos: i64) -> Option<ApplyResult<Shared<cst::Trivia>>> {
-        apply(self, 41u32, pos, |p| &mut p.packrat, |p| &mut p.cache__parse__trivia, Self::parse__trivia)
+        apply(self, 46u32, pos, |p| &mut p.packrat, |p| &mut p.cache__parse__trivia, Self::parse__trivia)
     }
 
     fn parse__trivia__alt0__item0(&mut self, pos: i64) -> Option<ApplyResult<Span>> {
@@ -2695,6 +2986,86 @@ mod python_bindings {
             match result {
                 Some(r) => {
                     let handle = cst::PySumChain::to_py_canonical(py, &r.result)?;
+                    Ok(Some(PyApplyResult { pos: r.pos, result: handle.into_any() }))
+                }
+                None => Ok(None),
+            }
+        }
+
+        fn apply__parse_entry_key(&mut self, py: Python<'_>, pos: i64) -> PyResult<Option<PyApplyResult>> {
+            self.check_pos(pos)?;
+            let result = self.inner.apply__parse_entry_key(pos);
+            if self.inner.depth_exceeded() {
+                return Err(PyRecursionError::new_err(format!(
+                    "parse depth limit exceeded (max_depth = {})", self.inner.max_depth())));
+            }
+            match result {
+                Some(r) => {
+                    let handle = cst::PyEntryKey::to_py_canonical(py, &r.result)?;
+                    Ok(Some(PyApplyResult { pos: r.pos, result: handle.into_any() }))
+                }
+                None => Ok(None),
+            }
+        }
+
+        fn apply__parse_entry(&mut self, py: Python<'_>, pos: i64) -> PyResult<Option<PyApplyResult>> {
+            self.check_pos(pos)?;
+            let result = self.inner.apply__parse_entry(pos);
+            if self.inner.depth_exceeded() {
+                return Err(PyRecursionError::new_err(format!(
+                    "parse depth limit exceeded (max_depth = {})", self.inner.max_depth())));
+            }
+            match result {
+                Some(r) => {
+                    let handle = cst::PyEntry::to_py_canonical(py, &r.result)?;
+                    Ok(Some(PyApplyResult { pos: r.pos, result: handle.into_any() }))
+                }
+                None => Ok(None),
+            }
+        }
+
+        fn apply__parse_entries(&mut self, py: Python<'_>, pos: i64) -> PyResult<Option<PyApplyResult>> {
+            self.check_pos(pos)?;
+            let result = self.inner.apply__parse_entries(pos);
+            if self.inner.depth_exceeded() {
+                return Err(PyRecursionError::new_err(format!(
+                    "parse depth limit exceeded (max_depth = {})", self.inner.max_depth())));
+            }
+            match result {
+                Some(r) => {
+                    let handle = cst::PyEntries::to_py_canonical(py, &r.result)?;
+                    Ok(Some(PyApplyResult { pos: r.pos, result: handle.into_any() }))
+                }
+                None => Ok(None),
+            }
+        }
+
+        fn apply__parse_multi_entry(&mut self, py: Python<'_>, pos: i64) -> PyResult<Option<PyApplyResult>> {
+            self.check_pos(pos)?;
+            let result = self.inner.apply__parse_multi_entry(pos);
+            if self.inner.depth_exceeded() {
+                return Err(PyRecursionError::new_err(format!(
+                    "parse depth limit exceeded (max_depth = {})", self.inner.max_depth())));
+            }
+            match result {
+                Some(r) => {
+                    let handle = cst::PyMultiEntry::to_py_canonical(py, &r.result)?;
+                    Ok(Some(PyApplyResult { pos: r.pos, result: handle.into_any() }))
+                }
+                None => Ok(None),
+            }
+        }
+
+        fn apply__parse_multi_entries(&mut self, py: Python<'_>, pos: i64) -> PyResult<Option<PyApplyResult>> {
+            self.check_pos(pos)?;
+            let result = self.inner.apply__parse_multi_entries(pos);
+            if self.inner.depth_exceeded() {
+                return Err(PyRecursionError::new_err(format!(
+                    "parse depth limit exceeded (max_depth = {})", self.inner.max_depth())));
+            }
+            match result {
+                Some(r) => {
+                    let handle = cst::PyMultiEntries::to_py_canonical(py, &r.result)?;
                     Ok(Some(PyApplyResult { pos: r.pos, result: handle.into_any() }))
                 }
                 None => Ok(None),

@@ -29,8 +29,9 @@ from collections.abc import Sequence
 from fltk.fegen import ast_config as ac
 from fltk.fegen import ast_model as am
 from fltk.fegen import naming, rust_emit
-from fltk.fegen.gsm2parser_rs import cst_module_import, module_import, rust_str_lit
+from fltk.fegen.gsm2parser_rs import cst_module_import, module_import
 from fltk.fegen.gsm2tree_rs import RustCstGenerator
+from fltk.fegen.rust_emit import rust_str_lit
 
 RUNTIME = "::fltk_serde_core"
 _CST_RUNTIME = "::fltk_cst_core"

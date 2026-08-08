@@ -2103,7 +2103,7 @@ def test_gen_rust_ast_entry_points_follow_module_paths(ast_grammar_file: pathlib
     src = output_rs.read_text()
     assert "use super::parser;" in src
     assert "use super::unparser;" in src
-    assert "pub fn parse_str(src: &str, filename: Option<&str>) -> Result<Entry," in src
+    assert "pub fn parse_str(src: &str, filename: ::std::option::Option<&str>) -> ::std::result::Result<Entry," in src
     assert "pub fn unparse_str(value: &Entry, max_width: usize, indent_width: usize)" in src
 
 
@@ -2181,7 +2181,7 @@ def test_gen_rust_ast_applies_an_ast_config(ast_grammar_file: pathlib.Path, tmp_
     src = output_rs.read_text()
     assert "pub struct Setting {" in src
     assert "pub struct Entry {" not in src
-    assert "pub entries: Vec<Setting>," in src
+    assert "pub entries: ::std::vec::Vec<Setting>," in src
 
 
 def test_gen_rust_ast_config_only_needs_the_rust_custom_entries(

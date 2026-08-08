@@ -11,6 +11,17 @@ from collections.abc import Iterable
 
 from fltk.fegen import cst_ergonomics, gsm, naming
 from fltk.fegen.gsm2tree import CstGenerator, ItemsModel, ModelType
+from fltk.fegen.rust_emit import (
+    STD_DROP,
+    STD_INTO,
+    STD_INTO_ITERATOR,
+    STD_ITERATOR,
+    STD_OPTION,
+    STD_PARTIAL_EQ,
+    STD_RESULT,
+    STD_STRING,
+    STD_VEC,
+)
 from fltk.iir.context import create_default_context
 from fltk.iir.py import reg as pyreg
 
@@ -855,13 +866,7 @@ class RustCstGenerator:
         return f"Py{class_name}"
 
     def class_name_for_rule(self, rule_name: str) -> str:
-        """Return the CamelCase class name (CN) for a grammar rule name.
-
-        TODO(rust-type-names-shadow-the-prelude): a rule named ``option`` / ``result`` /
-        ``string`` yields a struct that shadows the prelude type of that name inside the
-        generated module, which spells those types bare; the module then does not compile.
-        Either qualify the prelude spellings or refuse the colliding names here.
-        """
+        """Return the CamelCase class name (CN) for a grammar rule name."""
         return self._py_gen.class_name_for_rule_node(rule_name)
 
     def rule_has_labels(self, rule_name: str) -> bool:
@@ -940,7 +945,7 @@ class RustCstGenerator:
         # Only emit `_ => false` when there are multiple variants; with a single variant the
         # wildcard arm would be unreachable and trigger a clippy/rustc warning.
         num_variants = self.num_child_variants(rule_name)
-        lines.append(f"impl PartialEq for {enum_name} {{")
+        lines.append(f"impl {STD_PARTIAL_EQ} for {enum_name} {{")
         lines.append("    fn eq(&self, other: &Self) -> bool {")
         lines.append("        match (self, other) {")
         if has_span:
@@ -975,7 +980,7 @@ class RustCstGenerator:
         if needs_drop_item:
             worklist_param = "_worklist" if not child_classes else "worklist"
             lines.append(f"impl {enum_name} {{")
-            lines.append("    fn into_drop_item(self) -> Option<DropWorklistItem> {")
+            lines.append(f"    fn into_drop_item(self) -> {STD_OPTION}<DropWorklistItem> {{")
             lines.append("        match self {")
             if has_span:
                 lines.append("            Self::Span(_) => None,")
@@ -988,7 +993,8 @@ class RustCstGenerator:
             lines.append("    /// Span pair: compare directly. Node pair: ptr_eq short-circuit (skip enqueue)")
             lines.append("    /// or enqueue for the worklist. Variant mismatch: return false.")
             lines.append(
-                f"    fn eq_shallow_enqueue(&self, other: &Self, {worklist_param}: &mut Vec<EqWorklistItem>) -> bool {{"
+                f"    fn eq_shallow_enqueue(&self, other: &Self, "
+                f"{worklist_param}: &mut {STD_VEC}<EqWorklistItem>) -> bool {{"
             )
             lines.append("        match (self, other) {")
             if has_span:
@@ -1100,7 +1106,7 @@ class RustCstGenerator:
         child_classes, _has_span = self._child_variants_for_rule(rule_name)
         enum_name = self.child_enum_name(class_name)
         label_enum_name = self._label_enum_rust_name(class_name) if labels else ""
-        label_type = f"Option<{label_enum_name}>" if labels else "Option<()>"
+        label_type = f"{STD_OPTION}<{label_enum_name}>" if labels else f"{STD_OPTION}<()>"
         py_handle = self.py_handle_name(class_name)
         lines: list[str] = []
 
@@ -1128,7 +1134,7 @@ class RustCstGenerator:
         lines.append("    // Not pub: use span() / children() / push_child() — the stable accessor API.")
         lines.append("    // Direct field access bypasses any future validation logic on setters.")
         lines.append("    span: Span,")
-        lines.append(f"    children: Vec<({label_type}, {enum_name})>,")
+        lines.append(f"    children: {STD_VEC}<({label_type}, {enum_name})>,")
         lines.append("}")
         lines.append("")
 
@@ -1161,7 +1167,7 @@ class RustCstGenerator:
             lines.append("// Iterative Drop: derived drop glue would recurse through Shared children")
             lines.append("// one frame set per tree level (attacker-controlled depth → stack")
             lines.append("// exhaustion, uncatchable abort). Drains the subtree via a worklist instead.")
-            lines.append(f"impl Drop for {class_name} {{")
+            lines.append(f"impl {STD_DROP} for {class_name} {{")
             lines.append("    fn drop(&mut self) {")
             lines.append("        if self.children.is_empty() {")
             lines.append("            return; // also the recursion terminator for nodes drained by the worklist")
@@ -1170,7 +1176,7 @@ class RustCstGenerator:
             lines.append("        // the first push.  drain_into pushes only when it steals (count == 1).")
             lines.append("        // In the common backtracking case (shared/memoized children) no steal")
             lines.append("        // occurs and no allocation happens.  Owned deep chains allocate once.")
-            lines.append("        let mut worklist: Vec<DropWorklistItem> = Vec::new();")
+            lines.append(f"        let mut worklist: {STD_VEC}<DropWorklistItem> = {STD_VEC}::new();")
             lines.append("        for (_, child) in self.children.drain(..) {")
             lines.append("            if let Some(item) = child.into_drop_item() {")
             lines.append("                item.drain_into(&mut worklist);")
@@ -1191,14 +1197,14 @@ class RustCstGenerator:
             lines.append("// Iterative PartialEq: the recursive version would recurse through Shared children")
             lines.append("// one frame set per tree level (attacker-controlled depth → stack")
             lines.append("// exhaustion, uncatchable abort). Uses an explicit worklist of node pairs.")
-            lines.append(f"impl PartialEq for {class_name} {{")
+            lines.append(f"impl {STD_PARTIAL_EQ} for {class_name} {{")
             lines.append("    fn eq(&self, other: &Self) -> bool {")
             lines.append("        if self.span != other.span || self.children.len() != other.children.len() {")
             lines.append("            return false;")
             lines.append("        }")
             lines.append("        // Worklist allocated lazily (Vec::new does not heap-allocate until")
             lines.append("        // first push); shallow trees and all-ptr_eq children never allocate.")
-            lines.append("        let mut worklist: Vec<EqWorklistItem> = Vec::new();")
+            lines.append(f"        let mut worklist: {STD_VEC}<EqWorklistItem> = {STD_VEC}::new();")
             lines.append("        for ((la, ca), (lb, cb)) in self.children.iter().zip(other.children.iter()) {")
             lines.append("            if la != lb || !ca.eq_shallow_enqueue(cb, &mut worklist) {")
             lines.append("                return false;")
@@ -1217,7 +1223,7 @@ class RustCstGenerator:
             # Span-only class: no node-typed children, so PartialEq cannot recurse — depth-safe.
             # Mirrors the Drop precedent: span-only nodes get no impl Drop for the same reason.
             lines.append("// Span-only PartialEq: no node-typed children, so this cannot recurse — depth-safe.")
-            lines.append(f"impl PartialEq for {class_name} {{")
+            lines.append(f"impl {STD_PARTIAL_EQ} for {class_name} {{")
             lines.append("    fn eq(&self, other: &Self) -> bool {")
             lines.append("        self.span == other.span && self.children == other.children")
             lines.append("    }")
@@ -1232,7 +1238,7 @@ class RustCstGenerator:
         lines.append("    pub fn new(span: Span) -> Self {")
         lines.append(f"        {class_name} {{")
         lines.append("            span,")
-        lines.append("            children: Vec::new(),")
+        lines.append(f"            children: {STD_VEC}::new(),")
         lines.append("        }")
         lines.append("    }")
         lines.append("")
@@ -1271,7 +1277,7 @@ class RustCstGenerator:
         lines.append("    /// Return the single child (any label), or `Err` if there is not exactly one.")
         lines.append("    ///")
         lines.append("    /// Mirrors the Python `child()` method: count violation → `CstError::ChildCount`.")
-        lines.append(f"    pub fn child(&self) -> Result<&({label_type}, {enum_name}), CstError> {{")
+        lines.append(f"    pub fn child(&self) -> {STD_RESULT}<&({label_type}, {enum_name}), CstError> {{")
         lines.append("        match self.children.as_slice() {")
         lines.append("            [single] => Ok(single),")
         lines.append("            slice => Err(CstError::ChildCount {")
@@ -1386,14 +1392,17 @@ class RustCstGenerator:
         return [
             "    #[new]",
             "    #[pyo3(signature = (*, span = None))]",
-            f"    fn new(py: Python<'_>, span: Option<&Bound<'_, pyo3::PyAny>>) -> pyo3::PyResult<Py<{py_handle}>> {{",
+            (
+                f"    fn new(py: Python<'_>, span: {STD_OPTION}<&Bound<'_, pyo3::PyAny>>)"
+                f" -> pyo3::PyResult<Py<{py_handle}>> {{"
+            ),
             "        let native_span = match span {",
             "            Some(s) => extract_span(py, s)?,",
             "            None => Span::unknown(),",
             "        };",
             f"        let data = {class_name} {{",
             "            span: native_span,",
-            "            children: Vec::new(),",
+            f"            children: {STD_VEC}::new(),",
             "        };",
             "        let shared = Shared::new(data);",
             "        let addr = shared.arc_ptr();",
@@ -1465,7 +1474,7 @@ class RustCstGenerator:
             "    fn children(&self, py: Python<'_>) -> pyo3::PyResult<Py<pyo3::types::PyList>> {",
             "        // Snapshot the children vec (Arc clones for node children — O(n) refcount bumps).",
             "        // Lock scope: acquire read, snapshot, release before touching Python.",
-            "        let snapshot: Vec<_> = {",
+            f"        let snapshot: {STD_VEC}<_> = {{",
             "            let guard = self.inner.read();",
             "            guard.children.clone()",
             "        };",
@@ -1488,7 +1497,7 @@ class RustCstGenerator:
         return [
             "    #[pyo3(signature = (child, label = None))]",
             "    fn append(",
-            "        &self, py: Python<'_>, child: &Bound<'_, pyo3::PyAny>, label: Option<Py<pyo3::PyAny>>,",
+            f"        &self, py: Python<'_>, child: &Bound<'_, pyo3::PyAny>, label: {STD_OPTION}<Py<pyo3::PyAny>>,",
             "    ) -> pyo3::PyResult<()> {",
             "        let span_type = get_span_type(py)?;",
             f"        let native_child = {enum_name}::extract_from_pyobject(py, child, &span_type)?;",
@@ -1541,7 +1550,7 @@ class RustCstGenerator:
             "        &self,",
             "        py: Python<'_>,",
             "        children: &Bound<'_, pyo3::PyAny>,",
-            "        label: Option<Py<pyo3::PyAny>>,",
+            f"        label: {STD_OPTION}<Py<pyo3::PyAny>>,",
             "    ) -> pyo3::PyResult<()> {",
             "        let span_type = get_span_type(py)?;",
             "        let native_label = match label {",
@@ -1574,7 +1583,7 @@ class RustCstGenerator:
             "        // the same node (self-extend). No ptr_eq call is needed here — the snapshot",
             "        // approach handles self-extend structurally.",
             "        // Lock scope: hold read only long enough to clone the Arc-based children vec.",
-            "        let snapshot: Vec<_> = {",
+            f"        let snapshot: {STD_VEC}<_> = {{",
             "            let guard = other.inner.read();",
             "            guard.children.clone()",
             "        };",
@@ -1666,7 +1675,7 @@ class RustCstGenerator:
             "        py: Python<'_>,",
             "        index: &Bound<'_, pyo3::PyAny>,",
             "        child: &Bound<'_, pyo3::PyAny>,",
-            "        label: Option<Py<pyo3::PyAny>>,",
+            f"        label: {STD_OPTION}<Py<pyo3::PyAny>>,",
             "    ) -> pyo3::PyResult<()> {",
             "        // Validate child and label BEFORE taking the write lock.",
             "        let span_type = get_span_type(py)?;",
@@ -1724,7 +1733,7 @@ class RustCstGenerator:
         tests).
         """
         return [
-            "            let resolved: Option<usize> = match maybe_i64 {",
+            f"            let resolved: {STD_OPTION}<usize> = match maybe_i64 {{",
             "                Some(i) if i < 0 => {",
             "                    let normalized = n as i64 + i;",
             "                    if normalized < 0 || normalized as usize >= n { None }",
@@ -1753,10 +1762,10 @@ class RustCstGenerator:
             '            .getattr(pyo3::intern!(py, "index"))?',
             "            .call1((index,))?;",
             "        // Fast path: extract i64. Beyond i64 is always OOB for real trees.",
-            "        let maybe_i64: Option<i64> = raw_idx.extract::<i64>().ok();",
+            f"        let maybe_i64: {STD_OPTION}<i64> = raw_idx.extract::<i64>().ok();",
             "        // Single write lock: resolve + bounds-check + Vec::remove atomically (no TOCTOU).",
             "        // On OOB, capture n and return Err after releasing the guard.",
-            "        let result: Result<_, usize> = {",
+            f"        let result: {STD_RESULT}<_, usize> = {{",
             "            let mut guard = self.inner.write();",
             "            let n = guard.children.len();",
             *self._emit_resolve_index_stmts(),
@@ -1795,7 +1804,7 @@ class RustCstGenerator:
             "        py: Python<'_>,",
             "        index: &Bound<'_, pyo3::PyAny>,",
             "        child: &Bound<'_, pyo3::PyAny>,",
-            "        label: Option<Py<pyo3::PyAny>>,",
+            f"        label: {STD_OPTION}<Py<pyo3::PyAny>>,",
             "    ) -> pyo3::PyResult<()> {",
             "        // Validate child and label BEFORE taking the write lock.",
             "        let span_type = get_span_type(py)?;",
@@ -1811,7 +1820,7 @@ class RustCstGenerator:
             '            .import(pyo3::intern!(py, "operator"))?',
             '            .getattr(pyo3::intern!(py, "index"))?',
             "            .call1((index,))?;",
-            "        let maybe_i64: Option<i64> = raw_idx.extract::<i64>().ok();",
+            f"        let maybe_i64: {STD_OPTION}<i64> = raw_idx.extract::<i64>().ok();",
             "        // Single write lock: resolve + bounds-check + mem::replace atomically (no TOCTOU).",
             "        let old = {",
             "            let mut guard = self.inner.write();",
@@ -1918,7 +1927,7 @@ class RustCstGenerator:
                 lines.append("    ///")
                 lines.append(f"    /// Off-type variants stored under the `{label}` label are silently skipped.")
                 lines.append("    /// Use `children()` (the untyped slice) for a lossless view.")
-                lines.append(f"    pub fn children_{label}(&self) -> impl Iterator<Item = {ref_type}> + '_ {{")
+                lines.append(f"    pub fn children_{label}(&self) -> impl {STD_ITERATOR}<Item = {ref_type}> + '_ {{")
                 lines.append("        self.children.iter()")
                 lines.append(f"            .filter(|(lbl, _)| *lbl == Some({label_enum_name}::{rust_variant}))")
                 if need_wildcard:
@@ -1939,7 +1948,7 @@ class RustCstGenerator:
                 lines.append("    ///")
                 lines.append(f"    /// Off-type variants stored under the `{label}` label are silently skipped.")
                 lines.append("    /// Use `children()` (the untyped slice) for a lossless view.")
-                lines.append(f"    pub fn children_{label}(&self) -> impl Iterator<Item = {ref_type}> + '_ {{")
+                lines.append(f"    pub fn children_{label}(&self) -> impl {STD_ITERATOR}<Item = {ref_type}> + '_ {{")
                 lines.append("        self.children.iter()")
                 lines.append(f"            .filter(|(lbl, _)| *lbl == Some({label_enum_name}::{rust_variant}))")
                 if need_wildcard:
@@ -1954,7 +1963,7 @@ class RustCstGenerator:
             else:
                 # Union label: return the whole child enum ref (no type filtering)
                 lines.append(f"    /// Return an iterator over children labelled `{label}`.")
-                lines.append(f"    pub fn children_{label}(&self) -> impl Iterator<Item = {ref_type}> + '_ {{")
+                lines.append(f"    pub fn children_{label}(&self) -> impl {STD_ITERATOR}<Item = {ref_type}> + '_ {{")
                 lines.append("        self.children.iter()")
                 lines.append(f"            .filter(|(lbl, _)| *lbl == Some({label_enum_name}::{rust_variant}))")
                 lines.append("            .map(|(_, child)| child)")
@@ -1970,7 +1979,7 @@ class RustCstGenerator:
             if single_node_cls:
                 # When total_variants == 1, the single-typed match arm is exhaustive; no wildcard needed.
                 need_unexpected_arm = total_variants > 1
-                lines.append(f"    pub fn child_{label}(&self) -> Result<{ref_type}, CstError> {{")
+                lines.append(f"    pub fn child_{label}(&self) -> {STD_RESULT}<{ref_type}, CstError> {{")
                 # Zero-alloc: use (next, next) iterator match; recount only on the error path.
                 lines.append("        let mut it = self.children.iter()")
                 lines.append(f"            .filter(|(lbl, _)| *lbl == Some({label_enum_name}::{rust_variant}));")
@@ -1991,7 +2000,7 @@ class RustCstGenerator:
                 lines.append("    }")
             elif ref_type == "&Span":
                 need_unexpected_arm = total_variants > 1
-                lines.append(f"    pub fn child_{label}(&self) -> Result<{ref_type}, CstError> {{")
+                lines.append(f"    pub fn child_{label}(&self) -> {STD_RESULT}<{ref_type}, CstError> {{")
                 # Zero-alloc: use (next, next) iterator match; recount only on the error path.
                 lines.append("        let mut it = self.children.iter()")
                 lines.append(f"            .filter(|(lbl, _)| *lbl == Some({label_enum_name}::{rust_variant}));")
@@ -2012,7 +2021,7 @@ class RustCstGenerator:
                 lines.append("    }")
             else:
                 # Union: no type check needed.
-                lines.append(f"    pub fn child_{label}(&self) -> Result<{ref_type}, CstError> {{")
+                lines.append(f"    pub fn child_{label}(&self) -> {STD_RESULT}<{ref_type}, CstError> {{")
                 lines.append("        let mut matching = self.children.iter()")
                 lines.append(f"            .filter(|(lbl, _)| *lbl == Some({label_enum_name}::{rust_variant}));")
                 lines.append("        match (matching.next(), matching.next()) {")
@@ -2038,7 +2047,7 @@ class RustCstGenerator:
             lines.append("    /// `Err(CstError::ChildCount)` for two or more.")
             if single_node_cls:
                 need_unexpected_arm = total_variants > 1
-                lines.append(f"    pub fn maybe_{label}(&self) -> Result<Option<{ref_type}>, CstError> {{")
+                lines.append(f"    pub fn maybe_{label}(&self) -> {STD_RESULT}<{STD_OPTION}<{ref_type}>, CstError> {{")
                 # Zero-alloc: use (next, next) iterator match; recount only on the error path.
                 lines.append("        let mut it = self.children.iter()")
                 lines.append(f"            .filter(|(lbl, _)| *lbl == Some({label_enum_name}::{rust_variant}));")
@@ -2060,7 +2069,7 @@ class RustCstGenerator:
                 lines.append("    }")
             elif ref_type == "&Span":
                 need_unexpected_arm = total_variants > 1
-                lines.append(f"    pub fn maybe_{label}(&self) -> Result<Option<{ref_type}>, CstError> {{")
+                lines.append(f"    pub fn maybe_{label}(&self) -> {STD_RESULT}<{STD_OPTION}<{ref_type}>, CstError> {{")
                 # Zero-alloc: use (next, next) iterator match; recount only on the error path.
                 lines.append("        let mut it = self.children.iter()")
                 lines.append(f"            .filter(|(lbl, _)| *lbl == Some({label_enum_name}::{rust_variant}));")
@@ -2082,7 +2091,7 @@ class RustCstGenerator:
                 lines.append("    }")
             else:
                 # Union: no type check.
-                lines.append(f"    pub fn maybe_{label}(&self) -> Result<Option<{ref_type}>, CstError> {{")
+                lines.append(f"    pub fn maybe_{label}(&self) -> {STD_RESULT}<{STD_OPTION}<{ref_type}>, CstError> {{")
                 lines.append("        let mut matching = self.children.iter()")
                 lines.append(f"            .filter(|(lbl, _)| *lbl == Some({label_enum_name}::{rust_variant}));")
                 lines.append("        match (matching.next(), matching.next()) {")
@@ -2108,7 +2117,9 @@ class RustCstGenerator:
                     f"    /// Append a child with label `{label}`,"
                     f" accepting `{single_node_cls}` or `Shared<{single_node_cls}>`."
                 )
-                lines.append(f"    pub fn append_{label}(&mut self, child: impl Into<Shared<{single_node_cls}>>) {{")
+                lines.append(
+                    f"    pub fn append_{label}(&mut self, child: impl {STD_INTO}<Shared<{single_node_cls}>>) {{"
+                )
                 lines.append(
                     f"        self.children.push((Some({label_enum_name}::{rust_variant}),"
                     f" {enum_name}::{single_node_cls}(child.into())));"
@@ -2118,7 +2129,7 @@ class RustCstGenerator:
                 lines.append(f"    /// Append multiple children with label `{label}`.")
                 lines.append(
                     f"    pub fn extend_{label}(&mut self,"
-                    f" children: impl IntoIterator<Item = impl Into<Shared<{single_node_cls}>>>) {{"
+                    f" children: impl {STD_INTO_ITERATOR}<Item = impl {STD_INTO}<Shared<{single_node_cls}>>>) {{"
                 )
                 lines.append(
                     f"        self.children.extend(children.into_iter()"
@@ -2134,7 +2145,7 @@ class RustCstGenerator:
                 lines.append("    }")
                 lines.append("")
                 lines.append(f"    /// Append multiple `Span` children with label `{label}`.")
-                lines.append(f"    pub fn extend_{label}(&mut self, spans: impl IntoIterator<Item = Span>) {{")
+                lines.append(f"    pub fn extend_{label}(&mut self, spans: impl {STD_INTO_ITERATOR}<Item = Span>) {{")
                 lines.append(
                     f"        self.children.extend(spans.into_iter()"
                     f".map(|s| (Some({label_enum_name}::{rust_variant}), {enum_name}::Span(s))));"
@@ -2149,7 +2160,7 @@ class RustCstGenerator:
                 lines.append("")
                 lines.append(f"    /// Append multiple children with label `{label}`.")
                 lines.append(
-                    f"    pub fn extend_{label}(&mut self, children: impl IntoIterator<Item = {enum_name}>) {{"
+                    f"    pub fn extend_{label}(&mut self, children: impl {STD_INTO_ITERATOR}<Item = {enum_name}>) {{"
                 )
                 lines.append(
                     f"        self.children.extend(children.into_iter()"
@@ -2215,7 +2226,7 @@ class RustCstGenerator:
                         f"    /// Return the optional child labelled `{label}`.",
                         "    ///",
                         f"    /// Panics if more than one is present; use `maybe_{label}` for the checked form.",
-                        f"    pub fn {method}(&self) -> Option<{ref_type}> {{",
+                        f"    pub fn {method}(&self) -> {STD_OPTION}<{ref_type}> {{",
                         f"        self.maybe_{label}()",
                         f'            .unwrap_or_else(|e| panic!("{class_name}.{label}: {{e}}"))',
                         "    }",
@@ -2228,7 +2239,7 @@ class RustCstGenerator:
                         f"    /// Return an iterator over the children labelled `{label}`.",
                         "    ///",
                         f"    /// Arity-named alias of `children_{label}`.",
-                        f"    pub fn {method}(&self) -> impl Iterator<Item = {ref_type}> + '_ {{",
+                        f"    pub fn {method}(&self) -> impl {STD_ITERATOR}<Item = {ref_type}> + '_ {{",
                         f"        self.children_{label}()",
                         "    }",
                     ]
@@ -2262,7 +2273,7 @@ class RustCstGenerator:
                         "    ///",
                         "    /// `None` when the child is absent; panics if more than one is present or the",
                         "    /// span carries no usable source.",
-                        f"    pub fn {text_name}(&self) -> Option<&str> {{",
+                        f"    pub fn {text_name}(&self) -> {STD_OPTION}<&str> {{",
                         "        Some(",
                         f"            self.maybe_{label}()",
                         f'                .unwrap_or_else(|e| panic!("{class_name}.{label}_text: {{e}}"))?',
@@ -2338,7 +2349,10 @@ class RustCstGenerator:
                 elif arity == cst_ergonomics.ArityClass.OPTIONAL_SINGLE:
                     lines.extend(
                         [
-                            f"    fn {method}(&self, py: Python<'_>) -> pyo3::PyResult<Option<Py<pyo3::PyAny>>> {{",
+                            (
+                                f"    fn {method}(&self, py: Python<'_>)"
+                                f" -> pyo3::PyResult<{STD_OPTION}<Py<pyo3::PyAny>>> {{"
+                            ),
                             f"        self.maybe_{label}(py)",
                             "    }",
                             "",
@@ -2361,7 +2375,7 @@ class RustCstGenerator:
         if plan.rule_text:
             lines.extend(
                 [
-                    "    fn text(&self) -> pyo3::PyResult<String> {",
+                    f"    fn text(&self) -> pyo3::PyResult<{STD_STRING}> {{",
                     "        // Clone the span under the read guard, then release it before raising.",
                     "        let span = self.inner.read().span.clone();",
                     "        span.text_or_message()",
@@ -2415,7 +2429,7 @@ class RustCstGenerator:
         lines: list[str] = []
 
         if arity == cst_ergonomics.ArityClass.REQUIRED_SINGLE:
-            lines.append(f"    fn {method}(&self) -> pyo3::PyResult<String> {{")
+            lines.append(f"    fn {method}(&self) -> pyo3::PyResult<{STD_STRING}> {{")
             lines.extend(self._emit_count_first_scan_block(label_enum_name, rust_variant))
             lines.extend(
                 [
@@ -2441,7 +2455,7 @@ class RustCstGenerator:
             lines.extend(["        }", "    }", ""])
             return lines
 
-        lines.append(f"    fn {method}(&self) -> pyo3::PyResult<Option<String>> {{")
+        lines.append(f"    fn {method}(&self) -> pyo3::PyResult<{STD_OPTION}<{STD_STRING}>> {{")
         lines.extend(self._emit_count_first_scan_block(label_enum_name, rust_variant))
         lines.extend(
             [
@@ -2532,7 +2546,7 @@ class RustCstGenerator:
                 "        // Lock scope: filter by label under the read guard, cloning only matching",
                 "        // children (Arc bump or Span copy each); drop the guard before to_pyobject,",
                 "        // which performs Python work that must not happen while a node lock is held.",
-                "        let matching: Vec<_> = {",
+                f"        let matching: {STD_VEC}<_> = {{",
                 "            let guard = self.inner.read();",
                 "            guard.children.iter()",
                 f"                .filter(|(lbl, _)| *lbl == Some({label_enum_name}::{rust_variant}))",
@@ -2567,7 +2581,7 @@ class RustCstGenerator:
         )
 
         # maybe_<label>: return optional single child with matching label; error if more than one
-        lines.append(f"    fn maybe_{label}(&self, py: Python<'_>) -> pyo3::PyResult<Option<Py<pyo3::PyAny>>> {{")
+        lines.append(f"    fn maybe_{label}(&self, py: Python<'_>) -> pyo3::PyResult<{STD_OPTION}<Py<pyo3::PyAny>>> {{")
         lines.extend(self._emit_count_first_scan_block(label_enum_name, rust_variant))
         lines.extend(
             [
@@ -2620,7 +2634,7 @@ class RustCstGenerator:
 
     def _repr_method(self, class_name: str, _child_enum_name: str) -> list[str]:
         return [
-            "    fn __repr__(&self, _py: Python<'_>) -> String {",
+            f"    fn __repr__(&self, _py: Python<'_>) -> {STD_STRING} {{",
             "        let guard = self.inner.read();",
             '        let span_repr = format!("Span(start={}, end={})", guard.span.start(), guard.span.end());',
             "        let children_len = guard.children.len();",
@@ -2680,7 +2694,7 @@ class RustCstGenerator:
         lines.append("}")
         lines.append("")
         lines.append("impl DropWorklistItem {")
-        lines.append("    fn drain_into(self, worklist: &mut Vec<DropWorklistItem>) {")
+        lines.append(f"    fn drain_into(self, worklist: &mut {STD_VEC}<DropWorklistItem>) {{")
         lines.append("        // Each arm: if sole owner, steal children (so the node's Drop early-returns")
         lines.append("        // instead of recursing through drop glue); then drop `shared`.")
         lines.append("        // count==1 → childless node after steal, trivial drop;")
@@ -2750,7 +2764,7 @@ class RustCstGenerator:
         lines.append("impl EqWorklistItem {")
         lines.append("    /// Compare one node pair shallowly; enqueue node-typed child pairs for deferred comparison.")
         lines.append("    /// Returns false on the first mismatch (span, child count, label, or child variant/value).")
-        lines.append("    fn compare(self, worklist: &mut Vec<EqWorklistItem>) -> bool {")
+        lines.append(f"    fn compare(self, worklist: &mut {STD_VEC}<EqWorklistItem>) -> bool {{")
         lines.append("        // Each arm: read-lock the pair, check span + child-count, then walk children")
         lines.append(
             "        // via eq_shallow_enqueue (Span: compare directly; node: ptr_eq short-circuit or enqueue)."

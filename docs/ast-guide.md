@@ -76,7 +76,9 @@ match value {
 }
 ```
 
-`Cargo.toml` needs one entry beyond the CST/parser crates: `fltk-ast-core`.
+`Cargo.toml` needs one entry beyond the CST/parser crates: `fltk-ast-core`. The two shape comments
+name types in shorthand; the emitted file spells std items and runtime types by absolute path, for
+the reason under [Runtime dependencies](#runtime-dependencies).
 
 ### Python
 
@@ -198,6 +200,12 @@ two multi-alternative forms).
 A rule whose terminals are all *literals* is a product, not terminal-only: its span is a grammar
 constant modulo whitespace, so a `text` member on it would hold formatting rather than data.
 
+Every Rust shape this guide prints — the ones below and the two in the quick start above — names
+types in shorthand: `String`, `Vec<T>`, `Box<T>`, `Span`. The emitted file spells std items and
+runtime types by absolute path instead (`::std::string::String`, `::fltk_cst_core::Span`), for the
+collision reason under [Runtime dependencies](#runtime-dependencies); the type is the same either
+way, and your own annotations can use whichever spelling is in scope.
+
 ### Product rules
 
 One member per INCLUDE label, in grammar order, plus `span`:
@@ -205,8 +213,8 @@ One member per INCLUDE label, in grammar order, plus `span`:
 ```rust
 pub struct ServerDef {
     pub name: String,
-    pub settings: ::fltk_ast_core::IndexMap<String, Setting>,
-    pub span: ::fltk_cst_core::Span,
+    pub settings: IndexMap<String, Setting>,
+    pub span: Span,
 }
 ```
 
@@ -732,7 +740,10 @@ If your language wants decimal semantics rather than binary floating point, decl
 | Python | `fltk.fegen.pyrt.astrt` | Ships with FLTK |
 
 Generated Rust names the runtime by absolute path (`::fltk_ast_core::AstError`), so a rule called
-`error` or `span` cannot collide with anything your preamble imported.
+`error` or `span` cannot collide with anything your preamble imported. Std items in type position
+are spelled absolute for the same reason (`::std::string::String`, `::std::vec::Vec`): the generated
+module declares one item per rule at module scope, and Rust resolves those before the prelude, so a
+rule named `option` or `string` would otherwise make the file it appears in uncompilable.
 
 The generated AST module is **public API for out-of-tree consumers**: type names, field names,
 variant names, accepted lexemes and error templates are all downstream-visible. Renaming a rule,

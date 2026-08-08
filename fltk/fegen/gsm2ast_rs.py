@@ -19,8 +19,10 @@ about which types those are.
 
 Runtime types are named by absolute path (``::fltk_cst_core::Span``,
 ``::fltk_ast_core::IndexMap``) rather than imported, so a rule named ``span`` — whose type is
-``Span`` — cannot collide with a preamble.  What each type looks like is decided by
-``ast_model``; this module only spells the decisions as Rust.
+``Span`` — cannot collide with a preamble.  std items in type position are spelled absolute for
+the same reason, through :mod:`fltk.fegen.rust_emit`'s path table.  What each type looks like
+is decided by ``ast_model``; this module only spells the
+decisions as Rust.
 """
 
 from __future__ import annotations
@@ -34,8 +36,18 @@ from fltk.fegen import ast_model as am
 from fltk.fegen import cst_ergonomics as ce
 from fltk.fegen import grammar_shape as gshape
 from fltk.fegen import naming, rust_emit
-from fltk.fegen.gsm2parser_rs import cst_module_import, module_import, rust_str_lit
+from fltk.fegen.gsm2parser_rs import cst_module_import, module_import
 from fltk.fegen.gsm2tree_rs import RustCstGenerator
+from fltk.fegen.rust_emit import (
+    STD_BOX,
+    STD_DROP,
+    STD_OPTION,
+    STD_PARTIAL_EQ,
+    STD_RESULT,
+    STD_STRING,
+    STD_VEC,
+    rust_str_lit,
+)
 
 _SPAN_TYPE = "::fltk_cst_core::Span"
 _SHARED_TYPE = "::fltk_cst_core::Shared"
@@ -49,13 +61,13 @@ _UNPARSER_ALIAS = "unparser"
 """What the two optional modules behind the conveniences are imported as."""
 
 _SCALAR_TYPES = {
-    am.ScalarKind.TEXT: "String",
+    am.ScalarKind.TEXT: STD_STRING,
     am.ScalarKind.BOOL: "bool",
     am.ScalarKind.SPAN: _SPAN_TYPE,
 }
 
 _SCALAR_WITNESSES = {
-    am.ScalarKind.TEXT: "String::new()",
+    am.ScalarKind.TEXT: f"{STD_STRING}::new()",
     am.ScalarKind.BOOL: "false",
     am.ScalarKind.SPAN: f"{_SPAN_TYPE}::unknown()",
 }
@@ -63,7 +75,7 @@ _SCALAR_WITNESSES = {
 
 _EMPTY_CONTAINERS = {
     am.Container.OPTIONAL: "None",
-    am.Container.COLLECTION: "Vec::new()",
+    am.Container.COLLECTION: f"{STD_VEC}::new()",
     am.Container.MAP: f"{_INDEX_MAP_TYPE}::new()",
 }
 """The empty value of each container, for the same sentinel."""
@@ -135,7 +147,7 @@ _HOISTED_PREFIX = "v"
 _TERMINAL_PREFIX = "TERMINAL_"
 """The function-scoped `static` a text position's terminal is declared as."""
 
-_BORROWED_TYPES = {"String": "str"}
+_BORROWED_TYPES = {STD_STRING: "str"}
 """What a private helper takes a value of each owning type as; a `&String` parameter is a lint."""
 
 _PUSH_COLUMNS = 12
@@ -462,7 +474,7 @@ class RustAstGenerator:
     def embedded_type(self, owner: str | None, element: am.ElementType) -> str:
         """One element held by value in ``owner``, boxed where that edge closes a cycle."""
         inner = self.element_type(element)
-        return f"Box<{inner}>" if self.is_boxed_element(owner, element) else inner
+        return f"{STD_BOX}<{inner}>" if self.is_boxed_element(owner, element) else inner
 
     def boxed(self, value: _Value, owner: str | None, element: am.ElementType) -> _Value:
         """One converted value, indirected where the owning type holds it through a ``Box``.
@@ -471,7 +483,7 @@ class RustAstGenerator:
         """
         if not self.is_boxed_element(owner, element):
             return value
-        return _Value(f"Box::new({value.expression})")
+        return _Value(f"{STD_BOX}::new({value.expression})")
 
     def deep_type(self, element: am.ElementType) -> str | None:
         """The type this element holds whose comparison must not recurse, if it holds one."""
@@ -508,19 +520,19 @@ class RustAstGenerator:
         """What one key of a keyed collection holds: its element, or a run of them under ``multi``."""
         assert field_type.key is not None
         element = self.element_type(field_type.element)
-        return f"Vec<{element}>" if field_type.key.multi else element
+        return f"{STD_VEC}<{element}>" if field_type.key.multi else element
 
     def field_type(self, owner: str | None, field: am.Field) -> str:
         """The Rust type of one field of ``owner``."""
         container = field.type.container
         if container is am.Container.COLLECTION:
-            return f"Vec<{self.element_type(field.type.element)}>"
+            return f"{STD_VEC}<{self.element_type(field.type.element)}>"
         if container is am.Container.MAP:
             assert field.type.key is not None
             key = self.element_type(field.type.key.element)
             return f"{_INDEX_MAP_TYPE}<{key}, {self.map_value_type(field.type)}>"
         inner = self.embedded_type(owner, field.type.element)
-        return f"Option<{inner}>" if container is am.Container.OPTIONAL else inner
+        return f"{STD_OPTION}<{inner}>" if container is am.Container.OPTIONAL else inner
 
     # --- Emission ------------------------------------------------------------------------
 
@@ -636,12 +648,12 @@ class RustAstGenerator:
             return []
         return [
             "    /// The CST node this value was converted from; `None` on a hand-built value.",
-            f"    pub {am.CST_FIELD_NAME}: Option<{_SHARED_TYPE}<{self.cst_node_type(rule_name)}>>,",
+            f"    pub {am.CST_FIELD_NAME}: {STD_OPTION}<{_SHARED_TYPE}<{self.cst_node_type(rule_name)}>>,",
         ]
 
     def emit_terminal_struct(self, rule_name: str, node: am.TerminalNode) -> None:
         source = "its own span" if node.text_from is None else f"its `{node.text_from}` child"
-        member = ("text", "String") if node.coercion is None else ("value", self.coercion_type(node.coercion))
+        member = ("text", STD_STRING) if node.coercion is None else ("value", self.coercion_type(node.coercion))
         self.emit_struct_lines(
             node.name,
             rule_name,
@@ -705,8 +717,8 @@ class RustAstGenerator:
             (
                 (self.member_name(binary.op.name), self.field_type(binary.name, binary.op)),
                 # The chain's own indirections, which the recursion analysis therefore ignores.
-                (am.FOLD_LHS, f"Box<{node.name}>"),
-                (am.FOLD_RHS, f"Box<{node.name}>"),
+                (am.FOLD_LHS, f"{STD_BOX}<{node.name}>"),
+                (am.FOLD_RHS, f"{STD_BOX}<{node.name}>"),
             ),
             (
                 *self.eq_members((binary.op,)),
@@ -761,7 +773,7 @@ class RustAstGenerator:
         value = self.witness_expression(witness)
         if isinstance(witness, am.EmptyWitness) or not self.is_boxed_element(owner, element):
             return value
-        return f"Box::new({value})"
+        return f"{STD_BOX}::new({value})"
 
     def witness_scalar(self, element: am.ElementType) -> str:
         """The cheapest value of one scalar element, which is what a sentinel is made of."""
@@ -797,7 +809,7 @@ class RustAstGenerator:
         replace = "::std::mem::replace"
         self.separate()
         self.emit(
-            f"impl Drop for {node.binary.name} {{",
+            f"impl {STD_DROP} for {node.binary.name} {{",
             "    /// Take the chain below this link apart through a worklist rather than by recursion.",
             "    fn drop(&mut self) {",
             "        // A link holding two bare operands tears down by ordinary glue: their depth is the",
@@ -805,7 +817,7 @@ class RustAstGenerator:
             f"        if !matches!(&*self.{am.FOLD_LHS}, {link}(_)) && !matches!(&*self.{am.FOLD_RHS}, {link}(_)) {{",
             "            return;",
             "        }",
-            f"        let mut stack: Vec<{node.name}> = vec![",
+            f"        let mut stack: {STD_VEC}<{node.name}> = vec![",
             f"            {replace}(&mut *self.{am.FOLD_LHS}, {witness}),",
             f"            {replace}(&mut *self.{am.FOLD_RHS}, {witness}),",
             "        ];",
@@ -887,7 +899,7 @@ class RustAstGenerator:
         """``PartialEq`` for a type whose values nest to a depth nothing in the grammar bounds."""
         self.separate()
         self.emit(
-            f"impl PartialEq for {type_name} {{",
+            f"impl {STD_PARTIAL_EQ} for {type_name} {{",
             "    /// Bounded stack: the pending pairs live in a worklist, not in call frames.",
             "    fn eq(&self, other: &Self) -> bool {",
             f"        {_EQ_MODULE}::run({_EQ_MODULE}::Item::{type_name}(self, other))",
@@ -905,7 +917,7 @@ class RustAstGenerator:
         self.separate()
         if not members:
             self.emit(
-                f"impl PartialEq for {type_name} {{",
+                f"impl {STD_PARTIAL_EQ} for {type_name} {{",
                 "    /// A marker node carries position only, so every value of it is equal to every other.",
                 "    fn eq(&self, _other: &Self) -> bool {",
                 "        true",
@@ -914,7 +926,7 @@ class RustAstGenerator:
             )
             return
         comparisons = _chain([f"self.{member.name} == other.{member.name}" for member in members], "&&", 8)
-        self.emit(f"impl PartialEq for {type_name} {{", "    fn eq(&self, other: &Self) -> bool {")
+        self.emit(f"impl {STD_PARTIAL_EQ} for {type_name} {{", "    fn eq(&self, other: &Self) -> bool {")
         self.emit(*_indent(comparisons, 8))
         self.emit("    }", "}")
 
@@ -927,7 +939,7 @@ class RustAstGenerator:
             return
         self.separate()
         self.emit(
-            f"impl PartialEq for {type_name} {{",
+            f"impl {STD_PARTIAL_EQ} for {type_name} {{",
             "    fn eq(&self, other: &Self) -> bool {",
             "        match (self, other) {",
         )
@@ -940,7 +952,7 @@ class RustAstGenerator:
     def emit_eq_shallow(self, type_name: str, body: Sequence[str], *, walked: bool) -> None:
         """The one level of comparison the walk performs per pending pair."""
         worklist = "worklist" if walked else "_worklist"
-        signature = f"fn eq_shallow<'a>(&'a self, other: &'a Self, {worklist}: &mut Vec<{_EQ_MODULE}::Item<'a>>)"
+        signature = f"fn eq_shallow<'a>(&'a self, other: &'a Self, {worklist}: &mut {STD_VEC}<{_EQ_MODULE}::Item<'a>>)"
         self.separate()
         self.emit(
             f"impl {type_name} {{",
@@ -1060,7 +1072,7 @@ class RustAstGenerator:
             "    }",
             "",
             "    impl<'a> Item<'a> {",
-            "        fn compare(self, worklist: &mut Vec<Self>) -> bool {",
+            f"        fn compare(self, worklist: &mut {STD_VEC}<Self>) -> bool {{",
             "            match self {",
         )
         self.emit(*(f"                Self::{name}(a, b) => a.eq_shallow(b, worklist)," for name in self._walked))
@@ -1115,7 +1127,7 @@ class RustAstGenerator:
             f"impl {type_name} {{",
             f"    /// {doc or f'Convert a `{rule_name}` CST node.'}",
             f"    pub fn from_cst(node: &{_SHARED_TYPE}<{self.cst_node_type(rule_name)}>)"
-            f" -> Result<Self, {_AST_ERROR}> {{",
+            f" -> {STD_RESULT}<Self, {_AST_ERROR}> {{",
         )
         self.emit(*_indent(body, 8))
         self.emit("    }", "}")
@@ -1187,7 +1199,7 @@ class RustAstGenerator:
         if len(labels) == 1:
             return self.collect_lines(rule_name, labels[0], self.bucket_name(labels[0]))
         child_type = self.child_enum_type(rule_name)
-        lines = [f"let mut {self.bucket_name(label)}: Vec<&{child_type}> = Vec::new();" for label in labels]
+        lines = [f"let mut {self.bucket_name(label)}: {STD_VEC}<&{child_type}> = {STD_VEC}::new();" for label in labels]
         lines.extend(("for (label, child) in cst_node.children() {", "    match label {"))
         lines.extend(
             f"        Some({self.label_variant(rule_name, label)}) => {self.bucket_name(label)}.push(child),"
@@ -1199,7 +1211,7 @@ class RustAstGenerator:
     def collect_lines(self, rule_name: str, label: str, target: str) -> list[str]:
         """Statements collecting the children carrying one label, in source order."""
         return [
-            f"let {target}: Vec<&{self.child_enum_type(rule_name)}> = cst_node",
+            f"let {target}: {STD_VEC}<&{self.child_enum_type(rule_name)}> = cst_node",
             "    .children()",
             "    .iter()",
             f"    .filter(|(label, _)| matches!(label, Some({self.label_variant(rule_name, label)})))",
@@ -1284,7 +1296,7 @@ class RustAstGenerator:
             lines.append("}")
             return lines, _Value("value")
         if field_type.container is am.Container.COLLECTION:
-            lines.append(f"let mut values = Vec::with_capacity({bucket}.len());")
+            lines.append(f"let mut values = {STD_VEC}::with_capacity({bucket}.len());")
             lines.append(f"for child in &{bucket} {{")
             lines.extend(_indent(pre, 4))
             lines.append(f"    values.push({value.expression});")
@@ -1386,12 +1398,12 @@ class RustAstGenerator:
         boxed = self.is_boxed_element(owner, parent.type.element)
         degraded = own.type.container is am.Container.SINGLE and parent.type.container is am.Container.OPTIONAL
         if degraded:
-            return f"Some(Box::new({name}))" if boxed else f"Some({name})"
+            return f"Some({STD_BOX}::new({name}))" if boxed else f"Some({name})"
         if not boxed:
             return name
         if parent.type.container is am.Container.OPTIONAL:
-            return f"{name}.map(Box::new)"
-        return f"Box::new({name})"
+            return f"{name}.map({STD_BOX}::new)"
+        return f"{STD_BOX}::new({name})"
 
     @staticmethod
     def absent_default(field_type: am.FieldType) -> str:
@@ -1399,7 +1411,7 @@ class RustAstGenerator:
         if field_type.element == am.BOOL:
             return "false"
         if field_type.container is am.Container.COLLECTION:
-            return "Vec::new()"
+            return f"{STD_VEC}::new()"
         if field_type.container is am.Container.MAP:
             return f"{_INDEX_MAP_TYPE}::new()"
         return "None"
@@ -1414,7 +1426,7 @@ class RustAstGenerator:
         self.emit(
             f"/// Convert a `{rule_name}` CST node to the fields it is flattened into.",
             f"fn {am.flat_converter_names(rule_name)[0]}(node: &{_SHARED_TYPE}<{self.cst_node_type(rule_name)}>)"
-            f" -> Result<{result}, {_AST_ERROR}> {{",
+            f" -> {STD_RESULT}<{result}, {_AST_ERROR}> {{",
         )
         body = ["let cst_node = node.read();"]
         body.extend(self.bucket_lines(rule_name, self.body_labels(node.fields, node.hoists)))
@@ -1447,7 +1459,7 @@ class RustAstGenerator:
         self.emit(
             f"/// Convert a `{rule_name}` CST node to the payload its type erases to.",
             f"fn {am.erased_converter_names(rule_name)[0]}(node: &{_SHARED_TYPE}<{self.cst_node_type(rule_name)}>)"
-            f" -> Result<{payload}, {_AST_ERROR}> {{",
+            f" -> {STD_RESULT}<{payload}, {_AST_ERROR}> {{",
         )
         self.emit(*_indent(self.erased_body(rule_name, node), 4))
         self.emit("}")
@@ -1595,7 +1607,7 @@ class RustAstGenerator:
         statements, value = self.element_code(rule_name, label, element, "child")
         bucket = self.bucket_name(label)
         return [
-            f"let mut operands = Vec::with_capacity({bucket}.len());",
+            f"let mut operands = {STD_VEC}::with_capacity({bucket}.len());",
             f"for child in &{bucket} {{",
             *_indent(statements, 4),
             f"    let operand_span = {self.child_span(element)};",
@@ -1611,7 +1623,7 @@ class RustAstGenerator:
         held = self.boxed(value, node.binary.name, element)
         bucket = self.bucket_name(label)
         return [
-            f"let mut operators = Vec::with_capacity({bucket}.len());",
+            f"let mut operators = {STD_VEC}::with_capacity({bucket}.len());",
             f"for child in &{bucket} {{",
             *_indent(statements, 4),
             f"    operators.push({held.expression});",
@@ -1647,14 +1659,14 @@ class RustAstGenerator:
         operator = "operator," if member == "operator" else f"{member}: operator,"
         members = [
             operator,
-            f"{am.FOLD_LHS}: Box::new(lhs),",
-            f"{am.FOLD_RHS}: Box::new(rhs),",
+            f"{am.FOLD_LHS}: {STD_BOX}::new(lhs),",
+            f"{am.FOLD_RHS}: {STD_BOX}::new(rhs),",
             "span,",
             # A synthesized link stands for no CST node of its own.
             *(["cst: None,"] if self.model.cst_backpointers else []),
         ]
         boxed = self.is_boxed_element(node.name, am.NodeType(node.binary.name))
-        held = f"Box::new({node.binary.name} {{" if boxed else f"{node.binary.name} {{"
+        held = f"{STD_BOX}::new({node.binary.name} {{" if boxed else f"{node.binary.name} {{"
         return [
             "|operator, lhs, rhs, span| {",
             f"    Self::{node.binary_variant}({held}",
@@ -1730,7 +1742,7 @@ class RustAstGenerator:
             "///",
             "/// The CST does not record it, so each child is classified into the (label, kind) pair",
             "/// it occupies and the runtime takes the first alternative accepting those counts.",
-            f"fn {self.dispatch_name(rule_name)}(node: &{self.cst_node_type(rule_name)}) -> Option<usize> {{",
+            f"fn {self.dispatch_name(rule_name)}(node: &{self.cst_node_type(rule_name)}) -> {STD_OPTION}<usize> {{",
         )
         self.emit(*_indent(self.dispatch_body(rule_name, dispatch), 4))
         self.emit("}")
@@ -1798,7 +1810,7 @@ class RustAstGenerator:
             f"/// Convert an `{label}` child of rule `{rule_name}`, whichever of its types it carries.",
             f"fn {am.field_enum_converter_name(field_enum.name)}"
             f"(child: &{self.child_enum_type(rule_name)}, {parameter}: &{_SPAN_TYPE})"
-            f" -> Result<{field_enum.name}, {_AST_ERROR}> {{",
+            f" -> {STD_RESULT}<{field_enum.name}, {_AST_ERROR}> {{",
             "    match child {",
         )
         self.emit(*arms, "    }", "}")
@@ -1853,7 +1865,8 @@ class RustAstGenerator:
         self.emit(
             f"impl {type_name} {{",
             f"    /// {doc}",
-            f"    pub fn to_cst(&self) -> Result<{_SHARED_TYPE}<{self.cst_node_type(rule_name)}>, {_AST_ERROR}> {{",
+            f"    pub fn to_cst(&self)"
+            f" -> {STD_RESULT}<{_SHARED_TYPE}<{self.cst_node_type(rule_name)}>, {_AST_ERROR}> {{",
         )
         self.emit(*_indent(self.with_terminals(body), 8))
         self.emit("    }", "}")
@@ -1863,7 +1876,8 @@ class RustAstGenerator:
         self.separate()
         self.emit(
             f"/// {doc}",
-            f"fn {name}({parameters}) -> Result<{_SHARED_TYPE}<{self.cst_node_type(rule_name)}>, {_AST_ERROR}> {{",
+            f"fn {name}({parameters})"
+            f" -> {STD_RESULT}<{_SHARED_TYPE}<{self.cst_node_type(rule_name)}>, {_AST_ERROR}> {{",
         )
         self.emit(*_indent(self.with_terminals(body), 4))
         self.emit("}")
@@ -1960,7 +1974,7 @@ class RustAstGenerator:
         """
         if field.type.element == am.BOOL:
             # A presence flag is one occurrence of the literal where it is set, and none otherwise.
-            return f"if {truth} {{ vec![{reference}] }} else {{ Vec::new() }}"
+            return f"if {truth} {{ vec![{reference}] }} else {{ {STD_VEC}::new() }}"
         if field.type.container is am.Container.SINGLE:
             return f"vec![{reference}]"
         if field.type.container is am.Container.MAP:
@@ -2006,7 +2020,7 @@ class RustAstGenerator:
             return f"&{_INDEX_MAP_TYPE}<{key}, {self.map_value_type(field.type)}>"
         borrowed = _BORROWED_TYPES.get(element, element)
         if container is am.Container.OPTIONAL:
-            return f"Option<&{borrowed}>"
+            return f"{STD_OPTION}<&{borrowed}>"
         return f"&{borrowed}"
 
     # --- One node form at a time ---------------------------------------------------------
@@ -2036,7 +2050,7 @@ class RustAstGenerator:
             self.emit(
                 f"    /// Synthesise alternative {plan.index} of rule `{rule_name}`.",
                 f"    fn {_ALT_METHOD}{plan.index}(&self)"
-                f" -> Result<{_SHARED_TYPE}<{self.cst_node_type(rule_name)}>, {_AST_ERROR}> {{",
+                f" -> {STD_RESULT}<{_SHARED_TYPE}<{self.cst_node_type(rule_name)}>, {_AST_ERROR}> {{",
             )
             self.emit(*_indent(self.with_terminals(self.alternative_lines(body, fields, plan, hoists)), 8))
             self.emit("    }")
@@ -2123,8 +2137,8 @@ class RustAstGenerator:
         deeper, operand_side = (am.FOLD_LHS, am.FOLD_RHS) if left else (am.FOLD_RHS, am.FOLD_LHS)
         side = "right" if left else "left"
         lines = [
-            f"let mut {_OPERANDS} = Vec::new();",
-            f"let mut {_OPERATORS} = Vec::new();",
+            f"let mut {_OPERANDS} = {STD_VEC}::new();",
+            f"let mut {_OPERATORS} = {STD_VEC}::new();",
             "let mut chain = self;",
             "loop {",
             "    match chain {",
@@ -2770,8 +2784,8 @@ class RustAstGenerator:
             "///",
             "/// `filename` names the source in the parser's diagnostics. Trivia is not captured: a",
             "/// converter ignores unlabeled children, so there is nothing to capture it for.",
-            f"pub fn {am.PARSE_STR_FUNCTION}(src: &str, filename: Option<&str>)"
-            f" -> Result<{self.goal_type()}, {parse_error}> {{",
+            f"pub fn {am.PARSE_STR_FUNCTION}(src: &str, filename: {STD_OPTION}<&str>)"
+            f" -> {STD_RESULT}<{self.goal_type()}, {parse_error}> {{",
             *_indent(
                 rust_emit.parse_skeleton_lines(goal or "", _PARSER_ALIAS, failed, self.goal_from_cst("&parsed.result")),
                 4,
@@ -2789,7 +2803,8 @@ class RustAstGenerator:
             "/// The layout is whatever that formatter was generated with — the grammar's `.fltkfmt`,",
             "/// or the default separator spacing; `max_width` and `indent_width` are the renderer's.",
             f"pub fn {am.UNPARSE_STR_FUNCTION}(value: {self.goal_parameter()},"
-            f" max_width: usize, indent_width: usize) -> Result<String, {_AST_ERROR}> {{",
+            f" max_width: usize, indent_width: usize)"
+            f" -> {STD_RESULT}<{STD_STRING}, {_AST_ERROR}> {{",
             f"    let node = {self.goal_to_cst('value')};",
             "    let guard = node.read();",
             f"    let Some(unparsed) = {_UNPARSER_ALIAS}::Unparser::new().unparse_{goal}(&guard) else {{",

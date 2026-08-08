@@ -24,8 +24,9 @@ from collections.abc import Sequence
 from typing import Literal
 
 from fltk.fegen import gsm, naming
-from fltk.fegen.gsm2parser_rs import cst_module_import, rust_str_lit
+from fltk.fegen.gsm2parser_rs import cst_module_import
 from fltk.fegen.gsm2tree_rs import RustCstGenerator
+from fltk.fegen.rust_emit import rust_str_lit
 from fltk.unparse.combinators import Concat, Doc, HardLine, Line, Nbsp, Nil, SoftLine, Text
 from fltk.unparse.fmt_config import AnchorConfig, FormatterConfig, ItemSelector, Normal, Omit, OperationType, RenderAs
 from fltk.unparse.literal_labels import check_labeled_literal_texts, spellings_for
