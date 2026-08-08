@@ -19,7 +19,25 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   terminal to a scalar (integers, floats, `uuid`, `decimal`, or a `custom(...)` type of your own),
   `key:` turns a collection into an insertion-ordered map, `fold_left:`/`fold_right:` folds a
   repetition into a binary chain, and `name:`/`field`/`variant` rename anything generated.
-  Details will land with the AST documentation.
+  See `docs/ast-guide.md`.
+- `key: <label> multi;` in the `.fltkast` sidecar: an accumulating keyed collection. Elements
+  sharing a key group instead of colliding, so the map is `IndexMap<K, Vec<T>>` / `dict[K,
+  list[T]]` and a repeated key is no longer an error. A key takes its place where its first
+  element appeared, and the write direction renders a group together — adopting `multi` on a
+  region canonicalizes its unparse to grouped order.
+- Rust serde frontend (`gen-rust-serde`, `crates/fltk-serde-core`). A grammar can now generate a
+  `serde::Deserializer` over its CST, so source text deserializes straight into a consumer's own
+  `#[derive(Deserialize)]` types: `de::from_str(src, filename)` for the goal rule and
+  `de::from_<rule>_cst(node)` for any rule. It generates no types of its own — the target structs
+  are the schema, scalar targets run the same gates as the AST layer's `type:` coercions, and
+  serde's unknown-field / missing-field / invalid-type errors come back positioned by CST span.
+  A keyed region serves either a map (key omitted from the value, duplicates refused with both
+  locations) or a sequence (key included, source order), whichever the target declares.
+  `Spanned<T>` carries a field's position, `Raw<cst::T>` holds a subtree as syntax for later, and
+  with `--ast-mod-path` a field can be declared as a generated AST type and means that rule's
+  `from_cst`. Wired into the Makefile (`gen-rust-serde`) and Bazel (`ast_config` / `ast` /
+  `serde` / `goal` on `generate_rust_parser` and `fltk_pyo3_cdylib`, which also closes the
+  `.fltkast` plumbing gap for `ast.rs`). See `docs/rust-serde-guide.md`.
 
 ### Changed
 

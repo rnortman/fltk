@@ -4,8 +4,8 @@ The Rust emitters produce public API for out-of-tree consumers (CLAUDE.md), and 
 that reads right can still be Rust that does not compile — a misplaced brace, a missing ``Box``
 on a cyclic field, an unused binding under ``-D warnings``. Nor can a substring assertion say
 what the compiled code *does*. This assembles one crate holding a module per grammar shape —
-CST, and whichever of AST / parser / unparser the shape asks for — plus that shape's own Rust
-``#[test]``s, so the generated code is compiled and run where ``make check`` can see it.
+CST, and whichever of AST / parser / unparser / serde the shape asks for — plus that shape's own
+Rust ``#[test]``s, so the generated code is compiled and run where ``make check`` can see it.
 
 The crate is a workspace of its own so it resolves against the repo's runtime crates by path
 without joining the root workspace. Its `python` and `test-introspection` features exist only
@@ -24,6 +24,7 @@ from fltk.fegen import ast_model as am
 from fltk.fegen import ast_test_grammars as fixtures
 from fltk.fegen.gsm2ast_rs import generate_ast_rs
 from fltk.fegen.gsm2parser_rs import RustParserGenerator
+from fltk.fegen.gsm2serde_rs import generate_de_rs
 from fltk.fegen.gsm2tree_rs import RustCstGenerator
 from fltk.unparse.gsm2unparser_rs import RustUnparserGenerator
 
@@ -48,6 +49,8 @@ fltk-cst-core = {{ path = "{root}/crates/fltk-cst-core", default-features = fals
 fltk-ast-core = {{ path = "{root}/crates/fltk-ast-core", features = ["uuid", "decimal"] }}
 fltk-parser-core = {{ path = "{root}/crates/fltk-parser-core" }}
 fltk-unparser-core = {{ path = "{root}/crates/fltk-unparser-core" }}
+fltk-serde-core = {{ path = "{root}/crates/fltk-serde-core" }}
+serde = {{ version = "1", features = ["derive"] }}
 """
 
 
@@ -73,6 +76,17 @@ class Case:
 
     ast: bool = True
     """Whether the AST module is generated; false for a shape that gates the unparser alone."""
+
+    serde: bool = False
+    """Whether the serde description module is emitted, so a derived target can deserialize.
+
+    The emitter writes shape descriptions and entry points against ``fltk-serde-core``'s
+    vocabulary; nothing but a compiler says the two halves still agree, and a warning in the
+    emitted module is a hard build failure in every consumer under ``-D warnings``.
+
+    Where the case also has an AST module, the serde module is generated against it, so the
+    ``Deserialize`` impls on the generated AST types are compiled too.
+    """
 
     parser: bool = False
     """Whether a generated Rust parser is emitted, so a runtime test can parse real text."""
@@ -119,6 +133,17 @@ def write_crate(directory: Path, cases: list[Case]) -> Path:
         if case.unparser:
             declarations.append("pub mod unparser;\n")
             module.joinpath("unparser.rs").write_text(RustUnparserGenerator(model.grammar).generate())
+        if case.serde:
+            declarations.append("pub mod de;\n")
+            module.joinpath("de.rs").write_text(
+                generate_de_rs(
+                    model,
+                    cst_mod_path="super::cst",
+                    parser_mod_path="super::parser" if case.parser else None,
+                    goal_rule=case.goal,
+                    ast_mod_path="super::ast" if case.ast else None,
+                )
+            )
         if case.runtime:
             declarations.append("#[cfg(test)]\nmod runtime;\n")
             module.joinpath("runtime.rs").write_text(case.runtime)

@@ -1,0 +1,16 @@
+load("@rules_rust//rust:defs.bzl", "rust_library")
+
+rust_library(
+    name = "fltk-serde-core",
+    srcs = glob(["src/**/*.rs"]),
+    # No crate_features: the crate declares no features, and everything a generated `de.rs`
+    # names is unconditional.
+    crate_name = "fltk_serde_core",
+    edition = "2021",
+    visibility = ["//visibility:public"],
+    deps = [
+        "//crates/fltk-ast-core",
+        "//crates/fltk-cst-core",
+        "@fltk_crates//:serde",
+    ],
+)

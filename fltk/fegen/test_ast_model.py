@@ -1384,6 +1384,12 @@ class TestTransparent:
         assert element_of(model, "target", "x") == am.TransparentType("item", am.TEXT)
         assert model.transparent_types["item"] == am.TransparentType("item", am.TEXT)
 
+    def test_an_erased_rule_is_not_a_public_node(self) -> None:
+        model = configured("x:item", "rule item { transparent; }")
+        assert "item" in model.nodes
+        assert "item" not in model.public_nodes()
+        assert "target" in model.public_nodes()
+
     def test_a_coercion_travels_with_the_payload(self) -> None:
         model = configured_model(SCALAR_GRAMMAR, "rule num { type: i64; transparent; }")
         assert element_of(model, "target", "n") == am.TransparentType("num", am.TEXT, am.BuiltinCoercion("i64"))
@@ -1618,6 +1624,7 @@ class TestFlatten:
         model = configured_model(FLATTEN_GRAMMAR, FLATTEN_CONFIG)
         assert model.flattened_rules == frozenset({"parts"})
         assert "parts" in model.nodes
+        assert "parts" not in model.public_nodes()
 
     def test_a_required_site_carries_the_wrappers_own_field_types(self) -> None:
         fields = fields_by_name(configured_model(FLATTEN_GRAMMAR, FLATTEN_CONFIG).nodes["sure"])
@@ -1652,7 +1659,13 @@ class TestFlatten:
     def test_every_hoisted_field_names_the_wrapper_it_came_through(self) -> None:
         node = configured_model(FLATTEN_GRAMMAR, FLATTEN_CONFIG).nodes["sure"]
         assert isinstance(node, am.ProductNode)
-        assert {field.hoist for field in node.fields} == {"w"}
+        assert {field.wrapper for field in node.fields} == {"w"}
+
+    @pytest.mark.parametrize(("rule_name", "expected"), [("sure", False), ("maybe", True)])
+    def test_the_path_records_each_wrappers_own_optionality(self, rule_name: str, expected: bool) -> None:  # noqa: FBT001
+        node = configured_model(FLATTEN_GRAMMAR, FLATTEN_CONFIG).nodes[rule_name]
+        assert isinstance(node, am.ProductNode)
+        assert {field.hoist for field in node.fields} == {(am.Wrapper(label="w", optional=expected),)}
 
     def test_the_wrappers_type_name_is_free_for_reuse(self) -> None:
         """Nothing is emitted under it, so another rule may claim the name."""
@@ -1666,6 +1679,19 @@ class TestFlatten:
             "rule outer { flatten; }\nrule inner { flatten; }\n",
         )
         assert list(fields_by_name(model.nodes["top"])) == ["k", "v", "tail"]
+
+    def test_a_transitive_hoist_carries_the_whole_path(self) -> None:
+        """Two wrappers down is two steps: the field is neither on the node nor on the first."""
+        model = configured_model(
+            "top := t:outer? ;\nouter := i:inner , tail:word ;\ninner := k:word . '=' . v:num ;\n"
+            "word := w:/[a-z]+/ ;\nnum := d:/[0-9]+/ ;\n",
+            "rule outer { flatten; }\nrule inner { flatten; }\n",
+        )
+        node = model.nodes["top"]
+        assert isinstance(node, am.ProductNode)
+        paths = {field.name: field.hoist for field in node.fields}
+        assert paths["k"] == (am.Wrapper(label="t", optional=True), am.Wrapper(label="i", optional=False))
+        assert paths["tail"] == (am.Wrapper(label="t", optional=True),)
 
     def test_a_rename_inside_the_wrapper_names_the_hoisted_field(self) -> None:
         model = configured_model(FLATTEN_GRAMMAR, "rule parts { flatten; field k { name: key; } }")
@@ -1736,7 +1762,9 @@ class TestFlattenErrors:
 
     def test_flatten_and_key_cannot_both_apply(self) -> None:
         """A `key:` acts only at a collection use site, which a wrapper can never occupy."""
-        config = ac.ResolvedAstConfig(rules={"pair": ac.ResolvedRule("pair", flatten=True, key="a")})
+        config = ac.ResolvedAstConfig(
+            rules={"pair": ac.ResolvedRule("pair", flatten=True, key=ac.ResolvedKey(label="a"))}
+        )
         with pytest.raises(am.AstModelError) as exc:
             am.build_ast_model(
                 pipeline(parse_grammar(f"target := w:pair ;\npair := a:item . b:other ;\n{ITEM_TAIL}")), config
@@ -1802,6 +1830,8 @@ num   := d:/[0-9]+/ ;
 
 KEYED_CONFIG = "rule word { transparent; }\nrule entry { key: name; }\n"
 
+MULTI_CONFIG = "rule word { transparent; }\nrule entry { key: name multi; }\n"
+
 
 class TestKeyedCollections:
     """``key:`` turns every collection use site of the element rule into a map."""
@@ -1811,6 +1841,18 @@ class TestKeyedCollections:
         assert field.container is am.Container.MAP
         assert field.key == am.MapKey(
             rule_name="entry", label="name", field_name="name", element=am.TransparentType("word", am.TEXT)
+        )
+
+    def test_multi_keeps_the_map_container_and_records_the_accumulation(self) -> None:
+        """``multi`` alters what a key holds, so only the key says which of the two forms it is."""
+        field = fields_by_name(configured_model(KEYED_GRAMMAR, MULTI_CONFIG).nodes["top"])["e"]
+        assert field.container is am.Container.MAP
+        assert field.key == am.MapKey(
+            rule_name="entry",
+            label="name",
+            field_name="name",
+            element=am.TransparentType("word", am.TEXT),
+            multi=True,
         )
 
     def test_single_use_sites_are_untouched(self) -> None:
@@ -1881,7 +1923,9 @@ class TestKeyedCollectionErrors:
     def hand_built(text: str, **keys: str) -> tuple[str, ...]:
         """Reach the model's own checks past a validator that would reject the sidecar first."""
         config = ac.ResolvedAstConfig(
-            rules={name: ac.ResolvedRule(rule_name=name, key=label) for name, label in keys.items()}
+            rules={
+                name: ac.ResolvedRule(rule_name=name, key=ac.ResolvedKey(label=label)) for name, label in keys.items()
+            }
         )
         with pytest.raises(am.AstModelError) as exc:
             am.build_ast_model(pipeline(parse_grammar(text)), config)
@@ -1898,7 +1942,7 @@ class TestKeyedCollectionErrors:
         config = ac.ResolvedAstConfig(
             rules={
                 "num": ac.ResolvedRule(rule_name="num", coercion=ac.BuiltinScalar("f64"), transparent=True),
-                "entry": ac.ResolvedRule(rule_name="entry", key="v"),
+                "entry": ac.ResolvedRule(rule_name="entry", key=ac.ResolvedKey(label="v")),
             }
         )
         with pytest.raises(am.AstModelError) as exc:
@@ -1922,7 +1966,9 @@ class TestKeyedCollectionErrors:
 
     def test_an_erased_element_rule_has_no_key_field(self) -> None:
         grammar = pipeline(parse_grammar("top := e:entry* ;\nentry := name:/[a-z]+/ ;\n"))
-        config = ac.ResolvedAstConfig(rules={"entry": ac.ResolvedRule(rule_name="entry", key="name", transparent=True)})
+        config = ac.ResolvedAstConfig(
+            rules={"entry": ac.ResolvedRule(rule_name="entry", key=ac.ResolvedKey(label="name"), transparent=True)}
+        )
         with pytest.raises(am.AstModelError) as exc:
             am.build_ast_model(grammar, config)
         assert "`key:` and `transparent;` cannot both apply" in exc.value.errors[0]

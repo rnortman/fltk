@@ -2332,6 +2332,7 @@ TextFromStmt.Label.LABEL._fltk_canonical_name = "TextFromStmt.Label.LABEL"
 class KeyStmt:
     class Label(enum.Enum):
         LABEL = enum.auto()
+        MULTI = enum.auto()
         _fltk_canonical_name: str
 
         def __eq__(self, other: object) -> bool:
@@ -2349,25 +2350,45 @@ class KeyStmt:
 
     kind: typing.Literal[NodeKind.KEYSTMT] = NodeKind.KEYSTMT
     span: fltk.fegen.pyrt.span_protocol.SpanProtocol = fltk.fegen.pyrt.terminalsrc.UnknownSpan
-    children: list[tuple[Label | None, Identifier | Trivia]] = dataclasses.field(default_factory=list)
+    children: list[tuple[Label | None, Identifier | Trivia | fltk.fegen.pyrt.span_protocol.SpanProtocol]] = (
+        dataclasses.field(default_factory=list)
+    )
 
-    def append(self, child: Identifier | Trivia, label: Label | None = None) -> None:
+    def append(
+        self, child: Identifier | Trivia | fltk.fegen.pyrt.span_protocol.SpanProtocol, label: Label | None = None
+    ) -> None:
         self.children.append((label, child))
 
-    def extend(self, children: typing.Iterable[Identifier | Trivia], label: Label | None = None) -> None:
+    def extend(
+        self,
+        children: typing.Iterable[Identifier | Trivia | fltk.fegen.pyrt.span_protocol.SpanProtocol],
+        label: Label | None = None,
+    ) -> None:
         self.children.extend((label, child) for child in children)
 
     def extend_children(self, other: KeyStmt) -> None:
         self.children.extend(other.children)
 
-    def child(self) -> tuple[Label | None, Identifier | Trivia]:
+    def child(self) -> tuple[Label | None, Identifier | Trivia | fltk.fegen.pyrt.span_protocol.SpanProtocol]:
         if (n := len(self.children)) != 1:
             msg = f"Expected one child but have {n}"
             raise ValueError(msg)
         return self.children[0]
 
-    def _check_child_type_for_mutators(self, child: Identifier | Trivia) -> None:
-        if not isinstance(child, Identifier | Trivia):
+    _MUTATOR_ALLOWED_CHILD_TYPES = None
+
+    def _check_child_type_for_mutators(
+        self, child: Identifier | Trivia | fltk.fegen.pyrt.span_protocol.SpanProtocol
+    ) -> None:
+        _allowed = KeyStmt._MUTATOR_ALLOWED_CHILD_TYPES
+        if _allowed is None:
+            _allowed = (Identifier, Trivia, fltk.fegen.pyrt.terminalsrc.Span)
+            KeyStmt._MUTATOR_ALLOWED_CHILD_TYPES = _allowed
+        _ns = _get_native_span_type()
+        if _ns is not None and _ns not in _allowed:
+            KeyStmt._MUTATOR_ALLOWED_CHILD_TYPES = (*_allowed, _ns)
+            _allowed = KeyStmt._MUTATOR_ALLOWED_CHILD_TYPES
+        if not isinstance(child, _allowed):
             msg = f"KeyStmt: unsupported child type {type(child).__name__}"
             raise TypeError(msg)
 
@@ -2377,7 +2398,12 @@ class KeyStmt:
             msg = f"{_cn}.{method}: label argument is not a {_cn}_Label; got {type(label).__name__}"
             raise TypeError(msg)
 
-    def insert(self, index: int, child: Identifier | Trivia, label: Label | None = None) -> None:
+    def insert(
+        self,
+        index: int,
+        child: Identifier | Trivia | fltk.fegen.pyrt.span_protocol.SpanProtocol,
+        label: Label | None = None,
+    ) -> None:
         self._check_child_type_for_mutators(child)
         self._check_label_type_for_mutators(label, "insert")
         idx = operator.index(index)
@@ -2388,7 +2414,9 @@ class KeyStmt:
             idx = min(idx, n)
         self.children.insert(idx, (label, child))
 
-    def remove_at(self, index: int) -> tuple[Label | None, Identifier | Trivia]:
+    def remove_at(
+        self, index: int
+    ) -> tuple[Label | None, Identifier | Trivia | fltk.fegen.pyrt.span_protocol.SpanProtocol]:
         idx = operator.index(index)
         n = len(self.children)
         norm = idx + n if idx < 0 else idx
@@ -2397,7 +2425,12 @@ class KeyStmt:
             raise IndexError(msg)
         return self.children.pop(norm)
 
-    def replace_at(self, index: int, child: Identifier | Trivia, label: Label | None = None) -> None:
+    def replace_at(
+        self,
+        index: int,
+        child: Identifier | Trivia | fltk.fegen.pyrt.span_protocol.SpanProtocol,
+        label: Label | None = None,
+    ) -> None:
         self._check_child_type_for_mutators(child)
         self._check_label_type_for_mutators(label, "replace_at")
         idx = operator.index(index)
@@ -2434,11 +2467,52 @@ class KeyStmt:
             raise ValueError(msg)
         return children[0] if children else None
 
+    def append_multi(self, child: fltk.fegen.pyrt.span_protocol.SpanProtocol) -> None:
+        self.children.append((KeyStmt.Label.MULTI, child))
+
+    def extend_multi(self, children: typing.Iterable[fltk.fegen.pyrt.span_protocol.SpanProtocol]) -> None:
+        self.children.extend((KeyStmt.Label.MULTI, child) for child in children)
+
+    def children_multi(self) -> typing.Iterator[fltk.fegen.pyrt.span_protocol.SpanProtocol]:
+        return (
+            typing.cast("fltk.fegen.pyrt.span_protocol.SpanProtocol", child)
+            for (label, child) in self.children
+            if label == KeyStmt.Label.MULTI
+        )
+
+    def child_multi(self) -> fltk.fegen.pyrt.span_protocol.SpanProtocol:
+        children = list(self.children_multi())
+        if (n := len(children)) != 1:
+            msg = f"Expected one multi child but have {n}"
+            raise ValueError(msg)
+        return children[0]
+
+    def maybe_multi(self) -> fltk.fegen.pyrt.span_protocol.SpanProtocol | None:
+        children = list(self.children_multi())
+        if (n := len(children)) > 1:
+            msg = f"Expected at most one multi child but have {n}"
+            raise ValueError(msg)
+        return children[0] if children else None
+
     def label(self) -> Identifier:
         return self.child_label()
 
+    def multi(self) -> fltk.fegen.pyrt.span_protocol.SpanProtocol | None:
+        return self.maybe_multi()
+
+    def multi_text(self) -> str | None:
+        child = self.maybe_multi()
+        if child is None:
+            return None
+        try:
+            return child.text_or_raise()
+        except AttributeError:
+            msg = "KeyStmt.multi_text: child labelled 'multi' is not a Span"
+            raise TypeError(msg) from None
+
 
 KeyStmt.Label.LABEL._fltk_canonical_name = "KeyStmt.Label.LABEL"
+KeyStmt.Label.MULTI._fltk_canonical_name = "KeyStmt.Label.MULTI"
 
 
 @dataclasses.dataclass

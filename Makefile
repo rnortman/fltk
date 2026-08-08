@@ -4,7 +4,7 @@
         bazel-check bazel-consumer-check \
         build-native build-test-user-ext build-fegen-rust-cst build-rust-parser-fixture \
         build-test-fixtures build-poc-cst gen-rust-cst gen-rust-parser gen-rust-unparser \
-        gen-ast gen-rust-ast \
+        gen-ast gen-rust-ast gen-rust-serde \
         build-fegen-rust-parser test-native-parser test-rust-parser-fixture fix gencode
 
 # ══════════════════════════════════════════════════════════════════════════════
@@ -172,6 +172,9 @@ cargo-test-no-python:
 	cargo test -q --locked -p fltk-ast-core
 	cargo test -q --locked -p fltk-ast-core --no-default-features
 	cargo test -q --locked -p fltk-ast-core --all-features
+	# fltk-serde-core has no features: the workspace lane above compiles it, and this line is
+	# what keeps it compiling and passing with pyo3 out of the graph.
+	cargo test -q --locked -p fltk-serde-core
 	cargo test -q --locked --manifest-path tests/rust_parser_fixture/Cargo.toml
 	cargo test -q --locked --manifest-path crates/fegen-rust/Cargo.toml --no-default-features
 	cargo test -q --locked --manifest-path tests/rust_poc_cst/Cargo.toml --no-default-features
@@ -182,6 +185,7 @@ cargo-clippy-no-python:
 	cargo clippy -q --locked -p fltk-parser-core --all-targets -- -D warnings
 	cargo clippy -q --locked -p fltk-ast-core --no-default-features --all-targets -- -D warnings
 	cargo clippy -q --locked -p fltk-ast-core --all-features --all-targets -- -D warnings
+	cargo clippy -q --locked -p fltk-serde-core --all-targets -- -D warnings
 	cargo clippy -q --locked --manifest-path tests/rust_parser_fixture/Cargo.toml --all-targets -- -D warnings
 	cargo clippy -q --locked --manifest-path crates/fegen-rust/Cargo.toml --no-default-features --all-targets -- -D warnings
 	cargo clippy -q --locked --manifest-path tests/rust_poc_cst/Cargo.toml --no-default-features --all-targets -- -D warnings
@@ -205,6 +209,9 @@ check-no-pyo3:
 	ast_all="$$(cargo tree --locked -p fltk-ast-core --all-features --edges normal,build)"; \
 	echo "$$ast_all" | grep -q fltk-cst-core || { echo "FAIL: check-no-pyo3 broken: cargo tree output lacks fltk-cst-core"; exit 1; }; \
 	! echo "$$ast_all" | grep -q pyo3 || { echo "FAIL: pyo3 present in fltk-ast-core --all-features graph"; exit 1; }; \
+	serde="$$(cargo tree --locked -p fltk-serde-core --edges normal,build)"; \
+	echo "$$serde" | grep -q fltk-cst-core || { echo "FAIL: check-no-pyo3 broken: cargo tree output lacks fltk-cst-core"; exit 1; }; \
+	! echo "$$serde" | grep -q pyo3 || { echo "FAIL: pyo3 present in fltk-serde-core dependency graph"; exit 1; }; \
 	fixture="$$(cargo tree --locked --manifest-path tests/rust_parser_fixture/Cargo.toml --edges normal,build)"; \
 	echo "$$fixture" | grep -q fltk-parser-core || { echo "FAIL: check-no-pyo3 broken: cargo tree output lacks fltk-parser-core"; exit 1; }; \
 	! echo "$$fixture" | grep -q pyo3 || { echo "FAIL: pyo3 present in rust_parser_fixture default-features graph"; exit 1; }; \
@@ -360,6 +367,15 @@ gen-ast:
 gen-rust-ast:
 	uv run python -m fltk.fegen.genparser gen-rust-ast $(GRAMMAR) $(RS_OUT) $(EXTRA_ARGS)
 
+# Emit a Rust serde module (de.rs) from a grammar (no compilation).
+# The module describes the grammar's tree to the fltk-serde-core Deserializer; it references the
+# generated Rust CST module (--cst-mod-path, default super::cst), so emit that with gen-rust-cst
+# first.  EXTRA_ARGS carries --ast-config (required) / --parser-mod-path / --ast-mod-path / --goal.
+# Name the output de.rs, not serde.rs: a crate-root `mod serde` makes `use serde::...` ambiguous.
+# Usage: make gen-rust-serde GRAMMAR=path/to/grammar.fltkg RS_OUT=path/to/de.rs EXTRA_ARGS=...
+gen-rust-serde:
+	uv run python -m fltk.fegen.genparser gen-rust-serde $(GRAMMAR) $(RS_OUT) $(EXTRA_ARGS)
+
 # Regenerate the parser for the fegen grammar into the fegen-rust crate.
 build-fegen-rust-parser:
 	uv run python -m fltk.fegen.genparser gen-rust-parser \
@@ -456,6 +472,12 @@ gencode:
 	$(MAKE) gen-rust-ast GRAMMAR=fltk/fegen/test_data/rust_parser_fixture.fltkg RS_OUT=tests/rust_parser_fixture/src/ast.rs \
 		EXTRA_ARGS="--ast-config tests/rust_parser_fixture/rust_parser_fixture.fltkast \
 		            --parser-mod-path super::parser --unparser-mod-path super::unparser --goal nest_sum"
+	# Rust: tests/rust_parser_fixture/src/de.rs (same grammar and sidecar).  Committed artifact:
+	# the shape descriptions the fltk-serde-core Deserializer reads, from_str over the generated
+	# parser, and a Deserialize impl per generated AST type.  Emitted after ast.rs, which it names.
+	$(MAKE) gen-rust-serde GRAMMAR=fltk/fegen/test_data/rust_parser_fixture.fltkg RS_OUT=tests/rust_parser_fixture/src/de.rs \
+		EXTRA_ARGS="--ast-config tests/rust_parser_fixture/rust_parser_fixture.fltkast \
+		            --parser-mod-path super::parser --ast-mod-path super::ast --goal nest_sum"
 	# Rust: tests/rust_parser_fixture/src/collision_cst.rs and collision_parser.rs (collision_fixture.fltkg)
 	# Demonstrates that a cdylib can host multiple grammars; proves Parser/ApplyResult CST
 	# classes and the parser machinery coexist without collision after the cst/parser split.

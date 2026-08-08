@@ -13,14 +13,32 @@ import re
 from collections.abc import Sequence
 from dataclasses import dataclass
 
+from fltk.fegen import cst_ergonomics as ce
+
 # Standard Rust identifier: letter or underscore, then alphanumerics or underscores.
 _RUST_IDENT_RE = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
+
+# Keywords the generated lib.rs cannot spell as a bare name; it never writes the raw-identifier
+# form, so both the rawable and the unrawable sets are refused.
+_RUST_RESERVED = ce.RUST_KEYWORDS | ce.RUST_UNRAWABLE_KEYWORDS
 
 
 def _validate_rust_ident(value: str, label: str) -> None:
     """Raise ValueError if value is not a valid Rust identifier."""
     if not value or not _RUST_IDENT_RE.match(value):
         msg = f"Invalid Rust identifier for {label}: {value!r}"
+        raise ValueError(msg)
+
+
+def _validate_rust_name(value: str, label: str) -> None:
+    """Raise ValueError unless value can be written bare where the generator spells it.
+
+    ``mod``, ``fn`` and ``#[pymodule]`` names are emitted verbatim, so a keyword here is a
+    rustc syntax error inside a generated file the consumer cannot edit.
+    """
+    _validate_rust_ident(value, label)
+    if value in _RUST_RESERVED:
+        msg = f"Invalid Rust identifier for {label}: {value!r} is a Rust keyword"
         raise ValueError(msg)
 
 
@@ -76,13 +94,13 @@ class Submodule:
     def validate(self) -> None:
         """Raise ValueError if any field is not a valid Rust identifier.
 
-        Note: validation is limited to Rust identifier syntax.  A register_fn that is a
-        valid identifier but not a reachable function in the Rust crate will produce a
-        Rust compile error rather than a Python-level error here.
+        Note: validation is limited to identifier syntax and the Rust keyword set.  A
+        register_fn that is a valid identifier but not a reachable function in the Rust
+        crate will produce a Rust compile error rather than a Python-level error here.
         """
-        _validate_rust_ident(self.mod_name, "mod_name")
+        _validate_rust_name(self.mod_name, "mod_name")
         _validate_rust_ident(self.submodule_name, "submodule_name")
-        _validate_rust_ident(self.register_fn, "register_fn")
+        _validate_rust_name(self.register_fn, "register_fn")
 
 
 @dataclass(frozen=True)
@@ -95,6 +113,13 @@ class LibSpec:
     submodules: tuple[Submodule, ...]
     """Submodules to declare and register."""
 
+    plain_modules: tuple[str, ...] = ()
+    """Modules declared but never registered with the #[pymodule].
+
+    Declared `pub` so an rlib consumer can reach them and so an unused-module
+    warning cannot fire in a cdylib nothing else imports.
+    """
+
     register_span_types: bool = False
     """If True, emit Span/SourceText/LineColPos class registration and span module import."""
 
@@ -102,7 +127,13 @@ class LibSpec:
     """If True, emit the UNKNOWN_SPAN static declaration and once-init."""
 
     @staticmethod
-    def standard(module_name: str, *, with_parser: bool = True, with_unparser: bool = False) -> LibSpec:
+    def standard(
+        module_name: str,
+        *,
+        with_parser: bool = True,
+        with_unparser: bool = False,
+        plain_modules: Sequence[str] = (),
+    ) -> LibSpec:
         """Convenience constructor for the standard one-CST [+ parser] [+ unparser] layout.
 
         Args:
@@ -111,6 +142,7 @@ class LibSpec:
                          If False, omit it.
             with_unparser: If True, also include the unparser submodule.
                            If False (default), omit it.
+            plain_modules: Modules declared but not registered (e.g. "ast", "de").
 
         The cst submodule is always included.  The unparser uses the same
         register_classes entry point as cst/parser (existing two-submodule
@@ -121,13 +153,31 @@ class LibSpec:
             submodules.append(Submodule("parser", "parser"))
         if with_unparser:
             submodules.append(Submodule("unparser", "unparser"))
-        return LibSpec(module_name=module_name, submodules=tuple(submodules))
+        return LibSpec(
+            module_name=module_name,
+            submodules=tuple(submodules),
+            plain_modules=tuple(plain_modules),
+        )
 
     def validate(self) -> None:
         """Raise ValueError if any field contains invalid identifiers."""
-        _validate_rust_ident(self.module_name, "module_name")
+        _validate_rust_name(self.module_name, "module_name")
         for sub in self.submodules:
             sub.validate()
+        # Duplicate `mod` declarations are a compile error (rustc E0428).
+        declared = {sub.mod_name for sub in self.submodules}
+        if self.register_span_types:
+            declared.add("span")
+        seen: set[str] = set()
+        for mod_name in self.plain_modules:
+            _validate_rust_name(mod_name, "plain_module")
+            if mod_name in declared:
+                msg = f"LibSpec.plain_modules names a module already declared: {mod_name!r}"
+                raise ValueError(msg)
+            if mod_name in seen:
+                msg = f"LibSpec.plain_modules repeats {mod_name!r}"
+                raise ValueError(msg)
+            seen.add(mod_name)
         if not self.submodules and not self.register_span_types and not self.unknown_span_static:
             msg = "LibSpec.submodules must not be empty when no span types or UNKNOWN_SPAN are registered"
             raise ValueError(msg)
@@ -165,6 +215,8 @@ class RustLibGenerator:
             lines.append("mod span;")
         for sub in spec.submodules:
             lines.append(f"mod {sub.mod_name};")
+        for mod_name in spec.plain_modules:
+            lines.append(f"pub mod {mod_name};")
         lines.append("")
 
         # --- extra use for span types ---

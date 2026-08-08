@@ -12,7 +12,7 @@ from typer.testing import CliRunner
 from fltk.fegen import ast_config as ac
 from fltk.fegen import ast_model as am
 from fltk.fegen import ast_test_grammars as fixtures
-from fltk.fegen import gsm, gsm2ast_rs
+from fltk.fegen import gsm, gsm2ast_rs, gsm2serde_rs
 from fltk.fegen.genparser import _parse_grammar_raw, app
 from fltk.fegen.pyrt import astrt
 from fltk.plumbing import parse_grammar
@@ -1512,6 +1512,99 @@ def test_gen_rust_lib_no_parser_with_unparser(tmp_path: pathlib.Path) -> None:
     assert '"parser"' not in src
 
 
+def test_gen_rust_lib_plain_module_declared_without_registration(tmp_path: pathlib.Path) -> None:
+    """--plain-module declares the Rust-only generated modules and registers neither."""
+    output_rs = tmp_path / "lib.rs"
+    runner = CliRunner()
+    result = runner.invoke(
+        app,
+        [
+            "gen-rust-lib",
+            str(output_rs),
+            "--module-name",
+            "my_module",
+            "--plain-module",
+            "ast",
+            "--plain-module",
+            "de",
+        ],
+    )
+
+    assert result.exit_code == 0, f"gen-rust-lib --plain-module failed:\n{result.output}"
+    src = output_rs.read_text()
+
+    assert "pub mod ast;" in src
+    assert "pub mod de;" in src
+    assert '"ast"' not in src, "a plain module must not be registered as a Python submodule"
+    assert '"de"' not in src
+
+
+def test_gen_rust_lib_plain_module_colliding_with_submodule(tmp_path: pathlib.Path) -> None:
+    """--plain-module cst would emit `mod cst;` twice; the CLI refuses with no artifact."""
+    output_rs = tmp_path / "lib.rs"
+    runner = CliRunner()
+    result = runner.invoke(app, ["gen-rust-lib", str(output_rs), "--module-name", "my_module", "--plain-module", "cst"])
+
+    assert result.exit_code != 0, "Expected non-zero exit for a plain module colliding with a submodule"
+    assert not output_rs.exists(), "No output file should be created on error"
+    assert "names a module already declared" in result.output, "the collision guard must be the one that fired"
+    assert "cst" in result.output
+
+
+def test_gen_rust_lib_plain_module_colliding_with_span(tmp_path: pathlib.Path) -> None:
+    """--register-span-types emits `mod span;`, so --plain-module span is refused with no artifact."""
+    output_rs = tmp_path / "lib.rs"
+    runner = CliRunner()
+    result = runner.invoke(
+        app,
+        [
+            "gen-rust-lib",
+            str(output_rs),
+            "--module-name",
+            "my_module",
+            "--no-cst",
+            "--register-span-types",
+            "--plain-module",
+            "span",
+        ],
+    )
+
+    assert result.exit_code != 0, "Expected non-zero exit for a plain module colliding with the span module"
+    assert not output_rs.exists(), "No output file should be created on error"
+    assert "names a module already declared" in result.output, "the collision guard must be the one that fired"
+    assert "span" in result.output
+
+
+def test_gen_rust_lib_invalid_plain_module_name(tmp_path: pathlib.Path) -> None:
+    """--plain-module names are validated as Rust identifiers."""
+    output_rs = tmp_path / "lib.rs"
+    runner = CliRunner()
+    result = runner.invoke(
+        app, ["gen-rust-lib", str(output_rs), "--module-name", "my_module", "--plain-module", "not an ident"]
+    )
+
+    assert result.exit_code != 0, "Expected non-zero exit for an invalid plain module name"
+    assert not output_rs.exists(), "No output file should be created on error"
+    assert "Invalid Rust identifier for plain_module" in result.output, (
+        "the identifier guard must be the one that fired, attributed to plain_module"
+    )
+    assert "not an ident" in result.output
+
+
+def test_gen_rust_lib_rust_keyword_plain_module(tmp_path: pathlib.Path) -> None:
+    """--plain-module type would emit `pub mod type;`; the CLI refuses with no artifact."""
+    output_rs = tmp_path / "lib.rs"
+    runner = CliRunner()
+    result = runner.invoke(
+        app, ["gen-rust-lib", str(output_rs), "--module-name", "my_module", "--plain-module", "type"]
+    )
+
+    assert result.exit_code != 0, "Expected non-zero exit for a Rust keyword plain module name"
+    assert not output_rs.exists(), "No output file should be created on error"
+    assert "Invalid Rust identifier for plain_module" in result.output
+    assert "is a Rust keyword" in result.output
+
+
 def test_gen_rust_lib_invalid_module_name_empty(tmp_path: pathlib.Path) -> None:
     """gen-rust-lib rejects empty --module-name with exit 1."""
     output_rs = tmp_path / "lib.rs"
@@ -2186,6 +2279,341 @@ def test_gen_rust_ast_matches_the_generator_it_wraps(ast_grammar_file: pathlib.P
         "super::cst",
         str(ast_grammar_file),
         parser_mod_path="super::parser",
+    )
+
+    assert output_rs.read_text() == expected
+
+
+# ---------------------------------------------------------------------------
+# gen-rust-serde (Rust serde frontend)
+# ---------------------------------------------------------------------------
+
+_SERDE_SIDECAR_SRC = """\
+rule identifier { transparent; }
+rule number     { transparent; }
+rule entry      { key: key; }
+"""
+
+
+@pytest.fixture
+def serde_config_file(tmp_path: pathlib.Path) -> pathlib.Path:
+    """The sidecar the gen-rust-serde tests shape the config grammar with."""
+    p = tmp_path / "conf.fltkast"
+    p.write_text(_SERDE_SIDECAR_SRC)
+    return p
+
+
+def test_gen_rust_serde_emits_source(
+    ast_grammar_file: pathlib.Path, serde_config_file: pathlib.Path, tmp_path: pathlib.Path
+) -> None:
+    """gen-rust-serde writes the .rs describing the tree, plus one entry point per rule."""
+    output_rs = tmp_path / "de.rs"
+    runner = CliRunner()
+    result = runner.invoke(
+        app, ["gen-rust-serde", str(ast_grammar_file), str(output_rs), "--ast-config", str(serde_config_file)]
+    )
+
+    assert result.exit_code == 0, f"gen-rust-serde failed:\n{result.output}\n{result.exception}"
+    src = output_rs.read_text()
+    assert src.startswith("//! Generated by fltk gen-rust-serde from ")
+    assert str(ast_grammar_file) in src.splitlines()[0]
+    assert "use super::cst;" in src
+    assert "impl ::fltk_serde_core::NodeShape for cst::Config {" in src
+    assert "pub fn from_entry_cst<" in src
+    assert "pub fn from_str<" not in src
+
+
+def test_gen_rust_serde_generates_no_types(
+    ast_grammar_file: pathlib.Path, serde_config_file: pathlib.Path, tmp_path: pathlib.Path
+) -> None:
+    """The consumer's own derive targets are the schema, so the module mints no public type."""
+    output_rs = tmp_path / "de.rs"
+    runner = CliRunner()
+    result = runner.invoke(
+        app, ["gen-rust-serde", str(ast_grammar_file), str(output_rs), "--ast-config", str(serde_config_file)]
+    )
+
+    assert result.exit_code == 0, f"gen-rust-serde failed:\n{result.output}\n{result.exception}"
+    src = output_rs.read_text()
+    assert "pub struct " not in src
+    assert "pub enum " not in src
+
+
+def test_gen_rust_serde_from_str_follows_the_parser_module(
+    ast_grammar_file: pathlib.Path, serde_config_file: pathlib.Path, tmp_path: pathlib.Path
+) -> None:
+    """--parser-mod-path adds from_str and its import; --goal is what it parses."""
+    output_rs = tmp_path / "de.rs"
+    runner = CliRunner()
+    result = runner.invoke(
+        app,
+        [
+            "gen-rust-serde",
+            str(ast_grammar_file),
+            str(output_rs),
+            "--ast-config",
+            str(serde_config_file),
+            "--parser-mod-path",
+            "super::parser",
+            "--goal",
+            "entry",
+        ],
+    )
+
+    assert result.exit_code == 0, f"gen-rust-serde failed:\n{result.output}\n{result.exception}"
+    src = output_rs.read_text()
+    assert "use super::parser;" in src
+    assert "pub fn from_str<T: ::serde::de::DeserializeOwned>(src: &str, filename: Option<&str>)" in src
+    assert "parser.apply__parse_entry(0)" in src
+
+
+def test_gen_rust_serde_cst_mod_path_override(
+    ast_grammar_file: pathlib.Path, serde_config_file: pathlib.Path, tmp_path: pathlib.Path
+) -> None:
+    """--cst-mod-path lands in the generated `use` line, aliased when its tail is not `cst`."""
+    output_rs = tmp_path / "de.rs"
+    runner = CliRunner()
+    result = runner.invoke(
+        app,
+        [
+            "gen-rust-serde",
+            str(ast_grammar_file),
+            str(output_rs),
+            "--ast-config",
+            str(serde_config_file),
+            "--cst-mod-path",
+            "crate::generated::conf_cst",
+        ],
+    )
+
+    assert result.exit_code == 0, f"gen-rust-serde failed:\n{result.output}\n{result.exception}"
+    assert "use crate::generated::conf_cst as cst;" in output_rs.read_text()
+
+
+@pytest.mark.parametrize(
+    ("option", "value"),
+    [
+        ("--cst-mod-path", "not a path"),
+        ("--cst-mod-path", "super::cst\n"),
+        ("--parser-mod-path", "super::parser;"),
+        ("--ast-mod-path", "super::ast;"),
+    ],
+)
+def test_gen_rust_serde_invalid_mod_path_fails(
+    ast_grammar_file: pathlib.Path, serde_config_file: pathlib.Path, tmp_path: pathlib.Path, option: str, value: str
+) -> None:
+    """A malformed module path is rejected before anything is generated or written."""
+    output_rs = tmp_path / "de.rs"
+    runner = CliRunner()
+    result = runner.invoke(
+        app,
+        [
+            "gen-rust-serde",
+            str(ast_grammar_file),
+            str(output_rs),
+            "--ast-config",
+            str(serde_config_file),
+            option,
+            value,
+        ],
+    )
+
+    assert result.exit_code != 0, f"Expected non-zero exit for a malformed {option}"
+    assert option in result.output
+    assert not output_rs.exists(), "No output file should be created on error"
+
+
+def test_gen_rust_serde_requires_an_ast_config(ast_grammar_file: pathlib.Path, tmp_path: pathlib.Path) -> None:
+    """The sidecar is what says a repetition is a keyed region, so it is not optional here."""
+    output_rs = tmp_path / "de.rs"
+    runner = CliRunner()
+    result = runner.invoke(app, ["gen-rust-serde", str(ast_grammar_file), str(output_rs)])
+
+    assert result.exit_code != 0, "Expected non-zero exit without --ast-config"
+    assert "--ast-config" in result.output
+    assert not output_rs.exists(), "No output file should be created on error"
+
+
+def test_gen_rust_serde_missing_config_file_fails(ast_grammar_file: pathlib.Path, tmp_path: pathlib.Path) -> None:
+    output_rs = tmp_path / "de.rs"
+    runner = CliRunner()
+    result = runner.invoke(
+        app,
+        ["gen-rust-serde", str(ast_grammar_file), str(output_rs), "--ast-config", str(tmp_path / "absent.fltkast")],
+    )
+
+    assert result.exit_code == 1
+    assert "AST config file not found" in result.output
+    assert not output_rs.exists()
+
+
+def test_gen_rust_serde_unknown_goal_fails(
+    ast_grammar_file: pathlib.Path, serde_config_file: pathlib.Path, tmp_path: pathlib.Path
+) -> None:
+    """An unknown --goal is a CLI error naming the available rules, and writes nothing."""
+    output_rs = tmp_path / "de.rs"
+    runner = CliRunner()
+    result = runner.invoke(
+        app,
+        [
+            "gen-rust-serde",
+            str(ast_grammar_file),
+            str(output_rs),
+            "--ast-config",
+            str(serde_config_file),
+            "--goal",
+            "nope",
+        ],
+    )
+
+    assert result.exit_code != 0, "Expected non-zero exit for an unknown --goal"
+    assert "nope" in result.output
+    assert "config" in result.output
+    assert not output_rs.exists(), "No output file should be created on error"
+
+
+def test_gen_rust_serde_trivia_goal_fails_as_a_trivia_rule(
+    ast_grammar_file: pathlib.Path, serde_config_file: pathlib.Path, tmp_path: pathlib.Path
+) -> None:
+    """Naming the grammar's own trivia rule is refused for what it is, not as an unknown rule."""
+    output_rs = tmp_path / "de.rs"
+    runner = CliRunner()
+    result = runner.invoke(
+        app,
+        [
+            "gen-rust-serde",
+            str(ast_grammar_file),
+            str(output_rs),
+            "--ast-config",
+            str(serde_config_file),
+            "--goal",
+            "_trivia",
+        ],
+    )
+
+    assert result.exit_code != 0, "Expected non-zero exit for a trivia --goal"
+    assert "is a trivia rule, which a serde module never serves" in result.output
+    assert not output_rs.exists(), "No output file should be created on error"
+
+
+def test_gen_rust_serde_model_error_fails(tmp_path: pathlib.Path) -> None:
+    """A grammar the model rejects exits non-zero with the collected errors, writing nothing."""
+    grammar_file = tmp_path / "bad.fltkg"
+    grammar_file.write_text(_AST_BAD_GRAMMAR_SRC)
+    config_file = tmp_path / "bad.fltkast"
+    config_file.write_text("")
+    output_rs = tmp_path / "de.rs"
+    runner = CliRunner()
+    result = runner.invoke(app, ["gen-rust-serde", str(grammar_file), str(output_rs), "--ast-config", str(config_file)])
+
+    assert result.exit_code != 0, "Expected non-zero exit for a grammar with a reserved label"
+    assert "span" in result.output
+    assert not output_rs.exists(), "No output file should be created on error"
+
+
+def test_gen_rust_serde_matches_the_generator_it_wraps(
+    ast_grammar_file: pathlib.Path, serde_config_file: pathlib.Path, tmp_path: pathlib.Path
+) -> None:
+    """The CLI is a thin wrapper: its output is what the emitter produces for the same model."""
+    output_rs = tmp_path / "de.rs"
+    runner = CliRunner()
+    result = runner.invoke(
+        app,
+        [
+            "gen-rust-serde",
+            str(ast_grammar_file),
+            str(output_rs),
+            "--ast-config",
+            str(serde_config_file),
+            "--parser-mod-path",
+            "super::parser",
+        ],
+    )
+    assert result.exit_code == 0, f"gen-rust-serde failed:\n{result.output}\n{result.exception}"
+
+    grammar = fixtures.classify(parse_grammar(ast_grammar_file.read_text()))
+    config = ac.load_ast_config(serde_config_file.read_text(), grammar, {ac.Backend.RUST})
+    expected = gsm2serde_rs.generate_de_rs(
+        am.build_ast_model(grammar, config),
+        "super::cst",
+        str(ast_grammar_file),
+        parser_mod_path="super::parser",
+    )
+
+    assert output_rs.read_text() == expected
+
+
+def test_gen_rust_serde_ast_impls_follow_the_ast_module(
+    ast_grammar_file: pathlib.Path, serde_config_file: pathlib.Path, tmp_path: pathlib.Path
+) -> None:
+    """--ast-mod-path adds its import and one Deserialize impl per generated AST type."""
+    output_rs = tmp_path / "de.rs"
+    runner = CliRunner()
+    result = runner.invoke(
+        app,
+        [
+            "gen-rust-serde",
+            str(ast_grammar_file),
+            str(output_rs),
+            "--ast-config",
+            str(serde_config_file),
+            "--ast-mod-path",
+            "crate::generated::conf_ast",
+        ],
+    )
+
+    assert result.exit_code == 0, f"gen-rust-serde failed:\n{result.output}\n{result.exception}"
+    src = output_rs.read_text()
+    assert "use crate::generated::conf_ast as ast;" in src
+    assert "impl<'de> ::serde::Deserialize<'de> for ast::Config {" in src
+    assert "::fltk_serde_core::deserialize_ast(deserializer, _ENTRY_AST_NAME, ast::Entry::from_cst)" in src
+    # The erased rules have no AST type of their own to be a target.
+    assert "for ast::Identifier" not in src
+
+
+def test_gen_rust_serde_without_an_ast_module_emits_no_impls(
+    ast_grammar_file: pathlib.Path, serde_config_file: pathlib.Path, tmp_path: pathlib.Path
+) -> None:
+    """The pure bring-your-own-structs mode: no AST module named, no impl against one."""
+    output_rs = tmp_path / "de.rs"
+    runner = CliRunner()
+    result = runner.invoke(
+        app, ["gen-rust-serde", str(ast_grammar_file), str(output_rs), "--ast-config", str(serde_config_file)]
+    )
+
+    assert result.exit_code == 0, f"gen-rust-serde failed:\n{result.output}\n{result.exception}"
+    src = output_rs.read_text()
+    assert " as ast;" not in src
+    assert "Deserialize<'de> for" not in src
+
+
+def test_gen_rust_serde_ast_impls_match_the_generator_it_wraps(
+    ast_grammar_file: pathlib.Path, serde_config_file: pathlib.Path, tmp_path: pathlib.Path
+) -> None:
+    """The AST-module option reaches the emitter as it stands, like every other one."""
+    output_rs = tmp_path / "de.rs"
+    runner = CliRunner()
+    result = runner.invoke(
+        app,
+        [
+            "gen-rust-serde",
+            str(ast_grammar_file),
+            str(output_rs),
+            "--ast-config",
+            str(serde_config_file),
+            "--ast-mod-path",
+            "super::ast",
+        ],
+    )
+    assert result.exit_code == 0, f"gen-rust-serde failed:\n{result.output}\n{result.exception}"
+
+    grammar = fixtures.classify(parse_grammar(ast_grammar_file.read_text()))
+    config = ac.load_ast_config(serde_config_file.read_text(), grammar, {ac.Backend.RUST})
+    expected = gsm2serde_rs.generate_de_rs(
+        am.build_ast_model(grammar, config),
+        "super::cst",
+        str(ast_grammar_file),
+        ast_mod_path="super::ast",
     )
 
     assert output_rs.read_text() == expected

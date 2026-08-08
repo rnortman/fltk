@@ -1,6 +1,8 @@
 pub mod ast;
 mod ast_tests;
 pub mod cst;
+pub mod de;
+mod de_tests;
 pub mod parser;
 pub mod unparser;
 pub mod unparser_default;

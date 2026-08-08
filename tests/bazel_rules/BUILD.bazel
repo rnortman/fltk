@@ -1,4 +1,4 @@
-load("//:rust.bzl", "rust_bzl_internals")
+load("//:rust.bzl", "generate_rust_lib", "rust_bzl_internals")
 load(":rust_bzl_tests.bzl", "rust_bzl_test_suite")
 
 # Target-under-test for the analysistest: instantiates the internal codegen rule
@@ -14,6 +14,43 @@ rust_bzl_internals.generate_rust_srcs(
     src = "dummy.fltkg",
     protocol = True,
     protocol_module = "",
+    tags = ["manual"],
+)
+
+# Negative target: serde = True with no ast_config. Same "manual" tag rationale
+# as above.
+rust_bzl_internals.generate_rust_srcs(
+    name = "neg_serde_without_config",
+    src = "dummy.fltkg",
+    serde = True,
+    tags = ["manual"],
+)
+
+# Target-under-test for the codegen-argv analysistest: every attr the ast/serde
+# actions consume is set, so the test can read them back off the action command
+# lines. "manual" keeps it out of wildcard builds — the analysistest only
+# analyzes it, and dummy.fltkg is not a grammar these generators would accept.
+rust_bzl_internals.generate_rust_srcs(
+    name = "argv_ast_serde_srcs",
+    src = "dummy.fltkg",
+    ast = True,
+    ast_config = "dummy.fltkast",
+    goal = "nest_sum",
+    serde = True,
+    tags = ["manual"],
+)
+
+# Target-under-test for the plain-module analysistest: the generate_rust_lib hop
+# from the plain_modules attr to the repeatable --plain-module flag. An .rs file
+# that reaches a crate's srcs but no `mod` declaration is simply not compiled, so
+# no build target can witness this.
+generate_rust_lib(
+    name = "argv_plain_modules_lib",
+    module_name = "argv_plain_modules_lib",
+    plain_modules = [
+        "ast",
+        "de",
+    ],
     tags = ["manual"],
 )
 

@@ -22,8 +22,13 @@
 //!   honest: text that would not re-parse is refused rather than written out.
 //! - [`TerminalShape`], the other half of that honesty in the serialize direction: it splits a
 //!   terminal-only rule's text back across the grammar items it was read from.
+//! - [`merged_span`], the lenient covering span a diagnostic over a run of children is
+//!   positioned at.
+//! - The [`dispatch`] tables, which say which alternative of a sum rule a node's labeled
+//!   children came from — one counting rule, described per rule and evaluated here.
 //! - [`Cursor`] and its companions ([`check_group`], [`alternative_fits`], [`filled`],
-//!   [`check_consumed`], [`hoisted`], [`wrapper_needed`]), which hand a field's values to the item
+//!   [`check_consumed`], [`hoisted`], [`wrapper_needed`], [`multi_values`]), which hand a field's
+//!   values to the item
 //!   positions that can carry them and name the shapes the grammar cannot accommodate, plus
 //!   [`unrenderable`], which the `unparse_str` convenience reports when the formatter declines a
 //!   synthesised CST.
@@ -50,9 +55,11 @@
 
 mod children;
 mod convert;
+pub mod dispatch;
 mod error;
 mod fold;
 pub mod scalar;
+mod spans;
 mod synth;
 mod terminal;
 
@@ -60,8 +67,9 @@ pub use children::{duplicate_key, node_text, one, optional, presence, text, unex
 pub use convert::{FromCst, ToCst};
 pub use fold::{against_direction, check_fold_arity, fold_left, fold_right};
 pub use error::{AstError, ParseToAstError};
+pub use spans::merged_span;
 pub use synth::{
-    alternative_fits, check_consumed, check_group, filled, hoisted, populated, unplaceable, unrenderable,
+    alternative_fits, check_consumed, check_group, filled, hoisted, multi_values, populated, unplaceable, unrenderable,
     wrapper_needed, Cursor, TerminalAlt, TerminalShape, TerminalSplit, UNBOUNDED,
 };
 pub use terminal::{source_span, text_span, validate_terminal, LazyTerminal, TerminalPattern};

@@ -1059,24 +1059,43 @@ TextFromStmt.Label.LABEL = _ProtocolLabelMember("TextFromStmt.Label.LABEL")
 class KeyStmt(typing.Protocol):
     class Label:
         LABEL: typing.ClassVar[object]
+        MULTI: typing.ClassVar[object]
 
     kind: typing.Literal[NodeKind.KEYSTMT] = NodeKind.KEYSTMT
     span: fltk.fegen.pyrt.span_protocol.SpanProtocol
-    children: list[tuple[Label | None, Identifier | Trivia]]
+    children: list[tuple[Label | None, Identifier | Trivia | fltk.fegen.pyrt.span_protocol.SpanProtocol]]
 
-    def append(self, child: Identifier | Trivia, label: Label | None = None) -> None: ...
+    def append(
+        self, child: Identifier | Trivia | fltk.fegen.pyrt.span_protocol.SpanProtocol, label: Label | None = None
+    ) -> None: ...
 
-    def extend(self, children: typing.Iterable[Identifier | Trivia], label: Label | None = None) -> None: ...
+    def extend(
+        self,
+        children: typing.Iterable[Identifier | Trivia | fltk.fegen.pyrt.span_protocol.SpanProtocol],
+        label: Label | None = None,
+    ) -> None: ...
 
     def extend_children(self, other: KeyStmt) -> None: ...
 
-    def child(self) -> tuple[Label | None, Identifier | Trivia]: ...
+    def child(self) -> tuple[Label | None, Identifier | Trivia | fltk.fegen.pyrt.span_protocol.SpanProtocol]: ...
 
-    def insert(self, index: int, child: Identifier | Trivia, label: Label | None = None) -> None: ...
+    def insert(
+        self,
+        index: int,
+        child: Identifier | Trivia | fltk.fegen.pyrt.span_protocol.SpanProtocol,
+        label: Label | None = None,
+    ) -> None: ...
 
-    def remove_at(self, index: int) -> tuple[Label | None, Identifier | Trivia]: ...
+    def remove_at(
+        self, index: int
+    ) -> tuple[Label | None, Identifier | Trivia | fltk.fegen.pyrt.span_protocol.SpanProtocol]: ...
 
-    def replace_at(self, index: int, child: Identifier | Trivia, label: Label | None = None) -> None: ...
+    def replace_at(
+        self,
+        index: int,
+        child: Identifier | Trivia | fltk.fegen.pyrt.span_protocol.SpanProtocol,
+        label: Label | None = None,
+    ) -> None: ...
 
     def clear(self) -> None: ...
 
@@ -1090,10 +1109,25 @@ class KeyStmt(typing.Protocol):
 
     def maybe_label(self) -> Identifier | None: ...
 
+    def append_multi(self, child: fltk.fegen.pyrt.span_protocol.SpanProtocol) -> None: ...
+
+    def extend_multi(self, children: typing.Iterable[fltk.fegen.pyrt.span_protocol.SpanProtocol]) -> None: ...
+
+    def children_multi(self) -> typing.Iterator[fltk.fegen.pyrt.span_protocol.SpanProtocol]: ...
+
+    def child_multi(self) -> fltk.fegen.pyrt.span_protocol.SpanProtocol: ...
+
+    def maybe_multi(self) -> fltk.fegen.pyrt.span_protocol.SpanProtocol | None: ...
+
     def label(self) -> Identifier: ...
+
+    def multi(self) -> fltk.fegen.pyrt.span_protocol.SpanProtocol | None: ...
+
+    def multi_text(self) -> str | None: ...
 
 
 KeyStmt.Label.LABEL = _ProtocolLabelMember("KeyStmt.Label.LABEL")
+KeyStmt.Label.MULTI = _ProtocolLabelMember("KeyStmt.Label.MULTI")
 
 
 class FoldStmt(typing.Protocol):

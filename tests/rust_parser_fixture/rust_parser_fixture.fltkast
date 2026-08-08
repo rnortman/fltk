@@ -9,3 +9,5 @@ rule decimal_val { type: decimal; }
 
 // `op` is the operator label; `term` is the operand.
 rule sum_chain { fold_left: op; }
+
+// TODO(fixture-keyed-region): no keyed-entry rule, so no `key:` statement here.

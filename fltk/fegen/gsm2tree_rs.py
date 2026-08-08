@@ -857,19 +857,24 @@ class RustCstGenerator:
     def class_name_for_rule(self, rule_name: str) -> str:
         """Return the CamelCase class name (CN) for a grammar rule name.
 
-        Public wrapper around the internal _py_gen delegation; lets callers (e.g. tests)
-        compute derived identifier families without reaching into _py_gen directly.
+        TODO(rust-type-names-shadow-the-prelude): a rule named ``option`` / ``result`` /
+        ``string`` yields a struct that shadows the prelude type of that name inside the
+        generated module, which spells those types bare; the module then does not compile.
+        Either qualify the prelude spellings or refuse the colliding names here.
         """
         return self._py_gen.class_name_for_rule_node(rule_name)
 
     def rule_has_labels(self, rule_name: str) -> bool:
-        """Return True iff the rule has at least one labeled item (label enum is emitted).
-
-        Public wrapper around the internal rule_models lookup; lets callers check whether
-        label_enum_name applies to a given rule without touching _py_gen directly.
-        """
+        """Return True iff the rule has at least one labeled item (label enum is emitted)."""
         model = self._py_gen.rule_models[rule_name]
         return bool(model.labels)
+
+    def label_names_for_rule(self, rule_name: str) -> list[str]:
+        """Return the labels a rule's nodes can carry, in the label enum's own order.
+
+        Empty exactly when ``rule_has_labels`` is False.
+        """
+        return sorted(self._py_gen.rule_models[rule_name].labels.keys())
 
     def num_child_variants(self, rule_name: str) -> int:
         """Return the number of variants in a rule's <Name>Child enum.

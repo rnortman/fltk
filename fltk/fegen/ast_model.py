@@ -174,6 +174,59 @@ def signature_constant_name(rule_name: str) -> str:
     return f"_{rule_name.upper()}_SIGNATURES"
 
 
+SERDE_FROM_STR = "from_str"
+"""The serde module's one-call entry point, emitted when a parser module is named."""
+
+SERDE_MODULE_IMPORT_NAMES = ("cst", "parser", "ast")
+"""The module-level names a generated serde module's own imports bind.
+
+Rust resolves a bare path head against the module's own items first, so a generated ``static``
+or function spelled like one of these would shadow the import with no diagnostic — the same
+clobber :data:`MODULE_IMPORT_NAMES` guards the AST modules against.  Its own table, because a
+``de.rs`` is its own module namespace and shares none of the AST module's items.
+"""
+
+
+def serde_shape_name(rule_name: str) -> str:
+    """The ``static`` describing how one rule's nodes are served to serde."""
+    return f"_{rule_name.upper()}_SHAPE"
+
+
+def serde_alternatives_name(rule_name: str) -> str:
+    """The ``static`` holding a sum rule's serde-visible alternatives."""
+    return f"_{rule_name.upper()}_ALTERNATIVES"
+
+
+def serde_fold_name(rule_name: str) -> str:
+    """The ``static`` describing the chain a fold rule's nodes nest into."""
+    return f"_{rule_name.upper()}_FOLD"
+
+
+def serde_entry_name(rule_name: str) -> str:
+    """The per-rule entry point deserializing a target from one of that rule's CST nodes."""
+    return f"from_{rule_name}_cst"
+
+
+SERDE_AST_NAME_PREFIX = "$__fltk_private_ast::"
+"""The prefix of the newtype-struct name a generated AST type's ``Deserialize`` impl asks for.
+
+The rule name follows it.  This spelling is protocol between the generated module and
+``fltk-serde-core``'s ``AST_NAME_PREFIX``, which is why both halves write it out and a test pins
+them to each other: the two are released in lockstep, and a silent disagreement would make every
+AST-typed field fail at runtime.
+"""
+
+
+def serde_ast_name(rule_name: str) -> str:
+    """The newtype-struct name one rule's AST type is deserialized under."""
+    return f"{SERDE_AST_NAME_PREFIX}{rule_name}"
+
+
+def serde_ast_constant_name(rule_name: str) -> str:
+    """The module constant holding :func:`serde_ast_name` for one rule."""
+    return f"_{rule_name.upper()}_AST_NAME"
+
+
 class AstModelError(ValueError):
     """Every generation-time problem found while building the model, reported together."""
 
@@ -333,13 +386,15 @@ class MapKey:
     ``field_name`` is the member holding it, after any ``field { name: }`` rename — the field
     is authoritative and the map key a lookup convenience, so both directions read the key off
     the element rather than off the map.  ``element`` is the key's own resolved type, which is
-    text or an integer coercion of it.
+    text or an integer coercion of it.  ``multi`` says the elements sharing a key accumulate,
+    so the map's values are lists of them rather than single elements.
     """
 
     rule_name: str
     label: str
     field_name: str
     element: ElementType
+    multi: bool = False
 
 
 @dataclasses.dataclass(frozen=True, slots=True)
@@ -352,13 +407,35 @@ class FieldType:
 
 
 @dataclasses.dataclass(frozen=True, slots=True)
+class Wrapper:
+    """One ``flatten;`` wrapper a field was hoisted through.
+
+    ``label`` is the wrapper's label in the node above it, and ``optional`` whether that label's
+    use site is optional there — which is what decides whether an absent wrapper is a missing
+    child or simply a field with nothing in it.
+    """
+
+    label: str
+    optional: bool
+
+
+@dataclasses.dataclass(frozen=True, slots=True)
 class Field:
     name: str
     label: str
     type: FieldType
 
-    hoist: str | None = None
-    """The label of the ``flatten;`` wrapper this field was hoisted out of, if any."""
+    hoist: tuple[Wrapper, ...] = ()
+    """The ``flatten;`` wrappers between the node holding this field and the children it takes.
+
+    Outermost first, empty for a plain field.  Hoisting is transitive, so a field may be several
+    wrappers down; the whole path is here because reading the field off a node means walking it.
+    """
+
+    @property
+    def wrapper(self) -> str | None:
+        """The label of the outermost wrapper, which is where the node holds the hoist."""
+        return self.hoist[0].label if self.hoist else None
 
 
 @dataclasses.dataclass(frozen=True, slots=True)
@@ -866,6 +943,24 @@ class AstModel:
     Erased and flattened rules emit no type of their own, so they have no entry — and their
     type name is free for another rule to claim.
     """
+
+    def public_nodes(self) -> Mapping[str, RuleNode]:
+        """The rules with a public AST type of their own, in grammar order.
+
+        ``nodes`` is every non-trivia rule the AST layer analyses, which is not the same set:
+        a ``transparent;`` or ``flatten;`` rule keeps its entry there because the converters
+        need its shape, but emits no type — its use sites carry the payload's or the wrapper's
+        fields instead.  A ``custom(...)`` rule has no entry at all; its type is the consumer's.
+
+        Every analysis over "the types this grammar emits" walks this rather than spelling the
+        predicate again, so a future category that removes a rule's public type has one place
+        to be taught about.
+        """
+        return {
+            name: node
+            for name, node in self.nodes.items()
+            if name not in self.transparent_types and name not in self.flattened_rules
+        }
 
 
 # --- Conversion analysis: sum dispatch -------------------------------------------------
@@ -1503,7 +1598,7 @@ def selection_guards(model: AstModel, fields: Sequence[Field], plan: AltPlan) ->
     """
     guards: list[SelectionGuard] = []
     for field in fields:
-        if field.hoist is not None or field.label not in plan.labels:
+        if field.hoist or field.label not in plan.labels:
             continue
         elements = field_elements(model, field)
         if len(elements) < _RIVAL_SLOTS:
@@ -1558,6 +1653,123 @@ def resolve_goal_rule(model: AstModel, goal_rule: str | None) -> str:
     return goal_rule
 
 
+def serde_rules(model: AstModel) -> tuple[str, ...]:
+    """Every rule a generated serde module describes, in grammar order.
+
+    Every non-trivia rule, with no refinement: the serde frontend generates no types, so a rule
+    the AST layer hands to a ``custom(...)`` type or erases still has CST nodes a target can be
+    deserialized from, and each one gets a shape and an entry point.
+    """
+    return tuple(rule.name for rule in model.grammar.rules if not rule.is_trivia_rule)
+
+
+def serde_ast_rules(model: AstModel) -> tuple[str, ...]:
+    """Every rule whose generated AST type a serde target can name, in grammar order.
+
+    The rules with a public AST type and a ``from_cst`` over their own CST node: a
+    ``transparent;`` or ``flatten;`` rule has neither — its conversion is a private helper of the
+    AST module, and its use sites carry the payload's type — and a ``custom(...)`` rule's type
+    belongs to the consumer, so a `Deserialize` impl for it would be an orphan.
+
+    Rules, and only rules.  The AST module also exports types that are not a rule's own — a sum
+    variant's generated payload class, a value enum, a field enum — and none of them gets an
+    impl, so a target declaring one is a "the trait `Deserialize` is not implemented" at the
+    consumer's compile time rather than a runtime surprise.
+    """
+    public = model.public_nodes()
+    return tuple(name for name in serde_rules(model) if name in public)
+
+
+def resolve_serde_goal(model: AstModel, goal_rule: str | None) -> str:
+    """The rule the generated ``from_str`` targets; the grammar's first rule by default.
+
+    Unlike :func:`resolve_goal_rule` there is nothing to refine: every rule is served, so the
+    first one is the default whatever its shape and whatever the sidecar does to it.
+    """
+    rules = serde_rules(model)
+    if goal_rule is None:
+        if not rules:
+            msg = "the grammar has no non-trivia rule, so there is no goal rule to default to"
+            raise ValueError(msg)
+        return rules[0]
+    if goal_rule not in rules:
+        # A trivia rule is a rule of the grammar and is simply never served, so saying it is not
+        # one would contradict the file the user is looking at.
+        trivia = {rule.name for rule in model.grammar.rules if rule.is_trivia_rule}
+        reason = (
+            "is a trivia rule, which a serde module never serves"
+            if goal_rule in trivia
+            else "is not a rule of the grammar"
+        )
+        msg = f"goal rule {goal_rule!r} {reason}; available rules: {', '.join(rules)}"
+        raise ValueError(msg)
+    return goal_rule
+
+
+def serde_claims(model: AstModel) -> Mapping[str, str]:
+    """Every module-level name a generated serde module reserves, and what claimed it.
+
+    The same discipline as :attr:`AstModel.claimed_names`, over its own namespace: a ``de.rs``
+    holds no generated types, so it collides with nothing the AST module claims, but its own
+    per-rule ``static`` descriptions, entry points and import aliases share one Rust module
+    namespace and a second claimant would silently win.  Every spelling derives from a rule
+    name by a fixed transform, which is injective over rule names except for the uppercasing —
+    two rules differing only in case want one ``static``.
+
+    Raises:
+        AstModelError: if two things want one name.
+    """
+    owners: dict[str, str] = {}
+    errors: list[str] = []
+
+    def claim(name: str, description: str) -> None:
+        owner = owners.get(name)
+        if owner is not None:
+            errors.append(
+                f"Generated serde name {name!r} for {description} collides with {owner}; rename one of the rules"
+            )
+            return
+        owners[name] = description
+
+    for name in SERDE_MODULE_IMPORT_NAMES:
+        claim(name, f"the `{name}` a generated serde module's imports bind")
+    claim(SERDE_FROM_STR, f"the module-level `{SERDE_FROM_STR}()` entry point")
+    for rule_name in serde_rules(model):
+        claim(serde_shape_name(rule_name), f"the serde shape of rule {rule_name!r}")
+        claim(serde_entry_name(rule_name), f"the serde entry point of rule {rule_name!r}")
+        node = model.nodes.get(rule_name)
+        if isinstance(node, SumNode):
+            claim(signature_constant_name(rule_name), f"the dispatch table of sum rule {rule_name!r}")
+            claim(serde_alternatives_name(rule_name), f"the serde alternatives of sum rule {rule_name!r}")
+        elif isinstance(node, FoldNode):
+            claim(serde_fold_name(rule_name), f"the chain description of fold rule {rule_name!r}")
+    # Claimed whether or not an AST module is named, like `from_str`: a name family that is
+    # reserved only sometimes would let one generation succeed and its neighbour collide.
+    for rule_name in serde_ast_rules(model):
+        claim(serde_ast_constant_name(rule_name), f"the AST newtype name of rule {rule_name!r}")
+    if errors:
+        raise AstModelError(errors)
+    return owners
+
+
+def map_key_scalar(element: ElementType) -> str:
+    """The declared type of a map key: ``"text"``, or the integer builtin coercing it.
+
+    The one fact both keyed layers read — the AST layer keys by the coerced value, and the serde
+    runtime settles identity and serving by it (`KeyKind`).  Every other resolved type is refused
+    by ``ast_config.check_key_type`` before a key exists, so the two answers are exhaustive.
+    """
+    if element == TEXT:
+        return ScalarKind.TEXT.value
+    assert isinstance(element, TransparentType), f"{element!r} cannot key a map"
+    if element.coercion is None:
+        return map_key_scalar(element.payload)
+    assert isinstance(element.coercion, BuiltinCoercion) and element.coercion.is_integer, (
+        f"{element.coercion!r} cannot key a map"
+    )
+    return element.coercion.name
+
+
 def generated_payload(model: AstModel, variant: SumVariant) -> PayloadClass | None:
     """The payload class a sum generates for ``variant``; ``None`` for a direct payload."""
     if variant.payload_rule is not None or not isinstance(variant.payload, NodeType):
@@ -1599,7 +1811,7 @@ def group_checks(plan: AltPlan, fields: Sequence[Field], hoists: Sequence[Hoist]
     A group with a label that has neither a field nor a flattened wrapper behind it is skipped:
     nothing records whether that label is populated, so the group cannot be checked at all.
     """
-    by_label = {field.label: field for field in fields if field.hoist is None}
+    by_label = {field.label: field for field in fields if not field.hoist}
     hoisted = {hoist.label for hoist in hoists}
     checks: list[GroupCheck] = []
     for group in sorted({slot.group for slot in plan.slots if slot.group is not None}):
@@ -1694,9 +1906,7 @@ def type_graph(model: AstModel) -> Mapping[str, frozenset[str]]:
         edges[field_enum.name].update(
             target for variant in field_enum.variants for target in embedded_types(variant.element)
         )
-    for rule_name, node in model.nodes.items():
-        if rule_name in model.transparent_types or rule_name in model.flattened_rules:
-            continue
+    for node in model.public_nodes().values():
         targets = edges.setdefault(node.name, set())
         if isinstance(node, ProductNode):
             targets.update(target for field in node.fields for target in _field_targets(field))
@@ -1819,9 +2029,7 @@ def span_bearing(model: AstModel) -> frozenset[str]:
         for field_enum in model.field_enums.values()
     }
     bearing: set[str] = {payload.name for payload in model.payload_classes.values()}
-    for rule_name, node in model.nodes.items():
-        if rule_name in model.transparent_types or rule_name in model.flattened_rules:
-            continue
+    for node in model.public_nodes().values():
         if isinstance(node, SumNode):
             payloads[node.name] = tuple(variant.payload for variant in node.variants)
         elif isinstance(node, FoldNode):
@@ -1996,9 +2204,7 @@ def _witness_builders(model: AstModel) -> dict[str, _WitnessBuilder]:
         builders[payload.name] = _struct_builder(
             payload.name, [(field.name, field.type.element, field.type.container) for field in payload.fields]
         )
-    for rule_name, node in model.nodes.items():
-        if rule_name in model.transparent_types or rule_name in model.flattened_rules:
-            continue
+    for node in model.public_nodes().values():
         if isinstance(node, SumNode):
             builders[node.name] = _enum_builder(
                 node.name, [(variant.name, variant.payload) for variant in node.variants]
@@ -2691,7 +2897,10 @@ class _ModelBuilder:
             if field.type.container is Container.SINGLE and field.type.element != BOOL:
                 required.add(field.name)
             field_type = _degrade(field.type) if optional else field.type
-            hoisted.append(dataclasses.replace(field, hoist=label, type=field_type))
+            # The wrapper's own path is kept below the new step: a doubly hoisted field is
+            # reached by walking this label and then the ones the wrapper hoists through.
+            path = (Wrapper(label=label, optional=optional), *field.hoist)
+            hoisted.append(dataclasses.replace(field, hoist=path, type=field_type))
         return Hoist(
             rule_name=wrapper,
             label=label,
@@ -2762,16 +2971,22 @@ class _ModelBuilder:
         cached = self.map_keys.get(rule_name)
         if cached is not None:
             return cached
-        label = self.config.for_rule(rule_name).key
-        resolved = None if label is None else self.compute_map_key(rule_name, label)
+        key = self.config.for_rule(rule_name).key
+        resolved = None if key is None else self.compute_map_key(rule_name, key)
         if resolved is None:
             self.unkeyed.add(rule_name)
             return None
         self.map_keys[rule_name] = resolved
         return resolved
 
-    def compute_map_key(self, rule_name: str, label: str) -> MapKey | None:
-        """Resolve ``key: <label>;`` against the element rule's own fields."""
+    def compute_map_key(self, rule_name: str, key: ac.ResolvedKey) -> MapKey | None:
+        """Resolve ``key: <label> [multi];`` against the element rule's own fields.
+
+        ``multi`` alters what a key holds, not what may be one, so every check below applies
+        to both forms — the key field still has to occur exactly once and resolve to a string
+        or an integer.
+        """
+        label = key.label
         rule = self.rules_by_name.get(rule_name)
         if rule is None:
             # A `custom(...)` rule has no generated fields; the sidecar reports the conflict.
@@ -2819,6 +3034,7 @@ class _ModelBuilder:
             label=label,
             field_name=self.config.for_rule(rule_name).field_names.get(label, label),
             element=elements[0],
+            multi=key.multi,
         )
 
     def keyed_element(self, terms: Sequence[gsm.Term]) -> MapKey | None:

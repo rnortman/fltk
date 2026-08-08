@@ -1,7 +1,7 @@
 //! Crate root for the consumer-lane AST smoke target.
 //!
-//! `ast` reads its CST types as `super::cst`, so both modules must be siblings under
-//! this root.
+//! The generated modules reference each other as siblings (super::cst, super::parser),
+//! so all three must sit under this root.
 //!
 //! The two accessors below name the coerced types themselves, so the lane fails to build on
 //! either half of what it exists to prove: the runtime target dropping its `uuid`/`decimal`
@@ -10,6 +10,7 @@
 
 pub mod ast;
 pub mod cst;
+pub mod parser;
 
 /// The payment's identifier, as `rule ident { type: uuid; }` coerces it.
 pub fn payment_id(payment: &ast::Payment) -> &::fltk_ast_core::Uuid {

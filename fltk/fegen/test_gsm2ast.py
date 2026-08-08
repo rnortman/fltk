@@ -22,6 +22,7 @@ from fltk.fegen.ast_test_grammars import (
     FOLD_GRAMMAR,
     FOLD_SIDECAR,
     KEYED_SIDECAR,
+    MULTI_SIDECAR,
     TASK_GRAMMAR,
     TASK_SIDECAR,
 )
@@ -309,6 +310,18 @@ class TestConversionErrors:
 
     def test_sum_with_no_matching_alternative(self, config: Generated) -> None:
         node = config.parser.cst_module.Value()
+        with pytest.raises(astrt.AstError, match="no alternative matches"):
+            config.ast.value_from_cst(node)
+
+    def test_sum_with_a_child_no_alternative_accepts_under_its_label(self, config: Generated) -> None:
+        """A labeled child occupying no (label, kind) pair belongs to no alternative at all.
+
+        The parser cannot produce one — the label decides the kind — so this is the hand-built
+        case, and both backends have to refuse it the same way.
+        """
+        cst = config.parser.cst_module
+        node = cst.Value()
+        node.append(source_node(cst.Number, "1"), cst.Value.Label.STRING)
         with pytest.raises(astrt.AstError, match="no alternative matches"):
             config.ast.value_from_cst(node)
 
@@ -2282,6 +2295,93 @@ class TestKeyedCollections:
         generated = build_roundtrip(KEYED_GRAMMAR, "top", config_text=KEYED_CONFIG)
         assert generated.ast.parse("a = 1;") == generated.ast.parse("  a = 1;  ")
         assert generated.ast.parse("a = 1;") != generated.ast.parse("a = 2;")
+
+
+MULTI_CONFIG = "rule word { transparent; }\nrule num { type: i64; transparent; }\nrule entry { key: name multi; }\n"
+
+
+@pytest.fixture(scope="module")
+def multi() -> Generated:
+    return build_roundtrip(KEYED_GRAMMAR, "top", config_text=MULTI_CONFIG)
+
+
+class TestMultiKeyedCollections:
+    """``key: <label> multi;``: the elements sharing a key accumulate rather than collide."""
+
+    def test_the_annotation_holds_a_list_per_key(self, multi: Generated) -> None:
+        assert "entry: dict[str, list[Entry]]" in multi.source
+
+    def test_elements_sharing_a_key_accumulate_in_source_order(self, multi: Generated) -> None:
+        value = multi.ast.parse("a = 1; b = 2; a = 3;")
+        assert [element.v for element in value.entry["a"]] == [1, 3]
+        assert [element.v for element in value.entry["b"]] == [2]
+
+    def test_a_key_takes_its_place_where_it_first_occurred(self, multi: Generated) -> None:
+        value = multi.ast.parse("b = 1; a = 2; b = 3;")
+        assert list(value.entry) == ["b", "a"]
+
+    def test_the_key_stays_a_field_of_each_element(self, multi: Generated) -> None:
+        value = multi.ast.parse("a = 1; a = 3;")
+        assert [element.name for element in value.entry["a"]] == ["a", "a"]
+
+    def test_an_empty_collection_is_an_empty_map(self, multi: Generated) -> None:
+        value = multi.ast.parse("")
+        assert value.entry == {}
+        assert multi.ast.parse(multi.ast.unparse(value)) == value
+
+    def test_the_map_takes_part_in_equality(self, multi: Generated) -> None:
+        assert multi.ast.parse("a = 1; a = 2;") == multi.ast.parse("  a = 1;  a = 2;  ")
+        assert multi.ast.parse("a = 1; a = 2;") != multi.ast.parse("a = 1; a = 3;")
+        assert multi.ast.parse("a = 1; a = 2;") != multi.ast.parse("a = 1;")
+
+    def test_unparsing_groups_the_entries_by_key(self, multi: Generated) -> None:
+        """Grouping is what the map records, so the interleaved source canonicalises to it."""
+        value = multi.ast.parse("a = 1; b = 2; a = 3;")
+        assert multi.ast.unparse(value).replace(" ", "").strip() == "a=1;a=3;b=2;"
+        assert multi.ast.parse(multi.ast.unparse(value)) == value
+
+    def test_a_hand_built_map_round_trips(self, multi: Generated) -> None:
+        ast = multi.ast
+        value = ast.Top(entry={"a": [ast.Entry(name="a", v=1), ast.Entry(name="a", v=2)]})
+        assert ast.parse(ast.unparse(value)) == value
+
+    def test_a_key_with_no_element_cannot_be_rendered(self, multi: Generated) -> None:
+        """The key lives on the element, so an empty group has nothing to carry it."""
+        value = multi.ast.Top(entry={"a": []})
+        with pytest.raises(astrt.AstError) as exc:
+            multi.ast.unparse(value)
+        assert exc.value.message == "rule 'entry': the 'a' key has no element to render it on"
+
+    def test_a_duplicate_key_is_no_longer_an_error(self) -> None:
+        """The one behavioral difference from the singular form, at the same use site."""
+        singular = build_roundtrip(KEYED_GRAMMAR, "top", config_text=KEYED_CONFIG)
+        with pytest.raises(astrt.AstError):
+            singular.ast.parse("a = 1; a = 2;")
+        accumulated = build_roundtrip(KEYED_GRAMMAR, "top", config_text=MULTI_CONFIG).ast.parse("a = 1; a = 2;")
+        assert list(accumulated.entry) == ["a"]
+        assert [element.v for element in accumulated.entry["a"]] == [1, 2]
+
+    def test_the_shared_config_example_groups_a_repeated_setting(self) -> None:
+        """The same generation input the Rust suite reads, so the two backends group alike."""
+        generated = build_roundtrip(CONFIG_GRAMMAR, "config", config_text=MULTI_SIDECAR)
+        value = generated.ast.parse('server web { host = "a"; port = 1; host = "b"; }')
+        settings = value.stanzas[0].settings
+        assert list(settings) == ["host", "port"]
+        assert [setting.value for setting in settings["host"]] == ["a", "b"]
+        assert generated.ast.parse(generated.ast.unparse(value)) == value
+
+    def test_an_integer_key_groups_too(self) -> None:
+        generated = build_roundtrip(
+            'top := , entry* , ;\nentry := code:num , "=" , v:word , ";" , ;\n'
+            "word := w:/[a-z]+/ ;\nnum := d:/[0-9]+/ ;\n",
+            "top",
+            config_text="rule word { transparent; }\nrule num { type: i64; transparent; }\n"
+            "rule entry { key: code multi; }\n",
+        )
+        value = generated.ast.parse("7 = seven; 8 = eight; 7 = sept;")
+        assert "entry: dict[int, list[Entry]]" in generated.source
+        assert [element.v for element in value.entry[7]] == ["seven", "sept"]
+        assert generated.ast.parse(generated.ast.unparse(value)) == value
 
 
 # A product, a sum with both a generated payload class and direct payloads, an enum-shaped

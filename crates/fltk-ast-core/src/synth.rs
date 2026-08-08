@@ -18,6 +18,7 @@
 //! counterpart of the same name in `fltk.fegen.pyrt.astrt`, and the message templates are one
 //! text under the translation `tests/test_ast_error_message_parity.py` enforces.
 
+use std::fmt::Debug;
 use std::sync::OnceLock;
 
 use fltk_cst_core::Span;
@@ -169,6 +170,29 @@ impl<'a, T: ?Sized> Cursor<'a, T> {
     pub fn remaining(&self) -> usize {
         self.values.len() - self.position
     }
+}
+
+/// One `multi` keyed field's elements, its keys' groups in insertion order.
+///
+/// Grouping is what the map records, so the elements come out grouped and the source order that
+/// interleaved two keys is not recoverable. A key whose group is empty carries no element to
+/// render — the key lives on the element, not on the map — so it is refused rather than dropped
+/// silently.
+pub fn multi_values<'a, K: Debug + 'a, T: 'a>(
+    grouped: impl IntoIterator<Item = (&'a K, &'a Vec<T>)>,
+    rule: &str,
+) -> Result<Vec<&'a T>, AstError> {
+    let mut values = Vec::new();
+    for (key, elements) in grouped {
+        if elements.is_empty() {
+            return Err(AstError::new(
+                format!("rule {rule:?}: the {key:?} key has no element to render it on"),
+                Span::unknown(),
+            ));
+        }
+        values.extend(elements.iter());
+    }
+    Ok(values)
 }
 
 /// The labels of `states` that carry something, for alternative and branch selection.
@@ -598,6 +622,26 @@ mod tests {
         );
         assert!(error.message.contains("a bug in FLTK's AST synthesis"));
         assert_eq!(error.span, Span::unknown());
+    }
+
+    #[test]
+    fn a_multi_map_hands_out_its_groups_in_insertion_order() {
+        let groups = [("a".to_string(), vec![1, 3]), ("b".to_string(), vec![2])];
+        assert_eq!(
+            multi_values(groups.iter().map(|(key, run)| (key, run)), "entry"),
+            Ok(vec![&1, &3, &2])
+        );
+    }
+
+    #[test]
+    fn a_key_with_no_element_has_nothing_to_render_it_on() {
+        let groups: Vec<(String, Vec<u8>)> = vec![("a".to_string(), Vec::new())];
+        assert_eq!(
+            multi_values(groups.iter().map(|(key, run)| (key, run)), "entry")
+                .unwrap_err()
+                .message,
+            "rule \"entry\": the \"a\" key has no element to render it on"
+        );
     }
 
     #[test]

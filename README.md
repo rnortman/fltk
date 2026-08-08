@@ -79,6 +79,8 @@ rule := label:identifier , "literal" , /regex_pattern/ ;
 - [Usage Guide](docs/usage.md) - How to use FLTK to parse text
 - [Grammar Syntax Reference](docs/grammar-syntax.md) - Complete reference for the `.fltkg` grammar notation
 - [CST Structure Guide](docs/cst-structure.md) - How grammars map to Concrete Syntax Trees
+- [AST Guide](docs/ast-guide.md) - Generated typed trees and the `.fltkast` shaping sidecar
+- [Rust serde Guide](docs/rust-serde-guide.md) - Deserializing source text into your own `#[derive(Deserialize)]` types
 - [Trivia Guide](docs/trivia-guide.md) - Handling whitespace and comments
 
 ## Architecture

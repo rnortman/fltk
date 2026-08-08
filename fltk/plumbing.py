@@ -15,7 +15,17 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Optional, cast
 
 import fltk
-from fltk.fegen import ast_model, fltk2gsm, fltk_parser, gsm, gsm2ast, gsm2ast_rs, gsm2parser, gsm2tree
+from fltk.fegen import (
+    ast_model,
+    fltk2gsm,
+    fltk_parser,
+    gsm,
+    gsm2ast,
+    gsm2ast_rs,
+    gsm2parser,
+    gsm2serde_rs,
+    gsm2tree,
+)
 from fltk.fegen.ast_config import ALL_BACKENDS, Backend, ResolvedAstConfig, load_ast_config
 from fltk.fegen.pyrt import errors, memo, terminalsrc
 from fltk.iir.context import create_default_context
@@ -622,6 +632,51 @@ def generate_rust_ast_source(
         parser_mod_path=parser_mod_path,
         unparser_mod_path=unparser_mod_path,
         goal_rule=goal_rule,
+    )
+
+
+def generate_rust_serde_source(
+    grammar: gsm.Grammar,
+    cst_mod_path: str = "super::cst",
+    *,
+    parser_mod_path: str | None = None,
+    goal_rule: str | None = None,
+    ast_mod_path: str | None = None,
+    ast_config: ResolvedAstConfig | None = None,
+    source_name: str | None = None,
+) -> str:
+    """Generate the Rust serde description module source (``de.rs``) for ``grammar``.
+
+    The third consumer of the same model and the same sidecar: instead of generated types it
+    emits what the ``fltk-serde-core`` Deserializer needs to know about this grammar's tree, plus
+    the entry points that run it.  The consumer's own ``#[derive(Deserialize)]`` targets supply
+    the types.
+
+    Args:
+        grammar: The grammar to generate the serde frontend for
+        cst_mod_path: Rust module path of the grammar's generated CST module, imported as ``cst``
+        parser_mod_path: Rust module path of a generated parser module; enables ``from_str``
+        goal_rule: Rule ``from_str`` targets; defaults to the grammar's first rule
+        ast_mod_path: Rust module path of a generated AST module; enables the ``Deserialize``
+            impls that let a target declare a generated AST type as a field
+        ast_config: Resolved .fltkast sidecar shaping the tree; None is pure Tier 0
+        source_name: Names the grammar in the module's header comment when it is known
+
+    Returns:
+        The generated Rust serde module source as a string
+
+    Raises:
+        AstModelError: If the grammar cannot be modelled, or two generated serde names collide
+        ValueError: If goal_rule is not a rule of the grammar
+    """
+    model = ast_model.build_ast_model(_ast_grammar(grammar), ast_config)
+    return gsm2serde_rs.generate_de_rs(
+        model,
+        cst_mod_path,
+        source_name,
+        parser_mod_path=parser_mod_path,
+        goal_rule=goal_rule,
+        ast_mod_path=ast_mod_path,
     )
 
 

@@ -264,6 +264,19 @@ if result.success:
         print(f"Label: {label}, Child: {child}")
 ```
 
+### Step 6: Or Skip the CST and Get Typed Values
+
+Walking the CST by hand is the low-level route. FLTK can also generate a typed tree — one class
+per rule, converters in both directions, shaped by a `.fltkast` sidecar — so your application
+code works with `config.settings["port"]` rather than with labels and spans.
+
+See [ast-guide.md](ast-guide.md) for the AST layer and the complete `.fltkast` reference.
+
+On Rust there is a third route: the serde frontend deserializes source text straight into your
+own `#[derive(Deserialize)]` types, with serde's unknown-field and wrong-type errors positioned
+by CST span. FLTK generates no types for it — your structs are the schema. See
+[rust-serde-guide.md](rust-serde-guide.md).
+
 ## Complete Example
 
 ```python
