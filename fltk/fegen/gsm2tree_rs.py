@@ -10,7 +10,8 @@ import re
 from collections.abc import Iterable
 
 from fltk.fegen import cst_ergonomics, gsm, naming
-from fltk.fegen.gsm2tree import CstGenerator, ItemsModel, ModelType
+from fltk.fegen.gsm2tree import LABEL_PROTOCOL_ANNOTATION, CstGenerator, ItemsModel, ModelType
+from fltk.fegen.pyrt.label_protocol import label_canonical_name
 from fltk.fegen.rust_emit import (
     STD_DROP,
     STD_INTO,
@@ -365,6 +366,7 @@ class RustCstGenerator:
         # the stub names neither fltk._native nor the fltk.fegen.pyrt.span selector, so a
         # consumer can swap config 1 (Python CST) <-> config 2 (Rust CST) without churn.
         # terminalsrc / span / fltk._native are no longer referenced and are not imported.
+        lines.append("import fltk.fegen.pyrt.label_protocol")
         lines.append("import fltk.fegen.pyrt.span_protocol")
         lines.append(f"import {protocol_module} as _proto")
         lines.append("")
@@ -380,12 +382,10 @@ class RustCstGenerator:
             model = self._py_gen.rule_models[rule_name]
             lines.append(f"class {class_name}:")
 
-            # Nested Label class alias (only when rule has labels, mirroring .rs conditional emission).
-            # Use 'Label = _proto.ClassName.Label' (type alias assignment) rather than a ClassVar
-            # annotation: the protocol's Label is a nested class, not a ClassVar, and pyright rejects
-            # 'ClassVar[type[...]]' when checking structural compatibility with the protocol's nested class.
+            # Aliases the protocol's module-level label namespace so stub consumers keep
+            # writing `rust_cst.Grammar.Label.RULE` and get LabelProtocol-typed constants.
             if labels:
-                lines.append(f"    Label = _proto.{class_name}.Label")
+                lines.append(f"    Label = _proto.{class_name}Label")
 
             # kind discriminant: reference protocol's NodeKind so Literal matches
             node_kind_member = self._node_kind_python_name(rule_name)
@@ -397,13 +397,10 @@ class RustCstGenerator:
 
             # children: proto-qualified element types
             child_ann = self._pyi_annotation_for_model_types(model.types, class_name=class_name)
-            if labels:
-                lines.append(f"    children: list[tuple[typing.Optional[_proto.{class_name}.Label], {child_ann}]]")
-            else:
-                lines.append(f"    children: list[tuple[None, {child_ann}]]")
+            label_ann = f"typing.Optional[{LABEL_PROTOCOL_ANNOTATION}]" if labels else "None"
+            lines.append(f"    children: list[tuple[{label_ann}, {child_ann}]]")
 
             # Generic methods: append, extend, child, extend_children
-            label_ann = f"typing.Optional[_proto.{class_name}.Label]" if labels else "None"
             lines.append(f"    def append(self, child: {child_ann}, label: {label_ann} = ...) -> None: ...")
             lines.append(
                 f"    def extend(self, children: typing.Iterable[{child_ann}], label: {label_ann} = ...) -> None: ..."
@@ -411,10 +408,7 @@ class RustCstGenerator:
             # extend_children takes _proto.ClassName (not the stub-local class) to avoid
             # contravariance mismatches when pyright checks structural compatibility.
             lines.append(f"    def extend_children(self, other: _proto.{class_name}) -> None: ...")
-            if labels:
-                child_ret = f"tuple[typing.Optional[_proto.{class_name}.Label], {child_ann}]"
-            else:
-                child_ret = f"tuple[None, {child_ann}]"
+            child_ret = f"tuple[{label_ann}, {child_ann}]"
             lines.append(f"    def child(self) -> {child_ret}: ...")
 
             # Named mutators: insert, remove_at, replace_at, clear
@@ -453,7 +447,7 @@ class RustCstGenerator:
         """Emit the .pyi declarations for a rule's ergonomic pymethods.
 
         Return types mirror the protocol's, so a stub class stays assignable to its protocol
-        counterpart: ``variant`` is annotated with the protocol's own nested ``Label`` class.
+        counterpart: ``variant`` is annotated with the backend-agnostic LabelProtocol.
         """
         plan = self.plan_for_rule(rule_name)
         lines: list[str] = []
@@ -478,7 +472,7 @@ class RustCstGenerator:
         if plan.rule_text:
             lines.append("    def text(self) -> str: ...")
         if plan.variant:
-            lines.append(f"    def variant(self) -> _proto.{class_name}.Label: ...")
+            lines.append(f"    def variant(self) -> {LABEL_PROTOCOL_ANNOTATION}: ...")
 
         return lines
 
@@ -829,7 +823,8 @@ class RustCstGenerator:
         for label in labels:
             rust_variant = _rust_variant_name(label)
             python_name = _python_label_name(label)
-            lines.append(f'            {enum_name}::{rust_variant} => "{class_name}.Label.{python_name}",')
+            canonical = label_canonical_name(class_name, python_name)
+            lines.append(f'            {enum_name}::{rust_variant} => "{canonical}",')
         lines.append("        }")
         lines.append("    }")
         lines.append("")

@@ -398,31 +398,31 @@ test-rust-parser-fixture:
 gencode:
 	# Python: fegen grammar → fltk_cst.py, fltk_cst_protocol.py, fltk_parser.py, fltk_trivia_parser.py
 	# (fltk.fltkg is intentionally broken; fltk_cst.py is generated from fegen.fltkg)
-	uv run python -m fltk.fegen.genparser generate --protocol \
+	uv run python -m fltk.fegen.genparser generate \
 		fltk/fegen/fegen.fltkg fltk fltk.fegen.fltk_cst \
 		--output-dir fltk/fegen
 	# Python: bootstrap grammar → bootstrap_cst.py, bootstrap_cst_protocol.py, bootstrap_parser.py, bootstrap_trivia_parser.py
-	uv run python -m fltk.fegen.genparser generate --protocol \
+	uv run python -m fltk.fegen.genparser generate \
 		fltk/fegen/bootstrap.fltkg bootstrap fltk.fegen.bootstrap_cst \
 		--output-dir fltk/fegen
 	# Python: toy grammar (toy_cst.py, toy_cst_protocol.py, toy_parser.py, toy_trivia_parser.py)
-	uv run python -m fltk.fegen.genparser generate --protocol \
+	uv run python -m fltk.fegen.genparser generate \
 		fltk/unparse/toy.fltkg toy fltk.unparse.toy_cst \
 		--output-dir fltk/unparse
 	# Python: unparsefmt grammar (unparsefmt_cst.py, unparsefmt_cst_protocol.py, unparsefmt_parser.py, unparsefmt_trivia_parser.py)
-	uv run python -m fltk.fegen.genparser generate --protocol \
+	uv run python -m fltk.fegen.genparser generate \
 		fltk/unparse/unparsefmt.fltkg unparsefmt fltk.unparse.unparsefmt_cst \
 		--output-dir fltk/unparse
 	# Python: regex grammar (regex_cst.py, regex_cst_protocol.py, regex_parser.py, regex_trivia_parser.py)
-	uv run python -m fltk.fegen.genparser generate --protocol \
+	uv run python -m fltk.fegen.genparser generate \
 		fltk/fegen/regex.fltkg regex fltk.fegen.regex_cst \
 		--output-dir fltk/fegen
 	# Python: fltkast grammar (fltkast_cst.py, fltkast_cst_protocol.py, fltkast_parser.py, fltkast_trivia_parser.py)
-	uv run python -m fltk.fegen.genparser generate --protocol \
+	uv run python -m fltk.fegen.genparser generate \
 		fltk/fegen/fltkast.fltkg fltkast fltk.fegen.fltkast_cst \
 		--output-dir fltk/fegen
 	# Python: fltklsp grammar (fltklsp_cst.py, fltklsp_cst_protocol.py, fltklsp_parser.py, fltklsp_trivia_parser.py)
-	uv run python -m fltk.fegen.genparser generate --protocol \
+	uv run python -m fltk.fegen.genparser generate \
 		fltk/lsp/fltklsp.fltkg fltklsp fltk.lsp.fltklsp_cst \
 		--output-dir fltk/lsp
 	# Rust: src/lib.rs (fltk._native module wiring — span-only runtime, no grammar submodules)

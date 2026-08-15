@@ -1,10 +1,38 @@
 """Cross-backend parser parity helpers.
 
-Imported by test_rust_parser_parity_fegen.py and test_rust_parser_parity_fixture.py.
 Not a test module itself.
 """
 
 from __future__ import annotations
+
+import typing
+
+
+def parse_py_cst(parser_module: typing.Any, rule: str, text: str) -> typing.Any:
+    """Parse ``text`` as ``rule`` with a Python-backend parser module; return the CST root.
+
+    The whole input must be consumed, so a partial parse is a test failure rather than a
+    silently truncated tree.
+    """
+    from fltk.fegen.pyrt import terminalsrc  # noqa: PLC0415
+
+    source = terminalsrc.TerminalSource(text)
+    result = getattr(parser_module.Parser(terminalsrc=source), f"apply__parse_{rule}")(0)
+    assert result is not None, f"python parse of {text!r} as {rule} failed"
+    assert result.pos == len(source.terminals), f"python parse of {text!r} as {rule} stopped at {result.pos}"
+    return result.result
+
+
+def parse_rust_cst(parser_module: typing.Any, rule: str, text: str, *, capture_trivia: bool = False) -> typing.Any:
+    """Parse ``text`` as ``rule`` with a Rust-backend parser module; return the CST handle.
+
+    ``parser_module`` is the extension's ``parser`` submodule (e.g. ``fegen_rust_cst.parser``).
+    """
+    parser = parser_module.Parser(text, capture_trivia=capture_trivia)
+    result = getattr(parser, f"apply__parse_{rule}")(0)
+    assert result is not None, f"rust parse of {text!r} as {rule} failed"
+    assert result.pos == len(text), f"rust parse of {text!r} as {rule} stopped at {result.pos}"
+    return result.result
 
 
 def assert_cst_equal(py_node, rust_node, path: str = "") -> None:

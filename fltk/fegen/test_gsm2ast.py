@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import ast as pyast
 import decimal
 import pathlib
 import re
@@ -14,7 +15,8 @@ import pytest
 
 from fltk.fegen import ast_config as ac
 from fltk.fegen import ast_model as am
-from fltk.fegen import gsm2ast
+from fltk.fegen import ast_test_grammars as fixtures
+from fltk.fegen import gsm2ast, naming
 from fltk.fegen.ast_test_grammars import (
     CONFIG_GRAMMAR,
     CONFIG_SIDECAR,
@@ -27,7 +29,14 @@ from fltk.fegen.ast_test_grammars import (
     TASK_SIDECAR,
 )
 from fltk.fegen.pyrt import astrt, terminalsrc
-from fltk.plumbing import generate_parser, generate_unparser, parse_format_config, parse_grammar, parse_text
+from fltk.plumbing import (
+    generate_parser,
+    generate_protocol_module,
+    generate_unparser,
+    parse_format_config,
+    parse_grammar,
+    parse_text,
+)
 from fltk.plumbing_types import ParserResult
 from fltk.unparse.renderer import RendererConfig
 
@@ -57,7 +66,20 @@ def ast_module_for(
     config: ac.ResolvedAstConfig | None = None,
 ) -> Generated:
     model = am.build_ast_model(parser_result.grammar, config)
-    source = gsm2ast.generate_ast_module(model, parser_result.cst_module_name, parser_module, unparser_module, goal)
+    source = gsm2ast.generate_ast_module(
+        model,
+        parser_result.cst_module_name,
+        parser_module,
+        unparser_module,
+        goal,
+        # Named after the CST module, so repeat generations for one parser_result re-register
+        # one sys.modules entry instead of stacking counter-suffixed ones.  Each call replaces
+        # the entry with a freshly exec'd module; the AST source only ever compares NodeKind
+        # members, which are equal by canonical name across those generations.
+        protocol_module_name=generate_protocol_module(
+            parser_result.grammar, naming.protocol_module_name(parser_result.cst_module_name)
+        ),
+    )
     module_name = f"generated_ast_{id(parser_result)}_{id(source)}"
     module = types.ModuleType(module_name)
     module.__dict__["__name__"] = module_name
@@ -1444,7 +1466,11 @@ class TestCustomRules:
         )
         model = am.build_ast_model(parser_result.grammar, config)
         with pytest.raises(ValueError, match="names no `python:` type"):
-            gsm2ast.generate_ast_module(model, parser_result.cst_module_name)
+            gsm2ast.generate_ast_module(
+                model,
+                parser_result.cst_module_name,
+                protocol_module_name=naming.protocol_module_name(parser_result.cst_module_name),
+            )
 
     def test_two_custom_rules_on_one_class_get_payload_classes(self) -> None:
         """A union listing one class twice could not dispatch; both variants fall back."""
@@ -1471,7 +1497,11 @@ class TestCustomRules:
         )
         model = am.build_ast_model(parser_result.grammar, config)
         with pytest.raises(ValueError, match="must be a dotted path"):
-            gsm2ast.generate_ast_module(model, parser_result.cst_module_name)
+            gsm2ast.generate_ast_module(
+                model,
+                parser_result.cst_module_name,
+                protocol_module_name=naming.protocol_module_name(parser_result.cst_module_name),
+            )
 
 
 def coerced(pattern: str, statements: str, *, extra: str = "") -> Generated:
@@ -2768,7 +2798,7 @@ class TestFlatten:
         assert "the flattened wrapper needs a 'unit' value" in exc.value.message
 
     def test_the_wrapper_is_read_through_one_private_helper_pair(self, task: Generated) -> None:
-        assert "def _flat_schedule_from_cst(node: cst.Schedule) -> tuple[int, TimeUnitValue]:" in task.source
+        assert "def _flat_schedule_from_cst(node: cstp.Schedule) -> tuple[int, TimeUnitValue]:" in task.source
         assert "def _flat_schedule_to_cst(_f_interval: int, _f_unit: TimeUnitValue) -> cst.Schedule:" in task.source
 
 
@@ -3170,3 +3200,93 @@ class TestErasedUnionLabelSelection:
             "Word",
             "Span",
         ]
+
+
+_FORWARD_NAMES = re.compile(r"^(from_cst|_erased_\w+_from_cst|_flat_\w+_from_cst|\w+_from_cst)$")
+_REVERSE_NAMES = re.compile(r"^(to_cst|_to_cst_alt\d+|\w+_to_cst(_alt\d+)?)$")
+
+
+def _functions(source: str, names: re.Pattern[str]) -> list[pyast.FunctionDef]:
+    """Every function definition in the emitted source whose name ``names`` matches."""
+    return [
+        node
+        for node in pyast.walk(pyast.parse(source))
+        if isinstance(node, pyast.FunctionDef) and names.match(node.name)
+    ]
+
+
+class TestProtocolTypedForwardDirection:
+    """The forward converters are typed and keyed against the protocol module, the reverse ones are not.
+
+    A CST node from either backend converts through ``from_cst``, which is what makes one
+    generated AST layer usable from a consumer that switched its CST import.  Synthesis needs
+    node construction and span invention, so ``to_cst`` stays on the concrete module — and the
+    two must not bleed into each other: a protocol reference in a reverse body would fail at
+    construction time, and a concrete reference in a forward signature would refuse a Rust node
+    that converts perfectly well.
+    """
+
+    @staticmethod
+    @pytest.fixture(scope="class", params=[case[0] for case in fixtures.EXAMPLES])
+    def source(request: pytest.FixtureRequest) -> str:
+        """The emitted text of one shared example, not exec'd — a sidecar may name absent types."""
+        _name, grammar, sidecar = next(case for case in fixtures.EXAMPLES if case[0] == request.param)
+        parser_result = generate_parser(parse_grammar(grammar), capture_trivia=False)
+        config = ac.load_ast_config(sidecar, parser_result.grammar, {ac.Backend.PYTHON})
+        model = am.build_ast_model(parser_result.grammar, config)
+        return gsm2ast.generate_ast_module(model, "app.app_cst", protocol_module_name="app.app_cst_protocol")
+
+    def test_both_cst_modules_are_imported(self, source: str) -> None:
+        """The concrete module and the protocol module each get their own alias."""
+        assert re.search(r"^import \S+ as cst$", source, re.MULTILINE)
+        assert re.search(r"^import \S+_protocol\S* as cstp$", source, re.MULTILINE)
+
+    def test_no_kind_constant_comes_from_the_concrete_module(self, source: str) -> None:
+        """``NodeKind`` is read from the protocol module, whose members equal either backend's."""
+        assert "cst.NodeKind." not in source
+        assert "cstp.NodeKind." in source
+
+    def test_every_forward_signature_is_protocol_typed(self, source: str) -> None:
+        """A ``node:`` parameter naming the concrete class would refuse a Rust-backend node."""
+        forward = _functions(source, _FORWARD_NAMES)
+        assert forward, "the sweep found no forward converters"
+        annotations = [
+            pyast.unparse(argument.annotation)
+            for function in forward
+            for argument in function.args.args
+            if argument.arg == "node" and argument.annotation is not None
+        ]
+        assert annotations, "no forward converter annotates its node parameter"
+        assert all(annotation.startswith("cstp.") for annotation in annotations), annotations
+
+    def test_no_forward_body_reaches_the_concrete_module(self, source: str) -> None:
+        """Whatever a forward body touches has to hold for a node from either backend."""
+        for function in _functions(source, _FORWARD_NAMES):
+            body = "\n".join(pyast.unparse(statement) for statement in function.body)
+            assert "cst." not in body.replace("cstp.", ""), f"{function.name} reads the concrete module"
+
+    def test_no_reverse_function_reaches_the_protocol_module(self, source: str) -> None:
+        """Synthesis constructs nodes and appends labels, which the protocol does not offer."""
+        reverse = _functions(source, _REVERSE_NAMES)
+        assert reverse, "the sweep found no reverse converters"
+        for function in reverse:
+            assert "cstp" not in pyast.unparse(function), f"{function.name} names the protocol module"
+
+    def test_the_reverse_return_types_stay_concrete(self, source: str) -> None:
+        """``to_cst`` keeps building Python-backend nodes, so *every* annotation keeps saying so."""
+        returns = [
+            pyast.unparse(function.returns)
+            for function in _functions(source, _REVERSE_NAMES)
+            if function.returns is not None
+        ]
+        assert returns, "the sweep found no annotated reverse converter"
+        assert all(annotation.startswith("cst.") for annotation in returns), returns
+
+
+class TestProtocolTypedBackpointer:
+    """``option cst = true;`` records whichever backend's node the value was converted from."""
+
+    def test_the_backpointer_field_is_protocol_typed(self) -> None:
+        source = build_roundtrip(BACKPOINTER_GRAMMAR, "top", config_text="option cst = true;").source
+        assert "cst: cstp.Top | None = dataclasses.field(default=None, compare=False, repr=False)" in source
+        assert "cst: cst.Top | None" not in source

@@ -22,6 +22,7 @@ from typing import Final, Optional
 import astor
 
 import fltk
+from fltk import plumbing
 from fltk.fegen import gsm, gsm2tree
 from fltk.fegen import gsm2parser as g2p
 from fltk.fegen.pyrt import errors, memo, terminalsrc
@@ -99,7 +100,7 @@ def test_recursive_rule_not_spuriously_inlined():
     LOG.debug("Generated parser:\n%s", astor.to_source(parser_class_ast))
 
     # Generate the CST classes module
-    cst_module_ast = pgen.cstgen.gen_py_module()
+    cst_module_ast = pgen.cstgen.gen_py_module(plumbing.generate_protocol_module(enhanced_grammar))
     cst_mod = compile(cst_module_ast, "<cst_module>", "exec")
     cst_locals = {}
     exec(cst_mod, cst_locals)  # noqa: S102

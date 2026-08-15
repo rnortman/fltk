@@ -88,6 +88,11 @@ uv run python -m fltk.fegen.genparser gen-ast  calc.fltkg calc calc.calc_cst \
     --ast-config calc.fltkast --parser-module calc.calc_parser --goal expr -o calc/
 ```
 
+`generate` always writes `calc/calc_cst_protocol.py` beside the CST module. Both layers need it:
+`calc_cst.py` imports its `NodeKind` from it, and the AST module's `from_cst` converters are typed
+and keyed against it, which is what lets one AST layer convert a CST from either the Python or the
+Rust backend.
+
 ```python
 from calc.calc_ast import parse, ExprBinary
 
@@ -113,6 +118,7 @@ Writes `{BASE_NAME}_ast.py`.
 | `GRAMMAR_FILE` | yes | The `.fltkg` grammar |
 | `BASE_NAME` | yes | Output basename (`calc` writes `calc_ast.py`) |
 | `CST_MODULE` | yes | Import path of the generated CST module (`calc.calc_cst`) |
+| `--protocol-module PATH` | no | Import path of the generated CST protocol module the `from_cst` converters are typed against; defaults to `CST_MODULE` + `_protocol` |
 | `--ast-config PATH` | no | The `.fltkast` sidecar. Omitted, the AST is derived from the grammar alone |
 | `--parser-module PATH` | no | Import path of the generated parser; adds `parse(source, filename=None)` |
 | `--unparser-module PATH` | no | Import path of the generated unparser; adds `unparse(value, renderer_config=None)` |

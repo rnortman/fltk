@@ -8,6 +8,7 @@ Think of it as the pipes that connect your grammar to formatted output.
 from __future__ import annotations
 
 import ast
+import importlib
 import itertools
 import sys
 import types
@@ -25,6 +26,7 @@ from fltk.fegen import (
     gsm2parser,
     gsm2serde_rs,
     gsm2tree,
+    naming,
 )
 from fltk.fegen.ast_config import ALL_BACKENDS, Backend, ResolvedAstConfig, load_ast_config
 from fltk.fegen.pyrt import errors, memo, terminalsrc
@@ -48,7 +50,8 @@ if TYPE_CHECKING:
 
 
 _module_counter = itertools.count()
-"""Names the in-memory modules ``generate_parser`` and ``generate_ast`` register in ``sys.modules``.
+"""Names the in-memory modules ``generate_parser``, ``generate_protocol_module`` and ``generate_ast``
+register in ``sys.modules``.
 
 A process-wide counter rather than object ids: an id is only unique while its object lives, so a
 recycled one could name a second module over an earlier one's ``sys.modules`` entry while that
@@ -125,6 +128,9 @@ def generate_parser(
         capture_trivia: If True, generates parser that captures whitespace/comments as Trivia nodes.
                        If False, generates simpler parser that skips whitespace.
 
+    The grammar's CST protocol module is generated and registered here too: the CST module imports
+    its ``NodeKind`` from it, and its name is returned on the result.
+
     Returns:
         ParserResult containing the generated parser class and CST module
     """
@@ -137,47 +143,55 @@ def generate_parser(
     module_name = f"fltk_grammar_{next(_module_counter)}"
     cst_module = types.ModuleType(module_name)
 
-    # Python backend: generate and exec CST dataclass module
-    cst_module_ast = cstgen.gen_py_module()
-    cst_globals = {}
-    exec(compile(cst_module_ast, "<cst_module>", "exec"), cst_globals)  # noqa: S102
-    public = {k: v for k, v in cst_globals.items() if not k.startswith("_")}
+    # The CST module imports NodeKind from its protocol module, so that module has to be
+    # registered before the CST source is exec'd.  A failure anywhere after that takes the entry
+    # back out, for the same reason the CST module is registered only on success below.
+    protocol_module_name = _register_protocol_module(grammar_with_trivia, None, cstgen)
+    try:
+        # Python backend: generate and exec CST dataclass module
+        cst_module_ast = cstgen.gen_py_module(protocol_module_name)
+        cst_globals = {}
+        exec(compile(cst_module_ast, "<cst_module>", "exec"), cst_globals)  # noqa: S102
+        public = {k: v for k, v in cst_globals.items() if not k.startswith("_")}
 
-    for name, obj in public.items():
-        setattr(cst_module, name, obj)
+        for name, obj in public.items():
+            setattr(cst_module, name, obj)
 
-    pgen = gsm2parser.ParserGenerator(grammar=grammar_with_trivia, cstgen=cstgen, context=context)
-    parser_class_ast = compiler.compile_class(pgen.parser_class, context)
-    # Prepend `from __future__ import annotations` so the exec'd parser's span annotations
-    # are lazy strings.  The parser annotates its terminal spans with `terminalsrc.Span`;
-    # `terminalsrc` is bound in `parser_globals` below, so even eager evaluation would resolve,
-    # but keeping the annotations lazy removes the dependency entirely and matches the committed
-    # parsers (which also carry `from __future__ import annotations`).
-    future_import = ast.ImportFrom(module="__future__", names=[ast.alias(name="annotations")], level=0)
-    parser_module = ast.fix_missing_locations(ast.Module(body=[future_import, parser_class_ast], type_ignores=[]))
+        pgen = gsm2parser.ParserGenerator(grammar=grammar_with_trivia, cstgen=cstgen, context=context)
+        parser_class_ast = compiler.compile_class(pgen.parser_class, context)
+        # Prepend `from __future__ import annotations` so the exec'd parser's span annotations
+        # are lazy strings.  The parser annotates its terminal spans with `terminalsrc.Span`;
+        # `terminalsrc` is bound in `parser_globals` below, so even eager evaluation would resolve,
+        # but keeping the annotations lazy removes the dependency entirely and matches the committed
+        # parsers (which also carry `from __future__ import annotations`).
+        future_import = ast.ImportFrom(module="__future__", names=[ast.alias(name="annotations")], level=0)
+        parser_module = ast.fix_missing_locations(ast.Module(body=[future_import, parser_class_ast], type_ignores=[]))
 
-    parser_globals = {
-        "ApplyResult": memo.ApplyResult,
-        "Span": terminalsrc.Span,
-        "Optional": Optional,
-        "typing": __import__("typing"),
-        "terminalsrc": terminalsrc,
-        "fltk": fltk,
-        "errors": errors,
-    }
-    parser_globals.update(public)  # bind the generated Python CST node classes
+        parser_globals = {
+            "ApplyResult": memo.ApplyResult,
+            "Span": terminalsrc.Span,
+            "Optional": Optional,
+            "typing": __import__("typing"),
+            "terminalsrc": terminalsrc,
+            "fltk": fltk,
+            "errors": errors,
+        }
+        parser_globals.update(public)  # bind the generated Python CST node classes
 
-    exec(compile(parser_module, "<parser>", "exec"), parser_globals)  # noqa: S102
+        exec(compile(parser_module, "<parser>", "exec"), parser_globals)  # noqa: S102
 
-    parser_class = None
-    for name, obj in parser_globals.items():
-        if isinstance(obj, type) and name.endswith("Parser"):
-            parser_class = obj
-            break
+        parser_class = None
+        for name, obj in parser_globals.items():
+            if isinstance(obj, type) and name.endswith("Parser"):
+                parser_class = obj
+                break
 
-    if parser_class is None:
-        msg = "Generated parser class not found"
-        raise RuntimeError(msg)
+        if parser_class is None:
+            msg = "Generated parser class not found"
+            raise RuntimeError(msg)
+    except Exception:
+        del sys.modules[protocol_module_name]
+        raise
 
     # Register in sys.modules only after successful parser generation, so a codegen
     # failure does not leave a stale module entry under module_name.
@@ -189,6 +203,7 @@ def generate_parser(
         cst_module_name=module_name,
         grammar=grammar_with_trivia,
         capture_trivia=capture_trivia,
+        protocol_module_name=protocol_module_name,
     )
 
 
@@ -481,6 +496,90 @@ def parse_ast_config_file(
     return parse_ast_config(config_text, grammar, backends)
 
 
+def generate_protocol_module(grammar: gsm.Grammar, module_name: str | None = None) -> str:
+    """Generate the CST protocol module for ``grammar`` and register it; return its name.
+
+    The generated AST module's forward direction is annotated and keyed against the grammar's
+    protocol module, so a caller that generates an AST layer in memory needs that module
+    importable.  The classes are built from the trivia-processed grammar, the same one the CST
+    module is built from, so the two describe the same tree.
+
+    ``module_name`` names the ``sys.modules`` entry; without one a counter-suffixed name is used,
+    which is unique but exists only in this process.
+
+    A named entry is always rendered afresh and *replaces* whatever ``sys.modules`` holds under
+    that name, including an on-disk module — so naming a committed module shadows it for every
+    later importer in the process, and repeat calls hand out fresh ``NodeKind``/sentinel objects
+    (equal and hash-equal by canonical name, but not ``is`` the previous ones).
+    """
+    return _register_protocol_module(_ast_grammar(grammar), module_name)
+
+
+def _register_protocol_module(
+    grammar_with_trivia: gsm.Grammar, module_name: str | None, cstgen: gsm2tree.CstGenerator | None = None
+) -> str:
+    """Render, exec and register the protocol module of an already trivia-processed grammar.
+
+    A caller that already holds a generator over this grammar passes it: the protocol module and
+    the concrete module that shares its ``NodeKind`` are then rendered from one generator carrying
+    one context, instead of two built over the same grammar.
+    """
+    if cstgen is None:
+        context = create_default_context()
+        cstgen = gsm2tree.CstGenerator(grammar=grammar_with_trivia, py_module=pyreg.Builtins, context=context)
+
+    name = module_name if module_name is not None else f"fltk_cst_protocol_{next(_module_counter)}"
+    module = types.ModuleType(name)
+    module.__dict__["__name__"] = name
+    exec(compile(cstgen.gen_protocol_module_text(), f"<{name}>", "exec"), module.__dict__)  # noqa: S102
+    sys.modules[name] = module
+    return name
+
+
+def _protocol_module_for(grammar_with_trivia: gsm.Grammar, cst_module_name: str) -> str:
+    """The name the AST source imports when the caller named no protocol module.
+
+    Always the convention a regenerated pair uses, ``<cst_module>_protocol``, so source written
+    to disk names a module that exists there.  An already-importable one of that name — the
+    committed module beside a committed CST module, or one an earlier call registered — is used as
+    it is; otherwise one is generated and registered under that name, which is what makes the
+    source exec-able in this process.
+
+    A reused module is checked against this grammar first: the AST source reads a
+    ``NodeKind`` member per rule at import time, so one built from a different or older grammar
+    would fail deep inside that exec with a bare ``AttributeError`` — or, if the rule names
+    happen to overlap, bind the forward direction to the wrong shapes.  A module missing any of
+    the grammar's kinds raises instead.
+
+    Raises:
+        ValueError: If the reused module was built from a grammar without all of this one's rules
+    """
+    name = naming.protocol_module_name(cst_module_name)
+    try:
+        module = importlib.import_module(name)
+    except ModuleNotFoundError:
+        return _register_protocol_module(grammar_with_trivia, name)
+    _check_protocol_module_matches(module, grammar_with_trivia, name)
+    return name
+
+
+def _check_protocol_module_matches(module: types.ModuleType, grammar_with_trivia: gsm.Grammar, name: str) -> None:
+    """Raise unless ``module`` exposes a NodeKind member for every rule of the grammar."""
+    node_kind = getattr(module, "NodeKind", None)
+    missing = sorted(
+        member
+        for member in (naming.snake_to_upper_camel(rule.name).upper() for rule in grammar_with_trivia.rules)
+        if not hasattr(node_kind, member)
+    )
+    if missing:
+        msg = (
+            f"protocol module {name!r} does not match this grammar: its NodeKind is missing "
+            f"{', '.join(missing)}. Regenerate it beside the CST module, or pass "
+            f"protocol_module_name explicitly."
+        )
+        raise ValueError(msg)
+
+
 def _assemble_ast_module(
     grammar: gsm.Grammar,
     cst_module_name: str,
@@ -489,16 +588,29 @@ def _assemble_ast_module(
     goal_rule: str | None,
     *,
     ast_config: ResolvedAstConfig | None,
+    protocol_module_name: str | None,
 ) -> tuple[str, ast_model.AstModel, gsm.Grammar, str]:
     """Run the AST assembly pipeline; return (source, model, grammar_with_trivia, goal_rule).
 
     Single source of truth for the steps shared by generate_ast (which exec's the returned
     source) and generate_ast_source (which returns it).
+
+    An unnamed protocol module falls back to the ``<cst_module>_protocol`` convention, generated
+    and registered here when nothing of that name is importable yet — so the source both entry
+    points produce names a module that is importable both in this process and, after a regen,
+    beside a CST module on disk.
     """
     grammar_with_trivia = _ast_grammar(grammar)
+    protocol = (
+        protocol_module_name
+        if protocol_module_name is not None
+        else _protocol_module_for(grammar_with_trivia, cst_module_name)
+    )
     model = ast_model.build_ast_model(grammar_with_trivia, ast_config)
     goal = ast_model.resolve_goal_rule(model, goal_rule)
-    source = gsm2ast.generate_ast_module(model, cst_module_name, parser_module_name, unparser_module_name, goal)
+    source = gsm2ast.generate_ast_module(
+        model, cst_module_name, parser_module_name, unparser_module_name, goal, protocol_module_name=protocol
+    )
     return source, model, grammar_with_trivia, goal
 
 
@@ -510,6 +622,7 @@ def generate_ast_source(
     goal_rule: str | None = None,
     *,
     ast_config: ResolvedAstConfig | None = None,
+    protocol_module_name: str | None = None,
 ) -> str:
     """Generate the AST module source from grammar without executing it.
 
@@ -522,6 +635,9 @@ def generate_ast_source(
         unparser_module_name: Importable name of a generated unparser module; enables ``unparse()``
         goal_rule: Rule the conveniences target; defaults to the grammar's first rule
         ast_config: Resolved .fltkast sidecar shaping the AST; None is pure Tier 0
+        protocol_module_name: Importable name of the grammar's generated CST protocol module,
+            which the forward converters are annotated and keyed against.  When omitted, one is
+            generated and registered in ``sys.modules`` so the returned source is exec-able here.
 
     Returns:
         The generated AST module source as a string
@@ -531,7 +647,13 @@ def generate_ast_source(
         ValueError: If goal_rule is not a rule of the grammar
     """
     source, _model, _grammar_with_trivia, _goal = _assemble_ast_module(
-        grammar, cst_module_name, parser_module_name, unparser_module_name, goal_rule, ast_config=ast_config
+        grammar,
+        cst_module_name,
+        parser_module_name,
+        unparser_module_name,
+        goal_rule,
+        ast_config=ast_config,
+        protocol_module_name=protocol_module_name,
     )
     return source
 
@@ -544,11 +666,14 @@ def generate_ast(
     goal_rule: str | None = None,
     *,
     ast_config: ResolvedAstConfig | None = None,
+    protocol_module_name: str | None = None,
 ) -> AstResult:
     """Generate AST node classes and CST converters from grammar.
 
     The CST module named by ``cst_module_name`` must be importable (in ``sys.modules``)
-    when this function runs.
+    when this function runs.  The grammar's CST protocol module, which the forward converters
+    are annotated and keyed against, is generated and registered here unless
+    ``protocol_module_name`` names an already-importable one.
 
     Args:
         grammar: The grammar to generate the AST layer for
@@ -557,6 +682,8 @@ def generate_ast(
         unparser_module_name: Importable name of a generated unparser module; enables ``unparse()``
         goal_rule: Rule the conveniences target; defaults to the grammar's first rule
         ast_config: Resolved .fltkast sidecar shaping the AST; None is pure Tier 0
+        protocol_module_name: Importable name of the grammar's generated CST protocol module;
+            when omitted, one is generated and registered
 
     Returns:
         AstResult containing the executed AST module
@@ -566,7 +693,13 @@ def generate_ast(
         ValueError: If goal_rule is not a rule of the grammar
     """
     source, model, grammar_with_trivia, goal = _assemble_ast_module(
-        grammar, cst_module_name, parser_module_name, unparser_module_name, goal_rule, ast_config=ast_config
+        grammar,
+        cst_module_name,
+        parser_module_name,
+        unparser_module_name,
+        goal_rule,
+        ast_config=ast_config,
+        protocol_module_name=protocol_module_name,
     )
 
     module_name = f"fltk_ast_{next(_module_counter)}"

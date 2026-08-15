@@ -10,9 +10,10 @@ import ast
 import pytest
 
 import fltk.fegen.gsm2tree as gsm2tree_mod
-from fltk.fegen import gsm
+from fltk.fegen import fltk_cst, fltk_cst_protocol, gsm
 from tests.gsm2tree_helpers import make_generator as _make_generator
 from tests.gsm2tree_helpers import make_labeled_grammar as _make_labeled_grammar
+from tests.gsm2tree_helpers import make_rule_ref_grammar as _rule_ref_grammar
 from tests.gsm2tree_helpers import make_zero_label_grammar as _make_zero_label_grammar
 
 
@@ -118,8 +119,9 @@ class TestLabelFreeConcreteClass:
         fn = _find_function(klass, "extend_children")
         assert fn is not None, "extend_children not found on label-free node"
         fn_src = ast.unparse(fn)
-        # Parameter must be typed with the class forward-ref, not Label-annotated
-        assert "other: 'Foo'" in fn_src, f"Expected 'other: \\'Foo\\'' in extend_children; got:\n{fn_src}"
+        assert f"other: {gsm2tree_mod.PROTOCOL_MODULE_ALIAS}.Foo" in fn_src, (
+            f"Expected the protocol-typed 'other' param in extend_children; got:\n{fn_src}"
+        )
         # Return type must be None
         assert _annotation_source(fn.returns) == "None", (
             f"extend_children must return None; got: {_annotation_source(fn.returns)}"
@@ -154,12 +156,12 @@ class TestLabelBearingConcreteClassUnchanged:
         src = ast.unparse(klass)
         assert "Optional[Label]" in src, f"Label-bearing node must use Optional[Label]:\n{src}"
 
-    def test_append_label_optional(self, klass: ast.ClassDef) -> None:
-        """append() label param must be Optional[Label] = None for labeled nodes."""
+    def test_append_label_is_the_agnostic_label(self, klass: ast.ClassDef) -> None:
+        """append() takes any conforming backend's label, not just this class's enum."""
         append_fn = _find_function(klass, "append")
         assert append_fn is not None
         fn_src = ast.unparse(append_fn)
-        assert "Optional[Label]" in fn_src
+        assert f"label: typing.Optional[{gsm2tree_mod.LABEL_PROTOCOL_ANNOTATION}]" in fn_src, fn_src
 
     def test_per_label_methods_present(self, klass: ast.ClassDef) -> None:
         """Label-bearing node must have append_name, extend_name, children_name, child_name, maybe_name."""
@@ -228,6 +230,53 @@ def _make_simple_grammar() -> gsm.Grammar:
         rules=(alpha_rule, beta_rule),
         identifiers={"alpha": alpha_rule, "beta": beta_rule},
     )
+
+
+class TestConcreteModuleSharesNodeKind:
+    """The concrete module takes NodeKind from its protocol module instead of defining one.
+
+    One enum means a concrete node's ``kind: typing.Literal[NodeKind.X]`` is the *same* type as its
+    protocol counterpart's, which is what protocol-attribute invariance demands, and it makes
+    ``cst.NodeKind.X`` and ``cstp.NodeKind.X`` the same object rather than two bridged singletons.
+    """
+
+    @pytest.fixture(scope="class")
+    def module_ast(self) -> ast.Module:
+        return _make_generator(_make_simple_grammar()).gen_py_module("pkg.simple_cst_protocol")
+
+    def test_node_kind_is_imported_from_the_named_protocol_module(self, module_ast: ast.Module) -> None:
+        imports = [ast.unparse(stmt) for stmt in module_ast.body if isinstance(stmt, ast.ImportFrom)]
+        assert "from pkg.simple_cst_protocol import NodeKind" in imports, imports
+
+    def test_the_import_precedes_every_non_import_statement(self, module_ast: ast.Module) -> None:
+        """Emitted with the imports, so the module has no E402 to fix up after generation."""
+        first_other = next(
+            i for i, stmt in enumerate(module_ast.body) if not isinstance(stmt, ast.Import | ast.ImportFrom)
+        )
+        node_kind_import = next(
+            i
+            for i, stmt in enumerate(module_ast.body)
+            if isinstance(stmt, ast.ImportFrom) and any(alias.name == "NodeKind" for alias in stmt.names)
+        )
+        assert node_kind_import < first_other
+
+    def test_no_node_kind_class_is_defined(self, module_ast: ast.Module) -> None:
+        class_names = {stmt.name for stmt in module_ast.body if isinstance(stmt, ast.ClassDef)}
+        assert "NodeKind" not in class_names, class_names
+
+    def test_no_canonical_name_assignments_are_emitted(self, module_ast: ast.Module) -> None:
+        """The protocol module owns the members, so it owns their canonical-name assignments."""
+        source = ast.unparse(module_ast)
+        assert "_fltk_canonical_name = 'NodeKind." not in source, source
+
+    def test_kind_fields_still_default_to_the_shared_members(self, module_ast: ast.Module) -> None:
+        source = ast.unparse(module_ast)
+        assert "kind: typing.Literal[NodeKind.ALPHA] = NodeKind.ALPHA" in source, source
+
+    def test_a_committed_pair_shares_one_enum_object_at_runtime(self) -> None:
+        assert fltk_cst.NodeKind is fltk_cst_protocol.NodeKind
+        assert fltk_cst.NodeKind.GRAMMAR is fltk_cst_protocol.NodeKind.GRAMMAR
+        assert fltk_cst.Grammar().kind is fltk_cst_protocol.NodeKind.GRAMMAR
 
 
 class TestProtocolModuleAll:
@@ -416,12 +465,12 @@ class TestMutatorsEmittedPyConcreteClass:
         fn_src = ast.unparse(fn)
         assert "index: int" in fn_src, f"Expected 'index: int' in insert; got:\n{fn_src}"
 
-    def test_insert_label_param_optional_labeled(self, labeled_klass: ast.ClassDef) -> None:
-        """insert label param is 'Optional[Label] = None' for labeled nodes."""
+    def test_insert_label_param_is_the_agnostic_label(self, labeled_klass: ast.ClassDef) -> None:
+        """insert takes any conforming backend's label; the isinstance guard rejects a foreign one."""
         fn = _find_function(labeled_klass, "insert")
         assert fn is not None
         fn_src = ast.unparse(fn)
-        assert "Optional[Label]" in fn_src, f"Expected 'Optional[Label]' in insert; got:\n{fn_src}"
+        assert f"label: typing.Optional[{gsm2tree_mod.LABEL_PROTOCOL_ANNOTATION}]" in fn_src, fn_src
 
     def test_insert_label_param_none_zero_label(self, zero_label_klass: ast.ClassDef) -> None:
         """insert label param is 'None = None' for label-free nodes."""
@@ -512,12 +561,12 @@ class TestMutatorsEmittedPyProtocol:
         assert fn is not None, "clear not found on protocol class"
 
     def test_insert_signatures_match_concrete(self, protocol_klass: ast.ClassDef) -> None:
-        """Protocol insert has same signature shape as concrete insert."""
+        """Protocol insert has same signature shape as concrete insert, over the agnostic label."""
         fn = _find_function(protocol_klass, "insert")
         assert fn is not None
         fn_src = ast.unparse(fn)
         assert "index: int" in fn_src
-        assert "Optional[Label]" in fn_src
+        assert f"Optional[{gsm2tree_mod.LABEL_PROTOCOL_ANNOTATION}]" in fn_src
 
     def test_remove_at_returns_tuple_protocol(self, protocol_klass: ast.ClassDef) -> None:
         """Protocol remove_at returns a tuple (matches concrete)."""
@@ -593,8 +642,8 @@ def test_emit_label_quintet_unknown_method_raises(monkeypatch: pytest.MonkeyPatc
 
     raised: list[Exception] = []
 
-    def patched_quintet(self: gsm2tree_mod.CstGenerator, *, labels, annotation_for, body_for):  # type: ignore[type-arg]
-        result = original_quintet(self, labels=labels, annotation_for=annotation_for, body_for=body_for)
+    def patched_quintet(self: gsm2tree_mod.CstGenerator, *, labels, annotation_for, body_for, **kwargs):  # type: ignore[type-arg]
+        result = original_quintet(self, labels=labels, annotation_for=annotation_for, body_for=body_for, **kwargs)
         if labels:
             try:
                 body_for("nonexistent_method", labels[0])  # type: ignore[arg-type]
@@ -609,3 +658,179 @@ def test_emit_label_quintet_unknown_method_raises(monkeypatch: pytest.MonkeyPatc
 
     assert raised, "Expected ValueError from concrete_body_for with unknown method; none raised"
     assert "Unknown method" in str(raised[0])
+
+
+class TestWidenedMutatorInputs:
+    """Concrete mutator *inputs* name the protocol surface; every read stays concrete.
+
+    This is the annotation half of the conformance package: a concrete node can only satisfy its
+    protocol counterpart if its mutator parameters accept what the protocol's do (parameters are
+    contravariant), so `append`, `extend`, `insert`, `replace_at`, `extend_children` and the
+    per-label pair take protocol node types and `LabelProtocol`.  Widening a parameter is
+    non-breaking for downstream callers, and the runtime isinstance guards still reject a
+    foreign-backend argument — but only if the widening is confined to the input side, which is
+    what the accessor assertions below pin.
+    """
+
+    @pytest.fixture(scope="class")
+    @staticmethod
+    def klass() -> ast.ClassDef:
+        gen = _make_generator(_rule_ref_grammar(labeled=True))
+        return _get_class_def(gen.py_class_for_model("Baz", gen.rule_models["baz"], "baz"), "Baz")
+
+    @pytest.fixture(scope="class")
+    @staticmethod
+    def span_only_klass() -> ast.ClassDef:
+        """A node whose only children are spans: nothing on it can name another node's class."""
+        gen = _make_generator(_make_zero_label_grammar())
+        return _get_class_def(gen.py_class_for_model("Foo", gen.rule_models["foo"], "foo"), "Foo")
+
+    @staticmethod
+    def _param(klass: ast.ClassDef, method: str, param: str) -> str:
+        fn = _find_function(klass, method)
+        assert fn is not None, f"{method} not found"
+        arg = next((a for a in fn.args.args if a.arg == param), None)
+        assert arg is not None, f"{method} has no {param!r} parameter"
+        return _annotation_source(arg.annotation)
+
+    @pytest.mark.parametrize("method", ["append", "insert", "replace_at"])
+    def test_the_child_param_is_the_protocol_node_type(self, klass: ast.ClassDef, method: str) -> None:
+        assert self._param(klass, method, "child") == f"{gsm2tree_mod.PROTOCOL_MODULE_ALIAS}.Foo"
+
+    def test_extend_takes_an_iterable_of_protocol_nodes(self, klass: ast.ClassDef) -> None:
+        assert self._param(klass, "extend", "children") == (
+            f"typing.Iterable[{gsm2tree_mod.PROTOCOL_MODULE_ALIAS}.Foo]"
+        )
+
+    def test_extend_children_takes_this_class_protocol_counterpart(self, klass: ast.ClassDef) -> None:
+        assert self._param(klass, "extend_children", "other") == f"{gsm2tree_mod.PROTOCOL_MODULE_ALIAS}.Baz"
+
+    def test_the_per_label_mutators_widen_too(self, klass: ast.ClassDef) -> None:
+        assert self._param(klass, "append_inner", "child") == f"{gsm2tree_mod.PROTOCOL_MODULE_ALIAS}.Foo"
+        assert self._param(klass, "extend_inner", "children") == (
+            f"typing.Iterable[{gsm2tree_mod.PROTOCOL_MODULE_ALIAS}.Foo]"
+        )
+
+    def test_the_runtime_guards_take_the_widened_types(self, klass: ast.ClassDef) -> None:
+        """The guards are what turns a statically accepted foreign node into a TypeError."""
+        assert self._param(klass, "_check_child_type_for_mutators", "child") == (
+            f"{gsm2tree_mod.PROTOCOL_MODULE_ALIAS}.Foo"
+        )
+        assert self._param(klass, "_check_label_type_for_mutators", "label") == (
+            f"typing.Optional[{gsm2tree_mod.LABEL_PROTOCOL_ANNOTATION}]"
+        )
+
+    @pytest.mark.parametrize("method", ["children_inner", "child_inner", "maybe_inner", "inner"])
+    def test_every_accessor_still_returns_the_concrete_class(self, klass: ast.ClassDef, method: str) -> None:
+        """Reads stay concrete, so no downstream annotation churn on the accessor surface."""
+        fn = _find_function(klass, method)
+        assert fn is not None, f"{method} not found"
+        ret = _annotation_source(fn.returns)
+        assert gsm2tree_mod.PROTOCOL_MODULE_ALIAS not in ret, ret
+        assert "Foo" in ret, ret
+
+    @pytest.mark.parametrize("method", ["child", "remove_at"])
+    def test_child_and_remove_at_still_return_the_concrete_entry(self, klass: ast.ClassDef, method: str) -> None:
+        fn = _find_function(klass, method)
+        assert fn is not None, f"{method} not found"
+        ret = _annotation_source(fn.returns)
+        assert ret == "tuple[typing.Optional[Label], 'Foo']", ret
+
+    def test_the_children_field_stays_concrete(self, klass: ast.ClassDef) -> None:
+        """The stored entries keep their concrete types; only what may be handed in widens."""
+        field = next(
+            stmt
+            for stmt in klass.body
+            if isinstance(stmt, ast.AnnAssign) and isinstance(stmt.target, ast.Name) and stmt.target.id == "children"
+        )
+        assert _annotation_source(field.annotation) == "list[tuple[typing.Optional[Label], 'Foo']]"
+
+    @pytest.mark.parametrize("method", ["append", "extend", "insert", "replace_at"])
+    def test_a_span_only_node_names_no_protocol_class(self, span_only_klass: ast.ClassDef, method: str) -> None:
+        """Span children are already backend-agnostic (`SpanProtocol`), so nothing widens.
+
+        `extend_children` is the exception and is checked separately: its argument is this node's
+        own protocol class whatever the children are.
+        """
+        fn = _find_function(span_only_klass, method)
+        assert fn is not None, f"{method} not found"
+        source = ast.unparse(fn)
+        assert gsm2tree_mod.PROTOCOL_MODULE_ALIAS not in source, source
+        assert "fltk.fegen.pyrt.span_protocol.SpanProtocol" in source, source
+        assert "label: None" in source, source
+
+
+class TestWidenedEntryDerivation:
+    """The escape-hatch local is emitted exactly when the node's model says the entry can widen.
+
+    Widening comes from two independent sources: a rule-reference child (spelled ``"Rule"``
+    concretely and ``_cstp.Rule`` on the protocol surface) and the presence of labels (the
+    concrete nested enum versus ``LabelProtocol``).  All four combinations are pinned here so the
+    derivation cannot drift with the annotation renderers.
+    """
+
+    @staticmethod
+    def _append_source(grammar: gsm.Grammar, rule_name: str, class_name: str, method: str = "append") -> str:
+        gen = _make_generator(grammar)
+        klass = _get_class_def(gen.py_class_for_model(class_name, gen.rule_models[rule_name], rule_name), class_name)
+        fn = _find_function(klass, method)
+        assert fn is not None, f"{method} not found on {class_name}"
+        return ast.unparse(fn)
+
+    def test_span_children_without_labels_do_not_widen(self) -> None:
+        """Span-only, label-free: both surfaces spell the entry identically, so no escape hatch."""
+        src = self._append_source(_make_zero_label_grammar(), "foo", "Foo")
+        assert "typing.Any" not in src, src
+        assert "self.children.append((label, child))" in src, src
+
+    def test_labels_alone_widen(self) -> None:
+        """Span-only but labeled: the label slot is LabelProtocol on input, the enum in the list."""
+        src = self._append_source(_make_labeled_grammar(), "bar", "Bar")
+        assert "entry: typing.Any = (label, child)" in src, src
+
+    def test_rule_references_alone_widen(self) -> None:
+        """A rule-reference child widens even with no labels in the node."""
+        src = self._append_source(_rule_ref_grammar(labeled=False), "baz", "Baz")
+        assert "entry: typing.Any = (label, child)" in src, src
+
+    def test_rule_references_and_labels_widen(self) -> None:
+        src = self._append_source(_rule_ref_grammar(labeled=True), "baz", "Baz")
+        assert "entry: typing.Any = (label, child)" in src, src
+
+    def test_per_label_mutators_widen_on_the_child_side_only(self) -> None:
+        """append_<label> supplies the concrete enum member itself, so only its child can widen."""
+        span_labeled = self._append_source(_make_labeled_grammar(), "bar", "Bar", method="append_name")
+        assert "typing.Any" not in span_labeled, span_labeled
+
+        rule_ref = self._append_source(_rule_ref_grammar(labeled=True), "baz", "Baz", method="append_inner")
+        assert "entry: typing.Any = (Baz.Label.INNER, child)" in rule_ref, rule_ref
+
+    def test_extend_children_widens_even_when_nothing_else_does(self) -> None:
+        """extend_children forces the escape hatch: its argument is always a protocol node.
+
+        `other: _cstp.Foo` is the protocol class even for the span-only, label-free node whose
+        derived flag is False, so `other.children` is a Sequence of protocol entries regardless.
+        Without the forced widening the emitted `self.children.extend(other.children)` is a pyright
+        error in every generated module — a failure that only surfaces in the repo-wide gate over
+        committed artifacts after a full `make gencode`, and never for a grammar shape not in-tree.
+        """
+        src = self._append_source(_make_zero_label_grammar(), "foo", "Foo", method="extend_children")
+        assert "entries: typing.Any = other.children" in src, src
+        assert "self.children.extend(entries)" in src, src
+
+    def test_extend_widens_with_the_node_like_append(self) -> None:
+        """extend takes the same entries as append, so it widens on the same derivation."""
+        plain = self._append_source(_make_zero_label_grammar(), "foo", "Foo", method="extend")
+        assert "typing.Any" not in plain, plain
+
+        widened = self._append_source(_rule_ref_grammar(labeled=True), "baz", "Baz", method="extend")
+        assert "entries: typing.Any = ((label, child) for child in children)" in widened, widened
+
+    def test_insert_and_replace_at_widen_on_the_same_derivation(self) -> None:
+        """The two strict mutators build one entry each, hatched exactly when append is."""
+        for method in ("insert", "replace_at"):
+            plain = self._append_source(_make_zero_label_grammar(), "foo", "Foo", method=method)
+            assert "typing.Any" not in plain, (method, plain)
+
+            widened = self._append_source(_rule_ref_grammar(labeled=True), "baz", "Baz", method=method)
+            assert "entry: typing.Any = (label, child)" in widened, (method, widened)

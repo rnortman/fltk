@@ -25,7 +25,7 @@ from fltk.fegen import cst_ergonomics, gsm, gsm2tree
 from fltk.fegen.pyrt import terminalsrc
 from fltk.iir.context import create_default_context
 from fltk.iir.py import reg as pyreg
-from tests.pyright_test_utils import _diags_for_file, _run_pyright_over_dir, pyright_runnable, write_pyright_config
+from tests.pyright_test_utils import _diags_for_file, _run_pyright_over_dir, write_pyright_config
 
 # A grammar exercising every plan decision:
 #   doc       — required-single node label, optional-single node label, collection label
@@ -44,6 +44,12 @@ block := "{" , items:ident* , "}" ;
 op := plus:"+" | minus:"-" ;
 entity := op | pair ;
 """
+
+
+_PROTOCOL_MODULE_NAME = "ergo_cst_protocol"
+"""Import name of the protocol module the emitted CST module takes ``NodeKind`` from.
+
+Matches the file the pyright fixture writes beside the generated ``ergo_cst.py``."""
 
 
 def _generator(py_module: pyreg.Module | None = None) -> gsm2tree.CstGenerator:
@@ -87,7 +93,7 @@ def generator() -> gsm2tree.CstGenerator:
 @pytest.fixture(scope="module")
 def concrete_classes(generator: gsm2tree.CstGenerator) -> dict[str, ast.ClassDef]:
     """Concrete dataclass ClassDefs by class name."""
-    module = generator.gen_py_module()
+    module = generator.gen_py_module(_PROTOCOL_MODULE_NAME)
     return {stmt.name: stmt for stmt in module.body if isinstance(stmt, ast.ClassDef)}
 
 
@@ -202,13 +208,20 @@ class TestProtocolMirrorsConcrete:
             protocol = set(_method_names(protocol_classes[class_name]))
             # The concrete class carries private validation helpers the protocol does not declare.
             concrete -= {"_check_child_type_for_mutators", "_check_label_type_for_mutators"}
+            # The protocol declares children as a read-only property; the concrete class as a field.
+            protocol -= {"children"}
             assert concrete == protocol, f"{class_name}: concrete/protocol member mismatch"
 
-    def test_protocol_return_annotations_match_shape(self, protocol_classes: dict[str, ast.ClassDef]) -> None:
+    def test_protocol_return_annotations_match_shape(
+        self, protocol_classes: dict[str, ast.ClassDef], concrete_classes: dict[str, ast.ClassDef]
+    ) -> None:
         assert _return_annotation(protocol_classes["Tag"], "name_text") == "str"
         assert _return_annotation(protocol_classes["Op"], "plus_text") == "typing.Optional[str]"
-        assert _return_annotation(protocol_classes["Op"], "variant") == "Label"
-        assert _return_annotation(protocol_classes["Doc"], "tags") == "list['Tag']"
+        assert _return_annotation(protocol_classes["Op"], "variant") == gsm2tree.LABEL_PROTOCOL_ANNOTATION
+        # A MULTIPLE accessor promises only a Sequence in the protocol: list is invariant, so a
+        # backend returning a list of its own node classes could not satisfy list[<protocol node>].
+        assert _return_annotation(protocol_classes["Doc"], "tags") == "typing.Sequence['Tag']"
+        assert _return_annotation(concrete_classes["Doc"], "tags") == "list['Tag']"
 
     def test_protocol_bodies_are_ellipsis(self, protocol_classes: dict[str, ast.ClassDef]) -> None:
         for name in ("plus", "plus_text", "text", "variant"):
@@ -392,11 +405,6 @@ class TestRuntimeVariant:
 # ---------------------------------------------------------------------------
 
 
-@pytest.fixture(scope="session")
-def pyright_available() -> bool:
-    return pyright_runnable()
-
-
 @pytest.fixture(scope="module")
 def generated_pair_diagnostics(
     pyright_available: bool,  # noqa: FBT001
@@ -406,7 +414,7 @@ def generated_pair_diagnostics(
     tmpdir = tmp_path_factory.mktemp("ergonomic_accessors_pyright")
     write_pyright_config(tmpdir)
     generator = _generator(pyreg.Module(("ergo_cst",)))
-    (tmpdir / "ergo_cst.py").write_text(ast.unparse(generator.gen_py_module()) + "\n")
+    (tmpdir / "ergo_cst.py").write_text(ast.unparse(generator.gen_py_module(_PROTOCOL_MODULE_NAME)) + "\n")
     (tmpdir / "ergo_cst_protocol.py").write_text(generator.gen_protocol_module_text() + "\n")
     (tmpdir / "consumer.py").write_text(_CONSUMER_FIXTURE)
     return _run_pyright_over_dir(tmpdir, pyright_available=pyright_available)
@@ -429,7 +437,7 @@ def use_doc(doc: cstp.Doc) -> str:
 
 
 def use_op(op: cstp.Op) -> str:
-    if op.variant() == cstp.Op.Label.PLUS:
+    if op.variant() == cstp.OpLabel.PLUS:
         return op.plus_text() or ""
     return op.text()
 """
@@ -463,7 +471,7 @@ def test_in_tree_grammars_emit(grammar_path: str) -> None:
     grammar = plumbing.parse_grammar_file(repo_root / grammar_path)
     grammar = gsm.classify_trivia_rules(gsm.add_trivia_rule_to_grammar(grammar, context))
     generator = gsm2tree.CstGenerator(grammar=grammar, py_module=pyreg.Builtins, context=context)
-    assert ast.unparse(generator.gen_py_module())
+    assert ast.unparse(generator.gen_py_module(_PROTOCOL_MODULE_NAME))
     assert generator.gen_protocol_module_text()
 
 

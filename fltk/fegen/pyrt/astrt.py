@@ -21,11 +21,13 @@ from collections.abc import Callable, Iterable, Mapping, Sequence
 from typing import Any, Final
 
 from fltk.fegen.pyrt import errors, terminalsrc
+from fltk.fegen.pyrt.label_protocol import label_member_name
 
 if typing.TYPE_CHECKING:
     import decimal
     import uuid
 
+    from fltk.fegen.pyrt.label_protocol import LabelProtocol
     from fltk.fegen.pyrt.span_protocol import SpanProtocol
 
 
@@ -79,14 +81,12 @@ class CrossBackendEnumMixin:
     """
 
     _fltk_canonical_name: str
-    name: str
-    """Supplied by ``enum.Enum``; annotated so this mixin's ``__eq__`` type-checks."""
 
     def __eq__(self, other: object) -> bool:
         if other is self:
             return True
         if type(other) is type(self):
-            return self.name == typing.cast("CrossBackendEnumMixin", other).name
+            return self._fltk_canonical_name == typing.cast("CrossBackendEnumMixin", other)._fltk_canonical_name
         canonical = getattr(other, "_fltk_canonical_name", None)
         if canonical is not None:
             return self._fltk_canonical_name == canonical
@@ -96,8 +96,16 @@ class CrossBackendEnumMixin:
         return hash(self._fltk_canonical_name)
 
 
-def bucket_children(children: Iterable[tuple[Any, Any]]) -> dict[str, list[Any]]:
+def bucket_children(children: Iterable[tuple[LabelProtocol | None, Any]]) -> dict[str, list[Any]]:
     """Group a CST node's labeled children by label name, in source order.
+
+    A key is the ``<MEMBER>`` component of the label's ``_fltk_canonical_name``
+    (``"<Class>.Label.<MEMBER>"``), which is the same string a Python enum label carries as its
+    member name.  That canonical name is the cross-backend identity contract every CST backend
+    conforming to ``LabelProtocol`` implements — the Python enums, the PyO3 pyclasses, the
+    protocol module's own sentinels — so any of them buckets here, and the keys are
+    backend-independent.  A label carrying no ``_fltk_canonical_name`` is not from a conforming
+    backend and raises ``AttributeError`` naming the attribute.
 
     Unlabeled children — trivia and ``$``-included literals — are skipped, so the result
     is the same whether or not the parser captured trivia.
@@ -106,7 +114,7 @@ def bucket_children(children: Iterable[tuple[Any, Any]]) -> dict[str, list[Any]]
     for label, child in children:
         if label is None:
             continue
-        buckets.setdefault(label.name, []).append(child)
+        buckets.setdefault(label_member_name(label._fltk_canonical_name), []).append(child)
     return buckets
 
 

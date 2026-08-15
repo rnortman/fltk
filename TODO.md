@@ -248,3 +248,30 @@ selection content-aware changes what the tagged backend reads, and it has to be 
 multi-spelling doctrine (`rival_signature` deliberately does not record which literal a value came
 from, so alternatives differing only in literal spelling stay first-fit). Location:
 `fltk/fegen/ast_model.py` (`_kind_guard`), `fltk/fegen/gsm2ast_rs.py` (`kind_condition`).
+
+## `cst-mutator-append-parity`
+
+The Python backend's `append`, `extend`, `extend_children`, `append_<label>` and
+`extend_<label>` accept a child (and, for the first three, a label) without any isinstance
+check; only `insert` and `replace_at` call `_check_child_type_for_mutators` /
+`_check_label_type_for_mutators`. The Rust backend type-checks its `append` and per-label
+mutators (`extract_from_pyobject`, `PyTypeError`), so the two backends reject different inputs
+and `tests/test_cst_mutators_parity.py` cannot cover the difference. Until this round the
+concrete annotations made the divergence unreachable from type-checked code; now that mutator
+inputs are the protocol node types (so either backend's values type-check), a foreign-backend
+child passed to the Python `append` is stored silently and surfaces far away — in the unparser,
+in `astrt.bucket_children`, or in a `child()` tuple unpack. Closing it means either validating
+in the un-strict mutators (a deliberate behaviour change on the parser's hot construction path,
+where these methods are grandfathered as un-strict on purpose, and one that the frozen delta's
+"runtime behaviour is unchanged" clause rules out for this work) or ruling the divergence
+intended and pinning it in the parity suite. The inverse direction of the same asymmetry is open
+too: the protocol module's own label sentinels (`cstp.<Class>Label.<X>`) are the only label objects
+a purely protocol-typed consumer holds, they type-check into every mutator, and `insert`/
+`replace_at` reject them on *both* backends while `append`/`extend` store them (leaving a children
+entry whose label has no `.name` and is not the concrete enum). Both generated namespaces and the
+grammar reference now document the same-backend-label contract; closing it means either resolving a
+canonical-name-equal sentinel to the class's own label member before storing, or ruling the
+rejection intended and pinning it. Either way it is a cross-backend behaviour decision
+plus a hot-path cost judgement, not a mechanical fix. Location: `fltk/fegen/gsm2tree.py`
+(`py_class_for_model`'s `append`/`extend`/`extend_children` and `concrete_body_for`),
+`fltk/fegen/gsm2tree_rs.py` (`_generic_append`), `tests/test_cst_mutators_parity.py`.

@@ -1,6 +1,8 @@
-"""Tests for fltk.fegen.naming.snake_to_upper_camel and call-site delegation."""
+"""Tests for fltk.fegen.naming and call-site delegation."""
 
-from fltk.fegen.naming import snake_to_upper_camel
+import pytest
+
+from fltk.fegen.naming import protocol_module_name, protocol_module_path, snake_to_upper_camel
 
 
 def test_basic_two_segments():
@@ -82,3 +84,24 @@ def test_unparser_generator_class_name_delegates_to_snake_to_upper_camel():
     gen = UnparserGenerator(grammar=dummy_grammar, context=create_default_context(), cst_module="dummy.cst")
     assert gen.class_name_for_rule_node("foo_bar") == "FooBar"
     assert gen.class_name_for_rule_node("no_ws") == "NoWs"
+
+
+def test_protocol_module_name_appends_the_committed_suffix():
+    """The layout every generated pair uses: X_cst beside X_cst_protocol."""
+    assert protocol_module_name("mylang.mylang_cst") == "mylang.mylang_cst_protocol"
+
+
+def test_protocol_module_name_matches_the_committed_fegen_pair():
+    """The convention is not hypothetical: the committed modules are named this way."""
+    assert protocol_module_name("fltk.fegen.fltk_cst") == "fltk.fegen.fltk_cst_protocol"
+
+
+def test_protocol_module_path_is_the_sibling_file():
+    """The bootstrap writers derive the protocol file they must write beside the CST file."""
+    assert protocol_module_path("fltk/fegen/bootstrap_cst.py") == "fltk/fegen/bootstrap_cst_protocol.py"
+
+
+def test_protocol_module_path_requires_a_py_file():
+    """A path without the suffix would silently produce a file nothing imports."""
+    with pytest.raises(ValueError, match="does not end in"):
+        protocol_module_path("fltk/fegen/bootstrap_cst")

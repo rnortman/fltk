@@ -24,6 +24,7 @@ from typing import Final, Optional
 import astor
 
 import fltk
+from fltk import plumbing
 from fltk.fegen import gsm, gsm2tree
 from fltk.fegen import gsm2parser as g2p
 from fltk.fegen.pyrt import errors, memo, terminalsrc
@@ -84,7 +85,7 @@ def test_empty_nary_quantifier_plus():
     LOG.debug("Generated parser:\n%s", astor.to_source(parser_class_ast))
 
     # Generate the CST classes module
-    cst_module_ast = pgen.cstgen.gen_py_module()
+    cst_module_ast = pgen.cstgen.gen_py_module(plumbing.generate_protocol_module(enhanced_grammar))
     cst_mod = compile(cst_module_ast, "<cst_module>", "exec")
     cst_locals = {}
     exec(cst_mod, cst_locals)  # noqa: S102
@@ -192,7 +193,7 @@ def test_empty_nary_quantifier_star():
     mod_ast = ast.fix_missing_locations(ast.Module(body=[parser_class_ast], type_ignores=[]))
 
     # Generate the CST classes module
-    cst_module_ast = pgen.cstgen.gen_py_module()
+    cst_module_ast = pgen.cstgen.gen_py_module(plumbing.generate_protocol_module(enhanced_grammar))
     cst_mod = compile(cst_module_ast, "<cst_module>", "exec")
     cst_locals = {}
     exec(cst_mod, cst_locals)  # noqa: S102
@@ -298,7 +299,7 @@ def test_empty_nary_edge_cases():
     mod_ast = ast.fix_missing_locations(ast.Module(body=[parser_class_ast], type_ignores=[]))
 
     # Generate the CST classes module
-    cst_module_ast = pgen.cstgen.gen_py_module()
+    cst_module_ast = pgen.cstgen.gen_py_module(plumbing.generate_protocol_module(enhanced_grammar))
     cst_mod = compile(cst_module_ast, "<cst_module>", "exec")
     cst_locals = {}
     exec(cst_mod, cst_locals)  # noqa: S102

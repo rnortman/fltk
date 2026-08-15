@@ -30,7 +30,6 @@ import pytest
 from tests.pyright_test_utils import (
     _diags_for_file,
     _run_pyright_over_dir,
-    pyright_runnable,
     write_pyright_config,
 )
 
@@ -103,11 +102,6 @@ def bad_render(node: proto.Num) -> None:
     if doc is not None:
         result: int = doc.render()
 """
-
-
-@pytest.fixture(scope="session")
-def pyright_available() -> bool:
-    return pyright_runnable()
 
 
 @pytest.fixture(scope="module")

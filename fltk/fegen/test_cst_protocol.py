@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import ast
 import pathlib
-import shutil
 import subprocess
 import textwrap
 from typing import Any
@@ -14,7 +13,11 @@ import pytest
 from fltk.fegen import gsm, gsm2tree
 from fltk.fegen.genparser import _parse_grammar_raw, create_default_context
 from fltk.iir.py import reg as pyreg
-from tests.pyright_test_utils import _diags_for_file, _run_pyright_over_dir, write_pyright_config
+from tests.pyright_test_utils import (
+    _diags_for_file,
+    _run_pyright_over_dir,
+    write_pyright_config,
+)
 
 # ---------------------------------------------------------------------------
 # Paths
@@ -27,21 +30,6 @@ CONCRETE_MODULE = pathlib.Path(__file__).parent / "fltk_cst.py"
 # ---------------------------------------------------------------------------
 # Pyright harness
 # ---------------------------------------------------------------------------
-
-
-@pytest.fixture(scope="session")
-def pyright_available() -> bool:
-    """Return True when uv + pyright are runnable in this environment."""
-    if shutil.which("uv") is None:
-        return False
-    result = subprocess.run(
-        ["uv", "run", "pyright", "--version"],  # noqa: S607
-        capture_output=True,
-        text=True,
-        timeout=30,
-        check=False,
-    )
-    return result.returncode == 0
 
 
 # ---------------------------------------------------------------------------
@@ -113,6 +101,9 @@ def test_protocol_module_has_one_class_per_rule(
     rule_names = set(cst_generator.rule_models.keys())
     class_defs = {node.name for node in protocol_module_ast.body if isinstance(node, ast.ClassDef)}
     expected_node_names = {cst_generator.protocol_node_name(r) for r in rule_names}
+    expected_node_names |= {
+        cst_generator.protocol_label_namespace_name(r) for r in rule_names if cst_generator.rule_models[r].labels
+    }
     # CstModule and Span protocol are also generated; include them in the expected set
     expected_node_names.add("CstModule")
     expected_node_names.add("Span")
@@ -155,11 +146,50 @@ def test_protocol_node_has_required_members(
 
         labels = sorted(model.labels.keys())
         if labels:
-            assert "Label" in member_names, f"{node_class_name} has labels but no nested Label class"
+            # Label constants live in the module-level <Class>Label namespace, not nested on the
+            # node protocol: a nested member could never be satisfied by a concrete Label enum.
+            assert "Label" not in member_names, f"{node_class_name} must not carry a nested Label class"
+            namespace_name = cst_generator.protocol_label_namespace_name(rule_name)
+            assert namespace_name in class_map, f"{node_class_name} has labels but no {namespace_name} namespace"
+            namespace_members = {
+                item.target.id
+                for item in class_map[namespace_name].body
+                if isinstance(item, ast.AnnAssign) and isinstance(item.target, ast.Name)
+            }
+            for label in labels:
+                assert label.upper() in namespace_members, f"{namespace_name} missing '{label.upper()}'"
             for label in labels:
                 for prefix in ("append_", "extend_", "children_", "child_", "maybe_"):
                     expected = f"{prefix}{label}"
                     assert expected in member_names, f"{node_class_name} missing '{expected}'"
+
+
+def test_protocol_children_is_a_read_only_sequence_property(
+    cst_generator: gsm2tree.CstGenerator,
+    protocol_module_ast: ast.Module,
+) -> None:
+    """``children`` is a @property returning a Sequence of LabelProtocol-labelled tuples.
+
+    Both halves are load-bearing: a plain attribute would be invariant and reject every
+    backend's concrete list, and a narrower label element would reject one backend's labels.
+    """
+    class_map: dict[str, ast.ClassDef] = {
+        node.name: node for node in protocol_module_ast.body if isinstance(node, ast.ClassDef)
+    }
+
+    for rule_name, model in cst_generator.rule_models.items():
+        klass = class_map[cst_generator.protocol_node_name(rule_name)]
+        children = next(
+            (item for item in klass.body if isinstance(item, ast.FunctionDef) and item.name == "children"),
+            None,
+        )
+        assert children is not None, f"{klass.name}.children must be a property, not an attribute"
+        assert [ast.unparse(d) for d in children.decorator_list] == ["property"], klass.name
+        assert children.returns is not None
+        returned = ast.unparse(children.returns)
+        assert returned.startswith("typing.Sequence[tuple["), returned
+        expected_label = f"typing.Optional[{gsm2tree.LABEL_PROTOCOL_ANNOTATION}]" if model.labels else "None"
+        assert returned.startswith(f"typing.Sequence[tuple[{expected_label},"), returned
 
 
 def test_cst_module_protocol_has_property_per_rule(
@@ -221,6 +251,7 @@ def cst_protocol_pyright_diagnostics(
     (tmpdir / "member_access_fixture.py").write_text(_MEMBER_ACCESS_FIXTURE)
     (tmpdir / "standin_fixture.py").write_text(_STANDIN_FIXTURE)
     (tmpdir / "agnostic_spanprotocol_consumer.py").write_text(_AGNOSTIC_SPANPROTOCOL_CONSUMER_FIXTURE)
+    (tmpdir / "castless_probe.py").write_text(_CASTLESS_PROBE_FIXTURE)
     return _run_pyright_over_dir(tmpdir, pyright_available=pyright_available)
 
 
@@ -237,7 +268,6 @@ def cst_protocol_negative_pyright_diagnostics(
     tmpdir = tmp_path_factory.mktemp("cst_protocol_negative_pyright")
     write_pyright_config(tmpdir)
     (tmpdir / "wrong_access_fixture.py").write_text(_WRONG_ACCESS_FIXTURE)
-    (tmpdir / "castless_probe.py").write_text(_CASTLESS_PROBE_FIXTURE)
     return _run_pyright_over_dir(tmpdir, pyright_available=pyright_available)
 
 
@@ -250,12 +280,10 @@ def cst_protocol_negative_pyright_diagnostics(
 _MEMBER_ACCESS_FIXTURE = """\
 # ruff: noqa
 from __future__ import annotations
-from typing import Any, cast
-
 from fltk.fegen import fltk_cst_protocol as cstp
 from fltk.fegen import fltk_cst
 
-_m: cstp.CstModule = cast(cstp.CstModule, fltk_cst)
+_m: cstp.CstModule = fltk_cst
 
 # Access every top-level node type
 _grammar_type = _m.Grammar
@@ -272,9 +300,9 @@ _literal_type = _m.Literal
 _trivia_type = _m.Trivia
 
 # Access label constants
-_no_ws = _m.Items.Label.NO_WS
-_item_label = _m.Items.Label.ITEM
-_disposition_include = _m.Disposition.Label.INCLUDE
+_no_ws = cstp.ItemsLabel.NO_WS
+_item_label = cstp.ItemsLabel.ITEM
+_disposition_include = cstp.DispositionLabel.INCLUDE
 
 # Access methods on a typed instance
 def _check_grammar_node(g: cstp.Grammar) -> None:
@@ -290,8 +318,8 @@ def _check_items_node(items: cstp.Items) -> None:
     _ = items.children_item()
     _ = items.child_item()
     _ = items.maybe_item()
-    _ = items.Label.NO_WS
-    _ = items.Label.ITEM
+    _ = cstp.ItemsLabel.NO_WS
+    _ = cstp.ItemsLabel.ITEM
 
 def _check_item_node(item: cstp.Item) -> None:
     _ = item.child_term()
@@ -315,7 +343,7 @@ def _check_term_node(term: cstp.Term) -> None:
 def _check_disposition_node(d: cstp.Disposition) -> None:
     _ = d.span
     _ = d.child()
-    _ = d.Label.INCLUDE
+    _ = cstp.DispositionLabel.INCLUDE
 
 def _check_quantifier_node(q: cstp.Quantifier) -> None:
     _ = q.span
@@ -342,17 +370,17 @@ def _bad_method(g: cstp.Grammar) -> None:
 # Known-limitation fixture: pyright does NOT flag valid-but-semantically-wrong label comparisons.
 # The Protocol provides attribute-presence checking only (a non-existent label is flagged),
 # but comparing two valid label constants of different semantic meaning is not caught.
-# This is a nominal-enum limitation: == on ClassVar[object] members cannot distinguish semantic intent.
-# Documented here so future readers do not assume full label-value safety. See design.md.
+# This is a nominal-enum limitation: == on LabelProtocol members cannot distinguish semantic intent.
+# Documented here so future readers do not assume full label-value safety.
 _WRONG_LABEL_VALUE_FIXTURE = """\
 # ruff: noqa
 from __future__ import annotations
 from fltk.fegen import fltk_cst_protocol as cstp
 
-def _compare_wrong_labels(items: cstp.Items) -> bool:
+def _compare_wrong_labels() -> bool:
     # Comparing ITEM vs NO_WS is semantically wrong but pyright does NOT flag it (nominal-enum limitation).
-    # Both are valid ClassVar[object] members; their values are opaque to pyright.
-    return items.Label.ITEM == items.Label.NO_WS  # line 7: valid attributes, wrong semantic comparison
+    # Both are valid LabelProtocol members; their values are opaque to pyright.
+    return cstp.ItemsLabel.ITEM == cstp.ItemsLabel.NO_WS  # line 7: valid attributes, wrong semantic comparison
 """
 
 
@@ -391,12 +419,12 @@ def test_wrong_member_access_is_flagged(
 
 
 # ---------------------------------------------------------------------------
-# T2b — Boundary-assignability probe (documents nested-Label cast necessity)
+# T2b — Boundary assignability: the concrete module IS its protocol
 # ---------------------------------------------------------------------------
 
 _CASTLESS_PROBE_FIXTURE = """\
 # ruff: noqa
-# Probe without type: ignore — used to count raw mismatches.
+# Probe without type: ignore — a cast here would hide a real mismatch.
 from __future__ import annotations
 from fltk.fegen import fltk_cst_protocol as cstp
 from fltk.fegen import fltk_cst
@@ -405,20 +433,17 @@ _m: cstp.CstModule = fltk_cst
 """
 
 
-def test_boundary_probe_documents_label_mismatch(
-    cst_protocol_negative_pyright_diagnostics: dict[str, list[dict[str, Any]]],
+def test_the_concrete_module_assigns_to_cst_module_without_a_cast(
+    cst_protocol_pyright_diagnostics: dict[str, list[dict[str, Any]]],
 ) -> None:
-    """T2b: bare fltk_cst assignment to CstModule produces errors due to nested-Label nominal mismatch.
+    """T2b: the bare fltk_cst -> CstModule assignment type-checks — boundary code needs no cast.
 
-    This test confirms the cast in fltk2gsm.py _DEFAULT_CST is *required* (not optional).
-    The number of errors should equal or exceed the number of label-bearing node types.
+    Every former cause is resolved: labels are LabelProtocol on both sides, both surfaces name the
+    protocol module's NodeKind, the concrete mutators accept protocol nodes and labels, and
+    ``children`` plus the MULTIPLE accessors are covariant containers on the protocol side.
     """
-    errors = _diags_for_file(cst_protocol_negative_pyright_diagnostics, "castless_probe.py")
-    # Must have at least one error (the nested-Label nominal mismatch).
-    assert errors, (
-        "Expected pyright to report errors for bare fltk_cst -> CstModule assignment "
-        "(nested-Label nominal mismatch). If this passes, the boundary cast in _DEFAULT_CST may be unnecessary."
-    )
+    errors = _diags_for_file(cst_protocol_pyright_diagnostics, "castless_probe.py")
+    assert errors == [], errors
 
 
 # ---------------------------------------------------------------------------
@@ -433,30 +458,32 @@ _STANDIN_FIXTURE = textwrap.dedent("""\
     from __future__ import annotations
     import typing
 
+    import fltk.fegen.pyrt.span_protocol as _sp
     import fltk.fegen.pyrt.terminalsrc as _t
     from fltk.fegen import fltk_cst_protocol as cstp
 
     class _FakeGrammar:
-        class Label:
-            RULE: typing.ClassVar[object] = object()
-        span: _t.Span = _t.UnknownSpan
-        children: list = []
+        kind: typing.Literal[cstp.NodeKind.GRAMMAR] = cstp.NodeKind.GRAMMAR
+        span: _sp.SpanProtocol = _t.UnknownSpan
+        children: list[tuple[typing.Any, typing.Any]] = []
         def append(self, child, label=None) -> None: ...
         def extend(self, children, label=None) -> None: ...
-        def child(self): ...
+        def extend_children(self, other) -> None: ...
+        def child(self) -> typing.Any: ...
+        def insert(self, index, child, label=None) -> None: ...
+        def remove_at(self, index) -> typing.Any: ...
+        def replace_at(self, index, child, label=None) -> None: ...
+        def clear(self) -> None: ...
         def append_rule(self, child) -> None: ...
         def extend_rule(self, children) -> None: ...
-        def children_rule(self): ...
-        def child_rule(self): ...
-        def maybe_rule(self): ...
+        def children_rule(self) -> typing.Any: ...
+        def child_rule(self) -> typing.Any: ...
+        def maybe_rule(self) -> typing.Any: ...
+        def rule(self) -> typing.Any: ...
 
-    # The cast mirrors production usage: the nested-Label nominal mismatch (see design.md, DI boundary)
-    # means a direct structural assignment `_node: cstp.Grammar = _FakeGrammar()` is rejected
-    # by pyright for the same reason fltk_cst modules require a cast.  The cast here is intentional —
-    # it documents the known boundary, not a workaround for a real type gap.
-    # The member-access calls below (_node.span, _node.children_rule()) are the real T4 check:
-    # they verify that Protocol members resolve on a non-dataclass, non-enum plain class.
-    _node: cstp.Grammar = typing.cast(cstp.Grammar, _FakeGrammar())
+    # No cast: a hand-written plain class satisfies the protocol structurally, which is a stronger
+    # statement of this fixture's point than the member-access checks below it.
+    _node: cstp.Grammar = _FakeGrammar()
     _ = _node.span
     _ = _node.children_rule()
 """)
@@ -465,7 +492,7 @@ _STANDIN_FIXTURE = textwrap.dedent("""\
 def test_protocol_is_not_dataclass_specific(
     cst_protocol_pyright_diagnostics: dict[str, list[dict[str, Any]]],
 ) -> None:
-    """T4: A plain-class stand-in cast to Grammar resolves members without errors.
+    """T4: A plain-class stand-in satisfies Grammar bare and resolves its members.
 
     Confirms the Protocol imposes no dataclass-specific requirements (no @dataclass,
     no enum.Enum, no specific base class). The Protocol is structurally matchable by

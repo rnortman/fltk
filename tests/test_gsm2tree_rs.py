@@ -10,7 +10,6 @@ from __future__ import annotations
 import json
 import pathlib
 import re
-import shutil
 import subprocess
 from typing import Any
 
@@ -1245,13 +1244,13 @@ class TestGeneratePyiClasses:
             assert f"class {class_name}:" in poc_pyi
 
     def test_labelled_rule_has_label_alias(self, poc_pyi: str) -> None:
-        """Labelled rules have 'Label = _proto.<Class>.Label' (type alias, not ClassVar).
+        """Labelled rules alias the protocol's module-level label namespace as their Label.
 
-        ClassVar annotation causes pyright reportRedeclaration when checking structural
-        compatibility with the protocol's nested Label class (self-check must pass).
+        The alias keeps `rust_cst.<Class>.Label.<MEMBER>` working for stub consumers; a ClassVar
+        annotation instead of an alias assignment causes pyright reportRedeclaration.
         """
-        assert "Label = _proto.Identifier.Label" in poc_pyi
-        assert "Label = _proto.Items.Label" in poc_pyi
+        assert "Label = _proto.IdentifierLabel" in poc_pyi
+        assert "Label = _proto.ItemsLabel" in poc_pyi
 
     def test_zero_label_rule_has_no_label(self, zero_label_pyi: str) -> None:
         """Label-free rules omit the Label alias (mirroring .rs conditional emission).
@@ -1285,9 +1284,8 @@ class TestGeneratePyiClasses:
         assert "span: fltk.fegen.pyrt.span_protocol.SpanProtocol" in poc_pyi
 
     def test_children_annotation_labelled(self, poc_pyi: str) -> None:
-        """Labelled node children: list[tuple[Optional[_proto.<Class>.Label], <child_ann>]]."""
-        # Identifier has one label; children annotation must use proto Label
-        assert "list[tuple[typing.Optional[_proto.Identifier.Label]" in poc_pyi
+        """Labelled node children: list[tuple[Optional[LabelProtocol], <child_ann>]]."""
+        assert "list[tuple[typing.Optional[fltk.fegen.pyrt.label_protocol.LabelProtocol]" in poc_pyi
 
     def test_children_annotation_label_free(self, zero_label_pyi: str) -> None:
         """Label-free node children: list[tuple[None, <child_ann>]]."""
@@ -2278,21 +2276,6 @@ class TestUnionLabelNativeAccessors:
 # ---------------------------------------------------------------------------
 # Pyright harness for .pyi self-check and conformance tests
 # ---------------------------------------------------------------------------
-
-
-@pytest.fixture(scope="session")
-def pyright_available() -> bool:
-    """Return True when uv + pyright are runnable in this environment."""
-    if shutil.which("uv") is None:
-        return False
-    result = subprocess.run(
-        ["uv", "run", "pyright", "--version"],  # noqa: S607
-        capture_output=True,
-        text=True,
-        timeout=30,
-        check=False,
-    )
-    return result.returncode == 0
 
 
 def _run_pyright_in_tmpdir(

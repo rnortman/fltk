@@ -1,23 +1,27 @@
 def _genparser_impl(ctx):
+    expected_last = ctx.attr.base_name + "_cst"
+    if ctx.attr.cst_mod_path.split(".")[-1] != expected_last:
+        fail(
+            ("cst_mod_path %r must have %r as its last dotted component: the generated CST " +
+             "module imports NodeKind from cst_mod_path + \"_protocol\", and the protocol file " +
+             "is written as %s_cst_protocol.py beside it in this package.") %
+            (ctx.attr.cst_mod_path, expected_last, ctx.attr.base_name),
+        )
+
     args = ctx.actions.args()
     args.add("generate")
     args.add_all([ctx.file.src, ctx.attr.base_name, ctx.attr.cst_mod_path])
 
-    # Auto-compute output file names based on base_name
     cst_file = ctx.actions.declare_file(ctx.attr.base_name + "_cst.py")
     outputs = [cst_file]
 
-    # Set output directory to where Bazel will place the declared files
     args.add_all(["--output-dir", cst_file.dirname])
 
-    # Control which parsers to generate
     if ctx.attr.trivia_only:
         args.add("--trivia-only")
     elif ctx.attr.no_trivia_only:
         args.add("--no-trivia-only")
-    # Default generates both parsers
-    
-    # Conditionally declare parser outputs based on configuration
+
     if not ctx.attr.trivia_only:
         parser_file = ctx.actions.declare_file(ctx.attr.base_name + "_parser.py")
         outputs.append(parser_file)
@@ -26,13 +30,12 @@ def _genparser_impl(ctx):
         trivia_parser_file = ctx.actions.declare_file(ctx.attr.base_name + "_trivia_parser.py")
         outputs.append(trivia_parser_file)
 
-    # Opt-in protocol module (off by default).
-    if ctx.attr.protocol:
-        args.add("--protocol")
-        protocol_file = ctx.actions.declare_file(ctx.attr.base_name + "_cst_protocol.py")
-        outputs.append(protocol_file)
+    # The generated CST module imports NodeKind from the protocol module, so it
+    # must always be emitted. The `protocol` attr is a deprecated no-op kept so
+    # existing BUILD files keep working.
+    protocol_file = ctx.actions.declare_file(ctx.attr.base_name + "_cst_protocol.py")
+    outputs.append(protocol_file)
 
-    # Action to call the script.
     ctx.actions.run(
         inputs = ctx.files.src,
         outputs = outputs,
@@ -41,7 +44,6 @@ def _genparser_impl(ctx):
         executable = ctx.executable._gen_tool,
     )
     
-    # Return providers with the generated files
     return [DefaultInfo(files = depset(outputs))]
 
 generate_parser = rule(
@@ -58,7 +60,16 @@ generate_parser = rule(
         ),
         "cst_mod_path": attr.string(
             mandatory = True,
-            doc = "Base module name for CST classes",
+            doc = """Import name of the generated CST module.
+
+The generated CST module imports its NodeKind from cst_mod_path + "_protocol", and the
+protocol file is declared as base_name + "_cst_protocol.py" beside it in this package.
+Both files land in this package, so the last dotted component must be base_name + "_cst"
+(enforced: a mismatch fails at analysis time). Any dotted prefix must match the import
+root of the py_library that consumes these srcs: with imports = ["."] on a py_library in
+this package the flat name base_name + "_cst" is correct, while a consumer in package
+mylang/ whose py_library sets imports = ["../.."] names the modules mylang.<base>_cst and
+mylang.<base>_cst_protocol and must pass cst_mod_path = "mylang.<base>_cst".""",
         ),
         "trivia_only": attr.bool(
             default = False,
@@ -70,7 +81,7 @@ generate_parser = rule(
         ),
         "protocol": attr.bool(
             default = False,
-            doc = "Also generate the protocol module ({base_name}_cst_protocol.py)",
+            doc = "Deprecated no-op: {base_name}_cst_protocol.py is always generated",
         ),
         "_gen_tool": attr.label(
             default = Label(":genparser"),

@@ -24,7 +24,7 @@ import pytest
 from fltk import plumbing
 from fltk.fegen import cst_ergonomics
 from fltk.fegen.gsm2tree_rs import RustCstGenerator
-from tests.pyright_test_utils import _diags_for_file, _run_pyright_over_dir, pyright_runnable, write_pyright_config
+from tests.pyright_test_utils import _diags_for_file, _run_pyright_over_dir, write_pyright_config
 
 # A grammar exercising every plan decision the Rust surface has to encode:
 #   doc      — required-single, optional-single and collection node labels
@@ -301,9 +301,12 @@ class TestPyiEmission:
     def test_rule_text(self, pyi_text: str) -> None:
         assert stub_signature(pyi_text, "Pair", "text") == "def text(self) -> str:"
 
-    def test_variant_uses_the_protocols_label_class(self, pyi_text: str) -> None:
-        """Annotating the protocol's own nested class is what keeps the stub assignable to it."""
-        assert stub_signature(pyi_text, "Op", "variant") == "def variant(self) -> _proto.Op.Label:"
+    def test_variant_uses_the_agnostic_label_protocol(self, pyi_text: str) -> None:
+        """Annotating LabelProtocol, as the protocol does, is what keeps the stub assignable to it."""
+        assert (
+            stub_signature(pyi_text, "Op", "variant")
+            == "def variant(self) -> fltk.fegen.pyrt.label_protocol.LabelProtocol:"
+        )
 
     def test_keyword_label_named_by_its_python_name(self, pyi_text: str) -> None:
         assert stub_signature(pyi_text, "Kwlbl", "match").startswith("def match(self) ->")
@@ -357,11 +360,6 @@ class TestSurfacesAgree:
     def test_plan_missing_for_unknown_rule(self, generator: RustCstGenerator) -> None:
         with pytest.raises(RuntimeError, match="No ergonomic member plan"):
             generator.plan_for_rule("no_such_rule")
-
-
-@pytest.fixture(scope="session")
-def pyright_available() -> bool:
-    return pyright_runnable()
 
 
 @pytest.fixture(scope="module")

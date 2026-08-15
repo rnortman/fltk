@@ -36,6 +36,7 @@ import fegen_rust_cst.cst as rust_cst  # noqa: E402
 
 from fltk._native import Span as NativeSpan  # noqa: E402
 from fltk.fegen import fltk_cst as py_cst  # noqa: E402
+from fltk.fegen import fltk_cst_protocol as py_protocol  # noqa: E402
 from fltk.fegen.pyrt import terminalsrc  # noqa: E402
 from tests.gsm2tree_helpers import make_generator as _make_generator  # noqa: E402
 from tests.gsm2tree_helpers import make_zero_label_grammar as _make_zero_label_grammar  # noqa: E402
@@ -532,6 +533,67 @@ class TestErrorBehavior:
         s = _span(backend, 0, 1)
         with pytest.raises(TypeError):
             node.insert(0, s, label=mod.Items.Label.ITEM)  # type: ignore[arg-type]
+
+
+# ---------------------------------------------------------------------------
+# Foreign values accepted by the type signature but rejected at runtime
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize("backend", _BACKEND_KEYS)
+class TestForeignLabelsAndChildrenAreRejected:
+    """Values that the widened mutator signatures statically accept must still be refused.
+
+    `insert` / `replace_at` take the protocol node union and `LabelProtocol | None`, so a protocol
+    label sentinel, another backend's label and another backend's node all type-check into them.
+    The isinstance guards are what stop them reaching `children`, and nothing else does: without
+    these cases a later "the annotations already constrain the input" simplification of
+    `_check_label_type_for_mutators` / `_check_child_type_for_mutators` would store a foreign value
+    silently and surface it far away — in the unparser, in `astrt.bucket_children`, or in a
+    `child()` tuple unpack.
+    """
+
+    def test_protocol_label_sentinel_on_insert(self, backend: str) -> None:
+        """A protocol sentinel is not the node's own label object, on either backend."""
+        mod = _mod(backend)
+        node = mod.Identifier()
+        with pytest.raises(
+            TypeError, match=r"Identifier\.insert: label argument is not a Identifier_Label; got _ProtocolLabelMember"
+        ):
+            node.insert(0, _span(backend, 0, 1), label=py_protocol.IdentifierLabel.NAME)
+
+    def test_protocol_label_sentinel_on_replace_at(self, backend: str) -> None:
+        mod = _mod(backend)
+        node = mod.Identifier()
+        node.append_name(_span(backend, 0, 1))
+        with pytest.raises(
+            TypeError,
+            match=r"Identifier\.replace_at: label argument is not a Identifier_Label; got _ProtocolLabelMember",
+        ):
+            node.replace_at(0, _span(backend, 1, 2), label=py_protocol.IdentifierLabel.NAME)
+
+    def test_other_backends_label_on_insert(self, backend: str) -> None:
+        """The other backend's Identifier.Label compares equal by canonical name but is refused."""
+        other = rust_cst if backend == "py" else py_cst
+        node = _mod(backend).Identifier()
+        foreign_label = other.Identifier.Label.NAME
+        assert foreign_label == _mod(backend).Identifier.Label.NAME, "the two labels must compare equal"
+        with pytest.raises(TypeError, match=r"Identifier\.insert: label argument is not a Identifier_Label"):
+            node.insert(0, _span(backend, 0, 1), label=foreign_label)
+
+    def test_other_backends_child_on_insert(self, backend: str) -> None:
+        """A node from the other backend is not an accepted child type."""
+        other = rust_cst if backend == "py" else py_cst
+        node = _mod(backend).Items()
+        with pytest.raises(TypeError, match="unsupported child type"):
+            node.insert(0, other.Item())
+
+    def test_other_backends_child_on_replace_at(self, backend: str) -> None:
+        other = rust_cst if backend == "py" else py_cst
+        node = _mod(backend).Items()
+        node.append_item(_span(backend, 0, 1))
+        with pytest.raises(TypeError, match="unsupported child type"):
+            node.replace_at(0, other.Item())
 
 
 # ---------------------------------------------------------------------------

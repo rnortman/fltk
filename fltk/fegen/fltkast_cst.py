@@ -7,84 +7,12 @@ import sys
 import typing
 
 import fltk.fegen.pyrt.terminalsrc
+from fltk.fegen.fltkast_cst_protocol import NodeKind
 
 if typing.TYPE_CHECKING:
+    import fltk.fegen.fltkast_cst_protocol as _cstp
+    import fltk.fegen.pyrt.label_protocol
     import fltk.fegen.pyrt.span_protocol
-
-
-class NodeKind(enum.Enum):
-    ASTSPEC = enum.auto()
-    STATEMENT = enum.auto()
-    OPTIONSTMT = enum.auto()
-    OPTIONVALUE = enum.auto()
-    RULECONFIG = enum.auto()
-    RULESTATEMENT = enum.auto()
-    TYPESTMT = enum.auto()
-    TYPESPEC = enum.auto()
-    CUSTOMSPEC = enum.auto()
-    CUSTOMARG = enum.auto()
-    BOOLSTMT = enum.auto()
-    TRANSPARENTSTMT = enum.auto()
-    TEXTFROMSTMT = enum.auto()
-    KEYSTMT = enum.auto()
-    FOLDSTMT = enum.auto()
-    FOLDDIR = enum.auto()
-    FLATTENSTMT = enum.auto()
-    CUSTOMSTMT = enum.auto()
-    NAMESTMT = enum.auto()
-    VARIANTSTMT = enum.auto()
-    FIELDSTMT = enum.auto()
-    FIELDSTATEMENT = enum.auto()
-    SUMSTMT = enum.auto()
-    PRODUCTSTMT = enum.auto()
-    IDENTIFIER = enum.auto()
-    STRING = enum.auto()
-    TRIVIA = enum.auto()
-    LINECOMMENT = enum.auto()
-    _fltk_canonical_name: str
-
-    def __eq__(self, other: object) -> bool:
-        if other is self:
-            return True
-        if type(other) is type(self):
-            return self.name == other.name
-        cn = getattr(other, "_fltk_canonical_name", None)
-        if cn is not None:
-            return self._fltk_canonical_name == cn
-        return NotImplemented
-
-    def __hash__(self) -> int:
-        return hash(self._fltk_canonical_name)
-
-
-NodeKind.ASTSPEC._fltk_canonical_name = "NodeKind.ASTSPEC"
-NodeKind.STATEMENT._fltk_canonical_name = "NodeKind.STATEMENT"
-NodeKind.OPTIONSTMT._fltk_canonical_name = "NodeKind.OPTIONSTMT"
-NodeKind.OPTIONVALUE._fltk_canonical_name = "NodeKind.OPTIONVALUE"
-NodeKind.RULECONFIG._fltk_canonical_name = "NodeKind.RULECONFIG"
-NodeKind.RULESTATEMENT._fltk_canonical_name = "NodeKind.RULESTATEMENT"
-NodeKind.TYPESTMT._fltk_canonical_name = "NodeKind.TYPESTMT"
-NodeKind.TYPESPEC._fltk_canonical_name = "NodeKind.TYPESPEC"
-NodeKind.CUSTOMSPEC._fltk_canonical_name = "NodeKind.CUSTOMSPEC"
-NodeKind.CUSTOMARG._fltk_canonical_name = "NodeKind.CUSTOMARG"
-NodeKind.BOOLSTMT._fltk_canonical_name = "NodeKind.BOOLSTMT"
-NodeKind.TRANSPARENTSTMT._fltk_canonical_name = "NodeKind.TRANSPARENTSTMT"
-NodeKind.TEXTFROMSTMT._fltk_canonical_name = "NodeKind.TEXTFROMSTMT"
-NodeKind.KEYSTMT._fltk_canonical_name = "NodeKind.KEYSTMT"
-NodeKind.FOLDSTMT._fltk_canonical_name = "NodeKind.FOLDSTMT"
-NodeKind.FOLDDIR._fltk_canonical_name = "NodeKind.FOLDDIR"
-NodeKind.FLATTENSTMT._fltk_canonical_name = "NodeKind.FLATTENSTMT"
-NodeKind.CUSTOMSTMT._fltk_canonical_name = "NodeKind.CUSTOMSTMT"
-NodeKind.NAMESTMT._fltk_canonical_name = "NodeKind.NAMESTMT"
-NodeKind.VARIANTSTMT._fltk_canonical_name = "NodeKind.VARIANTSTMT"
-NodeKind.FIELDSTMT._fltk_canonical_name = "NodeKind.FIELDSTMT"
-NodeKind.FIELDSTATEMENT._fltk_canonical_name = "NodeKind.FIELDSTATEMENT"
-NodeKind.SUMSTMT._fltk_canonical_name = "NodeKind.SUMSTMT"
-NodeKind.PRODUCTSTMT._fltk_canonical_name = "NodeKind.PRODUCTSTMT"
-NodeKind.IDENTIFIER._fltk_canonical_name = "NodeKind.IDENTIFIER"
-NodeKind.STRING._fltk_canonical_name = "NodeKind.STRING"
-NodeKind.TRIVIA._fltk_canonical_name = "NodeKind.TRIVIA"
-NodeKind.LINECOMMENT._fltk_canonical_name = "NodeKind.LINECOMMENT"
 
 
 def _get_native_span_type():
@@ -115,14 +43,23 @@ class AstSpec:
     span: fltk.fegen.pyrt.span_protocol.SpanProtocol = fltk.fegen.pyrt.terminalsrc.UnknownSpan
     children: list[tuple[Label | None, Statement | Trivia]] = dataclasses.field(default_factory=list)
 
-    def append(self, child: Statement | Trivia, label: Label | None = None) -> None:
-        self.children.append((label, child))
+    def append(
+        self, child: _cstp.Statement | _cstp.Trivia, label: fltk.fegen.pyrt.label_protocol.LabelProtocol | None = None
+    ) -> None:
+        entry: typing.Any = (label, child)
+        self.children.append(entry)
 
-    def extend(self, children: typing.Iterable[Statement | Trivia], label: Label | None = None) -> None:
-        self.children.extend((label, child) for child in children)
+    def extend(
+        self,
+        children: typing.Iterable[_cstp.Statement | _cstp.Trivia],
+        label: fltk.fegen.pyrt.label_protocol.LabelProtocol | None = None,
+    ) -> None:
+        entries: typing.Any = ((label, child) for child in children)
+        self.children.extend(entries)
 
-    def extend_children(self, other: AstSpec) -> None:
-        self.children.extend(other.children)
+    def extend_children(self, other: _cstp.AstSpec) -> None:
+        entries: typing.Any = other.children
+        self.children.extend(entries)
 
     def child(self) -> tuple[Label | None, Statement | Trivia]:
         if (n := len(self.children)) != 1:
@@ -130,18 +67,25 @@ class AstSpec:
             raise ValueError(msg)
         return self.children[0]
 
-    def _check_child_type_for_mutators(self, child: Statement | Trivia) -> None:
+    def _check_child_type_for_mutators(self, child: _cstp.Statement | _cstp.Trivia) -> None:
         if not isinstance(child, Statement | Trivia):
             msg = f"AstSpec: unsupported child type {type(child).__name__}"
             raise TypeError(msg)
 
-    def _check_label_type_for_mutators(self, label: Label | None, method: str) -> None:
+    def _check_label_type_for_mutators(
+        self, label: fltk.fegen.pyrt.label_protocol.LabelProtocol | None, method: str
+    ) -> None:
         if label is not None and (not isinstance(label, AstSpec.Label)):
             _cn = "AstSpec"
             msg = f"{_cn}.{method}: label argument is not a {_cn}_Label; got {type(label).__name__}"
             raise TypeError(msg)
 
-    def insert(self, index: int, child: Statement | Trivia, label: Label | None = None) -> None:
+    def insert(
+        self,
+        index: int,
+        child: _cstp.Statement | _cstp.Trivia,
+        label: fltk.fegen.pyrt.label_protocol.LabelProtocol | None = None,
+    ) -> None:
         self._check_child_type_for_mutators(child)
         self._check_label_type_for_mutators(label, "insert")
         idx = operator.index(index)
@@ -150,7 +94,8 @@ class AstSpec:
             idx = max(n + idx, 0)
         else:
             idx = min(idx, n)
-        self.children.insert(idx, (label, child))
+        entry: typing.Any = (label, child)
+        self.children.insert(idx, entry)
 
     def remove_at(self, index: int) -> tuple[Label | None, Statement | Trivia]:
         idx = operator.index(index)
@@ -161,7 +106,12 @@ class AstSpec:
             raise IndexError(msg)
         return self.children.pop(norm)
 
-    def replace_at(self, index: int, child: Statement | Trivia, label: Label | None = None) -> None:
+    def replace_at(
+        self,
+        index: int,
+        child: _cstp.Statement | _cstp.Trivia,
+        label: fltk.fegen.pyrt.label_protocol.LabelProtocol | None = None,
+    ) -> None:
         self._check_child_type_for_mutators(child)
         self._check_label_type_for_mutators(label, "replace_at")
         idx = operator.index(index)
@@ -170,16 +120,19 @@ class AstSpec:
         if norm < 0 or norm >= n:
             msg = f"AstSpec.replace_at: index {index} out of range ({n} children)"
             raise IndexError(msg)
-        self.children[norm] = (label, child)
+        entry: typing.Any = (label, child)
+        self.children[norm] = entry
 
     def clear(self) -> None:
         self.children.clear()
 
-    def append_statement(self, child: Statement) -> None:
-        self.children.append((AstSpec.Label.STATEMENT, child))
+    def append_statement(self, child: _cstp.Statement) -> None:
+        entry: typing.Any = (AstSpec.Label.STATEMENT, child)
+        self.children.append(entry)
 
-    def extend_statement(self, children: typing.Iterable[Statement]) -> None:
-        self.children.extend((AstSpec.Label.STATEMENT, child) for child in children)
+    def extend_statement(self, children: typing.Iterable[_cstp.Statement]) -> None:
+        entries: typing.Any = ((AstSpec.Label.STATEMENT, child) for child in children)
+        self.children.extend(entries)
 
     def children_statement(self) -> typing.Iterator[Statement]:
         return (typing.cast("Statement", child) for (label, child) in self.children if label == AstSpec.Label.STATEMENT)
@@ -229,14 +182,25 @@ class Statement:
     span: fltk.fegen.pyrt.span_protocol.SpanProtocol = fltk.fegen.pyrt.terminalsrc.UnknownSpan
     children: list[tuple[Label | None, OptionStmt | RuleConfig]] = dataclasses.field(default_factory=list)
 
-    def append(self, child: OptionStmt | RuleConfig, label: Label | None = None) -> None:
-        self.children.append((label, child))
+    def append(
+        self,
+        child: _cstp.OptionStmt | _cstp.RuleConfig,
+        label: fltk.fegen.pyrt.label_protocol.LabelProtocol | None = None,
+    ) -> None:
+        entry: typing.Any = (label, child)
+        self.children.append(entry)
 
-    def extend(self, children: typing.Iterable[OptionStmt | RuleConfig], label: Label | None = None) -> None:
-        self.children.extend((label, child) for child in children)
+    def extend(
+        self,
+        children: typing.Iterable[_cstp.OptionStmt | _cstp.RuleConfig],
+        label: fltk.fegen.pyrt.label_protocol.LabelProtocol | None = None,
+    ) -> None:
+        entries: typing.Any = ((label, child) for child in children)
+        self.children.extend(entries)
 
-    def extend_children(self, other: Statement) -> None:
-        self.children.extend(other.children)
+    def extend_children(self, other: _cstp.Statement) -> None:
+        entries: typing.Any = other.children
+        self.children.extend(entries)
 
     def child(self) -> tuple[Label | None, OptionStmt | RuleConfig]:
         if (n := len(self.children)) != 1:
@@ -244,18 +208,25 @@ class Statement:
             raise ValueError(msg)
         return self.children[0]
 
-    def _check_child_type_for_mutators(self, child: OptionStmt | RuleConfig) -> None:
+    def _check_child_type_for_mutators(self, child: _cstp.OptionStmt | _cstp.RuleConfig) -> None:
         if not isinstance(child, OptionStmt | RuleConfig):
             msg = f"Statement: unsupported child type {type(child).__name__}"
             raise TypeError(msg)
 
-    def _check_label_type_for_mutators(self, label: Label | None, method: str) -> None:
+    def _check_label_type_for_mutators(
+        self, label: fltk.fegen.pyrt.label_protocol.LabelProtocol | None, method: str
+    ) -> None:
         if label is not None and (not isinstance(label, Statement.Label)):
             _cn = "Statement"
             msg = f"{_cn}.{method}: label argument is not a {_cn}_Label; got {type(label).__name__}"
             raise TypeError(msg)
 
-    def insert(self, index: int, child: OptionStmt | RuleConfig, label: Label | None = None) -> None:
+    def insert(
+        self,
+        index: int,
+        child: _cstp.OptionStmt | _cstp.RuleConfig,
+        label: fltk.fegen.pyrt.label_protocol.LabelProtocol | None = None,
+    ) -> None:
         self._check_child_type_for_mutators(child)
         self._check_label_type_for_mutators(label, "insert")
         idx = operator.index(index)
@@ -264,7 +235,8 @@ class Statement:
             idx = max(n + idx, 0)
         else:
             idx = min(idx, n)
-        self.children.insert(idx, (label, child))
+        entry: typing.Any = (label, child)
+        self.children.insert(idx, entry)
 
     def remove_at(self, index: int) -> tuple[Label | None, OptionStmt | RuleConfig]:
         idx = operator.index(index)
@@ -275,7 +247,12 @@ class Statement:
             raise IndexError(msg)
         return self.children.pop(norm)
 
-    def replace_at(self, index: int, child: OptionStmt | RuleConfig, label: Label | None = None) -> None:
+    def replace_at(
+        self,
+        index: int,
+        child: _cstp.OptionStmt | _cstp.RuleConfig,
+        label: fltk.fegen.pyrt.label_protocol.LabelProtocol | None = None,
+    ) -> None:
         self._check_child_type_for_mutators(child)
         self._check_label_type_for_mutators(label, "replace_at")
         idx = operator.index(index)
@@ -284,16 +261,19 @@ class Statement:
         if norm < 0 or norm >= n:
             msg = f"Statement.replace_at: index {index} out of range ({n} children)"
             raise IndexError(msg)
-        self.children[norm] = (label, child)
+        entry: typing.Any = (label, child)
+        self.children[norm] = entry
 
     def clear(self) -> None:
         self.children.clear()
 
-    def append_option_stmt(self, child: OptionStmt) -> None:
-        self.children.append((Statement.Label.OPTION_STMT, child))
+    def append_option_stmt(self, child: _cstp.OptionStmt) -> None:
+        entry: typing.Any = (Statement.Label.OPTION_STMT, child)
+        self.children.append(entry)
 
-    def extend_option_stmt(self, children: typing.Iterable[OptionStmt]) -> None:
-        self.children.extend((Statement.Label.OPTION_STMT, child) for child in children)
+    def extend_option_stmt(self, children: typing.Iterable[_cstp.OptionStmt]) -> None:
+        entries: typing.Any = ((Statement.Label.OPTION_STMT, child) for child in children)
+        self.children.extend(entries)
 
     def children_option_stmt(self) -> typing.Iterator[OptionStmt]:
         return (
@@ -314,11 +294,13 @@ class Statement:
             raise ValueError(msg)
         return children[0] if children else None
 
-    def append_rule_config(self, child: RuleConfig) -> None:
-        self.children.append((Statement.Label.RULE_CONFIG, child))
+    def append_rule_config(self, child: _cstp.RuleConfig) -> None:
+        entry: typing.Any = (Statement.Label.RULE_CONFIG, child)
+        self.children.append(entry)
 
-    def extend_rule_config(self, children: typing.Iterable[RuleConfig]) -> None:
-        self.children.extend((Statement.Label.RULE_CONFIG, child) for child in children)
+    def extend_rule_config(self, children: typing.Iterable[_cstp.RuleConfig]) -> None:
+        entries: typing.Any = ((Statement.Label.RULE_CONFIG, child) for child in children)
+        self.children.extend(entries)
 
     def children_rule_config(self) -> typing.Iterator[RuleConfig]:
         return (
@@ -381,14 +363,25 @@ class OptionStmt:
     span: fltk.fegen.pyrt.span_protocol.SpanProtocol = fltk.fegen.pyrt.terminalsrc.UnknownSpan
     children: list[tuple[Label | None, Identifier | OptionValue | Trivia]] = dataclasses.field(default_factory=list)
 
-    def append(self, child: Identifier | OptionValue | Trivia, label: Label | None = None) -> None:
-        self.children.append((label, child))
+    def append(
+        self,
+        child: _cstp.Identifier | _cstp.OptionValue | _cstp.Trivia,
+        label: fltk.fegen.pyrt.label_protocol.LabelProtocol | None = None,
+    ) -> None:
+        entry: typing.Any = (label, child)
+        self.children.append(entry)
 
-    def extend(self, children: typing.Iterable[Identifier | OptionValue | Trivia], label: Label | None = None) -> None:
-        self.children.extend((label, child) for child in children)
+    def extend(
+        self,
+        children: typing.Iterable[_cstp.Identifier | _cstp.OptionValue | _cstp.Trivia],
+        label: fltk.fegen.pyrt.label_protocol.LabelProtocol | None = None,
+    ) -> None:
+        entries: typing.Any = ((label, child) for child in children)
+        self.children.extend(entries)
 
-    def extend_children(self, other: OptionStmt) -> None:
-        self.children.extend(other.children)
+    def extend_children(self, other: _cstp.OptionStmt) -> None:
+        entries: typing.Any = other.children
+        self.children.extend(entries)
 
     def child(self) -> tuple[Label | None, Identifier | OptionValue | Trivia]:
         if (n := len(self.children)) != 1:
@@ -396,18 +389,25 @@ class OptionStmt:
             raise ValueError(msg)
         return self.children[0]
 
-    def _check_child_type_for_mutators(self, child: Identifier | OptionValue | Trivia) -> None:
+    def _check_child_type_for_mutators(self, child: _cstp.Identifier | _cstp.OptionValue | _cstp.Trivia) -> None:
         if not isinstance(child, Identifier | OptionValue | Trivia):
             msg = f"OptionStmt: unsupported child type {type(child).__name__}"
             raise TypeError(msg)
 
-    def _check_label_type_for_mutators(self, label: Label | None, method: str) -> None:
+    def _check_label_type_for_mutators(
+        self, label: fltk.fegen.pyrt.label_protocol.LabelProtocol | None, method: str
+    ) -> None:
         if label is not None and (not isinstance(label, OptionStmt.Label)):
             _cn = "OptionStmt"
             msg = f"{_cn}.{method}: label argument is not a {_cn}_Label; got {type(label).__name__}"
             raise TypeError(msg)
 
-    def insert(self, index: int, child: Identifier | OptionValue | Trivia, label: Label | None = None) -> None:
+    def insert(
+        self,
+        index: int,
+        child: _cstp.Identifier | _cstp.OptionValue | _cstp.Trivia,
+        label: fltk.fegen.pyrt.label_protocol.LabelProtocol | None = None,
+    ) -> None:
         self._check_child_type_for_mutators(child)
         self._check_label_type_for_mutators(label, "insert")
         idx = operator.index(index)
@@ -416,7 +416,8 @@ class OptionStmt:
             idx = max(n + idx, 0)
         else:
             idx = min(idx, n)
-        self.children.insert(idx, (label, child))
+        entry: typing.Any = (label, child)
+        self.children.insert(idx, entry)
 
     def remove_at(self, index: int) -> tuple[Label | None, Identifier | OptionValue | Trivia]:
         idx = operator.index(index)
@@ -427,7 +428,12 @@ class OptionStmt:
             raise IndexError(msg)
         return self.children.pop(norm)
 
-    def replace_at(self, index: int, child: Identifier | OptionValue | Trivia, label: Label | None = None) -> None:
+    def replace_at(
+        self,
+        index: int,
+        child: _cstp.Identifier | _cstp.OptionValue | _cstp.Trivia,
+        label: fltk.fegen.pyrt.label_protocol.LabelProtocol | None = None,
+    ) -> None:
         self._check_child_type_for_mutators(child)
         self._check_label_type_for_mutators(label, "replace_at")
         idx = operator.index(index)
@@ -436,16 +442,19 @@ class OptionStmt:
         if norm < 0 or norm >= n:
             msg = f"OptionStmt.replace_at: index {index} out of range ({n} children)"
             raise IndexError(msg)
-        self.children[norm] = (label, child)
+        entry: typing.Any = (label, child)
+        self.children[norm] = entry
 
     def clear(self) -> None:
         self.children.clear()
 
-    def append_key(self, child: Identifier) -> None:
-        self.children.append((OptionStmt.Label.KEY, child))
+    def append_key(self, child: _cstp.Identifier) -> None:
+        entry: typing.Any = (OptionStmt.Label.KEY, child)
+        self.children.append(entry)
 
-    def extend_key(self, children: typing.Iterable[Identifier]) -> None:
-        self.children.extend((OptionStmt.Label.KEY, child) for child in children)
+    def extend_key(self, children: typing.Iterable[_cstp.Identifier]) -> None:
+        entries: typing.Any = ((OptionStmt.Label.KEY, child) for child in children)
+        self.children.extend(entries)
 
     def children_key(self) -> typing.Iterator[Identifier]:
         return (typing.cast("Identifier", child) for (label, child) in self.children if label == OptionStmt.Label.KEY)
@@ -464,11 +473,13 @@ class OptionStmt:
             raise ValueError(msg)
         return children[0] if children else None
 
-    def append_value(self, child: OptionValue) -> None:
-        self.children.append((OptionStmt.Label.VALUE, child))
+    def append_value(self, child: _cstp.OptionValue) -> None:
+        entry: typing.Any = (OptionStmt.Label.VALUE, child)
+        self.children.append(entry)
 
-    def extend_value(self, children: typing.Iterable[OptionValue]) -> None:
-        self.children.extend((OptionStmt.Label.VALUE, child) for child in children)
+    def extend_value(self, children: typing.Iterable[_cstp.OptionValue]) -> None:
+        entries: typing.Any = ((OptionStmt.Label.VALUE, child) for child in children)
+        self.children.extend(entries)
 
     def children_value(self) -> typing.Iterator[OptionValue]:
         return (
@@ -527,16 +538,25 @@ class OptionValue:
         default_factory=list
     )
 
-    def append(self, child: String | fltk.fegen.pyrt.span_protocol.SpanProtocol, label: Label | None = None) -> None:
-        self.children.append((label, child))
+    def append(
+        self,
+        child: _cstp.String | fltk.fegen.pyrt.span_protocol.SpanProtocol,
+        label: fltk.fegen.pyrt.label_protocol.LabelProtocol | None = None,
+    ) -> None:
+        entry: typing.Any = (label, child)
+        self.children.append(entry)
 
     def extend(
-        self, children: typing.Iterable[String | fltk.fegen.pyrt.span_protocol.SpanProtocol], label: Label | None = None
+        self,
+        children: typing.Iterable[_cstp.String | fltk.fegen.pyrt.span_protocol.SpanProtocol],
+        label: fltk.fegen.pyrt.label_protocol.LabelProtocol | None = None,
     ) -> None:
-        self.children.extend((label, child) for child in children)
+        entries: typing.Any = ((label, child) for child in children)
+        self.children.extend(entries)
 
-    def extend_children(self, other: OptionValue) -> None:
-        self.children.extend(other.children)
+    def extend_children(self, other: _cstp.OptionValue) -> None:
+        entries: typing.Any = other.children
+        self.children.extend(entries)
 
     def child(self) -> tuple[Label | None, String | fltk.fegen.pyrt.span_protocol.SpanProtocol]:
         if (n := len(self.children)) != 1:
@@ -546,7 +566,7 @@ class OptionValue:
 
     _MUTATOR_ALLOWED_CHILD_TYPES = None
 
-    def _check_child_type_for_mutators(self, child: String | fltk.fegen.pyrt.span_protocol.SpanProtocol) -> None:
+    def _check_child_type_for_mutators(self, child: _cstp.String | fltk.fegen.pyrt.span_protocol.SpanProtocol) -> None:
         _allowed = OptionValue._MUTATOR_ALLOWED_CHILD_TYPES
         if _allowed is None:
             _allowed = (String, fltk.fegen.pyrt.terminalsrc.Span)
@@ -559,14 +579,19 @@ class OptionValue:
             msg = f"OptionValue: unsupported child type {type(child).__name__}"
             raise TypeError(msg)
 
-    def _check_label_type_for_mutators(self, label: Label | None, method: str) -> None:
+    def _check_label_type_for_mutators(
+        self, label: fltk.fegen.pyrt.label_protocol.LabelProtocol | None, method: str
+    ) -> None:
         if label is not None and (not isinstance(label, OptionValue.Label)):
             _cn = "OptionValue"
             msg = f"{_cn}.{method}: label argument is not a {_cn}_Label; got {type(label).__name__}"
             raise TypeError(msg)
 
     def insert(
-        self, index: int, child: String | fltk.fegen.pyrt.span_protocol.SpanProtocol, label: Label | None = None
+        self,
+        index: int,
+        child: _cstp.String | fltk.fegen.pyrt.span_protocol.SpanProtocol,
+        label: fltk.fegen.pyrt.label_protocol.LabelProtocol | None = None,
     ) -> None:
         self._check_child_type_for_mutators(child)
         self._check_label_type_for_mutators(label, "insert")
@@ -576,7 +601,8 @@ class OptionValue:
             idx = max(n + idx, 0)
         else:
             idx = min(idx, n)
-        self.children.insert(idx, (label, child))
+        entry: typing.Any = (label, child)
+        self.children.insert(idx, entry)
 
     def remove_at(self, index: int) -> tuple[Label | None, String | fltk.fegen.pyrt.span_protocol.SpanProtocol]:
         idx = operator.index(index)
@@ -588,7 +614,10 @@ class OptionValue:
         return self.children.pop(norm)
 
     def replace_at(
-        self, index: int, child: String | fltk.fegen.pyrt.span_protocol.SpanProtocol, label: Label | None = None
+        self,
+        index: int,
+        child: _cstp.String | fltk.fegen.pyrt.span_protocol.SpanProtocol,
+        label: fltk.fegen.pyrt.label_protocol.LabelProtocol | None = None,
     ) -> None:
         self._check_child_type_for_mutators(child)
         self._check_label_type_for_mutators(label, "replace_at")
@@ -598,7 +627,8 @@ class OptionValue:
         if norm < 0 or norm >= n:
             msg = f"OptionValue.replace_at: index {index} out of range ({n} children)"
             raise IndexError(msg)
-        self.children[norm] = (label, child)
+        entry: typing.Any = (label, child)
+        self.children[norm] = entry
 
     def clear(self) -> None:
         self.children.clear()
@@ -630,11 +660,13 @@ class OptionValue:
             raise ValueError(msg)
         return children[0] if children else None
 
-    def append_string(self, child: String) -> None:
-        self.children.append((OptionValue.Label.STRING, child))
+    def append_string(self, child: _cstp.String) -> None:
+        entry: typing.Any = (OptionValue.Label.STRING, child)
+        self.children.append(entry)
 
-    def extend_string(self, children: typing.Iterable[String]) -> None:
-        self.children.extend((OptionValue.Label.STRING, child) for child in children)
+    def extend_string(self, children: typing.Iterable[_cstp.String]) -> None:
+        entries: typing.Any = ((OptionValue.Label.STRING, child) for child in children)
+        self.children.extend(entries)
 
     def children_string(self) -> typing.Iterator[String]:
         return (typing.cast("String", child) for (label, child) in self.children if label == OptionValue.Label.STRING)
@@ -746,16 +778,25 @@ class RuleConfig:
     span: fltk.fegen.pyrt.span_protocol.SpanProtocol = fltk.fegen.pyrt.terminalsrc.UnknownSpan
     children: list[tuple[Label | None, Identifier | RuleStatement | Trivia]] = dataclasses.field(default_factory=list)
 
-    def append(self, child: Identifier | RuleStatement | Trivia, label: Label | None = None) -> None:
-        self.children.append((label, child))
+    def append(
+        self,
+        child: _cstp.Identifier | _cstp.RuleStatement | _cstp.Trivia,
+        label: fltk.fegen.pyrt.label_protocol.LabelProtocol | None = None,
+    ) -> None:
+        entry: typing.Any = (label, child)
+        self.children.append(entry)
 
     def extend(
-        self, children: typing.Iterable[Identifier | RuleStatement | Trivia], label: Label | None = None
+        self,
+        children: typing.Iterable[_cstp.Identifier | _cstp.RuleStatement | _cstp.Trivia],
+        label: fltk.fegen.pyrt.label_protocol.LabelProtocol | None = None,
     ) -> None:
-        self.children.extend((label, child) for child in children)
+        entries: typing.Any = ((label, child) for child in children)
+        self.children.extend(entries)
 
-    def extend_children(self, other: RuleConfig) -> None:
-        self.children.extend(other.children)
+    def extend_children(self, other: _cstp.RuleConfig) -> None:
+        entries: typing.Any = other.children
+        self.children.extend(entries)
 
     def child(self) -> tuple[Label | None, Identifier | RuleStatement | Trivia]:
         if (n := len(self.children)) != 1:
@@ -763,18 +804,25 @@ class RuleConfig:
             raise ValueError(msg)
         return self.children[0]
 
-    def _check_child_type_for_mutators(self, child: Identifier | RuleStatement | Trivia) -> None:
+    def _check_child_type_for_mutators(self, child: _cstp.Identifier | _cstp.RuleStatement | _cstp.Trivia) -> None:
         if not isinstance(child, Identifier | RuleStatement | Trivia):
             msg = f"RuleConfig: unsupported child type {type(child).__name__}"
             raise TypeError(msg)
 
-    def _check_label_type_for_mutators(self, label: Label | None, method: str) -> None:
+    def _check_label_type_for_mutators(
+        self, label: fltk.fegen.pyrt.label_protocol.LabelProtocol | None, method: str
+    ) -> None:
         if label is not None and (not isinstance(label, RuleConfig.Label)):
             _cn = "RuleConfig"
             msg = f"{_cn}.{method}: label argument is not a {_cn}_Label; got {type(label).__name__}"
             raise TypeError(msg)
 
-    def insert(self, index: int, child: Identifier | RuleStatement | Trivia, label: Label | None = None) -> None:
+    def insert(
+        self,
+        index: int,
+        child: _cstp.Identifier | _cstp.RuleStatement | _cstp.Trivia,
+        label: fltk.fegen.pyrt.label_protocol.LabelProtocol | None = None,
+    ) -> None:
         self._check_child_type_for_mutators(child)
         self._check_label_type_for_mutators(label, "insert")
         idx = operator.index(index)
@@ -783,7 +831,8 @@ class RuleConfig:
             idx = max(n + idx, 0)
         else:
             idx = min(idx, n)
-        self.children.insert(idx, (label, child))
+        entry: typing.Any = (label, child)
+        self.children.insert(idx, entry)
 
     def remove_at(self, index: int) -> tuple[Label | None, Identifier | RuleStatement | Trivia]:
         idx = operator.index(index)
@@ -794,7 +843,12 @@ class RuleConfig:
             raise IndexError(msg)
         return self.children.pop(norm)
 
-    def replace_at(self, index: int, child: Identifier | RuleStatement | Trivia, label: Label | None = None) -> None:
+    def replace_at(
+        self,
+        index: int,
+        child: _cstp.Identifier | _cstp.RuleStatement | _cstp.Trivia,
+        label: fltk.fegen.pyrt.label_protocol.LabelProtocol | None = None,
+    ) -> None:
         self._check_child_type_for_mutators(child)
         self._check_label_type_for_mutators(label, "replace_at")
         idx = operator.index(index)
@@ -803,16 +857,19 @@ class RuleConfig:
         if norm < 0 or norm >= n:
             msg = f"RuleConfig.replace_at: index {index} out of range ({n} children)"
             raise IndexError(msg)
-        self.children[norm] = (label, child)
+        entry: typing.Any = (label, child)
+        self.children[norm] = entry
 
     def clear(self) -> None:
         self.children.clear()
 
-    def append_rule_name(self, child: Identifier) -> None:
-        self.children.append((RuleConfig.Label.RULE_NAME, child))
+    def append_rule_name(self, child: _cstp.Identifier) -> None:
+        entry: typing.Any = (RuleConfig.Label.RULE_NAME, child)
+        self.children.append(entry)
 
-    def extend_rule_name(self, children: typing.Iterable[Identifier]) -> None:
-        self.children.extend((RuleConfig.Label.RULE_NAME, child) for child in children)
+    def extend_rule_name(self, children: typing.Iterable[_cstp.Identifier]) -> None:
+        entries: typing.Any = ((RuleConfig.Label.RULE_NAME, child) for child in children)
+        self.children.extend(entries)
 
     def children_rule_name(self) -> typing.Iterator[Identifier]:
         return (
@@ -833,11 +890,13 @@ class RuleConfig:
             raise ValueError(msg)
         return children[0] if children else None
 
-    def append_rule_statement(self, child: RuleStatement) -> None:
-        self.children.append((RuleConfig.Label.RULE_STATEMENT, child))
+    def append_rule_statement(self, child: _cstp.RuleStatement) -> None:
+        entry: typing.Any = (RuleConfig.Label.RULE_STATEMENT, child)
+        self.children.append(entry)
 
-    def extend_rule_statement(self, children: typing.Iterable[RuleStatement]) -> None:
-        self.children.extend((RuleConfig.Label.RULE_STATEMENT, child) for child in children)
+    def extend_rule_statement(self, children: typing.Iterable[_cstp.RuleStatement]) -> None:
+        entries: typing.Any = ((RuleConfig.Label.RULE_STATEMENT, child) for child in children)
+        self.children.extend(entries)
 
     def children_rule_statement(self) -> typing.Iterator[RuleStatement]:
         return (
@@ -925,46 +984,49 @@ class RuleStatement:
 
     def append(
         self,
-        child: BoolStmt
-        | CustomStmt
-        | FieldStmt
-        | FlattenStmt
-        | FoldStmt
-        | KeyStmt
-        | NameStmt
-        | ProductStmt
-        | SumStmt
-        | TextFromStmt
-        | TransparentStmt
-        | TypeStmt
-        | VariantStmt,
-        label: Label | None = None,
+        child: _cstp.BoolStmt
+        | _cstp.CustomStmt
+        | _cstp.FieldStmt
+        | _cstp.FlattenStmt
+        | _cstp.FoldStmt
+        | _cstp.KeyStmt
+        | _cstp.NameStmt
+        | _cstp.ProductStmt
+        | _cstp.SumStmt
+        | _cstp.TextFromStmt
+        | _cstp.TransparentStmt
+        | _cstp.TypeStmt
+        | _cstp.VariantStmt,
+        label: fltk.fegen.pyrt.label_protocol.LabelProtocol | None = None,
     ) -> None:
-        self.children.append((label, child))
+        entry: typing.Any = (label, child)
+        self.children.append(entry)
 
     def extend(
         self,
         children: typing.Iterable[
-            BoolStmt
-            | CustomStmt
-            | FieldStmt
-            | FlattenStmt
-            | FoldStmt
-            | KeyStmt
-            | NameStmt
-            | ProductStmt
-            | SumStmt
-            | TextFromStmt
-            | TransparentStmt
-            | TypeStmt
-            | VariantStmt
+            _cstp.BoolStmt
+            | _cstp.CustomStmt
+            | _cstp.FieldStmt
+            | _cstp.FlattenStmt
+            | _cstp.FoldStmt
+            | _cstp.KeyStmt
+            | _cstp.NameStmt
+            | _cstp.ProductStmt
+            | _cstp.SumStmt
+            | _cstp.TextFromStmt
+            | _cstp.TransparentStmt
+            | _cstp.TypeStmt
+            | _cstp.VariantStmt
         ],
-        label: Label | None = None,
+        label: fltk.fegen.pyrt.label_protocol.LabelProtocol | None = None,
     ) -> None:
-        self.children.extend((label, child) for child in children)
+        entries: typing.Any = ((label, child) for child in children)
+        self.children.extend(entries)
 
-    def extend_children(self, other: RuleStatement) -> None:
-        self.children.extend(other.children)
+    def extend_children(self, other: _cstp.RuleStatement) -> None:
+        entries: typing.Any = other.children
+        self.children.extend(entries)
 
     def child(
         self,
@@ -991,19 +1053,19 @@ class RuleStatement:
 
     def _check_child_type_for_mutators(
         self,
-        child: BoolStmt
-        | CustomStmt
-        | FieldStmt
-        | FlattenStmt
-        | FoldStmt
-        | KeyStmt
-        | NameStmt
-        | ProductStmt
-        | SumStmt
-        | TextFromStmt
-        | TransparentStmt
-        | TypeStmt
-        | VariantStmt,
+        child: _cstp.BoolStmt
+        | _cstp.CustomStmt
+        | _cstp.FieldStmt
+        | _cstp.FlattenStmt
+        | _cstp.FoldStmt
+        | _cstp.KeyStmt
+        | _cstp.NameStmt
+        | _cstp.ProductStmt
+        | _cstp.SumStmt
+        | _cstp.TextFromStmt
+        | _cstp.TransparentStmt
+        | _cstp.TypeStmt
+        | _cstp.VariantStmt,
     ) -> None:
         if not isinstance(
             child,
@@ -1024,7 +1086,9 @@ class RuleStatement:
             msg = f"RuleStatement: unsupported child type {type(child).__name__}"
             raise TypeError(msg)
 
-    def _check_label_type_for_mutators(self, label: Label | None, method: str) -> None:
+    def _check_label_type_for_mutators(
+        self, label: fltk.fegen.pyrt.label_protocol.LabelProtocol | None, method: str
+    ) -> None:
         if label is not None and (not isinstance(label, RuleStatement.Label)):
             _cn = "RuleStatement"
             msg = f"{_cn}.{method}: label argument is not a {_cn}_Label; got {type(label).__name__}"
@@ -1033,20 +1097,20 @@ class RuleStatement:
     def insert(
         self,
         index: int,
-        child: BoolStmt
-        | CustomStmt
-        | FieldStmt
-        | FlattenStmt
-        | FoldStmt
-        | KeyStmt
-        | NameStmt
-        | ProductStmt
-        | SumStmt
-        | TextFromStmt
-        | TransparentStmt
-        | TypeStmt
-        | VariantStmt,
-        label: Label | None = None,
+        child: _cstp.BoolStmt
+        | _cstp.CustomStmt
+        | _cstp.FieldStmt
+        | _cstp.FlattenStmt
+        | _cstp.FoldStmt
+        | _cstp.KeyStmt
+        | _cstp.NameStmt
+        | _cstp.ProductStmt
+        | _cstp.SumStmt
+        | _cstp.TextFromStmt
+        | _cstp.TransparentStmt
+        | _cstp.TypeStmt
+        | _cstp.VariantStmt,
+        label: fltk.fegen.pyrt.label_protocol.LabelProtocol | None = None,
     ) -> None:
         self._check_child_type_for_mutators(child)
         self._check_label_type_for_mutators(label, "insert")
@@ -1056,7 +1120,8 @@ class RuleStatement:
             idx = max(n + idx, 0)
         else:
             idx = min(idx, n)
-        self.children.insert(idx, (label, child))
+        entry: typing.Any = (label, child)
+        self.children.insert(idx, entry)
 
     def remove_at(
         self, index: int
@@ -1087,20 +1152,20 @@ class RuleStatement:
     def replace_at(
         self,
         index: int,
-        child: BoolStmt
-        | CustomStmt
-        | FieldStmt
-        | FlattenStmt
-        | FoldStmt
-        | KeyStmt
-        | NameStmt
-        | ProductStmt
-        | SumStmt
-        | TextFromStmt
-        | TransparentStmt
-        | TypeStmt
-        | VariantStmt,
-        label: Label | None = None,
+        child: _cstp.BoolStmt
+        | _cstp.CustomStmt
+        | _cstp.FieldStmt
+        | _cstp.FlattenStmt
+        | _cstp.FoldStmt
+        | _cstp.KeyStmt
+        | _cstp.NameStmt
+        | _cstp.ProductStmt
+        | _cstp.SumStmt
+        | _cstp.TextFromStmt
+        | _cstp.TransparentStmt
+        | _cstp.TypeStmt
+        | _cstp.VariantStmt,
+        label: fltk.fegen.pyrt.label_protocol.LabelProtocol | None = None,
     ) -> None:
         self._check_child_type_for_mutators(child)
         self._check_label_type_for_mutators(label, "replace_at")
@@ -1110,16 +1175,19 @@ class RuleStatement:
         if norm < 0 or norm >= n:
             msg = f"RuleStatement.replace_at: index {index} out of range ({n} children)"
             raise IndexError(msg)
-        self.children[norm] = (label, child)
+        entry: typing.Any = (label, child)
+        self.children[norm] = entry
 
     def clear(self) -> None:
         self.children.clear()
 
-    def append_bool_stmt(self, child: BoolStmt) -> None:
-        self.children.append((RuleStatement.Label.BOOL_STMT, child))
+    def append_bool_stmt(self, child: _cstp.BoolStmt) -> None:
+        entry: typing.Any = (RuleStatement.Label.BOOL_STMT, child)
+        self.children.append(entry)
 
-    def extend_bool_stmt(self, children: typing.Iterable[BoolStmt]) -> None:
-        self.children.extend((RuleStatement.Label.BOOL_STMT, child) for child in children)
+    def extend_bool_stmt(self, children: typing.Iterable[_cstp.BoolStmt]) -> None:
+        entries: typing.Any = ((RuleStatement.Label.BOOL_STMT, child) for child in children)
+        self.children.extend(entries)
 
     def children_bool_stmt(self) -> typing.Iterator[BoolStmt]:
         return (
@@ -1140,11 +1208,13 @@ class RuleStatement:
             raise ValueError(msg)
         return children[0] if children else None
 
-    def append_custom_stmt(self, child: CustomStmt) -> None:
-        self.children.append((RuleStatement.Label.CUSTOM_STMT, child))
+    def append_custom_stmt(self, child: _cstp.CustomStmt) -> None:
+        entry: typing.Any = (RuleStatement.Label.CUSTOM_STMT, child)
+        self.children.append(entry)
 
-    def extend_custom_stmt(self, children: typing.Iterable[CustomStmt]) -> None:
-        self.children.extend((RuleStatement.Label.CUSTOM_STMT, child) for child in children)
+    def extend_custom_stmt(self, children: typing.Iterable[_cstp.CustomStmt]) -> None:
+        entries: typing.Any = ((RuleStatement.Label.CUSTOM_STMT, child) for child in children)
+        self.children.extend(entries)
 
     def children_custom_stmt(self) -> typing.Iterator[CustomStmt]:
         return (
@@ -1167,11 +1237,13 @@ class RuleStatement:
             raise ValueError(msg)
         return children[0] if children else None
 
-    def append_field_stmt(self, child: FieldStmt) -> None:
-        self.children.append((RuleStatement.Label.FIELD_STMT, child))
+    def append_field_stmt(self, child: _cstp.FieldStmt) -> None:
+        entry: typing.Any = (RuleStatement.Label.FIELD_STMT, child)
+        self.children.append(entry)
 
-    def extend_field_stmt(self, children: typing.Iterable[FieldStmt]) -> None:
-        self.children.extend((RuleStatement.Label.FIELD_STMT, child) for child in children)
+    def extend_field_stmt(self, children: typing.Iterable[_cstp.FieldStmt]) -> None:
+        entries: typing.Any = ((RuleStatement.Label.FIELD_STMT, child) for child in children)
+        self.children.extend(entries)
 
     def children_field_stmt(self) -> typing.Iterator[FieldStmt]:
         return (
@@ -1194,11 +1266,13 @@ class RuleStatement:
             raise ValueError(msg)
         return children[0] if children else None
 
-    def append_flatten_stmt(self, child: FlattenStmt) -> None:
-        self.children.append((RuleStatement.Label.FLATTEN_STMT, child))
+    def append_flatten_stmt(self, child: _cstp.FlattenStmt) -> None:
+        entry: typing.Any = (RuleStatement.Label.FLATTEN_STMT, child)
+        self.children.append(entry)
 
-    def extend_flatten_stmt(self, children: typing.Iterable[FlattenStmt]) -> None:
-        self.children.extend((RuleStatement.Label.FLATTEN_STMT, child) for child in children)
+    def extend_flatten_stmt(self, children: typing.Iterable[_cstp.FlattenStmt]) -> None:
+        entries: typing.Any = ((RuleStatement.Label.FLATTEN_STMT, child) for child in children)
+        self.children.extend(entries)
 
     def children_flatten_stmt(self) -> typing.Iterator[FlattenStmt]:
         return (
@@ -1221,11 +1295,13 @@ class RuleStatement:
             raise ValueError(msg)
         return children[0] if children else None
 
-    def append_fold_stmt(self, child: FoldStmt) -> None:
-        self.children.append((RuleStatement.Label.FOLD_STMT, child))
+    def append_fold_stmt(self, child: _cstp.FoldStmt) -> None:
+        entry: typing.Any = (RuleStatement.Label.FOLD_STMT, child)
+        self.children.append(entry)
 
-    def extend_fold_stmt(self, children: typing.Iterable[FoldStmt]) -> None:
-        self.children.extend((RuleStatement.Label.FOLD_STMT, child) for child in children)
+    def extend_fold_stmt(self, children: typing.Iterable[_cstp.FoldStmt]) -> None:
+        entries: typing.Any = ((RuleStatement.Label.FOLD_STMT, child) for child in children)
+        self.children.extend(entries)
 
     def children_fold_stmt(self) -> typing.Iterator[FoldStmt]:
         return (
@@ -1246,11 +1322,13 @@ class RuleStatement:
             raise ValueError(msg)
         return children[0] if children else None
 
-    def append_key_stmt(self, child: KeyStmt) -> None:
-        self.children.append((RuleStatement.Label.KEY_STMT, child))
+    def append_key_stmt(self, child: _cstp.KeyStmt) -> None:
+        entry: typing.Any = (RuleStatement.Label.KEY_STMT, child)
+        self.children.append(entry)
 
-    def extend_key_stmt(self, children: typing.Iterable[KeyStmt]) -> None:
-        self.children.extend((RuleStatement.Label.KEY_STMT, child) for child in children)
+    def extend_key_stmt(self, children: typing.Iterable[_cstp.KeyStmt]) -> None:
+        entries: typing.Any = ((RuleStatement.Label.KEY_STMT, child) for child in children)
+        self.children.extend(entries)
 
     def children_key_stmt(self) -> typing.Iterator[KeyStmt]:
         return (
@@ -1271,11 +1349,13 @@ class RuleStatement:
             raise ValueError(msg)
         return children[0] if children else None
 
-    def append_name_stmt(self, child: NameStmt) -> None:
-        self.children.append((RuleStatement.Label.NAME_STMT, child))
+    def append_name_stmt(self, child: _cstp.NameStmt) -> None:
+        entry: typing.Any = (RuleStatement.Label.NAME_STMT, child)
+        self.children.append(entry)
 
-    def extend_name_stmt(self, children: typing.Iterable[NameStmt]) -> None:
-        self.children.extend((RuleStatement.Label.NAME_STMT, child) for child in children)
+    def extend_name_stmt(self, children: typing.Iterable[_cstp.NameStmt]) -> None:
+        entries: typing.Any = ((RuleStatement.Label.NAME_STMT, child) for child in children)
+        self.children.extend(entries)
 
     def children_name_stmt(self) -> typing.Iterator[NameStmt]:
         return (
@@ -1296,11 +1376,13 @@ class RuleStatement:
             raise ValueError(msg)
         return children[0] if children else None
 
-    def append_product_stmt(self, child: ProductStmt) -> None:
-        self.children.append((RuleStatement.Label.PRODUCT_STMT, child))
+    def append_product_stmt(self, child: _cstp.ProductStmt) -> None:
+        entry: typing.Any = (RuleStatement.Label.PRODUCT_STMT, child)
+        self.children.append(entry)
 
-    def extend_product_stmt(self, children: typing.Iterable[ProductStmt]) -> None:
-        self.children.extend((RuleStatement.Label.PRODUCT_STMT, child) for child in children)
+    def extend_product_stmt(self, children: typing.Iterable[_cstp.ProductStmt]) -> None:
+        entries: typing.Any = ((RuleStatement.Label.PRODUCT_STMT, child) for child in children)
+        self.children.extend(entries)
 
     def children_product_stmt(self) -> typing.Iterator[ProductStmt]:
         return (
@@ -1323,11 +1405,13 @@ class RuleStatement:
             raise ValueError(msg)
         return children[0] if children else None
 
-    def append_sum_stmt(self, child: SumStmt) -> None:
-        self.children.append((RuleStatement.Label.SUM_STMT, child))
+    def append_sum_stmt(self, child: _cstp.SumStmt) -> None:
+        entry: typing.Any = (RuleStatement.Label.SUM_STMT, child)
+        self.children.append(entry)
 
-    def extend_sum_stmt(self, children: typing.Iterable[SumStmt]) -> None:
-        self.children.extend((RuleStatement.Label.SUM_STMT, child) for child in children)
+    def extend_sum_stmt(self, children: typing.Iterable[_cstp.SumStmt]) -> None:
+        entries: typing.Any = ((RuleStatement.Label.SUM_STMT, child) for child in children)
+        self.children.extend(entries)
 
     def children_sum_stmt(self) -> typing.Iterator[SumStmt]:
         return (
@@ -1348,11 +1432,13 @@ class RuleStatement:
             raise ValueError(msg)
         return children[0] if children else None
 
-    def append_text_from_stmt(self, child: TextFromStmt) -> None:
-        self.children.append((RuleStatement.Label.TEXT_FROM_STMT, child))
+    def append_text_from_stmt(self, child: _cstp.TextFromStmt) -> None:
+        entry: typing.Any = (RuleStatement.Label.TEXT_FROM_STMT, child)
+        self.children.append(entry)
 
-    def extend_text_from_stmt(self, children: typing.Iterable[TextFromStmt]) -> None:
-        self.children.extend((RuleStatement.Label.TEXT_FROM_STMT, child) for child in children)
+    def extend_text_from_stmt(self, children: typing.Iterable[_cstp.TextFromStmt]) -> None:
+        entries: typing.Any = ((RuleStatement.Label.TEXT_FROM_STMT, child) for child in children)
+        self.children.extend(entries)
 
     def children_text_from_stmt(self) -> typing.Iterator[TextFromStmt]:
         return (
@@ -1375,11 +1461,13 @@ class RuleStatement:
             raise ValueError(msg)
         return children[0] if children else None
 
-    def append_transparent_stmt(self, child: TransparentStmt) -> None:
-        self.children.append((RuleStatement.Label.TRANSPARENT_STMT, child))
+    def append_transparent_stmt(self, child: _cstp.TransparentStmt) -> None:
+        entry: typing.Any = (RuleStatement.Label.TRANSPARENT_STMT, child)
+        self.children.append(entry)
 
-    def extend_transparent_stmt(self, children: typing.Iterable[TransparentStmt]) -> None:
-        self.children.extend((RuleStatement.Label.TRANSPARENT_STMT, child) for child in children)
+    def extend_transparent_stmt(self, children: typing.Iterable[_cstp.TransparentStmt]) -> None:
+        entries: typing.Any = ((RuleStatement.Label.TRANSPARENT_STMT, child) for child in children)
+        self.children.extend(entries)
 
     def children_transparent_stmt(self) -> typing.Iterator[TransparentStmt]:
         return (
@@ -1402,11 +1490,13 @@ class RuleStatement:
             raise ValueError(msg)
         return children[0] if children else None
 
-    def append_type_stmt(self, child: TypeStmt) -> None:
-        self.children.append((RuleStatement.Label.TYPE_STMT, child))
+    def append_type_stmt(self, child: _cstp.TypeStmt) -> None:
+        entry: typing.Any = (RuleStatement.Label.TYPE_STMT, child)
+        self.children.append(entry)
 
-    def extend_type_stmt(self, children: typing.Iterable[TypeStmt]) -> None:
-        self.children.extend((RuleStatement.Label.TYPE_STMT, child) for child in children)
+    def extend_type_stmt(self, children: typing.Iterable[_cstp.TypeStmt]) -> None:
+        entries: typing.Any = ((RuleStatement.Label.TYPE_STMT, child) for child in children)
+        self.children.extend(entries)
 
     def children_type_stmt(self) -> typing.Iterator[TypeStmt]:
         return (
@@ -1427,11 +1517,13 @@ class RuleStatement:
             raise ValueError(msg)
         return children[0] if children else None
 
-    def append_variant_stmt(self, child: VariantStmt) -> None:
-        self.children.append((RuleStatement.Label.VARIANT_STMT, child))
+    def append_variant_stmt(self, child: _cstp.VariantStmt) -> None:
+        entry: typing.Any = (RuleStatement.Label.VARIANT_STMT, child)
+        self.children.append(entry)
 
-    def extend_variant_stmt(self, children: typing.Iterable[VariantStmt]) -> None:
-        self.children.extend((RuleStatement.Label.VARIANT_STMT, child) for child in children)
+    def extend_variant_stmt(self, children: typing.Iterable[_cstp.VariantStmt]) -> None:
+        entries: typing.Any = ((RuleStatement.Label.VARIANT_STMT, child) for child in children)
+        self.children.extend(entries)
 
     def children_variant_stmt(self) -> typing.Iterator[VariantStmt]:
         return (
@@ -1539,14 +1631,23 @@ class TypeStmt:
     span: fltk.fegen.pyrt.span_protocol.SpanProtocol = fltk.fegen.pyrt.terminalsrc.UnknownSpan
     children: list[tuple[Label | None, Trivia | TypeSpec]] = dataclasses.field(default_factory=list)
 
-    def append(self, child: Trivia | TypeSpec, label: Label | None = None) -> None:
-        self.children.append((label, child))
+    def append(
+        self, child: _cstp.Trivia | _cstp.TypeSpec, label: fltk.fegen.pyrt.label_protocol.LabelProtocol | None = None
+    ) -> None:
+        entry: typing.Any = (label, child)
+        self.children.append(entry)
 
-    def extend(self, children: typing.Iterable[Trivia | TypeSpec], label: Label | None = None) -> None:
-        self.children.extend((label, child) for child in children)
+    def extend(
+        self,
+        children: typing.Iterable[_cstp.Trivia | _cstp.TypeSpec],
+        label: fltk.fegen.pyrt.label_protocol.LabelProtocol | None = None,
+    ) -> None:
+        entries: typing.Any = ((label, child) for child in children)
+        self.children.extend(entries)
 
-    def extend_children(self, other: TypeStmt) -> None:
-        self.children.extend(other.children)
+    def extend_children(self, other: _cstp.TypeStmt) -> None:
+        entries: typing.Any = other.children
+        self.children.extend(entries)
 
     def child(self) -> tuple[Label | None, Trivia | TypeSpec]:
         if (n := len(self.children)) != 1:
@@ -1554,18 +1655,25 @@ class TypeStmt:
             raise ValueError(msg)
         return self.children[0]
 
-    def _check_child_type_for_mutators(self, child: Trivia | TypeSpec) -> None:
+    def _check_child_type_for_mutators(self, child: _cstp.Trivia | _cstp.TypeSpec) -> None:
         if not isinstance(child, Trivia | TypeSpec):
             msg = f"TypeStmt: unsupported child type {type(child).__name__}"
             raise TypeError(msg)
 
-    def _check_label_type_for_mutators(self, label: Label | None, method: str) -> None:
+    def _check_label_type_for_mutators(
+        self, label: fltk.fegen.pyrt.label_protocol.LabelProtocol | None, method: str
+    ) -> None:
         if label is not None and (not isinstance(label, TypeStmt.Label)):
             _cn = "TypeStmt"
             msg = f"{_cn}.{method}: label argument is not a {_cn}_Label; got {type(label).__name__}"
             raise TypeError(msg)
 
-    def insert(self, index: int, child: Trivia | TypeSpec, label: Label | None = None) -> None:
+    def insert(
+        self,
+        index: int,
+        child: _cstp.Trivia | _cstp.TypeSpec,
+        label: fltk.fegen.pyrt.label_protocol.LabelProtocol | None = None,
+    ) -> None:
         self._check_child_type_for_mutators(child)
         self._check_label_type_for_mutators(label, "insert")
         idx = operator.index(index)
@@ -1574,7 +1682,8 @@ class TypeStmt:
             idx = max(n + idx, 0)
         else:
             idx = min(idx, n)
-        self.children.insert(idx, (label, child))
+        entry: typing.Any = (label, child)
+        self.children.insert(idx, entry)
 
     def remove_at(self, index: int) -> tuple[Label | None, Trivia | TypeSpec]:
         idx = operator.index(index)
@@ -1585,7 +1694,12 @@ class TypeStmt:
             raise IndexError(msg)
         return self.children.pop(norm)
 
-    def replace_at(self, index: int, child: Trivia | TypeSpec, label: Label | None = None) -> None:
+    def replace_at(
+        self,
+        index: int,
+        child: _cstp.Trivia | _cstp.TypeSpec,
+        label: fltk.fegen.pyrt.label_protocol.LabelProtocol | None = None,
+    ) -> None:
         self._check_child_type_for_mutators(child)
         self._check_label_type_for_mutators(label, "replace_at")
         idx = operator.index(index)
@@ -1594,16 +1708,19 @@ class TypeStmt:
         if norm < 0 or norm >= n:
             msg = f"TypeStmt.replace_at: index {index} out of range ({n} children)"
             raise IndexError(msg)
-        self.children[norm] = (label, child)
+        entry: typing.Any = (label, child)
+        self.children[norm] = entry
 
     def clear(self) -> None:
         self.children.clear()
 
-    def append_spec(self, child: TypeSpec) -> None:
-        self.children.append((TypeStmt.Label.SPEC, child))
+    def append_spec(self, child: _cstp.TypeSpec) -> None:
+        entry: typing.Any = (TypeStmt.Label.SPEC, child)
+        self.children.append(entry)
 
-    def extend_spec(self, children: typing.Iterable[TypeSpec]) -> None:
-        self.children.extend((TypeStmt.Label.SPEC, child) for child in children)
+    def extend_spec(self, children: typing.Iterable[_cstp.TypeSpec]) -> None:
+        entries: typing.Any = ((TypeStmt.Label.SPEC, child) for child in children)
+        self.children.extend(entries)
 
     def children_spec(self) -> typing.Iterator[TypeSpec]:
         return (typing.cast("TypeSpec", child) for (label, child) in self.children if label == TypeStmt.Label.SPEC)
@@ -1653,14 +1770,25 @@ class TypeSpec:
     span: fltk.fegen.pyrt.span_protocol.SpanProtocol = fltk.fegen.pyrt.terminalsrc.UnknownSpan
     children: list[tuple[Label | None, CustomSpec | Identifier]] = dataclasses.field(default_factory=list)
 
-    def append(self, child: CustomSpec | Identifier, label: Label | None = None) -> None:
-        self.children.append((label, child))
+    def append(
+        self,
+        child: _cstp.CustomSpec | _cstp.Identifier,
+        label: fltk.fegen.pyrt.label_protocol.LabelProtocol | None = None,
+    ) -> None:
+        entry: typing.Any = (label, child)
+        self.children.append(entry)
 
-    def extend(self, children: typing.Iterable[CustomSpec | Identifier], label: Label | None = None) -> None:
-        self.children.extend((label, child) for child in children)
+    def extend(
+        self,
+        children: typing.Iterable[_cstp.CustomSpec | _cstp.Identifier],
+        label: fltk.fegen.pyrt.label_protocol.LabelProtocol | None = None,
+    ) -> None:
+        entries: typing.Any = ((label, child) for child in children)
+        self.children.extend(entries)
 
-    def extend_children(self, other: TypeSpec) -> None:
-        self.children.extend(other.children)
+    def extend_children(self, other: _cstp.TypeSpec) -> None:
+        entries: typing.Any = other.children
+        self.children.extend(entries)
 
     def child(self) -> tuple[Label | None, CustomSpec | Identifier]:
         if (n := len(self.children)) != 1:
@@ -1668,18 +1796,25 @@ class TypeSpec:
             raise ValueError(msg)
         return self.children[0]
 
-    def _check_child_type_for_mutators(self, child: CustomSpec | Identifier) -> None:
+    def _check_child_type_for_mutators(self, child: _cstp.CustomSpec | _cstp.Identifier) -> None:
         if not isinstance(child, CustomSpec | Identifier):
             msg = f"TypeSpec: unsupported child type {type(child).__name__}"
             raise TypeError(msg)
 
-    def _check_label_type_for_mutators(self, label: Label | None, method: str) -> None:
+    def _check_label_type_for_mutators(
+        self, label: fltk.fegen.pyrt.label_protocol.LabelProtocol | None, method: str
+    ) -> None:
         if label is not None and (not isinstance(label, TypeSpec.Label)):
             _cn = "TypeSpec"
             msg = f"{_cn}.{method}: label argument is not a {_cn}_Label; got {type(label).__name__}"
             raise TypeError(msg)
 
-    def insert(self, index: int, child: CustomSpec | Identifier, label: Label | None = None) -> None:
+    def insert(
+        self,
+        index: int,
+        child: _cstp.CustomSpec | _cstp.Identifier,
+        label: fltk.fegen.pyrt.label_protocol.LabelProtocol | None = None,
+    ) -> None:
         self._check_child_type_for_mutators(child)
         self._check_label_type_for_mutators(label, "insert")
         idx = operator.index(index)
@@ -1688,7 +1823,8 @@ class TypeSpec:
             idx = max(n + idx, 0)
         else:
             idx = min(idx, n)
-        self.children.insert(idx, (label, child))
+        entry: typing.Any = (label, child)
+        self.children.insert(idx, entry)
 
     def remove_at(self, index: int) -> tuple[Label | None, CustomSpec | Identifier]:
         idx = operator.index(index)
@@ -1699,7 +1835,12 @@ class TypeSpec:
             raise IndexError(msg)
         return self.children.pop(norm)
 
-    def replace_at(self, index: int, child: CustomSpec | Identifier, label: Label | None = None) -> None:
+    def replace_at(
+        self,
+        index: int,
+        child: _cstp.CustomSpec | _cstp.Identifier,
+        label: fltk.fegen.pyrt.label_protocol.LabelProtocol | None = None,
+    ) -> None:
         self._check_child_type_for_mutators(child)
         self._check_label_type_for_mutators(label, "replace_at")
         idx = operator.index(index)
@@ -1708,16 +1849,19 @@ class TypeSpec:
         if norm < 0 or norm >= n:
             msg = f"TypeSpec.replace_at: index {index} out of range ({n} children)"
             raise IndexError(msg)
-        self.children[norm] = (label, child)
+        entry: typing.Any = (label, child)
+        self.children[norm] = entry
 
     def clear(self) -> None:
         self.children.clear()
 
-    def append_builtin(self, child: Identifier) -> None:
-        self.children.append((TypeSpec.Label.BUILTIN, child))
+    def append_builtin(self, child: _cstp.Identifier) -> None:
+        entry: typing.Any = (TypeSpec.Label.BUILTIN, child)
+        self.children.append(entry)
 
-    def extend_builtin(self, children: typing.Iterable[Identifier]) -> None:
-        self.children.extend((TypeSpec.Label.BUILTIN, child) for child in children)
+    def extend_builtin(self, children: typing.Iterable[_cstp.Identifier]) -> None:
+        entries: typing.Any = ((TypeSpec.Label.BUILTIN, child) for child in children)
+        self.children.extend(entries)
 
     def children_builtin(self) -> typing.Iterator[Identifier]:
         return (typing.cast("Identifier", child) for (label, child) in self.children if label == TypeSpec.Label.BUILTIN)
@@ -1736,11 +1880,13 @@ class TypeSpec:
             raise ValueError(msg)
         return children[0] if children else None
 
-    def append_custom(self, child: CustomSpec) -> None:
-        self.children.append((TypeSpec.Label.CUSTOM, child))
+    def append_custom(self, child: _cstp.CustomSpec) -> None:
+        entry: typing.Any = (TypeSpec.Label.CUSTOM, child)
+        self.children.append(entry)
 
-    def extend_custom(self, children: typing.Iterable[CustomSpec]) -> None:
-        self.children.extend((TypeSpec.Label.CUSTOM, child) for child in children)
+    def extend_custom(self, children: typing.Iterable[_cstp.CustomSpec]) -> None:
+        entries: typing.Any = ((TypeSpec.Label.CUSTOM, child) for child in children)
+        self.children.extend(entries)
 
     def children_custom(self) -> typing.Iterator[CustomSpec]:
         return (typing.cast("CustomSpec", child) for (label, child) in self.children if label == TypeSpec.Label.CUSTOM)
@@ -1800,14 +1946,23 @@ class CustomSpec:
     span: fltk.fegen.pyrt.span_protocol.SpanProtocol = fltk.fegen.pyrt.terminalsrc.UnknownSpan
     children: list[tuple[Label | None, CustomArg | Trivia]] = dataclasses.field(default_factory=list)
 
-    def append(self, child: CustomArg | Trivia, label: Label | None = None) -> None:
-        self.children.append((label, child))
+    def append(
+        self, child: _cstp.CustomArg | _cstp.Trivia, label: fltk.fegen.pyrt.label_protocol.LabelProtocol | None = None
+    ) -> None:
+        entry: typing.Any = (label, child)
+        self.children.append(entry)
 
-    def extend(self, children: typing.Iterable[CustomArg | Trivia], label: Label | None = None) -> None:
-        self.children.extend((label, child) for child in children)
+    def extend(
+        self,
+        children: typing.Iterable[_cstp.CustomArg | _cstp.Trivia],
+        label: fltk.fegen.pyrt.label_protocol.LabelProtocol | None = None,
+    ) -> None:
+        entries: typing.Any = ((label, child) for child in children)
+        self.children.extend(entries)
 
-    def extend_children(self, other: CustomSpec) -> None:
-        self.children.extend(other.children)
+    def extend_children(self, other: _cstp.CustomSpec) -> None:
+        entries: typing.Any = other.children
+        self.children.extend(entries)
 
     def child(self) -> tuple[Label | None, CustomArg | Trivia]:
         if (n := len(self.children)) != 1:
@@ -1815,18 +1970,25 @@ class CustomSpec:
             raise ValueError(msg)
         return self.children[0]
 
-    def _check_child_type_for_mutators(self, child: CustomArg | Trivia) -> None:
+    def _check_child_type_for_mutators(self, child: _cstp.CustomArg | _cstp.Trivia) -> None:
         if not isinstance(child, CustomArg | Trivia):
             msg = f"CustomSpec: unsupported child type {type(child).__name__}"
             raise TypeError(msg)
 
-    def _check_label_type_for_mutators(self, label: Label | None, method: str) -> None:
+    def _check_label_type_for_mutators(
+        self, label: fltk.fegen.pyrt.label_protocol.LabelProtocol | None, method: str
+    ) -> None:
         if label is not None and (not isinstance(label, CustomSpec.Label)):
             _cn = "CustomSpec"
             msg = f"{_cn}.{method}: label argument is not a {_cn}_Label; got {type(label).__name__}"
             raise TypeError(msg)
 
-    def insert(self, index: int, child: CustomArg | Trivia, label: Label | None = None) -> None:
+    def insert(
+        self,
+        index: int,
+        child: _cstp.CustomArg | _cstp.Trivia,
+        label: fltk.fegen.pyrt.label_protocol.LabelProtocol | None = None,
+    ) -> None:
         self._check_child_type_for_mutators(child)
         self._check_label_type_for_mutators(label, "insert")
         idx = operator.index(index)
@@ -1835,7 +1997,8 @@ class CustomSpec:
             idx = max(n + idx, 0)
         else:
             idx = min(idx, n)
-        self.children.insert(idx, (label, child))
+        entry: typing.Any = (label, child)
+        self.children.insert(idx, entry)
 
     def remove_at(self, index: int) -> tuple[Label | None, CustomArg | Trivia]:
         idx = operator.index(index)
@@ -1846,7 +2009,12 @@ class CustomSpec:
             raise IndexError(msg)
         return self.children.pop(norm)
 
-    def replace_at(self, index: int, child: CustomArg | Trivia, label: Label | None = None) -> None:
+    def replace_at(
+        self,
+        index: int,
+        child: _cstp.CustomArg | _cstp.Trivia,
+        label: fltk.fegen.pyrt.label_protocol.LabelProtocol | None = None,
+    ) -> None:
         self._check_child_type_for_mutators(child)
         self._check_label_type_for_mutators(label, "replace_at")
         idx = operator.index(index)
@@ -1855,16 +2023,19 @@ class CustomSpec:
         if norm < 0 or norm >= n:
             msg = f"CustomSpec.replace_at: index {index} out of range ({n} children)"
             raise IndexError(msg)
-        self.children[norm] = (label, child)
+        entry: typing.Any = (label, child)
+        self.children[norm] = entry
 
     def clear(self) -> None:
         self.children.clear()
 
-    def append_arg(self, child: CustomArg) -> None:
-        self.children.append((CustomSpec.Label.ARG, child))
+    def append_arg(self, child: _cstp.CustomArg) -> None:
+        entry: typing.Any = (CustomSpec.Label.ARG, child)
+        self.children.append(entry)
 
-    def extend_arg(self, children: typing.Iterable[CustomArg]) -> None:
-        self.children.extend((CustomSpec.Label.ARG, child) for child in children)
+    def extend_arg(self, children: typing.Iterable[_cstp.CustomArg]) -> None:
+        entries: typing.Any = ((CustomSpec.Label.ARG, child) for child in children)
+        self.children.extend(entries)
 
     def children_arg(self) -> typing.Iterator[CustomArg]:
         return (typing.cast("CustomArg", child) for (label, child) in self.children if label == CustomSpec.Label.ARG)
@@ -1914,14 +2085,25 @@ class CustomArg:
     span: fltk.fegen.pyrt.span_protocol.SpanProtocol = fltk.fegen.pyrt.terminalsrc.UnknownSpan
     children: list[tuple[Label | None, Identifier | String | Trivia]] = dataclasses.field(default_factory=list)
 
-    def append(self, child: Identifier | String | Trivia, label: Label | None = None) -> None:
-        self.children.append((label, child))
+    def append(
+        self,
+        child: _cstp.Identifier | _cstp.String | _cstp.Trivia,
+        label: fltk.fegen.pyrt.label_protocol.LabelProtocol | None = None,
+    ) -> None:
+        entry: typing.Any = (label, child)
+        self.children.append(entry)
 
-    def extend(self, children: typing.Iterable[Identifier | String | Trivia], label: Label | None = None) -> None:
-        self.children.extend((label, child) for child in children)
+    def extend(
+        self,
+        children: typing.Iterable[_cstp.Identifier | _cstp.String | _cstp.Trivia],
+        label: fltk.fegen.pyrt.label_protocol.LabelProtocol | None = None,
+    ) -> None:
+        entries: typing.Any = ((label, child) for child in children)
+        self.children.extend(entries)
 
-    def extend_children(self, other: CustomArg) -> None:
-        self.children.extend(other.children)
+    def extend_children(self, other: _cstp.CustomArg) -> None:
+        entries: typing.Any = other.children
+        self.children.extend(entries)
 
     def child(self) -> tuple[Label | None, Identifier | String | Trivia]:
         if (n := len(self.children)) != 1:
@@ -1929,18 +2111,25 @@ class CustomArg:
             raise ValueError(msg)
         return self.children[0]
 
-    def _check_child_type_for_mutators(self, child: Identifier | String | Trivia) -> None:
+    def _check_child_type_for_mutators(self, child: _cstp.Identifier | _cstp.String | _cstp.Trivia) -> None:
         if not isinstance(child, Identifier | String | Trivia):
             msg = f"CustomArg: unsupported child type {type(child).__name__}"
             raise TypeError(msg)
 
-    def _check_label_type_for_mutators(self, label: Label | None, method: str) -> None:
+    def _check_label_type_for_mutators(
+        self, label: fltk.fegen.pyrt.label_protocol.LabelProtocol | None, method: str
+    ) -> None:
         if label is not None and (not isinstance(label, CustomArg.Label)):
             _cn = "CustomArg"
             msg = f"{_cn}.{method}: label argument is not a {_cn}_Label; got {type(label).__name__}"
             raise TypeError(msg)
 
-    def insert(self, index: int, child: Identifier | String | Trivia, label: Label | None = None) -> None:
+    def insert(
+        self,
+        index: int,
+        child: _cstp.Identifier | _cstp.String | _cstp.Trivia,
+        label: fltk.fegen.pyrt.label_protocol.LabelProtocol | None = None,
+    ) -> None:
         self._check_child_type_for_mutators(child)
         self._check_label_type_for_mutators(label, "insert")
         idx = operator.index(index)
@@ -1949,7 +2138,8 @@ class CustomArg:
             idx = max(n + idx, 0)
         else:
             idx = min(idx, n)
-        self.children.insert(idx, (label, child))
+        entry: typing.Any = (label, child)
+        self.children.insert(idx, entry)
 
     def remove_at(self, index: int) -> tuple[Label | None, Identifier | String | Trivia]:
         idx = operator.index(index)
@@ -1960,7 +2150,12 @@ class CustomArg:
             raise IndexError(msg)
         return self.children.pop(norm)
 
-    def replace_at(self, index: int, child: Identifier | String | Trivia, label: Label | None = None) -> None:
+    def replace_at(
+        self,
+        index: int,
+        child: _cstp.Identifier | _cstp.String | _cstp.Trivia,
+        label: fltk.fegen.pyrt.label_protocol.LabelProtocol | None = None,
+    ) -> None:
         self._check_child_type_for_mutators(child)
         self._check_label_type_for_mutators(label, "replace_at")
         idx = operator.index(index)
@@ -1969,16 +2164,19 @@ class CustomArg:
         if norm < 0 or norm >= n:
             msg = f"CustomArg.replace_at: index {index} out of range ({n} children)"
             raise IndexError(msg)
-        self.children[norm] = (label, child)
+        entry: typing.Any = (label, child)
+        self.children[norm] = entry
 
     def clear(self) -> None:
         self.children.clear()
 
-    def append_key(self, child: Identifier) -> None:
-        self.children.append((CustomArg.Label.KEY, child))
+    def append_key(self, child: _cstp.Identifier) -> None:
+        entry: typing.Any = (CustomArg.Label.KEY, child)
+        self.children.append(entry)
 
-    def extend_key(self, children: typing.Iterable[Identifier]) -> None:
-        self.children.extend((CustomArg.Label.KEY, child) for child in children)
+    def extend_key(self, children: typing.Iterable[_cstp.Identifier]) -> None:
+        entries: typing.Any = ((CustomArg.Label.KEY, child) for child in children)
+        self.children.extend(entries)
 
     def children_key(self) -> typing.Iterator[Identifier]:
         return (typing.cast("Identifier", child) for (label, child) in self.children if label == CustomArg.Label.KEY)
@@ -1997,11 +2195,13 @@ class CustomArg:
             raise ValueError(msg)
         return children[0] if children else None
 
-    def append_value(self, child: String) -> None:
-        self.children.append((CustomArg.Label.VALUE, child))
+    def append_value(self, child: _cstp.String) -> None:
+        entry: typing.Any = (CustomArg.Label.VALUE, child)
+        self.children.append(entry)
 
-    def extend_value(self, children: typing.Iterable[String]) -> None:
-        self.children.extend((CustomArg.Label.VALUE, child) for child in children)
+    def extend_value(self, children: typing.Iterable[_cstp.String]) -> None:
+        entries: typing.Any = ((CustomArg.Label.VALUE, child) for child in children)
+        self.children.extend(entries)
 
     def children_value(self) -> typing.Iterator[String]:
         return (typing.cast("String", child) for (label, child) in self.children if label == CustomArg.Label.VALUE)
@@ -2054,14 +2254,23 @@ class BoolStmt:
     span: fltk.fegen.pyrt.span_protocol.SpanProtocol = fltk.fegen.pyrt.terminalsrc.UnknownSpan
     children: list[tuple[Label | None, Identifier | Trivia]] = dataclasses.field(default_factory=list)
 
-    def append(self, child: Identifier | Trivia, label: Label | None = None) -> None:
-        self.children.append((label, child))
+    def append(
+        self, child: _cstp.Identifier | _cstp.Trivia, label: fltk.fegen.pyrt.label_protocol.LabelProtocol | None = None
+    ) -> None:
+        entry: typing.Any = (label, child)
+        self.children.append(entry)
 
-    def extend(self, children: typing.Iterable[Identifier | Trivia], label: Label | None = None) -> None:
-        self.children.extend((label, child) for child in children)
+    def extend(
+        self,
+        children: typing.Iterable[_cstp.Identifier | _cstp.Trivia],
+        label: fltk.fegen.pyrt.label_protocol.LabelProtocol | None = None,
+    ) -> None:
+        entries: typing.Any = ((label, child) for child in children)
+        self.children.extend(entries)
 
-    def extend_children(self, other: BoolStmt) -> None:
-        self.children.extend(other.children)
+    def extend_children(self, other: _cstp.BoolStmt) -> None:
+        entries: typing.Any = other.children
+        self.children.extend(entries)
 
     def child(self) -> tuple[Label | None, Identifier | Trivia]:
         if (n := len(self.children)) != 1:
@@ -2069,18 +2278,25 @@ class BoolStmt:
             raise ValueError(msg)
         return self.children[0]
 
-    def _check_child_type_for_mutators(self, child: Identifier | Trivia) -> None:
+    def _check_child_type_for_mutators(self, child: _cstp.Identifier | _cstp.Trivia) -> None:
         if not isinstance(child, Identifier | Trivia):
             msg = f"BoolStmt: unsupported child type {type(child).__name__}"
             raise TypeError(msg)
 
-    def _check_label_type_for_mutators(self, label: Label | None, method: str) -> None:
+    def _check_label_type_for_mutators(
+        self, label: fltk.fegen.pyrt.label_protocol.LabelProtocol | None, method: str
+    ) -> None:
         if label is not None and (not isinstance(label, BoolStmt.Label)):
             _cn = "BoolStmt"
             msg = f"{_cn}.{method}: label argument is not a {_cn}_Label; got {type(label).__name__}"
             raise TypeError(msg)
 
-    def insert(self, index: int, child: Identifier | Trivia, label: Label | None = None) -> None:
+    def insert(
+        self,
+        index: int,
+        child: _cstp.Identifier | _cstp.Trivia,
+        label: fltk.fegen.pyrt.label_protocol.LabelProtocol | None = None,
+    ) -> None:
         self._check_child_type_for_mutators(child)
         self._check_label_type_for_mutators(label, "insert")
         idx = operator.index(index)
@@ -2089,7 +2305,8 @@ class BoolStmt:
             idx = max(n + idx, 0)
         else:
             idx = min(idx, n)
-        self.children.insert(idx, (label, child))
+        entry: typing.Any = (label, child)
+        self.children.insert(idx, entry)
 
     def remove_at(self, index: int) -> tuple[Label | None, Identifier | Trivia]:
         idx = operator.index(index)
@@ -2100,7 +2317,12 @@ class BoolStmt:
             raise IndexError(msg)
         return self.children.pop(norm)
 
-    def replace_at(self, index: int, child: Identifier | Trivia, label: Label | None = None) -> None:
+    def replace_at(
+        self,
+        index: int,
+        child: _cstp.Identifier | _cstp.Trivia,
+        label: fltk.fegen.pyrt.label_protocol.LabelProtocol | None = None,
+    ) -> None:
         self._check_child_type_for_mutators(child)
         self._check_label_type_for_mutators(label, "replace_at")
         idx = operator.index(index)
@@ -2109,16 +2331,19 @@ class BoolStmt:
         if norm < 0 or norm >= n:
             msg = f"BoolStmt.replace_at: index {index} out of range ({n} children)"
             raise IndexError(msg)
-        self.children[norm] = (label, child)
+        entry: typing.Any = (label, child)
+        self.children[norm] = entry
 
     def clear(self) -> None:
         self.children.clear()
 
-    def append_truthy(self, child: Identifier) -> None:
-        self.children.append((BoolStmt.Label.TRUTHY, child))
+    def append_truthy(self, child: _cstp.Identifier) -> None:
+        entry: typing.Any = (BoolStmt.Label.TRUTHY, child)
+        self.children.append(entry)
 
-    def extend_truthy(self, children: typing.Iterable[Identifier]) -> None:
-        self.children.extend((BoolStmt.Label.TRUTHY, child) for child in children)
+    def extend_truthy(self, children: typing.Iterable[_cstp.Identifier]) -> None:
+        entries: typing.Any = ((BoolStmt.Label.TRUTHY, child) for child in children)
+        self.children.extend(entries)
 
     def children_truthy(self) -> typing.Iterator[Identifier]:
         return (typing.cast("Identifier", child) for (label, child) in self.children if label == BoolStmt.Label.TRUTHY)
@@ -2150,14 +2375,17 @@ class TransparentStmt:
     span: fltk.fegen.pyrt.span_protocol.SpanProtocol = fltk.fegen.pyrt.terminalsrc.UnknownSpan
     children: list[tuple[None, Trivia]] = dataclasses.field(default_factory=list)
 
-    def append(self, child: Trivia, label: None = None) -> None:
-        self.children.append((label, child))
+    def append(self, child: _cstp.Trivia, label: None = None) -> None:
+        entry: typing.Any = (label, child)
+        self.children.append(entry)
 
-    def extend(self, children: typing.Iterable[Trivia], label: None = None) -> None:
-        self.children.extend((label, child) for child in children)
+    def extend(self, children: typing.Iterable[_cstp.Trivia], label: None = None) -> None:
+        entries: typing.Any = ((label, child) for child in children)
+        self.children.extend(entries)
 
-    def extend_children(self, other: TransparentStmt) -> None:
-        self.children.extend(other.children)
+    def extend_children(self, other: _cstp.TransparentStmt) -> None:
+        entries: typing.Any = other.children
+        self.children.extend(entries)
 
     def child(self) -> tuple[None, Trivia]:
         if (n := len(self.children)) != 1:
@@ -2165,7 +2393,7 @@ class TransparentStmt:
             raise ValueError(msg)
         return self.children[0]
 
-    def _check_child_type_for_mutators(self, child: Trivia) -> None:
+    def _check_child_type_for_mutators(self, child: _cstp.Trivia) -> None:
         if not isinstance(child, Trivia):
             msg = f"TransparentStmt: unsupported child type {type(child).__name__}"
             raise TypeError(msg)
@@ -2175,7 +2403,7 @@ class TransparentStmt:
             msg = f"TransparentStmt.{method}: no labels defined for this node; got {type(label).__name__} label"
             raise TypeError(msg)
 
-    def insert(self, index: int, child: Trivia, label: None = None) -> None:
+    def insert(self, index: int, child: _cstp.Trivia, label: None = None) -> None:
         self._check_child_type_for_mutators(child)
         self._check_label_type_for_mutators(label, "insert")
         idx = operator.index(index)
@@ -2184,7 +2412,8 @@ class TransparentStmt:
             idx = max(n + idx, 0)
         else:
             idx = min(idx, n)
-        self.children.insert(idx, (label, child))
+        entry: typing.Any = (label, child)
+        self.children.insert(idx, entry)
 
     def remove_at(self, index: int) -> tuple[None, Trivia]:
         idx = operator.index(index)
@@ -2195,7 +2424,7 @@ class TransparentStmt:
             raise IndexError(msg)
         return self.children.pop(norm)
 
-    def replace_at(self, index: int, child: Trivia, label: None = None) -> None:
+    def replace_at(self, index: int, child: _cstp.Trivia, label: None = None) -> None:
         self._check_child_type_for_mutators(child)
         self._check_label_type_for_mutators(label, "replace_at")
         idx = operator.index(index)
@@ -2204,7 +2433,8 @@ class TransparentStmt:
         if norm < 0 or norm >= n:
             msg = f"TransparentStmt.replace_at: index {index} out of range ({n} children)"
             raise IndexError(msg)
-        self.children[norm] = (label, child)
+        entry: typing.Any = (label, child)
+        self.children[norm] = entry
 
     def clear(self) -> None:
         self.children.clear()
@@ -2236,14 +2466,23 @@ class TextFromStmt:
     span: fltk.fegen.pyrt.span_protocol.SpanProtocol = fltk.fegen.pyrt.terminalsrc.UnknownSpan
     children: list[tuple[Label | None, Identifier | Trivia]] = dataclasses.field(default_factory=list)
 
-    def append(self, child: Identifier | Trivia, label: Label | None = None) -> None:
-        self.children.append((label, child))
+    def append(
+        self, child: _cstp.Identifier | _cstp.Trivia, label: fltk.fegen.pyrt.label_protocol.LabelProtocol | None = None
+    ) -> None:
+        entry: typing.Any = (label, child)
+        self.children.append(entry)
 
-    def extend(self, children: typing.Iterable[Identifier | Trivia], label: Label | None = None) -> None:
-        self.children.extend((label, child) for child in children)
+    def extend(
+        self,
+        children: typing.Iterable[_cstp.Identifier | _cstp.Trivia],
+        label: fltk.fegen.pyrt.label_protocol.LabelProtocol | None = None,
+    ) -> None:
+        entries: typing.Any = ((label, child) for child in children)
+        self.children.extend(entries)
 
-    def extend_children(self, other: TextFromStmt) -> None:
-        self.children.extend(other.children)
+    def extend_children(self, other: _cstp.TextFromStmt) -> None:
+        entries: typing.Any = other.children
+        self.children.extend(entries)
 
     def child(self) -> tuple[Label | None, Identifier | Trivia]:
         if (n := len(self.children)) != 1:
@@ -2251,18 +2490,25 @@ class TextFromStmt:
             raise ValueError(msg)
         return self.children[0]
 
-    def _check_child_type_for_mutators(self, child: Identifier | Trivia) -> None:
+    def _check_child_type_for_mutators(self, child: _cstp.Identifier | _cstp.Trivia) -> None:
         if not isinstance(child, Identifier | Trivia):
             msg = f"TextFromStmt: unsupported child type {type(child).__name__}"
             raise TypeError(msg)
 
-    def _check_label_type_for_mutators(self, label: Label | None, method: str) -> None:
+    def _check_label_type_for_mutators(
+        self, label: fltk.fegen.pyrt.label_protocol.LabelProtocol | None, method: str
+    ) -> None:
         if label is not None and (not isinstance(label, TextFromStmt.Label)):
             _cn = "TextFromStmt"
             msg = f"{_cn}.{method}: label argument is not a {_cn}_Label; got {type(label).__name__}"
             raise TypeError(msg)
 
-    def insert(self, index: int, child: Identifier | Trivia, label: Label | None = None) -> None:
+    def insert(
+        self,
+        index: int,
+        child: _cstp.Identifier | _cstp.Trivia,
+        label: fltk.fegen.pyrt.label_protocol.LabelProtocol | None = None,
+    ) -> None:
         self._check_child_type_for_mutators(child)
         self._check_label_type_for_mutators(label, "insert")
         idx = operator.index(index)
@@ -2271,7 +2517,8 @@ class TextFromStmt:
             idx = max(n + idx, 0)
         else:
             idx = min(idx, n)
-        self.children.insert(idx, (label, child))
+        entry: typing.Any = (label, child)
+        self.children.insert(idx, entry)
 
     def remove_at(self, index: int) -> tuple[Label | None, Identifier | Trivia]:
         idx = operator.index(index)
@@ -2282,7 +2529,12 @@ class TextFromStmt:
             raise IndexError(msg)
         return self.children.pop(norm)
 
-    def replace_at(self, index: int, child: Identifier | Trivia, label: Label | None = None) -> None:
+    def replace_at(
+        self,
+        index: int,
+        child: _cstp.Identifier | _cstp.Trivia,
+        label: fltk.fegen.pyrt.label_protocol.LabelProtocol | None = None,
+    ) -> None:
         self._check_child_type_for_mutators(child)
         self._check_label_type_for_mutators(label, "replace_at")
         idx = operator.index(index)
@@ -2291,16 +2543,19 @@ class TextFromStmt:
         if norm < 0 or norm >= n:
             msg = f"TextFromStmt.replace_at: index {index} out of range ({n} children)"
             raise IndexError(msg)
-        self.children[norm] = (label, child)
+        entry: typing.Any = (label, child)
+        self.children[norm] = entry
 
     def clear(self) -> None:
         self.children.clear()
 
-    def append_label(self, child: Identifier) -> None:
-        self.children.append((TextFromStmt.Label.LABEL, child))
+    def append_label(self, child: _cstp.Identifier) -> None:
+        entry: typing.Any = (TextFromStmt.Label.LABEL, child)
+        self.children.append(entry)
 
-    def extend_label(self, children: typing.Iterable[Identifier]) -> None:
-        self.children.extend((TextFromStmt.Label.LABEL, child) for child in children)
+    def extend_label(self, children: typing.Iterable[_cstp.Identifier]) -> None:
+        entries: typing.Any = ((TextFromStmt.Label.LABEL, child) for child in children)
+        self.children.extend(entries)
 
     def children_label(self) -> typing.Iterator[Identifier]:
         return (
@@ -2355,19 +2610,24 @@ class KeyStmt:
     )
 
     def append(
-        self, child: Identifier | Trivia | fltk.fegen.pyrt.span_protocol.SpanProtocol, label: Label | None = None
+        self,
+        child: _cstp.Identifier | _cstp.Trivia | fltk.fegen.pyrt.span_protocol.SpanProtocol,
+        label: fltk.fegen.pyrt.label_protocol.LabelProtocol | None = None,
     ) -> None:
-        self.children.append((label, child))
+        entry: typing.Any = (label, child)
+        self.children.append(entry)
 
     def extend(
         self,
-        children: typing.Iterable[Identifier | Trivia | fltk.fegen.pyrt.span_protocol.SpanProtocol],
-        label: Label | None = None,
+        children: typing.Iterable[_cstp.Identifier | _cstp.Trivia | fltk.fegen.pyrt.span_protocol.SpanProtocol],
+        label: fltk.fegen.pyrt.label_protocol.LabelProtocol | None = None,
     ) -> None:
-        self.children.extend((label, child) for child in children)
+        entries: typing.Any = ((label, child) for child in children)
+        self.children.extend(entries)
 
-    def extend_children(self, other: KeyStmt) -> None:
-        self.children.extend(other.children)
+    def extend_children(self, other: _cstp.KeyStmt) -> None:
+        entries: typing.Any = other.children
+        self.children.extend(entries)
 
     def child(self) -> tuple[Label | None, Identifier | Trivia | fltk.fegen.pyrt.span_protocol.SpanProtocol]:
         if (n := len(self.children)) != 1:
@@ -2378,7 +2638,7 @@ class KeyStmt:
     _MUTATOR_ALLOWED_CHILD_TYPES = None
 
     def _check_child_type_for_mutators(
-        self, child: Identifier | Trivia | fltk.fegen.pyrt.span_protocol.SpanProtocol
+        self, child: _cstp.Identifier | _cstp.Trivia | fltk.fegen.pyrt.span_protocol.SpanProtocol
     ) -> None:
         _allowed = KeyStmt._MUTATOR_ALLOWED_CHILD_TYPES
         if _allowed is None:
@@ -2392,7 +2652,9 @@ class KeyStmt:
             msg = f"KeyStmt: unsupported child type {type(child).__name__}"
             raise TypeError(msg)
 
-    def _check_label_type_for_mutators(self, label: Label | None, method: str) -> None:
+    def _check_label_type_for_mutators(
+        self, label: fltk.fegen.pyrt.label_protocol.LabelProtocol | None, method: str
+    ) -> None:
         if label is not None and (not isinstance(label, KeyStmt.Label)):
             _cn = "KeyStmt"
             msg = f"{_cn}.{method}: label argument is not a {_cn}_Label; got {type(label).__name__}"
@@ -2401,8 +2663,8 @@ class KeyStmt:
     def insert(
         self,
         index: int,
-        child: Identifier | Trivia | fltk.fegen.pyrt.span_protocol.SpanProtocol,
-        label: Label | None = None,
+        child: _cstp.Identifier | _cstp.Trivia | fltk.fegen.pyrt.span_protocol.SpanProtocol,
+        label: fltk.fegen.pyrt.label_protocol.LabelProtocol | None = None,
     ) -> None:
         self._check_child_type_for_mutators(child)
         self._check_label_type_for_mutators(label, "insert")
@@ -2412,7 +2674,8 @@ class KeyStmt:
             idx = max(n + idx, 0)
         else:
             idx = min(idx, n)
-        self.children.insert(idx, (label, child))
+        entry: typing.Any = (label, child)
+        self.children.insert(idx, entry)
 
     def remove_at(
         self, index: int
@@ -2428,8 +2691,8 @@ class KeyStmt:
     def replace_at(
         self,
         index: int,
-        child: Identifier | Trivia | fltk.fegen.pyrt.span_protocol.SpanProtocol,
-        label: Label | None = None,
+        child: _cstp.Identifier | _cstp.Trivia | fltk.fegen.pyrt.span_protocol.SpanProtocol,
+        label: fltk.fegen.pyrt.label_protocol.LabelProtocol | None = None,
     ) -> None:
         self._check_child_type_for_mutators(child)
         self._check_label_type_for_mutators(label, "replace_at")
@@ -2439,16 +2702,19 @@ class KeyStmt:
         if norm < 0 or norm >= n:
             msg = f"KeyStmt.replace_at: index {index} out of range ({n} children)"
             raise IndexError(msg)
-        self.children[norm] = (label, child)
+        entry: typing.Any = (label, child)
+        self.children[norm] = entry
 
     def clear(self) -> None:
         self.children.clear()
 
-    def append_label(self, child: Identifier) -> None:
-        self.children.append((KeyStmt.Label.LABEL, child))
+    def append_label(self, child: _cstp.Identifier) -> None:
+        entry: typing.Any = (KeyStmt.Label.LABEL, child)
+        self.children.append(entry)
 
-    def extend_label(self, children: typing.Iterable[Identifier]) -> None:
-        self.children.extend((KeyStmt.Label.LABEL, child) for child in children)
+    def extend_label(self, children: typing.Iterable[_cstp.Identifier]) -> None:
+        entries: typing.Any = ((KeyStmt.Label.LABEL, child) for child in children)
+        self.children.extend(entries)
 
     def children_label(self) -> typing.Iterator[Identifier]:
         return (typing.cast("Identifier", child) for (label, child) in self.children if label == KeyStmt.Label.LABEL)
@@ -2539,14 +2805,25 @@ class FoldStmt:
     span: fltk.fegen.pyrt.span_protocol.SpanProtocol = fltk.fegen.pyrt.terminalsrc.UnknownSpan
     children: list[tuple[Label | None, FoldDir | Identifier | Trivia]] = dataclasses.field(default_factory=list)
 
-    def append(self, child: FoldDir | Identifier | Trivia, label: Label | None = None) -> None:
-        self.children.append((label, child))
+    def append(
+        self,
+        child: _cstp.FoldDir | _cstp.Identifier | _cstp.Trivia,
+        label: fltk.fegen.pyrt.label_protocol.LabelProtocol | None = None,
+    ) -> None:
+        entry: typing.Any = (label, child)
+        self.children.append(entry)
 
-    def extend(self, children: typing.Iterable[FoldDir | Identifier | Trivia], label: Label | None = None) -> None:
-        self.children.extend((label, child) for child in children)
+    def extend(
+        self,
+        children: typing.Iterable[_cstp.FoldDir | _cstp.Identifier | _cstp.Trivia],
+        label: fltk.fegen.pyrt.label_protocol.LabelProtocol | None = None,
+    ) -> None:
+        entries: typing.Any = ((label, child) for child in children)
+        self.children.extend(entries)
 
-    def extend_children(self, other: FoldStmt) -> None:
-        self.children.extend(other.children)
+    def extend_children(self, other: _cstp.FoldStmt) -> None:
+        entries: typing.Any = other.children
+        self.children.extend(entries)
 
     def child(self) -> tuple[Label | None, FoldDir | Identifier | Trivia]:
         if (n := len(self.children)) != 1:
@@ -2554,18 +2831,25 @@ class FoldStmt:
             raise ValueError(msg)
         return self.children[0]
 
-    def _check_child_type_for_mutators(self, child: FoldDir | Identifier | Trivia) -> None:
+    def _check_child_type_for_mutators(self, child: _cstp.FoldDir | _cstp.Identifier | _cstp.Trivia) -> None:
         if not isinstance(child, FoldDir | Identifier | Trivia):
             msg = f"FoldStmt: unsupported child type {type(child).__name__}"
             raise TypeError(msg)
 
-    def _check_label_type_for_mutators(self, label: Label | None, method: str) -> None:
+    def _check_label_type_for_mutators(
+        self, label: fltk.fegen.pyrt.label_protocol.LabelProtocol | None, method: str
+    ) -> None:
         if label is not None and (not isinstance(label, FoldStmt.Label)):
             _cn = "FoldStmt"
             msg = f"{_cn}.{method}: label argument is not a {_cn}_Label; got {type(label).__name__}"
             raise TypeError(msg)
 
-    def insert(self, index: int, child: FoldDir | Identifier | Trivia, label: Label | None = None) -> None:
+    def insert(
+        self,
+        index: int,
+        child: _cstp.FoldDir | _cstp.Identifier | _cstp.Trivia,
+        label: fltk.fegen.pyrt.label_protocol.LabelProtocol | None = None,
+    ) -> None:
         self._check_child_type_for_mutators(child)
         self._check_label_type_for_mutators(label, "insert")
         idx = operator.index(index)
@@ -2574,7 +2858,8 @@ class FoldStmt:
             idx = max(n + idx, 0)
         else:
             idx = min(idx, n)
-        self.children.insert(idx, (label, child))
+        entry: typing.Any = (label, child)
+        self.children.insert(idx, entry)
 
     def remove_at(self, index: int) -> tuple[Label | None, FoldDir | Identifier | Trivia]:
         idx = operator.index(index)
@@ -2585,7 +2870,12 @@ class FoldStmt:
             raise IndexError(msg)
         return self.children.pop(norm)
 
-    def replace_at(self, index: int, child: FoldDir | Identifier | Trivia, label: Label | None = None) -> None:
+    def replace_at(
+        self,
+        index: int,
+        child: _cstp.FoldDir | _cstp.Identifier | _cstp.Trivia,
+        label: fltk.fegen.pyrt.label_protocol.LabelProtocol | None = None,
+    ) -> None:
         self._check_child_type_for_mutators(child)
         self._check_label_type_for_mutators(label, "replace_at")
         idx = operator.index(index)
@@ -2594,16 +2884,19 @@ class FoldStmt:
         if norm < 0 or norm >= n:
             msg = f"FoldStmt.replace_at: index {index} out of range ({n} children)"
             raise IndexError(msg)
-        self.children[norm] = (label, child)
+        entry: typing.Any = (label, child)
+        self.children[norm] = entry
 
     def clear(self) -> None:
         self.children.clear()
 
-    def append_dir(self, child: FoldDir) -> None:
-        self.children.append((FoldStmt.Label.DIR, child))
+    def append_dir(self, child: _cstp.FoldDir) -> None:
+        entry: typing.Any = (FoldStmt.Label.DIR, child)
+        self.children.append(entry)
 
-    def extend_dir(self, children: typing.Iterable[FoldDir]) -> None:
-        self.children.extend((FoldStmt.Label.DIR, child) for child in children)
+    def extend_dir(self, children: typing.Iterable[_cstp.FoldDir]) -> None:
+        entries: typing.Any = ((FoldStmt.Label.DIR, child) for child in children)
+        self.children.extend(entries)
 
     def children_dir(self) -> typing.Iterator[FoldDir]:
         return (typing.cast("FoldDir", child) for (label, child) in self.children if label == FoldStmt.Label.DIR)
@@ -2622,11 +2915,13 @@ class FoldStmt:
             raise ValueError(msg)
         return children[0] if children else None
 
-    def append_op(self, child: Identifier) -> None:
-        self.children.append((FoldStmt.Label.OP, child))
+    def append_op(self, child: _cstp.Identifier) -> None:
+        entry: typing.Any = (FoldStmt.Label.OP, child)
+        self.children.append(entry)
 
-    def extend_op(self, children: typing.Iterable[Identifier]) -> None:
-        self.children.extend((FoldStmt.Label.OP, child) for child in children)
+    def extend_op(self, children: typing.Iterable[_cstp.Identifier]) -> None:
+        entries: typing.Any = ((FoldStmt.Label.OP, child) for child in children)
+        self.children.extend(entries)
 
     def children_op(self) -> typing.Iterator[Identifier]:
         return (typing.cast("Identifier", child) for (label, child) in self.children if label == FoldStmt.Label.OP)
@@ -2682,16 +2977,25 @@ class FoldDir:
         default_factory=list
     )
 
-    def append(self, child: fltk.fegen.pyrt.span_protocol.SpanProtocol, label: Label | None = None) -> None:
-        self.children.append((label, child))
+    def append(
+        self,
+        child: fltk.fegen.pyrt.span_protocol.SpanProtocol,
+        label: fltk.fegen.pyrt.label_protocol.LabelProtocol | None = None,
+    ) -> None:
+        entry: typing.Any = (label, child)
+        self.children.append(entry)
 
     def extend(
-        self, children: typing.Iterable[fltk.fegen.pyrt.span_protocol.SpanProtocol], label: Label | None = None
+        self,
+        children: typing.Iterable[fltk.fegen.pyrt.span_protocol.SpanProtocol],
+        label: fltk.fegen.pyrt.label_protocol.LabelProtocol | None = None,
     ) -> None:
-        self.children.extend((label, child) for child in children)
+        entries: typing.Any = ((label, child) for child in children)
+        self.children.extend(entries)
 
-    def extend_children(self, other: FoldDir) -> None:
-        self.children.extend(other.children)
+    def extend_children(self, other: _cstp.FoldDir) -> None:
+        entries: typing.Any = other.children
+        self.children.extend(entries)
 
     def child(self) -> tuple[Label | None, fltk.fegen.pyrt.span_protocol.SpanProtocol]:
         if (n := len(self.children)) != 1:
@@ -2714,13 +3018,20 @@ class FoldDir:
             msg = f"FoldDir: unsupported child type {type(child).__name__}"
             raise TypeError(msg)
 
-    def _check_label_type_for_mutators(self, label: Label | None, method: str) -> None:
+    def _check_label_type_for_mutators(
+        self, label: fltk.fegen.pyrt.label_protocol.LabelProtocol | None, method: str
+    ) -> None:
         if label is not None and (not isinstance(label, FoldDir.Label)):
             _cn = "FoldDir"
             msg = f"{_cn}.{method}: label argument is not a {_cn}_Label; got {type(label).__name__}"
             raise TypeError(msg)
 
-    def insert(self, index: int, child: fltk.fegen.pyrt.span_protocol.SpanProtocol, label: Label | None = None) -> None:
+    def insert(
+        self,
+        index: int,
+        child: fltk.fegen.pyrt.span_protocol.SpanProtocol,
+        label: fltk.fegen.pyrt.label_protocol.LabelProtocol | None = None,
+    ) -> None:
         self._check_child_type_for_mutators(child)
         self._check_label_type_for_mutators(label, "insert")
         idx = operator.index(index)
@@ -2729,7 +3040,8 @@ class FoldDir:
             idx = max(n + idx, 0)
         else:
             idx = min(idx, n)
-        self.children.insert(idx, (label, child))
+        entry: typing.Any = (label, child)
+        self.children.insert(idx, entry)
 
     def remove_at(self, index: int) -> tuple[Label | None, fltk.fegen.pyrt.span_protocol.SpanProtocol]:
         idx = operator.index(index)
@@ -2741,7 +3053,10 @@ class FoldDir:
         return self.children.pop(norm)
 
     def replace_at(
-        self, index: int, child: fltk.fegen.pyrt.span_protocol.SpanProtocol, label: Label | None = None
+        self,
+        index: int,
+        child: fltk.fegen.pyrt.span_protocol.SpanProtocol,
+        label: fltk.fegen.pyrt.label_protocol.LabelProtocol | None = None,
     ) -> None:
         self._check_child_type_for_mutators(child)
         self._check_label_type_for_mutators(label, "replace_at")
@@ -2751,7 +3066,8 @@ class FoldDir:
         if norm < 0 or norm >= n:
             msg = f"FoldDir.replace_at: index {index} out of range ({n} children)"
             raise IndexError(msg)
-        self.children[norm] = (label, child)
+        entry: typing.Any = (label, child)
+        self.children[norm] = entry
 
     def clear(self) -> None:
         self.children.clear()
@@ -2849,14 +3165,17 @@ class FlattenStmt:
     span: fltk.fegen.pyrt.span_protocol.SpanProtocol = fltk.fegen.pyrt.terminalsrc.UnknownSpan
     children: list[tuple[None, Trivia]] = dataclasses.field(default_factory=list)
 
-    def append(self, child: Trivia, label: None = None) -> None:
-        self.children.append((label, child))
+    def append(self, child: _cstp.Trivia, label: None = None) -> None:
+        entry: typing.Any = (label, child)
+        self.children.append(entry)
 
-    def extend(self, children: typing.Iterable[Trivia], label: None = None) -> None:
-        self.children.extend((label, child) for child in children)
+    def extend(self, children: typing.Iterable[_cstp.Trivia], label: None = None) -> None:
+        entries: typing.Any = ((label, child) for child in children)
+        self.children.extend(entries)
 
-    def extend_children(self, other: FlattenStmt) -> None:
-        self.children.extend(other.children)
+    def extend_children(self, other: _cstp.FlattenStmt) -> None:
+        entries: typing.Any = other.children
+        self.children.extend(entries)
 
     def child(self) -> tuple[None, Trivia]:
         if (n := len(self.children)) != 1:
@@ -2864,7 +3183,7 @@ class FlattenStmt:
             raise ValueError(msg)
         return self.children[0]
 
-    def _check_child_type_for_mutators(self, child: Trivia) -> None:
+    def _check_child_type_for_mutators(self, child: _cstp.Trivia) -> None:
         if not isinstance(child, Trivia):
             msg = f"FlattenStmt: unsupported child type {type(child).__name__}"
             raise TypeError(msg)
@@ -2874,7 +3193,7 @@ class FlattenStmt:
             msg = f"FlattenStmt.{method}: no labels defined for this node; got {type(label).__name__} label"
             raise TypeError(msg)
 
-    def insert(self, index: int, child: Trivia, label: None = None) -> None:
+    def insert(self, index: int, child: _cstp.Trivia, label: None = None) -> None:
         self._check_child_type_for_mutators(child)
         self._check_label_type_for_mutators(label, "insert")
         idx = operator.index(index)
@@ -2883,7 +3202,8 @@ class FlattenStmt:
             idx = max(n + idx, 0)
         else:
             idx = min(idx, n)
-        self.children.insert(idx, (label, child))
+        entry: typing.Any = (label, child)
+        self.children.insert(idx, entry)
 
     def remove_at(self, index: int) -> tuple[None, Trivia]:
         idx = operator.index(index)
@@ -2894,7 +3214,7 @@ class FlattenStmt:
             raise IndexError(msg)
         return self.children.pop(norm)
 
-    def replace_at(self, index: int, child: Trivia, label: None = None) -> None:
+    def replace_at(self, index: int, child: _cstp.Trivia, label: None = None) -> None:
         self._check_child_type_for_mutators(child)
         self._check_label_type_for_mutators(label, "replace_at")
         idx = operator.index(index)
@@ -2903,7 +3223,8 @@ class FlattenStmt:
         if norm < 0 or norm >= n:
             msg = f"FlattenStmt.replace_at: index {index} out of range ({n} children)"
             raise IndexError(msg)
-        self.children[norm] = (label, child)
+        entry: typing.Any = (label, child)
+        self.children[norm] = entry
 
     def clear(self) -> None:
         self.children.clear()
@@ -2935,14 +3256,23 @@ class CustomStmt:
     span: fltk.fegen.pyrt.span_protocol.SpanProtocol = fltk.fegen.pyrt.terminalsrc.UnknownSpan
     children: list[tuple[Label | None, CustomArg | Trivia]] = dataclasses.field(default_factory=list)
 
-    def append(self, child: CustomArg | Trivia, label: Label | None = None) -> None:
-        self.children.append((label, child))
+    def append(
+        self, child: _cstp.CustomArg | _cstp.Trivia, label: fltk.fegen.pyrt.label_protocol.LabelProtocol | None = None
+    ) -> None:
+        entry: typing.Any = (label, child)
+        self.children.append(entry)
 
-    def extend(self, children: typing.Iterable[CustomArg | Trivia], label: Label | None = None) -> None:
-        self.children.extend((label, child) for child in children)
+    def extend(
+        self,
+        children: typing.Iterable[_cstp.CustomArg | _cstp.Trivia],
+        label: fltk.fegen.pyrt.label_protocol.LabelProtocol | None = None,
+    ) -> None:
+        entries: typing.Any = ((label, child) for child in children)
+        self.children.extend(entries)
 
-    def extend_children(self, other: CustomStmt) -> None:
-        self.children.extend(other.children)
+    def extend_children(self, other: _cstp.CustomStmt) -> None:
+        entries: typing.Any = other.children
+        self.children.extend(entries)
 
     def child(self) -> tuple[Label | None, CustomArg | Trivia]:
         if (n := len(self.children)) != 1:
@@ -2950,18 +3280,25 @@ class CustomStmt:
             raise ValueError(msg)
         return self.children[0]
 
-    def _check_child_type_for_mutators(self, child: CustomArg | Trivia) -> None:
+    def _check_child_type_for_mutators(self, child: _cstp.CustomArg | _cstp.Trivia) -> None:
         if not isinstance(child, CustomArg | Trivia):
             msg = f"CustomStmt: unsupported child type {type(child).__name__}"
             raise TypeError(msg)
 
-    def _check_label_type_for_mutators(self, label: Label | None, method: str) -> None:
+    def _check_label_type_for_mutators(
+        self, label: fltk.fegen.pyrt.label_protocol.LabelProtocol | None, method: str
+    ) -> None:
         if label is not None and (not isinstance(label, CustomStmt.Label)):
             _cn = "CustomStmt"
             msg = f"{_cn}.{method}: label argument is not a {_cn}_Label; got {type(label).__name__}"
             raise TypeError(msg)
 
-    def insert(self, index: int, child: CustomArg | Trivia, label: Label | None = None) -> None:
+    def insert(
+        self,
+        index: int,
+        child: _cstp.CustomArg | _cstp.Trivia,
+        label: fltk.fegen.pyrt.label_protocol.LabelProtocol | None = None,
+    ) -> None:
         self._check_child_type_for_mutators(child)
         self._check_label_type_for_mutators(label, "insert")
         idx = operator.index(index)
@@ -2970,7 +3307,8 @@ class CustomStmt:
             idx = max(n + idx, 0)
         else:
             idx = min(idx, n)
-        self.children.insert(idx, (label, child))
+        entry: typing.Any = (label, child)
+        self.children.insert(idx, entry)
 
     def remove_at(self, index: int) -> tuple[Label | None, CustomArg | Trivia]:
         idx = operator.index(index)
@@ -2981,7 +3319,12 @@ class CustomStmt:
             raise IndexError(msg)
         return self.children.pop(norm)
 
-    def replace_at(self, index: int, child: CustomArg | Trivia, label: Label | None = None) -> None:
+    def replace_at(
+        self,
+        index: int,
+        child: _cstp.CustomArg | _cstp.Trivia,
+        label: fltk.fegen.pyrt.label_protocol.LabelProtocol | None = None,
+    ) -> None:
         self._check_child_type_for_mutators(child)
         self._check_label_type_for_mutators(label, "replace_at")
         idx = operator.index(index)
@@ -2990,16 +3333,19 @@ class CustomStmt:
         if norm < 0 or norm >= n:
             msg = f"CustomStmt.replace_at: index {index} out of range ({n} children)"
             raise IndexError(msg)
-        self.children[norm] = (label, child)
+        entry: typing.Any = (label, child)
+        self.children[norm] = entry
 
     def clear(self) -> None:
         self.children.clear()
 
-    def append_arg(self, child: CustomArg) -> None:
-        self.children.append((CustomStmt.Label.ARG, child))
+    def append_arg(self, child: _cstp.CustomArg) -> None:
+        entry: typing.Any = (CustomStmt.Label.ARG, child)
+        self.children.append(entry)
 
-    def extend_arg(self, children: typing.Iterable[CustomArg]) -> None:
-        self.children.extend((CustomStmt.Label.ARG, child) for child in children)
+    def extend_arg(self, children: typing.Iterable[_cstp.CustomArg]) -> None:
+        entries: typing.Any = ((CustomStmt.Label.ARG, child) for child in children)
+        self.children.extend(entries)
 
     def children_arg(self) -> typing.Iterator[CustomArg]:
         return (typing.cast("CustomArg", child) for (label, child) in self.children if label == CustomStmt.Label.ARG)
@@ -3048,14 +3394,23 @@ class NameStmt:
     span: fltk.fegen.pyrt.span_protocol.SpanProtocol = fltk.fegen.pyrt.terminalsrc.UnknownSpan
     children: list[tuple[Label | None, Identifier | Trivia]] = dataclasses.field(default_factory=list)
 
-    def append(self, child: Identifier | Trivia, label: Label | None = None) -> None:
-        self.children.append((label, child))
+    def append(
+        self, child: _cstp.Identifier | _cstp.Trivia, label: fltk.fegen.pyrt.label_protocol.LabelProtocol | None = None
+    ) -> None:
+        entry: typing.Any = (label, child)
+        self.children.append(entry)
 
-    def extend(self, children: typing.Iterable[Identifier | Trivia], label: Label | None = None) -> None:
-        self.children.extend((label, child) for child in children)
+    def extend(
+        self,
+        children: typing.Iterable[_cstp.Identifier | _cstp.Trivia],
+        label: fltk.fegen.pyrt.label_protocol.LabelProtocol | None = None,
+    ) -> None:
+        entries: typing.Any = ((label, child) for child in children)
+        self.children.extend(entries)
 
-    def extend_children(self, other: NameStmt) -> None:
-        self.children.extend(other.children)
+    def extend_children(self, other: _cstp.NameStmt) -> None:
+        entries: typing.Any = other.children
+        self.children.extend(entries)
 
     def child(self) -> tuple[Label | None, Identifier | Trivia]:
         if (n := len(self.children)) != 1:
@@ -3063,18 +3418,25 @@ class NameStmt:
             raise ValueError(msg)
         return self.children[0]
 
-    def _check_child_type_for_mutators(self, child: Identifier | Trivia) -> None:
+    def _check_child_type_for_mutators(self, child: _cstp.Identifier | _cstp.Trivia) -> None:
         if not isinstance(child, Identifier | Trivia):
             msg = f"NameStmt: unsupported child type {type(child).__name__}"
             raise TypeError(msg)
 
-    def _check_label_type_for_mutators(self, label: Label | None, method: str) -> None:
+    def _check_label_type_for_mutators(
+        self, label: fltk.fegen.pyrt.label_protocol.LabelProtocol | None, method: str
+    ) -> None:
         if label is not None and (not isinstance(label, NameStmt.Label)):
             _cn = "NameStmt"
             msg = f"{_cn}.{method}: label argument is not a {_cn}_Label; got {type(label).__name__}"
             raise TypeError(msg)
 
-    def insert(self, index: int, child: Identifier | Trivia, label: Label | None = None) -> None:
+    def insert(
+        self,
+        index: int,
+        child: _cstp.Identifier | _cstp.Trivia,
+        label: fltk.fegen.pyrt.label_protocol.LabelProtocol | None = None,
+    ) -> None:
         self._check_child_type_for_mutators(child)
         self._check_label_type_for_mutators(label, "insert")
         idx = operator.index(index)
@@ -3083,7 +3445,8 @@ class NameStmt:
             idx = max(n + idx, 0)
         else:
             idx = min(idx, n)
-        self.children.insert(idx, (label, child))
+        entry: typing.Any = (label, child)
+        self.children.insert(idx, entry)
 
     def remove_at(self, index: int) -> tuple[Label | None, Identifier | Trivia]:
         idx = operator.index(index)
@@ -3094,7 +3457,12 @@ class NameStmt:
             raise IndexError(msg)
         return self.children.pop(norm)
 
-    def replace_at(self, index: int, child: Identifier | Trivia, label: Label | None = None) -> None:
+    def replace_at(
+        self,
+        index: int,
+        child: _cstp.Identifier | _cstp.Trivia,
+        label: fltk.fegen.pyrt.label_protocol.LabelProtocol | None = None,
+    ) -> None:
         self._check_child_type_for_mutators(child)
         self._check_label_type_for_mutators(label, "replace_at")
         idx = operator.index(index)
@@ -3103,16 +3471,19 @@ class NameStmt:
         if norm < 0 or norm >= n:
             msg = f"NameStmt.replace_at: index {index} out of range ({n} children)"
             raise IndexError(msg)
-        self.children[norm] = (label, child)
+        entry: typing.Any = (label, child)
+        self.children[norm] = entry
 
     def clear(self) -> None:
         self.children.clear()
 
-    def append_new_name(self, child: Identifier) -> None:
-        self.children.append((NameStmt.Label.NEW_NAME, child))
+    def append_new_name(self, child: _cstp.Identifier) -> None:
+        entry: typing.Any = (NameStmt.Label.NEW_NAME, child)
+        self.children.append(entry)
 
-    def extend_new_name(self, children: typing.Iterable[Identifier]) -> None:
-        self.children.extend((NameStmt.Label.NEW_NAME, child) for child in children)
+    def extend_new_name(self, children: typing.Iterable[_cstp.Identifier]) -> None:
+        entries: typing.Any = ((NameStmt.Label.NEW_NAME, child) for child in children)
+        self.children.extend(entries)
 
     def children_new_name(self) -> typing.Iterator[Identifier]:
         return (
@@ -3164,14 +3535,23 @@ class VariantStmt:
     span: fltk.fegen.pyrt.span_protocol.SpanProtocol = fltk.fegen.pyrt.terminalsrc.UnknownSpan
     children: list[tuple[Label | None, Identifier | Trivia]] = dataclasses.field(default_factory=list)
 
-    def append(self, child: Identifier | Trivia, label: Label | None = None) -> None:
-        self.children.append((label, child))
+    def append(
+        self, child: _cstp.Identifier | _cstp.Trivia, label: fltk.fegen.pyrt.label_protocol.LabelProtocol | None = None
+    ) -> None:
+        entry: typing.Any = (label, child)
+        self.children.append(entry)
 
-    def extend(self, children: typing.Iterable[Identifier | Trivia], label: Label | None = None) -> None:
-        self.children.extend((label, child) for child in children)
+    def extend(
+        self,
+        children: typing.Iterable[_cstp.Identifier | _cstp.Trivia],
+        label: fltk.fegen.pyrt.label_protocol.LabelProtocol | None = None,
+    ) -> None:
+        entries: typing.Any = ((label, child) for child in children)
+        self.children.extend(entries)
 
-    def extend_children(self, other: VariantStmt) -> None:
-        self.children.extend(other.children)
+    def extend_children(self, other: _cstp.VariantStmt) -> None:
+        entries: typing.Any = other.children
+        self.children.extend(entries)
 
     def child(self) -> tuple[Label | None, Identifier | Trivia]:
         if (n := len(self.children)) != 1:
@@ -3179,18 +3559,25 @@ class VariantStmt:
             raise ValueError(msg)
         return self.children[0]
 
-    def _check_child_type_for_mutators(self, child: Identifier | Trivia) -> None:
+    def _check_child_type_for_mutators(self, child: _cstp.Identifier | _cstp.Trivia) -> None:
         if not isinstance(child, Identifier | Trivia):
             msg = f"VariantStmt: unsupported child type {type(child).__name__}"
             raise TypeError(msg)
 
-    def _check_label_type_for_mutators(self, label: Label | None, method: str) -> None:
+    def _check_label_type_for_mutators(
+        self, label: fltk.fegen.pyrt.label_protocol.LabelProtocol | None, method: str
+    ) -> None:
         if label is not None and (not isinstance(label, VariantStmt.Label)):
             _cn = "VariantStmt"
             msg = f"{_cn}.{method}: label argument is not a {_cn}_Label; got {type(label).__name__}"
             raise TypeError(msg)
 
-    def insert(self, index: int, child: Identifier | Trivia, label: Label | None = None) -> None:
+    def insert(
+        self,
+        index: int,
+        child: _cstp.Identifier | _cstp.Trivia,
+        label: fltk.fegen.pyrt.label_protocol.LabelProtocol | None = None,
+    ) -> None:
         self._check_child_type_for_mutators(child)
         self._check_label_type_for_mutators(label, "insert")
         idx = operator.index(index)
@@ -3199,7 +3586,8 @@ class VariantStmt:
             idx = max(n + idx, 0)
         else:
             idx = min(idx, n)
-        self.children.insert(idx, (label, child))
+        entry: typing.Any = (label, child)
+        self.children.insert(idx, entry)
 
     def remove_at(self, index: int) -> tuple[Label | None, Identifier | Trivia]:
         idx = operator.index(index)
@@ -3210,7 +3598,12 @@ class VariantStmt:
             raise IndexError(msg)
         return self.children.pop(norm)
 
-    def replace_at(self, index: int, child: Identifier | Trivia, label: Label | None = None) -> None:
+    def replace_at(
+        self,
+        index: int,
+        child: _cstp.Identifier | _cstp.Trivia,
+        label: fltk.fegen.pyrt.label_protocol.LabelProtocol | None = None,
+    ) -> None:
         self._check_child_type_for_mutators(child)
         self._check_label_type_for_mutators(label, "replace_at")
         idx = operator.index(index)
@@ -3219,16 +3612,19 @@ class VariantStmt:
         if norm < 0 or norm >= n:
             msg = f"VariantStmt.replace_at: index {index} out of range ({n} children)"
             raise IndexError(msg)
-        self.children[norm] = (label, child)
+        entry: typing.Any = (label, child)
+        self.children[norm] = entry
 
     def clear(self) -> None:
         self.children.clear()
 
-    def append_new_name(self, child: Identifier) -> None:
-        self.children.append((VariantStmt.Label.NEW_NAME, child))
+    def append_new_name(self, child: _cstp.Identifier) -> None:
+        entry: typing.Any = (VariantStmt.Label.NEW_NAME, child)
+        self.children.append(entry)
 
-    def extend_new_name(self, children: typing.Iterable[Identifier]) -> None:
-        self.children.extend((VariantStmt.Label.NEW_NAME, child) for child in children)
+    def extend_new_name(self, children: typing.Iterable[_cstp.Identifier]) -> None:
+        entries: typing.Any = ((VariantStmt.Label.NEW_NAME, child) for child in children)
+        self.children.extend(entries)
 
     def children_new_name(self) -> typing.Iterator[Identifier]:
         return (
@@ -3249,11 +3645,13 @@ class VariantStmt:
             raise ValueError(msg)
         return children[0] if children else None
 
-    def append_selector(self, child: Identifier) -> None:
-        self.children.append((VariantStmt.Label.SELECTOR, child))
+    def append_selector(self, child: _cstp.Identifier) -> None:
+        entry: typing.Any = (VariantStmt.Label.SELECTOR, child)
+        self.children.append(entry)
 
-    def extend_selector(self, children: typing.Iterable[Identifier]) -> None:
-        self.children.extend((VariantStmt.Label.SELECTOR, child) for child in children)
+    def extend_selector(self, children: typing.Iterable[_cstp.Identifier]) -> None:
+        entries: typing.Any = ((VariantStmt.Label.SELECTOR, child) for child in children)
+        self.children.extend(entries)
 
     def children_selector(self) -> typing.Iterator[Identifier]:
         return (
@@ -3309,16 +3707,25 @@ class FieldStmt:
     span: fltk.fegen.pyrt.span_protocol.SpanProtocol = fltk.fegen.pyrt.terminalsrc.UnknownSpan
     children: list[tuple[Label | None, FieldStatement | Identifier | Trivia]] = dataclasses.field(default_factory=list)
 
-    def append(self, child: FieldStatement | Identifier | Trivia, label: Label | None = None) -> None:
-        self.children.append((label, child))
+    def append(
+        self,
+        child: _cstp.FieldStatement | _cstp.Identifier | _cstp.Trivia,
+        label: fltk.fegen.pyrt.label_protocol.LabelProtocol | None = None,
+    ) -> None:
+        entry: typing.Any = (label, child)
+        self.children.append(entry)
 
     def extend(
-        self, children: typing.Iterable[FieldStatement | Identifier | Trivia], label: Label | None = None
+        self,
+        children: typing.Iterable[_cstp.FieldStatement | _cstp.Identifier | _cstp.Trivia],
+        label: fltk.fegen.pyrt.label_protocol.LabelProtocol | None = None,
     ) -> None:
-        self.children.extend((label, child) for child in children)
+        entries: typing.Any = ((label, child) for child in children)
+        self.children.extend(entries)
 
-    def extend_children(self, other: FieldStmt) -> None:
-        self.children.extend(other.children)
+    def extend_children(self, other: _cstp.FieldStmt) -> None:
+        entries: typing.Any = other.children
+        self.children.extend(entries)
 
     def child(self) -> tuple[Label | None, FieldStatement | Identifier | Trivia]:
         if (n := len(self.children)) != 1:
@@ -3326,18 +3733,25 @@ class FieldStmt:
             raise ValueError(msg)
         return self.children[0]
 
-    def _check_child_type_for_mutators(self, child: FieldStatement | Identifier | Trivia) -> None:
+    def _check_child_type_for_mutators(self, child: _cstp.FieldStatement | _cstp.Identifier | _cstp.Trivia) -> None:
         if not isinstance(child, FieldStatement | Identifier | Trivia):
             msg = f"FieldStmt: unsupported child type {type(child).__name__}"
             raise TypeError(msg)
 
-    def _check_label_type_for_mutators(self, label: Label | None, method: str) -> None:
+    def _check_label_type_for_mutators(
+        self, label: fltk.fegen.pyrt.label_protocol.LabelProtocol | None, method: str
+    ) -> None:
         if label is not None and (not isinstance(label, FieldStmt.Label)):
             _cn = "FieldStmt"
             msg = f"{_cn}.{method}: label argument is not a {_cn}_Label; got {type(label).__name__}"
             raise TypeError(msg)
 
-    def insert(self, index: int, child: FieldStatement | Identifier | Trivia, label: Label | None = None) -> None:
+    def insert(
+        self,
+        index: int,
+        child: _cstp.FieldStatement | _cstp.Identifier | _cstp.Trivia,
+        label: fltk.fegen.pyrt.label_protocol.LabelProtocol | None = None,
+    ) -> None:
         self._check_child_type_for_mutators(child)
         self._check_label_type_for_mutators(label, "insert")
         idx = operator.index(index)
@@ -3346,7 +3760,8 @@ class FieldStmt:
             idx = max(n + idx, 0)
         else:
             idx = min(idx, n)
-        self.children.insert(idx, (label, child))
+        entry: typing.Any = (label, child)
+        self.children.insert(idx, entry)
 
     def remove_at(self, index: int) -> tuple[Label | None, FieldStatement | Identifier | Trivia]:
         idx = operator.index(index)
@@ -3357,7 +3772,12 @@ class FieldStmt:
             raise IndexError(msg)
         return self.children.pop(norm)
 
-    def replace_at(self, index: int, child: FieldStatement | Identifier | Trivia, label: Label | None = None) -> None:
+    def replace_at(
+        self,
+        index: int,
+        child: _cstp.FieldStatement | _cstp.Identifier | _cstp.Trivia,
+        label: fltk.fegen.pyrt.label_protocol.LabelProtocol | None = None,
+    ) -> None:
         self._check_child_type_for_mutators(child)
         self._check_label_type_for_mutators(label, "replace_at")
         idx = operator.index(index)
@@ -3366,16 +3786,19 @@ class FieldStmt:
         if norm < 0 or norm >= n:
             msg = f"FieldStmt.replace_at: index {index} out of range ({n} children)"
             raise IndexError(msg)
-        self.children[norm] = (label, child)
+        entry: typing.Any = (label, child)
+        self.children[norm] = entry
 
     def clear(self) -> None:
         self.children.clear()
 
-    def append_field_statement(self, child: FieldStatement) -> None:
-        self.children.append((FieldStmt.Label.FIELD_STATEMENT, child))
+    def append_field_statement(self, child: _cstp.FieldStatement) -> None:
+        entry: typing.Any = (FieldStmt.Label.FIELD_STATEMENT, child)
+        self.children.append(entry)
 
-    def extend_field_statement(self, children: typing.Iterable[FieldStatement]) -> None:
-        self.children.extend((FieldStmt.Label.FIELD_STATEMENT, child) for child in children)
+    def extend_field_statement(self, children: typing.Iterable[_cstp.FieldStatement]) -> None:
+        entries: typing.Any = ((FieldStmt.Label.FIELD_STATEMENT, child) for child in children)
+        self.children.extend(entries)
 
     def children_field_statement(self) -> typing.Iterator[FieldStatement]:
         return (
@@ -3398,11 +3821,13 @@ class FieldStmt:
             raise ValueError(msg)
         return children[0] if children else None
 
-    def append_label(self, child: Identifier) -> None:
-        self.children.append((FieldStmt.Label.LABEL, child))
+    def append_label(self, child: _cstp.Identifier) -> None:
+        entry: typing.Any = (FieldStmt.Label.LABEL, child)
+        self.children.append(entry)
 
-    def extend_label(self, children: typing.Iterable[Identifier]) -> None:
-        self.children.extend((FieldStmt.Label.LABEL, child) for child in children)
+    def extend_label(self, children: typing.Iterable[_cstp.Identifier]) -> None:
+        entries: typing.Any = ((FieldStmt.Label.LABEL, child) for child in children)
+        self.children.extend(entries)
 
     def children_label(self) -> typing.Iterator[Identifier]:
         return (typing.cast("Identifier", child) for (label, child) in self.children if label == FieldStmt.Label.LABEL)
@@ -3455,14 +3880,21 @@ class FieldStatement:
     span: fltk.fegen.pyrt.span_protocol.SpanProtocol = fltk.fegen.pyrt.terminalsrc.UnknownSpan
     children: list[tuple[Label | None, NameStmt]] = dataclasses.field(default_factory=list)
 
-    def append(self, child: NameStmt, label: Label | None = None) -> None:
-        self.children.append((label, child))
+    def append(self, child: _cstp.NameStmt, label: fltk.fegen.pyrt.label_protocol.LabelProtocol | None = None) -> None:
+        entry: typing.Any = (label, child)
+        self.children.append(entry)
 
-    def extend(self, children: typing.Iterable[NameStmt], label: Label | None = None) -> None:
-        self.children.extend((label, child) for child in children)
+    def extend(
+        self,
+        children: typing.Iterable[_cstp.NameStmt],
+        label: fltk.fegen.pyrt.label_protocol.LabelProtocol | None = None,
+    ) -> None:
+        entries: typing.Any = ((label, child) for child in children)
+        self.children.extend(entries)
 
-    def extend_children(self, other: FieldStatement) -> None:
-        self.children.extend(other.children)
+    def extend_children(self, other: _cstp.FieldStatement) -> None:
+        entries: typing.Any = other.children
+        self.children.extend(entries)
 
     def child(self) -> tuple[Label | None, NameStmt]:
         if (n := len(self.children)) != 1:
@@ -3470,18 +3902,22 @@ class FieldStatement:
             raise ValueError(msg)
         return self.children[0]
 
-    def _check_child_type_for_mutators(self, child: NameStmt) -> None:
+    def _check_child_type_for_mutators(self, child: _cstp.NameStmt) -> None:
         if not isinstance(child, NameStmt):
             msg = f"FieldStatement: unsupported child type {type(child).__name__}"
             raise TypeError(msg)
 
-    def _check_label_type_for_mutators(self, label: Label | None, method: str) -> None:
+    def _check_label_type_for_mutators(
+        self, label: fltk.fegen.pyrt.label_protocol.LabelProtocol | None, method: str
+    ) -> None:
         if label is not None and (not isinstance(label, FieldStatement.Label)):
             _cn = "FieldStatement"
             msg = f"{_cn}.{method}: label argument is not a {_cn}_Label; got {type(label).__name__}"
             raise TypeError(msg)
 
-    def insert(self, index: int, child: NameStmt, label: Label | None = None) -> None:
+    def insert(
+        self, index: int, child: _cstp.NameStmt, label: fltk.fegen.pyrt.label_protocol.LabelProtocol | None = None
+    ) -> None:
         self._check_child_type_for_mutators(child)
         self._check_label_type_for_mutators(label, "insert")
         idx = operator.index(index)
@@ -3490,7 +3926,8 @@ class FieldStatement:
             idx = max(n + idx, 0)
         else:
             idx = min(idx, n)
-        self.children.insert(idx, (label, child))
+        entry: typing.Any = (label, child)
+        self.children.insert(idx, entry)
 
     def remove_at(self, index: int) -> tuple[Label | None, NameStmt]:
         idx = operator.index(index)
@@ -3501,7 +3938,9 @@ class FieldStatement:
             raise IndexError(msg)
         return self.children.pop(norm)
 
-    def replace_at(self, index: int, child: NameStmt, label: Label | None = None) -> None:
+    def replace_at(
+        self, index: int, child: _cstp.NameStmt, label: fltk.fegen.pyrt.label_protocol.LabelProtocol | None = None
+    ) -> None:
         self._check_child_type_for_mutators(child)
         self._check_label_type_for_mutators(label, "replace_at")
         idx = operator.index(index)
@@ -3510,16 +3949,19 @@ class FieldStatement:
         if norm < 0 or norm >= n:
             msg = f"FieldStatement.replace_at: index {index} out of range ({n} children)"
             raise IndexError(msg)
-        self.children[norm] = (label, child)
+        entry: typing.Any = (label, child)
+        self.children[norm] = entry
 
     def clear(self) -> None:
         self.children.clear()
 
-    def append_name_stmt(self, child: NameStmt) -> None:
-        self.children.append((FieldStatement.Label.NAME_STMT, child))
+    def append_name_stmt(self, child: _cstp.NameStmt) -> None:
+        entry: typing.Any = (FieldStatement.Label.NAME_STMT, child)
+        self.children.append(entry)
 
-    def extend_name_stmt(self, children: typing.Iterable[NameStmt]) -> None:
-        self.children.extend((FieldStatement.Label.NAME_STMT, child) for child in children)
+    def extend_name_stmt(self, children: typing.Iterable[_cstp.NameStmt]) -> None:
+        entries: typing.Any = ((FieldStatement.Label.NAME_STMT, child) for child in children)
+        self.children.extend(entries)
 
     def children_name_stmt(self) -> typing.Iterator[NameStmt]:
         return (child for (label, child) in self.children if label == FieldStatement.Label.NAME_STMT)
@@ -3551,14 +3993,17 @@ class SumStmt:
     span: fltk.fegen.pyrt.span_protocol.SpanProtocol = fltk.fegen.pyrt.terminalsrc.UnknownSpan
     children: list[tuple[None, Trivia]] = dataclasses.field(default_factory=list)
 
-    def append(self, child: Trivia, label: None = None) -> None:
-        self.children.append((label, child))
+    def append(self, child: _cstp.Trivia, label: None = None) -> None:
+        entry: typing.Any = (label, child)
+        self.children.append(entry)
 
-    def extend(self, children: typing.Iterable[Trivia], label: None = None) -> None:
-        self.children.extend((label, child) for child in children)
+    def extend(self, children: typing.Iterable[_cstp.Trivia], label: None = None) -> None:
+        entries: typing.Any = ((label, child) for child in children)
+        self.children.extend(entries)
 
-    def extend_children(self, other: SumStmt) -> None:
-        self.children.extend(other.children)
+    def extend_children(self, other: _cstp.SumStmt) -> None:
+        entries: typing.Any = other.children
+        self.children.extend(entries)
 
     def child(self) -> tuple[None, Trivia]:
         if (n := len(self.children)) != 1:
@@ -3566,7 +4011,7 @@ class SumStmt:
             raise ValueError(msg)
         return self.children[0]
 
-    def _check_child_type_for_mutators(self, child: Trivia) -> None:
+    def _check_child_type_for_mutators(self, child: _cstp.Trivia) -> None:
         if not isinstance(child, Trivia):
             msg = f"SumStmt: unsupported child type {type(child).__name__}"
             raise TypeError(msg)
@@ -3576,7 +4021,7 @@ class SumStmt:
             msg = f"SumStmt.{method}: no labels defined for this node; got {type(label).__name__} label"
             raise TypeError(msg)
 
-    def insert(self, index: int, child: Trivia, label: None = None) -> None:
+    def insert(self, index: int, child: _cstp.Trivia, label: None = None) -> None:
         self._check_child_type_for_mutators(child)
         self._check_label_type_for_mutators(label, "insert")
         idx = operator.index(index)
@@ -3585,7 +4030,8 @@ class SumStmt:
             idx = max(n + idx, 0)
         else:
             idx = min(idx, n)
-        self.children.insert(idx, (label, child))
+        entry: typing.Any = (label, child)
+        self.children.insert(idx, entry)
 
     def remove_at(self, index: int) -> tuple[None, Trivia]:
         idx = operator.index(index)
@@ -3596,7 +4042,7 @@ class SumStmt:
             raise IndexError(msg)
         return self.children.pop(norm)
 
-    def replace_at(self, index: int, child: Trivia, label: None = None) -> None:
+    def replace_at(self, index: int, child: _cstp.Trivia, label: None = None) -> None:
         self._check_child_type_for_mutators(child)
         self._check_label_type_for_mutators(label, "replace_at")
         idx = operator.index(index)
@@ -3605,7 +4051,8 @@ class SumStmt:
         if norm < 0 or norm >= n:
             msg = f"SumStmt.replace_at: index {index} out of range ({n} children)"
             raise IndexError(msg)
-        self.children[norm] = (label, child)
+        entry: typing.Any = (label, child)
+        self.children[norm] = entry
 
     def clear(self) -> None:
         self.children.clear()
@@ -3620,14 +4067,17 @@ class ProductStmt:
     span: fltk.fegen.pyrt.span_protocol.SpanProtocol = fltk.fegen.pyrt.terminalsrc.UnknownSpan
     children: list[tuple[None, Trivia]] = dataclasses.field(default_factory=list)
 
-    def append(self, child: Trivia, label: None = None) -> None:
-        self.children.append((label, child))
+    def append(self, child: _cstp.Trivia, label: None = None) -> None:
+        entry: typing.Any = (label, child)
+        self.children.append(entry)
 
-    def extend(self, children: typing.Iterable[Trivia], label: None = None) -> None:
-        self.children.extend((label, child) for child in children)
+    def extend(self, children: typing.Iterable[_cstp.Trivia], label: None = None) -> None:
+        entries: typing.Any = ((label, child) for child in children)
+        self.children.extend(entries)
 
-    def extend_children(self, other: ProductStmt) -> None:
-        self.children.extend(other.children)
+    def extend_children(self, other: _cstp.ProductStmt) -> None:
+        entries: typing.Any = other.children
+        self.children.extend(entries)
 
     def child(self) -> tuple[None, Trivia]:
         if (n := len(self.children)) != 1:
@@ -3635,7 +4085,7 @@ class ProductStmt:
             raise ValueError(msg)
         return self.children[0]
 
-    def _check_child_type_for_mutators(self, child: Trivia) -> None:
+    def _check_child_type_for_mutators(self, child: _cstp.Trivia) -> None:
         if not isinstance(child, Trivia):
             msg = f"ProductStmt: unsupported child type {type(child).__name__}"
             raise TypeError(msg)
@@ -3645,7 +4095,7 @@ class ProductStmt:
             msg = f"ProductStmt.{method}: no labels defined for this node; got {type(label).__name__} label"
             raise TypeError(msg)
 
-    def insert(self, index: int, child: Trivia, label: None = None) -> None:
+    def insert(self, index: int, child: _cstp.Trivia, label: None = None) -> None:
         self._check_child_type_for_mutators(child)
         self._check_label_type_for_mutators(label, "insert")
         idx = operator.index(index)
@@ -3654,7 +4104,8 @@ class ProductStmt:
             idx = max(n + idx, 0)
         else:
             idx = min(idx, n)
-        self.children.insert(idx, (label, child))
+        entry: typing.Any = (label, child)
+        self.children.insert(idx, entry)
 
     def remove_at(self, index: int) -> tuple[None, Trivia]:
         idx = operator.index(index)
@@ -3665,7 +4116,7 @@ class ProductStmt:
             raise IndexError(msg)
         return self.children.pop(norm)
 
-    def replace_at(self, index: int, child: Trivia, label: None = None) -> None:
+    def replace_at(self, index: int, child: _cstp.Trivia, label: None = None) -> None:
         self._check_child_type_for_mutators(child)
         self._check_label_type_for_mutators(label, "replace_at")
         idx = operator.index(index)
@@ -3674,7 +4125,8 @@ class ProductStmt:
         if norm < 0 or norm >= n:
             msg = f"ProductStmt.replace_at: index {index} out of range ({n} children)"
             raise IndexError(msg)
-        self.children[norm] = (label, child)
+        entry: typing.Any = (label, child)
+        self.children[norm] = entry
 
     def clear(self) -> None:
         self.children.clear()
@@ -3708,16 +4160,25 @@ class Identifier:
         default_factory=list
     )
 
-    def append(self, child: fltk.fegen.pyrt.span_protocol.SpanProtocol, label: Label | None = None) -> None:
-        self.children.append((label, child))
+    def append(
+        self,
+        child: fltk.fegen.pyrt.span_protocol.SpanProtocol,
+        label: fltk.fegen.pyrt.label_protocol.LabelProtocol | None = None,
+    ) -> None:
+        entry: typing.Any = (label, child)
+        self.children.append(entry)
 
     def extend(
-        self, children: typing.Iterable[fltk.fegen.pyrt.span_protocol.SpanProtocol], label: Label | None = None
+        self,
+        children: typing.Iterable[fltk.fegen.pyrt.span_protocol.SpanProtocol],
+        label: fltk.fegen.pyrt.label_protocol.LabelProtocol | None = None,
     ) -> None:
-        self.children.extend((label, child) for child in children)
+        entries: typing.Any = ((label, child) for child in children)
+        self.children.extend(entries)
 
-    def extend_children(self, other: Identifier) -> None:
-        self.children.extend(other.children)
+    def extend_children(self, other: _cstp.Identifier) -> None:
+        entries: typing.Any = other.children
+        self.children.extend(entries)
 
     def child(self) -> tuple[Label | None, fltk.fegen.pyrt.span_protocol.SpanProtocol]:
         if (n := len(self.children)) != 1:
@@ -3740,13 +4201,20 @@ class Identifier:
             msg = f"Identifier: unsupported child type {type(child).__name__}"
             raise TypeError(msg)
 
-    def _check_label_type_for_mutators(self, label: Label | None, method: str) -> None:
+    def _check_label_type_for_mutators(
+        self, label: fltk.fegen.pyrt.label_protocol.LabelProtocol | None, method: str
+    ) -> None:
         if label is not None and (not isinstance(label, Identifier.Label)):
             _cn = "Identifier"
             msg = f"{_cn}.{method}: label argument is not a {_cn}_Label; got {type(label).__name__}"
             raise TypeError(msg)
 
-    def insert(self, index: int, child: fltk.fegen.pyrt.span_protocol.SpanProtocol, label: Label | None = None) -> None:
+    def insert(
+        self,
+        index: int,
+        child: fltk.fegen.pyrt.span_protocol.SpanProtocol,
+        label: fltk.fegen.pyrt.label_protocol.LabelProtocol | None = None,
+    ) -> None:
         self._check_child_type_for_mutators(child)
         self._check_label_type_for_mutators(label, "insert")
         idx = operator.index(index)
@@ -3755,7 +4223,8 @@ class Identifier:
             idx = max(n + idx, 0)
         else:
             idx = min(idx, n)
-        self.children.insert(idx, (label, child))
+        entry: typing.Any = (label, child)
+        self.children.insert(idx, entry)
 
     def remove_at(self, index: int) -> tuple[Label | None, fltk.fegen.pyrt.span_protocol.SpanProtocol]:
         idx = operator.index(index)
@@ -3767,7 +4236,10 @@ class Identifier:
         return self.children.pop(norm)
 
     def replace_at(
-        self, index: int, child: fltk.fegen.pyrt.span_protocol.SpanProtocol, label: Label | None = None
+        self,
+        index: int,
+        child: fltk.fegen.pyrt.span_protocol.SpanProtocol,
+        label: fltk.fegen.pyrt.label_protocol.LabelProtocol | None = None,
     ) -> None:
         self._check_child_type_for_mutators(child)
         self._check_label_type_for_mutators(label, "replace_at")
@@ -3777,7 +4249,8 @@ class Identifier:
         if norm < 0 or norm >= n:
             msg = f"Identifier.replace_at: index {index} out of range ({n} children)"
             raise IndexError(msg)
-        self.children[norm] = (label, child)
+        entry: typing.Any = (label, child)
+        self.children[norm] = entry
 
     def clear(self) -> None:
         self.children.clear()
@@ -3848,16 +4321,25 @@ class String:
         default_factory=list
     )
 
-    def append(self, child: fltk.fegen.pyrt.span_protocol.SpanProtocol, label: Label | None = None) -> None:
-        self.children.append((label, child))
+    def append(
+        self,
+        child: fltk.fegen.pyrt.span_protocol.SpanProtocol,
+        label: fltk.fegen.pyrt.label_protocol.LabelProtocol | None = None,
+    ) -> None:
+        entry: typing.Any = (label, child)
+        self.children.append(entry)
 
     def extend(
-        self, children: typing.Iterable[fltk.fegen.pyrt.span_protocol.SpanProtocol], label: Label | None = None
+        self,
+        children: typing.Iterable[fltk.fegen.pyrt.span_protocol.SpanProtocol],
+        label: fltk.fegen.pyrt.label_protocol.LabelProtocol | None = None,
     ) -> None:
-        self.children.extend((label, child) for child in children)
+        entries: typing.Any = ((label, child) for child in children)
+        self.children.extend(entries)
 
-    def extend_children(self, other: String) -> None:
-        self.children.extend(other.children)
+    def extend_children(self, other: _cstp.String) -> None:
+        entries: typing.Any = other.children
+        self.children.extend(entries)
 
     def child(self) -> tuple[Label | None, fltk.fegen.pyrt.span_protocol.SpanProtocol]:
         if (n := len(self.children)) != 1:
@@ -3880,13 +4362,20 @@ class String:
             msg = f"String: unsupported child type {type(child).__name__}"
             raise TypeError(msg)
 
-    def _check_label_type_for_mutators(self, label: Label | None, method: str) -> None:
+    def _check_label_type_for_mutators(
+        self, label: fltk.fegen.pyrt.label_protocol.LabelProtocol | None, method: str
+    ) -> None:
         if label is not None and (not isinstance(label, String.Label)):
             _cn = "String"
             msg = f"{_cn}.{method}: label argument is not a {_cn}_Label; got {type(label).__name__}"
             raise TypeError(msg)
 
-    def insert(self, index: int, child: fltk.fegen.pyrt.span_protocol.SpanProtocol, label: Label | None = None) -> None:
+    def insert(
+        self,
+        index: int,
+        child: fltk.fegen.pyrt.span_protocol.SpanProtocol,
+        label: fltk.fegen.pyrt.label_protocol.LabelProtocol | None = None,
+    ) -> None:
         self._check_child_type_for_mutators(child)
         self._check_label_type_for_mutators(label, "insert")
         idx = operator.index(index)
@@ -3895,7 +4384,8 @@ class String:
             idx = max(n + idx, 0)
         else:
             idx = min(idx, n)
-        self.children.insert(idx, (label, child))
+        entry: typing.Any = (label, child)
+        self.children.insert(idx, entry)
 
     def remove_at(self, index: int) -> tuple[Label | None, fltk.fegen.pyrt.span_protocol.SpanProtocol]:
         idx = operator.index(index)
@@ -3907,7 +4397,10 @@ class String:
         return self.children.pop(norm)
 
     def replace_at(
-        self, index: int, child: fltk.fegen.pyrt.span_protocol.SpanProtocol, label: Label | None = None
+        self,
+        index: int,
+        child: fltk.fegen.pyrt.span_protocol.SpanProtocol,
+        label: fltk.fegen.pyrt.label_protocol.LabelProtocol | None = None,
     ) -> None:
         self._check_child_type_for_mutators(child)
         self._check_label_type_for_mutators(label, "replace_at")
@@ -3917,7 +4410,8 @@ class String:
         if norm < 0 or norm >= n:
             msg = f"String.replace_at: index {index} out of range ({n} children)"
             raise IndexError(msg)
-        self.children[norm] = (label, child)
+        entry: typing.Any = (label, child)
+        self.children[norm] = entry
 
     def clear(self) -> None:
         self.children.clear()
@@ -3989,19 +4483,24 @@ class Trivia:
     )
 
     def append(
-        self, child: LineComment | fltk.fegen.pyrt.span_protocol.SpanProtocol, label: Label | None = None
+        self,
+        child: _cstp.LineComment | fltk.fegen.pyrt.span_protocol.SpanProtocol,
+        label: fltk.fegen.pyrt.label_protocol.LabelProtocol | None = None,
     ) -> None:
-        self.children.append((label, child))
+        entry: typing.Any = (label, child)
+        self.children.append(entry)
 
     def extend(
         self,
-        children: typing.Iterable[LineComment | fltk.fegen.pyrt.span_protocol.SpanProtocol],
-        label: Label | None = None,
+        children: typing.Iterable[_cstp.LineComment | fltk.fegen.pyrt.span_protocol.SpanProtocol],
+        label: fltk.fegen.pyrt.label_protocol.LabelProtocol | None = None,
     ) -> None:
-        self.children.extend((label, child) for child in children)
+        entries: typing.Any = ((label, child) for child in children)
+        self.children.extend(entries)
 
-    def extend_children(self, other: Trivia) -> None:
-        self.children.extend(other.children)
+    def extend_children(self, other: _cstp.Trivia) -> None:
+        entries: typing.Any = other.children
+        self.children.extend(entries)
 
     def child(self) -> tuple[Label | None, LineComment | fltk.fegen.pyrt.span_protocol.SpanProtocol]:
         if (n := len(self.children)) != 1:
@@ -4011,7 +4510,9 @@ class Trivia:
 
     _MUTATOR_ALLOWED_CHILD_TYPES = None
 
-    def _check_child_type_for_mutators(self, child: LineComment | fltk.fegen.pyrt.span_protocol.SpanProtocol) -> None:
+    def _check_child_type_for_mutators(
+        self, child: _cstp.LineComment | fltk.fegen.pyrt.span_protocol.SpanProtocol
+    ) -> None:
         _allowed = Trivia._MUTATOR_ALLOWED_CHILD_TYPES
         if _allowed is None:
             _allowed = (LineComment, fltk.fegen.pyrt.terminalsrc.Span)
@@ -4024,14 +4525,19 @@ class Trivia:
             msg = f"Trivia: unsupported child type {type(child).__name__}"
             raise TypeError(msg)
 
-    def _check_label_type_for_mutators(self, label: Label | None, method: str) -> None:
+    def _check_label_type_for_mutators(
+        self, label: fltk.fegen.pyrt.label_protocol.LabelProtocol | None, method: str
+    ) -> None:
         if label is not None and (not isinstance(label, Trivia.Label)):
             _cn = "Trivia"
             msg = f"{_cn}.{method}: label argument is not a {_cn}_Label; got {type(label).__name__}"
             raise TypeError(msg)
 
     def insert(
-        self, index: int, child: LineComment | fltk.fegen.pyrt.span_protocol.SpanProtocol, label: Label | None = None
+        self,
+        index: int,
+        child: _cstp.LineComment | fltk.fegen.pyrt.span_protocol.SpanProtocol,
+        label: fltk.fegen.pyrt.label_protocol.LabelProtocol | None = None,
     ) -> None:
         self._check_child_type_for_mutators(child)
         self._check_label_type_for_mutators(label, "insert")
@@ -4041,7 +4547,8 @@ class Trivia:
             idx = max(n + idx, 0)
         else:
             idx = min(idx, n)
-        self.children.insert(idx, (label, child))
+        entry: typing.Any = (label, child)
+        self.children.insert(idx, entry)
 
     def remove_at(self, index: int) -> tuple[Label | None, LineComment | fltk.fegen.pyrt.span_protocol.SpanProtocol]:
         idx = operator.index(index)
@@ -4053,7 +4560,10 @@ class Trivia:
         return self.children.pop(norm)
 
     def replace_at(
-        self, index: int, child: LineComment | fltk.fegen.pyrt.span_protocol.SpanProtocol, label: Label | None = None
+        self,
+        index: int,
+        child: _cstp.LineComment | fltk.fegen.pyrt.span_protocol.SpanProtocol,
+        label: fltk.fegen.pyrt.label_protocol.LabelProtocol | None = None,
     ) -> None:
         self._check_child_type_for_mutators(child)
         self._check_label_type_for_mutators(label, "replace_at")
@@ -4063,16 +4573,19 @@ class Trivia:
         if norm < 0 or norm >= n:
             msg = f"Trivia.replace_at: index {index} out of range ({n} children)"
             raise IndexError(msg)
-        self.children[norm] = (label, child)
+        entry: typing.Any = (label, child)
+        self.children[norm] = entry
 
     def clear(self) -> None:
         self.children.clear()
 
-    def append_line_comment(self, child: LineComment) -> None:
-        self.children.append((Trivia.Label.LINE_COMMENT, child))
+    def append_line_comment(self, child: _cstp.LineComment) -> None:
+        entry: typing.Any = (Trivia.Label.LINE_COMMENT, child)
+        self.children.append(entry)
 
-    def extend_line_comment(self, children: typing.Iterable[LineComment]) -> None:
-        self.children.extend((Trivia.Label.LINE_COMMENT, child) for child in children)
+    def extend_line_comment(self, children: typing.Iterable[_cstp.LineComment]) -> None:
+        entries: typing.Any = ((Trivia.Label.LINE_COMMENT, child) for child in children)
+        self.children.extend(entries)
 
     def children_line_comment(self) -> typing.Iterator[LineComment]:
         return (
@@ -4127,16 +4640,25 @@ class LineComment:
         default_factory=list
     )
 
-    def append(self, child: fltk.fegen.pyrt.span_protocol.SpanProtocol, label: Label | None = None) -> None:
-        self.children.append((label, child))
+    def append(
+        self,
+        child: fltk.fegen.pyrt.span_protocol.SpanProtocol,
+        label: fltk.fegen.pyrt.label_protocol.LabelProtocol | None = None,
+    ) -> None:
+        entry: typing.Any = (label, child)
+        self.children.append(entry)
 
     def extend(
-        self, children: typing.Iterable[fltk.fegen.pyrt.span_protocol.SpanProtocol], label: Label | None = None
+        self,
+        children: typing.Iterable[fltk.fegen.pyrt.span_protocol.SpanProtocol],
+        label: fltk.fegen.pyrt.label_protocol.LabelProtocol | None = None,
     ) -> None:
-        self.children.extend((label, child) for child in children)
+        entries: typing.Any = ((label, child) for child in children)
+        self.children.extend(entries)
 
-    def extend_children(self, other: LineComment) -> None:
-        self.children.extend(other.children)
+    def extend_children(self, other: _cstp.LineComment) -> None:
+        entries: typing.Any = other.children
+        self.children.extend(entries)
 
     def child(self) -> tuple[Label | None, fltk.fegen.pyrt.span_protocol.SpanProtocol]:
         if (n := len(self.children)) != 1:
@@ -4159,13 +4681,20 @@ class LineComment:
             msg = f"LineComment: unsupported child type {type(child).__name__}"
             raise TypeError(msg)
 
-    def _check_label_type_for_mutators(self, label: Label | None, method: str) -> None:
+    def _check_label_type_for_mutators(
+        self, label: fltk.fegen.pyrt.label_protocol.LabelProtocol | None, method: str
+    ) -> None:
         if label is not None and (not isinstance(label, LineComment.Label)):
             _cn = "LineComment"
             msg = f"{_cn}.{method}: label argument is not a {_cn}_Label; got {type(label).__name__}"
             raise TypeError(msg)
 
-    def insert(self, index: int, child: fltk.fegen.pyrt.span_protocol.SpanProtocol, label: Label | None = None) -> None:
+    def insert(
+        self,
+        index: int,
+        child: fltk.fegen.pyrt.span_protocol.SpanProtocol,
+        label: fltk.fegen.pyrt.label_protocol.LabelProtocol | None = None,
+    ) -> None:
         self._check_child_type_for_mutators(child)
         self._check_label_type_for_mutators(label, "insert")
         idx = operator.index(index)
@@ -4174,7 +4703,8 @@ class LineComment:
             idx = max(n + idx, 0)
         else:
             idx = min(idx, n)
-        self.children.insert(idx, (label, child))
+        entry: typing.Any = (label, child)
+        self.children.insert(idx, entry)
 
     def remove_at(self, index: int) -> tuple[Label | None, fltk.fegen.pyrt.span_protocol.SpanProtocol]:
         idx = operator.index(index)
@@ -4186,7 +4716,10 @@ class LineComment:
         return self.children.pop(norm)
 
     def replace_at(
-        self, index: int, child: fltk.fegen.pyrt.span_protocol.SpanProtocol, label: Label | None = None
+        self,
+        index: int,
+        child: fltk.fegen.pyrt.span_protocol.SpanProtocol,
+        label: fltk.fegen.pyrt.label_protocol.LabelProtocol | None = None,
     ) -> None:
         self._check_child_type_for_mutators(child)
         self._check_label_type_for_mutators(label, "replace_at")
@@ -4196,7 +4729,8 @@ class LineComment:
         if norm < 0 or norm >= n:
             msg = f"LineComment.replace_at: index {index} out of range ({n} children)"
             raise IndexError(msg)
-        self.children[norm] = (label, child)
+        entry: typing.Any = (label, child)
+        self.children[norm] = entry
 
     def clear(self) -> None:
         self.children.clear()

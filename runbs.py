@@ -3,7 +3,7 @@ import sys
 import astor  # type: ignore
 
 from fltk import pygen
-from fltk.fegen import bootstrap2gsm, bootstrap_parser, gsm, gsm2parser, gsm2tree
+from fltk.fegen import bootstrap2gsm, bootstrap_parser, gsm, gsm2parser, gsm2tree, naming
 from fltk.fegen.pyrt import terminalsrc
 from fltk.iir.context import create_default_context
 from fltk.iir.py import compiler
@@ -46,9 +46,15 @@ def gen_parser(grammar: gsm.Grammar) -> None:
     with open(parser_filename, "w") as parser_file:
         parser_file.write(astor.to_source(parser_mod))
 
-    cst_mod = cstgen.gen_py_module()
+    cst_mod = cstgen.gen_py_module(naming.protocol_module_name(cst_module_name))
     with open(cst_filename, "w") as cst_file:
         cst_file.write(astor.to_source(cst_mod))
+
+    # The CST module imports NodeKind from its protocol module, so the pair must be written
+    # together: a fresh CST module beside a stale protocol module fails at import (or silently
+    # reuses the wrong NodeKind members) as soon as the grammar's rule set changes.
+    with open(naming.protocol_module_path(cst_filename), "w") as protocol_file:
+        protocol_file.write(cstgen.gen_protocol_module_text())
 
 
 if __name__ == "__main__":

@@ -78,6 +78,7 @@ MODULE_IMPORT_NAMES = (
     "annotations",
     "astrt",
     "cst",
+    "cstp",
     "dataclasses",
     "enum",
     "fltk",

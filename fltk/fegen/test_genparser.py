@@ -262,8 +262,14 @@ def test_generated_parser_concrete_terminalsrc_span_annotations(tmp_path: pathli
 # ---------------------------------------------------------------------------
 
 
-def test_generate_no_protocol_by_default(simple_grammar_file: pathlib.Path, tmp_path: pathlib.Path) -> None:
-    """A bare `generate` writes the CST and both parsers but NOT the protocol module (new default)."""
+def test_generate_writes_the_protocol_module_by_default(
+    simple_grammar_file: pathlib.Path, tmp_path: pathlib.Path
+) -> None:
+    """A bare `generate` writes the CST, its protocol companion, and both parsers.
+
+    The pair is mandatory: the CST module imports its NodeKind from the protocol module, so the
+    protocol module is no longer opt-in and the emitted CST source names it.
+    """
     runner = CliRunner()
     result = runner.invoke(
         app, ["generate", str(simple_grammar_file), "simple", "simple_cst", "--output-dir", str(tmp_path)]
@@ -273,23 +279,81 @@ def test_generate_no_protocol_by_default(simple_grammar_file: pathlib.Path, tmp_
     assert (tmp_path / "simple_cst.py").exists(), "generate must write the shared CST module"
     assert (tmp_path / "simple_parser.py").exists(), "generate must write the non-trivia parser"
     assert (tmp_path / "simple_trivia_parser.py").exists(), "generate must write the trivia parser"
-    assert not (tmp_path / "simple_cst_protocol.py").exists(), (
-        "generate must NOT write the protocol module without --protocol (new opt-in default)"
-    )
+    assert (tmp_path / "simple_cst_protocol.py").exists(), "generate must write the protocol module"
+    assert "from simple_cst_protocol import NodeKind" in (tmp_path / "simple_cst.py").read_text()
 
 
-def test_generate_protocol_writes_protocol_alongside(simple_grammar_file: pathlib.Path, tmp_path: pathlib.Path) -> None:
-    """`generate --protocol` writes the CST, both parsers, and the protocol module."""
+def test_generate_protocol_flag_is_an_accepted_no_op(simple_grammar_file: pathlib.Path, tmp_path: pathlib.Path) -> None:
+    """`--protocol` still succeeds, warns that it is a no-op, and changes nothing.
+
+    Kept so existing invocations (and the Bazel rule's older `protocol = True` BUILD files) keep
+    working after protocol emission became unconditional.
+    """
+    plain_dir = tmp_path / "plain"
+    flag_dir = tmp_path / "flag"
+    plain_dir.mkdir()
+    flag_dir.mkdir()
     runner = CliRunner()
+    result_plain = runner.invoke(
+        app, ["generate", str(simple_grammar_file), "simple", "simple_cst", "--output-dir", str(plain_dir)]
+    )
+    assert result_plain.exit_code == 0, f"generate failed:\n{result_plain.output}"
     result = runner.invoke(
-        app, ["generate", "--protocol", str(simple_grammar_file), "simple", "simple_cst", "--output-dir", str(tmp_path)]
+        app, ["generate", "--protocol", str(simple_grammar_file), "simple", "simple_cst", "--output-dir", str(flag_dir)]
     )
 
     assert result.exit_code == 0, f"generate --protocol failed:\n{result.output}\n{result.exception}"
-    assert (tmp_path / "simple_cst.py").exists(), "generate --protocol must write the shared CST module"
-    assert (tmp_path / "simple_parser.py").exists(), "generate --protocol must write the non-trivia parser"
-    assert (tmp_path / "simple_trivia_parser.py").exists(), "generate --protocol must write the trivia parser"
-    assert (tmp_path / "simple_cst_protocol.py").exists(), "generate --protocol must write the protocol module"
+    assert "deprecated no-op" in result.output
+    for name in ("simple_cst.py", "simple_cst_protocol.py", "simple_parser.py", "simple_trivia_parser.py"):
+        assert (flag_dir / name).read_text() == (plain_dir / name).read_text(), name
+
+
+def test_generate_warns_when_the_cst_module_name_does_not_match_the_filenames(
+    simple_grammar_file: pathlib.Path, tmp_path: pathlib.Path
+) -> None:
+    """A CST_MODULE that is not `{base_name}_cst` makes the emitted NodeKind import unresolvable.
+
+    The CST file is named from base_name while the import it carries is derived from CST_MODULE,
+    so the two only agree in place when the last component matches. Relocating the files is a
+    supported layout, hence a warning rather than a failure — but the mismatch must be visible at
+    generation time instead of as a ModuleNotFoundError at the consumer's first import.
+    """
+    runner = CliRunner()
+    result = runner.invoke(
+        app, ["generate", str(simple_grammar_file), "simple", "mylang.cst", "--output-dir", str(tmp_path)]
+    )
+
+    assert result.exit_code == 0, f"generate failed:\n{result.output}\n{result.exception}"
+    assert "from mylang.cst_protocol import NodeKind" in (tmp_path / "simple_cst.py").read_text()
+    assert "does not match the written file 'simple_cst.py'" in result.output, result.output
+    assert "mylang.cst_protocol" in result.output, result.output
+
+
+def test_generate_does_not_warn_on_the_matching_layout(
+    simple_grammar_file: pathlib.Path, tmp_path: pathlib.Path
+) -> None:
+    """A dotted CST_MODULE whose last component is `{base_name}_cst` is the in-place layout."""
+    runner = CliRunner()
+    result = runner.invoke(
+        app, ["generate", str(simple_grammar_file), "simple", "mylang.simple_cst", "--output-dir", str(tmp_path)]
+    )
+
+    assert result.exit_code == 0, f"generate failed:\n{result.output}\n{result.exception}"
+    assert "does not match the written file" not in result.output, result.output
+
+
+def test_generate_rejects_a_malformed_cst_module_name(
+    simple_grammar_file: pathlib.Path, tmp_path: pathlib.Path
+) -> None:
+    """CST_MODULE is interpolated into an import line, so it is validated like the other module args."""
+    runner = CliRunner()
+    result = runner.invoke(
+        app, ["generate", str(simple_grammar_file), "simple", "not a module", "--output-dir", str(tmp_path)]
+    )
+
+    assert result.exit_code == 1, result.output
+    assert "is not a valid Python module path" in result.output, result.output
+    assert not (tmp_path / "simple_cst.py").exists(), "nothing may be written for an invalid module name"
 
 
 def test_generate_protocol_matches_protocol_only(simple_grammar_file: pathlib.Path, tmp_path: pathlib.Path) -> None:
@@ -1788,6 +1852,7 @@ def test_gen_ast_emits_module(ast_grammar_file: pathlib.Path, tmp_path: pathlib.
 
     src = module_file.read_text()
     assert "import conf_cst as cst" in src
+    assert "import conf_cst_protocol as cstp" in src
     for class_name in ("class Config:", "class Entry:", "class Identifier:", "class Number:"):
         assert class_name in src
     assert "def config_from_cst(" in src
@@ -1823,6 +1888,53 @@ def test_gen_ast_conveniences_follow_module_options(ast_grammar_file: pathlib.Pa
     assert "import conf_unparser as _unparser" in src
     assert "def parse(source: str, filename: str | None = None) -> Entry:" in src
     assert "def unparse(value: Entry" in src
+
+
+def test_gen_ast_protocol_module_option_overrides_the_default(
+    ast_grammar_file: pathlib.Path, tmp_path: pathlib.Path
+) -> None:
+    """--protocol-module names the module the forward converters are typed against."""
+    runner = CliRunner()
+    result = runner.invoke(
+        app,
+        [
+            "gen-ast",
+            str(ast_grammar_file),
+            "conf",
+            "conf_cst",
+            "--protocol-module",
+            "pkg.shapes",
+            "--output-dir",
+            str(tmp_path),
+        ],
+    )
+
+    assert result.exit_code == 0, f"gen-ast failed:\n{result.output}\n{result.exception}"
+    src = (tmp_path / "conf_ast.py").read_text()
+    assert "import pkg.shapes as cstp" in src
+    assert "conf_cst_protocol" not in src
+
+
+def test_gen_ast_invalid_protocol_module_fails(ast_grammar_file: pathlib.Path, tmp_path: pathlib.Path) -> None:
+    """A malformed --protocol-module is rejected before anything is generated."""
+    runner = CliRunner()
+    result = runner.invoke(
+        app,
+        [
+            "gen-ast",
+            str(ast_grammar_file),
+            "conf",
+            "conf_cst",
+            "--protocol-module",
+            "not a module",
+            "--output-dir",
+            str(tmp_path),
+        ],
+    )
+
+    assert result.exit_code != 0, "Expected non-zero exit for a malformed --protocol-module"
+    assert "--protocol-module" in result.output
+    assert not (tmp_path / "conf_ast.py").exists(), "No output file should be created on error"
 
 
 def test_gen_ast_unknown_goal_fails(ast_grammar_file: pathlib.Path, tmp_path: pathlib.Path) -> None:
@@ -1906,8 +2018,9 @@ def test_gen_ast_module_parses_through_generated_parser(
     system — everything else drives generated modules from in-memory exec.
     """
     runner = CliRunner()
+    # The AST module imports the protocol module, so it must exist for the imports to resolve.
     generated = runner.invoke(
-        app, ["generate", str(ast_grammar_file), "conf", "conf_cst", "--output-dir", str(tmp_path)]
+        app, ["generate", str(ast_grammar_file), "conf", "conf_cst", "--protocol", "--output-dir", str(tmp_path)]
     )
     assert generated.exit_code == 0, f"generate failed:\n{generated.output}\n{generated.exception}"
 
@@ -1940,7 +2053,7 @@ def test_gen_ast_module_parses_through_generated_parser(
     finally:
         # The imported modules live in a tmp_path that is about to disappear; leaving them in
         # sys.modules would hand a later importer a module whose source file is gone.
-        for name in ("conf_ast", "conf_parser", "conf_cst"):
+        for name in ("conf_ast", "conf_parser", "conf_cst", "conf_cst_protocol"):
             sys.modules.pop(name, None)
 
 

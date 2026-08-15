@@ -65,7 +65,7 @@ lint = [
 
 [tool.pyright]
 pythonVersion = "3.10"
-include = ["fltk", "*.py"]
+include = ["fltk", "*.py", "tests/typecheck_fegen_cst_conformance.py"]
 exclude = ["**/__pycache__"]
 stubPath = ""
 extraPaths = ["fltk/_stubs"]

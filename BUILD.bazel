@@ -91,14 +91,14 @@ generate_parser(
     name = "bootstrap_both",
     src = "fltk/fegen/bootstrap.fltkg",
     base_name = "bootstrap_test",
-    cst_mod_path = "bootstrap_test.cst",
+    cst_mod_path = "bootstrap_test_cst",
 )
 
 generate_parser(
     name = "bootstrap_trivia_only",
     src = "fltk/fegen/bootstrap.fltkg", 
     base_name = "bootstrap_trivia",
-    cst_mod_path = "bootstrap_trivia.cst",
+    cst_mod_path = "bootstrap_trivia_cst",
     trivia_only = True,
 )
 
@@ -106,7 +106,7 @@ generate_parser(
     name = "bootstrap_no_trivia_only",
     src = "fltk/fegen/bootstrap.fltkg",
     base_name = "bootstrap_clean", 
-    cst_mod_path = "bootstrap_clean.cst",
+    cst_mod_path = "bootstrap_clean_cst",
     no_trivia_only = True,
 )
 
@@ -114,7 +114,7 @@ generate_parser(
     name = "fegen_full",
     src = "fltk/fegen/fegen.fltkg",
     base_name = "fegen_test",
-    cst_mod_path = "fegen_test.cst",
+    cst_mod_path = "fegen_test_cst",
 )
 
 # Pure-Rust smoke target for the generate_rust_parser macro (python_extension =

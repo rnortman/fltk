@@ -2,6 +2,7 @@
 
 import sys
 import types
+from pathlib import Path
 from typing import TYPE_CHECKING, cast
 
 import pytest
@@ -9,6 +10,7 @@ import pytest
 if TYPE_CHECKING:
     from fltk.fegen import fltk_cst_protocol as cst
 from fltk.fegen import fltk_parser as _fltk_parser
+from fltk.fegen import gsm2tree
 from fltk.fegen.ast_config import AstConfigError, Backend
 from fltk.fegen.fltk2gsm import Cst2Gsm
 from fltk.fegen.pyrt import terminalsrc as _terminalsrc
@@ -16,12 +18,14 @@ from fltk.plumbing import (
     generate_ast,
     generate_ast_source,
     generate_parser,
+    generate_protocol_module,
     generate_unparser,
     generate_unparser_source,
     parse_ast_config,
     parse_ast_config_file,
     parse_format_config,
     parse_grammar,
+    parse_grammar_file,
     parse_text,
     render_doc,
     unparse_cst,
@@ -91,6 +95,43 @@ class TestParserGeneration:
 
         assert parser_result.parser_class is not None
         assert parser_result.capture_trivia is False
+
+    def test_generate_parser_registers_the_protocol_module_the_cst_module_needs(self):
+        """The CST module imports NodeKind from its protocol module, so both are registered.
+
+        The name is on the result so a caller generating a further layer (an AST module) can name
+        the very module the CST classes were built against instead of guessing at a convention.
+        """
+        grammar = parse_grammar("expr := number;\nnumber := value:/[0-9]+/;\n")
+        parser_result = generate_parser(grammar)
+
+        protocol_module = sys.modules[parser_result.protocol_module_name]
+        assert parser_result.cst_module.NodeKind is protocol_module.NodeKind
+        assert parser_result.cst_module.Expr().kind is protocol_module.NodeKind.EXPR
+        # Two parsers from one grammar get their own protocol modules, not a shared entry.
+        other = generate_parser(grammar)
+        assert other.protocol_module_name != parser_result.protocol_module_name
+
+    def test_a_failed_generation_leaves_no_protocol_module_behind(self, monkeypatch):
+        """The protocol module is registered before the CST exec, so a later failure must undo it.
+
+        Same hygiene rule as the CST module, which is registered only once generation succeeded:
+        a codegen failure must not grow sys.modules with an entry nothing can reach.
+        """
+        grammar = parse_grammar('test := value:"hello";')
+
+        def boom(*_args, **_kwargs):
+            msg = "codegen exploded"
+            raise RuntimeError(msg)
+
+        monkeypatch.setattr(gsm2tree.CstGenerator, "gen_py_module", boom)
+
+        before = {name for name in sys.modules if name.startswith("fltk_cst_protocol_")}
+        with pytest.raises(RuntimeError, match="codegen exploded"):
+            generate_parser(grammar)
+        after = {name for name in sys.modules if name.startswith("fltk_cst_protocol_")}
+
+        assert after == before
 
     def test_parser_module_cleanup(self):
         """Test that generated modules are properly registered."""
@@ -541,6 +582,82 @@ class TestAstConfig:
 
         assert "class Entry:" in source
         assert "class Setting:" not in source
+
+    def test_an_unnamed_protocol_module_takes_the_committed_convention(self):
+        """The import the source carries is <cst_module>_protocol, importable on disk after a regen.
+
+        A counter-suffixed in-process name would leave source written to a file naming a module
+        that exists nowhere.
+        """
+        parser_result = generate_parser(parse_grammar(_AST_GRAMMAR), capture_trivia=False)
+        expected = f"{parser_result.cst_module_name}_protocol"
+
+        source = generate_ast_source(parser_result.grammar, parser_result.cst_module_name)
+
+        assert f"import {expected} as cstp" in source
+        assert "fltk_cst_protocol_" not in source
+        assert expected in sys.modules, "the derived name must be registered so the source execs here"
+
+    def test_a_second_generation_reuses_the_registered_protocol_module(self):
+        """Nothing regenerates a protocol module that is already importable under that name."""
+        parser_result = generate_parser(parse_grammar(_AST_GRAMMAR), capture_trivia=False)
+        generate_ast_source(parser_result.grammar, parser_result.cst_module_name)
+        first = sys.modules[f"{parser_result.cst_module_name}_protocol"]
+
+        generate_ast_source(parser_result.grammar, parser_result.cst_module_name)
+
+        assert sys.modules[f"{parser_result.cst_module_name}_protocol"] is first
+
+    def test_a_committed_protocol_module_is_used_as_it_is(self):
+        """With a real CST module named, the committed protocol module beside it is what is imported."""
+        fegen_grammar = parse_grammar_file(Path(__file__).parent / "fegen" / "fegen.fltkg")
+
+        source = generate_ast_source(fegen_grammar, "fltk.fegen.fltk_cst")
+
+        assert "import fltk.fegen.fltk_cst_protocol as cstp" in source
+        assert sys.modules["fltk.fegen.fltk_cst_protocol"].__name__ == "fltk.fegen.fltk_cst_protocol"
+
+    def test_a_protocol_module_from_another_grammar_is_refused(self):
+        """Reusing a same-named module built from a different grammar names the mismatch.
+
+        Without the check the AST source execs against the wrong module and dies on an
+        ``AttributeError`` for a NodeKind member, naming neither the staleness nor the fix.
+        """
+        with pytest.raises(ValueError, match=r"does not match this grammar") as excinfo:
+            generate_ast_source(parse_grammar(_AST_GRAMMAR), "fltk.fegen.fltk_cst")
+
+        message = str(excinfo.value)
+        assert "fltk.fegen.fltk_cst_protocol" in message
+        assert "CONFIG" in message, message
+        assert "protocol_module_name" in message
+
+    def test_an_unnamed_module_is_registered_afresh_and_is_functional(self):
+        """``generate_protocol_module(grammar)`` registers a usable module under a fresh name."""
+        grammar = parse_grammar(_AST_GRAMMAR)
+
+        first = generate_protocol_module(grammar)
+        second = generate_protocol_module(grammar)
+
+        assert first != second, "each unnamed call must get its own sys.modules entry"
+        module = sys.modules[first]
+        assert {"CONFIG", "ENTRY", "IDENTIFIER", "NUMBER"} <= set(module.NodeKind.__members__)
+        assert module.EntryLabel.KEY._fltk_canonical_name == "Entry.Label.KEY"
+        assert module.Entry.__name__ == "Entry"
+
+    def test_a_named_module_replaces_the_entry_under_that_name(self):
+        """A named generation overwrites the entry rather than reusing it."""
+        grammar = parse_grammar(_AST_GRAMMAR)
+        name = "fltk_test_plumbing_named_protocol"
+
+        generate_protocol_module(grammar, name)
+        first = sys.modules[name]
+        generate_protocol_module(grammar, name)
+
+        try:
+            assert sys.modules[name] is not first
+            assert sys.modules[name].NodeKind.CONFIG == first.NodeKind.CONFIG
+        finally:
+            del sys.modules[name]
 
 
 class TestUnparsing:

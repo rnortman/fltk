@@ -2975,14 +2975,16 @@ class TestClaimTableExhaustiveness:
     )
     def test_every_name_the_python_module_defines_was_claimed(self, name: str, grammar: str, sidecar: str) -> None:
         model = configured_model(grammar, sidecar)
-        source = gsm2ast.generate_ast_module(model, "app.cst", "app.parser", "app.unparser")
+        source = gsm2ast.generate_ast_module(
+            model, "app.cst", "app.parser", "app.unparser", protocol_module_name="app.cst_protocol"
+        )
         unclaimed = sorted(_module_level_names(source) - set(model.claimed_names))
         assert not unclaimed, f"{name}: unclaimed generated names {unclaimed}"
 
     def test_the_sweep_reaches_the_per_alternative_helpers(self) -> None:
         """The one name family the shared examples would otherwise not emit at all."""
         model = configured_model(fixtures.MERGED_GRAMMAR, fixtures.MERGED_SIDECAR)
-        source = gsm2ast.generate_ast_module(model, "app.cst")
+        source = gsm2ast.generate_ast_module(model, "app.cst", protocol_module_name="app.cst_protocol")
         assert {"_erased_wrapped_to_cst_alt0", "_flat_bracket_to_cst_alt0"} <= _module_level_names(source)
 
     @pytest.mark.parametrize(

@@ -1,7 +1,5 @@
 """Cross-backend Label and NodeKind equality / hash / membership matrix.
 
-Covers AC1-AC8 from the cross-backend-label-equality design (section 4).
-
 Requires fegen_rust_cst to be built.
 Tests are skipped when the modules are unavailable.
 
@@ -26,6 +24,8 @@ fegen_rust_cst = pytest.importorskip(
 )
 
 from fltk.fegen import fltk_cst as py_cst  # noqa: E402
+from fltk.fegen import fltk_parser  # noqa: E402
+from fltk.fegen.pyrt import astrt, terminalsrc  # noqa: E402
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -293,27 +293,62 @@ class TestMarkerScope:
 
 
 # ---------------------------------------------------------------------------
-# NodeKind narrowing pyright fixture
-#
-# This function is type-checked by pyright (via make check) and confirms that
-# `node.kind == NodeKind.X` narrows correctly over a homogeneous union of
-# kind-bearing node Protocols.
-#
-# The fixture uses the Protocol types from fltk_cst_protocol — the same
-# Protocol surface out-of-tree consumers program against.
+# astrt.bucket_children over a real Rust CST
 # ---------------------------------------------------------------------------
 
-if typing.TYPE_CHECKING:
-    from collections.abc import Sequence as _Seq
+_BUCKETING_GRAMMAR = """\
+grammar := rule+ ;
+rule := name:identifier , ":=" , alternatives:alternatives , ";" ;
+"""
 
-    from fltk.fegen import fltk_cst_protocol as _proto
-    from fltk.fegen.fltk_cst import NodeKind as _NodeKind
 
-    def _narrowing_fixture(node: _proto.Items | _proto.Grammar) -> None:
-        """Pyright must narrow each branch correctly with zero errors."""
-        if node.kind == _NodeKind.ITEMS:
-            # In this branch pyright knows node is Items; Items-specific access is valid.
-            _: _Seq[tuple[_proto.Items.Label | None, object]] = node.children
-        else:
-            # In this branch pyright knows node is Grammar.
-            _2: _Seq[tuple[_proto.Grammar.Label | None, object]] = node.children
+def _bucket_shape(node: object) -> list[tuple[str, ...]]:
+    """Every node's bucket keys with their child counts, in document order.
+
+    ``bucket_children`` is the one place a generated ``from_cst`` reads labels, and it keys on
+    the cross-backend canonical name; identical shapes from both backends is what makes one
+    generated AST module convert either one's CST.
+    """
+    children = typing.cast("list[tuple[typing.Any, typing.Any]]", node.children)  # type: ignore[attr-defined]
+    buckets = astrt.bucket_children(children)
+    shape: list[tuple[str, ...]] = [tuple(f"{key}={len(value)}" for key, value in sorted(buckets.items()))]
+    for _label, child in children:
+        if hasattr(child, "children"):
+            shape.extend(_bucket_shape(child))
+    return shape
+
+
+class TestBucketChildrenAcrossBackends:
+    """bucket_children over genuine PyO3 labels must produce the same shape as over Python labels."""
+
+    @staticmethod
+    def _rust_grammar_node(text: str) -> object:
+        parser = fegen_rust_cst.parser.Parser(text, capture_trivia=False)
+        result = parser.apply__parse_grammar(0)
+        assert result is not None, parser.error_message()
+        assert result.pos == len(text), parser.error_message()
+        return result.result
+
+    @staticmethod
+    def _python_grammar_node(text: str) -> object:
+        terminals = terminalsrc.TerminalSource(text)
+        parser = fltk_parser.Parser(terminalsrc=terminals)
+        result = parser.apply__parse_grammar(0)
+        assert result is not None
+        assert result.pos == len(terminals.terminals)
+        return result.result
+
+    def test_a_rust_cst_buckets_exactly_like_the_python_one(self) -> None:
+        """Rust labels are pyclasses with no ``.name``; the canonical-name key is what bridges them."""
+        rust_shape = _bucket_shape(self._rust_grammar_node(_BUCKETING_GRAMMAR))
+        python_shape = _bucket_shape(self._python_grammar_node(_BUCKETING_GRAMMAR))
+
+        assert rust_shape == python_shape
+        assert any("RULE=" in entry for row in rust_shape for entry in row), rust_shape
+
+    def test_the_keys_are_the_python_enum_member_names(self) -> None:
+        """A key drift on either side would make every generated converter miss its children."""
+        node = self._rust_grammar_node(_BUCKETING_GRAMMAR)
+        children = typing.cast("list[tuple[typing.Any, typing.Any]]", node.children)  # type: ignore[attr-defined]
+
+        assert set(astrt.bucket_children(children)) == {py_cst.Grammar.Label.RULE.name}

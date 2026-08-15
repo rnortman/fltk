@@ -676,8 +676,10 @@ mutators are strict and enforce cross-backend-parity ordering:
   `Label` enum (`gsm2tree.py:515-529`).
 - `insert` clamps out-of-range indices (matching `list.insert` and Rust);
   `remove_at` / `replace_at` raise `IndexError` out of range (`gsm2tree.py:558-603`).
-- `append` / `extend` are grandfathered as un-strict (no type check) for backward
-  compatibility; only the newer named mutators are strict (`gsm2tree.py:283-297, 395-396`).
+- `append` / `extend` / `extend_children` and the per-label `append_<label>` /
+  `extend_<label>` are grandfathered as un-strict (no type check) for backward compatibility;
+  only the newer named mutators are strict (`gsm2tree.py:283-297, 395-396`). The Rust backend
+  checks on `append` as well, so the two backends diverge there (`TODO(cst-mutator-append-parity)`).
 
 ### 10.5 Node identity and cross-backend equality
 
@@ -691,7 +693,35 @@ across backends** — the load-bearing piece of the drop-in-replacement contract
 
 A parallel `*_cst_protocol.py` module (`gsm2tree.py:721-1006`) mirrors the concrete CST
 surface with `typing.Protocol` classes, for structural typing across backends without
-importing a concrete backend.
+importing a concrete backend. Its label-typed slots are the backend-agnostic
+`fltk.fegen.pyrt.label_protocol.LabelProtocol`, and its label constants live in module-level
+namespaces (`cstp.ItemsLabel.NO_WS`) rather than nested on the node protocols; `children` is a
+read-only `Sequence` property there, so protocol-typed code mutates through the mutator
+methods. Multiple-arity bare label accessors return `typing.Sequence[...]` on the protocol
+(the concrete accessors still return `list[...]`). The concrete classes keep their nested
+`Label` enums (`cst.Items.Label.NO_WS`) and their mutable `children` list.
+
+The concrete mutators (`append`, `extend`, `insert`, `replace_at`, `extend_children`, and the
+per-label `append_<label>` / `extend_<label>`) accept the protocol node types and
+`LabelProtocol` labels, so either backend's values type-check as inputs. Runtime rejection of a
+foreign-backend argument follows §10.4's strictness split and no longer has the annotations
+behind it: `insert` and `replace_at` raise `TypeError`, while `append`, `extend`,
+`extend_children` and the per-label mutators store whatever they are given. The Rust backend
+type-checks its `append` too, so a foreign child is a `TypeError` there and silently stored on
+the Python backend. Accessor and `child()` / `remove_at()` / `variant()` return types stay
+concrete.
+
+The protocol module's label constants are sentinels, not either backend's label objects: they
+exist to *compare* against a label read off a tree (canonical-name `__eq__`/`__hash__`), and
+`insert` / `replace_at` reject them on both backends even though they type-check. Code that
+mutates a tree passes a label obtained from the node being mutated — from `children`,
+`remove_at()` or `variant()` — or the concrete backend's own `cst.<Class>.Label.<X>`.
+
+The two modules are a mandatory pair: `NodeKind` is defined in the protocol module and
+re-exported by the concrete one (`from <grammar>_cst_protocol import NodeKind`), so a node's
+`kind: typing.Literal[NodeKind.X]` names the same enum on both surfaces. `genparser generate`
+therefore always writes both files, and importing a concrete CST module without its protocol
+module beside it raises `ModuleNotFoundError`.
 
 ### 10.6 At least one included member per node
 

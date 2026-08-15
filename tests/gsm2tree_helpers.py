@@ -64,6 +64,28 @@ def make_labeled_grammar() -> gsm.Grammar:
     return gsm.Grammar(rules=(rule,), identifiers={"bar": rule})
 
 
+def make_rule_ref_grammar(*, labeled: bool) -> gsm.Grammar:
+    """``foo := $"x"."y";`` plus a rule referencing it, with or without a label."""
+    foo = make_zero_label_grammar().rules[0]
+    ref = gsm.Rule(
+        name="baz",
+        alternatives=[
+            gsm.Items(
+                items=[
+                    gsm.Item(
+                        label="inner" if labeled else None,
+                        disposition=gsm.Disposition.INCLUDE,
+                        term=gsm.Identifier("foo"),
+                        quantifier=gsm.REQUIRED,
+                    ),
+                ],
+                sep_after=[gsm.Separator.NO_WS],
+            ),
+        ],
+    )
+    return gsm.Grammar(rules=(foo, ref), identifiers={"foo": foo, "baz": ref})
+
+
 def make_generator(grammar: gsm.Grammar) -> CstGenerator:
     """Construct a CstGenerator with default context and Python builtins module."""
     return CstGenerator(grammar=grammar, py_module=pyreg.Builtins, context=create_default_context())

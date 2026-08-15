@@ -7,58 +7,106 @@ import typing
 import fltk.fegen.pyrt.terminalsrc
 
 if typing.TYPE_CHECKING:
+    import fltk.fegen.pyrt.label_protocol
     import fltk.fegen.pyrt.span_protocol
 __all__ = [
     "AnchoredWord",
+    "AnchoredWordLabel",
     "Arrow",
+    "ArrowLabel",
     "Atom",
+    "AtomLabel",
     "CaseInsensitive",
+    "CaseInsensitiveLabel",
     "Colour",
+    "ColourLabel",
     "CstModule",
     "DecimalVal",
+    "DecimalValLabel",
     "DigitSeq",
+    "DigitSeqLabel",
     "Entries",
+    "EntriesLabel",
     "Entry",
     "EntryKey",
+    "EntryKeyLabel",
+    "EntryLabel",
     "EscapedMetas",
+    "EscapedMetasLabel",
     "ExactlyTwoDigits",
+    "ExactlyTwoDigitsLabel",
     "Expr",
+    "ExprLabel",
     "Grouped",
+    "GroupedLabel",
     "Items",
+    "ItemsLabel",
     "KwLabels",
+    "KwLabelsLabel",
     "LatinRange",
+    "LatinRangeLabel",
     "LatinWord",
+    "LatinWordLabel",
     "LeadingWs",
+    "LeadingWsLabel",
     "Lval",
+    "LvalLabel",
     "MixedOpt",
+    "MixedOptLabel",
     "MultiEntries",
+    "MultiEntriesLabel",
     "MultiEntry",
+    "MultiEntryLabel",
     "Name",
+    "NameLabel",
     "NcGroupAlt",
+    "NcGroupAltLabel",
     "Nest",
+    "NestLabel",
     "NestSum",
+    "NestSumLabel",
     "NodeKind",
     "Num",
+    "NumLabel",
     "OptItem",
+    "OptItemLabel",
     "OptWrapper",
+    "OptWrapperLabel",
     "Pair",
+    "PairLabel",
     "ParenExpr",
+    "ParenExprLabel",
     "Quoted",
+    "QuotedLabel",
     "RecViaSub",
+    "RecViaSubLabel",
     "RepWrapper",
+    "RepWrapperLabel",
     "Rval",
+    "RvalLabel",
     "Span",
     "Stmt",
+    "StmtLabel",
     "SumChain",
+    "SumChainLabel",
     "Tagged",
+    "TaggedLabel",
     "ThreeToFiveDigits",
+    "ThreeToFiveDigitsLabel",
     "Trivia",
+    "TriviaLabel",
     "UuidVal",
+    "UuidValLabel",
     "Val",
+    "ValLabel",
     "WordSeq",
+    "WordSeqLabel",
     "Wrapper",
+    "WrapperLabel",
     "WsSeq",
+    "WsSeqLabel",
     "ZeroItems",
+    "ZeroItemsLabel",
 ]
 
 
@@ -199,31 +247,50 @@ class _ProtocolLabelMember:
 
 
 class Num(typing.Protocol):
-    class Label:
-        VALUE: typing.ClassVar[object]
-
     kind: typing.Literal[NodeKind.NUM] = NodeKind.NUM
     span: fltk.fegen.pyrt.span_protocol.SpanProtocol
-    children: list[tuple[Label | None, fltk.fegen.pyrt.span_protocol.SpanProtocol]]
 
-    def append(self, child: fltk.fegen.pyrt.span_protocol.SpanProtocol, label: Label | None = None) -> None: ...
+    @property
+    def children(
+        self,
+    ) -> typing.Sequence[
+        tuple[fltk.fegen.pyrt.label_protocol.LabelProtocol | None, fltk.fegen.pyrt.span_protocol.SpanProtocol]
+    ]: ...
+
+    def append(
+        self,
+        child: fltk.fegen.pyrt.span_protocol.SpanProtocol,
+        label: fltk.fegen.pyrt.label_protocol.LabelProtocol | None = None,
+    ) -> None: ...
 
     def extend(
-        self, children: typing.Iterable[fltk.fegen.pyrt.span_protocol.SpanProtocol], label: Label | None = None
+        self,
+        children: typing.Iterable[fltk.fegen.pyrt.span_protocol.SpanProtocol],
+        label: fltk.fegen.pyrt.label_protocol.LabelProtocol | None = None,
     ) -> None: ...
 
     def extend_children(self, other: Num) -> None: ...
 
-    def child(self) -> tuple[Label | None, fltk.fegen.pyrt.span_protocol.SpanProtocol]: ...
+    def child(
+        self,
+    ) -> tuple[fltk.fegen.pyrt.label_protocol.LabelProtocol | None, fltk.fegen.pyrt.span_protocol.SpanProtocol]: ...
 
     def insert(
-        self, index: int, child: fltk.fegen.pyrt.span_protocol.SpanProtocol, label: Label | None = None
+        self,
+        index: int,
+        child: fltk.fegen.pyrt.span_protocol.SpanProtocol,
+        label: fltk.fegen.pyrt.label_protocol.LabelProtocol | None = None,
     ) -> None: ...
 
-    def remove_at(self, index: int) -> tuple[Label | None, fltk.fegen.pyrt.span_protocol.SpanProtocol]: ...
+    def remove_at(
+        self, index: int
+    ) -> tuple[fltk.fegen.pyrt.label_protocol.LabelProtocol | None, fltk.fegen.pyrt.span_protocol.SpanProtocol]: ...
 
     def replace_at(
-        self, index: int, child: fltk.fegen.pyrt.span_protocol.SpanProtocol, label: Label | None = None
+        self,
+        index: int,
+        child: fltk.fegen.pyrt.span_protocol.SpanProtocol,
+        label: fltk.fegen.pyrt.label_protocol.LabelProtocol | None = None,
     ) -> None: ...
 
     def clear(self) -> None: ...
@@ -245,35 +312,62 @@ class Num(typing.Protocol):
     def text(self) -> str: ...
 
 
-Num.Label.VALUE = _ProtocolLabelMember("Num.Label.VALUE")
+class NumLabel:
+    """Sentinels equal to either backend's Num labels, for identifying one.
+
+    They are not a backend's own label objects, so insert() and replace_at() reject
+    them on every backend; pass those a label read off the node being mutated (from
+    children, remove_at() or variant()).
+    """
+
+    VALUE: typing.Final[fltk.fegen.pyrt.label_protocol.LabelProtocol] = _ProtocolLabelMember("Num.Label.VALUE")
 
 
 class Name(typing.Protocol):
-    class Label:
-        VALUE: typing.ClassVar[object]
-
     kind: typing.Literal[NodeKind.NAME] = NodeKind.NAME
     span: fltk.fegen.pyrt.span_protocol.SpanProtocol
-    children: list[tuple[Label | None, fltk.fegen.pyrt.span_protocol.SpanProtocol]]
 
-    def append(self, child: fltk.fegen.pyrt.span_protocol.SpanProtocol, label: Label | None = None) -> None: ...
+    @property
+    def children(
+        self,
+    ) -> typing.Sequence[
+        tuple[fltk.fegen.pyrt.label_protocol.LabelProtocol | None, fltk.fegen.pyrt.span_protocol.SpanProtocol]
+    ]: ...
+
+    def append(
+        self,
+        child: fltk.fegen.pyrt.span_protocol.SpanProtocol,
+        label: fltk.fegen.pyrt.label_protocol.LabelProtocol | None = None,
+    ) -> None: ...
 
     def extend(
-        self, children: typing.Iterable[fltk.fegen.pyrt.span_protocol.SpanProtocol], label: Label | None = None
+        self,
+        children: typing.Iterable[fltk.fegen.pyrt.span_protocol.SpanProtocol],
+        label: fltk.fegen.pyrt.label_protocol.LabelProtocol | None = None,
     ) -> None: ...
 
     def extend_children(self, other: Name) -> None: ...
 
-    def child(self) -> tuple[Label | None, fltk.fegen.pyrt.span_protocol.SpanProtocol]: ...
+    def child(
+        self,
+    ) -> tuple[fltk.fegen.pyrt.label_protocol.LabelProtocol | None, fltk.fegen.pyrt.span_protocol.SpanProtocol]: ...
 
     def insert(
-        self, index: int, child: fltk.fegen.pyrt.span_protocol.SpanProtocol, label: Label | None = None
+        self,
+        index: int,
+        child: fltk.fegen.pyrt.span_protocol.SpanProtocol,
+        label: fltk.fegen.pyrt.label_protocol.LabelProtocol | None = None,
     ) -> None: ...
 
-    def remove_at(self, index: int) -> tuple[Label | None, fltk.fegen.pyrt.span_protocol.SpanProtocol]: ...
+    def remove_at(
+        self, index: int
+    ) -> tuple[fltk.fegen.pyrt.label_protocol.LabelProtocol | None, fltk.fegen.pyrt.span_protocol.SpanProtocol]: ...
 
     def replace_at(
-        self, index: int, child: fltk.fegen.pyrt.span_protocol.SpanProtocol, label: Label | None = None
+        self,
+        index: int,
+        child: fltk.fegen.pyrt.span_protocol.SpanProtocol,
+        label: fltk.fegen.pyrt.label_protocol.LabelProtocol | None = None,
     ) -> None: ...
 
     def clear(self) -> None: ...
@@ -295,31 +389,43 @@ class Name(typing.Protocol):
     def text(self) -> str: ...
 
 
-Name.Label.VALUE = _ProtocolLabelMember("Name.Label.VALUE")
+class NameLabel:
+    """Sentinels equal to either backend's Name labels, for identifying one.
+
+    They are not a backend's own label objects, so insert() and replace_at() reject
+    them on every backend; pass those a label read off the node being mutated (from
+    children, remove_at() or variant()).
+    """
+
+    VALUE: typing.Final[fltk.fegen.pyrt.label_protocol.LabelProtocol] = _ProtocolLabelMember("Name.Label.VALUE")
 
 
 class Atom(typing.Protocol):
-    class Label:
-        NAME: typing.ClassVar[object]
-        NUM: typing.ClassVar[object]
-
     kind: typing.Literal[NodeKind.ATOM] = NodeKind.ATOM
     span: fltk.fegen.pyrt.span_protocol.SpanProtocol
-    children: list[tuple[Label | None, Name | Num]]
 
-    def append(self, child: Name | Num, label: Label | None = None) -> None: ...
+    @property
+    def children(self) -> typing.Sequence[tuple[fltk.fegen.pyrt.label_protocol.LabelProtocol | None, Name | Num]]: ...
 
-    def extend(self, children: typing.Iterable[Name | Num], label: Label | None = None) -> None: ...
+    def append(self, child: Name | Num, label: fltk.fegen.pyrt.label_protocol.LabelProtocol | None = None) -> None: ...
+
+    def extend(
+        self, children: typing.Iterable[Name | Num], label: fltk.fegen.pyrt.label_protocol.LabelProtocol | None = None
+    ) -> None: ...
 
     def extend_children(self, other: Atom) -> None: ...
 
-    def child(self) -> tuple[Label | None, Name | Num]: ...
+    def child(self) -> tuple[fltk.fegen.pyrt.label_protocol.LabelProtocol | None, Name | Num]: ...
 
-    def insert(self, index: int, child: Name | Num, label: Label | None = None) -> None: ...
+    def insert(
+        self, index: int, child: Name | Num, label: fltk.fegen.pyrt.label_protocol.LabelProtocol | None = None
+    ) -> None: ...
 
-    def remove_at(self, index: int) -> tuple[Label | None, Name | Num]: ...
+    def remove_at(self, index: int) -> tuple[fltk.fegen.pyrt.label_protocol.LabelProtocol | None, Name | Num]: ...
 
-    def replace_at(self, index: int, child: Name | Num, label: Label | None = None) -> None: ...
+    def replace_at(
+        self, index: int, child: Name | Num, label: fltk.fegen.pyrt.label_protocol.LabelProtocol | None = None
+    ) -> None: ...
 
     def clear(self) -> None: ...
 
@@ -347,34 +453,53 @@ class Atom(typing.Protocol):
 
     def num(self) -> Num | None: ...
 
-    def variant(self) -> Label: ...
+    def variant(self) -> fltk.fegen.pyrt.label_protocol.LabelProtocol: ...
 
 
-Atom.Label.NAME = _ProtocolLabelMember("Atom.Label.NAME")
-Atom.Label.NUM = _ProtocolLabelMember("Atom.Label.NUM")
+class AtomLabel:
+    """Sentinels equal to either backend's Atom labels, for identifying one.
+
+    They are not a backend's own label objects, so insert() and replace_at() reject
+    them on every backend; pass those a label read off the node being mutated (from
+    children, remove_at() or variant()).
+    """
+
+    NAME: typing.Final[fltk.fegen.pyrt.label_protocol.LabelProtocol] = _ProtocolLabelMember("Atom.Label.NAME")
+    NUM: typing.Final[fltk.fegen.pyrt.label_protocol.LabelProtocol] = _ProtocolLabelMember("Atom.Label.NUM")
 
 
 class ParenExpr(typing.Protocol):
-    class Label:
-        INNER: typing.ClassVar[object]
-
     kind: typing.Literal[NodeKind.PARENEXPR] = NodeKind.PARENEXPR
     span: fltk.fegen.pyrt.span_protocol.SpanProtocol
-    children: list[tuple[Label | None, Atom | Trivia]]
 
-    def append(self, child: Atom | Trivia, label: Label | None = None) -> None: ...
+    @property
+    def children(
+        self,
+    ) -> typing.Sequence[tuple[fltk.fegen.pyrt.label_protocol.LabelProtocol | None, Atom | Trivia]]: ...
 
-    def extend(self, children: typing.Iterable[Atom | Trivia], label: Label | None = None) -> None: ...
+    def append(
+        self, child: Atom | Trivia, label: fltk.fegen.pyrt.label_protocol.LabelProtocol | None = None
+    ) -> None: ...
+
+    def extend(
+        self,
+        children: typing.Iterable[Atom | Trivia],
+        label: fltk.fegen.pyrt.label_protocol.LabelProtocol | None = None,
+    ) -> None: ...
 
     def extend_children(self, other: ParenExpr) -> None: ...
 
-    def child(self) -> tuple[Label | None, Atom | Trivia]: ...
+    def child(self) -> tuple[fltk.fegen.pyrt.label_protocol.LabelProtocol | None, Atom | Trivia]: ...
 
-    def insert(self, index: int, child: Atom | Trivia, label: Label | None = None) -> None: ...
+    def insert(
+        self, index: int, child: Atom | Trivia, label: fltk.fegen.pyrt.label_protocol.LabelProtocol | None = None
+    ) -> None: ...
 
-    def remove_at(self, index: int) -> tuple[Label | None, Atom | Trivia]: ...
+    def remove_at(self, index: int) -> tuple[fltk.fegen.pyrt.label_protocol.LabelProtocol | None, Atom | Trivia]: ...
 
-    def replace_at(self, index: int, child: Atom | Trivia, label: Label | None = None) -> None: ...
+    def replace_at(
+        self, index: int, child: Atom | Trivia, label: fltk.fegen.pyrt.label_protocol.LabelProtocol | None = None
+    ) -> None: ...
 
     def clear(self) -> None: ...
 
@@ -391,31 +516,49 @@ class ParenExpr(typing.Protocol):
     def inner(self) -> Atom: ...
 
 
-ParenExpr.Label.INNER = _ProtocolLabelMember("ParenExpr.Label.INNER")
+class ParenExprLabel:
+    """Sentinels equal to either backend's ParenExpr labels, for identifying one.
+
+    They are not a backend's own label objects, so insert() and replace_at() reject
+    them on every backend; pass those a label read off the node being mutated (from
+    children, remove_at() or variant()).
+    """
+
+    INNER: typing.Final[fltk.fegen.pyrt.label_protocol.LabelProtocol] = _ProtocolLabelMember("ParenExpr.Label.INNER")
 
 
 class Stmt(typing.Protocol):
-    class Label:
-        LHS: typing.ClassVar[object]
-        RHS: typing.ClassVar[object]
-
     kind: typing.Literal[NodeKind.STMT] = NodeKind.STMT
     span: fltk.fegen.pyrt.span_protocol.SpanProtocol
-    children: list[tuple[Label | None, Atom | Trivia]]
 
-    def append(self, child: Atom | Trivia, label: Label | None = None) -> None: ...
+    @property
+    def children(
+        self,
+    ) -> typing.Sequence[tuple[fltk.fegen.pyrt.label_protocol.LabelProtocol | None, Atom | Trivia]]: ...
 
-    def extend(self, children: typing.Iterable[Atom | Trivia], label: Label | None = None) -> None: ...
+    def append(
+        self, child: Atom | Trivia, label: fltk.fegen.pyrt.label_protocol.LabelProtocol | None = None
+    ) -> None: ...
+
+    def extend(
+        self,
+        children: typing.Iterable[Atom | Trivia],
+        label: fltk.fegen.pyrt.label_protocol.LabelProtocol | None = None,
+    ) -> None: ...
 
     def extend_children(self, other: Stmt) -> None: ...
 
-    def child(self) -> tuple[Label | None, Atom | Trivia]: ...
+    def child(self) -> tuple[fltk.fegen.pyrt.label_protocol.LabelProtocol | None, Atom | Trivia]: ...
 
-    def insert(self, index: int, child: Atom | Trivia, label: Label | None = None) -> None: ...
+    def insert(
+        self, index: int, child: Atom | Trivia, label: fltk.fegen.pyrt.label_protocol.LabelProtocol | None = None
+    ) -> None: ...
 
-    def remove_at(self, index: int) -> tuple[Label | None, Atom | Trivia]: ...
+    def remove_at(self, index: int) -> tuple[fltk.fegen.pyrt.label_protocol.LabelProtocol | None, Atom | Trivia]: ...
 
-    def replace_at(self, index: int, child: Atom | Trivia, label: Label | None = None) -> None: ...
+    def replace_at(
+        self, index: int, child: Atom | Trivia, label: fltk.fegen.pyrt.label_protocol.LabelProtocol | None = None
+    ) -> None: ...
 
     def clear(self) -> None: ...
 
@@ -444,31 +587,44 @@ class Stmt(typing.Protocol):
     def rhs(self) -> Atom: ...
 
 
-Stmt.Label.LHS = _ProtocolLabelMember("Stmt.Label.LHS")
-Stmt.Label.RHS = _ProtocolLabelMember("Stmt.Label.RHS")
+class StmtLabel:
+    """Sentinels equal to either backend's Stmt labels, for identifying one.
+
+    They are not a backend's own label objects, so insert() and replace_at() reject
+    them on every backend; pass those a label read off the node being mutated (from
+    children, remove_at() or variant()).
+    """
+
+    LHS: typing.Final[fltk.fegen.pyrt.label_protocol.LabelProtocol] = _ProtocolLabelMember("Stmt.Label.LHS")
+    RHS: typing.Final[fltk.fegen.pyrt.label_protocol.LabelProtocol] = _ProtocolLabelMember("Stmt.Label.RHS")
 
 
 class Items(typing.Protocol):
-    class Label:
-        ITEM: typing.ClassVar[object]
-
     kind: typing.Literal[NodeKind.ITEMS] = NodeKind.ITEMS
     span: fltk.fegen.pyrt.span_protocol.SpanProtocol
-    children: list[tuple[Label | None, Atom]]
 
-    def append(self, child: Atom, label: Label | None = None) -> None: ...
+    @property
+    def children(self) -> typing.Sequence[tuple[fltk.fegen.pyrt.label_protocol.LabelProtocol | None, Atom]]: ...
 
-    def extend(self, children: typing.Iterable[Atom], label: Label | None = None) -> None: ...
+    def append(self, child: Atom, label: fltk.fegen.pyrt.label_protocol.LabelProtocol | None = None) -> None: ...
+
+    def extend(
+        self, children: typing.Iterable[Atom], label: fltk.fegen.pyrt.label_protocol.LabelProtocol | None = None
+    ) -> None: ...
 
     def extend_children(self, other: Items) -> None: ...
 
-    def child(self) -> tuple[Label | None, Atom]: ...
+    def child(self) -> tuple[fltk.fegen.pyrt.label_protocol.LabelProtocol | None, Atom]: ...
 
-    def insert(self, index: int, child: Atom, label: Label | None = None) -> None: ...
+    def insert(
+        self, index: int, child: Atom, label: fltk.fegen.pyrt.label_protocol.LabelProtocol | None = None
+    ) -> None: ...
 
-    def remove_at(self, index: int) -> tuple[Label | None, Atom]: ...
+    def remove_at(self, index: int) -> tuple[fltk.fegen.pyrt.label_protocol.LabelProtocol | None, Atom]: ...
 
-    def replace_at(self, index: int, child: Atom, label: Label | None = None) -> None: ...
+    def replace_at(
+        self, index: int, child: Atom, label: fltk.fegen.pyrt.label_protocol.LabelProtocol | None = None
+    ) -> None: ...
 
     def clear(self) -> None: ...
 
@@ -482,33 +638,46 @@ class Items(typing.Protocol):
 
     def maybe_item(self) -> Atom | None: ...
 
-    def item(self) -> list[Atom]: ...
+    def item(self) -> typing.Sequence[Atom]: ...
 
 
-Items.Label.ITEM = _ProtocolLabelMember("Items.Label.ITEM")
+class ItemsLabel:
+    """Sentinels equal to either backend's Items labels, for identifying one.
+
+    They are not a backend's own label objects, so insert() and replace_at() reject
+    them on every backend; pass those a label read off the node being mutated (from
+    children, remove_at() or variant()).
+    """
+
+    ITEM: typing.Final[fltk.fegen.pyrt.label_protocol.LabelProtocol] = _ProtocolLabelMember("Items.Label.ITEM")
 
 
 class OptItem(typing.Protocol):
-    class Label:
-        ITEM: typing.ClassVar[object]
-
     kind: typing.Literal[NodeKind.OPTITEM] = NodeKind.OPTITEM
     span: fltk.fegen.pyrt.span_protocol.SpanProtocol
-    children: list[tuple[Label | None, Atom]]
 
-    def append(self, child: Atom, label: Label | None = None) -> None: ...
+    @property
+    def children(self) -> typing.Sequence[tuple[fltk.fegen.pyrt.label_protocol.LabelProtocol | None, Atom]]: ...
 
-    def extend(self, children: typing.Iterable[Atom], label: Label | None = None) -> None: ...
+    def append(self, child: Atom, label: fltk.fegen.pyrt.label_protocol.LabelProtocol | None = None) -> None: ...
+
+    def extend(
+        self, children: typing.Iterable[Atom], label: fltk.fegen.pyrt.label_protocol.LabelProtocol | None = None
+    ) -> None: ...
 
     def extend_children(self, other: OptItem) -> None: ...
 
-    def child(self) -> tuple[Label | None, Atom]: ...
+    def child(self) -> tuple[fltk.fegen.pyrt.label_protocol.LabelProtocol | None, Atom]: ...
 
-    def insert(self, index: int, child: Atom, label: Label | None = None) -> None: ...
+    def insert(
+        self, index: int, child: Atom, label: fltk.fegen.pyrt.label_protocol.LabelProtocol | None = None
+    ) -> None: ...
 
-    def remove_at(self, index: int) -> tuple[Label | None, Atom]: ...
+    def remove_at(self, index: int) -> tuple[fltk.fegen.pyrt.label_protocol.LabelProtocol | None, Atom]: ...
 
-    def replace_at(self, index: int, child: Atom, label: Label | None = None) -> None: ...
+    def replace_at(
+        self, index: int, child: Atom, label: fltk.fegen.pyrt.label_protocol.LabelProtocol | None = None
+    ) -> None: ...
 
     def clear(self) -> None: ...
 
@@ -525,30 +694,43 @@ class OptItem(typing.Protocol):
     def item(self) -> Atom | None: ...
 
 
-OptItem.Label.ITEM = _ProtocolLabelMember("OptItem.Label.ITEM")
+class OptItemLabel:
+    """Sentinels equal to either backend's OptItem labels, for identifying one.
+
+    They are not a backend's own label objects, so insert() and replace_at() reject
+    them on every backend; pass those a label read off the node being mutated (from
+    children, remove_at() or variant()).
+    """
+
+    ITEM: typing.Final[fltk.fegen.pyrt.label_protocol.LabelProtocol] = _ProtocolLabelMember("OptItem.Label.ITEM")
 
 
 class ZeroItems(typing.Protocol):
-    class Label:
-        ITEM: typing.ClassVar[object]
-
     kind: typing.Literal[NodeKind.ZEROITEMS] = NodeKind.ZEROITEMS
     span: fltk.fegen.pyrt.span_protocol.SpanProtocol
-    children: list[tuple[Label | None, Atom]]
 
-    def append(self, child: Atom, label: Label | None = None) -> None: ...
+    @property
+    def children(self) -> typing.Sequence[tuple[fltk.fegen.pyrt.label_protocol.LabelProtocol | None, Atom]]: ...
 
-    def extend(self, children: typing.Iterable[Atom], label: Label | None = None) -> None: ...
+    def append(self, child: Atom, label: fltk.fegen.pyrt.label_protocol.LabelProtocol | None = None) -> None: ...
+
+    def extend(
+        self, children: typing.Iterable[Atom], label: fltk.fegen.pyrt.label_protocol.LabelProtocol | None = None
+    ) -> None: ...
 
     def extend_children(self, other: ZeroItems) -> None: ...
 
-    def child(self) -> tuple[Label | None, Atom]: ...
+    def child(self) -> tuple[fltk.fegen.pyrt.label_protocol.LabelProtocol | None, Atom]: ...
 
-    def insert(self, index: int, child: Atom, label: Label | None = None) -> None: ...
+    def insert(
+        self, index: int, child: Atom, label: fltk.fegen.pyrt.label_protocol.LabelProtocol | None = None
+    ) -> None: ...
 
-    def remove_at(self, index: int) -> tuple[Label | None, Atom]: ...
+    def remove_at(self, index: int) -> tuple[fltk.fegen.pyrt.label_protocol.LabelProtocol | None, Atom]: ...
 
-    def replace_at(self, index: int, child: Atom, label: Label | None = None) -> None: ...
+    def replace_at(
+        self, index: int, child: Atom, label: fltk.fegen.pyrt.label_protocol.LabelProtocol | None = None
+    ) -> None: ...
 
     def clear(self) -> None: ...
 
@@ -562,35 +744,46 @@ class ZeroItems(typing.Protocol):
 
     def maybe_item(self) -> Atom | None: ...
 
-    def item(self) -> list[Atom]: ...
+    def item(self) -> typing.Sequence[Atom]: ...
 
 
-ZeroItems.Label.ITEM = _ProtocolLabelMember("ZeroItems.Label.ITEM")
+class ZeroItemsLabel:
+    """Sentinels equal to either backend's ZeroItems labels, for identifying one.
+
+    They are not a backend's own label objects, so insert() and replace_at() reject
+    them on every backend; pass those a label read off the node being mutated (from
+    children, remove_at() or variant()).
+    """
+
+    ITEM: typing.Final[fltk.fegen.pyrt.label_protocol.LabelProtocol] = _ProtocolLabelMember("ZeroItems.Label.ITEM")
 
 
 class Expr(typing.Protocol):
-    class Label:
-        ATOM: typing.ClassVar[object]
-        LHS: typing.ClassVar[object]
-        RHS: typing.ClassVar[object]
-
     kind: typing.Literal[NodeKind.EXPR] = NodeKind.EXPR
     span: fltk.fegen.pyrt.span_protocol.SpanProtocol
-    children: list[tuple[Label | None, Atom | Expr]]
 
-    def append(self, child: Atom | Expr, label: Label | None = None) -> None: ...
+    @property
+    def children(self) -> typing.Sequence[tuple[fltk.fegen.pyrt.label_protocol.LabelProtocol | None, Atom | Expr]]: ...
 
-    def extend(self, children: typing.Iterable[Atom | Expr], label: Label | None = None) -> None: ...
+    def append(self, child: Atom | Expr, label: fltk.fegen.pyrt.label_protocol.LabelProtocol | None = None) -> None: ...
+
+    def extend(
+        self, children: typing.Iterable[Atom | Expr], label: fltk.fegen.pyrt.label_protocol.LabelProtocol | None = None
+    ) -> None: ...
 
     def extend_children(self, other: Expr) -> None: ...
 
-    def child(self) -> tuple[Label | None, Atom | Expr]: ...
+    def child(self) -> tuple[fltk.fegen.pyrt.label_protocol.LabelProtocol | None, Atom | Expr]: ...
 
-    def insert(self, index: int, child: Atom | Expr, label: Label | None = None) -> None: ...
+    def insert(
+        self, index: int, child: Atom | Expr, label: fltk.fegen.pyrt.label_protocol.LabelProtocol | None = None
+    ) -> None: ...
 
-    def remove_at(self, index: int) -> tuple[Label | None, Atom | Expr]: ...
+    def remove_at(self, index: int) -> tuple[fltk.fegen.pyrt.label_protocol.LabelProtocol | None, Atom | Expr]: ...
 
-    def replace_at(self, index: int, child: Atom | Expr, label: Label | None = None) -> None: ...
+    def replace_at(
+        self, index: int, child: Atom | Expr, label: fltk.fegen.pyrt.label_protocol.LabelProtocol | None = None
+    ) -> None: ...
 
     def clear(self) -> None: ...
 
@@ -631,33 +824,45 @@ class Expr(typing.Protocol):
     def rhs(self) -> Atom | None: ...
 
 
-Expr.Label.ATOM = _ProtocolLabelMember("Expr.Label.ATOM")
-Expr.Label.LHS = _ProtocolLabelMember("Expr.Label.LHS")
-Expr.Label.RHS = _ProtocolLabelMember("Expr.Label.RHS")
+class ExprLabel:
+    """Sentinels equal to either backend's Expr labels, for identifying one.
+
+    They are not a backend's own label objects, so insert() and replace_at() reject
+    them on every backend; pass those a label read off the node being mutated (from
+    children, remove_at() or variant()).
+    """
+
+    ATOM: typing.Final[fltk.fegen.pyrt.label_protocol.LabelProtocol] = _ProtocolLabelMember("Expr.Label.ATOM")
+    LHS: typing.Final[fltk.fegen.pyrt.label_protocol.LabelProtocol] = _ProtocolLabelMember("Expr.Label.LHS")
+    RHS: typing.Final[fltk.fegen.pyrt.label_protocol.LabelProtocol] = _ProtocolLabelMember("Expr.Label.RHS")
 
 
 class Lval(typing.Protocol):
-    class Label:
-        BASE: typing.ClassVar[object]
-        INNER: typing.ClassVar[object]
-
     kind: typing.Literal[NodeKind.LVAL] = NodeKind.LVAL
     span: fltk.fegen.pyrt.span_protocol.SpanProtocol
-    children: list[tuple[Label | None, Name | Rval]]
 
-    def append(self, child: Name | Rval, label: Label | None = None) -> None: ...
+    @property
+    def children(self) -> typing.Sequence[tuple[fltk.fegen.pyrt.label_protocol.LabelProtocol | None, Name | Rval]]: ...
 
-    def extend(self, children: typing.Iterable[Name | Rval], label: Label | None = None) -> None: ...
+    def append(self, child: Name | Rval, label: fltk.fegen.pyrt.label_protocol.LabelProtocol | None = None) -> None: ...
+
+    def extend(
+        self, children: typing.Iterable[Name | Rval], label: fltk.fegen.pyrt.label_protocol.LabelProtocol | None = None
+    ) -> None: ...
 
     def extend_children(self, other: Lval) -> None: ...
 
-    def child(self) -> tuple[Label | None, Name | Rval]: ...
+    def child(self) -> tuple[fltk.fegen.pyrt.label_protocol.LabelProtocol | None, Name | Rval]: ...
 
-    def insert(self, index: int, child: Name | Rval, label: Label | None = None) -> None: ...
+    def insert(
+        self, index: int, child: Name | Rval, label: fltk.fegen.pyrt.label_protocol.LabelProtocol | None = None
+    ) -> None: ...
 
-    def remove_at(self, index: int) -> tuple[Label | None, Name | Rval]: ...
+    def remove_at(self, index: int) -> tuple[fltk.fegen.pyrt.label_protocol.LabelProtocol | None, Name | Rval]: ...
 
-    def replace_at(self, index: int, child: Name | Rval, label: Label | None = None) -> None: ...
+    def replace_at(
+        self, index: int, child: Name | Rval, label: fltk.fegen.pyrt.label_protocol.LabelProtocol | None = None
+    ) -> None: ...
 
     def clear(self) -> None: ...
 
@@ -686,32 +891,44 @@ class Lval(typing.Protocol):
     def inner(self) -> Rval | None: ...
 
 
-Lval.Label.BASE = _ProtocolLabelMember("Lval.Label.BASE")
-Lval.Label.INNER = _ProtocolLabelMember("Lval.Label.INNER")
+class LvalLabel:
+    """Sentinels equal to either backend's Lval labels, for identifying one.
+
+    They are not a backend's own label objects, so insert() and replace_at() reject
+    them on every backend; pass those a label read off the node being mutated (from
+    children, remove_at() or variant()).
+    """
+
+    BASE: typing.Final[fltk.fegen.pyrt.label_protocol.LabelProtocol] = _ProtocolLabelMember("Lval.Label.BASE")
+    INNER: typing.Final[fltk.fegen.pyrt.label_protocol.LabelProtocol] = _ProtocolLabelMember("Lval.Label.INNER")
 
 
 class Rval(typing.Protocol):
-    class Label:
-        BASE: typing.ClassVar[object]
-        INNER: typing.ClassVar[object]
-
     kind: typing.Literal[NodeKind.RVAL] = NodeKind.RVAL
     span: fltk.fegen.pyrt.span_protocol.SpanProtocol
-    children: list[tuple[Label | None, Lval | Num]]
 
-    def append(self, child: Lval | Num, label: Label | None = None) -> None: ...
+    @property
+    def children(self) -> typing.Sequence[tuple[fltk.fegen.pyrt.label_protocol.LabelProtocol | None, Lval | Num]]: ...
 
-    def extend(self, children: typing.Iterable[Lval | Num], label: Label | None = None) -> None: ...
+    def append(self, child: Lval | Num, label: fltk.fegen.pyrt.label_protocol.LabelProtocol | None = None) -> None: ...
+
+    def extend(
+        self, children: typing.Iterable[Lval | Num], label: fltk.fegen.pyrt.label_protocol.LabelProtocol | None = None
+    ) -> None: ...
 
     def extend_children(self, other: Rval) -> None: ...
 
-    def child(self) -> tuple[Label | None, Lval | Num]: ...
+    def child(self) -> tuple[fltk.fegen.pyrt.label_protocol.LabelProtocol | None, Lval | Num]: ...
 
-    def insert(self, index: int, child: Lval | Num, label: Label | None = None) -> None: ...
+    def insert(
+        self, index: int, child: Lval | Num, label: fltk.fegen.pyrt.label_protocol.LabelProtocol | None = None
+    ) -> None: ...
 
-    def remove_at(self, index: int) -> tuple[Label | None, Lval | Num]: ...
+    def remove_at(self, index: int) -> tuple[fltk.fegen.pyrt.label_protocol.LabelProtocol | None, Lval | Num]: ...
 
-    def replace_at(self, index: int, child: Lval | Num, label: Label | None = None) -> None: ...
+    def replace_at(
+        self, index: int, child: Lval | Num, label: fltk.fegen.pyrt.label_protocol.LabelProtocol | None = None
+    ) -> None: ...
 
     def clear(self) -> None: ...
 
@@ -740,31 +957,44 @@ class Rval(typing.Protocol):
     def inner(self) -> Lval | None: ...
 
 
-Rval.Label.BASE = _ProtocolLabelMember("Rval.Label.BASE")
-Rval.Label.INNER = _ProtocolLabelMember("Rval.Label.INNER")
+class RvalLabel:
+    """Sentinels equal to either backend's Rval labels, for identifying one.
+
+    They are not a backend's own label objects, so insert() and replace_at() reject
+    them on every backend; pass those a label read off the node being mutated (from
+    children, remove_at() or variant()).
+    """
+
+    BASE: typing.Final[fltk.fegen.pyrt.label_protocol.LabelProtocol] = _ProtocolLabelMember("Rval.Label.BASE")
+    INNER: typing.Final[fltk.fegen.pyrt.label_protocol.LabelProtocol] = _ProtocolLabelMember("Rval.Label.INNER")
 
 
 class Arrow(typing.Protocol):
-    class Label:
-        TARGET: typing.ClassVar[object]
-
     kind: typing.Literal[NodeKind.ARROW] = NodeKind.ARROW
     span: fltk.fegen.pyrt.span_protocol.SpanProtocol
-    children: list[tuple[Label | None, Name]]
 
-    def append(self, child: Name, label: Label | None = None) -> None: ...
+    @property
+    def children(self) -> typing.Sequence[tuple[fltk.fegen.pyrt.label_protocol.LabelProtocol | None, Name]]: ...
 
-    def extend(self, children: typing.Iterable[Name], label: Label | None = None) -> None: ...
+    def append(self, child: Name, label: fltk.fegen.pyrt.label_protocol.LabelProtocol | None = None) -> None: ...
+
+    def extend(
+        self, children: typing.Iterable[Name], label: fltk.fegen.pyrt.label_protocol.LabelProtocol | None = None
+    ) -> None: ...
 
     def extend_children(self, other: Arrow) -> None: ...
 
-    def child(self) -> tuple[Label | None, Name]: ...
+    def child(self) -> tuple[fltk.fegen.pyrt.label_protocol.LabelProtocol | None, Name]: ...
 
-    def insert(self, index: int, child: Name, label: Label | None = None) -> None: ...
+    def insert(
+        self, index: int, child: Name, label: fltk.fegen.pyrt.label_protocol.LabelProtocol | None = None
+    ) -> None: ...
 
-    def remove_at(self, index: int) -> tuple[Label | None, Name]: ...
+    def remove_at(self, index: int) -> tuple[fltk.fegen.pyrt.label_protocol.LabelProtocol | None, Name]: ...
 
-    def replace_at(self, index: int, child: Name, label: Label | None = None) -> None: ...
+    def replace_at(
+        self, index: int, child: Name, label: fltk.fegen.pyrt.label_protocol.LabelProtocol | None = None
+    ) -> None: ...
 
     def clear(self) -> None: ...
 
@@ -781,35 +1011,62 @@ class Arrow(typing.Protocol):
     def target(self) -> Name: ...
 
 
-Arrow.Label.TARGET = _ProtocolLabelMember("Arrow.Label.TARGET")
+class ArrowLabel:
+    """Sentinels equal to either backend's Arrow labels, for identifying one.
+
+    They are not a backend's own label objects, so insert() and replace_at() reject
+    them on every backend; pass those a label read off the node being mutated (from
+    children, remove_at() or variant()).
+    """
+
+    TARGET: typing.Final[fltk.fegen.pyrt.label_protocol.LabelProtocol] = _ProtocolLabelMember("Arrow.Label.TARGET")
 
 
 class LatinWord(typing.Protocol):
-    class Label:
-        VALUE: typing.ClassVar[object]
-
     kind: typing.Literal[NodeKind.LATINWORD] = NodeKind.LATINWORD
     span: fltk.fegen.pyrt.span_protocol.SpanProtocol
-    children: list[tuple[Label | None, fltk.fegen.pyrt.span_protocol.SpanProtocol]]
 
-    def append(self, child: fltk.fegen.pyrt.span_protocol.SpanProtocol, label: Label | None = None) -> None: ...
+    @property
+    def children(
+        self,
+    ) -> typing.Sequence[
+        tuple[fltk.fegen.pyrt.label_protocol.LabelProtocol | None, fltk.fegen.pyrt.span_protocol.SpanProtocol]
+    ]: ...
+
+    def append(
+        self,
+        child: fltk.fegen.pyrt.span_protocol.SpanProtocol,
+        label: fltk.fegen.pyrt.label_protocol.LabelProtocol | None = None,
+    ) -> None: ...
 
     def extend(
-        self, children: typing.Iterable[fltk.fegen.pyrt.span_protocol.SpanProtocol], label: Label | None = None
+        self,
+        children: typing.Iterable[fltk.fegen.pyrt.span_protocol.SpanProtocol],
+        label: fltk.fegen.pyrt.label_protocol.LabelProtocol | None = None,
     ) -> None: ...
 
     def extend_children(self, other: LatinWord) -> None: ...
 
-    def child(self) -> tuple[Label | None, fltk.fegen.pyrt.span_protocol.SpanProtocol]: ...
+    def child(
+        self,
+    ) -> tuple[fltk.fegen.pyrt.label_protocol.LabelProtocol | None, fltk.fegen.pyrt.span_protocol.SpanProtocol]: ...
 
     def insert(
-        self, index: int, child: fltk.fegen.pyrt.span_protocol.SpanProtocol, label: Label | None = None
+        self,
+        index: int,
+        child: fltk.fegen.pyrt.span_protocol.SpanProtocol,
+        label: fltk.fegen.pyrt.label_protocol.LabelProtocol | None = None,
     ) -> None: ...
 
-    def remove_at(self, index: int) -> tuple[Label | None, fltk.fegen.pyrt.span_protocol.SpanProtocol]: ...
+    def remove_at(
+        self, index: int
+    ) -> tuple[fltk.fegen.pyrt.label_protocol.LabelProtocol | None, fltk.fegen.pyrt.span_protocol.SpanProtocol]: ...
 
     def replace_at(
-        self, index: int, child: fltk.fegen.pyrt.span_protocol.SpanProtocol, label: Label | None = None
+        self,
+        index: int,
+        child: fltk.fegen.pyrt.span_protocol.SpanProtocol,
+        label: fltk.fegen.pyrt.label_protocol.LabelProtocol | None = None,
     ) -> None: ...
 
     def clear(self) -> None: ...
@@ -831,35 +1088,62 @@ class LatinWord(typing.Protocol):
     def text(self) -> str: ...
 
 
-LatinWord.Label.VALUE = _ProtocolLabelMember("LatinWord.Label.VALUE")
+class LatinWordLabel:
+    """Sentinels equal to either backend's LatinWord labels, for identifying one.
+
+    They are not a backend's own label objects, so insert() and replace_at() reject
+    them on every backend; pass those a label read off the node being mutated (from
+    children, remove_at() or variant()).
+    """
+
+    VALUE: typing.Final[fltk.fegen.pyrt.label_protocol.LabelProtocol] = _ProtocolLabelMember("LatinWord.Label.VALUE")
 
 
 class Tagged(typing.Protocol):
-    class Label:
-        VALUE: typing.ClassVar[object]
-
     kind: typing.Literal[NodeKind.TAGGED] = NodeKind.TAGGED
     span: fltk.fegen.pyrt.span_protocol.SpanProtocol
-    children: list[tuple[Label | None, fltk.fegen.pyrt.span_protocol.SpanProtocol]]
 
-    def append(self, child: fltk.fegen.pyrt.span_protocol.SpanProtocol, label: Label | None = None) -> None: ...
+    @property
+    def children(
+        self,
+    ) -> typing.Sequence[
+        tuple[fltk.fegen.pyrt.label_protocol.LabelProtocol | None, fltk.fegen.pyrt.span_protocol.SpanProtocol]
+    ]: ...
+
+    def append(
+        self,
+        child: fltk.fegen.pyrt.span_protocol.SpanProtocol,
+        label: fltk.fegen.pyrt.label_protocol.LabelProtocol | None = None,
+    ) -> None: ...
 
     def extend(
-        self, children: typing.Iterable[fltk.fegen.pyrt.span_protocol.SpanProtocol], label: Label | None = None
+        self,
+        children: typing.Iterable[fltk.fegen.pyrt.span_protocol.SpanProtocol],
+        label: fltk.fegen.pyrt.label_protocol.LabelProtocol | None = None,
     ) -> None: ...
 
     def extend_children(self, other: Tagged) -> None: ...
 
-    def child(self) -> tuple[Label | None, fltk.fegen.pyrt.span_protocol.SpanProtocol]: ...
+    def child(
+        self,
+    ) -> tuple[fltk.fegen.pyrt.label_protocol.LabelProtocol | None, fltk.fegen.pyrt.span_protocol.SpanProtocol]: ...
 
     def insert(
-        self, index: int, child: fltk.fegen.pyrt.span_protocol.SpanProtocol, label: Label | None = None
+        self,
+        index: int,
+        child: fltk.fegen.pyrt.span_protocol.SpanProtocol,
+        label: fltk.fegen.pyrt.label_protocol.LabelProtocol | None = None,
     ) -> None: ...
 
-    def remove_at(self, index: int) -> tuple[Label | None, fltk.fegen.pyrt.span_protocol.SpanProtocol]: ...
+    def remove_at(
+        self, index: int
+    ) -> tuple[fltk.fegen.pyrt.label_protocol.LabelProtocol | None, fltk.fegen.pyrt.span_protocol.SpanProtocol]: ...
 
     def replace_at(
-        self, index: int, child: fltk.fegen.pyrt.span_protocol.SpanProtocol, label: Label | None = None
+        self,
+        index: int,
+        child: fltk.fegen.pyrt.span_protocol.SpanProtocol,
+        label: fltk.fegen.pyrt.label_protocol.LabelProtocol | None = None,
     ) -> None: ...
 
     def clear(self) -> None: ...
@@ -881,39 +1165,68 @@ class Tagged(typing.Protocol):
     def text(self) -> str: ...
 
 
-Tagged.Label.VALUE = _ProtocolLabelMember("Tagged.Label.VALUE")
+class TaggedLabel:
+    """Sentinels equal to either backend's Tagged labels, for identifying one.
+
+    They are not a backend's own label objects, so insert() and replace_at() reject
+    them on every backend; pass those a label read off the node being mutated (from
+    children, remove_at() or variant()).
+    """
+
+    VALUE: typing.Final[fltk.fegen.pyrt.label_protocol.LabelProtocol] = _ProtocolLabelMember("Tagged.Label.VALUE")
 
 
 class Val(typing.Protocol):
-    class Label:
-        ITEM: typing.ClassVar[object]
-
     kind: typing.Literal[NodeKind.VAL] = NodeKind.VAL
     span: fltk.fegen.pyrt.span_protocol.SpanProtocol
-    children: list[tuple[Label | None, Name | Num | fltk.fegen.pyrt.span_protocol.SpanProtocol]]
+
+    @property
+    def children(
+        self,
+    ) -> typing.Sequence[
+        tuple[
+            fltk.fegen.pyrt.label_protocol.LabelProtocol | None, Name | Num | fltk.fegen.pyrt.span_protocol.SpanProtocol
+        ]
+    ]: ...
 
     def append(
-        self, child: Name | Num | fltk.fegen.pyrt.span_protocol.SpanProtocol, label: Label | None = None
+        self,
+        child: Name | Num | fltk.fegen.pyrt.span_protocol.SpanProtocol,
+        label: fltk.fegen.pyrt.label_protocol.LabelProtocol | None = None,
     ) -> None: ...
 
     def extend(
         self,
         children: typing.Iterable[Name | Num | fltk.fegen.pyrt.span_protocol.SpanProtocol],
-        label: Label | None = None,
+        label: fltk.fegen.pyrt.label_protocol.LabelProtocol | None = None,
     ) -> None: ...
 
     def extend_children(self, other: Val) -> None: ...
 
-    def child(self) -> tuple[Label | None, Name | Num | fltk.fegen.pyrt.span_protocol.SpanProtocol]: ...
+    def child(
+        self,
+    ) -> tuple[
+        fltk.fegen.pyrt.label_protocol.LabelProtocol | None, Name | Num | fltk.fegen.pyrt.span_protocol.SpanProtocol
+    ]: ...
 
     def insert(
-        self, index: int, child: Name | Num | fltk.fegen.pyrt.span_protocol.SpanProtocol, label: Label | None = None
+        self,
+        index: int,
+        child: Name | Num | fltk.fegen.pyrt.span_protocol.SpanProtocol,
+        label: fltk.fegen.pyrt.label_protocol.LabelProtocol | None = None,
     ) -> None: ...
 
-    def remove_at(self, index: int) -> tuple[Label | None, Name | Num | fltk.fegen.pyrt.span_protocol.SpanProtocol]: ...
+    def remove_at(
+        self, index: int
+    ) -> tuple[
+        fltk.fegen.pyrt.label_protocol.LabelProtocol | None, Name | Num | fltk.fegen.pyrt.span_protocol.SpanProtocol
+    ]: ...
 
     def replace_at(
-        self, index: int, child: Name | Num | fltk.fegen.pyrt.span_protocol.SpanProtocol, label: Label | None = None
+        self,
+        index: int,
+        child: Name | Num | fltk.fegen.pyrt.span_protocol.SpanProtocol,
+        label: fltk.fegen.pyrt.label_protocol.LabelProtocol | None = None,
     ) -> None: ...
 
     def clear(self) -> None: ...
@@ -932,33 +1245,48 @@ class Val(typing.Protocol):
 
     def item(self) -> Name | Num | fltk.fegen.pyrt.span_protocol.SpanProtocol: ...
 
-    def variant(self) -> Label: ...
+    def variant(self) -> fltk.fegen.pyrt.label_protocol.LabelProtocol: ...
 
 
-Val.Label.ITEM = _ProtocolLabelMember("Val.Label.ITEM")
+class ValLabel:
+    """Sentinels equal to either backend's Val labels, for identifying one.
+
+    They are not a backend's own label objects, so insert() and replace_at() reject
+    them on every backend; pass those a label read off the node being mutated (from
+    children, remove_at() or variant()).
+    """
+
+    ITEM: typing.Final[fltk.fegen.pyrt.label_protocol.LabelProtocol] = _ProtocolLabelMember("Val.Label.ITEM")
 
 
 class LeadingWs(typing.Protocol):
-    class Label:
-        NUM: typing.ClassVar[object]
-
     kind: typing.Literal[NodeKind.LEADINGWS] = NodeKind.LEADINGWS
     span: fltk.fegen.pyrt.span_protocol.SpanProtocol
-    children: list[tuple[Label | None, Num | Trivia]]
 
-    def append(self, child: Num | Trivia, label: Label | None = None) -> None: ...
+    @property
+    def children(self) -> typing.Sequence[tuple[fltk.fegen.pyrt.label_protocol.LabelProtocol | None, Num | Trivia]]: ...
 
-    def extend(self, children: typing.Iterable[Num | Trivia], label: Label | None = None) -> None: ...
+    def append(
+        self, child: Num | Trivia, label: fltk.fegen.pyrt.label_protocol.LabelProtocol | None = None
+    ) -> None: ...
+
+    def extend(
+        self, children: typing.Iterable[Num | Trivia], label: fltk.fegen.pyrt.label_protocol.LabelProtocol | None = None
+    ) -> None: ...
 
     def extend_children(self, other: LeadingWs) -> None: ...
 
-    def child(self) -> tuple[Label | None, Num | Trivia]: ...
+    def child(self) -> tuple[fltk.fegen.pyrt.label_protocol.LabelProtocol | None, Num | Trivia]: ...
 
-    def insert(self, index: int, child: Num | Trivia, label: Label | None = None) -> None: ...
+    def insert(
+        self, index: int, child: Num | Trivia, label: fltk.fegen.pyrt.label_protocol.LabelProtocol | None = None
+    ) -> None: ...
 
-    def remove_at(self, index: int) -> tuple[Label | None, Num | Trivia]: ...
+    def remove_at(self, index: int) -> tuple[fltk.fegen.pyrt.label_protocol.LabelProtocol | None, Num | Trivia]: ...
 
-    def replace_at(self, index: int, child: Num | Trivia, label: Label | None = None) -> None: ...
+    def replace_at(
+        self, index: int, child: Num | Trivia, label: fltk.fegen.pyrt.label_protocol.LabelProtocol | None = None
+    ) -> None: ...
 
     def clear(self) -> None: ...
 
@@ -975,30 +1303,51 @@ class LeadingWs(typing.Protocol):
     def num(self) -> Num: ...
 
 
-LeadingWs.Label.NUM = _ProtocolLabelMember("LeadingWs.Label.NUM")
+class LeadingWsLabel:
+    """Sentinels equal to either backend's LeadingWs labels, for identifying one.
+
+    They are not a backend's own label objects, so insert() and replace_at() reject
+    them on every backend; pass those a label read off the node being mutated (from
+    children, remove_at() or variant()).
+    """
+
+    NUM: typing.Final[fltk.fegen.pyrt.label_protocol.LabelProtocol] = _ProtocolLabelMember("LeadingWs.Label.NUM")
 
 
 class Grouped(typing.Protocol):
-    class Label:
-        LEFT: typing.ClassVar[object]
-
     kind: typing.Literal[NodeKind.GROUPED] = NodeKind.GROUPED
     span: fltk.fegen.pyrt.span_protocol.SpanProtocol
-    children: list[tuple[Label | None, Name | Num | Trivia]]
 
-    def append(self, child: Name | Num | Trivia, label: Label | None = None) -> None: ...
+    @property
+    def children(
+        self,
+    ) -> typing.Sequence[tuple[fltk.fegen.pyrt.label_protocol.LabelProtocol | None, Name | Num | Trivia]]: ...
 
-    def extend(self, children: typing.Iterable[Name | Num | Trivia], label: Label | None = None) -> None: ...
+    def append(
+        self, child: Name | Num | Trivia, label: fltk.fegen.pyrt.label_protocol.LabelProtocol | None = None
+    ) -> None: ...
+
+    def extend(
+        self,
+        children: typing.Iterable[Name | Num | Trivia],
+        label: fltk.fegen.pyrt.label_protocol.LabelProtocol | None = None,
+    ) -> None: ...
 
     def extend_children(self, other: Grouped) -> None: ...
 
-    def child(self) -> tuple[Label | None, Name | Num | Trivia]: ...
+    def child(self) -> tuple[fltk.fegen.pyrt.label_protocol.LabelProtocol | None, Name | Num | Trivia]: ...
 
-    def insert(self, index: int, child: Name | Num | Trivia, label: Label | None = None) -> None: ...
+    def insert(
+        self, index: int, child: Name | Num | Trivia, label: fltk.fegen.pyrt.label_protocol.LabelProtocol | None = None
+    ) -> None: ...
 
-    def remove_at(self, index: int) -> tuple[Label | None, Name | Num | Trivia]: ...
+    def remove_at(
+        self, index: int
+    ) -> tuple[fltk.fegen.pyrt.label_protocol.LabelProtocol | None, Name | Num | Trivia]: ...
 
-    def replace_at(self, index: int, child: Name | Num | Trivia, label: Label | None = None) -> None: ...
+    def replace_at(
+        self, index: int, child: Name | Num | Trivia, label: fltk.fegen.pyrt.label_protocol.LabelProtocol | None = None
+    ) -> None: ...
 
     def clear(self) -> None: ...
 
@@ -1015,31 +1364,57 @@ class Grouped(typing.Protocol):
     def left(self) -> Name | Num: ...
 
 
-Grouped.Label.LEFT = _ProtocolLabelMember("Grouped.Label.LEFT")
+class GroupedLabel:
+    """Sentinels equal to either backend's Grouped labels, for identifying one.
+
+    They are not a backend's own label objects, so insert() and replace_at() reject
+    them on every backend; pass those a label read off the node being mutated (from
+    children, remove_at() or variant()).
+    """
+
+    LEFT: typing.Final[fltk.fegen.pyrt.label_protocol.LabelProtocol] = _ProtocolLabelMember("Grouped.Label.LEFT")
 
 
 class RecViaSub(typing.Protocol):
-    class Label:
-        INNER: typing.ClassVar[object]
-        SUFFIX: typing.ClassVar[object]
-
     kind: typing.Literal[NodeKind.RECVIASUB] = NodeKind.RECVIASUB
     span: fltk.fegen.pyrt.span_protocol.SpanProtocol
-    children: list[tuple[Label | None, Atom | Name | RecViaSub]]
 
-    def append(self, child: Atom | Name | RecViaSub, label: Label | None = None) -> None: ...
+    @property
+    def children(
+        self,
+    ) -> typing.Sequence[tuple[fltk.fegen.pyrt.label_protocol.LabelProtocol | None, Atom | Name | RecViaSub]]: ...
 
-    def extend(self, children: typing.Iterable[Atom | Name | RecViaSub], label: Label | None = None) -> None: ...
+    def append(
+        self, child: Atom | Name | RecViaSub, label: fltk.fegen.pyrt.label_protocol.LabelProtocol | None = None
+    ) -> None: ...
+
+    def extend(
+        self,
+        children: typing.Iterable[Atom | Name | RecViaSub],
+        label: fltk.fegen.pyrt.label_protocol.LabelProtocol | None = None,
+    ) -> None: ...
 
     def extend_children(self, other: RecViaSub) -> None: ...
 
-    def child(self) -> tuple[Label | None, Atom | Name | RecViaSub]: ...
+    def child(self) -> tuple[fltk.fegen.pyrt.label_protocol.LabelProtocol | None, Atom | Name | RecViaSub]: ...
 
-    def insert(self, index: int, child: Atom | Name | RecViaSub, label: Label | None = None) -> None: ...
+    def insert(
+        self,
+        index: int,
+        child: Atom | Name | RecViaSub,
+        label: fltk.fegen.pyrt.label_protocol.LabelProtocol | None = None,
+    ) -> None: ...
 
-    def remove_at(self, index: int) -> tuple[Label | None, Atom | Name | RecViaSub]: ...
+    def remove_at(
+        self, index: int
+    ) -> tuple[fltk.fegen.pyrt.label_protocol.LabelProtocol | None, Atom | Name | RecViaSub]: ...
 
-    def replace_at(self, index: int, child: Atom | Name | RecViaSub, label: Label | None = None) -> None: ...
+    def replace_at(
+        self,
+        index: int,
+        child: Atom | Name | RecViaSub,
+        label: fltk.fegen.pyrt.label_protocol.LabelProtocol | None = None,
+    ) -> None: ...
 
     def clear(self) -> None: ...
 
@@ -1068,32 +1443,44 @@ class RecViaSub(typing.Protocol):
     def suffix(self) -> Name: ...
 
 
-RecViaSub.Label.INNER = _ProtocolLabelMember("RecViaSub.Label.INNER")
-RecViaSub.Label.SUFFIX = _ProtocolLabelMember("RecViaSub.Label.SUFFIX")
+class RecViaSubLabel:
+    """Sentinels equal to either backend's RecViaSub labels, for identifying one.
+
+    They are not a backend's own label objects, so insert() and replace_at() reject
+    them on every backend; pass those a label read off the node being mutated (from
+    children, remove_at() or variant()).
+    """
+
+    INNER: typing.Final[fltk.fegen.pyrt.label_protocol.LabelProtocol] = _ProtocolLabelMember("RecViaSub.Label.INNER")
+    SUFFIX: typing.Final[fltk.fegen.pyrt.label_protocol.LabelProtocol] = _ProtocolLabelMember("RecViaSub.Label.SUFFIX")
 
 
 class Nest(typing.Protocol):
-    class Label:
-        INNER: typing.ClassVar[object]
-        LEAF: typing.ClassVar[object]
-
     kind: typing.Literal[NodeKind.NEST] = NodeKind.NEST
     span: fltk.fegen.pyrt.span_protocol.SpanProtocol
-    children: list[tuple[Label | None, Nest | Num]]
 
-    def append(self, child: Nest | Num, label: Label | None = None) -> None: ...
+    @property
+    def children(self) -> typing.Sequence[tuple[fltk.fegen.pyrt.label_protocol.LabelProtocol | None, Nest | Num]]: ...
 
-    def extend(self, children: typing.Iterable[Nest | Num], label: Label | None = None) -> None: ...
+    def append(self, child: Nest | Num, label: fltk.fegen.pyrt.label_protocol.LabelProtocol | None = None) -> None: ...
+
+    def extend(
+        self, children: typing.Iterable[Nest | Num], label: fltk.fegen.pyrt.label_protocol.LabelProtocol | None = None
+    ) -> None: ...
 
     def extend_children(self, other: Nest) -> None: ...
 
-    def child(self) -> tuple[Label | None, Nest | Num]: ...
+    def child(self) -> tuple[fltk.fegen.pyrt.label_protocol.LabelProtocol | None, Nest | Num]: ...
 
-    def insert(self, index: int, child: Nest | Num, label: Label | None = None) -> None: ...
+    def insert(
+        self, index: int, child: Nest | Num, label: fltk.fegen.pyrt.label_protocol.LabelProtocol | None = None
+    ) -> None: ...
 
-    def remove_at(self, index: int) -> tuple[Label | None, Nest | Num]: ...
+    def remove_at(self, index: int) -> tuple[fltk.fegen.pyrt.label_protocol.LabelProtocol | None, Nest | Num]: ...
 
-    def replace_at(self, index: int, child: Nest | Num, label: Label | None = None) -> None: ...
+    def replace_at(
+        self, index: int, child: Nest | Num, label: fltk.fegen.pyrt.label_protocol.LabelProtocol | None = None
+    ) -> None: ...
 
     def clear(self) -> None: ...
 
@@ -1122,33 +1509,50 @@ class Nest(typing.Protocol):
     def leaf(self) -> Num | None: ...
 
 
-Nest.Label.INNER = _ProtocolLabelMember("Nest.Label.INNER")
-Nest.Label.LEAF = _ProtocolLabelMember("Nest.Label.LEAF")
+class NestLabel:
+    """Sentinels equal to either backend's Nest labels, for identifying one.
+
+    They are not a backend's own label objects, so insert() and replace_at() reject
+    them on every backend; pass those a label read off the node being mutated (from
+    children, remove_at() or variant()).
+    """
+
+    INNER: typing.Final[fltk.fegen.pyrt.label_protocol.LabelProtocol] = _ProtocolLabelMember("Nest.Label.INNER")
+    LEAF: typing.Final[fltk.fegen.pyrt.label_protocol.LabelProtocol] = _ProtocolLabelMember("Nest.Label.LEAF")
 
 
 class NestSum(typing.Protocol):
-    class Label:
-        FIRST: typing.ClassVar[object]
-        LHS: typing.ClassVar[object]
-        RHS: typing.ClassVar[object]
-
     kind: typing.Literal[NodeKind.NESTSUM] = NodeKind.NESTSUM
     span: fltk.fegen.pyrt.span_protocol.SpanProtocol
-    children: list[tuple[Label | None, Nest | NestSum]]
 
-    def append(self, child: Nest | NestSum, label: Label | None = None) -> None: ...
+    @property
+    def children(
+        self,
+    ) -> typing.Sequence[tuple[fltk.fegen.pyrt.label_protocol.LabelProtocol | None, Nest | NestSum]]: ...
 
-    def extend(self, children: typing.Iterable[Nest | NestSum], label: Label | None = None) -> None: ...
+    def append(
+        self, child: Nest | NestSum, label: fltk.fegen.pyrt.label_protocol.LabelProtocol | None = None
+    ) -> None: ...
+
+    def extend(
+        self,
+        children: typing.Iterable[Nest | NestSum],
+        label: fltk.fegen.pyrt.label_protocol.LabelProtocol | None = None,
+    ) -> None: ...
 
     def extend_children(self, other: NestSum) -> None: ...
 
-    def child(self) -> tuple[Label | None, Nest | NestSum]: ...
+    def child(self) -> tuple[fltk.fegen.pyrt.label_protocol.LabelProtocol | None, Nest | NestSum]: ...
 
-    def insert(self, index: int, child: Nest | NestSum, label: Label | None = None) -> None: ...
+    def insert(
+        self, index: int, child: Nest | NestSum, label: fltk.fegen.pyrt.label_protocol.LabelProtocol | None = None
+    ) -> None: ...
 
-    def remove_at(self, index: int) -> tuple[Label | None, Nest | NestSum]: ...
+    def remove_at(self, index: int) -> tuple[fltk.fegen.pyrt.label_protocol.LabelProtocol | None, Nest | NestSum]: ...
 
-    def replace_at(self, index: int, child: Nest | NestSum, label: Label | None = None) -> None: ...
+    def replace_at(
+        self, index: int, child: Nest | NestSum, label: fltk.fegen.pyrt.label_protocol.LabelProtocol | None = None
+    ) -> None: ...
 
     def clear(self) -> None: ...
 
@@ -1189,37 +1593,64 @@ class NestSum(typing.Protocol):
     def rhs(self) -> Nest | None: ...
 
 
-NestSum.Label.FIRST = _ProtocolLabelMember("NestSum.Label.FIRST")
-NestSum.Label.LHS = _ProtocolLabelMember("NestSum.Label.LHS")
-NestSum.Label.RHS = _ProtocolLabelMember("NestSum.Label.RHS")
+class NestSumLabel:
+    """Sentinels equal to either backend's NestSum labels, for identifying one.
+
+    They are not a backend's own label objects, so insert() and replace_at() reject
+    them on every backend; pass those a label read off the node being mutated (from
+    children, remove_at() or variant()).
+    """
+
+    FIRST: typing.Final[fltk.fegen.pyrt.label_protocol.LabelProtocol] = _ProtocolLabelMember("NestSum.Label.FIRST")
+    LHS: typing.Final[fltk.fegen.pyrt.label_protocol.LabelProtocol] = _ProtocolLabelMember("NestSum.Label.LHS")
+    RHS: typing.Final[fltk.fegen.pyrt.label_protocol.LabelProtocol] = _ProtocolLabelMember("NestSum.Label.RHS")
 
 
 class DigitSeq(typing.Protocol):
-    class Label:
-        VALUE: typing.ClassVar[object]
-
     kind: typing.Literal[NodeKind.DIGITSEQ] = NodeKind.DIGITSEQ
     span: fltk.fegen.pyrt.span_protocol.SpanProtocol
-    children: list[tuple[Label | None, fltk.fegen.pyrt.span_protocol.SpanProtocol]]
 
-    def append(self, child: fltk.fegen.pyrt.span_protocol.SpanProtocol, label: Label | None = None) -> None: ...
+    @property
+    def children(
+        self,
+    ) -> typing.Sequence[
+        tuple[fltk.fegen.pyrt.label_protocol.LabelProtocol | None, fltk.fegen.pyrt.span_protocol.SpanProtocol]
+    ]: ...
+
+    def append(
+        self,
+        child: fltk.fegen.pyrt.span_protocol.SpanProtocol,
+        label: fltk.fegen.pyrt.label_protocol.LabelProtocol | None = None,
+    ) -> None: ...
 
     def extend(
-        self, children: typing.Iterable[fltk.fegen.pyrt.span_protocol.SpanProtocol], label: Label | None = None
+        self,
+        children: typing.Iterable[fltk.fegen.pyrt.span_protocol.SpanProtocol],
+        label: fltk.fegen.pyrt.label_protocol.LabelProtocol | None = None,
     ) -> None: ...
 
     def extend_children(self, other: DigitSeq) -> None: ...
 
-    def child(self) -> tuple[Label | None, fltk.fegen.pyrt.span_protocol.SpanProtocol]: ...
+    def child(
+        self,
+    ) -> tuple[fltk.fegen.pyrt.label_protocol.LabelProtocol | None, fltk.fegen.pyrt.span_protocol.SpanProtocol]: ...
 
     def insert(
-        self, index: int, child: fltk.fegen.pyrt.span_protocol.SpanProtocol, label: Label | None = None
+        self,
+        index: int,
+        child: fltk.fegen.pyrt.span_protocol.SpanProtocol,
+        label: fltk.fegen.pyrt.label_protocol.LabelProtocol | None = None,
     ) -> None: ...
 
-    def remove_at(self, index: int) -> tuple[Label | None, fltk.fegen.pyrt.span_protocol.SpanProtocol]: ...
+    def remove_at(
+        self, index: int
+    ) -> tuple[fltk.fegen.pyrt.label_protocol.LabelProtocol | None, fltk.fegen.pyrt.span_protocol.SpanProtocol]: ...
 
     def replace_at(
-        self, index: int, child: fltk.fegen.pyrt.span_protocol.SpanProtocol, label: Label | None = None
+        self,
+        index: int,
+        child: fltk.fegen.pyrt.span_protocol.SpanProtocol,
+        label: fltk.fegen.pyrt.label_protocol.LabelProtocol | None = None,
     ) -> None: ...
 
     def clear(self) -> None: ...
@@ -1241,35 +1672,62 @@ class DigitSeq(typing.Protocol):
     def text(self) -> str: ...
 
 
-DigitSeq.Label.VALUE = _ProtocolLabelMember("DigitSeq.Label.VALUE")
+class DigitSeqLabel:
+    """Sentinels equal to either backend's DigitSeq labels, for identifying one.
+
+    They are not a backend's own label objects, so insert() and replace_at() reject
+    them on every backend; pass those a label read off the node being mutated (from
+    children, remove_at() or variant()).
+    """
+
+    VALUE: typing.Final[fltk.fegen.pyrt.label_protocol.LabelProtocol] = _ProtocolLabelMember("DigitSeq.Label.VALUE")
 
 
 class WordSeq(typing.Protocol):
-    class Label:
-        VALUE: typing.ClassVar[object]
-
     kind: typing.Literal[NodeKind.WORDSEQ] = NodeKind.WORDSEQ
     span: fltk.fegen.pyrt.span_protocol.SpanProtocol
-    children: list[tuple[Label | None, fltk.fegen.pyrt.span_protocol.SpanProtocol]]
 
-    def append(self, child: fltk.fegen.pyrt.span_protocol.SpanProtocol, label: Label | None = None) -> None: ...
+    @property
+    def children(
+        self,
+    ) -> typing.Sequence[
+        tuple[fltk.fegen.pyrt.label_protocol.LabelProtocol | None, fltk.fegen.pyrt.span_protocol.SpanProtocol]
+    ]: ...
+
+    def append(
+        self,
+        child: fltk.fegen.pyrt.span_protocol.SpanProtocol,
+        label: fltk.fegen.pyrt.label_protocol.LabelProtocol | None = None,
+    ) -> None: ...
 
     def extend(
-        self, children: typing.Iterable[fltk.fegen.pyrt.span_protocol.SpanProtocol], label: Label | None = None
+        self,
+        children: typing.Iterable[fltk.fegen.pyrt.span_protocol.SpanProtocol],
+        label: fltk.fegen.pyrt.label_protocol.LabelProtocol | None = None,
     ) -> None: ...
 
     def extend_children(self, other: WordSeq) -> None: ...
 
-    def child(self) -> tuple[Label | None, fltk.fegen.pyrt.span_protocol.SpanProtocol]: ...
+    def child(
+        self,
+    ) -> tuple[fltk.fegen.pyrt.label_protocol.LabelProtocol | None, fltk.fegen.pyrt.span_protocol.SpanProtocol]: ...
 
     def insert(
-        self, index: int, child: fltk.fegen.pyrt.span_protocol.SpanProtocol, label: Label | None = None
+        self,
+        index: int,
+        child: fltk.fegen.pyrt.span_protocol.SpanProtocol,
+        label: fltk.fegen.pyrt.label_protocol.LabelProtocol | None = None,
     ) -> None: ...
 
-    def remove_at(self, index: int) -> tuple[Label | None, fltk.fegen.pyrt.span_protocol.SpanProtocol]: ...
+    def remove_at(
+        self, index: int
+    ) -> tuple[fltk.fegen.pyrt.label_protocol.LabelProtocol | None, fltk.fegen.pyrt.span_protocol.SpanProtocol]: ...
 
     def replace_at(
-        self, index: int, child: fltk.fegen.pyrt.span_protocol.SpanProtocol, label: Label | None = None
+        self,
+        index: int,
+        child: fltk.fegen.pyrt.span_protocol.SpanProtocol,
+        label: fltk.fegen.pyrt.label_protocol.LabelProtocol | None = None,
     ) -> None: ...
 
     def clear(self) -> None: ...
@@ -1291,35 +1749,62 @@ class WordSeq(typing.Protocol):
     def text(self) -> str: ...
 
 
-WordSeq.Label.VALUE = _ProtocolLabelMember("WordSeq.Label.VALUE")
+class WordSeqLabel:
+    """Sentinels equal to either backend's WordSeq labels, for identifying one.
+
+    They are not a backend's own label objects, so insert() and replace_at() reject
+    them on every backend; pass those a label read off the node being mutated (from
+    children, remove_at() or variant()).
+    """
+
+    VALUE: typing.Final[fltk.fegen.pyrt.label_protocol.LabelProtocol] = _ProtocolLabelMember("WordSeq.Label.VALUE")
 
 
 class WsSeq(typing.Protocol):
-    class Label:
-        VALUE: typing.ClassVar[object]
-
     kind: typing.Literal[NodeKind.WSSEQ] = NodeKind.WSSEQ
     span: fltk.fegen.pyrt.span_protocol.SpanProtocol
-    children: list[tuple[Label | None, fltk.fegen.pyrt.span_protocol.SpanProtocol]]
 
-    def append(self, child: fltk.fegen.pyrt.span_protocol.SpanProtocol, label: Label | None = None) -> None: ...
+    @property
+    def children(
+        self,
+    ) -> typing.Sequence[
+        tuple[fltk.fegen.pyrt.label_protocol.LabelProtocol | None, fltk.fegen.pyrt.span_protocol.SpanProtocol]
+    ]: ...
+
+    def append(
+        self,
+        child: fltk.fegen.pyrt.span_protocol.SpanProtocol,
+        label: fltk.fegen.pyrt.label_protocol.LabelProtocol | None = None,
+    ) -> None: ...
 
     def extend(
-        self, children: typing.Iterable[fltk.fegen.pyrt.span_protocol.SpanProtocol], label: Label | None = None
+        self,
+        children: typing.Iterable[fltk.fegen.pyrt.span_protocol.SpanProtocol],
+        label: fltk.fegen.pyrt.label_protocol.LabelProtocol | None = None,
     ) -> None: ...
 
     def extend_children(self, other: WsSeq) -> None: ...
 
-    def child(self) -> tuple[Label | None, fltk.fegen.pyrt.span_protocol.SpanProtocol]: ...
+    def child(
+        self,
+    ) -> tuple[fltk.fegen.pyrt.label_protocol.LabelProtocol | None, fltk.fegen.pyrt.span_protocol.SpanProtocol]: ...
 
     def insert(
-        self, index: int, child: fltk.fegen.pyrt.span_protocol.SpanProtocol, label: Label | None = None
+        self,
+        index: int,
+        child: fltk.fegen.pyrt.span_protocol.SpanProtocol,
+        label: fltk.fegen.pyrt.label_protocol.LabelProtocol | None = None,
     ) -> None: ...
 
-    def remove_at(self, index: int) -> tuple[Label | None, fltk.fegen.pyrt.span_protocol.SpanProtocol]: ...
+    def remove_at(
+        self, index: int
+    ) -> tuple[fltk.fegen.pyrt.label_protocol.LabelProtocol | None, fltk.fegen.pyrt.span_protocol.SpanProtocol]: ...
 
     def replace_at(
-        self, index: int, child: fltk.fegen.pyrt.span_protocol.SpanProtocol, label: Label | None = None
+        self,
+        index: int,
+        child: fltk.fegen.pyrt.span_protocol.SpanProtocol,
+        label: fltk.fegen.pyrt.label_protocol.LabelProtocol | None = None,
     ) -> None: ...
 
     def clear(self) -> None: ...
@@ -1341,35 +1826,62 @@ class WsSeq(typing.Protocol):
     def text(self) -> str: ...
 
 
-WsSeq.Label.VALUE = _ProtocolLabelMember("WsSeq.Label.VALUE")
+class WsSeqLabel:
+    """Sentinels equal to either backend's WsSeq labels, for identifying one.
+
+    They are not a backend's own label objects, so insert() and replace_at() reject
+    them on every backend; pass those a label read off the node being mutated (from
+    children, remove_at() or variant()).
+    """
+
+    VALUE: typing.Final[fltk.fegen.pyrt.label_protocol.LabelProtocol] = _ProtocolLabelMember("WsSeq.Label.VALUE")
 
 
 class ThreeToFiveDigits(typing.Protocol):
-    class Label:
-        VALUE: typing.ClassVar[object]
-
     kind: typing.Literal[NodeKind.THREETOFIVEDIGITS] = NodeKind.THREETOFIVEDIGITS
     span: fltk.fegen.pyrt.span_protocol.SpanProtocol
-    children: list[tuple[Label | None, fltk.fegen.pyrt.span_protocol.SpanProtocol]]
 
-    def append(self, child: fltk.fegen.pyrt.span_protocol.SpanProtocol, label: Label | None = None) -> None: ...
+    @property
+    def children(
+        self,
+    ) -> typing.Sequence[
+        tuple[fltk.fegen.pyrt.label_protocol.LabelProtocol | None, fltk.fegen.pyrt.span_protocol.SpanProtocol]
+    ]: ...
+
+    def append(
+        self,
+        child: fltk.fegen.pyrt.span_protocol.SpanProtocol,
+        label: fltk.fegen.pyrt.label_protocol.LabelProtocol | None = None,
+    ) -> None: ...
 
     def extend(
-        self, children: typing.Iterable[fltk.fegen.pyrt.span_protocol.SpanProtocol], label: Label | None = None
+        self,
+        children: typing.Iterable[fltk.fegen.pyrt.span_protocol.SpanProtocol],
+        label: fltk.fegen.pyrt.label_protocol.LabelProtocol | None = None,
     ) -> None: ...
 
     def extend_children(self, other: ThreeToFiveDigits) -> None: ...
 
-    def child(self) -> tuple[Label | None, fltk.fegen.pyrt.span_protocol.SpanProtocol]: ...
+    def child(
+        self,
+    ) -> tuple[fltk.fegen.pyrt.label_protocol.LabelProtocol | None, fltk.fegen.pyrt.span_protocol.SpanProtocol]: ...
 
     def insert(
-        self, index: int, child: fltk.fegen.pyrt.span_protocol.SpanProtocol, label: Label | None = None
+        self,
+        index: int,
+        child: fltk.fegen.pyrt.span_protocol.SpanProtocol,
+        label: fltk.fegen.pyrt.label_protocol.LabelProtocol | None = None,
     ) -> None: ...
 
-    def remove_at(self, index: int) -> tuple[Label | None, fltk.fegen.pyrt.span_protocol.SpanProtocol]: ...
+    def remove_at(
+        self, index: int
+    ) -> tuple[fltk.fegen.pyrt.label_protocol.LabelProtocol | None, fltk.fegen.pyrt.span_protocol.SpanProtocol]: ...
 
     def replace_at(
-        self, index: int, child: fltk.fegen.pyrt.span_protocol.SpanProtocol, label: Label | None = None
+        self,
+        index: int,
+        child: fltk.fegen.pyrt.span_protocol.SpanProtocol,
+        label: fltk.fegen.pyrt.label_protocol.LabelProtocol | None = None,
     ) -> None: ...
 
     def clear(self) -> None: ...
@@ -1391,35 +1903,64 @@ class ThreeToFiveDigits(typing.Protocol):
     def text(self) -> str: ...
 
 
-ThreeToFiveDigits.Label.VALUE = _ProtocolLabelMember("ThreeToFiveDigits.Label.VALUE")
+class ThreeToFiveDigitsLabel:
+    """Sentinels equal to either backend's ThreeToFiveDigits labels, for identifying one.
+
+    They are not a backend's own label objects, so insert() and replace_at() reject
+    them on every backend; pass those a label read off the node being mutated (from
+    children, remove_at() or variant()).
+    """
+
+    VALUE: typing.Final[fltk.fegen.pyrt.label_protocol.LabelProtocol] = _ProtocolLabelMember(
+        "ThreeToFiveDigits.Label.VALUE"
+    )
 
 
 class ExactlyTwoDigits(typing.Protocol):
-    class Label:
-        VALUE: typing.ClassVar[object]
-
     kind: typing.Literal[NodeKind.EXACTLYTWODIGITS] = NodeKind.EXACTLYTWODIGITS
     span: fltk.fegen.pyrt.span_protocol.SpanProtocol
-    children: list[tuple[Label | None, fltk.fegen.pyrt.span_protocol.SpanProtocol]]
 
-    def append(self, child: fltk.fegen.pyrt.span_protocol.SpanProtocol, label: Label | None = None) -> None: ...
+    @property
+    def children(
+        self,
+    ) -> typing.Sequence[
+        tuple[fltk.fegen.pyrt.label_protocol.LabelProtocol | None, fltk.fegen.pyrt.span_protocol.SpanProtocol]
+    ]: ...
+
+    def append(
+        self,
+        child: fltk.fegen.pyrt.span_protocol.SpanProtocol,
+        label: fltk.fegen.pyrt.label_protocol.LabelProtocol | None = None,
+    ) -> None: ...
 
     def extend(
-        self, children: typing.Iterable[fltk.fegen.pyrt.span_protocol.SpanProtocol], label: Label | None = None
+        self,
+        children: typing.Iterable[fltk.fegen.pyrt.span_protocol.SpanProtocol],
+        label: fltk.fegen.pyrt.label_protocol.LabelProtocol | None = None,
     ) -> None: ...
 
     def extend_children(self, other: ExactlyTwoDigits) -> None: ...
 
-    def child(self) -> tuple[Label | None, fltk.fegen.pyrt.span_protocol.SpanProtocol]: ...
+    def child(
+        self,
+    ) -> tuple[fltk.fegen.pyrt.label_protocol.LabelProtocol | None, fltk.fegen.pyrt.span_protocol.SpanProtocol]: ...
 
     def insert(
-        self, index: int, child: fltk.fegen.pyrt.span_protocol.SpanProtocol, label: Label | None = None
+        self,
+        index: int,
+        child: fltk.fegen.pyrt.span_protocol.SpanProtocol,
+        label: fltk.fegen.pyrt.label_protocol.LabelProtocol | None = None,
     ) -> None: ...
 
-    def remove_at(self, index: int) -> tuple[Label | None, fltk.fegen.pyrt.span_protocol.SpanProtocol]: ...
+    def remove_at(
+        self, index: int
+    ) -> tuple[fltk.fegen.pyrt.label_protocol.LabelProtocol | None, fltk.fegen.pyrt.span_protocol.SpanProtocol]: ...
 
     def replace_at(
-        self, index: int, child: fltk.fegen.pyrt.span_protocol.SpanProtocol, label: Label | None = None
+        self,
+        index: int,
+        child: fltk.fegen.pyrt.span_protocol.SpanProtocol,
+        label: fltk.fegen.pyrt.label_protocol.LabelProtocol | None = None,
     ) -> None: ...
 
     def clear(self) -> None: ...
@@ -1441,35 +1982,64 @@ class ExactlyTwoDigits(typing.Protocol):
     def text(self) -> str: ...
 
 
-ExactlyTwoDigits.Label.VALUE = _ProtocolLabelMember("ExactlyTwoDigits.Label.VALUE")
+class ExactlyTwoDigitsLabel:
+    """Sentinels equal to either backend's ExactlyTwoDigits labels, for identifying one.
+
+    They are not a backend's own label objects, so insert() and replace_at() reject
+    them on every backend; pass those a label read off the node being mutated (from
+    children, remove_at() or variant()).
+    """
+
+    VALUE: typing.Final[fltk.fegen.pyrt.label_protocol.LabelProtocol] = _ProtocolLabelMember(
+        "ExactlyTwoDigits.Label.VALUE"
+    )
 
 
 class EscapedMetas(typing.Protocol):
-    class Label:
-        VALUE: typing.ClassVar[object]
-
     kind: typing.Literal[NodeKind.ESCAPEDMETAS] = NodeKind.ESCAPEDMETAS
     span: fltk.fegen.pyrt.span_protocol.SpanProtocol
-    children: list[tuple[Label | None, fltk.fegen.pyrt.span_protocol.SpanProtocol]]
 
-    def append(self, child: fltk.fegen.pyrt.span_protocol.SpanProtocol, label: Label | None = None) -> None: ...
+    @property
+    def children(
+        self,
+    ) -> typing.Sequence[
+        tuple[fltk.fegen.pyrt.label_protocol.LabelProtocol | None, fltk.fegen.pyrt.span_protocol.SpanProtocol]
+    ]: ...
+
+    def append(
+        self,
+        child: fltk.fegen.pyrt.span_protocol.SpanProtocol,
+        label: fltk.fegen.pyrt.label_protocol.LabelProtocol | None = None,
+    ) -> None: ...
 
     def extend(
-        self, children: typing.Iterable[fltk.fegen.pyrt.span_protocol.SpanProtocol], label: Label | None = None
+        self,
+        children: typing.Iterable[fltk.fegen.pyrt.span_protocol.SpanProtocol],
+        label: fltk.fegen.pyrt.label_protocol.LabelProtocol | None = None,
     ) -> None: ...
 
     def extend_children(self, other: EscapedMetas) -> None: ...
 
-    def child(self) -> tuple[Label | None, fltk.fegen.pyrt.span_protocol.SpanProtocol]: ...
+    def child(
+        self,
+    ) -> tuple[fltk.fegen.pyrt.label_protocol.LabelProtocol | None, fltk.fegen.pyrt.span_protocol.SpanProtocol]: ...
 
     def insert(
-        self, index: int, child: fltk.fegen.pyrt.span_protocol.SpanProtocol, label: Label | None = None
+        self,
+        index: int,
+        child: fltk.fegen.pyrt.span_protocol.SpanProtocol,
+        label: fltk.fegen.pyrt.label_protocol.LabelProtocol | None = None,
     ) -> None: ...
 
-    def remove_at(self, index: int) -> tuple[Label | None, fltk.fegen.pyrt.span_protocol.SpanProtocol]: ...
+    def remove_at(
+        self, index: int
+    ) -> tuple[fltk.fegen.pyrt.label_protocol.LabelProtocol | None, fltk.fegen.pyrt.span_protocol.SpanProtocol]: ...
 
     def replace_at(
-        self, index: int, child: fltk.fegen.pyrt.span_protocol.SpanProtocol, label: Label | None = None
+        self,
+        index: int,
+        child: fltk.fegen.pyrt.span_protocol.SpanProtocol,
+        label: fltk.fegen.pyrt.label_protocol.LabelProtocol | None = None,
     ) -> None: ...
 
     def clear(self) -> None: ...
@@ -1491,35 +2061,62 @@ class EscapedMetas(typing.Protocol):
     def text(self) -> str: ...
 
 
-EscapedMetas.Label.VALUE = _ProtocolLabelMember("EscapedMetas.Label.VALUE")
+class EscapedMetasLabel:
+    """Sentinels equal to either backend's EscapedMetas labels, for identifying one.
+
+    They are not a backend's own label objects, so insert() and replace_at() reject
+    them on every backend; pass those a label read off the node being mutated (from
+    children, remove_at() or variant()).
+    """
+
+    VALUE: typing.Final[fltk.fegen.pyrt.label_protocol.LabelProtocol] = _ProtocolLabelMember("EscapedMetas.Label.VALUE")
 
 
 class LatinRange(typing.Protocol):
-    class Label:
-        VALUE: typing.ClassVar[object]
-
     kind: typing.Literal[NodeKind.LATINRANGE] = NodeKind.LATINRANGE
     span: fltk.fegen.pyrt.span_protocol.SpanProtocol
-    children: list[tuple[Label | None, fltk.fegen.pyrt.span_protocol.SpanProtocol]]
 
-    def append(self, child: fltk.fegen.pyrt.span_protocol.SpanProtocol, label: Label | None = None) -> None: ...
+    @property
+    def children(
+        self,
+    ) -> typing.Sequence[
+        tuple[fltk.fegen.pyrt.label_protocol.LabelProtocol | None, fltk.fegen.pyrt.span_protocol.SpanProtocol]
+    ]: ...
+
+    def append(
+        self,
+        child: fltk.fegen.pyrt.span_protocol.SpanProtocol,
+        label: fltk.fegen.pyrt.label_protocol.LabelProtocol | None = None,
+    ) -> None: ...
 
     def extend(
-        self, children: typing.Iterable[fltk.fegen.pyrt.span_protocol.SpanProtocol], label: Label | None = None
+        self,
+        children: typing.Iterable[fltk.fegen.pyrt.span_protocol.SpanProtocol],
+        label: fltk.fegen.pyrt.label_protocol.LabelProtocol | None = None,
     ) -> None: ...
 
     def extend_children(self, other: LatinRange) -> None: ...
 
-    def child(self) -> tuple[Label | None, fltk.fegen.pyrt.span_protocol.SpanProtocol]: ...
+    def child(
+        self,
+    ) -> tuple[fltk.fegen.pyrt.label_protocol.LabelProtocol | None, fltk.fegen.pyrt.span_protocol.SpanProtocol]: ...
 
     def insert(
-        self, index: int, child: fltk.fegen.pyrt.span_protocol.SpanProtocol, label: Label | None = None
+        self,
+        index: int,
+        child: fltk.fegen.pyrt.span_protocol.SpanProtocol,
+        label: fltk.fegen.pyrt.label_protocol.LabelProtocol | None = None,
     ) -> None: ...
 
-    def remove_at(self, index: int) -> tuple[Label | None, fltk.fegen.pyrt.span_protocol.SpanProtocol]: ...
+    def remove_at(
+        self, index: int
+    ) -> tuple[fltk.fegen.pyrt.label_protocol.LabelProtocol | None, fltk.fegen.pyrt.span_protocol.SpanProtocol]: ...
 
     def replace_at(
-        self, index: int, child: fltk.fegen.pyrt.span_protocol.SpanProtocol, label: Label | None = None
+        self,
+        index: int,
+        child: fltk.fegen.pyrt.span_protocol.SpanProtocol,
+        label: fltk.fegen.pyrt.label_protocol.LabelProtocol | None = None,
     ) -> None: ...
 
     def clear(self) -> None: ...
@@ -1541,35 +2138,62 @@ class LatinRange(typing.Protocol):
     def text(self) -> str: ...
 
 
-LatinRange.Label.VALUE = _ProtocolLabelMember("LatinRange.Label.VALUE")
+class LatinRangeLabel:
+    """Sentinels equal to either backend's LatinRange labels, for identifying one.
+
+    They are not a backend's own label objects, so insert() and replace_at() reject
+    them on every backend; pass those a label read off the node being mutated (from
+    children, remove_at() or variant()).
+    """
+
+    VALUE: typing.Final[fltk.fegen.pyrt.label_protocol.LabelProtocol] = _ProtocolLabelMember("LatinRange.Label.VALUE")
 
 
 class NcGroupAlt(typing.Protocol):
-    class Label:
-        VALUE: typing.ClassVar[object]
-
     kind: typing.Literal[NodeKind.NCGROUPALT] = NodeKind.NCGROUPALT
     span: fltk.fegen.pyrt.span_protocol.SpanProtocol
-    children: list[tuple[Label | None, fltk.fegen.pyrt.span_protocol.SpanProtocol]]
 
-    def append(self, child: fltk.fegen.pyrt.span_protocol.SpanProtocol, label: Label | None = None) -> None: ...
+    @property
+    def children(
+        self,
+    ) -> typing.Sequence[
+        tuple[fltk.fegen.pyrt.label_protocol.LabelProtocol | None, fltk.fegen.pyrt.span_protocol.SpanProtocol]
+    ]: ...
+
+    def append(
+        self,
+        child: fltk.fegen.pyrt.span_protocol.SpanProtocol,
+        label: fltk.fegen.pyrt.label_protocol.LabelProtocol | None = None,
+    ) -> None: ...
 
     def extend(
-        self, children: typing.Iterable[fltk.fegen.pyrt.span_protocol.SpanProtocol], label: Label | None = None
+        self,
+        children: typing.Iterable[fltk.fegen.pyrt.span_protocol.SpanProtocol],
+        label: fltk.fegen.pyrt.label_protocol.LabelProtocol | None = None,
     ) -> None: ...
 
     def extend_children(self, other: NcGroupAlt) -> None: ...
 
-    def child(self) -> tuple[Label | None, fltk.fegen.pyrt.span_protocol.SpanProtocol]: ...
+    def child(
+        self,
+    ) -> tuple[fltk.fegen.pyrt.label_protocol.LabelProtocol | None, fltk.fegen.pyrt.span_protocol.SpanProtocol]: ...
 
     def insert(
-        self, index: int, child: fltk.fegen.pyrt.span_protocol.SpanProtocol, label: Label | None = None
+        self,
+        index: int,
+        child: fltk.fegen.pyrt.span_protocol.SpanProtocol,
+        label: fltk.fegen.pyrt.label_protocol.LabelProtocol | None = None,
     ) -> None: ...
 
-    def remove_at(self, index: int) -> tuple[Label | None, fltk.fegen.pyrt.span_protocol.SpanProtocol]: ...
+    def remove_at(
+        self, index: int
+    ) -> tuple[fltk.fegen.pyrt.label_protocol.LabelProtocol | None, fltk.fegen.pyrt.span_protocol.SpanProtocol]: ...
 
     def replace_at(
-        self, index: int, child: fltk.fegen.pyrt.span_protocol.SpanProtocol, label: Label | None = None
+        self,
+        index: int,
+        child: fltk.fegen.pyrt.span_protocol.SpanProtocol,
+        label: fltk.fegen.pyrt.label_protocol.LabelProtocol | None = None,
     ) -> None: ...
 
     def clear(self) -> None: ...
@@ -1591,35 +2215,62 @@ class NcGroupAlt(typing.Protocol):
     def text(self) -> str: ...
 
 
-NcGroupAlt.Label.VALUE = _ProtocolLabelMember("NcGroupAlt.Label.VALUE")
+class NcGroupAltLabel:
+    """Sentinels equal to either backend's NcGroupAlt labels, for identifying one.
+
+    They are not a backend's own label objects, so insert() and replace_at() reject
+    them on every backend; pass those a label read off the node being mutated (from
+    children, remove_at() or variant()).
+    """
+
+    VALUE: typing.Final[fltk.fegen.pyrt.label_protocol.LabelProtocol] = _ProtocolLabelMember("NcGroupAlt.Label.VALUE")
 
 
 class CaseInsensitive(typing.Protocol):
-    class Label:
-        VALUE: typing.ClassVar[object]
-
     kind: typing.Literal[NodeKind.CASEINSENSITIVE] = NodeKind.CASEINSENSITIVE
     span: fltk.fegen.pyrt.span_protocol.SpanProtocol
-    children: list[tuple[Label | None, fltk.fegen.pyrt.span_protocol.SpanProtocol]]
 
-    def append(self, child: fltk.fegen.pyrt.span_protocol.SpanProtocol, label: Label | None = None) -> None: ...
+    @property
+    def children(
+        self,
+    ) -> typing.Sequence[
+        tuple[fltk.fegen.pyrt.label_protocol.LabelProtocol | None, fltk.fegen.pyrt.span_protocol.SpanProtocol]
+    ]: ...
+
+    def append(
+        self,
+        child: fltk.fegen.pyrt.span_protocol.SpanProtocol,
+        label: fltk.fegen.pyrt.label_protocol.LabelProtocol | None = None,
+    ) -> None: ...
 
     def extend(
-        self, children: typing.Iterable[fltk.fegen.pyrt.span_protocol.SpanProtocol], label: Label | None = None
+        self,
+        children: typing.Iterable[fltk.fegen.pyrt.span_protocol.SpanProtocol],
+        label: fltk.fegen.pyrt.label_protocol.LabelProtocol | None = None,
     ) -> None: ...
 
     def extend_children(self, other: CaseInsensitive) -> None: ...
 
-    def child(self) -> tuple[Label | None, fltk.fegen.pyrt.span_protocol.SpanProtocol]: ...
+    def child(
+        self,
+    ) -> tuple[fltk.fegen.pyrt.label_protocol.LabelProtocol | None, fltk.fegen.pyrt.span_protocol.SpanProtocol]: ...
 
     def insert(
-        self, index: int, child: fltk.fegen.pyrt.span_protocol.SpanProtocol, label: Label | None = None
+        self,
+        index: int,
+        child: fltk.fegen.pyrt.span_protocol.SpanProtocol,
+        label: fltk.fegen.pyrt.label_protocol.LabelProtocol | None = None,
     ) -> None: ...
 
-    def remove_at(self, index: int) -> tuple[Label | None, fltk.fegen.pyrt.span_protocol.SpanProtocol]: ...
+    def remove_at(
+        self, index: int
+    ) -> tuple[fltk.fegen.pyrt.label_protocol.LabelProtocol | None, fltk.fegen.pyrt.span_protocol.SpanProtocol]: ...
 
     def replace_at(
-        self, index: int, child: fltk.fegen.pyrt.span_protocol.SpanProtocol, label: Label | None = None
+        self,
+        index: int,
+        child: fltk.fegen.pyrt.span_protocol.SpanProtocol,
+        label: fltk.fegen.pyrt.label_protocol.LabelProtocol | None = None,
     ) -> None: ...
 
     def clear(self) -> None: ...
@@ -1641,35 +2292,64 @@ class CaseInsensitive(typing.Protocol):
     def text(self) -> str: ...
 
 
-CaseInsensitive.Label.VALUE = _ProtocolLabelMember("CaseInsensitive.Label.VALUE")
+class CaseInsensitiveLabel:
+    """Sentinels equal to either backend's CaseInsensitive labels, for identifying one.
+
+    They are not a backend's own label objects, so insert() and replace_at() reject
+    them on every backend; pass those a label read off the node being mutated (from
+    children, remove_at() or variant()).
+    """
+
+    VALUE: typing.Final[fltk.fegen.pyrt.label_protocol.LabelProtocol] = _ProtocolLabelMember(
+        "CaseInsensitive.Label.VALUE"
+    )
 
 
 class AnchoredWord(typing.Protocol):
-    class Label:
-        VALUE: typing.ClassVar[object]
-
     kind: typing.Literal[NodeKind.ANCHOREDWORD] = NodeKind.ANCHOREDWORD
     span: fltk.fegen.pyrt.span_protocol.SpanProtocol
-    children: list[tuple[Label | None, fltk.fegen.pyrt.span_protocol.SpanProtocol]]
 
-    def append(self, child: fltk.fegen.pyrt.span_protocol.SpanProtocol, label: Label | None = None) -> None: ...
+    @property
+    def children(
+        self,
+    ) -> typing.Sequence[
+        tuple[fltk.fegen.pyrt.label_protocol.LabelProtocol | None, fltk.fegen.pyrt.span_protocol.SpanProtocol]
+    ]: ...
+
+    def append(
+        self,
+        child: fltk.fegen.pyrt.span_protocol.SpanProtocol,
+        label: fltk.fegen.pyrt.label_protocol.LabelProtocol | None = None,
+    ) -> None: ...
 
     def extend(
-        self, children: typing.Iterable[fltk.fegen.pyrt.span_protocol.SpanProtocol], label: Label | None = None
+        self,
+        children: typing.Iterable[fltk.fegen.pyrt.span_protocol.SpanProtocol],
+        label: fltk.fegen.pyrt.label_protocol.LabelProtocol | None = None,
     ) -> None: ...
 
     def extend_children(self, other: AnchoredWord) -> None: ...
 
-    def child(self) -> tuple[Label | None, fltk.fegen.pyrt.span_protocol.SpanProtocol]: ...
+    def child(
+        self,
+    ) -> tuple[fltk.fegen.pyrt.label_protocol.LabelProtocol | None, fltk.fegen.pyrt.span_protocol.SpanProtocol]: ...
 
     def insert(
-        self, index: int, child: fltk.fegen.pyrt.span_protocol.SpanProtocol, label: Label | None = None
+        self,
+        index: int,
+        child: fltk.fegen.pyrt.span_protocol.SpanProtocol,
+        label: fltk.fegen.pyrt.label_protocol.LabelProtocol | None = None,
     ) -> None: ...
 
-    def remove_at(self, index: int) -> tuple[Label | None, fltk.fegen.pyrt.span_protocol.SpanProtocol]: ...
+    def remove_at(
+        self, index: int
+    ) -> tuple[fltk.fegen.pyrt.label_protocol.LabelProtocol | None, fltk.fegen.pyrt.span_protocol.SpanProtocol]: ...
 
     def replace_at(
-        self, index: int, child: fltk.fegen.pyrt.span_protocol.SpanProtocol, label: Label | None = None
+        self,
+        index: int,
+        child: fltk.fegen.pyrt.span_protocol.SpanProtocol,
+        label: fltk.fegen.pyrt.label_protocol.LabelProtocol | None = None,
     ) -> None: ...
 
     def clear(self) -> None: ...
@@ -1691,31 +2371,43 @@ class AnchoredWord(typing.Protocol):
     def text(self) -> str: ...
 
 
-AnchoredWord.Label.VALUE = _ProtocolLabelMember("AnchoredWord.Label.VALUE")
+class AnchoredWordLabel:
+    """Sentinels equal to either backend's AnchoredWord labels, for identifying one.
+
+    They are not a backend's own label objects, so insert() and replace_at() reject
+    them on every backend; pass those a label read off the node being mutated (from
+    children, remove_at() or variant()).
+    """
+
+    VALUE: typing.Final[fltk.fegen.pyrt.label_protocol.LabelProtocol] = _ProtocolLabelMember("AnchoredWord.Label.VALUE")
 
 
 class Pair(typing.Protocol):
-    class Label:
-        KEY: typing.ClassVar[object]
-        VAL: typing.ClassVar[object]
-
     kind: typing.Literal[NodeKind.PAIR] = NodeKind.PAIR
     span: fltk.fegen.pyrt.span_protocol.SpanProtocol
-    children: list[tuple[Label | None, Name | Num]]
 
-    def append(self, child: Name | Num, label: Label | None = None) -> None: ...
+    @property
+    def children(self) -> typing.Sequence[tuple[fltk.fegen.pyrt.label_protocol.LabelProtocol | None, Name | Num]]: ...
 
-    def extend(self, children: typing.Iterable[Name | Num], label: Label | None = None) -> None: ...
+    def append(self, child: Name | Num, label: fltk.fegen.pyrt.label_protocol.LabelProtocol | None = None) -> None: ...
+
+    def extend(
+        self, children: typing.Iterable[Name | Num], label: fltk.fegen.pyrt.label_protocol.LabelProtocol | None = None
+    ) -> None: ...
 
     def extend_children(self, other: Pair) -> None: ...
 
-    def child(self) -> tuple[Label | None, Name | Num]: ...
+    def child(self) -> tuple[fltk.fegen.pyrt.label_protocol.LabelProtocol | None, Name | Num]: ...
 
-    def insert(self, index: int, child: Name | Num, label: Label | None = None) -> None: ...
+    def insert(
+        self, index: int, child: Name | Num, label: fltk.fegen.pyrt.label_protocol.LabelProtocol | None = None
+    ) -> None: ...
 
-    def remove_at(self, index: int) -> tuple[Label | None, Name | Num]: ...
+    def remove_at(self, index: int) -> tuple[fltk.fegen.pyrt.label_protocol.LabelProtocol | None, Name | Num]: ...
 
-    def replace_at(self, index: int, child: Name | Num, label: Label | None = None) -> None: ...
+    def replace_at(
+        self, index: int, child: Name | Num, label: fltk.fegen.pyrt.label_protocol.LabelProtocol | None = None
+    ) -> None: ...
 
     def clear(self) -> None: ...
 
@@ -1744,32 +2436,44 @@ class Pair(typing.Protocol):
     def val(self) -> Num: ...
 
 
-Pair.Label.KEY = _ProtocolLabelMember("Pair.Label.KEY")
-Pair.Label.VAL = _ProtocolLabelMember("Pair.Label.VAL")
+class PairLabel:
+    """Sentinels equal to either backend's Pair labels, for identifying one.
+
+    They are not a backend's own label objects, so insert() and replace_at() reject
+    them on every backend; pass those a label read off the node being mutated (from
+    children, remove_at() or variant()).
+    """
+
+    KEY: typing.Final[fltk.fegen.pyrt.label_protocol.LabelProtocol] = _ProtocolLabelMember("Pair.Label.KEY")
+    VAL: typing.Final[fltk.fegen.pyrt.label_protocol.LabelProtocol] = _ProtocolLabelMember("Pair.Label.VAL")
 
 
 class Wrapper(typing.Protocol):
-    class Label:
-        KEY: typing.ClassVar[object]
-        VAL: typing.ClassVar[object]
-
     kind: typing.Literal[NodeKind.WRAPPER] = NodeKind.WRAPPER
     span: fltk.fegen.pyrt.span_protocol.SpanProtocol
-    children: list[tuple[Label | None, Name | Num]]
 
-    def append(self, child: Name | Num, label: Label | None = None) -> None: ...
+    @property
+    def children(self) -> typing.Sequence[tuple[fltk.fegen.pyrt.label_protocol.LabelProtocol | None, Name | Num]]: ...
 
-    def extend(self, children: typing.Iterable[Name | Num], label: Label | None = None) -> None: ...
+    def append(self, child: Name | Num, label: fltk.fegen.pyrt.label_protocol.LabelProtocol | None = None) -> None: ...
+
+    def extend(
+        self, children: typing.Iterable[Name | Num], label: fltk.fegen.pyrt.label_protocol.LabelProtocol | None = None
+    ) -> None: ...
 
     def extend_children(self, other: Wrapper) -> None: ...
 
-    def child(self) -> tuple[Label | None, Name | Num]: ...
+    def child(self) -> tuple[fltk.fegen.pyrt.label_protocol.LabelProtocol | None, Name | Num]: ...
 
-    def insert(self, index: int, child: Name | Num, label: Label | None = None) -> None: ...
+    def insert(
+        self, index: int, child: Name | Num, label: fltk.fegen.pyrt.label_protocol.LabelProtocol | None = None
+    ) -> None: ...
 
-    def remove_at(self, index: int) -> tuple[Label | None, Name | Num]: ...
+    def remove_at(self, index: int) -> tuple[fltk.fegen.pyrt.label_protocol.LabelProtocol | None, Name | Num]: ...
 
-    def replace_at(self, index: int, child: Name | Num, label: Label | None = None) -> None: ...
+    def replace_at(
+        self, index: int, child: Name | Num, label: fltk.fegen.pyrt.label_protocol.LabelProtocol | None = None
+    ) -> None: ...
 
     def clear(self) -> None: ...
 
@@ -1798,32 +2502,44 @@ class Wrapper(typing.Protocol):
     def val(self) -> Num: ...
 
 
-Wrapper.Label.KEY = _ProtocolLabelMember("Wrapper.Label.KEY")
-Wrapper.Label.VAL = _ProtocolLabelMember("Wrapper.Label.VAL")
+class WrapperLabel:
+    """Sentinels equal to either backend's Wrapper labels, for identifying one.
+
+    They are not a backend's own label objects, so insert() and replace_at() reject
+    them on every backend; pass those a label read off the node being mutated (from
+    children, remove_at() or variant()).
+    """
+
+    KEY: typing.Final[fltk.fegen.pyrt.label_protocol.LabelProtocol] = _ProtocolLabelMember("Wrapper.Label.KEY")
+    VAL: typing.Final[fltk.fegen.pyrt.label_protocol.LabelProtocol] = _ProtocolLabelMember("Wrapper.Label.VAL")
 
 
 class OptWrapper(typing.Protocol):
-    class Label:
-        KEY: typing.ClassVar[object]
-        VAL: typing.ClassVar[object]
-
     kind: typing.Literal[NodeKind.OPTWRAPPER] = NodeKind.OPTWRAPPER
     span: fltk.fegen.pyrt.span_protocol.SpanProtocol
-    children: list[tuple[Label | None, Name | Num]]
 
-    def append(self, child: Name | Num, label: Label | None = None) -> None: ...
+    @property
+    def children(self) -> typing.Sequence[tuple[fltk.fegen.pyrt.label_protocol.LabelProtocol | None, Name | Num]]: ...
 
-    def extend(self, children: typing.Iterable[Name | Num], label: Label | None = None) -> None: ...
+    def append(self, child: Name | Num, label: fltk.fegen.pyrt.label_protocol.LabelProtocol | None = None) -> None: ...
+
+    def extend(
+        self, children: typing.Iterable[Name | Num], label: fltk.fegen.pyrt.label_protocol.LabelProtocol | None = None
+    ) -> None: ...
 
     def extend_children(self, other: OptWrapper) -> None: ...
 
-    def child(self) -> tuple[Label | None, Name | Num]: ...
+    def child(self) -> tuple[fltk.fegen.pyrt.label_protocol.LabelProtocol | None, Name | Num]: ...
 
-    def insert(self, index: int, child: Name | Num, label: Label | None = None) -> None: ...
+    def insert(
+        self, index: int, child: Name | Num, label: fltk.fegen.pyrt.label_protocol.LabelProtocol | None = None
+    ) -> None: ...
 
-    def remove_at(self, index: int) -> tuple[Label | None, Name | Num]: ...
+    def remove_at(self, index: int) -> tuple[fltk.fegen.pyrt.label_protocol.LabelProtocol | None, Name | Num]: ...
 
-    def replace_at(self, index: int, child: Name | Num, label: Label | None = None) -> None: ...
+    def replace_at(
+        self, index: int, child: Name | Num, label: fltk.fegen.pyrt.label_protocol.LabelProtocol | None = None
+    ) -> None: ...
 
     def clear(self) -> None: ...
 
@@ -1852,32 +2568,44 @@ class OptWrapper(typing.Protocol):
     def val(self) -> Num | None: ...
 
 
-OptWrapper.Label.KEY = _ProtocolLabelMember("OptWrapper.Label.KEY")
-OptWrapper.Label.VAL = _ProtocolLabelMember("OptWrapper.Label.VAL")
+class OptWrapperLabel:
+    """Sentinels equal to either backend's OptWrapper labels, for identifying one.
+
+    They are not a backend's own label objects, so insert() and replace_at() reject
+    them on every backend; pass those a label read off the node being mutated (from
+    children, remove_at() or variant()).
+    """
+
+    KEY: typing.Final[fltk.fegen.pyrt.label_protocol.LabelProtocol] = _ProtocolLabelMember("OptWrapper.Label.KEY")
+    VAL: typing.Final[fltk.fegen.pyrt.label_protocol.LabelProtocol] = _ProtocolLabelMember("OptWrapper.Label.VAL")
 
 
 class RepWrapper(typing.Protocol):
-    class Label:
-        KEY: typing.ClassVar[object]
-        VAL: typing.ClassVar[object]
-
     kind: typing.Literal[NodeKind.REPWRAPPER] = NodeKind.REPWRAPPER
     span: fltk.fegen.pyrt.span_protocol.SpanProtocol
-    children: list[tuple[Label | None, Name | Num]]
 
-    def append(self, child: Name | Num, label: Label | None = None) -> None: ...
+    @property
+    def children(self) -> typing.Sequence[tuple[fltk.fegen.pyrt.label_protocol.LabelProtocol | None, Name | Num]]: ...
 
-    def extend(self, children: typing.Iterable[Name | Num], label: Label | None = None) -> None: ...
+    def append(self, child: Name | Num, label: fltk.fegen.pyrt.label_protocol.LabelProtocol | None = None) -> None: ...
+
+    def extend(
+        self, children: typing.Iterable[Name | Num], label: fltk.fegen.pyrt.label_protocol.LabelProtocol | None = None
+    ) -> None: ...
 
     def extend_children(self, other: RepWrapper) -> None: ...
 
-    def child(self) -> tuple[Label | None, Name | Num]: ...
+    def child(self) -> tuple[fltk.fegen.pyrt.label_protocol.LabelProtocol | None, Name | Num]: ...
 
-    def insert(self, index: int, child: Name | Num, label: Label | None = None) -> None: ...
+    def insert(
+        self, index: int, child: Name | Num, label: fltk.fegen.pyrt.label_protocol.LabelProtocol | None = None
+    ) -> None: ...
 
-    def remove_at(self, index: int) -> tuple[Label | None, Name | Num]: ...
+    def remove_at(self, index: int) -> tuple[fltk.fegen.pyrt.label_protocol.LabelProtocol | None, Name | Num]: ...
 
-    def replace_at(self, index: int, child: Name | Num, label: Label | None = None) -> None: ...
+    def replace_at(
+        self, index: int, child: Name | Num, label: fltk.fegen.pyrt.label_protocol.LabelProtocol | None = None
+    ) -> None: ...
 
     def clear(self) -> None: ...
 
@@ -1901,42 +2629,72 @@ class RepWrapper(typing.Protocol):
 
     def maybe_val(self) -> Num | None: ...
 
-    def key(self) -> list[Name]: ...
+    def key(self) -> typing.Sequence[Name]: ...
 
-    def val(self) -> list[Num]: ...
+    def val(self) -> typing.Sequence[Num]: ...
 
 
-RepWrapper.Label.KEY = _ProtocolLabelMember("RepWrapper.Label.KEY")
-RepWrapper.Label.VAL = _ProtocolLabelMember("RepWrapper.Label.VAL")
+class RepWrapperLabel:
+    """Sentinels equal to either backend's RepWrapper labels, for identifying one.
+
+    They are not a backend's own label objects, so insert() and replace_at() reject
+    them on every backend; pass those a label read off the node being mutated (from
+    children, remove_at() or variant()).
+    """
+
+    KEY: typing.Final[fltk.fegen.pyrt.label_protocol.LabelProtocol] = _ProtocolLabelMember("RepWrapper.Label.KEY")
+    VAL: typing.Final[fltk.fegen.pyrt.label_protocol.LabelProtocol] = _ProtocolLabelMember("RepWrapper.Label.VAL")
 
 
 class KwLabels(typing.Protocol):
-    class Label:
-        MATCH: typing.ClassVar[object]
-        TYPE: typing.ClassVar[object]
-
     kind: typing.Literal[NodeKind.KWLABELS] = NodeKind.KWLABELS
     span: fltk.fegen.pyrt.span_protocol.SpanProtocol
-    children: list[tuple[Label | None, Num | fltk.fegen.pyrt.span_protocol.SpanProtocol]]
 
-    def append(self, child: Num | fltk.fegen.pyrt.span_protocol.SpanProtocol, label: Label | None = None) -> None: ...
+    @property
+    def children(
+        self,
+    ) -> typing.Sequence[
+        tuple[fltk.fegen.pyrt.label_protocol.LabelProtocol | None, Num | fltk.fegen.pyrt.span_protocol.SpanProtocol]
+    ]: ...
+
+    def append(
+        self,
+        child: Num | fltk.fegen.pyrt.span_protocol.SpanProtocol,
+        label: fltk.fegen.pyrt.label_protocol.LabelProtocol | None = None,
+    ) -> None: ...
 
     def extend(
-        self, children: typing.Iterable[Num | fltk.fegen.pyrt.span_protocol.SpanProtocol], label: Label | None = None
+        self,
+        children: typing.Iterable[Num | fltk.fegen.pyrt.span_protocol.SpanProtocol],
+        label: fltk.fegen.pyrt.label_protocol.LabelProtocol | None = None,
     ) -> None: ...
 
     def extend_children(self, other: KwLabels) -> None: ...
 
-    def child(self) -> tuple[Label | None, Num | fltk.fegen.pyrt.span_protocol.SpanProtocol]: ...
+    def child(
+        self,
+    ) -> tuple[
+        fltk.fegen.pyrt.label_protocol.LabelProtocol | None, Num | fltk.fegen.pyrt.span_protocol.SpanProtocol
+    ]: ...
 
     def insert(
-        self, index: int, child: Num | fltk.fegen.pyrt.span_protocol.SpanProtocol, label: Label | None = None
+        self,
+        index: int,
+        child: Num | fltk.fegen.pyrt.span_protocol.SpanProtocol,
+        label: fltk.fegen.pyrt.label_protocol.LabelProtocol | None = None,
     ) -> None: ...
 
-    def remove_at(self, index: int) -> tuple[Label | None, Num | fltk.fegen.pyrt.span_protocol.SpanProtocol]: ...
+    def remove_at(
+        self, index: int
+    ) -> tuple[
+        fltk.fegen.pyrt.label_protocol.LabelProtocol | None, Num | fltk.fegen.pyrt.span_protocol.SpanProtocol
+    ]: ...
 
     def replace_at(
-        self, index: int, child: Num | fltk.fegen.pyrt.span_protocol.SpanProtocol, label: Label | None = None
+        self,
+        index: int,
+        child: Num | fltk.fegen.pyrt.span_protocol.SpanProtocol,
+        label: fltk.fegen.pyrt.label_protocol.LabelProtocol | None = None,
     ) -> None: ...
 
     def clear(self) -> None: ...
@@ -1968,37 +2726,63 @@ class KwLabels(typing.Protocol):
     def type_text(self) -> str: ...
 
 
-KwLabels.Label.MATCH = _ProtocolLabelMember("KwLabels.Label.MATCH")
-KwLabels.Label.TYPE = _ProtocolLabelMember("KwLabels.Label.TYPE")
+class KwLabelsLabel:
+    """Sentinels equal to either backend's KwLabels labels, for identifying one.
+
+    They are not a backend's own label objects, so insert() and replace_at() reject
+    them on every backend; pass those a label read off the node being mutated (from
+    children, remove_at() or variant()).
+    """
+
+    MATCH: typing.Final[fltk.fegen.pyrt.label_protocol.LabelProtocol] = _ProtocolLabelMember("KwLabels.Label.MATCH")
+    TYPE: typing.Final[fltk.fegen.pyrt.label_protocol.LabelProtocol] = _ProtocolLabelMember("KwLabels.Label.TYPE")
 
 
 class Quoted(typing.Protocol):
-    class Label:
-        TAIL: typing.ClassVar[object]
-        VALUE: typing.ClassVar[object]
-
     kind: typing.Literal[NodeKind.QUOTED] = NodeKind.QUOTED
     span: fltk.fegen.pyrt.span_protocol.SpanProtocol
-    children: list[tuple[Label | None, fltk.fegen.pyrt.span_protocol.SpanProtocol]]
 
-    def append(self, child: fltk.fegen.pyrt.span_protocol.SpanProtocol, label: Label | None = None) -> None: ...
+    @property
+    def children(
+        self,
+    ) -> typing.Sequence[
+        tuple[fltk.fegen.pyrt.label_protocol.LabelProtocol | None, fltk.fegen.pyrt.span_protocol.SpanProtocol]
+    ]: ...
+
+    def append(
+        self,
+        child: fltk.fegen.pyrt.span_protocol.SpanProtocol,
+        label: fltk.fegen.pyrt.label_protocol.LabelProtocol | None = None,
+    ) -> None: ...
 
     def extend(
-        self, children: typing.Iterable[fltk.fegen.pyrt.span_protocol.SpanProtocol], label: Label | None = None
+        self,
+        children: typing.Iterable[fltk.fegen.pyrt.span_protocol.SpanProtocol],
+        label: fltk.fegen.pyrt.label_protocol.LabelProtocol | None = None,
     ) -> None: ...
 
     def extend_children(self, other: Quoted) -> None: ...
 
-    def child(self) -> tuple[Label | None, fltk.fegen.pyrt.span_protocol.SpanProtocol]: ...
+    def child(
+        self,
+    ) -> tuple[fltk.fegen.pyrt.label_protocol.LabelProtocol | None, fltk.fegen.pyrt.span_protocol.SpanProtocol]: ...
 
     def insert(
-        self, index: int, child: fltk.fegen.pyrt.span_protocol.SpanProtocol, label: Label | None = None
+        self,
+        index: int,
+        child: fltk.fegen.pyrt.span_protocol.SpanProtocol,
+        label: fltk.fegen.pyrt.label_protocol.LabelProtocol | None = None,
     ) -> None: ...
 
-    def remove_at(self, index: int) -> tuple[Label | None, fltk.fegen.pyrt.span_protocol.SpanProtocol]: ...
+    def remove_at(
+        self, index: int
+    ) -> tuple[fltk.fegen.pyrt.label_protocol.LabelProtocol | None, fltk.fegen.pyrt.span_protocol.SpanProtocol]: ...
 
     def replace_at(
-        self, index: int, child: fltk.fegen.pyrt.span_protocol.SpanProtocol, label: Label | None = None
+        self,
+        index: int,
+        child: fltk.fegen.pyrt.span_protocol.SpanProtocol,
+        label: fltk.fegen.pyrt.label_protocol.LabelProtocol | None = None,
     ) -> None: ...
 
     def clear(self) -> None: ...
@@ -2034,37 +2818,67 @@ class Quoted(typing.Protocol):
     def text(self) -> str: ...
 
 
-Quoted.Label.TAIL = _ProtocolLabelMember("Quoted.Label.TAIL")
-Quoted.Label.VALUE = _ProtocolLabelMember("Quoted.Label.VALUE")
+class QuotedLabel:
+    """Sentinels equal to either backend's Quoted labels, for identifying one.
+
+    They are not a backend's own label objects, so insert() and replace_at() reject
+    them on every backend; pass those a label read off the node being mutated (from
+    children, remove_at() or variant()).
+    """
+
+    TAIL: typing.Final[fltk.fegen.pyrt.label_protocol.LabelProtocol] = _ProtocolLabelMember("Quoted.Label.TAIL")
+    VALUE: typing.Final[fltk.fegen.pyrt.label_protocol.LabelProtocol] = _ProtocolLabelMember("Quoted.Label.VALUE")
 
 
 class MixedOpt(typing.Protocol):
-    class Label:
-        KEY: typing.ClassVar[object]
-        NODE: typing.ClassVar[object]
-
     kind: typing.Literal[NodeKind.MIXEDOPT] = NodeKind.MIXEDOPT
     span: fltk.fegen.pyrt.span_protocol.SpanProtocol
-    children: list[tuple[Label | None, Num | fltk.fegen.pyrt.span_protocol.SpanProtocol]]
 
-    def append(self, child: Num | fltk.fegen.pyrt.span_protocol.SpanProtocol, label: Label | None = None) -> None: ...
+    @property
+    def children(
+        self,
+    ) -> typing.Sequence[
+        tuple[fltk.fegen.pyrt.label_protocol.LabelProtocol | None, Num | fltk.fegen.pyrt.span_protocol.SpanProtocol]
+    ]: ...
+
+    def append(
+        self,
+        child: Num | fltk.fegen.pyrt.span_protocol.SpanProtocol,
+        label: fltk.fegen.pyrt.label_protocol.LabelProtocol | None = None,
+    ) -> None: ...
 
     def extend(
-        self, children: typing.Iterable[Num | fltk.fegen.pyrt.span_protocol.SpanProtocol], label: Label | None = None
+        self,
+        children: typing.Iterable[Num | fltk.fegen.pyrt.span_protocol.SpanProtocol],
+        label: fltk.fegen.pyrt.label_protocol.LabelProtocol | None = None,
     ) -> None: ...
 
     def extend_children(self, other: MixedOpt) -> None: ...
 
-    def child(self) -> tuple[Label | None, Num | fltk.fegen.pyrt.span_protocol.SpanProtocol]: ...
+    def child(
+        self,
+    ) -> tuple[
+        fltk.fegen.pyrt.label_protocol.LabelProtocol | None, Num | fltk.fegen.pyrt.span_protocol.SpanProtocol
+    ]: ...
 
     def insert(
-        self, index: int, child: Num | fltk.fegen.pyrt.span_protocol.SpanProtocol, label: Label | None = None
+        self,
+        index: int,
+        child: Num | fltk.fegen.pyrt.span_protocol.SpanProtocol,
+        label: fltk.fegen.pyrt.label_protocol.LabelProtocol | None = None,
     ) -> None: ...
 
-    def remove_at(self, index: int) -> tuple[Label | None, Num | fltk.fegen.pyrt.span_protocol.SpanProtocol]: ...
+    def remove_at(
+        self, index: int
+    ) -> tuple[
+        fltk.fegen.pyrt.label_protocol.LabelProtocol | None, Num | fltk.fegen.pyrt.span_protocol.SpanProtocol
+    ]: ...
 
     def replace_at(
-        self, index: int, child: Num | fltk.fegen.pyrt.span_protocol.SpanProtocol, label: Label | None = None
+        self,
+        index: int,
+        child: Num | fltk.fegen.pyrt.span_protocol.SpanProtocol,
+        label: fltk.fegen.pyrt.label_protocol.LabelProtocol | None = None,
     ) -> None: ...
 
     def clear(self) -> None: ...
@@ -2096,36 +2910,63 @@ class MixedOpt(typing.Protocol):
     def node(self) -> Num: ...
 
 
-MixedOpt.Label.KEY = _ProtocolLabelMember("MixedOpt.Label.KEY")
-MixedOpt.Label.NODE = _ProtocolLabelMember("MixedOpt.Label.NODE")
+class MixedOptLabel:
+    """Sentinels equal to either backend's MixedOpt labels, for identifying one.
+
+    They are not a backend's own label objects, so insert() and replace_at() reject
+    them on every backend; pass those a label read off the node being mutated (from
+    children, remove_at() or variant()).
+    """
+
+    KEY: typing.Final[fltk.fegen.pyrt.label_protocol.LabelProtocol] = _ProtocolLabelMember("MixedOpt.Label.KEY")
+    NODE: typing.Final[fltk.fegen.pyrt.label_protocol.LabelProtocol] = _ProtocolLabelMember("MixedOpt.Label.NODE")
 
 
 class UuidVal(typing.Protocol):
-    class Label:
-        VALUE: typing.ClassVar[object]
-
     kind: typing.Literal[NodeKind.UUIDVAL] = NodeKind.UUIDVAL
     span: fltk.fegen.pyrt.span_protocol.SpanProtocol
-    children: list[tuple[Label | None, fltk.fegen.pyrt.span_protocol.SpanProtocol]]
 
-    def append(self, child: fltk.fegen.pyrt.span_protocol.SpanProtocol, label: Label | None = None) -> None: ...
+    @property
+    def children(
+        self,
+    ) -> typing.Sequence[
+        tuple[fltk.fegen.pyrt.label_protocol.LabelProtocol | None, fltk.fegen.pyrt.span_protocol.SpanProtocol]
+    ]: ...
+
+    def append(
+        self,
+        child: fltk.fegen.pyrt.span_protocol.SpanProtocol,
+        label: fltk.fegen.pyrt.label_protocol.LabelProtocol | None = None,
+    ) -> None: ...
 
     def extend(
-        self, children: typing.Iterable[fltk.fegen.pyrt.span_protocol.SpanProtocol], label: Label | None = None
+        self,
+        children: typing.Iterable[fltk.fegen.pyrt.span_protocol.SpanProtocol],
+        label: fltk.fegen.pyrt.label_protocol.LabelProtocol | None = None,
     ) -> None: ...
 
     def extend_children(self, other: UuidVal) -> None: ...
 
-    def child(self) -> tuple[Label | None, fltk.fegen.pyrt.span_protocol.SpanProtocol]: ...
+    def child(
+        self,
+    ) -> tuple[fltk.fegen.pyrt.label_protocol.LabelProtocol | None, fltk.fegen.pyrt.span_protocol.SpanProtocol]: ...
 
     def insert(
-        self, index: int, child: fltk.fegen.pyrt.span_protocol.SpanProtocol, label: Label | None = None
+        self,
+        index: int,
+        child: fltk.fegen.pyrt.span_protocol.SpanProtocol,
+        label: fltk.fegen.pyrt.label_protocol.LabelProtocol | None = None,
     ) -> None: ...
 
-    def remove_at(self, index: int) -> tuple[Label | None, fltk.fegen.pyrt.span_protocol.SpanProtocol]: ...
+    def remove_at(
+        self, index: int
+    ) -> tuple[fltk.fegen.pyrt.label_protocol.LabelProtocol | None, fltk.fegen.pyrt.span_protocol.SpanProtocol]: ...
 
     def replace_at(
-        self, index: int, child: fltk.fegen.pyrt.span_protocol.SpanProtocol, label: Label | None = None
+        self,
+        index: int,
+        child: fltk.fegen.pyrt.span_protocol.SpanProtocol,
+        label: fltk.fegen.pyrt.label_protocol.LabelProtocol | None = None,
     ) -> None: ...
 
     def clear(self) -> None: ...
@@ -2147,35 +2988,62 @@ class UuidVal(typing.Protocol):
     def text(self) -> str: ...
 
 
-UuidVal.Label.VALUE = _ProtocolLabelMember("UuidVal.Label.VALUE")
+class UuidValLabel:
+    """Sentinels equal to either backend's UuidVal labels, for identifying one.
+
+    They are not a backend's own label objects, so insert() and replace_at() reject
+    them on every backend; pass those a label read off the node being mutated (from
+    children, remove_at() or variant()).
+    """
+
+    VALUE: typing.Final[fltk.fegen.pyrt.label_protocol.LabelProtocol] = _ProtocolLabelMember("UuidVal.Label.VALUE")
 
 
 class DecimalVal(typing.Protocol):
-    class Label:
-        VALUE: typing.ClassVar[object]
-
     kind: typing.Literal[NodeKind.DECIMALVAL] = NodeKind.DECIMALVAL
     span: fltk.fegen.pyrt.span_protocol.SpanProtocol
-    children: list[tuple[Label | None, fltk.fegen.pyrt.span_protocol.SpanProtocol]]
 
-    def append(self, child: fltk.fegen.pyrt.span_protocol.SpanProtocol, label: Label | None = None) -> None: ...
+    @property
+    def children(
+        self,
+    ) -> typing.Sequence[
+        tuple[fltk.fegen.pyrt.label_protocol.LabelProtocol | None, fltk.fegen.pyrt.span_protocol.SpanProtocol]
+    ]: ...
+
+    def append(
+        self,
+        child: fltk.fegen.pyrt.span_protocol.SpanProtocol,
+        label: fltk.fegen.pyrt.label_protocol.LabelProtocol | None = None,
+    ) -> None: ...
 
     def extend(
-        self, children: typing.Iterable[fltk.fegen.pyrt.span_protocol.SpanProtocol], label: Label | None = None
+        self,
+        children: typing.Iterable[fltk.fegen.pyrt.span_protocol.SpanProtocol],
+        label: fltk.fegen.pyrt.label_protocol.LabelProtocol | None = None,
     ) -> None: ...
 
     def extend_children(self, other: DecimalVal) -> None: ...
 
-    def child(self) -> tuple[Label | None, fltk.fegen.pyrt.span_protocol.SpanProtocol]: ...
+    def child(
+        self,
+    ) -> tuple[fltk.fegen.pyrt.label_protocol.LabelProtocol | None, fltk.fegen.pyrt.span_protocol.SpanProtocol]: ...
 
     def insert(
-        self, index: int, child: fltk.fegen.pyrt.span_protocol.SpanProtocol, label: Label | None = None
+        self,
+        index: int,
+        child: fltk.fegen.pyrt.span_protocol.SpanProtocol,
+        label: fltk.fegen.pyrt.label_protocol.LabelProtocol | None = None,
     ) -> None: ...
 
-    def remove_at(self, index: int) -> tuple[Label | None, fltk.fegen.pyrt.span_protocol.SpanProtocol]: ...
+    def remove_at(
+        self, index: int
+    ) -> tuple[fltk.fegen.pyrt.label_protocol.LabelProtocol | None, fltk.fegen.pyrt.span_protocol.SpanProtocol]: ...
 
     def replace_at(
-        self, index: int, child: fltk.fegen.pyrt.span_protocol.SpanProtocol, label: Label | None = None
+        self,
+        index: int,
+        child: fltk.fegen.pyrt.span_protocol.SpanProtocol,
+        label: fltk.fegen.pyrt.label_protocol.LabelProtocol | None = None,
     ) -> None: ...
 
     def clear(self) -> None: ...
@@ -2197,36 +3065,62 @@ class DecimalVal(typing.Protocol):
     def text(self) -> str: ...
 
 
-DecimalVal.Label.VALUE = _ProtocolLabelMember("DecimalVal.Label.VALUE")
+class DecimalValLabel:
+    """Sentinels equal to either backend's DecimalVal labels, for identifying one.
+
+    They are not a backend's own label objects, so insert() and replace_at() reject
+    them on every backend; pass those a label read off the node being mutated (from
+    children, remove_at() or variant()).
+    """
+
+    VALUE: typing.Final[fltk.fegen.pyrt.label_protocol.LabelProtocol] = _ProtocolLabelMember("DecimalVal.Label.VALUE")
 
 
 class Colour(typing.Protocol):
-    class Label:
-        DARK: typing.ClassVar[object]
-        SHADE: typing.ClassVar[object]
-
     kind: typing.Literal[NodeKind.COLOUR] = NodeKind.COLOUR
     span: fltk.fegen.pyrt.span_protocol.SpanProtocol
-    children: list[tuple[Label | None, fltk.fegen.pyrt.span_protocol.SpanProtocol]]
 
-    def append(self, child: fltk.fegen.pyrt.span_protocol.SpanProtocol, label: Label | None = None) -> None: ...
+    @property
+    def children(
+        self,
+    ) -> typing.Sequence[
+        tuple[fltk.fegen.pyrt.label_protocol.LabelProtocol | None, fltk.fegen.pyrt.span_protocol.SpanProtocol]
+    ]: ...
+
+    def append(
+        self,
+        child: fltk.fegen.pyrt.span_protocol.SpanProtocol,
+        label: fltk.fegen.pyrt.label_protocol.LabelProtocol | None = None,
+    ) -> None: ...
 
     def extend(
-        self, children: typing.Iterable[fltk.fegen.pyrt.span_protocol.SpanProtocol], label: Label | None = None
+        self,
+        children: typing.Iterable[fltk.fegen.pyrt.span_protocol.SpanProtocol],
+        label: fltk.fegen.pyrt.label_protocol.LabelProtocol | None = None,
     ) -> None: ...
 
     def extend_children(self, other: Colour) -> None: ...
 
-    def child(self) -> tuple[Label | None, fltk.fegen.pyrt.span_protocol.SpanProtocol]: ...
+    def child(
+        self,
+    ) -> tuple[fltk.fegen.pyrt.label_protocol.LabelProtocol | None, fltk.fegen.pyrt.span_protocol.SpanProtocol]: ...
 
     def insert(
-        self, index: int, child: fltk.fegen.pyrt.span_protocol.SpanProtocol, label: Label | None = None
+        self,
+        index: int,
+        child: fltk.fegen.pyrt.span_protocol.SpanProtocol,
+        label: fltk.fegen.pyrt.label_protocol.LabelProtocol | None = None,
     ) -> None: ...
 
-    def remove_at(self, index: int) -> tuple[Label | None, fltk.fegen.pyrt.span_protocol.SpanProtocol]: ...
+    def remove_at(
+        self, index: int
+    ) -> tuple[fltk.fegen.pyrt.label_protocol.LabelProtocol | None, fltk.fegen.pyrt.span_protocol.SpanProtocol]: ...
 
     def replace_at(
-        self, index: int, child: fltk.fegen.pyrt.span_protocol.SpanProtocol, label: Label | None = None
+        self,
+        index: int,
+        child: fltk.fegen.pyrt.span_protocol.SpanProtocol,
+        label: fltk.fegen.pyrt.label_protocol.LabelProtocol | None = None,
     ) -> None: ...
 
     def clear(self) -> None: ...
@@ -2261,46 +3155,73 @@ class Colour(typing.Protocol):
 
     def text(self) -> str: ...
 
-    def variant(self) -> Label: ...
+    def variant(self) -> fltk.fegen.pyrt.label_protocol.LabelProtocol: ...
 
 
-Colour.Label.DARK = _ProtocolLabelMember("Colour.Label.DARK")
-Colour.Label.SHADE = _ProtocolLabelMember("Colour.Label.SHADE")
+class ColourLabel:
+    """Sentinels equal to either backend's Colour labels, for identifying one.
+
+    They are not a backend's own label objects, so insert() and replace_at() reject
+    them on every backend; pass those a label read off the node being mutated (from
+    children, remove_at() or variant()).
+    """
+
+    DARK: typing.Final[fltk.fegen.pyrt.label_protocol.LabelProtocol] = _ProtocolLabelMember("Colour.Label.DARK")
+    SHADE: typing.Final[fltk.fegen.pyrt.label_protocol.LabelProtocol] = _ProtocolLabelMember("Colour.Label.SHADE")
 
 
 class SumChain(typing.Protocol):
-    class Label:
-        OP: typing.ClassVar[object]
-        TERM: typing.ClassVar[object]
-
     kind: typing.Literal[NodeKind.SUMCHAIN] = NodeKind.SUMCHAIN
     span: fltk.fegen.pyrt.span_protocol.SpanProtocol
-    children: list[tuple[Label | None, Num | Trivia | fltk.fegen.pyrt.span_protocol.SpanProtocol]]
+
+    @property
+    def children(
+        self,
+    ) -> typing.Sequence[
+        tuple[
+            fltk.fegen.pyrt.label_protocol.LabelProtocol | None,
+            Num | Trivia | fltk.fegen.pyrt.span_protocol.SpanProtocol,
+        ]
+    ]: ...
 
     def append(
-        self, child: Num | Trivia | fltk.fegen.pyrt.span_protocol.SpanProtocol, label: Label | None = None
+        self,
+        child: Num | Trivia | fltk.fegen.pyrt.span_protocol.SpanProtocol,
+        label: fltk.fegen.pyrt.label_protocol.LabelProtocol | None = None,
     ) -> None: ...
 
     def extend(
         self,
         children: typing.Iterable[Num | Trivia | fltk.fegen.pyrt.span_protocol.SpanProtocol],
-        label: Label | None = None,
+        label: fltk.fegen.pyrt.label_protocol.LabelProtocol | None = None,
     ) -> None: ...
 
     def extend_children(self, other: SumChain) -> None: ...
 
-    def child(self) -> tuple[Label | None, Num | Trivia | fltk.fegen.pyrt.span_protocol.SpanProtocol]: ...
+    def child(
+        self,
+    ) -> tuple[
+        fltk.fegen.pyrt.label_protocol.LabelProtocol | None, Num | Trivia | fltk.fegen.pyrt.span_protocol.SpanProtocol
+    ]: ...
 
     def insert(
-        self, index: int, child: Num | Trivia | fltk.fegen.pyrt.span_protocol.SpanProtocol, label: Label | None = None
+        self,
+        index: int,
+        child: Num | Trivia | fltk.fegen.pyrt.span_protocol.SpanProtocol,
+        label: fltk.fegen.pyrt.label_protocol.LabelProtocol | None = None,
     ) -> None: ...
 
     def remove_at(
         self, index: int
-    ) -> tuple[Label | None, Num | Trivia | fltk.fegen.pyrt.span_protocol.SpanProtocol]: ...
+    ) -> tuple[
+        fltk.fegen.pyrt.label_protocol.LabelProtocol | None, Num | Trivia | fltk.fegen.pyrt.span_protocol.SpanProtocol
+    ]: ...
 
     def replace_at(
-        self, index: int, child: Num | Trivia | fltk.fegen.pyrt.span_protocol.SpanProtocol, label: Label | None = None
+        self,
+        index: int,
+        child: Num | Trivia | fltk.fegen.pyrt.span_protocol.SpanProtocol,
+        label: fltk.fegen.pyrt.label_protocol.LabelProtocol | None = None,
     ) -> None: ...
 
     def clear(self) -> None: ...
@@ -2325,41 +3246,68 @@ class SumChain(typing.Protocol):
 
     def maybe_term(self) -> Num | None: ...
 
-    def op(self) -> list[fltk.fegen.pyrt.span_protocol.SpanProtocol]: ...
+    def op(self) -> typing.Sequence[fltk.fegen.pyrt.span_protocol.SpanProtocol]: ...
 
-    def term(self) -> list[Num]: ...
+    def term(self) -> typing.Sequence[Num]: ...
 
 
-SumChain.Label.OP = _ProtocolLabelMember("SumChain.Label.OP")
-SumChain.Label.TERM = _ProtocolLabelMember("SumChain.Label.TERM")
+class SumChainLabel:
+    """Sentinels equal to either backend's SumChain labels, for identifying one.
+
+    They are not a backend's own label objects, so insert() and replace_at() reject
+    them on every backend; pass those a label read off the node being mutated (from
+    children, remove_at() or variant()).
+    """
+
+    OP: typing.Final[fltk.fegen.pyrt.label_protocol.LabelProtocol] = _ProtocolLabelMember("SumChain.Label.OP")
+    TERM: typing.Final[fltk.fegen.pyrt.label_protocol.LabelProtocol] = _ProtocolLabelMember("SumChain.Label.TERM")
 
 
 class EntryKey(typing.Protocol):
-    class Label:
-        VALUE: typing.ClassVar[object]
-
     kind: typing.Literal[NodeKind.ENTRYKEY] = NodeKind.ENTRYKEY
     span: fltk.fegen.pyrt.span_protocol.SpanProtocol
-    children: list[tuple[Label | None, fltk.fegen.pyrt.span_protocol.SpanProtocol]]
 
-    def append(self, child: fltk.fegen.pyrt.span_protocol.SpanProtocol, label: Label | None = None) -> None: ...
+    @property
+    def children(
+        self,
+    ) -> typing.Sequence[
+        tuple[fltk.fegen.pyrt.label_protocol.LabelProtocol | None, fltk.fegen.pyrt.span_protocol.SpanProtocol]
+    ]: ...
+
+    def append(
+        self,
+        child: fltk.fegen.pyrt.span_protocol.SpanProtocol,
+        label: fltk.fegen.pyrt.label_protocol.LabelProtocol | None = None,
+    ) -> None: ...
 
     def extend(
-        self, children: typing.Iterable[fltk.fegen.pyrt.span_protocol.SpanProtocol], label: Label | None = None
+        self,
+        children: typing.Iterable[fltk.fegen.pyrt.span_protocol.SpanProtocol],
+        label: fltk.fegen.pyrt.label_protocol.LabelProtocol | None = None,
     ) -> None: ...
 
     def extend_children(self, other: EntryKey) -> None: ...
 
-    def child(self) -> tuple[Label | None, fltk.fegen.pyrt.span_protocol.SpanProtocol]: ...
+    def child(
+        self,
+    ) -> tuple[fltk.fegen.pyrt.label_protocol.LabelProtocol | None, fltk.fegen.pyrt.span_protocol.SpanProtocol]: ...
 
     def insert(
-        self, index: int, child: fltk.fegen.pyrt.span_protocol.SpanProtocol, label: Label | None = None
+        self,
+        index: int,
+        child: fltk.fegen.pyrt.span_protocol.SpanProtocol,
+        label: fltk.fegen.pyrt.label_protocol.LabelProtocol | None = None,
     ) -> None: ...
 
-    def remove_at(self, index: int) -> tuple[Label | None, fltk.fegen.pyrt.span_protocol.SpanProtocol]: ...
+    def remove_at(
+        self, index: int
+    ) -> tuple[fltk.fegen.pyrt.label_protocol.LabelProtocol | None, fltk.fegen.pyrt.span_protocol.SpanProtocol]: ...
 
     def replace_at(
-        self, index: int, child: fltk.fegen.pyrt.span_protocol.SpanProtocol, label: Label | None = None
+        self,
+        index: int,
+        child: fltk.fegen.pyrt.span_protocol.SpanProtocol,
+        label: fltk.fegen.pyrt.label_protocol.LabelProtocol | None = None,
     ) -> None: ...
 
     def clear(self) -> None: ...
@@ -2381,31 +3329,57 @@ class EntryKey(typing.Protocol):
     def text(self) -> str: ...
 
 
-EntryKey.Label.VALUE = _ProtocolLabelMember("EntryKey.Label.VALUE")
+class EntryKeyLabel:
+    """Sentinels equal to either backend's EntryKey labels, for identifying one.
+
+    They are not a backend's own label objects, so insert() and replace_at() reject
+    them on every backend; pass those a label read off the node being mutated (from
+    children, remove_at() or variant()).
+    """
+
+    VALUE: typing.Final[fltk.fegen.pyrt.label_protocol.LabelProtocol] = _ProtocolLabelMember("EntryKey.Label.VALUE")
 
 
 class Entry(typing.Protocol):
-    class Label:
-        KEY: typing.ClassVar[object]
-        VALUE: typing.ClassVar[object]
-
     kind: typing.Literal[NodeKind.ENTRY] = NodeKind.ENTRY
     span: fltk.fegen.pyrt.span_protocol.SpanProtocol
-    children: list[tuple[Label | None, Atom | EntryKey | Trivia]]
 
-    def append(self, child: Atom | EntryKey | Trivia, label: Label | None = None) -> None: ...
+    @property
+    def children(
+        self,
+    ) -> typing.Sequence[tuple[fltk.fegen.pyrt.label_protocol.LabelProtocol | None, Atom | EntryKey | Trivia]]: ...
 
-    def extend(self, children: typing.Iterable[Atom | EntryKey | Trivia], label: Label | None = None) -> None: ...
+    def append(
+        self, child: Atom | EntryKey | Trivia, label: fltk.fegen.pyrt.label_protocol.LabelProtocol | None = None
+    ) -> None: ...
+
+    def extend(
+        self,
+        children: typing.Iterable[Atom | EntryKey | Trivia],
+        label: fltk.fegen.pyrt.label_protocol.LabelProtocol | None = None,
+    ) -> None: ...
 
     def extend_children(self, other: Entry) -> None: ...
 
-    def child(self) -> tuple[Label | None, Atom | EntryKey | Trivia]: ...
+    def child(self) -> tuple[fltk.fegen.pyrt.label_protocol.LabelProtocol | None, Atom | EntryKey | Trivia]: ...
 
-    def insert(self, index: int, child: Atom | EntryKey | Trivia, label: Label | None = None) -> None: ...
+    def insert(
+        self,
+        index: int,
+        child: Atom | EntryKey | Trivia,
+        label: fltk.fegen.pyrt.label_protocol.LabelProtocol | None = None,
+    ) -> None: ...
 
-    def remove_at(self, index: int) -> tuple[Label | None, Atom | EntryKey | Trivia]: ...
+    def remove_at(
+        self, index: int
+    ) -> tuple[fltk.fegen.pyrt.label_protocol.LabelProtocol | None, Atom | EntryKey | Trivia]: ...
 
-    def replace_at(self, index: int, child: Atom | EntryKey | Trivia, label: Label | None = None) -> None: ...
+    def replace_at(
+        self,
+        index: int,
+        child: Atom | EntryKey | Trivia,
+        label: fltk.fegen.pyrt.label_protocol.LabelProtocol | None = None,
+    ) -> None: ...
 
     def clear(self) -> None: ...
 
@@ -2434,31 +3408,50 @@ class Entry(typing.Protocol):
     def value(self) -> Atom: ...
 
 
-Entry.Label.KEY = _ProtocolLabelMember("Entry.Label.KEY")
-Entry.Label.VALUE = _ProtocolLabelMember("Entry.Label.VALUE")
+class EntryLabel:
+    """Sentinels equal to either backend's Entry labels, for identifying one.
+
+    They are not a backend's own label objects, so insert() and replace_at() reject
+    them on every backend; pass those a label read off the node being mutated (from
+    children, remove_at() or variant()).
+    """
+
+    KEY: typing.Final[fltk.fegen.pyrt.label_protocol.LabelProtocol] = _ProtocolLabelMember("Entry.Label.KEY")
+    VALUE: typing.Final[fltk.fegen.pyrt.label_protocol.LabelProtocol] = _ProtocolLabelMember("Entry.Label.VALUE")
 
 
 class Entries(typing.Protocol):
-    class Label:
-        ENTRY: typing.ClassVar[object]
-
     kind: typing.Literal[NodeKind.ENTRIES] = NodeKind.ENTRIES
     span: fltk.fegen.pyrt.span_protocol.SpanProtocol
-    children: list[tuple[Label | None, Entry | Trivia]]
 
-    def append(self, child: Entry | Trivia, label: Label | None = None) -> None: ...
+    @property
+    def children(
+        self,
+    ) -> typing.Sequence[tuple[fltk.fegen.pyrt.label_protocol.LabelProtocol | None, Entry | Trivia]]: ...
 
-    def extend(self, children: typing.Iterable[Entry | Trivia], label: Label | None = None) -> None: ...
+    def append(
+        self, child: Entry | Trivia, label: fltk.fegen.pyrt.label_protocol.LabelProtocol | None = None
+    ) -> None: ...
+
+    def extend(
+        self,
+        children: typing.Iterable[Entry | Trivia],
+        label: fltk.fegen.pyrt.label_protocol.LabelProtocol | None = None,
+    ) -> None: ...
 
     def extend_children(self, other: Entries) -> None: ...
 
-    def child(self) -> tuple[Label | None, Entry | Trivia]: ...
+    def child(self) -> tuple[fltk.fegen.pyrt.label_protocol.LabelProtocol | None, Entry | Trivia]: ...
 
-    def insert(self, index: int, child: Entry | Trivia, label: Label | None = None) -> None: ...
+    def insert(
+        self, index: int, child: Entry | Trivia, label: fltk.fegen.pyrt.label_protocol.LabelProtocol | None = None
+    ) -> None: ...
 
-    def remove_at(self, index: int) -> tuple[Label | None, Entry | Trivia]: ...
+    def remove_at(self, index: int) -> tuple[fltk.fegen.pyrt.label_protocol.LabelProtocol | None, Entry | Trivia]: ...
 
-    def replace_at(self, index: int, child: Entry | Trivia, label: Label | None = None) -> None: ...
+    def replace_at(
+        self, index: int, child: Entry | Trivia, label: fltk.fegen.pyrt.label_protocol.LabelProtocol | None = None
+    ) -> None: ...
 
     def clear(self) -> None: ...
 
@@ -2472,34 +3465,60 @@ class Entries(typing.Protocol):
 
     def maybe_entry(self) -> Entry | None: ...
 
-    def entry(self) -> list[Entry]: ...
+    def entry(self) -> typing.Sequence[Entry]: ...
 
 
-Entries.Label.ENTRY = _ProtocolLabelMember("Entries.Label.ENTRY")
+class EntriesLabel:
+    """Sentinels equal to either backend's Entries labels, for identifying one.
+
+    They are not a backend's own label objects, so insert() and replace_at() reject
+    them on every backend; pass those a label read off the node being mutated (from
+    children, remove_at() or variant()).
+    """
+
+    ENTRY: typing.Final[fltk.fegen.pyrt.label_protocol.LabelProtocol] = _ProtocolLabelMember("Entries.Label.ENTRY")
 
 
 class MultiEntry(typing.Protocol):
-    class Label:
-        KEY: typing.ClassVar[object]
-        VALUE: typing.ClassVar[object]
-
     kind: typing.Literal[NodeKind.MULTIENTRY] = NodeKind.MULTIENTRY
     span: fltk.fegen.pyrt.span_protocol.SpanProtocol
-    children: list[tuple[Label | None, Atom | EntryKey | Trivia]]
 
-    def append(self, child: Atom | EntryKey | Trivia, label: Label | None = None) -> None: ...
+    @property
+    def children(
+        self,
+    ) -> typing.Sequence[tuple[fltk.fegen.pyrt.label_protocol.LabelProtocol | None, Atom | EntryKey | Trivia]]: ...
 
-    def extend(self, children: typing.Iterable[Atom | EntryKey | Trivia], label: Label | None = None) -> None: ...
+    def append(
+        self, child: Atom | EntryKey | Trivia, label: fltk.fegen.pyrt.label_protocol.LabelProtocol | None = None
+    ) -> None: ...
+
+    def extend(
+        self,
+        children: typing.Iterable[Atom | EntryKey | Trivia],
+        label: fltk.fegen.pyrt.label_protocol.LabelProtocol | None = None,
+    ) -> None: ...
 
     def extend_children(self, other: MultiEntry) -> None: ...
 
-    def child(self) -> tuple[Label | None, Atom | EntryKey | Trivia]: ...
+    def child(self) -> tuple[fltk.fegen.pyrt.label_protocol.LabelProtocol | None, Atom | EntryKey | Trivia]: ...
 
-    def insert(self, index: int, child: Atom | EntryKey | Trivia, label: Label | None = None) -> None: ...
+    def insert(
+        self,
+        index: int,
+        child: Atom | EntryKey | Trivia,
+        label: fltk.fegen.pyrt.label_protocol.LabelProtocol | None = None,
+    ) -> None: ...
 
-    def remove_at(self, index: int) -> tuple[Label | None, Atom | EntryKey | Trivia]: ...
+    def remove_at(
+        self, index: int
+    ) -> tuple[fltk.fegen.pyrt.label_protocol.LabelProtocol | None, Atom | EntryKey | Trivia]: ...
 
-    def replace_at(self, index: int, child: Atom | EntryKey | Trivia, label: Label | None = None) -> None: ...
+    def replace_at(
+        self,
+        index: int,
+        child: Atom | EntryKey | Trivia,
+        label: fltk.fegen.pyrt.label_protocol.LabelProtocol | None = None,
+    ) -> None: ...
 
     def clear(self) -> None: ...
 
@@ -2528,31 +3547,52 @@ class MultiEntry(typing.Protocol):
     def value(self) -> Atom: ...
 
 
-MultiEntry.Label.KEY = _ProtocolLabelMember("MultiEntry.Label.KEY")
-MultiEntry.Label.VALUE = _ProtocolLabelMember("MultiEntry.Label.VALUE")
+class MultiEntryLabel:
+    """Sentinels equal to either backend's MultiEntry labels, for identifying one.
+
+    They are not a backend's own label objects, so insert() and replace_at() reject
+    them on every backend; pass those a label read off the node being mutated (from
+    children, remove_at() or variant()).
+    """
+
+    KEY: typing.Final[fltk.fegen.pyrt.label_protocol.LabelProtocol] = _ProtocolLabelMember("MultiEntry.Label.KEY")
+    VALUE: typing.Final[fltk.fegen.pyrt.label_protocol.LabelProtocol] = _ProtocolLabelMember("MultiEntry.Label.VALUE")
 
 
 class MultiEntries(typing.Protocol):
-    class Label:
-        MULTI_ENTRY: typing.ClassVar[object]
-
     kind: typing.Literal[NodeKind.MULTIENTRIES] = NodeKind.MULTIENTRIES
     span: fltk.fegen.pyrt.span_protocol.SpanProtocol
-    children: list[tuple[Label | None, MultiEntry | Trivia]]
 
-    def append(self, child: MultiEntry | Trivia, label: Label | None = None) -> None: ...
+    @property
+    def children(
+        self,
+    ) -> typing.Sequence[tuple[fltk.fegen.pyrt.label_protocol.LabelProtocol | None, MultiEntry | Trivia]]: ...
 
-    def extend(self, children: typing.Iterable[MultiEntry | Trivia], label: Label | None = None) -> None: ...
+    def append(
+        self, child: MultiEntry | Trivia, label: fltk.fegen.pyrt.label_protocol.LabelProtocol | None = None
+    ) -> None: ...
+
+    def extend(
+        self,
+        children: typing.Iterable[MultiEntry | Trivia],
+        label: fltk.fegen.pyrt.label_protocol.LabelProtocol | None = None,
+    ) -> None: ...
 
     def extend_children(self, other: MultiEntries) -> None: ...
 
-    def child(self) -> tuple[Label | None, MultiEntry | Trivia]: ...
+    def child(self) -> tuple[fltk.fegen.pyrt.label_protocol.LabelProtocol | None, MultiEntry | Trivia]: ...
 
-    def insert(self, index: int, child: MultiEntry | Trivia, label: Label | None = None) -> None: ...
+    def insert(
+        self, index: int, child: MultiEntry | Trivia, label: fltk.fegen.pyrt.label_protocol.LabelProtocol | None = None
+    ) -> None: ...
 
-    def remove_at(self, index: int) -> tuple[Label | None, MultiEntry | Trivia]: ...
+    def remove_at(
+        self, index: int
+    ) -> tuple[fltk.fegen.pyrt.label_protocol.LabelProtocol | None, MultiEntry | Trivia]: ...
 
-    def replace_at(self, index: int, child: MultiEntry | Trivia, label: Label | None = None) -> None: ...
+    def replace_at(
+        self, index: int, child: MultiEntry | Trivia, label: fltk.fegen.pyrt.label_protocol.LabelProtocol | None = None
+    ) -> None: ...
 
     def clear(self) -> None: ...
 
@@ -2566,38 +3606,67 @@ class MultiEntries(typing.Protocol):
 
     def maybe_multi_entry(self) -> MultiEntry | None: ...
 
-    def multi_entry(self) -> list[MultiEntry]: ...
+    def multi_entry(self) -> typing.Sequence[MultiEntry]: ...
 
 
-MultiEntries.Label.MULTI_ENTRY = _ProtocolLabelMember("MultiEntries.Label.MULTI_ENTRY")
+class MultiEntriesLabel:
+    """Sentinels equal to either backend's MultiEntries labels, for identifying one.
+
+    They are not a backend's own label objects, so insert() and replace_at() reject
+    them on every backend; pass those a label read off the node being mutated (from
+    children, remove_at() or variant()).
+    """
+
+    MULTI_ENTRY: typing.Final[fltk.fegen.pyrt.label_protocol.LabelProtocol] = _ProtocolLabelMember(
+        "MultiEntries.Label.MULTI_ENTRY"
+    )
 
 
 class Trivia(typing.Protocol):
-    class Label:
-        CONTENT: typing.ClassVar[object]
-
     kind: typing.Literal[NodeKind.TRIVIA] = NodeKind.TRIVIA
     span: fltk.fegen.pyrt.span_protocol.SpanProtocol
-    children: list[tuple[Label | None, fltk.fegen.pyrt.span_protocol.SpanProtocol]]
 
-    def append(self, child: fltk.fegen.pyrt.span_protocol.SpanProtocol, label: Label | None = None) -> None: ...
+    @property
+    def children(
+        self,
+    ) -> typing.Sequence[
+        tuple[fltk.fegen.pyrt.label_protocol.LabelProtocol | None, fltk.fegen.pyrt.span_protocol.SpanProtocol]
+    ]: ...
+
+    def append(
+        self,
+        child: fltk.fegen.pyrt.span_protocol.SpanProtocol,
+        label: fltk.fegen.pyrt.label_protocol.LabelProtocol | None = None,
+    ) -> None: ...
 
     def extend(
-        self, children: typing.Iterable[fltk.fegen.pyrt.span_protocol.SpanProtocol], label: Label | None = None
+        self,
+        children: typing.Iterable[fltk.fegen.pyrt.span_protocol.SpanProtocol],
+        label: fltk.fegen.pyrt.label_protocol.LabelProtocol | None = None,
     ) -> None: ...
 
     def extend_children(self, other: Trivia) -> None: ...
 
-    def child(self) -> tuple[Label | None, fltk.fegen.pyrt.span_protocol.SpanProtocol]: ...
+    def child(
+        self,
+    ) -> tuple[fltk.fegen.pyrt.label_protocol.LabelProtocol | None, fltk.fegen.pyrt.span_protocol.SpanProtocol]: ...
 
     def insert(
-        self, index: int, child: fltk.fegen.pyrt.span_protocol.SpanProtocol, label: Label | None = None
+        self,
+        index: int,
+        child: fltk.fegen.pyrt.span_protocol.SpanProtocol,
+        label: fltk.fegen.pyrt.label_protocol.LabelProtocol | None = None,
     ) -> None: ...
 
-    def remove_at(self, index: int) -> tuple[Label | None, fltk.fegen.pyrt.span_protocol.SpanProtocol]: ...
+    def remove_at(
+        self, index: int
+    ) -> tuple[fltk.fegen.pyrt.label_protocol.LabelProtocol | None, fltk.fegen.pyrt.span_protocol.SpanProtocol]: ...
 
     def replace_at(
-        self, index: int, child: fltk.fegen.pyrt.span_protocol.SpanProtocol, label: Label | None = None
+        self,
+        index: int,
+        child: fltk.fegen.pyrt.span_protocol.SpanProtocol,
+        label: fltk.fegen.pyrt.label_protocol.LabelProtocol | None = None,
     ) -> None: ...
 
     def clear(self) -> None: ...
@@ -2619,7 +3688,15 @@ class Trivia(typing.Protocol):
     def text(self) -> str: ...
 
 
-Trivia.Label.CONTENT = _ProtocolLabelMember("Trivia.Label.CONTENT")
+class TriviaLabel:
+    """Sentinels equal to either backend's Trivia labels, for identifying one.
+
+    They are not a backend's own label objects, so insert() and replace_at() reject
+    them on every backend; pass those a label read off the node being mutated (from
+    children, remove_at() or variant()).
+    """
+
+    CONTENT: typing.Final[fltk.fegen.pyrt.label_protocol.LabelProtocol] = _ProtocolLabelMember("Trivia.Label.CONTENT")
 
 
 class Span(typing.Protocol):

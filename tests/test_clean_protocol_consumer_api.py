@@ -20,7 +20,6 @@ from __future__ import annotations
 import enum
 import json
 import pathlib
-import shutil
 import subprocess
 
 import pytest
@@ -32,7 +31,11 @@ from fltk.fegen import fltk_cst_protocol as proto_cst
 from fltk.fegen import fltk_parser
 from fltk.fegen.pyrt import terminalsrc
 from fltk.fegen.pyrt.terminalsrc import SpanKind
-from tests.pyright_test_utils import _diags_for_file, _run_pyright_over_dir, write_pyright_config
+from tests.pyright_test_utils import (
+    _diags_for_file,
+    _run_pyright_over_dir,
+    write_pyright_config,
+)
 
 # ---------------------------------------------------------------------------
 # Module-level availability guards
@@ -69,21 +72,6 @@ _SIMPLE_GRAMMAR_TEXT = 'test := "hello" , "world" ;'
 # ---------------------------------------------------------------------------
 # Helpers: pyright and ruff
 # ---------------------------------------------------------------------------
-
-
-@pytest.fixture(scope="session")
-def pyright_available() -> bool:
-    """Return True when uv + pyright are runnable."""
-    if shutil.which("uv") is None:
-        return False
-    result = subprocess.run(
-        ["uv", "run", "pyright", "--version"],  # noqa: S607
-        capture_output=True,
-        text=True,
-        timeout=30,
-        check=False,
-    )
-    return result.returncode == 0
 
 
 def _run_pyright(file_path: pathlib.Path, *, pyright_available: bool) -> list[dict]:
@@ -208,20 +196,20 @@ def shape1_interleaved_walk(items: cst.Items) -> list[tuple[str, Any]]:
     children = items.children
     start_idx = 0
     if children and children[0][0] in (
-        cst.Items.Label.NO_WS,
-        cst.Items.Label.WS_ALLOWED,
-        cst.Items.Label.WS_REQUIRED,
+        cst.ItemsLabel.NO_WS,
+        cst.ItemsLabel.WS_ALLOWED,
+        cst.ItemsLabel.WS_REQUIRED,
     ):
         start_idx = 1
     remaining = children[start_idx:]
     for (item_label, item), (sep_label, _) in zip(remaining[::2], remaining[1::2], strict=False):
-        assert item_label == cst.Items.Label.ITEM
+        assert item_label == cst.ItemsLabel.ITEM
         assert item.kind == cst.Item.kind  # narrows item: Item|Trivia|Span -> cst.Item
         results.append(("item", item))
         results.append(("sep", sep_label))
     if len(remaining) % 2 != 0:
         item_label, item = remaining[-1]
-        assert item_label == cst.Items.Label.ITEM
+        assert item_label == cst.ItemsLabel.ITEM
         assert item.kind == cst.Item.kind
         results.append(("item", item))
     return results
@@ -353,18 +341,18 @@ def test_protocol_module_no_new_file_level_suppressions() -> None:
 def test_protocol_label_members_have_runtime_values() -> None:
     """Protocol Label members are runtime objects usable in ==."""
     # Access the member — must not be an unbound annotation (which would be None or raise)
-    label_item = proto_cst.Items.Label.ITEM
+    label_item = proto_cst.ItemsLabel.ITEM
     assert label_item is not None, "Items.Label.ITEM must be a runtime object"
-    label_no_ws = proto_cst.Items.Label.NO_WS
+    label_no_ws = proto_cst.ItemsLabel.NO_WS
     assert label_no_ws is not None, "Items.Label.NO_WS must be a runtime object"
 
     # Usable in == (compare against a fresh access of the same member to avoid PLR0124)
-    assert label_item == proto_cst.Items.Label.ITEM
+    assert label_item == proto_cst.ItemsLabel.ITEM
     assert label_item != label_no_ws
 
     # Disposition labels
-    assert proto_cst.Disposition.Label.INCLUDE is not None
-    assert proto_cst.Disposition.Label.SUPPRESS is not None
+    assert proto_cst.DispositionLabel.INCLUDE is not None
+    assert proto_cst.DispositionLabel.SUPPRESS is not None
 
 
 def test_protocol_nodekind_members_have_runtime_values() -> None:
@@ -475,14 +463,14 @@ class TestCrossBackendEqualityHash:
 
     def test_label_proto_eq_python_matching(self) -> None:
         """proto Items.Label.ITEM == py_cst.Items.Label.ITEM (both operand orders)."""
-        proto_label = proto_cst.Items.Label.ITEM
+        proto_label = proto_cst.ItemsLabel.ITEM
         py_label = py_cst.Items.Label.ITEM
         assert proto_label == py_label, "proto Items.Label.ITEM != py Items.Label.ITEM"
         assert py_label == proto_label, "py Items.Label.ITEM != proto Items.Label.ITEM (reverse)"
 
     def test_label_proto_eq_rust_embedded_matching(self) -> None:
         """proto Items.Label.ITEM == fegen_rust_cst.cst.Items.Label.ITEM (both orders)."""
-        proto_label = proto_cst.Items.Label.ITEM
+        proto_label = proto_cst.ItemsLabel.ITEM
         rust_label = fegen_rust_cst.cst.Items.Label.ITEM
         assert proto_label == rust_label, "proto Items.Label.ITEM != rust emb Items.Label.ITEM"
         assert rust_label == proto_label, "rust emb Items.Label.ITEM != proto Items.Label.ITEM (reverse)"
@@ -490,14 +478,14 @@ class TestCrossBackendEqualityHash:
     @_FEGEN_RUST_CST_SKIP
     def test_label_proto_eq_rust_external_matching(self) -> None:
         """proto Items.Label.ITEM == fegen_rust_cst.cst.Items.Label.ITEM (both orders)."""
-        proto_label = proto_cst.Items.Label.ITEM
+        proto_label = proto_cst.ItemsLabel.ITEM
         rust_label = fegen_rust_cst.cst.Items.Label.ITEM
         assert proto_label == rust_label, "proto Items.Label.ITEM != rust ext Items.Label.ITEM"
         assert rust_label == proto_label, "rust ext Items.Label.ITEM != proto Items.Label.ITEM (reverse)"
 
     def test_label_proto_nonmatching_neq(self) -> None:
         """proto Items.Label.ITEM != py/rust Items.Label.NO_WS (nonmatching, both orders)."""
-        proto_label = proto_cst.Items.Label.ITEM
+        proto_label = proto_cst.ItemsLabel.ITEM
         assert proto_label != py_cst.Items.Label.NO_WS
         assert py_cst.Items.Label.NO_WS != proto_label
         assert proto_label != fegen_rust_cst.cst.Items.Label.NO_WS
@@ -506,7 +494,7 @@ class TestCrossBackendEqualityHash:
     def test_label_hash_consistent(self) -> None:
         """hash(proto_label) == hash(py_label) == hash(rust_emb_label) for matching pairs."""
         for member in ("ITEM", "NO_WS", "WS_ALLOWED", "WS_REQUIRED"):
-            proto_label = getattr(proto_cst.Items.Label, member)
+            proto_label = getattr(proto_cst.ItemsLabel, member)
             py_label = getattr(py_cst.Items.Label, member)
             rust_emb_label = getattr(fegen_rust_cst.cst.Items.Label, member)
             assert hash(proto_label) == hash(py_label), f"hash mismatch proto vs py for Items.Label.{member}"
@@ -518,7 +506,7 @@ class TestCrossBackendEqualityHash:
     def test_label_hash_consistent_rust_external(self) -> None:
         """hash(proto_label) == hash(fegen_rust_cst label) for matching pairs."""
         for member in ("ITEM", "NO_WS", "WS_ALLOWED", "WS_REQUIRED"):
-            proto_label = getattr(proto_cst.Items.Label, member)
+            proto_label = getattr(proto_cst.ItemsLabel, member)
             rust_ext_label = getattr(fegen_rust_cst.cst.Items.Label, member)
             assert hash(proto_label) == hash(rust_ext_label), (
                 f"hash mismatch proto vs rust ext for Items.Label.{member}"
@@ -526,7 +514,7 @@ class TestCrossBackendEqualityHash:
 
     def test_label_set_collapse_with_proto(self) -> None:
         """{proto_label, py_label, rust_label} has length 1 for matching members."""
-        proto_label = proto_cst.Items.Label.ITEM
+        proto_label = proto_cst.ItemsLabel.ITEM
         py_label = py_cst.Items.Label.ITEM
         rust_label = fegen_rust_cst.cst.Items.Label.ITEM
         s = {proto_label, py_label, rust_label}
@@ -591,20 +579,20 @@ class TestCrossBackendDualShapeDispatch:
         children = items_node.children
         start_idx = 0
         if children and children[0][0] in (
-            proto_cst.Items.Label.NO_WS,
-            proto_cst.Items.Label.WS_ALLOWED,
-            proto_cst.Items.Label.WS_REQUIRED,
+            proto_cst.ItemsLabel.NO_WS,
+            proto_cst.ItemsLabel.WS_ALLOWED,
+            proto_cst.ItemsLabel.WS_REQUIRED,
         ):
             start_idx = 1
         remaining = children[start_idx:]
         for (item_label, item), (sep_label, _) in zip(remaining[::2], remaining[1::2], strict=False):
-            assert item_label == proto_cst.Items.Label.ITEM
+            assert item_label == proto_cst.ItemsLabel.ITEM
             assert item.kind == proto_cst.Item.kind
             results.append(("item", item))
             results.append(("sep_label", sep_label))
         if len(remaining) % 2 != 0:
             item_label, item = remaining[-1]
-            assert item_label == proto_cst.Items.Label.ITEM
+            assert item_label == proto_cst.ItemsLabel.ITEM
             assert item.kind == proto_cst.Item.kind
             results.append(("item", item))
         return results
@@ -763,7 +751,7 @@ class TestCanonicalStringAgreement:
     def test_label_canonical_strings_agree(self) -> None:
         """Label._fltk_canonical_name agrees across proto / Python / Rust for Items.Label members."""
         for member in ("ITEM", "NO_WS", "WS_ALLOWED", "WS_REQUIRED"):
-            proto_label = getattr(proto_cst.Items.Label, member)
+            proto_label = getattr(proto_cst.ItemsLabel, member)
             py_label = getattr(py_cst.Items.Label, member)
             rust_emb_label = getattr(fegen_rust_cst.cst.Items.Label, member)
 
@@ -828,47 +816,48 @@ class TestSpanEqualityHashUnchanged:
 
 
 # ---------------------------------------------------------------------------
-# Structural-mismatch contract preserved (Option A)
+# The Python backend conforms to its protocol without a cast
 # ---------------------------------------------------------------------------
 
 _CASTLESS_PROBE_FIXTURE = """\
 # ruff: noqa
-# Probe without type: ignore — used to count raw mismatches.
+# Probe without type: ignore — a cast here would hide a real mismatch.
 from __future__ import annotations
 from fltk.fegen import fltk_cst_protocol as cstp
 from fltk.fegen import fltk_cst
 
 _m: cstp.CstModule = fltk_cst
+
+
+def _take_grammar(node: cstp.Grammar) -> None: ...
+
+
+_take_grammar(fltk_cst.Grammar())
 """
 
 
-def test_structural_mismatch_contract_preserved(
+def test_the_python_backend_assigns_to_its_protocol_without_a_cast(
     protocol_pyright_diagnostics: dict[str, list[dict]],
 ) -> None:
-    """test_boundary_probe_documents_label_mismatch still passes.
+    """Bare module and node assignment to the protocol type-check: no boundary cast anywhere.
 
-    Concrete enum.Enum Label remains non-assignable to the protocol plain-class Label.
-    Adding runtime values to Label members (Option A) must NOT make the protocol Label
-    structurally compatible with the concrete enum.Enum Label.
+    Both flavors speak LabelProtocol, share the protocol module's NodeKind, take protocol nodes in
+    their mutators, and expose ``children`` and the MULTIPLE accessors through covariant containers.
+    That is the whole point of the protocol: one consumer source, either backend.
     """
     errors = _diags_for_file(protocol_pyright_diagnostics, "castless_probe.py")
-    assert errors, (
-        "Expected pyright to report errors for bare fltk_cst -> CstModule assignment "
-        "(nested-Label nominal mismatch). The structural-mismatch contract (Option A) has been broken — "
-        "protocol Label members becoming runtime values must NOT make the Label classes structurally compatible."
-    )
+    assert errors == [], errors
 
 
 def test_protocol_label_remains_plain_class_not_enum() -> None:
-    """Protocol Label is a plain class, not an enum.Enum subclass.
+    """The protocol label namespace is a plain class, not an enum.Enum subclass.
 
-    Adding runtime values (Option A) must not change the Label to an enum.
+    Its members carry runtime sentinel values; that must not promote the namespace to an enum.
     """
-    # Protocol Label is the class itself (accessed on the Protocol, not an instance)
-    label_class = proto_cst.Items.Label
+    label_class = proto_cst.ItemsLabel
     assert not issubclass(label_class, enum.Enum), (
-        "Protocol Items.Label must remain a plain class (not an enum.Enum subclass). "
-        "Option A requires additive change only — no type promotion."
+        "Protocol ItemsLabel must remain a plain class (not an enum.Enum subclass); "
+        "its members are sentinels, not enum members."
     )
 
     # Concrete Label IS an enum.Enum

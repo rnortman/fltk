@@ -10,6 +10,12 @@ converters in both directions: ``from_cst``/``to_cst`` members on every class pl
 module-level ``<rule>_from_cst`` / ``<rule>_to_cst`` for every rule.  A ``parse`` and an
 ``unparse`` convenience appear when a parser and an unparser module are named.
 
+The two directions are typed against different CST modules.  The forward direction takes any
+CST node conforming to the grammar's generated ``*_cst_protocol`` module — a Python-backend
+node, a Rust-backend one — so it is annotated and keyed against that protocol.  The reverse
+direction constructs nodes and synthesises spans, which only the Python backend supports, so
+it names the concrete CST module and always emits Python-backend nodes.
+
 What each converter does is decided by ``ast_model``; this module only spells the decisions
 as Python.  Anything here that reasons about grammar shape rather than about Python source
 belongs in the model, where the Rust emitter reads it too.
@@ -32,6 +38,11 @@ Every class carries a ``span`` locating it in the source.  Spans never take part
 equality, so two values converted from identical text at different offsets — or in
 different files — compare equal.  Node classes are plain mutable dataclasses: build them by
 hand, mutate them in place, compare them by value.
+
+``from_cst`` takes any CST node conforming to the grammar's CST protocol, so a tree from
+either the Python or the Rust backend converts through the same call.  ``to_cst`` goes the
+other way and always builds Python-backend nodes: synthesising a node needs spans made from
+nothing, which is a Python-backend capability.
 """'''
 
 _SPAN_TYPE = "fltk.fegen.pyrt.span_protocol.SpanProtocol"
@@ -122,9 +133,12 @@ class AstGenerator:
         parser_module_name: str | None = None,
         unparser_module_name: str | None = None,
         goal_rule: str | None = None,
+        *,
+        protocol_module_name: str,
     ) -> None:
         self.model = model
         self.cst_module_name = cst_module_name
+        self.protocol_module_name = protocol_module_name
         self.parser_module_name = parser_module_name
         self.unparser_module_name = unparser_module_name
         self.goal_rule = am.resolve_goal_rule(model, goal_rule)
@@ -142,9 +156,21 @@ class AstGenerator:
         """The CST node class for a rule, as the CST emitter names it."""
         return naming.snake_to_upper_camel(rule_name)
 
+    def proto_class(self, rule_name: str) -> str:
+        """The protocol class for a rule, which the forward direction is annotated against.
+
+        The protocol emitter names its classes exactly as the CST emitter names the concrete
+        ones, so only the module alias differs.
+        """
+        return f"cstp.{self.cst_class(rule_name)}"
+
     def node_kind(self, rule_name: str) -> str:
-        """The ``cst.NodeKind`` member expression for a rule."""
-        return f"cst.NodeKind.{self.cst_class(rule_name).upper()}"
+        """The ``NodeKind`` member expression for a rule, taken from the protocol module.
+
+        The protocol module's ``NodeKind`` compares and hashes equal to either backend's own, so
+        a constant from it discriminates a node from either one.
+        """
+        return f"cstp.NodeKind.{self.cst_class(rule_name).upper()}"
 
     def converter_name(self, rule_name: str) -> str:
         return am.converter_names(rule_name)[0]
@@ -318,7 +344,10 @@ class AstGenerator:
         if self.model.value_enums:
             self.emit("import enum")
         self.emit("import typing", "")
+        # Both imports are unconditional: the protocol module supplies the ``NodeKind`` constants
+        # the signature tables hold at import time, and it pulls in no backend of its own.
         self.emit(f"import {self.cst_module_name} as cst")
+        self.emit(f"import {self.protocol_module_name} as cstp")
         if self.parser_module_name:
             self.emit(f"import {self.parser_module_name} as _parser")
         if self.unparser_module_name:
@@ -409,10 +438,13 @@ class AstGenerator:
 
         Hand-built and mutated values have none, so it is optional and out of both equality and
         repr; the AST fields stay authoritative and the reverse direction ignores it.
+
+        The field is protocol-typed because it holds whichever backend's node the value was
+        converted from, and reading it back gives the full public CST surface either way.
         """
         if not self.model.cst_backpointers:
             return []
-        annotation = f"cst.{self.cst_class(rule_name)} | None"
+        annotation = f"{self.proto_class(rule_name)} | None"
         return [f"    {am.CST_FIELD_NAME}: {annotation} = dataclasses.field(default=None, compare=False, repr=False)"]
 
     @staticmethod
@@ -455,7 +487,7 @@ class AstGenerator:
     ) -> None:
         self.emit(
             "    @classmethod",
-            f"    def from_cst(cls, node: cst.{self.cst_class(rule_name)}) -> {class_name}:",
+            f"    def from_cst(cls, node: {self.proto_class(rule_name)}) -> {class_name}:",
             f'        """Convert a ``{rule_name}`` CST node."""',
         )
         if not fields:
@@ -869,7 +901,7 @@ class AstGenerator:
             *self.narrowing_method(self.narrowed_value(member, node.coercion)),
             "",
             "    @classmethod",
-            f"    def from_cst(cls, node: cst.{cst_class}) -> {node.name}:",
+            f"    def from_cst(cls, node: {self.proto_class(rule_name)}) -> {node.name}:",
             f'        """Convert a ``{rule_name}`` CST node."""',
         )
         prelude, text = self.terminal_text_code(rule_name, node)
@@ -999,7 +1031,7 @@ class AstGenerator:
             *self.backpointer_field(rule_name),
             "",
             "    @classmethod",
-            f"    def from_cst(cls, node: cst.{cst_class}) -> {node.name}:",
+            f"    def from_cst(cls, node: {self.proto_class(rule_name)}) -> {node.name}:",
             f'        """Convert a ``{rule_name}`` CST node."""',
         )
         backpointer = self.backpointer_argument()
@@ -1025,7 +1057,7 @@ class AstGenerator:
         cst_class = self.cst_class(rule_name)
         self.separate()
         self.emit(
-            f"def {self.erased_forward(rule_name)}(node: cst.{cst_class}) -> {annotation}:",
+            f"def {self.erased_forward(rule_name)}(node: {self.proto_class(rule_name)}) -> {annotation}:",
             f'    """Convert a ``{rule_name}`` CST node to the payload its type erases to."""',
         )
         self.emit(*(f"    {line}" for line in self.erased_forward_lines(rule_name, node)))
@@ -1057,7 +1089,7 @@ class AstGenerator:
             annotation = f"tuple[{', '.join(self.field_annotation(field.type) for field in fields)}]"
             self.separate()
             self.emit(
-                f"def {self.flat_forward(rule_name)}(node: cst.{cst_class}) -> {annotation}:",
+                f"def {self.flat_forward(rule_name)}(node: {self.proto_class(rule_name)}) -> {annotation}:",
                 f'    """Convert a ``{rule_name}`` CST node to the fields it is flattened into."""',
                 "    buckets = astrt.bucket_children(node.children)",
             )
@@ -1169,7 +1201,7 @@ class AstGenerator:
         builder = "fold_left" if node.direction is ac.FoldDirection.LEFT else "fold_right"
         self.separate()
         self.emit(
-            f"def {self.converter_name(rule_name)}(node: cst.{self.cst_class(rule_name)}) -> {node.name}:",
+            f"def {self.converter_name(rule_name)}(node: {self.proto_class(rule_name)}) -> {node.name}:",
             f'    """Convert a ``{rule_name}`` CST node, folding its operands into a chain."""',
             "    buckets = astrt.bucket_children(node.children)",
             f'    _operands = buckets.get("{node.operand.label.upper()}", ())',
@@ -1308,7 +1340,7 @@ class AstGenerator:
         self.emit(")")
         self.separate()
         self.emit(
-            f"def {self.converter_name(rule_name)}(node: cst.{self.cst_class(rule_name)}) -> {node.name}:",
+            f"def {self.converter_name(rule_name)}(node: {self.proto_class(rule_name)}) -> {node.name}:",
             f'    """Convert a ``{rule_name}`` CST node, dispatching on the alternative that matched."""',
             "    buckets = astrt.bucket_children(node.children)",
         )
@@ -1375,7 +1407,7 @@ class AstGenerator:
                 continue
             self.separate()
             self.emit(
-                f"def {self.converter_name(rule_name)}(node: cst.{self.cst_class(rule_name)}) -> {node.name}:",
+                f"def {self.converter_name(rule_name)}(node: {self.proto_class(rule_name)}) -> {node.name}:",
                 f'    """Convert a ``{rule_name}`` CST node to its AST node."""',
                 f"    return {node.name}.from_cst(node)",
             )
@@ -1425,11 +1457,24 @@ def generate_ast_module(
     parser_module_name: str | None = None,
     unparser_module_name: str | None = None,
     goal_rule: str | None = None,
+    *,
+    protocol_module_name: str,
 ) -> str:
     """Return the source of the Python AST module for ``model``.
 
-    ``cst_module_name`` is the importable name of the grammar's generated CST module.
+    ``cst_module_name`` is the importable name of the grammar's generated CST module, which the
+    reverse direction constructs nodes from.  ``protocol_module_name`` is the importable name of
+    the grammar's generated CST protocol module, which the forward direction is annotated and
+    keyed against; it has no default here, because which module that is depends on how the
+    caller laid its generated artifacts out.
     Naming a parser module adds ``parse()``; naming an unparser module adds ``unparse()``.
     ``goal_rule`` defaults to the grammar's first rule.
     """
-    return AstGenerator(model, cst_module_name, parser_module_name, unparser_module_name, goal_rule).generate()
+    return AstGenerator(
+        model,
+        cst_module_name,
+        parser_module_name,
+        unparser_module_name,
+        goal_rule,
+        protocol_module_name=protocol_module_name,
+    ).generate()

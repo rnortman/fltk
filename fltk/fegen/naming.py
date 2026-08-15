@@ -4,6 +4,26 @@ Leaf module: no FLTK imports, no third-party imports.
 """
 
 
+def protocol_module_name(cst_module_name: str) -> str:
+    """CST module import name → its paired CST protocol module import name.
+
+    The layout every generated pair uses: ``X_cst`` beside ``X_cst_protocol``.
+    """
+    return f"{cst_module_name}_protocol"
+
+
+def protocol_module_path(cst_path: str) -> str:
+    """Path of a written CST module file → path of its paired protocol module file.
+
+    ``dir/X_cst.py`` → ``dir/X_cst_protocol.py``, the layout ``genparser generate`` writes.  The
+    ``.py`` suffix is required; the stem is otherwise unconstrained.
+    """
+    if not cst_path.endswith(".py"):
+        msg = f"CST module path {cst_path!r} does not end in '.py'"
+        raise ValueError(msg)
+    return f"{cst_path[: -len('.py')]}_protocol.py"
+
+
 def snake_to_upper_camel(name: str) -> str:
     """Convert a snake_case name to UpperCamelCase.
 

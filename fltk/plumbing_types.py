@@ -21,6 +21,11 @@ class ParserResult:
     cst_module_name: str
     grammar: gsm.Grammar
     capture_trivia: bool
+    protocol_module_name: str
+    """Importable name of the CST protocol module the CST module imports ``NodeKind`` from.
+
+    Registered in ``sys.modules`` alongside the CST module; pass it wherever a generated layer
+    has to name this grammar's protocol module (e.g. ``generate_ast``)."""
 
 
 @dataclass

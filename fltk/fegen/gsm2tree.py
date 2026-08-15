@@ -8,6 +8,7 @@ from typing import TYPE_CHECKING, Literal
 
 from fltk import pygen
 from fltk.fegen import cst_ergonomics, gsm, naming
+from fltk.fegen.pyrt.label_protocol import label_canonical_name
 from fltk.iir import model as iir
 from fltk.iir import typemodel
 from fltk.iir.py import compiler as pycompiler
@@ -23,6 +24,62 @@ INLINE_NOT_EXPANDED_MSG = (
 )
 
 ErgonomicMember = Literal["bare", "text", "rule_text", "variant"]
+
+# Fully qualified because the generated modules import the module, not the name.
+LABEL_PROTOCOL_ANNOTATION = "fltk.fegen.pyrt.label_protocol.LabelProtocol"
+
+PROTOCOL_MODULE_ALIAS = "_cstp"
+
+
+def _child_types_widen(model_types: Iterable[ModelType]) -> bool:
+    """True when the protocol annotation for these child types differs from the concrete one.
+
+    Rule references are the only model types whose two renderings differ (``"Rule"`` concretely,
+    ``_cstp.Rule`` on the protocol surface); library types such as Span are spelled identically on
+    both.
+    """
+    return any(isinstance(model_type, str) for model_type in model_types)
+
+
+def _widened_entry_stmts(expr: str, *, name: str, widened: bool) -> tuple[list[str], str]:
+    """Bind ``expr`` to a deliberately untyped local when it is protocol-typed, else pass it through.
+
+    Returns (statements to emit first, expression naming the value).  Mutator inputs are annotated
+    with the protocol surface while the ``children`` list keeps its concrete element type, so a
+    value on its way into the list needs a static escape hatch.  ``typing.Any`` is used rather than
+    a ``typing.cast`` to the concrete element type because a cast is equally unchecked — pyright
+    validates nothing about a cast's operand — while its type argument is a string literal that no
+    formatter can wrap, and the concrete element type of a node with many child classes does not
+    fit on a line.  The local is consumed by the very next statement.  Runtime type safety rests on
+    the mutators' isinstance guards, not on these annotations.
+    """
+    if not widened:
+        return [], expr
+    return [f"{name}: typing.Any = {expr}"], name
+
+
+@dataclass(frozen=True)
+class _ChildTypes:
+    """One node's child/label annotations in both flavors: concrete for reads, protocol for inputs.
+
+    ``concrete_child`` may carry quoted forward references (the in-module annotation form).
+    ``widened`` says whether an entry built from the inputs can differ from the children element
+    type; it is derived from the node's model, not by comparing the rendered annotations.
+    """
+
+    concrete_child: str
+    input_child: str
+    concrete_label: str
+    input_label: str
+    widened: bool
+
+    def entry(self, label_expr: str, child_expr: str) -> tuple[list[str], str]:
+        """Statements preparing one children entry, and the expression naming it."""
+        return _widened_entry_stmts(f"({label_expr}, {child_expr})", name="entry", widened=self.widened)
+
+    def entries(self, expr: str, *, widened: bool | None = None) -> tuple[list[str], str]:
+        """Statements preparing a sequence of children entries, and the expression naming it."""
+        return _widened_entry_stmts(expr, name="entries", widened=self.widened if widened is None else widened)
 
 
 @dataclass()
@@ -148,7 +205,11 @@ class CstGenerator:
         enum_klass.body.append(hash_fn)
 
     def _node_kind_enum(self) -> ast.ClassDef:
-        """Emit the module-level NodeKind enum with cross-backend eq/hash."""
+        """Emit the module-level NodeKind enum with cross-backend eq/hash.
+
+        Emitted into the protocol module only; the concrete module imports that one so both
+        surfaces' ``kind`` Literals are the same type.
+        """
         node_kind = pygen.klass(name="NodeKind", bases=["enum.Enum"])
         for rule in self.grammar.rules:
             member = self.node_kind_member_name(rule.name)
@@ -180,11 +241,19 @@ class CstGenerator:
         stmts: list[ast.stmt] = []
         for label in labels:
             python_name = label.upper()
-            canonical = f"{class_name}.Label.{python_name}"
+            canonical = label_canonical_name(class_name, python_name)
             stmts.append(pygen.stmt(f'{class_name}.Label.{python_name}._fltk_canonical_name = "{canonical}"'))
         return stmts
 
-    def gen_py_module(self) -> ast.Module:
+    def gen_py_module(self, protocol_module_name: str) -> ast.Module:
+        """Emit the concrete CST dataclass module.
+
+        ``protocol_module_name`` is the importable name of this grammar's protocol module; the
+        emitted source contains ``from <protocol_module_name> import NodeKind`` plus, under
+        TYPE_CHECKING, ``import <protocol_module_name> as _cstp`` for the mutator input
+        annotations.  Never derived here — the caller knows the pair it is writing to disk or has
+        registered.
+        """
         imports = [
             pyreg.Module(("dataclasses",)),
             pyreg.Module(("enum",)),
@@ -201,8 +270,6 @@ class CstGenerator:
         module.body.insert(0, pygen.stmt("from __future__ import annotations"))
         # span_protocol under TYPE_CHECKING: annotations are lazy (from __future__ above),
         # so it is only needed by pyright for type resolution, not at runtime.
-        # This mirrors the protocol generator (gen_protocol_module) exactly, keeping
-        # concrete CST modules importable in pure-Python environments.
         module.body.append(
             pygen.if_(
                 pygen.expr("typing.TYPE_CHECKING"),
@@ -210,18 +277,24 @@ class CstGenerator:
                     # Backend-agnostic span protocol: pyright resolves
                     # fltk.fegen.pyrt.span_protocol.SpanProtocol in the span field and span-typed
                     # child annotations. Names neither the span selector nor fltk._native.
+                    pygen.stmt("import fltk.fegen.pyrt.label_protocol"),
                     pygen.stmt("import fltk.fegen.pyrt.span_protocol"),
+                    # Mutator inputs are annotated against the protocol node types; annotations are
+                    # lazy strings here, so the alias is needed by pyright only.
+                    pygen.stmt(f"import {protocol_module_name} as {PROTOCOL_MODULE_ALIAS}"),
                 ],
                 [],
             )
         )
 
-        # Emit module-level NodeKind enum before the node classes.
-        module.body.append(self._node_kind_enum())
-        # Assign _fltk_canonical_name as a plain string attribute on each NodeKind member
-        # after the class is fully constructed, so __hash__/__eq__ avoid per-call f-string
-        # rebuilds (efficiency-1: members are immutable singletons, value is invariant).
-        module.body.extend(self._emit_node_kind_canonical_name_assignments())
+        # NodeKind is imported from the protocol module so the per-node `kind` Literal names the
+        # same enum on both surfaces (protocol-attribute invariance requires it).  Makes the pair
+        # mandatory: importing this module without its protocol module is a ModuleNotFoundError.
+        # Placed among the imports (before TYPE_CHECKING) to avoid E402.
+        module.body.insert(
+            len([stmt for stmt in module.body if isinstance(stmt, ast.Import | ast.ImportFrom)]),
+            pygen.stmt(f"from {protocol_module_name} import NodeKind"),
+        )
 
         # Module-level helper: lazily resolve fltk._native.Span so the generated module never
         # imports the native extension at load time (preserves pure-Python importability).
@@ -270,6 +343,17 @@ def _get_native_span_type():
         child_annotation = self.py_annotation_for_model_types(model_types=model.types, in_module=True)
         # Must match the Protocol generator's label_annotation pattern.
         label_annotation = "typing.Optional[Label]" if labels else "None"
+        types = _ChildTypes(
+            concrete_child=child_annotation,
+            input_child=self.protocol_annotation_for_model_types(
+                model_types=model.types, class_name=class_name, module_alias=PROTOCOL_MODULE_ALIAS
+            ),
+            concrete_label=f"typing.Optional[{class_name}.Label]" if labels else "None",
+            input_label=f"typing.Optional[{LABEL_PROTOCOL_ANNOTATION}]" if labels else "None",
+            # The label side widens whenever the node has labels (concrete enum vs LabelProtocol);
+            # a label-free node's slot is None on both surfaces.
+            widened=_child_types_widen(model.types) or bool(labels),
+        )
         # MUST NOT be ClassVar — pyright rejects ClassVar against the Protocol's instance-attr declaration.
         # Uses node_kind_member_name to stay in sync with the Protocol generator.
         kind_member = self.node_kind_member_name(rule_name) if rule_name else class_name.upper()
@@ -287,31 +371,49 @@ def _get_native_span_type():
         )
 
         child_annotation_by_labels = {
-            label: self.py_annotation_for_model_types(model_types=types, in_module=True)
-            for label, types in model.labels.items()
+            label: self.py_annotation_for_model_types(model_types=label_types, in_module=True)
+            for label, label_types in model.labels.items()
         }
+        input_child_annotation_by_labels = {
+            label: self.protocol_annotation_for_model_types(
+                model_types=label_types, class_name=f"{class_name}.{label}", module_alias=PROTOCOL_MODULE_ALIAS
+            )
+            for label, label_types in model.labels.items()
+        }
+        # TODO(cst-mutator-append-parity): append/extend/extend_children and the per-label mutators
+        # store their argument without an isinstance check, while insert/replace_at and the Rust
+        # backend's append reject a foreign-backend child.  The same split applies to labels: a
+        # protocol label sentinel is stored by append/extend and rejected by insert/replace_at.
         append_fn = pygen.function(
             "append",
-            f"self, child: {child_annotation}, label: {label_annotation} = None",
+            f"self, child: {types.input_child}, label: {types.input_label} = None",
             "None",
         )
-        append_fn.body.append(pygen.stmt("self.children.append((label, child))"))
+        prep, entry = types.entry("label", "child")
+        append_fn.body.extend(pygen.stmt(stmt) for stmt in prep)
+        append_fn.body.append(pygen.stmt(f"self.children.append({entry})"))
         klass.body.append(append_fn)
 
         extend_fn = pygen.function(
             "extend",
-            f"self, children: typing.Iterable[{child_annotation}], label: {label_annotation} = None",
+            f"self, children: typing.Iterable[{types.input_child}], label: {types.input_label} = None",
             "None",
         )
-        extend_fn.body.append(pygen.stmt("self.children.extend((label, child) for child in children)"))
+        prep, entries = types.entries("((label, child) for child in children)")
+        extend_fn.body.extend(pygen.stmt(stmt) for stmt in prep)
+        extend_fn.body.append(pygen.stmt(f"self.children.extend({entries})"))
         klass.body.append(extend_fn)
 
         extend_children_fn = pygen.function(
             "extend_children",
-            f"self, other: '{class_name}'",
+            # Assumes the protocol module defines the node class under the same name.
+            f"self, other: {PROTOCOL_MODULE_ALIAS}.{class_name}",
             "None",
         )
-        extend_children_fn.body.append(pygen.stmt("self.children.extend(other.children)"))
+        # Always widened: `other` is the protocol node type even when nothing else here widens.
+        prep, entries = types.entries("other.children", widened=True)
+        extend_children_fn.body.extend(pygen.stmt(stmt) for stmt in prep)
+        extend_children_fn.body.append(pygen.stmt(f"self.children.extend({entries})"))
         klass.body.append(extend_children_fn)
 
         child_fn = pygen.function("child", "self", f"tuple[{label_annotation}, {child_annotation}]")
@@ -330,17 +432,33 @@ def _get_native_span_type():
         )
         klass.body.append(child_fn)
 
-        klass.body.extend(self._emit_py_mutators(class_name, child_annotation, label_annotation, model))
+        klass.body.extend(self._emit_py_mutators(class_name, types, model))
 
         multi_type = len(model.types) > 1
+
+        def label_widened(label: str) -> bool:
+            """True when append_<label>/extend_<label> accept more than the list element type.
+
+            Only the child side can widen here: these methods supply the label themselves, as the
+            concrete enum member.
+            """
+            return _child_types_widen(model.labels[label])
 
         def concrete_body_for(method: str, label: str) -> list[ast.stmt]:
             lann = child_annotation_by_labels[label]
             upper = label.upper()
             if method == "append":
-                return [pygen.stmt(f"self.children.append(({class_name}.Label.{upper}, child))")]
+                prep, entry = _widened_entry_stmts(
+                    f"({class_name}.Label.{upper}, child)", name="entry", widened=label_widened(label)
+                )
+                return [pygen.stmt(stmt) for stmt in (*prep, f"self.children.append({entry})")]
             if method == "extend":
-                return [pygen.stmt(f"self.children.extend(({class_name}.Label.{upper}, child) for child in children)")]
+                prep, entries = _widened_entry_stmts(
+                    f"(({class_name}.Label.{upper}, child) for child in children)",
+                    name="entries",
+                    widened=label_widened(label),
+                )
+                return [pygen.stmt(stmt) for stmt in (*prep, f"self.children.extend({entries})")]
             if method == "children":
                 child_expr = f"typing.cast({lann}, child)" if multi_type else "child"
                 return [
@@ -383,6 +501,7 @@ def _get_native_span_type():
                 labels=labels,
                 annotation_for=lambda label: child_annotation_by_labels[label],
                 body_for=concrete_body_for,
+                input_annotation_for=lambda label: input_child_annotation_by_labels[label],
             )
         )
 
@@ -395,6 +514,8 @@ def _get_native_span_type():
                     body_for=lambda member, label: self._concrete_ergonomic_body(
                         plan=plan, class_name=class_name, member=member, label=label
                     ),
+                    variant_return="Label",
+                    multiple_container="list",
                 )
             )
 
@@ -469,8 +590,7 @@ raise ValueError(msg)
     def _emit_py_mutators(
         self,
         class_name: str,
-        child_annotation: str,
-        label_annotation: str,
+        types: _ChildTypes,
         model: ItemsModel,
     ) -> list[ast.stmt]:
         """Emit insert / remove_at / replace_at / clear on the concrete dataclass.
@@ -527,7 +647,7 @@ raise ValueError(msg)
         # seen.  fltk._native never unloads once imported, so positive memoisation is safe.
         # The tuple is a ClassVar (not an instance field) but declared without a type annotation
         # in the dataclass body to avoid being treated as a dataclass field.
-        check_child_fn = pygen.function("_check_child_type_for_mutators", f"self, child: {child_annotation}", "None")
+        check_child_fn = pygen.function("_check_child_type_for_mutators", f"self, child: {types.input_child}", "None")
         if has_span_types:
             # _MUTATOR_ALLOWED_CHILD_TYPES starts as None; lazily initialised to the static-type
             # tuple on first call, then memoised.  Native Span is appended once when fltk._native
@@ -582,7 +702,7 @@ if not isinstance(child, {union_expr}):
             # Assign it to a local _cn so the f-string line stays within the 120-char ruff limit for
             # nodes with long class names.
             check_label_fn = pygen.function(
-                "_check_label_type_for_mutators", f"self, label: {label_annotation}, method: str", "None"
+                "_check_label_type_for_mutators", f"self, label: {types.input_label}, method: str", "None"
             )
             check_label_fn.body.extend(
                 ast.parse(
@@ -598,7 +718,7 @@ if label is not None and not isinstance(label, {class_name}.Label):
         else:
             # Label-free node: any non-None label is an error
             check_label_fn = pygen.function(
-                "_check_label_type_for_mutators", f"self, label: {label_annotation}, method: str", "None"
+                "_check_label_type_for_mutators", f"self, label: {types.input_label}, method: str", "None"
             )
             check_label_fn.body.extend(
                 ast.parse(
@@ -618,9 +738,10 @@ if label is not None:
         # for arbitrarily-large ints (pinned by test_insert_clamp_large_positive).
         insert_fn = pygen.function(
             "insert",
-            f"self, index: int, child: {child_annotation}, label: {label_annotation} = None",
+            f"self, index: int, child: {types.input_child}, label: {types.input_label} = None",
             "None",
         )
+        prep, entry = types.entry("label", "child")
         insert_fn.body.extend(
             ast.parse(
                 """\
@@ -632,10 +753,10 @@ if idx < 0:
     idx = max(n + idx, 0)
 else:
     idx = min(idx, n)
-self.children.insert(idx, (label, child))
 """
             ).body
         )
+        insert_fn.body.extend(ast.parse("\n".join([*prep, f"self.children.insert(idx, {entry})", ""])).body)
         fns.append(insert_fn)
 
         def _emit_bounds_check_stmts(method_name: str) -> list[ast.stmt]:
@@ -657,10 +778,12 @@ if norm < 0 or norm >= n:
             ).body
 
         # remove_at(index) -> tuple[label, child] — strict bounds check + parity message.
+        # Returns stay concrete: a concrete child/label satisfies the protocol's element type
+        # covariantly, so downstream reads keep their concrete types.
         if model.labels:
-            remove_ret = f"tuple[{label_annotation}, {child_annotation}]"
+            remove_ret = f"tuple[typing.Optional[Label], {types.concrete_child}]"
         else:
-            remove_ret = f"tuple[None, {child_annotation}]"
+            remove_ret = f"tuple[None, {types.concrete_child}]"
         remove_fn = pygen.function("remove_at", "self, index: int", remove_ret)
         remove_fn.body.extend(_emit_bounds_check_stmts("remove_at"))
         remove_fn.body.extend(ast.parse("return self.children.pop(norm)\n").body)
@@ -670,7 +793,7 @@ if norm < 0 or norm >= n:
         # Validation order: child → label → index, matching the Rust backend.
         replace_fn = pygen.function(
             "replace_at",
-            f"self, index: int, child: {child_annotation}, label: {label_annotation} = None",
+            f"self, index: int, child: {types.input_child}, label: {types.input_label} = None",
             "None",
         )
         replace_fn.body.extend(
@@ -682,7 +805,8 @@ self._check_label_type_for_mutators(label, "replace_at")
             ).body
         )
         replace_fn.body.extend(_emit_bounds_check_stmts("replace_at"))
-        replace_fn.body.extend(ast.parse("self.children[norm] = (label, child)\n").body)
+        replace_prep, replace_entry = types.entry("label", "child")
+        replace_fn.body.extend(ast.parse("\n".join([*replace_prep, f"self.children[norm] = {replace_entry}", ""])).body)
         fns.append(replace_fn)
 
         # clear() -> None
@@ -735,11 +859,27 @@ self._check_label_type_for_mutators(label, "replace_at")
         """
         return self.class_name_for_rule_node(rule_name)
 
-    def protocol_annotation_for_model_types(self, *, model_types: Iterable[ModelType], class_name: str = "") -> str:
+    def protocol_label_namespace_name(self, rule_name: str) -> str:
+        """Rule name → the protocol module's module-level label namespace class name.
+
+        Label constants live in a module-level ``<Class>Label`` namespace rather than nested in
+        the node protocol: pyright types an ``enum.auto()`` member as its value type when checking
+        a class object against a namespace protocol, so a nested ``Label`` requirement could never
+        be satisfied by a concrete backend's ``Label`` enum.
+        """
+        return f"{self.protocol_node_name(rule_name)}Label"
+
+    def protocol_annotation_for_model_types(
+        self, *, model_types: Iterable[ModelType], class_name: str = "", module_alias: str = ""
+    ) -> str:
         """Return a Python annotation string for model_types.
 
         Uses the bare Protocol class name (same as the concrete class name) for rule references, and
         library-type annotations for everything else.
+
+        ``module_alias``, when given, qualifies rule references with it (e.g. ``_cstp.Rule``) and
+        leaves them unquoted: the annotation is being emitted into a module other than the protocol
+        module, where the names are reachable only through that alias and are not forward references.
 
         Quoting asymmetry is intentional: rule references are quoted strings (e.g. '"Rule"') because they are
         forward references to Protocol classes defined later in the same module, while library types (e.g.
@@ -750,8 +890,13 @@ self._check_label_type_for_mutators(label, "replace_at")
         parts = []
         for model_type in model_types:
             if isinstance(model_type, str):
-                # rule reference -> Protocol node name (quoted forward ref)
-                parts.append(f'"{self.protocol_node_name(model_type)}"')
+                node_name = self.protocol_node_name(model_type)
+                if module_alias:
+                    # Reached through the alias from another module: not a forward reference.
+                    parts.append(f"{module_alias}.{node_name}")
+                else:
+                    # rule reference -> Protocol node name (quoted forward ref)
+                    parts.append(f'"{node_name}"')
             else:
                 # library type (Span, etc.) -> use the existing iir-to-annotation path (unquoted)
                 iir_type = typemodel.lookup_type(model_type)
@@ -772,9 +917,10 @@ self._check_label_type_for_mutators(label, "replace_at")
         """Emit the module-level _ProtocolLabelMember sentinel class for protocol Label members.
 
         Instances carry _fltk_canonical_name and a cross-backend __eq__/__hash__ matching the
-        shape in _emit_cross_backend_eq_hash.  The static type of each Label member stays object
-        (ClassVar[object]) — this sentinel is not an enum.Enum, preserving the structural-mismatch
-        contract (test_boundary_probe_documents_label_mismatch).
+        shape in _emit_cross_backend_eq_hash, so a sentinel compares equal to either backend's
+        label with the same canonical name.  Each member of a ``<Class>Label`` namespace is one
+        of these instances, statically typed as LabelProtocol; the sentinel class itself is not
+        an enum.Enum and is private to the protocol module.
         """
         stmts = ast.parse(
             """\
@@ -820,6 +966,7 @@ class _ProtocolLabelMember:
             pygen.if_(
                 pygen.expr("typing.TYPE_CHECKING"),
                 [
+                    pygen.stmt("import fltk.fegen.pyrt.label_protocol"),
                     pygen.stmt("import fltk.fegen.pyrt.span_protocol"),
                 ],
                 [],
@@ -852,7 +999,9 @@ class _ProtocolLabelMember:
         # used to emit the actual classes so it cannot drift from the generated output.
         # Sorted for deterministic output across regenerations.
         public_names = sorted(
-            {self.protocol_node_name(rule) for rule in self.rule_models} | {"NodeKind", "Span", "CstModule"}
+            {self.protocol_node_name(rule) for rule in self.rule_models}
+            | {self.protocol_label_namespace_name(rule) for rule, model in self.rule_models.items() if model.labels}
+            | {"NodeKind", "Span", "CstModule"}
         )
         # Insert after the last import / TYPE_CHECKING block so __all__ appears near the top of
         # the module.  Derive the position structurally rather than hardcoding a count so it
@@ -898,27 +1047,44 @@ class _ProtocolLabelMember:
           (intentional).
         - E501 is NOT added: ``make fix`` reformats the generated file so no line exceeds the
           limit, and including E501 causes RUF100 (unused noqa) after ``make fix``.
-        - F821 is NOT added: nested Label references resolve via ``from __future__ import
-          annotations`` and ruff does not raise F821 for them; including F821 causes RUF100
-          (unused noqa) after ``make fix``.
+        - F821 is NOT added: forward references to protocol classes resolve via ``from __future__
+          import annotations`` and ruff does not raise F821 for them; including F821 causes
+          RUF100 (unused noqa) after ``make fix``.
         """
         return "# ruff: noqa: N802\n" + ast.unparse(self.gen_protocol_module(emit_kind_literal=emit_kind_literal))
 
     def _protocol_class_for_model_with_assignments(
         self, class_name: str, model: ItemsModel, rule_name: str, *, emit_kind_literal: bool
     ) -> list[ast.stmt]:
-        """Generate a Protocol class plus post-class Label member sentinel assignments.
+        """Generate a Protocol class plus, for a labeled rule, its label namespace class.
 
-        Returns a list: [ClassDef, assignment-stmts...].
+        Returns a list: [ClassDef] or [ClassDef, label-namespace ClassDef].  The namespace is a
+        plain class whose members are LabelProtocol-typed sentinels carrying the unchanged
+        ``<Class>.Label.<MEMBER>`` canonical names.
         """
         klass = self._protocol_class_for_model(class_name, model, rule_name, emit_kind_literal=emit_kind_literal)
         stmts: list[ast.stmt] = [klass]
-        # Emit post-class sentinel assignments for each Label member.
         labels = sorted(model.labels.keys())
-        for label in labels:
-            python_name = label.upper()
-            canonical = f"{class_name}.Label.{python_name}"
-            stmts.append(pygen.stmt(f'{class_name}.Label.{python_name} = _ProtocolLabelMember("{canonical}")'))
+        if labels:
+            namespace = pygen.klass(name=f"{class_name}Label")
+            namespace.body.append(
+                pygen.stmt(
+                    f'"""Sentinels equal to either backend\'s {class_name} labels, for identifying one.\n\n'
+                    "    They are not a backend's own label objects, so insert() and replace_at() reject\n"
+                    "    them on every backend; pass those a label read off the node being mutated (from\n"
+                    '    children, remove_at() or variant()).\n    """'
+                )
+            )
+            for label in labels:
+                python_name = label.upper()
+                canonical = label_canonical_name(class_name, python_name)
+                namespace.body.append(
+                    pygen.stmt(
+                        f"{python_name}: typing.Final[{LABEL_PROTOCOL_ANNOTATION}]"
+                        f' = _ProtocolLabelMember("{canonical}")'
+                    )
+                )
+            stmts.append(namespace)
         return stmts
 
     def _emit_label_quintet(
@@ -927,6 +1093,7 @@ class _ProtocolLabelMember:
         labels: list[str],
         annotation_for: Callable[[str], str],
         body_for: Callable[[Literal["append", "extend", "children", "child", "maybe"], str], list[ast.stmt]],
+        input_annotation_for: Callable[[str], str],
     ) -> list[ast.FunctionDef]:
         """Emit the per-label quintet of accessor methods shared by both generators.
 
@@ -938,21 +1105,28 @@ class _ProtocolLabelMember:
         labels:
             Sorted list of label names (empty → returns []).
         annotation_for:
-            Maps label name → child type annotation string for that label.
+            Maps label name → child type annotation string for that label, used for the three
+            accessors' return types.
         body_for:
             Maps (method_name, label) → list of body statements.
             method_name is one of "append", "extend", "children", "child", "maybe".
             Protocol callers return [pygen.stmt("...")] for every call.
+        input_annotation_for:
+            Maps label name → the child type accepted by append_<l> / extend_<l>.  Stated by every
+            caller, like ``variant_return`` on _emit_label_ergonomics: the concrete classes accept
+            the protocol child types while returning their own, so a default here would silently
+            give one surface the other's annotations.
         """
         fns: list[ast.FunctionDef] = []
         for label in labels:
             lann = annotation_for(label)
+            iann = input_annotation_for(label)
 
-            fn = pygen.function(f"append_{label}", f"self, child: {lann}", "None")
+            fn = pygen.function(f"append_{label}", f"self, child: {iann}", "None")
             fn.body = body_for("append", label)
             fns.append(fn)
 
-            fn = pygen.function(f"extend_{label}", f"self, children: typing.Iterable[{lann}]", "None")
+            fn = pygen.function(f"extend_{label}", f"self, children: typing.Iterable[{iann}]", "None")
             fn.body = body_for("extend", label)
             fns.append(fn)
 
@@ -976,6 +1150,8 @@ class _ProtocolLabelMember:
         plan: cst_ergonomics.RulePlan,
         annotation_for: Callable[[str], str],
         body_for: Callable[[ErgonomicMember, str], list[ast.stmt]],
+        variant_return: str,
+        multiple_container: str,
     ) -> list[ast.FunctionDef]:
         """Emit the arity-aware ergonomic accessors.
 
@@ -993,6 +1169,16 @@ class _ProtocolLabelMember:
         body_for:
             Maps (member kind, label) → list of body statements.  The label is the empty string
             for the rule-level members.  Protocol callers return [pygen.stmt("...")] throughout.
+        variant_return:
+            Return annotation for ``variant()``, stated by every caller because it is the one
+            member whose type differs per surface: the concrete classes return their own nested
+            ``Label`` enum, the protocol returns the backend-agnostic LabelProtocol.
+        multiple_container:
+            Container for a MULTIPLE-arity bare accessor's return type, stated by every caller for
+            the same reason as ``variant_return``.  The concrete classes
+            return a ``list``; the protocol demands only ``typing.Sequence``, because ``list`` is
+            invariant and a backend returning a list of its own node classes could otherwise never
+            satisfy a protocol promising a list of protocol nodes.
         """
         fns: list[ast.FunctionDef] = []
 
@@ -1005,7 +1191,7 @@ class _ProtocolLabelMember:
                 elif bare_arity == cst_ergonomics.ArityClass.OPTIONAL_SINGLE:
                     ret = f"typing.Optional[{lann}]"
                 else:
-                    ret = f"list[{lann}]"
+                    ret = f"{multiple_container}[{lann}]"
                 fn = pygen.function(label, "self", ret)
                 fn.body = body_for("bare", label)
                 fns.append(fn)
@@ -1023,7 +1209,7 @@ class _ProtocolLabelMember:
             fns.append(fn)
 
         if plan.variant:
-            fn = pygen.function("variant", "self", "Label")
+            fn = pygen.function("variant", "self", variant_return)
             fn.body = body_for("variant", "")
             fns.append(fn)
 
@@ -1041,18 +1227,6 @@ class _ProtocolLabelMember:
 
         labels = sorted(model.labels.keys())
 
-        if labels:
-            label_class = pygen.klass(name="Label")
-            for label in labels:
-                # Use ClassVar[object] rather than ClassVar[Label] to avoid the
-                # self-referential annotation that pyright flags as reportUndefinedVariable
-                # inside the nested class body.  The only guarantee we need is attribute
-                # presence (so label == self.cst.Items.Label.NO_WS typechecks); the exact
-                # type of the constant is immaterial for Protocol-level checking.
-                # Value is set post-class by _protocol_class_for_model_with_assignments.
-                label_class.body.append(pygen.stmt(f"{label.upper()}: typing.ClassVar[object]"))
-            klass.body.append(label_class)
-
         # Runtime default enables cst.<Node>.kind narrowing.
         # py_module plays no role in protocol output.
         if rule_name and emit_kind_literal:
@@ -1065,12 +1239,16 @@ class _ProtocolLabelMember:
 
         child_annotation = self.protocol_annotation_for_model_types(model_types=model.types, class_name=class_name)
 
-        if labels:
-            klass.body.append(pygen.stmt(f"children: list[tuple[typing.Optional[Label], {child_annotation}]]"))
-        else:
-            klass.body.append(pygen.stmt(f"children: list[tuple[None, {child_annotation}]]"))
+        label_annotation = f"typing.Optional[{LABEL_PROTOCOL_ANNOTATION}]" if labels else "None"
+        child_element = f"tuple[{label_annotation}, {child_annotation}]"
 
-        label_annotation = "typing.Optional[Label]" if labels else "None"
+        # children is a read-only property returning a Sequence: a plain protocol attribute is
+        # invariant and would reject every backend's concrete list element type, while a
+        # read-only property accepts them covariantly.  Mutation goes through the mutators.
+        children_fn = pygen.function("children", "self", f"typing.Sequence[{child_element}]")
+        children_fn.decorator_list = [pygen.expr("property")]
+        children_fn.body.append(pygen.stmt("..."))
+        klass.body.append(children_fn)
 
         append_fn = pygen.function(
             "append", f"self, child: {child_annotation}, label: {label_annotation} = None", "None"
@@ -1088,10 +1266,7 @@ class _ProtocolLabelMember:
         extend_children_fn.body.append(pygen.stmt("..."))
         klass.body.append(extend_children_fn)
 
-        if labels:
-            child_ret = f"tuple[typing.Optional[Label], {child_annotation}]"
-        else:
-            child_ret = f"tuple[None, {child_annotation}]"
+        child_ret = child_element
         child_fn = pygen.function("child", "self", child_ret)
         child_fn.body.append(pygen.stmt("..."))
         klass.body.append(child_fn)
@@ -1131,6 +1306,7 @@ class _ProtocolLabelMember:
                 labels=labels,
                 annotation_for=protocol_annotation_for,
                 body_for=lambda _method, _label: [pygen.stmt("...")],
+                input_annotation_for=protocol_annotation_for,
             )
         )
 
@@ -1141,6 +1317,8 @@ class _ProtocolLabelMember:
                     plan=plan,
                     annotation_for=protocol_annotation_for,
                     body_for=lambda _member, _label: [pygen.stmt("...")],
+                    variant_return=LABEL_PROTOCOL_ANNOTATION,
+                    multiple_container="typing.Sequence",
                 )
             )
 

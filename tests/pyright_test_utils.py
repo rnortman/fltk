@@ -20,11 +20,7 @@ _REPO_ROOT = pathlib.Path(__file__).parent.parent
 
 
 def pyright_runnable() -> bool:
-    """Return True when uv + pyright are runnable.
-
-    Shared probe behind the session-scoped ``pyright_available`` fixtures in the
-    consumer-stub tests, so the availability check lives in one place.
-    """
+    """Return True when uv + pyright are runnable."""
     if shutil.which("uv") is None:
         return False
     result = subprocess.run(
