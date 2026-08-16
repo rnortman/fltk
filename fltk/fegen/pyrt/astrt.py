@@ -517,6 +517,9 @@ def _merged(left: Any, right: Any, rule: str) -> Any:
     try:
         return left.merge(right)
     except ValueError as error:
+        # TODO(astrt-fold-roundtrip-span-merge): a reverse-constructed CST synthesises each node's
+        # span against its own source text, so this arm fires for every AST -> to_cst -> from_cst
+        # round trip of a fold rule.
         msg = f"rule {rule!r}: the operands of a fold come from different sources, so their spans cannot merge"
         raise AstError(msg, left) from error
 

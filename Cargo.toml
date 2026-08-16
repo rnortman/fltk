@@ -22,6 +22,8 @@ regex-automata = { version = "0.4", default-features = false, features = [
 
 [package]
 name = "fltk-native"
+# TODO(version-bump-0-6-0): still reads 0.4.0 while v0.5.0 is tagged; bump every manifest at the
+# 0.6.0 cut.
 version = "0.4.0"
 edition = "2021"
 # Ships to PyPI via maturin, not crates.io. Guards against accidental `cargo publish`

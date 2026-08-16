@@ -389,7 +389,8 @@ class TestConversionErrors:
         generated = build(FIELD_ENUM_GRAMMAR)
         cst = generated.parser.cst_module
         node = cst.Entry()
-        node.append(terminalsrc.Span.with_source(0, 1, "x"), cst.Entry.Label.VAL)
+        # Written straight into the list: the mutators refuse a child type outside the node's model.
+        node.children.append((cst.Entry.Label.VAL, terminalsrc.Span.with_source(0, 1, "x")))
         with pytest.raises(astrt.AstError, match="label 'val' has a child of unexpected kind"):
             generated.ast.entry_from_cst(node)
 
@@ -403,7 +404,8 @@ class TestConversionErrors:
         generated = build(OPTIONAL_GRAMMAR)
         cst = generated.parser.cst_module
         node = cst.Opt()
-        node.append(terminalsrc.Span.with_source(0, 1, "a"), cst.Opt.Label.NAME)
+        # Written straight into the list: the mutators refuse a child type outside the node's model.
+        node.children.append((cst.Opt.Label.NAME, terminalsrc.Span.with_source(0, 1, "a")))
         with pytest.raises(astrt.AstError, match="rule 'opt': label 'name' has a child of unexpected kind"):
             generated.ast.opt_from_cst(node)
 

@@ -452,7 +452,7 @@ class TestPhase1IdentityAndMutation:
         node = Entry()
         ident = Identifier()
         node.append_key(ident)
-        keys = node.children_key()
+        keys = list(node.children_key())
         assert len(keys) == 1, "expected one key child"
         assert keys[0] is ident, "children_<label>() must return the same registered handle"
 

@@ -7,6 +7,7 @@ same Python-visible API as gsm2tree.py but as compiled Rust extension classes.
 from __future__ import annotations
 
 import re
+import typing
 from collections.abc import Iterable
 
 from fltk.fegen import cst_ergonomics, gsm, naming
@@ -32,6 +33,20 @@ from fltk.iir.py import reg as pyreg
 # by gsm.validate_no_underscore_only_names (called from classify_trivia_rules), which fires
 # before this loop with a user-friendly diagnostic.
 _IDENTIFIER_RE = re.compile(r"^[_a-z][_a-z0-9]*$")
+
+
+class _PyiAnnotations(typing.NamedTuple):
+    """The two spellings of one node annotation in the .pyi stub.
+
+    ``param`` names the protocol classes (``_proto.Grammar``) and goes in parameter positions, so
+    either backend's values are accepted.  ``local`` names this stub's own classes (``Grammar``)
+    and goes in return positions, so a consumer annotated against the concrete classes can descend
+    a tree with the accessors.
+    """
+
+    param: str
+    local: str
+
 
 # Labels whose per-label generated methods collide with fixed method names on the
 # handle pyclass.  Rejection is a generation-time error naming the label and method.
@@ -171,6 +186,11 @@ def _rust_variant_name(label: str) -> str:
     # TODO(rust-codegen-self-keyword): a label whose camel form is `Self` emits a
     # reserved-word enum variant, which rustc rejects.
     return naming.snake_to_upper_camel(label)
+
+
+# Reserved in `cst_ergonomics`, so no grammar label can generate a pymethod of the same
+# name and collide on the same inherent-impl type.
+CHILDREN_SNAPSHOT_FN = "py_children_snapshot"
 
 
 def _python_label_name(label: str) -> str:
@@ -347,9 +367,14 @@ class RustCstGenerator:
         """Return a complete .pyi stub for the generated Rust extension as a string.
 
         protocol_module: import path of the committed protocol module for this grammar,
-        e.g. 'fltk.fegen.fltk_cst_protocol'. All type identities in annotations reference
-        it under the alias '_proto', so the stub cannot satisfy pyright with stub-local
-        nominal types.
+        e.g. 'fltk.fegen.fltk_cst_protocol'. It is imported under the alias '_proto'.
+
+        Node-typed annotations follow one rule: parameters are protocol-wide
+        (``_proto.<Class>``), returns are stub-local (``<Class>``). Width belongs on inputs,
+        so either backend's values flow in; narrow returns let a consumer annotated against
+        the concrete classes descend a tree with the accessors, exactly as on the Python
+        backend. Stub-local returns stay assignable to their protocol counterparts because
+        the protocol declares multi-valued accessors as read-only ``Sequence``.
 
         Callers write this string to <name>/cst.pyi inside a stub-package directory
         (i.e. <name>/__init__.pyi + <name>/cst.pyi), or to a custom path via --pyi-output.
@@ -395,10 +420,16 @@ class RustCstGenerator:
             # matches the protocol's span field so the Rust CST stays swap-compatible with the Python CST)
             lines.append("    span: fltk.fegen.pyrt.span_protocol.SpanProtocol")
 
-            # children: proto-qualified element types
-            child_ann = self._pyi_annotation_for_model_types(model.types, class_name=class_name)
+            child_types = self._pyi_annotations(model.types, class_name=class_name)
+            child_ann = child_types.param
+            local_child_ann = child_types.local
             label_ann = f"typing.Optional[{LABEL_PROTOCOL_ANNOTATION}]" if labels else "None"
-            lines.append(f"    children: list[tuple[{label_ann}, {child_ann}]]")
+            # `children` is a list of this backend's own node classes, matching the Python backend's
+            # `children`. `list` is invariant, so a variable annotated with the protocol element type
+            # does not accept it; protocol-typed code reads the protocol's read-only `children`
+            # Sequence property instead. The list this getter returns is a per-call snapshot, so
+            # mutating it does not touch the tree — writes go through the mutators.
+            lines.append(f"    children: list[tuple[{label_ann}, {local_child_ann}]]")
 
             # Generic methods: append, extend, child, extend_children
             lines.append(f"    def append(self, child: {child_ann}, label: {label_ann} = ...) -> None: ...")
@@ -408,7 +439,7 @@ class RustCstGenerator:
             # extend_children takes _proto.ClassName (not the stub-local class) to avoid
             # contravariance mismatches when pyright checks structural compatibility.
             lines.append(f"    def extend_children(self, other: _proto.{class_name}) -> None: ...")
-            child_ret = f"tuple[{label_ann}, {child_ann}]"
+            child_ret = f"tuple[{label_ann}, {local_child_ann}]"
             lines.append(f"    def child(self) -> {child_ret}: ...")
 
             # Named mutators: insert, remove_at, replace_at, clear
@@ -421,15 +452,14 @@ class RustCstGenerator:
 
             # Per-label accessor quintet
             for label in labels:
-                lann = self._pyi_annotation_for_model_types(model.labels[label], class_name=f"{class_name}.{label}")
+                label_types = self._pyi_annotations(model.labels[label], class_name=f"{class_name}.{label}")
+                lann = label_types.param
+                local_lann = label_types.local
                 lines.append(f"    def append_{label}(self, child: {lann}) -> None: ...")
                 lines.append(f"    def extend_{label}(self, children: typing.Iterable[{lann}]) -> None: ...")
-                # children_<label>: typed Iterator[T] (Rust returns list but
-                # Iterator is the protocol's declared return type; stub uses narrower declaration
-                # so conformance fixtures pass. Callers only ever iterate.)
-                lines.append(f"    def children_{label}(self) -> typing.Iterator[{lann}]: ...")  # stub/runtime diverge
-                lines.append(f"    def child_{label}(self) -> {lann}: ...")
-                lines.append(f"    def maybe_{label}(self) -> typing.Optional[{lann}]: ...")
+                lines.append(f"    def children_{label}(self) -> typing.Iterator[{local_lann}]: ...")
+                lines.append(f"    def child_{label}(self) -> {local_lann}: ...")
+                lines.append(f"    def maybe_{label}(self) -> typing.Optional[{local_lann}]: ...")
 
             lines.extend(self._pyi_ergonomic_lines(class_name, rule_name, model))
 
@@ -446,8 +476,10 @@ class RustCstGenerator:
     def _pyi_ergonomic_lines(self, class_name: str, rule_name: str, model: ItemsModel) -> list[str]:
         """Emit the .pyi declarations for a rule's ergonomic pymethods.
 
-        Return types mirror the protocol's, so a stub class stays assignable to its protocol
-        counterpart: ``variant`` is annotated with the backend-agnostic LabelProtocol.
+        Node-typed returns are stub-local class names; the stub class stays assignable to its
+        protocol counterpart because the protocol's multi-valued accessors are read-only
+        ``Sequence``. ``variant`` returns a label object, which genuinely is the protocol's
+        type at runtime, so it keeps the backend-agnostic LabelProtocol annotation.
         """
         plan = self.plan_for_rule(rule_name)
         lines: list[str] = []
@@ -455,7 +487,7 @@ class RustCstGenerator:
         for label in self._planned_labels(plan):
             arity = plan.bare_accessors.get(label)
             if arity is not None:
-                lann = self._pyi_annotation_for_model_types(model.labels[label], class_name=f"{class_name}.{label}")
+                lann = self._pyi_annotations(model.labels[label], class_name=f"{class_name}.{label}").local
                 if arity == cst_ergonomics.ArityClass.REQUIRED_SINGLE:
                     ret = lann
                 elif arity == cst_ergonomics.ArityClass.OPTIONAL_SINGLE:
@@ -484,34 +516,27 @@ class RustCstGenerator:
         The protocol module is backend-agnostic — it describes the structural CST API via
         ``typing.Protocol`` classes plus a runtime ``NodeKind`` enum and is equally valid as a
         type contract for the Python-backed and Rust-backed CSTs.
-
-        Reuses ``self._py_gen`` directly: protocol emission is read-only with respect to the
-        ``py_module``/context state (``py_module`` plays no role in protocol output, and the precise
-        ``kind: typing.Literal[NodeKind.*]`` discriminant is selected by ``emit_kind_literal``, which
-        defaults True), so the Builtins-backed generator that also backs ``.rs`` / ``.pyi`` emission
-        produces identical output with no side effects.  Rendered through the shared
-        ``gen_protocol_module_text`` helper so this path and the Python ``generate --protocol`` path
-        emit byte-identical text from one code path (the cross-path byte-identity test is the guardrail).
         """
         return self._py_gen.gen_protocol_module_text()
 
-    def _pyi_annotation_for_model_types(self, model_types: Iterable[ModelType], *, class_name: str = "") -> str:
-        """Return a proto-qualified annotation string for use in the .pyi stub.
+    def _pyi_annotations(self, model_types: Iterable[ModelType], *, class_name: str = "") -> _PyiAnnotations:
+        """Return the two spellings of one model's node annotation for the .pyi stub.
 
         Transforms the output of protocol_annotation_for_model_types: quoted rule references
-        like '"Grammar"' become '_proto.Grammar', while unquoted library paths (e.g.
-        'fltk.fegen.pyrt.terminalsrc.Span') are kept as-is.
+        like '"Grammar"' become '_proto.Grammar' in the ``param`` spelling and the bare
+        stub-local 'Grammar' in the ``local`` spelling; unquoted library paths (e.g.
+        'fltk.fegen.pyrt.terminalsrc.Span') are kept as-is in both.
+
+        Union member order is the same in both: the sort happens on the quoted form, once,
+        before either substitution.
         """
-        # Get the raw annotation string from the protocol machinery.
+        # Raw form: '"ClassName"' (single-type) or 'typing.Union["A", "B", ...]'.
         raw = self._py_gen.protocol_annotation_for_model_types(model_types=model_types, class_name=class_name)
-
-        # Transform quoted rule refs to _proto-qualified names.
-        # Raw form: '"ClassName"' (single-type) or 'typing.Union["A", "B", ...]'
-        # We replace each '"ClassName"' occurrence with '_proto.ClassName'.
-        def _replace_quoted(m: re.Match[str]) -> str:
-            return f"_proto.{m.group(1)}"
-
-        return re.sub(r'"([A-Z][A-Za-z0-9_]*)"', _replace_quoted, raw)
+        quoted = re.compile(r'"([A-Z][A-Za-z0-9_]*)"')
+        return _PyiAnnotations(
+            param=quoted.sub(lambda m: f"_proto.{m.group(1)}", raw),
+            local=quoted.sub(lambda m: m.group(1), raw),
+        )
 
     def _child_class_union(self) -> list[str]:
         """Return the sorted list of node class names that appear as node-typed children in any child enum.
@@ -624,6 +649,14 @@ class RustCstGenerator:
             # (which itself is cfg-gated on test-introspection).  Putting the imports under the
             # same gate prevents "unused import" warnings when test-introspection is disabled.
             "use pyo3::prelude::{pyfunction, wrap_pyfunction};\n"
+            "\n"
+            "/// Cap on the `__len__`-based capacity hint used when pre-sizing the staging\n"
+            "/// vec in `extend` / `extend_<label>`.  The hint is caller-controlled and need\n"
+            "/// not match what the iterator yields; an oversized reservation aborts the\n"
+            "/// process (Rust's allocation-failure path) instead of raising, so we clamp it\n"
+            "/// and let the vec grow normally beyond this point.\n"
+            '#[cfg(feature = "python")]\n'
+            "const EXTEND_CAPACITY_HINT_CAP: usize = 1024;\n"
             "\n"
         )
 
@@ -791,8 +824,17 @@ class RustCstGenerator:
         lines.append("")
 
         # Dual-cfg blocks (same rationale as NodeKind above).
-        # Variant names extracted once and reused in both blocks to prevent drift.
-        label_variants = [(_rust_variant_name(lbl), _python_label_name(lbl)) for lbl in labels]
+        # Rust variant, Python name and canonical name are derived once and reused by every block
+        # below.  The __repr__ match and the from_canonical_name match are inverses of each other,
+        # so a second derivation of the same string could make them disagree silently.
+        label_variants = [
+            (
+                _rust_variant_name(lbl),
+                _python_label_name(lbl),
+                label_canonical_name(class_name, _python_label_name(lbl)),
+            )
+            for lbl in labels
+        ]
         lines.append("/// Label discriminant enum for children of this node type.")
         lines.append("///")
         lines.append(f"/// Python-visible name is `{python_enum_name}` (preserved for compatibility).")
@@ -801,7 +843,7 @@ class RustCstGenerator:
         lines.append(f'#[pyclass(frozen, from_py_object, name = "{python_enum_name}")]')
         lines.append("#[derive(Clone, Debug, PartialEq, Eq, Hash)]")
         lines.append(f"pub enum {enum_name} {{")
-        for rust_variant, python_name in label_variants:
+        for rust_variant, python_name, _canonical in label_variants:
             lines.append(f'    #[pyo3(name = "{python_name}")]')
             lines.append(f"    {rust_variant},")
         lines.append("}")
@@ -809,7 +851,7 @@ class RustCstGenerator:
         lines.append('#[cfg(not(feature = "python"))]')
         lines.append("#[derive(Clone, Debug, PartialEq, Eq, Hash)]")
         lines.append(f"pub enum {enum_name} {{")
-        for rust_variant, _python_name in label_variants:
+        for rust_variant, _python_name, _canonical in label_variants:
             lines.append(f"    {rust_variant},")
         lines.append("}")
         lines.append("")
@@ -820,10 +862,7 @@ class RustCstGenerator:
         lines.append(f"impl {enum_name} {{")
         lines.append("    fn __repr__(&self) -> &'static str {")
         lines.append("        match self {")
-        for label in labels:
-            rust_variant = _rust_variant_name(label)
-            python_name = _python_label_name(label)
-            canonical = label_canonical_name(class_name, python_name)
+        for rust_variant, _python_name, canonical in label_variants:
             lines.append(f'            {enum_name}::{rust_variant} => "{canonical}",')
         lines.append("        }")
         lines.append("    }")
@@ -834,6 +873,20 @@ class RustCstGenerator:
         lines.append("    }")
         lines.append("")
         self._emit_rust_cross_backend_eq_hash(lines, enum_name)
+        lines.append("}")
+        lines.append("")
+
+        # Plain impl, not pymethods — not Python-visible.
+        lines.append('#[cfg(feature = "python")]')
+        lines.append(f"impl {enum_name} {{")
+        lines.append("    /// The variant with this cross-backend canonical name, if any.")
+        lines.append(f"    fn from_canonical_name(name: &str) -> {STD_OPTION}<Self> {{")
+        lines.append("        match name {")
+        for rust_variant, _python_name, canonical in label_variants:
+            lines.append(f'            "{canonical}" => Some({enum_name}::{rust_variant}),')
+        lines.append("            _ => None,")
+        lines.append("        }")
+        lines.append("    }")
         lines.append("}")
         lines.append("")
 
@@ -1071,9 +1124,15 @@ class RustCstGenerator:
             # Degenerate case: no known child types — always error.
             # Use the underscore-prefixed param names chosen above to suppress unused-variable warnings.
             lines.append("        let _ = (_py, _span_type);")
+        # Qualify the rejected type with its module: both backends export their node classes under
+        # the same Python names, so a bare type name renders a cross-backend mix-up as
+        # "Grammar: unsupported child type Grammar".  Both backends must use module.qualname
+        # unconditionally (no builtins stripping) so their messages agree.
+        lines.append("        let rejected_type = obj.get_type();")
         lines.append("        Err(pyo3::exceptions::PyTypeError::new_err(format!(")
-        lines.append(f'            "{class_name}: unsupported child type {{}}",')
-        lines.append("            obj.get_type().name()?")
+        lines.append(f'            "{class_name}: unsupported child type {{}}.{{}}",')
+        lines.append("            rejected_type.module()?,")
+        lines.append("            rejected_type.qualname()?")
         lines.append("        )))")
         lines.append("    }")
         lines.append("}")
@@ -1340,6 +1399,8 @@ class RustCstGenerator:
         lines.append("        })?;")
         lines.append(f"        obj.bind(py).cast::<{py_handle}>().map(|b| b.clone().unbind()).map_err(|e| e.into())")
         lines.append("    }")
+        if labels:
+            lines.extend(self._children_snapshot_helper(class_name))
         lines.append("}")
         lines.append("")
 
@@ -1494,11 +1555,11 @@ class RustCstGenerator:
             "    fn append(",
             f"        &self, py: Python<'_>, child: &Bound<'_, pyo3::PyAny>, label: {STD_OPTION}<Py<pyo3::PyAny>>,",
             "    ) -> pyo3::PyResult<()> {",
-            "        let span_type = get_span_type(py)?;",
-            f"        let native_child = {enum_name}::extract_from_pyobject(py, child, &span_type)?;",
             "        let native_label = match label {",
             *self._label_from_pyobject_match(class_name, labels, method_name="append"),
             "        };",
+            "        let span_type = get_span_type(py)?;",
+            f"        let native_child = {enum_name}::extract_from_pyobject(py, child, &span_type)?;",
             "        self.inner.write().children.push((native_label, native_child));",
             "        Ok(())",
             "    }",
@@ -1506,7 +1567,13 @@ class RustCstGenerator:
         ]
 
     def _label_from_pyobject_match(self, class_name: str, labels: list[str], method_name: str) -> list[str]:
-        """Emit the match arms for converting an Option<Py<PyAny>> label to native label type."""
+        """Emit the match arms for converting an Option<Py<PyAny>> label to native label type.
+
+        A label is matched by value, not by identity: this extension's own enum extracts directly,
+        and anything else carrying a matching ``_fltk_canonical_name`` — a protocol sentinel, the
+        Python backend's enum member — resolves to the corresponding variant here.  The stored
+        label is always this extension's own.
+        """
         if not labels:
             return [
                 "            None => None,",
@@ -1523,16 +1590,34 @@ class RustCstGenerator:
         lines = [
             "            None => None,",
             "            Some(lbl) => {",
-            f"                if let Ok(native_lbl) = lbl.bind(py).extract::<{rust_enum_name}>() {{",
+            "                let bound = lbl.bind(py);",
+            f"                if let Ok(native_lbl) = bound.extract::<{rust_enum_name}>() {{",
             "                    Some(native_lbl)",
             "                } else {",
-            "                    return Err(PyTypeError::new_err(format!(",
+            '                    // Only AttributeError means "not a label" and falls through to the',
+            "                    // TypeError below.  Anything else the lookup raises — a property that",
+            "                    // fails, a broken __getattr__, an interrupt — is the caller's real",
+            "                    // error and propagates unchanged.",
+            "                    use pyo3::exceptions::PyAttributeError;",
+            f"                    let canonical: {STD_OPTION}<{STD_STRING}> = match bound",
+            '                        .getattr(pyo3::intern!(py, "_fltk_canonical_name"))',
+            "                    {",
+            f"                        Ok(attr) => attr.extract::<{STD_STRING}>().ok(),",
+            "                        Err(e) if e.is_instance_of::<PyAttributeError>(py) => None,",
+            "                        Err(e) => return Err(e),",
+            "                    };",
+            f"                    match canonical.and_then(|cn| {rust_enum_name}::from_canonical_name(&cn)) {{",
+            "                        Some(resolved) => Some(resolved),",
+            "                        None => {",
+            "                            return Err(PyTypeError::new_err(format!(",
             (
-                f'                        "{class_name}.{method_name}: label argument is not a '
+                f'                                "{class_name}.{method_name}: label argument is not a '
                 f'{python_enum_name}; got {{}}",'
             ),
-            "                        lbl.bind(py).get_type().name()?",
-            "                    )));",
+            "                                bound.get_type().name()?",
+            "                            )));",
+            "                        }",
+            "                    }",
             "                }",
             "            }",
         ]
@@ -1547,16 +1632,21 @@ class RustCstGenerator:
             "        children: &Bound<'_, pyo3::PyAny>,",
             f"        label: {STD_OPTION}<Py<pyo3::PyAny>>,",
             "    ) -> pyo3::PyResult<()> {",
-            "        let span_type = get_span_type(py)?;",
             "        let native_label = match label {",
             *self._label_from_pyobject_match(class_name, labels, method_name="extend"),
             "        };",
+            "        let span_type = get_span_type(py)?;",
             "        let iter = children.try_iter()?;",
+            "        // Extract every child before touching the node: a rejected element must leave",
+            "        // the node unmutated (no partial extend).",
+            "        let cap = children.len().unwrap_or(0).min(EXTEND_CAPACITY_HINT_CAP);",
+            f"        let mut pending: {STD_VEC}<_> = {STD_VEC}::with_capacity(cap);",
             "        for child_result in iter {",
             "            let child = child_result?;",
             f"            let native_child = {enum_name}::extract_from_pyobject(py, &child, &span_type)?;",
-            "            self.inner.write().children.push((native_label.clone(), native_child));",
+            "            pending.push((native_label.clone(), native_child));",
             "        }",
+            "        self.inner.write().children.extend(pending);",
             "        Ok(())",
             "    }",
             "",
@@ -1672,12 +1762,13 @@ class RustCstGenerator:
             "        child: &Bound<'_, pyo3::PyAny>,",
             f"        label: {STD_OPTION}<Py<pyo3::PyAny>>,",
             "    ) -> pyo3::PyResult<()> {",
-            "        // Validate child and label BEFORE taking the write lock.",
-            "        let span_type = get_span_type(py)?;",
-            f"        let native_child = {enum_name}::extract_from_pyobject(py, child, &span_type)?;",
+            "        // Validate label and child BEFORE taking the write lock; label first, as",
+            "        // every mutator on both backends does.",
             "        let native_label = match label {",
             *self._label_from_pyobject_match(class_name, labels, method_name="insert"),
             "        };",
+            "        let span_type = get_span_type(py)?;",
+            f"        let native_child = {enum_name}::extract_from_pyobject(py, child, &span_type)?;",
             "        // Index normalization via operator.index (PyNumber_Index semantics).",
             "        // This raises TypeError (not AttributeError) for non-indexable inputs, matching Python's",
             "        // operator.index contract. Must be done BEFORE taking any lock.",
@@ -1801,12 +1892,13 @@ class RustCstGenerator:
             "        child: &Bound<'_, pyo3::PyAny>,",
             f"        label: {STD_OPTION}<Py<pyo3::PyAny>>,",
             "    ) -> pyo3::PyResult<()> {",
-            "        // Validate child and label BEFORE taking the write lock.",
-            "        let span_type = get_span_type(py)?;",
-            f"        let native_child = {enum_name}::extract_from_pyobject(py, child, &span_type)?;",
+            "        // Validate label and child BEFORE taking the write lock; label first, as",
+            "        // every mutator on both backends does.",
             "        let native_label = match label {",
             *self._label_from_pyobject_match(class_name, labels, method_name="replace_at"),
             "        };",
+            "        let span_type = get_span_type(py)?;",
+            f"        let native_child = {enum_name}::extract_from_pyobject(py, child, &span_type)?;",
             "        // Capture the caller's original string representation BEFORE normalization.",
             "        let orig_str = index.str()?.to_string_lossy().into_owned();",
             "        // Normalize via operator.index: raises TypeError for non-indexable inputs.",
@@ -2357,7 +2449,7 @@ class RustCstGenerator:
                     lines.extend(
                         [
                             f"    fn {method}(&self, py: Python<'_>) -> pyo3::PyResult<Py<pyo3::types::PyList>> {{",
-                            f"        self.children_{label}(py)",
+                            f"        self.{CHILDREN_SNAPSHOT_FN}(py, &{label_enum_name}::{_rust_variant_name(label)})",
                             "    }",
                             "",
                         ]
@@ -2497,12 +2589,49 @@ class RustCstGenerator:
             "        };",
         ]
 
+    def _children_snapshot_helper(self, class_name: str) -> list[str]:
+        """Emit the private list-snapshot helper backing `children_<label>` and `<label>()`.
+
+        One per class, taking the label: the body is label-invariant, so emitting it per label
+        would grow the generated crate with the label count rather than the class count.
+
+        Not a pymethod: `children_<label>` wraps its result in a fresh iterator while the
+        bare multiple-arity accessor hands the list back, and both need the same snapshot.
+        """
+        label_enum_name = self._label_enum_rust_name(class_name)
+        return [
+            "",
+            "    /// Snapshot the children carrying `label` into a new Python list.",
+            (
+                f"    fn {CHILDREN_SNAPSHOT_FN}(&self, py: Python<'_>, label: &{label_enum_name})"
+                " -> pyo3::PyResult<Py<pyo3::types::PyList>> {"
+            ),
+            "        // Lock scope: filter by label under the read guard, cloning only matching",
+            "        // children (Arc bump or Span copy each); drop the guard before to_pyobject,",
+            "        // which performs Python work that must not happen while a node lock is held.",
+            f"        let matching: {STD_VEC}<_> = {{",
+            "            let guard = self.inner.read();",
+            "            guard.children.iter()",
+            "                .filter(|(lbl, _)| lbl.as_ref() == Some(label))",
+            "                .map(|(_, child)| child.clone())",
+            "                .collect()",
+            "        };",
+            "        let result = pyo3::types::PyList::empty(py);",
+            "        for child in &matching {",
+            "            result.append(child.to_pyobject(py)?)?;",
+            "        }",
+            "        Ok(result.unbind())",
+            "    }",
+        ]
+
     def _per_label_methods(self, class_name: str, label: str, child_enum_name: str) -> list[str]:
         label_enum_name = self._label_enum_rust_name(class_name)
         rust_variant = _rust_variant_name(label)
 
         lines: list[str] = []
 
+        # TODO(cst-per-label-mutator-narrow-child-check): extraction goes through the node-wide
+        # child enum, so a wrong-but-known class is accepted and stored under this label.
         # append_<label>: push one child with the given label
         lines.extend(
             [
@@ -2522,37 +2651,28 @@ class RustCstGenerator:
                 f"    fn extend_{label}(&self, py: Python<'_>, children: &Bound<'_, pyo3::PyAny>) -> pyo3::PyResult<()> {{",  # noqa: E501
                 "        let span_type = get_span_type(py)?;",
                 "        let iter = children.try_iter()?;",
+                "        // Extract every child before touching the node: a rejected element must",
+                "        // leave the node unmutated (no partial extend).",
+                "        let cap = children.len().unwrap_or(0).min(EXTEND_CAPACITY_HINT_CAP);",
+                f"        let mut pending: {STD_VEC}<_> = {STD_VEC}::with_capacity(cap);",
                 "        for child_result in iter {",
                 "            let child = child_result?;",
                 f"            let native_child = {child_enum_name}::extract_from_pyobject(py, &child, &span_type)?;",
-                f"            let entry = (Some({label_enum_name}::{rust_variant}), native_child);",
-                "            self.inner.write().children.push(entry);",
+                f"            pending.push((Some({label_enum_name}::{rust_variant}), native_child));",
                 "        }",
+                "        self.inner.write().children.extend(pending);",
                 "        Ok(())",
                 "    }",
                 "",
             ]
         )
 
-        # children_<label>: return list of all children with matching label
+        # children_<label>: fresh single-pass iterator over a call-time snapshot
         lines.extend(
             [
-                f"    fn children_{label}(&self, py: Python<'_>) -> pyo3::PyResult<Py<pyo3::types::PyList>> {{",
-                "        // Lock scope: filter by label under the read guard, cloning only matching",
-                "        // children (Arc bump or Span copy each); drop the guard before to_pyobject,",
-                "        // which performs Python work that must not happen while a node lock is held.",
-                f"        let matching: {STD_VEC}<_> = {{",
-                "            let guard = self.inner.read();",
-                "            guard.children.iter()",
-                f"                .filter(|(lbl, _)| *lbl == Some({label_enum_name}::{rust_variant}))",
-                "                .map(|(_, child)| child.clone())",
-                "                .collect()",
-                "        };",
-                "        let result = pyo3::types::PyList::empty(py);",
-                "        for child in &matching {",
-                "            result.append(child.to_pyobject(py)?)?;",
-                "        }",
-                "        Ok(result.unbind())",
+                (f"    fn children_{label}(&self, py: Python<'_>) -> pyo3::PyResult<Py<pyo3::types::PyIterator>> {{"),
+                f"        let snapshot = self.{CHILDREN_SNAPSHOT_FN}(py, &{label_enum_name}::{rust_variant})?;",
+                "        Ok(snapshot.bind(py).try_iter()?.unbind())",
                 "    }",
                 "",
             ]

@@ -17,6 +17,14 @@ use pyo3::prelude::{Python, Py, Bound, IntoPyObject,
 #[cfg(all(feature = "python", feature = "test-introspection"))]
 use pyo3::prelude::{pyfunction, wrap_pyfunction};
 
+/// Cap on the `__len__`-based capacity hint used when pre-sizing the staging
+/// vec in `extend` / `extend_<label>`.  The hint is caller-controlled and need
+/// not match what the iterator yields; an oversized reservation aborts the
+/// process (Rust's allocation-failure path) instead of raising, so we clamp it
+/// and let the vec grow normally beyond this point.
+#[cfg(feature = "python")]
+const EXTEND_CAPACITY_HINT_CAP: usize = 1024;
+
 
 // ───────────────────────────────────────────────────────────────────────────
 // NodeKind
@@ -136,6 +144,17 @@ impl IdentifierLabel {
     }
 }
 
+#[cfg(feature = "python")]
+impl IdentifierLabel {
+    /// The variant with this cross-backend canonical name, if any.
+    fn from_canonical_name(name: &str) -> ::std::option::Option<Self> {
+        match name {
+            "Identifier.Label.NAME" => Some(IdentifierLabel::Name),
+            _ => None,
+        }
+    }
+}
+
 /// Child value enum for `Identifier` nodes.
 ///
 /// Node-typed variants hold `Shared<T>` (`Arc<RwLock<T>>`); `Clone` is shallow
@@ -189,9 +208,11 @@ impl IdentifierChild {
         if obj.is_instance_of::<Span>() || obj.is_instance(span_type)? {
             return extract_span(py, obj).map(Self::Span);
         }
+        let rejected_type = obj.get_type();
         Err(pyo3::exceptions::PyTypeError::new_err(format!(
-            "Identifier: unsupported child type {}",
-            obj.get_type().name()?
+            "Identifier: unsupported child type {}.{}",
+            rejected_type.module()?,
+            rejected_type.qualname()?
         )))
     }
 }
@@ -449,6 +470,25 @@ impl PyIdentifier {
         })?;
         obj.bind(py).cast::<PyIdentifier>().map(|b| b.clone().unbind()).map_err(|e| e.into())
     }
+
+    /// Snapshot the children carrying `label` into a new Python list.
+    fn py_children_snapshot(&self, py: Python<'_>, label: &IdentifierLabel) -> pyo3::PyResult<Py<pyo3::types::PyList>> {
+        // Lock scope: filter by label under the read guard, cloning only matching
+        // children (Arc bump or Span copy each); drop the guard before to_pyobject,
+        // which performs Python work that must not happen while a node lock is held.
+        let matching: ::std::vec::Vec<_> = {
+            let guard = self.inner.read();
+            guard.children.iter()
+                .filter(|(lbl, _)| lbl.as_ref() == Some(label))
+                .map(|(_, child)| child.clone())
+                .collect()
+        };
+        let result = pyo3::types::PyList::empty(py);
+        for child in &matching {
+            result.append(child.to_pyobject(py)?)?;
+        }
+        Ok(result.unbind())
+    }
 }
 
 #[cfg(feature = "python")]
@@ -525,21 +565,39 @@ impl PyIdentifier {
     fn append(
         &self, py: Python<'_>, child: &Bound<'_, pyo3::PyAny>, label: ::std::option::Option<Py<pyo3::PyAny>>,
     ) -> pyo3::PyResult<()> {
-        let span_type = get_span_type(py)?;
-        let native_child = IdentifierChild::extract_from_pyobject(py, child, &span_type)?;
         let native_label = match label {
             None => None,
             Some(lbl) => {
-                if let Ok(native_lbl) = lbl.bind(py).extract::<IdentifierLabel>() {
+                let bound = lbl.bind(py);
+                if let Ok(native_lbl) = bound.extract::<IdentifierLabel>() {
                     Some(native_lbl)
                 } else {
-                    return Err(PyTypeError::new_err(format!(
-                        "Identifier.append: label argument is not a Identifier_Label; got {}",
-                        lbl.bind(py).get_type().name()?
-                    )));
+                    // Only AttributeError means "not a label" and falls through to the
+                    // TypeError below.  Anything else the lookup raises — a property that
+                    // fails, a broken __getattr__, an interrupt — is the caller's real
+                    // error and propagates unchanged.
+                    use pyo3::exceptions::PyAttributeError;
+                    let canonical: ::std::option::Option<::std::string::String> = match bound
+                        .getattr(pyo3::intern!(py, "_fltk_canonical_name"))
+                    {
+                        Ok(attr) => attr.extract::<::std::string::String>().ok(),
+                        Err(e) if e.is_instance_of::<PyAttributeError>(py) => None,
+                        Err(e) => return Err(e),
+                    };
+                    match canonical.and_then(|cn| IdentifierLabel::from_canonical_name(&cn)) {
+                        Some(resolved) => Some(resolved),
+                        None => {
+                            return Err(PyTypeError::new_err(format!(
+                                "Identifier.append: label argument is not a Identifier_Label; got {}",
+                                bound.get_type().name()?
+                            )));
+                        }
+                    }
                 }
             }
         };
+        let span_type = get_span_type(py)?;
+        let native_child = IdentifierChild::extract_from_pyobject(py, child, &span_type)?;
         self.inner.write().children.push((native_label, native_child));
         Ok(())
     }
@@ -551,26 +609,49 @@ impl PyIdentifier {
         children: &Bound<'_, pyo3::PyAny>,
         label: ::std::option::Option<Py<pyo3::PyAny>>,
     ) -> pyo3::PyResult<()> {
-        let span_type = get_span_type(py)?;
         let native_label = match label {
             None => None,
             Some(lbl) => {
-                if let Ok(native_lbl) = lbl.bind(py).extract::<IdentifierLabel>() {
+                let bound = lbl.bind(py);
+                if let Ok(native_lbl) = bound.extract::<IdentifierLabel>() {
                     Some(native_lbl)
                 } else {
-                    return Err(PyTypeError::new_err(format!(
-                        "Identifier.extend: label argument is not a Identifier_Label; got {}",
-                        lbl.bind(py).get_type().name()?
-                    )));
+                    // Only AttributeError means "not a label" and falls through to the
+                    // TypeError below.  Anything else the lookup raises — a property that
+                    // fails, a broken __getattr__, an interrupt — is the caller's real
+                    // error and propagates unchanged.
+                    use pyo3::exceptions::PyAttributeError;
+                    let canonical: ::std::option::Option<::std::string::String> = match bound
+                        .getattr(pyo3::intern!(py, "_fltk_canonical_name"))
+                    {
+                        Ok(attr) => attr.extract::<::std::string::String>().ok(),
+                        Err(e) if e.is_instance_of::<PyAttributeError>(py) => None,
+                        Err(e) => return Err(e),
+                    };
+                    match canonical.and_then(|cn| IdentifierLabel::from_canonical_name(&cn)) {
+                        Some(resolved) => Some(resolved),
+                        None => {
+                            return Err(PyTypeError::new_err(format!(
+                                "Identifier.extend: label argument is not a Identifier_Label; got {}",
+                                bound.get_type().name()?
+                            )));
+                        }
+                    }
                 }
             }
         };
+        let span_type = get_span_type(py)?;
         let iter = children.try_iter()?;
+        // Extract every child before touching the node: a rejected element must leave
+        // the node unmutated (no partial extend).
+        let cap = children.len().unwrap_or(0).min(EXTEND_CAPACITY_HINT_CAP);
+        let mut pending: ::std::vec::Vec<_> = ::std::vec::Vec::with_capacity(cap);
         for child_result in iter {
             let child = child_result?;
             let native_child = IdentifierChild::extract_from_pyobject(py, &child, &span_type)?;
-            self.inner.write().children.push((native_label.clone(), native_child));
+            pending.push((native_label.clone(), native_child));
         }
+        self.inner.write().children.extend(pending);
         Ok(())
     }
 
@@ -622,22 +703,41 @@ impl PyIdentifier {
         child: &Bound<'_, pyo3::PyAny>,
         label: ::std::option::Option<Py<pyo3::PyAny>>,
     ) -> pyo3::PyResult<()> {
-        // Validate child and label BEFORE taking the write lock.
-        let span_type = get_span_type(py)?;
-        let native_child = IdentifierChild::extract_from_pyobject(py, child, &span_type)?;
+        // Validate label and child BEFORE taking the write lock; label first, as
+        // every mutator on both backends does.
         let native_label = match label {
             None => None,
             Some(lbl) => {
-                if let Ok(native_lbl) = lbl.bind(py).extract::<IdentifierLabel>() {
+                let bound = lbl.bind(py);
+                if let Ok(native_lbl) = bound.extract::<IdentifierLabel>() {
                     Some(native_lbl)
                 } else {
-                    return Err(PyTypeError::new_err(format!(
-                        "Identifier.insert: label argument is not a Identifier_Label; got {}",
-                        lbl.bind(py).get_type().name()?
-                    )));
+                    // Only AttributeError means "not a label" and falls through to the
+                    // TypeError below.  Anything else the lookup raises — a property that
+                    // fails, a broken __getattr__, an interrupt — is the caller's real
+                    // error and propagates unchanged.
+                    use pyo3::exceptions::PyAttributeError;
+                    let canonical: ::std::option::Option<::std::string::String> = match bound
+                        .getattr(pyo3::intern!(py, "_fltk_canonical_name"))
+                    {
+                        Ok(attr) => attr.extract::<::std::string::String>().ok(),
+                        Err(e) if e.is_instance_of::<PyAttributeError>(py) => None,
+                        Err(e) => return Err(e),
+                    };
+                    match canonical.and_then(|cn| IdentifierLabel::from_canonical_name(&cn)) {
+                        Some(resolved) => Some(resolved),
+                        None => {
+                            return Err(PyTypeError::new_err(format!(
+                                "Identifier.insert: label argument is not a Identifier_Label; got {}",
+                                bound.get_type().name()?
+                            )));
+                        }
+                    }
                 }
             }
         };
+        let span_type = get_span_type(py)?;
+        let native_child = IdentifierChild::extract_from_pyobject(py, child, &span_type)?;
         // Index normalization via operator.index (PyNumber_Index semantics).
         // This raises TypeError (not AttributeError) for non-indexable inputs, matching Python's
         // operator.index contract. Must be done BEFORE taking any lock.
@@ -728,22 +828,41 @@ impl PyIdentifier {
         child: &Bound<'_, pyo3::PyAny>,
         label: ::std::option::Option<Py<pyo3::PyAny>>,
     ) -> pyo3::PyResult<()> {
-        // Validate child and label BEFORE taking the write lock.
-        let span_type = get_span_type(py)?;
-        let native_child = IdentifierChild::extract_from_pyobject(py, child, &span_type)?;
+        // Validate label and child BEFORE taking the write lock; label first, as
+        // every mutator on both backends does.
         let native_label = match label {
             None => None,
             Some(lbl) => {
-                if let Ok(native_lbl) = lbl.bind(py).extract::<IdentifierLabel>() {
+                let bound = lbl.bind(py);
+                if let Ok(native_lbl) = bound.extract::<IdentifierLabel>() {
                     Some(native_lbl)
                 } else {
-                    return Err(PyTypeError::new_err(format!(
-                        "Identifier.replace_at: label argument is not a Identifier_Label; got {}",
-                        lbl.bind(py).get_type().name()?
-                    )));
+                    // Only AttributeError means "not a label" and falls through to the
+                    // TypeError below.  Anything else the lookup raises — a property that
+                    // fails, a broken __getattr__, an interrupt — is the caller's real
+                    // error and propagates unchanged.
+                    use pyo3::exceptions::PyAttributeError;
+                    let canonical: ::std::option::Option<::std::string::String> = match bound
+                        .getattr(pyo3::intern!(py, "_fltk_canonical_name"))
+                    {
+                        Ok(attr) => attr.extract::<::std::string::String>().ok(),
+                        Err(e) if e.is_instance_of::<PyAttributeError>(py) => None,
+                        Err(e) => return Err(e),
+                    };
+                    match canonical.and_then(|cn| IdentifierLabel::from_canonical_name(&cn)) {
+                        Some(resolved) => Some(resolved),
+                        None => {
+                            return Err(PyTypeError::new_err(format!(
+                                "Identifier.replace_at: label argument is not a Identifier_Label; got {}",
+                                bound.get_type().name()?
+                            )));
+                        }
+                    }
                 }
             }
         };
+        let span_type = get_span_type(py)?;
+        let native_child = IdentifierChild::extract_from_pyobject(py, child, &span_type)?;
         // Capture the caller's original string representation BEFORE normalization.
         let orig_str = index.str()?.to_string_lossy().into_owned();
         // Normalize via operator.index: raises TypeError for non-indexable inputs.
@@ -803,31 +922,22 @@ impl PyIdentifier {
     fn extend_name(&self, py: Python<'_>, children: &Bound<'_, pyo3::PyAny>) -> pyo3::PyResult<()> {
         let span_type = get_span_type(py)?;
         let iter = children.try_iter()?;
+        // Extract every child before touching the node: a rejected element must
+        // leave the node unmutated (no partial extend).
+        let cap = children.len().unwrap_or(0).min(EXTEND_CAPACITY_HINT_CAP);
+        let mut pending: ::std::vec::Vec<_> = ::std::vec::Vec::with_capacity(cap);
         for child_result in iter {
             let child = child_result?;
             let native_child = IdentifierChild::extract_from_pyobject(py, &child, &span_type)?;
-            let entry = (Some(IdentifierLabel::Name), native_child);
-            self.inner.write().children.push(entry);
+            pending.push((Some(IdentifierLabel::Name), native_child));
         }
+        self.inner.write().children.extend(pending);
         Ok(())
     }
 
-    fn children_name(&self, py: Python<'_>) -> pyo3::PyResult<Py<pyo3::types::PyList>> {
-        // Lock scope: filter by label under the read guard, cloning only matching
-        // children (Arc bump or Span copy each); drop the guard before to_pyobject,
-        // which performs Python work that must not happen while a node lock is held.
-        let matching: ::std::vec::Vec<_> = {
-            let guard = self.inner.read();
-            guard.children.iter()
-                .filter(|(lbl, _)| *lbl == Some(IdentifierLabel::Name))
-                .map(|(_, child)| child.clone())
-                .collect()
-        };
-        let result = pyo3::types::PyList::empty(py);
-        for child in &matching {
-            result.append(child.to_pyobject(py)?)?;
-        }
-        Ok(result.unbind())
+    fn children_name(&self, py: Python<'_>) -> pyo3::PyResult<Py<pyo3::types::PyIterator>> {
+        let snapshot = self.py_children_snapshot(py, &IdentifierLabel::Name)?;
+        Ok(snapshot.bind(py).try_iter()?.unbind())
     }
 
     fn child_name(&self, py: Python<'_>) -> pyo3::PyResult<Py<pyo3::PyAny>> {
@@ -1021,6 +1131,20 @@ impl ItemsLabel {
     }
 }
 
+#[cfg(feature = "python")]
+impl ItemsLabel {
+    /// The variant with this cross-backend canonical name, if any.
+    fn from_canonical_name(name: &str) -> ::std::option::Option<Self> {
+        match name {
+            "Items.Label.ITEM" => Some(ItemsLabel::Item),
+            "Items.Label.NO_WS" => Some(ItemsLabel::NoWs),
+            "Items.Label.WS_ALLOWED" => Some(ItemsLabel::WsAllowed),
+            "Items.Label.WS_REQUIRED" => Some(ItemsLabel::WsRequired),
+            _ => None,
+        }
+    }
+}
+
 /// Child value enum for `Items` nodes.
 ///
 /// Node-typed variants hold `Shared<T>` (`Arc<RwLock<T>>`); `Clone` is shallow
@@ -1132,9 +1256,11 @@ impl ItemsChild {
             registry::register_if_absent(py, addr, obj)?;
             return Ok(Self::Trivia(shared));
         }
+        let rejected_type = obj.get_type();
         Err(pyo3::exceptions::PyTypeError::new_err(format!(
-            "Items: unsupported child type {}",
-            obj.get_type().name()?
+            "Items: unsupported child type {}.{}",
+            rejected_type.module()?,
+            rejected_type.qualname()?
         )))
     }
 }
@@ -1684,6 +1810,25 @@ impl PyItems {
         })?;
         obj.bind(py).cast::<PyItems>().map(|b| b.clone().unbind()).map_err(|e| e.into())
     }
+
+    /// Snapshot the children carrying `label` into a new Python list.
+    fn py_children_snapshot(&self, py: Python<'_>, label: &ItemsLabel) -> pyo3::PyResult<Py<pyo3::types::PyList>> {
+        // Lock scope: filter by label under the read guard, cloning only matching
+        // children (Arc bump or Span copy each); drop the guard before to_pyobject,
+        // which performs Python work that must not happen while a node lock is held.
+        let matching: ::std::vec::Vec<_> = {
+            let guard = self.inner.read();
+            guard.children.iter()
+                .filter(|(lbl, _)| lbl.as_ref() == Some(label))
+                .map(|(_, child)| child.clone())
+                .collect()
+        };
+        let result = pyo3::types::PyList::empty(py);
+        for child in &matching {
+            result.append(child.to_pyobject(py)?)?;
+        }
+        Ok(result.unbind())
+    }
 }
 
 #[cfg(feature = "python")]
@@ -1760,21 +1905,39 @@ impl PyItems {
     fn append(
         &self, py: Python<'_>, child: &Bound<'_, pyo3::PyAny>, label: ::std::option::Option<Py<pyo3::PyAny>>,
     ) -> pyo3::PyResult<()> {
-        let span_type = get_span_type(py)?;
-        let native_child = ItemsChild::extract_from_pyobject(py, child, &span_type)?;
         let native_label = match label {
             None => None,
             Some(lbl) => {
-                if let Ok(native_lbl) = lbl.bind(py).extract::<ItemsLabel>() {
+                let bound = lbl.bind(py);
+                if let Ok(native_lbl) = bound.extract::<ItemsLabel>() {
                     Some(native_lbl)
                 } else {
-                    return Err(PyTypeError::new_err(format!(
-                        "Items.append: label argument is not a Items_Label; got {}",
-                        lbl.bind(py).get_type().name()?
-                    )));
+                    // Only AttributeError means "not a label" and falls through to the
+                    // TypeError below.  Anything else the lookup raises — a property that
+                    // fails, a broken __getattr__, an interrupt — is the caller's real
+                    // error and propagates unchanged.
+                    use pyo3::exceptions::PyAttributeError;
+                    let canonical: ::std::option::Option<::std::string::String> = match bound
+                        .getattr(pyo3::intern!(py, "_fltk_canonical_name"))
+                    {
+                        Ok(attr) => attr.extract::<::std::string::String>().ok(),
+                        Err(e) if e.is_instance_of::<PyAttributeError>(py) => None,
+                        Err(e) => return Err(e),
+                    };
+                    match canonical.and_then(|cn| ItemsLabel::from_canonical_name(&cn)) {
+                        Some(resolved) => Some(resolved),
+                        None => {
+                            return Err(PyTypeError::new_err(format!(
+                                "Items.append: label argument is not a Items_Label; got {}",
+                                bound.get_type().name()?
+                            )));
+                        }
+                    }
                 }
             }
         };
+        let span_type = get_span_type(py)?;
+        let native_child = ItemsChild::extract_from_pyobject(py, child, &span_type)?;
         self.inner.write().children.push((native_label, native_child));
         Ok(())
     }
@@ -1786,26 +1949,49 @@ impl PyItems {
         children: &Bound<'_, pyo3::PyAny>,
         label: ::std::option::Option<Py<pyo3::PyAny>>,
     ) -> pyo3::PyResult<()> {
-        let span_type = get_span_type(py)?;
         let native_label = match label {
             None => None,
             Some(lbl) => {
-                if let Ok(native_lbl) = lbl.bind(py).extract::<ItemsLabel>() {
+                let bound = lbl.bind(py);
+                if let Ok(native_lbl) = bound.extract::<ItemsLabel>() {
                     Some(native_lbl)
                 } else {
-                    return Err(PyTypeError::new_err(format!(
-                        "Items.extend: label argument is not a Items_Label; got {}",
-                        lbl.bind(py).get_type().name()?
-                    )));
+                    // Only AttributeError means "not a label" and falls through to the
+                    // TypeError below.  Anything else the lookup raises — a property that
+                    // fails, a broken __getattr__, an interrupt — is the caller's real
+                    // error and propagates unchanged.
+                    use pyo3::exceptions::PyAttributeError;
+                    let canonical: ::std::option::Option<::std::string::String> = match bound
+                        .getattr(pyo3::intern!(py, "_fltk_canonical_name"))
+                    {
+                        Ok(attr) => attr.extract::<::std::string::String>().ok(),
+                        Err(e) if e.is_instance_of::<PyAttributeError>(py) => None,
+                        Err(e) => return Err(e),
+                    };
+                    match canonical.and_then(|cn| ItemsLabel::from_canonical_name(&cn)) {
+                        Some(resolved) => Some(resolved),
+                        None => {
+                            return Err(PyTypeError::new_err(format!(
+                                "Items.extend: label argument is not a Items_Label; got {}",
+                                bound.get_type().name()?
+                            )));
+                        }
+                    }
                 }
             }
         };
+        let span_type = get_span_type(py)?;
         let iter = children.try_iter()?;
+        // Extract every child before touching the node: a rejected element must leave
+        // the node unmutated (no partial extend).
+        let cap = children.len().unwrap_or(0).min(EXTEND_CAPACITY_HINT_CAP);
+        let mut pending: ::std::vec::Vec<_> = ::std::vec::Vec::with_capacity(cap);
         for child_result in iter {
             let child = child_result?;
             let native_child = ItemsChild::extract_from_pyobject(py, &child, &span_type)?;
-            self.inner.write().children.push((native_label.clone(), native_child));
+            pending.push((native_label.clone(), native_child));
         }
+        self.inner.write().children.extend(pending);
         Ok(())
     }
 
@@ -1857,22 +2043,41 @@ impl PyItems {
         child: &Bound<'_, pyo3::PyAny>,
         label: ::std::option::Option<Py<pyo3::PyAny>>,
     ) -> pyo3::PyResult<()> {
-        // Validate child and label BEFORE taking the write lock.
-        let span_type = get_span_type(py)?;
-        let native_child = ItemsChild::extract_from_pyobject(py, child, &span_type)?;
+        // Validate label and child BEFORE taking the write lock; label first, as
+        // every mutator on both backends does.
         let native_label = match label {
             None => None,
             Some(lbl) => {
-                if let Ok(native_lbl) = lbl.bind(py).extract::<ItemsLabel>() {
+                let bound = lbl.bind(py);
+                if let Ok(native_lbl) = bound.extract::<ItemsLabel>() {
                     Some(native_lbl)
                 } else {
-                    return Err(PyTypeError::new_err(format!(
-                        "Items.insert: label argument is not a Items_Label; got {}",
-                        lbl.bind(py).get_type().name()?
-                    )));
+                    // Only AttributeError means "not a label" and falls through to the
+                    // TypeError below.  Anything else the lookup raises — a property that
+                    // fails, a broken __getattr__, an interrupt — is the caller's real
+                    // error and propagates unchanged.
+                    use pyo3::exceptions::PyAttributeError;
+                    let canonical: ::std::option::Option<::std::string::String> = match bound
+                        .getattr(pyo3::intern!(py, "_fltk_canonical_name"))
+                    {
+                        Ok(attr) => attr.extract::<::std::string::String>().ok(),
+                        Err(e) if e.is_instance_of::<PyAttributeError>(py) => None,
+                        Err(e) => return Err(e),
+                    };
+                    match canonical.and_then(|cn| ItemsLabel::from_canonical_name(&cn)) {
+                        Some(resolved) => Some(resolved),
+                        None => {
+                            return Err(PyTypeError::new_err(format!(
+                                "Items.insert: label argument is not a Items_Label; got {}",
+                                bound.get_type().name()?
+                            )));
+                        }
+                    }
                 }
             }
         };
+        let span_type = get_span_type(py)?;
+        let native_child = ItemsChild::extract_from_pyobject(py, child, &span_type)?;
         // Index normalization via operator.index (PyNumber_Index semantics).
         // This raises TypeError (not AttributeError) for non-indexable inputs, matching Python's
         // operator.index contract. Must be done BEFORE taking any lock.
@@ -1963,22 +2168,41 @@ impl PyItems {
         child: &Bound<'_, pyo3::PyAny>,
         label: ::std::option::Option<Py<pyo3::PyAny>>,
     ) -> pyo3::PyResult<()> {
-        // Validate child and label BEFORE taking the write lock.
-        let span_type = get_span_type(py)?;
-        let native_child = ItemsChild::extract_from_pyobject(py, child, &span_type)?;
+        // Validate label and child BEFORE taking the write lock; label first, as
+        // every mutator on both backends does.
         let native_label = match label {
             None => None,
             Some(lbl) => {
-                if let Ok(native_lbl) = lbl.bind(py).extract::<ItemsLabel>() {
+                let bound = lbl.bind(py);
+                if let Ok(native_lbl) = bound.extract::<ItemsLabel>() {
                     Some(native_lbl)
                 } else {
-                    return Err(PyTypeError::new_err(format!(
-                        "Items.replace_at: label argument is not a Items_Label; got {}",
-                        lbl.bind(py).get_type().name()?
-                    )));
+                    // Only AttributeError means "not a label" and falls through to the
+                    // TypeError below.  Anything else the lookup raises — a property that
+                    // fails, a broken __getattr__, an interrupt — is the caller's real
+                    // error and propagates unchanged.
+                    use pyo3::exceptions::PyAttributeError;
+                    let canonical: ::std::option::Option<::std::string::String> = match bound
+                        .getattr(pyo3::intern!(py, "_fltk_canonical_name"))
+                    {
+                        Ok(attr) => attr.extract::<::std::string::String>().ok(),
+                        Err(e) if e.is_instance_of::<PyAttributeError>(py) => None,
+                        Err(e) => return Err(e),
+                    };
+                    match canonical.and_then(|cn| ItemsLabel::from_canonical_name(&cn)) {
+                        Some(resolved) => Some(resolved),
+                        None => {
+                            return Err(PyTypeError::new_err(format!(
+                                "Items.replace_at: label argument is not a Items_Label; got {}",
+                                bound.get_type().name()?
+                            )));
+                        }
+                    }
                 }
             }
         };
+        let span_type = get_span_type(py)?;
+        let native_child = ItemsChild::extract_from_pyobject(py, child, &span_type)?;
         // Capture the caller's original string representation BEFORE normalization.
         let orig_str = index.str()?.to_string_lossy().into_owned();
         // Normalize via operator.index: raises TypeError for non-indexable inputs.
@@ -2038,31 +2262,22 @@ impl PyItems {
     fn extend_item(&self, py: Python<'_>, children: &Bound<'_, pyo3::PyAny>) -> pyo3::PyResult<()> {
         let span_type = get_span_type(py)?;
         let iter = children.try_iter()?;
+        // Extract every child before touching the node: a rejected element must
+        // leave the node unmutated (no partial extend).
+        let cap = children.len().unwrap_or(0).min(EXTEND_CAPACITY_HINT_CAP);
+        let mut pending: ::std::vec::Vec<_> = ::std::vec::Vec::with_capacity(cap);
         for child_result in iter {
             let child = child_result?;
             let native_child = ItemsChild::extract_from_pyobject(py, &child, &span_type)?;
-            let entry = (Some(ItemsLabel::Item), native_child);
-            self.inner.write().children.push(entry);
+            pending.push((Some(ItemsLabel::Item), native_child));
         }
+        self.inner.write().children.extend(pending);
         Ok(())
     }
 
-    fn children_item(&self, py: Python<'_>) -> pyo3::PyResult<Py<pyo3::types::PyList>> {
-        // Lock scope: filter by label under the read guard, cloning only matching
-        // children (Arc bump or Span copy each); drop the guard before to_pyobject,
-        // which performs Python work that must not happen while a node lock is held.
-        let matching: ::std::vec::Vec<_> = {
-            let guard = self.inner.read();
-            guard.children.iter()
-                .filter(|(lbl, _)| *lbl == Some(ItemsLabel::Item))
-                .map(|(_, child)| child.clone())
-                .collect()
-        };
-        let result = pyo3::types::PyList::empty(py);
-        for child in &matching {
-            result.append(child.to_pyobject(py)?)?;
-        }
-        Ok(result.unbind())
+    fn children_item(&self, py: Python<'_>) -> pyo3::PyResult<Py<pyo3::types::PyIterator>> {
+        let snapshot = self.py_children_snapshot(py, &ItemsLabel::Item)?;
+        Ok(snapshot.bind(py).try_iter()?.unbind())
     }
 
     fn child_item(&self, py: Python<'_>) -> pyo3::PyResult<Py<pyo3::PyAny>> {
@@ -2129,31 +2344,22 @@ impl PyItems {
     fn extend_no_ws(&self, py: Python<'_>, children: &Bound<'_, pyo3::PyAny>) -> pyo3::PyResult<()> {
         let span_type = get_span_type(py)?;
         let iter = children.try_iter()?;
+        // Extract every child before touching the node: a rejected element must
+        // leave the node unmutated (no partial extend).
+        let cap = children.len().unwrap_or(0).min(EXTEND_CAPACITY_HINT_CAP);
+        let mut pending: ::std::vec::Vec<_> = ::std::vec::Vec::with_capacity(cap);
         for child_result in iter {
             let child = child_result?;
             let native_child = ItemsChild::extract_from_pyobject(py, &child, &span_type)?;
-            let entry = (Some(ItemsLabel::NoWs), native_child);
-            self.inner.write().children.push(entry);
+            pending.push((Some(ItemsLabel::NoWs), native_child));
         }
+        self.inner.write().children.extend(pending);
         Ok(())
     }
 
-    fn children_no_ws(&self, py: Python<'_>) -> pyo3::PyResult<Py<pyo3::types::PyList>> {
-        // Lock scope: filter by label under the read guard, cloning only matching
-        // children (Arc bump or Span copy each); drop the guard before to_pyobject,
-        // which performs Python work that must not happen while a node lock is held.
-        let matching: ::std::vec::Vec<_> = {
-            let guard = self.inner.read();
-            guard.children.iter()
-                .filter(|(lbl, _)| *lbl == Some(ItemsLabel::NoWs))
-                .map(|(_, child)| child.clone())
-                .collect()
-        };
-        let result = pyo3::types::PyList::empty(py);
-        for child in &matching {
-            result.append(child.to_pyobject(py)?)?;
-        }
-        Ok(result.unbind())
+    fn children_no_ws(&self, py: Python<'_>) -> pyo3::PyResult<Py<pyo3::types::PyIterator>> {
+        let snapshot = self.py_children_snapshot(py, &ItemsLabel::NoWs)?;
+        Ok(snapshot.bind(py).try_iter()?.unbind())
     }
 
     fn child_no_ws(&self, py: Python<'_>) -> pyo3::PyResult<Py<pyo3::PyAny>> {
@@ -2220,31 +2426,22 @@ impl PyItems {
     fn extend_ws_allowed(&self, py: Python<'_>, children: &Bound<'_, pyo3::PyAny>) -> pyo3::PyResult<()> {
         let span_type = get_span_type(py)?;
         let iter = children.try_iter()?;
+        // Extract every child before touching the node: a rejected element must
+        // leave the node unmutated (no partial extend).
+        let cap = children.len().unwrap_or(0).min(EXTEND_CAPACITY_HINT_CAP);
+        let mut pending: ::std::vec::Vec<_> = ::std::vec::Vec::with_capacity(cap);
         for child_result in iter {
             let child = child_result?;
             let native_child = ItemsChild::extract_from_pyobject(py, &child, &span_type)?;
-            let entry = (Some(ItemsLabel::WsAllowed), native_child);
-            self.inner.write().children.push(entry);
+            pending.push((Some(ItemsLabel::WsAllowed), native_child));
         }
+        self.inner.write().children.extend(pending);
         Ok(())
     }
 
-    fn children_ws_allowed(&self, py: Python<'_>) -> pyo3::PyResult<Py<pyo3::types::PyList>> {
-        // Lock scope: filter by label under the read guard, cloning only matching
-        // children (Arc bump or Span copy each); drop the guard before to_pyobject,
-        // which performs Python work that must not happen while a node lock is held.
-        let matching: ::std::vec::Vec<_> = {
-            let guard = self.inner.read();
-            guard.children.iter()
-                .filter(|(lbl, _)| *lbl == Some(ItemsLabel::WsAllowed))
-                .map(|(_, child)| child.clone())
-                .collect()
-        };
-        let result = pyo3::types::PyList::empty(py);
-        for child in &matching {
-            result.append(child.to_pyobject(py)?)?;
-        }
-        Ok(result.unbind())
+    fn children_ws_allowed(&self, py: Python<'_>) -> pyo3::PyResult<Py<pyo3::types::PyIterator>> {
+        let snapshot = self.py_children_snapshot(py, &ItemsLabel::WsAllowed)?;
+        Ok(snapshot.bind(py).try_iter()?.unbind())
     }
 
     fn child_ws_allowed(&self, py: Python<'_>) -> pyo3::PyResult<Py<pyo3::PyAny>> {
@@ -2311,31 +2508,22 @@ impl PyItems {
     fn extend_ws_required(&self, py: Python<'_>, children: &Bound<'_, pyo3::PyAny>) -> pyo3::PyResult<()> {
         let span_type = get_span_type(py)?;
         let iter = children.try_iter()?;
+        // Extract every child before touching the node: a rejected element must
+        // leave the node unmutated (no partial extend).
+        let cap = children.len().unwrap_or(0).min(EXTEND_CAPACITY_HINT_CAP);
+        let mut pending: ::std::vec::Vec<_> = ::std::vec::Vec::with_capacity(cap);
         for child_result in iter {
             let child = child_result?;
             let native_child = ItemsChild::extract_from_pyobject(py, &child, &span_type)?;
-            let entry = (Some(ItemsLabel::WsRequired), native_child);
-            self.inner.write().children.push(entry);
+            pending.push((Some(ItemsLabel::WsRequired), native_child));
         }
+        self.inner.write().children.extend(pending);
         Ok(())
     }
 
-    fn children_ws_required(&self, py: Python<'_>) -> pyo3::PyResult<Py<pyo3::types::PyList>> {
-        // Lock scope: filter by label under the read guard, cloning only matching
-        // children (Arc bump or Span copy each); drop the guard before to_pyobject,
-        // which performs Python work that must not happen while a node lock is held.
-        let matching: ::std::vec::Vec<_> = {
-            let guard = self.inner.read();
-            guard.children.iter()
-                .filter(|(lbl, _)| *lbl == Some(ItemsLabel::WsRequired))
-                .map(|(_, child)| child.clone())
-                .collect()
-        };
-        let result = pyo3::types::PyList::empty(py);
-        for child in &matching {
-            result.append(child.to_pyobject(py)?)?;
-        }
-        Ok(result.unbind())
+    fn children_ws_required(&self, py: Python<'_>) -> pyo3::PyResult<Py<pyo3::types::PyIterator>> {
+        let snapshot = self.py_children_snapshot(py, &ItemsLabel::WsRequired)?;
+        Ok(snapshot.bind(py).try_iter()?.unbind())
     }
 
     fn child_ws_required(&self, py: Python<'_>) -> pyo3::PyResult<Py<pyo3::PyAny>> {
@@ -2588,6 +2776,17 @@ impl TriviaLabel {
     }
 }
 
+#[cfg(feature = "python")]
+impl TriviaLabel {
+    /// The variant with this cross-backend canonical name, if any.
+    fn from_canonical_name(name: &str) -> ::std::option::Option<Self> {
+        match name {
+            "Trivia.Label.CONTENT" => Some(TriviaLabel::Content),
+            _ => None,
+        }
+    }
+}
+
 /// Child value enum for `Trivia` nodes.
 ///
 /// Node-typed variants hold `Shared<T>` (`Arc<RwLock<T>>`); `Clone` is shallow
@@ -2641,9 +2840,11 @@ impl TriviaChild {
         if obj.is_instance_of::<Span>() || obj.is_instance(span_type)? {
             return extract_span(py, obj).map(Self::Span);
         }
+        let rejected_type = obj.get_type();
         Err(pyo3::exceptions::PyTypeError::new_err(format!(
-            "Trivia: unsupported child type {}",
-            obj.get_type().name()?
+            "Trivia: unsupported child type {}.{}",
+            rejected_type.module()?,
+            rejected_type.qualname()?
         )))
     }
 }
@@ -2901,6 +3102,25 @@ impl PyTrivia {
         })?;
         obj.bind(py).cast::<PyTrivia>().map(|b| b.clone().unbind()).map_err(|e| e.into())
     }
+
+    /// Snapshot the children carrying `label` into a new Python list.
+    fn py_children_snapshot(&self, py: Python<'_>, label: &TriviaLabel) -> pyo3::PyResult<Py<pyo3::types::PyList>> {
+        // Lock scope: filter by label under the read guard, cloning only matching
+        // children (Arc bump or Span copy each); drop the guard before to_pyobject,
+        // which performs Python work that must not happen while a node lock is held.
+        let matching: ::std::vec::Vec<_> = {
+            let guard = self.inner.read();
+            guard.children.iter()
+                .filter(|(lbl, _)| lbl.as_ref() == Some(label))
+                .map(|(_, child)| child.clone())
+                .collect()
+        };
+        let result = pyo3::types::PyList::empty(py);
+        for child in &matching {
+            result.append(child.to_pyobject(py)?)?;
+        }
+        Ok(result.unbind())
+    }
 }
 
 #[cfg(feature = "python")]
@@ -2977,21 +3197,39 @@ impl PyTrivia {
     fn append(
         &self, py: Python<'_>, child: &Bound<'_, pyo3::PyAny>, label: ::std::option::Option<Py<pyo3::PyAny>>,
     ) -> pyo3::PyResult<()> {
-        let span_type = get_span_type(py)?;
-        let native_child = TriviaChild::extract_from_pyobject(py, child, &span_type)?;
         let native_label = match label {
             None => None,
             Some(lbl) => {
-                if let Ok(native_lbl) = lbl.bind(py).extract::<TriviaLabel>() {
+                let bound = lbl.bind(py);
+                if let Ok(native_lbl) = bound.extract::<TriviaLabel>() {
                     Some(native_lbl)
                 } else {
-                    return Err(PyTypeError::new_err(format!(
-                        "Trivia.append: label argument is not a Trivia_Label; got {}",
-                        lbl.bind(py).get_type().name()?
-                    )));
+                    // Only AttributeError means "not a label" and falls through to the
+                    // TypeError below.  Anything else the lookup raises — a property that
+                    // fails, a broken __getattr__, an interrupt — is the caller's real
+                    // error and propagates unchanged.
+                    use pyo3::exceptions::PyAttributeError;
+                    let canonical: ::std::option::Option<::std::string::String> = match bound
+                        .getattr(pyo3::intern!(py, "_fltk_canonical_name"))
+                    {
+                        Ok(attr) => attr.extract::<::std::string::String>().ok(),
+                        Err(e) if e.is_instance_of::<PyAttributeError>(py) => None,
+                        Err(e) => return Err(e),
+                    };
+                    match canonical.and_then(|cn| TriviaLabel::from_canonical_name(&cn)) {
+                        Some(resolved) => Some(resolved),
+                        None => {
+                            return Err(PyTypeError::new_err(format!(
+                                "Trivia.append: label argument is not a Trivia_Label; got {}",
+                                bound.get_type().name()?
+                            )));
+                        }
+                    }
                 }
             }
         };
+        let span_type = get_span_type(py)?;
+        let native_child = TriviaChild::extract_from_pyobject(py, child, &span_type)?;
         self.inner.write().children.push((native_label, native_child));
         Ok(())
     }
@@ -3003,26 +3241,49 @@ impl PyTrivia {
         children: &Bound<'_, pyo3::PyAny>,
         label: ::std::option::Option<Py<pyo3::PyAny>>,
     ) -> pyo3::PyResult<()> {
-        let span_type = get_span_type(py)?;
         let native_label = match label {
             None => None,
             Some(lbl) => {
-                if let Ok(native_lbl) = lbl.bind(py).extract::<TriviaLabel>() {
+                let bound = lbl.bind(py);
+                if let Ok(native_lbl) = bound.extract::<TriviaLabel>() {
                     Some(native_lbl)
                 } else {
-                    return Err(PyTypeError::new_err(format!(
-                        "Trivia.extend: label argument is not a Trivia_Label; got {}",
-                        lbl.bind(py).get_type().name()?
-                    )));
+                    // Only AttributeError means "not a label" and falls through to the
+                    // TypeError below.  Anything else the lookup raises — a property that
+                    // fails, a broken __getattr__, an interrupt — is the caller's real
+                    // error and propagates unchanged.
+                    use pyo3::exceptions::PyAttributeError;
+                    let canonical: ::std::option::Option<::std::string::String> = match bound
+                        .getattr(pyo3::intern!(py, "_fltk_canonical_name"))
+                    {
+                        Ok(attr) => attr.extract::<::std::string::String>().ok(),
+                        Err(e) if e.is_instance_of::<PyAttributeError>(py) => None,
+                        Err(e) => return Err(e),
+                    };
+                    match canonical.and_then(|cn| TriviaLabel::from_canonical_name(&cn)) {
+                        Some(resolved) => Some(resolved),
+                        None => {
+                            return Err(PyTypeError::new_err(format!(
+                                "Trivia.extend: label argument is not a Trivia_Label; got {}",
+                                bound.get_type().name()?
+                            )));
+                        }
+                    }
                 }
             }
         };
+        let span_type = get_span_type(py)?;
         let iter = children.try_iter()?;
+        // Extract every child before touching the node: a rejected element must leave
+        // the node unmutated (no partial extend).
+        let cap = children.len().unwrap_or(0).min(EXTEND_CAPACITY_HINT_CAP);
+        let mut pending: ::std::vec::Vec<_> = ::std::vec::Vec::with_capacity(cap);
         for child_result in iter {
             let child = child_result?;
             let native_child = TriviaChild::extract_from_pyobject(py, &child, &span_type)?;
-            self.inner.write().children.push((native_label.clone(), native_child));
+            pending.push((native_label.clone(), native_child));
         }
+        self.inner.write().children.extend(pending);
         Ok(())
     }
 
@@ -3074,22 +3335,41 @@ impl PyTrivia {
         child: &Bound<'_, pyo3::PyAny>,
         label: ::std::option::Option<Py<pyo3::PyAny>>,
     ) -> pyo3::PyResult<()> {
-        // Validate child and label BEFORE taking the write lock.
-        let span_type = get_span_type(py)?;
-        let native_child = TriviaChild::extract_from_pyobject(py, child, &span_type)?;
+        // Validate label and child BEFORE taking the write lock; label first, as
+        // every mutator on both backends does.
         let native_label = match label {
             None => None,
             Some(lbl) => {
-                if let Ok(native_lbl) = lbl.bind(py).extract::<TriviaLabel>() {
+                let bound = lbl.bind(py);
+                if let Ok(native_lbl) = bound.extract::<TriviaLabel>() {
                     Some(native_lbl)
                 } else {
-                    return Err(PyTypeError::new_err(format!(
-                        "Trivia.insert: label argument is not a Trivia_Label; got {}",
-                        lbl.bind(py).get_type().name()?
-                    )));
+                    // Only AttributeError means "not a label" and falls through to the
+                    // TypeError below.  Anything else the lookup raises — a property that
+                    // fails, a broken __getattr__, an interrupt — is the caller's real
+                    // error and propagates unchanged.
+                    use pyo3::exceptions::PyAttributeError;
+                    let canonical: ::std::option::Option<::std::string::String> = match bound
+                        .getattr(pyo3::intern!(py, "_fltk_canonical_name"))
+                    {
+                        Ok(attr) => attr.extract::<::std::string::String>().ok(),
+                        Err(e) if e.is_instance_of::<PyAttributeError>(py) => None,
+                        Err(e) => return Err(e),
+                    };
+                    match canonical.and_then(|cn| TriviaLabel::from_canonical_name(&cn)) {
+                        Some(resolved) => Some(resolved),
+                        None => {
+                            return Err(PyTypeError::new_err(format!(
+                                "Trivia.insert: label argument is not a Trivia_Label; got {}",
+                                bound.get_type().name()?
+                            )));
+                        }
+                    }
                 }
             }
         };
+        let span_type = get_span_type(py)?;
+        let native_child = TriviaChild::extract_from_pyobject(py, child, &span_type)?;
         // Index normalization via operator.index (PyNumber_Index semantics).
         // This raises TypeError (not AttributeError) for non-indexable inputs, matching Python's
         // operator.index contract. Must be done BEFORE taking any lock.
@@ -3180,22 +3460,41 @@ impl PyTrivia {
         child: &Bound<'_, pyo3::PyAny>,
         label: ::std::option::Option<Py<pyo3::PyAny>>,
     ) -> pyo3::PyResult<()> {
-        // Validate child and label BEFORE taking the write lock.
-        let span_type = get_span_type(py)?;
-        let native_child = TriviaChild::extract_from_pyobject(py, child, &span_type)?;
+        // Validate label and child BEFORE taking the write lock; label first, as
+        // every mutator on both backends does.
         let native_label = match label {
             None => None,
             Some(lbl) => {
-                if let Ok(native_lbl) = lbl.bind(py).extract::<TriviaLabel>() {
+                let bound = lbl.bind(py);
+                if let Ok(native_lbl) = bound.extract::<TriviaLabel>() {
                     Some(native_lbl)
                 } else {
-                    return Err(PyTypeError::new_err(format!(
-                        "Trivia.replace_at: label argument is not a Trivia_Label; got {}",
-                        lbl.bind(py).get_type().name()?
-                    )));
+                    // Only AttributeError means "not a label" and falls through to the
+                    // TypeError below.  Anything else the lookup raises — a property that
+                    // fails, a broken __getattr__, an interrupt — is the caller's real
+                    // error and propagates unchanged.
+                    use pyo3::exceptions::PyAttributeError;
+                    let canonical: ::std::option::Option<::std::string::String> = match bound
+                        .getattr(pyo3::intern!(py, "_fltk_canonical_name"))
+                    {
+                        Ok(attr) => attr.extract::<::std::string::String>().ok(),
+                        Err(e) if e.is_instance_of::<PyAttributeError>(py) => None,
+                        Err(e) => return Err(e),
+                    };
+                    match canonical.and_then(|cn| TriviaLabel::from_canonical_name(&cn)) {
+                        Some(resolved) => Some(resolved),
+                        None => {
+                            return Err(PyTypeError::new_err(format!(
+                                "Trivia.replace_at: label argument is not a Trivia_Label; got {}",
+                                bound.get_type().name()?
+                            )));
+                        }
+                    }
                 }
             }
         };
+        let span_type = get_span_type(py)?;
+        let native_child = TriviaChild::extract_from_pyobject(py, child, &span_type)?;
         // Capture the caller's original string representation BEFORE normalization.
         let orig_str = index.str()?.to_string_lossy().into_owned();
         // Normalize via operator.index: raises TypeError for non-indexable inputs.
@@ -3255,31 +3554,22 @@ impl PyTrivia {
     fn extend_content(&self, py: Python<'_>, children: &Bound<'_, pyo3::PyAny>) -> pyo3::PyResult<()> {
         let span_type = get_span_type(py)?;
         let iter = children.try_iter()?;
+        // Extract every child before touching the node: a rejected element must
+        // leave the node unmutated (no partial extend).
+        let cap = children.len().unwrap_or(0).min(EXTEND_CAPACITY_HINT_CAP);
+        let mut pending: ::std::vec::Vec<_> = ::std::vec::Vec::with_capacity(cap);
         for child_result in iter {
             let child = child_result?;
             let native_child = TriviaChild::extract_from_pyobject(py, &child, &span_type)?;
-            let entry = (Some(TriviaLabel::Content), native_child);
-            self.inner.write().children.push(entry);
+            pending.push((Some(TriviaLabel::Content), native_child));
         }
+        self.inner.write().children.extend(pending);
         Ok(())
     }
 
-    fn children_content(&self, py: Python<'_>) -> pyo3::PyResult<Py<pyo3::types::PyList>> {
-        // Lock scope: filter by label under the read guard, cloning only matching
-        // children (Arc bump or Span copy each); drop the guard before to_pyobject,
-        // which performs Python work that must not happen while a node lock is held.
-        let matching: ::std::vec::Vec<_> = {
-            let guard = self.inner.read();
-            guard.children.iter()
-                .filter(|(lbl, _)| *lbl == Some(TriviaLabel::Content))
-                .map(|(_, child)| child.clone())
-                .collect()
-        };
-        let result = pyo3::types::PyList::empty(py);
-        for child in &matching {
-            result.append(child.to_pyobject(py)?)?;
-        }
-        Ok(result.unbind())
+    fn children_content(&self, py: Python<'_>) -> pyo3::PyResult<Py<pyo3::types::PyIterator>> {
+        let snapshot = self.py_children_snapshot(py, &TriviaLabel::Content)?;
+        Ok(snapshot.bind(py).try_iter()?.unbind())
     }
 
     fn child_content(&self, py: Python<'_>) -> pyo3::PyResult<Py<pyo3::PyAny>> {

@@ -249,29 +249,74 @@ multi-spelling doctrine (`rival_signature` deliberately does not record which li
 from, so alternatives differing only in literal spelling stay first-fit). Location:
 `fltk/fegen/ast_model.py` (`_kind_guard`), `fltk/fegen/gsm2ast_rs.py` (`kind_condition`).
 
-## `cst-mutator-append-parity`
+## `cst-per-label-mutator-narrow-child-check`
 
-The Python backend's `append`, `extend`, `extend_children`, `append_<label>` and
-`extend_<label>` accept a child (and, for the first three, a label) without any isinstance
-check; only `insert` and `replace_at` call `_check_child_type_for_mutators` /
-`_check_label_type_for_mutators`. The Rust backend type-checks its `append` and per-label
-mutators (`extract_from_pyobject`, `PyTypeError`), so the two backends reject different inputs
-and `tests/test_cst_mutators_parity.py` cannot cover the difference. Until this round the
-concrete annotations made the divergence unreachable from type-checked code; now that mutator
-inputs are the protocol node types (so either backend's values type-check), a foreign-backend
-child passed to the Python `append` is stored silently and surfaces far away — in the unparser,
-in `astrt.bucket_children`, or in a `child()` tuple unpack. Closing it means either validating
-in the un-strict mutators (a deliberate behaviour change on the parser's hot construction path,
-where these methods are grandfathered as un-strict on purpose, and one that the frozen delta's
-"runtime behaviour is unchanged" clause rules out for this work) or ruling the divergence
-intended and pinning it in the parity suite. The inverse direction of the same asymmetry is open
-too: the protocol module's own label sentinels (`cstp.<Class>Label.<X>`) are the only label objects
-a purely protocol-typed consumer holds, they type-check into every mutator, and `insert`/
-`replace_at` reject them on *both* backends while `append`/`extend` store them (leaving a children
-entry whose label has no `.name` and is not the concrete enum). Both generated namespaces and the
-grammar reference now document the same-backend-label contract; closing it means either resolving a
-canonical-name-equal sentinel to the class's own label member before storing, or ruling the
-rejection intended and pinning it. Either way it is a cross-backend behaviour decision
-plus a hot-path cost judgement, not a mechanical fix. Location: `fltk/fegen/gsm2tree.py`
-(`py_class_for_model`'s `append`/`extend`/`extend_children` and `concrete_body_for`),
-`fltk/fegen/gsm2tree_rs.py` (`_generic_append`), `tests/test_cst_mutators_parity.py`.
+`append_<label>` / `extend_<label>` are annotated with the label's own child type but validate
+against the *node-wide* child union, on both backends. On `Items`, `append_item(trivia_node)` is a
+pyright error and a runtime success: the `Trivia` is stored under `Items.Label.ITEM`, comes back
+out of `children_item()` typed as `Item`, and is silently skipped by the native Rust data-struct
+accessors, which do match on the child variant. Deferred rather than fixed because the Python side
+alone is not the ceiling: the Rust per-label mutators extract through the node-wide child enum
+(`extract_from_pyobject`), so closing this means either a per-label extraction path in the Rust
+emitter or a per-label allowed-class tuple threaded through both emitters, plus a decision about
+what the two backends' typed readers should do with an off-type child already in a tree. Pinned by
+`test_per_label_append_stores_an_off_type_known_child` in `tests/test_cst_mutators_parity.py` —
+invert that test when this closes. Location: `fltk/fegen/gsm2tree.py` (`concrete_body_for`'s
+`append`/`extend` branches, `_check_child_type_for_mutators`), `fltk/fegen/gsm2tree_rs.py`
+(`_per_label_methods`, `extract_from_pyobject`).
+
+## `astrt-fold-roundtrip-span-merge`
+
+`to_cst()` on an AST value from a `fold`-using rule produces a CST that `from_cst()` then refuses:
+the round trip raises `AstError` with "the operands of a fold come from different sources, so their
+spans cannot merge". Reverse construction synthesises each node's span against its own source text,
+one text per node, and `Span.merge` rejects operands from different sources by construction — so
+this fires on any real parse of such a rule, not just on a hand-mixed tree. It needs the operands to
+carry spans: a sidecar that erases them to plain scalars leaves nothing to merge and round-trips
+today, so a fix validated only on that shape proves nothing. Pre-existing, and backend-independent
+(`to_cst` is Python-backend-only either way). Closing it means deciding how synthesised spans
+compose across sources —
+whether reverse construction should share one synthetic source per conversion, whether a fold link's
+span should be synthesised rather than merged, and what a consumer reading `.span` off a
+round-tripped node is entitled to — which is a design cycle, not a patch. Pinned by
+`test_fold_roundtrip_raises_on_span_merge` in `tests/test_ast_fold_roundtrip.py`; invert that test
+when this closes. Location: `fltk/fegen/pyrt/astrt.py` (`_merged`).
+
+## `version-bump-0-6-0`
+
+The version fields across the repo still read `0.4.0` even though `v0.5.0` is a tag on `origin`
+(pointing at `f33015c`), so any artifact built from that tag self-identifies as `0.4.0`. The
+decision is to leave `v0.5.0` exactly as it is — no re-tag, no deletion, no `0.5.1`; it is accepted
+as a known-broken release — and to correct the metadata when `0.6.0` is cut. This entry exists
+because a forgotten version bump is the defect that made `v0.5.0` broken in the first place, and the
+edit spans eight manifests: `pyproject.toml` (`version`), the root `Cargo.toml`
+(`[package] version`), and `crates/fltk-cst-core/Cargo.toml`, `crates/fltk-serde-core/Cargo.toml`,
+`crates/fltk-fmt-cli/Cargo.toml`, `crates/fltk-unparser-core/Cargo.toml`,
+`crates/fltk-parser-core/Cargo.toml`, `crates/fltk-ast-core/Cargo.toml` (each `[package] version`).
+Done = every one of those fields reads the released version at the `0.6.0` cut, and `v0.5.0` is left
+untouched. Location: `pyproject.toml` and the root `Cargo.toml` carry the
+`TODO(version-bump-0-6-0)` comments; the six crate manifests above are the rest of the edit.
+
+## `bazel-test-fixture-builds`
+
+A direct `uv run pytest` after a generator change silently tests stale fixture cdylibs: five
+extension modules (`fltk._native`, `phase4_roundtrip_cst`, `fegen_rust_cst`, `rust_parser_fixture`,
+`poc_cst`) are built by `make build-test-fixtures` and installed into the venv, and nothing outside
+`make test` rebuilds them, so the `rust`-parametrized half of the suite imports the previously-built
+`.so` and passes against code that no longer exists in the tree. This fired during this cycle: three
+tests asserting the old list-returning `children_<label>()` stayed green after the generator had
+already changed. The failure direction — silent false green in a suite whose purpose is proving the
+two backends equivalent — is the worst one. Interim mitigation: run `make test` (or at least
+`make build-test-fixtures`) rather than bare `pytest` after touching a generator.
+
+Root cause: generated code is checked in and the fixture cdylibs are built by ad-hoc
+`maturin develop` invocations outside any dependency-tracked build graph. Fix direction: move those
+builds — and, where that is what removes the hole, the generation itself — under Bazel, the build
+system the original request asked for, so a stale binary cannot be imported by construction.
+Closing this by wrapping the existing ad-hoc invocations in Bazel-shaped shell without putting them
+under a dependency graph does not satisfy it. Do **not** close it with an mtime/hash staleness
+checker either: that alternative was considered and rejected by the user, because any such tracker
+is a hand-rolled, drift-prone reimplementation of what Bazel already does. Done = the
+`rust`-parametrized suite consumes Bazel-built fixture extensions (or equivalent dependency-tracked
+builds) and the bare-`pytest` staleness hole is closed by construction. Location: `Makefile`
+(the `build-test-fixtures` target).

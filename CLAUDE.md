@@ -91,6 +91,8 @@ uv run pytest
 
 `maturin develop` without `--release` produces a debug build (fast compile, adequate for correctness testing). Pass `--release` for performance testing.
 
+After changing a code generator or regenerating Rust sources, run `make build-test-fixtures` (or `make test`) before `uv run pytest`: the test-fixture cdylibs do not rebuild themselves, so the `rust`-parametrized tests would otherwise import the previously-built extension and pass against code that no longer exists in the tree.
+
 ## Development Protocols
 
 Almost all changes should follow Test-Driven Design (TDD): First write a set of tests that fail but will pass when your task is done, and then complete the task.

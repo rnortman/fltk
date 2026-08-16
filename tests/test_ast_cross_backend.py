@@ -14,7 +14,6 @@ A CI lane where every test here is skipped is a failure signal.
 from __future__ import annotations
 
 import dataclasses
-import pathlib
 import typing
 
 import pytest
@@ -25,18 +24,14 @@ rust_parser_fixture = pytest.importorskip(
 )
 
 from fltk import plumbing  # noqa: E402
-from fltk.fegen.ast_config import Backend  # noqa: E402
 from fltk.fegen.pyrt import astrt  # noqa: E402
+from tests import fixture_ast_layer  # noqa: E402
 from tests.parser_parity import parse_rust_cst  # noqa: E402
 
 if typing.TYPE_CHECKING:
     import types
 
     from fltk.plumbing_types import ParserResult
-
-_REPO_ROOT = pathlib.Path(__file__).parent.parent
-_FIXTURE_FLTKG = _REPO_ROOT / "fltk" / "fegen" / "test_data" / "rust_parser_fixture.fltkg"
-_FIXTURE_SIDECAR = _REPO_ROOT / "tests" / "rust_parser_fixture" / "rust_parser_fixture.fltkast"
 
 
 class Layer(typing.NamedTuple):
@@ -74,16 +69,8 @@ class Layer(typing.NamedTuple):
 
 
 def _build_layer(*, capture_trivia: bool, config_prefix: str = "") -> Layer:
-    grammar = plumbing.parse_grammar_file(_FIXTURE_FLTKG)
-    config = plumbing.parse_ast_config(config_prefix + _FIXTURE_SIDECAR.read_text(), grammar, {Backend.PYTHON})
-    parser = plumbing.generate_parser(grammar, capture_trivia=capture_trivia)
-    ast_result = plumbing.generate_ast(
-        parser.grammar,
-        parser.cst_module_name,
-        ast_config=config,
-        protocol_module_name=parser.protocol_module_name,
-    )
-    return Layer(parser=parser, ast=ast_result.ast_module, capture_trivia=capture_trivia, converted={})
+    base = fixture_ast_layer.build(capture_trivia=capture_trivia, config_prefix=config_prefix)
+    return Layer(parser=base.parser, ast=base.ast, capture_trivia=capture_trivia, converted={})
 
 
 @pytest.fixture(scope="module", params=[False, True], ids=["no_trivia", "trivia"])

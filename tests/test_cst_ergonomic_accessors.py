@@ -128,10 +128,16 @@ class TestBareAccessorEmission:
         assert ret.startswith("typing.Optional["), ret
 
     def test_bare_accessor_delegates_to_quintet(self, concrete_classes: dict[str, ast.ClassDef]) -> None:
-        """Bodies delegate so that count checks and error messages are identical by construction."""
+        """Single-arity bodies delegate, so count checks and messages are identical by construction.
+
+        The multiple-arity body does not: it takes the label snapshot directly, because listing
+        `children_tags()`'s iterator would copy the snapshot a second time.
+        """
         assert _source(concrete_classes["Doc"], "name").endswith("return self.child_name()")
         assert _source(concrete_classes["Doc"], "body").endswith("return self.maybe_body()")
-        assert _source(concrete_classes["Doc"], "tags").endswith("return list(self.children_tags())")
+        assert _source(concrete_classes["Doc"], "tags").endswith(
+            "return typing.cast('list[Tag]', self._children_snapshot(Doc.Label.TAGS))"
+        )
 
     def test_colliding_bare_accessor_skipped(self, concrete_classes: dict[str, ast.ClassDef]) -> None:
         """`ident`'s label is `text`, which the rule-level text() reserves: bare accessor skipped."""
@@ -207,7 +213,11 @@ class TestProtocolMirrorsConcrete:
             concrete = set(_method_names(concrete_classes[class_name]))
             protocol = set(_method_names(protocol_classes[class_name]))
             # The concrete class carries private validation helpers the protocol does not declare.
-            concrete -= {"_check_child_type_for_mutators", "_check_label_type_for_mutators"}
+            concrete -= {
+                "_check_child_type_for_mutators",
+                "_check_label_type_for_mutators",
+                "_children_snapshot",
+            }
             # The protocol declares children as a read-only property; the concrete class as a field.
             protocol -= {"children"}
             assert concrete == protocol, f"{class_name}: concrete/protocol member mismatch"
@@ -265,6 +275,7 @@ def test_unknown_ergonomic_member_kind_raises(generator: gsm2tree.CstGenerator) 
             class_name="Op",
             member="nope",  # type: ignore[arg-type]
             label="",
+            snapshot_expr=lambda label: f"self._children_snapshot(Op.Label.{label.upper()})",
         )
 
 
@@ -344,17 +355,17 @@ class TestRuntimeTextAccessors:
             node.name_text()
 
     def test_required_text_accessor_rejects_a_non_span_child(self, parser_result: plumbing.ParserResult) -> None:
-        """Only reachable through the untyped mutators."""
+        """Only reachable by writing the children list directly; every mutator refuses the child."""
         tag = _parse(parser_result, "#hello", "tag")
         tag.clear()
-        tag.append(_parse(parser_result, "alpha", "ident"), tag.Label.NAME)
+        tag.children.append((tag.Label.NAME, _parse(parser_result, "alpha", "ident")))
         with pytest.raises(TypeError, match=re.escape("Tag.name_text: child labelled 'name' is not a Span")):
             tag.name_text()
 
     def test_optional_text_accessor_rejects_a_non_span_child(self, parser_result: plumbing.ParserResult) -> None:
         op = _parse(parser_result, "+", "op")
         op.clear()
-        op.append(_parse(parser_result, "alpha", "ident"), op.Label.PLUS)
+        op.children.append((op.Label.PLUS, _parse(parser_result, "alpha", "ident")))
         with pytest.raises(TypeError, match=re.escape("Op.plus_text: child labelled 'plus' is not a Span")):
             op.plus_text()
 

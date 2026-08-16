@@ -235,9 +235,9 @@ class Formatter(typing.Protocol):
 class FormatterLabel:
     """Sentinels equal to either backend's Formatter labels, for identifying one.
 
-    They are not a backend's own label objects, so insert() and replace_at() reject
-    them on every backend; pass those a label read off the node being mutated (from
-    children, remove_at() or variant()).
+    Every mutator on every backend accepts one and stores the mutated node's own
+    label member in its place: a label is matched by canonical name, not by identity.
+    A label read off a tree keeps whatever object the backend put there.
     """
 
     STATEMENT: typing.Final[fltk.fegen.pyrt.label_protocol.LabelProtocol] = _ProtocolLabelMember(
@@ -493,9 +493,9 @@ class Statement(typing.Protocol):
 class StatementLabel:
     """Sentinels equal to either backend's Statement labels, for identifying one.
 
-    They are not a backend's own label objects, so insert() and replace_at() reject
-    them on every backend; pass those a label read off the node being mutated (from
-    children, remove_at() or variant()).
+    Every mutator on every backend accepts one and stores the mutated node's own
+    label member in its place: a label is matched by canonical name, not by identity.
+    A label read off a tree keeps whatever object the backend put there.
     """
 
     AFTER: typing.Final[fltk.fegen.pyrt.label_protocol.LabelProtocol] = _ProtocolLabelMember("Statement.Label.AFTER")
@@ -621,9 +621,9 @@ class Default(typing.Protocol):
 class DefaultLabel:
     """Sentinels equal to either backend's Default labels, for identifying one.
 
-    They are not a backend's own label objects, so insert() and replace_at() reject
-    them on every backend; pass those a label read off the node being mutated (from
-    children, remove_at() or variant()).
+    Every mutator on every backend accepts one and stores the mutated node's own
+    label member in its place: a label is matched by canonical name, not by identity.
+    A label read off a tree keeps whatever object the backend put there.
     """
 
     SPACING: typing.Final[fltk.fegen.pyrt.label_protocol.LabelProtocol] = _ProtocolLabelMember("Default.Label.SPACING")
@@ -712,9 +712,9 @@ class RuleConfig(typing.Protocol):
 class RuleConfigLabel:
     """Sentinels equal to either backend's RuleConfig labels, for identifying one.
 
-    They are not a backend's own label objects, so insert() and replace_at() reject
-    them on every backend; pass those a label read off the node being mutated (from
-    children, remove_at() or variant()).
+    Every mutator on every backend accepts one and stores the mutated node's own
+    label member in its place: a label is matched by canonical name, not by identity.
+    A label read off a tree keeps whatever object the backend put there.
     """
 
     RULE_NAME: typing.Final[fltk.fegen.pyrt.label_protocol.LabelProtocol] = _ProtocolLabelMember(
@@ -897,9 +897,9 @@ class RuleStatement(typing.Protocol):
 class RuleStatementLabel:
     """Sentinels equal to either backend's RuleStatement labels, for identifying one.
 
-    They are not a backend's own label objects, so insert() and replace_at() reject
-    them on every backend; pass those a label read off the node being mutated (from
-    children, remove_at() or variant()).
+    Every mutator on every backend accepts one and stores the mutated node's own
+    label member in its place: a label is matched by canonical name, not by identity.
+    A label read off a tree keeps whatever object the backend put there.
     """
 
     AFTER: typing.Final[fltk.fegen.pyrt.label_protocol.LabelProtocol] = _ProtocolLabelMember(
@@ -996,9 +996,9 @@ class Group(typing.Protocol):
 class GroupLabel:
     """Sentinels equal to either backend's Group labels, for identifying one.
 
-    They are not a backend's own label objects, so insert() and replace_at() reject
-    them on every backend; pass those a label read off the node being mutated (from
-    children, remove_at() or variant()).
+    Every mutator on every backend accepts one and stores the mutated node's own
+    label member in its place: a label is matched by canonical name, not by identity.
+    A label read off a tree keeps whatever object the backend put there.
     """
 
     FROM_SPEC: typing.Final[fltk.fegen.pyrt.label_protocol.LabelProtocol] = _ProtocolLabelMember(
@@ -1096,9 +1096,9 @@ class Nest(typing.Protocol):
 class NestLabel:
     """Sentinels equal to either backend's Nest labels, for identifying one.
 
-    They are not a backend's own label objects, so insert() and replace_at() reject
-    them on every backend; pass those a label read off the node being mutated (from
-    children, remove_at() or variant()).
+    Every mutator on every backend accepts one and stores the mutated node's own
+    label member in its place: a label is matched by canonical name, not by identity.
+    A label read off a tree keeps whatever object the backend put there.
     """
 
     FROM_SPEC: typing.Final[fltk.fegen.pyrt.label_protocol.LabelProtocol] = _ProtocolLabelMember("Nest.Label.FROM_SPEC")
@@ -1195,9 +1195,9 @@ class Join(typing.Protocol):
 class JoinLabel:
     """Sentinels equal to either backend's Join labels, for identifying one.
 
-    They are not a backend's own label objects, so insert() and replace_at() reject
-    them on every backend; pass those a label read off the node being mutated (from
-    children, remove_at() or variant()).
+    Every mutator on every backend accepts one and stores the mutated node's own
+    label member in its place: a label is matched by canonical name, not by identity.
+    A label read off a tree keeps whatever object the backend put there.
     """
 
     DOC_LITERAL: typing.Final[fltk.fegen.pyrt.label_protocol.LabelProtocol] = _ProtocolLabelMember(
@@ -1295,9 +1295,9 @@ class FromSpec(typing.Protocol):
 class FromSpecLabel:
     """Sentinels equal to either backend's FromSpec labels, for identifying one.
 
-    They are not a backend's own label objects, so insert() and replace_at() reject
-    them on every backend; pass those a label read off the node being mutated (from
-    children, remove_at() or variant()).
+    Every mutator on every backend accepts one and stores the mutated node's own
+    label member in its place: a label is matched by canonical name, not by identity.
+    A label read off a tree keeps whatever object the backend put there.
     """
 
     AFTER: typing.Final[fltk.fegen.pyrt.label_protocol.LabelProtocol] = _ProtocolLabelMember("FromSpec.Label.AFTER")
@@ -1394,9 +1394,9 @@ class ToSpec(typing.Protocol):
 class ToSpecLabel:
     """Sentinels equal to either backend's ToSpec labels, for identifying one.
 
-    They are not a backend's own label objects, so insert() and replace_at() reject
-    them on every backend; pass those a label read off the node being mutated (from
-    children, remove_at() or variant()).
+    Every mutator on every backend accepts one and stores the mutated node's own
+    label member in its place: a label is matched by canonical name, not by identity.
+    A label read off a tree keeps whatever object the backend put there.
     """
 
     BEFORE: typing.Final[fltk.fegen.pyrt.label_protocol.LabelProtocol] = _ProtocolLabelMember("ToSpec.Label.BEFORE")
@@ -1472,9 +1472,9 @@ class Anchor(typing.Protocol):
 class AnchorLabel:
     """Sentinels equal to either backend's Anchor labels, for identifying one.
 
-    They are not a backend's own label objects, so insert() and replace_at() reject
-    them on every backend; pass those a label read off the node being mutated (from
-    children, remove_at() or variant()).
+    Every mutator on every backend accepts one and stores the mutated node's own
+    label member in its place: a label is matched by canonical name, not by identity.
+    A label read off a tree keeps whatever object the backend put there.
     """
 
     LABEL: typing.Final[fltk.fegen.pyrt.label_protocol.LabelProtocol] = _ProtocolLabelMember("Anchor.Label.LABEL")
@@ -1558,9 +1558,9 @@ class After(typing.Protocol):
 class AfterLabel:
     """Sentinels equal to either backend's After labels, for identifying one.
 
-    They are not a backend's own label objects, so insert() and replace_at() reject
-    them on every backend; pass those a label read off the node being mutated (from
-    children, remove_at() or variant()).
+    Every mutator on every backend accepts one and stores the mutated node's own
+    label member in its place: a label is matched by canonical name, not by identity.
+    A label read off a tree keeps whatever object the backend put there.
     """
 
     ANCHOR: typing.Final[fltk.fegen.pyrt.label_protocol.LabelProtocol] = _ProtocolLabelMember("After.Label.ANCHOR")
@@ -1646,9 +1646,9 @@ class Before(typing.Protocol):
 class BeforeLabel:
     """Sentinels equal to either backend's Before labels, for identifying one.
 
-    They are not a backend's own label objects, so insert() and replace_at() reject
-    them on every backend; pass those a label read off the node being mutated (from
-    children, remove_at() or variant()).
+    Every mutator on every backend accepts one and stores the mutated node's own
+    label member in its place: a label is matched by canonical name, not by identity.
+    A label read off a tree keeps whatever object the backend put there.
     """
 
     ANCHOR: typing.Final[fltk.fegen.pyrt.label_protocol.LabelProtocol] = _ProtocolLabelMember("Before.Label.ANCHOR")
@@ -1708,9 +1708,9 @@ class Omit(typing.Protocol):
 class OmitLabel:
     """Sentinels equal to either backend's Omit labels, for identifying one.
 
-    They are not a backend's own label objects, so insert() and replace_at() reject
-    them on every backend; pass those a label read off the node being mutated (from
-    children, remove_at() or variant()).
+    Every mutator on every backend accepts one and stores the mutated node's own
+    label member in its place: a label is matched by canonical name, not by identity.
+    A label read off a tree keeps whatever object the backend put there.
     """
 
     ANCHOR: typing.Final[fltk.fegen.pyrt.label_protocol.LabelProtocol] = _ProtocolLabelMember("Omit.Label.ANCHOR")
@@ -1787,9 +1787,9 @@ class Render(typing.Protocol):
 class RenderLabel:
     """Sentinels equal to either backend's Render labels, for identifying one.
 
-    They are not a backend's own label objects, so insert() and replace_at() reject
-    them on every backend; pass those a label read off the node being mutated (from
-    children, remove_at() or variant()).
+    Every mutator on every backend accepts one and stores the mutated node's own
+    label member in its place: a label is matched by canonical name, not by identity.
+    A label read off a tree keeps whatever object the backend put there.
     """
 
     ANCHOR: typing.Final[fltk.fegen.pyrt.label_protocol.LabelProtocol] = _ProtocolLabelMember("Render.Label.ANCHOR")
@@ -1873,9 +1873,9 @@ class PositionSpecStatement(typing.Protocol):
 class PositionSpecStatementLabel:
     """Sentinels equal to either backend's PositionSpecStatement labels, for identifying one.
 
-    They are not a backend's own label objects, so insert() and replace_at() reject
-    them on every backend; pass those a label read off the node being mutated (from
-    children, remove_at() or variant()).
+    Every mutator on every backend accepts one and stores the mutated node's own
+    label member in its place: a label is matched by canonical name, not by identity.
+    A label read off a tree keeps whatever object the backend put there.
     """
 
     PRESERVE_BLANKS: typing.Final[fltk.fegen.pyrt.label_protocol.LabelProtocol] = _ProtocolLabelMember(
@@ -2044,9 +2044,9 @@ class Spacing(typing.Protocol):
 class SpacingLabel:
     """Sentinels equal to either backend's Spacing labels, for identifying one.
 
-    They are not a backend's own label objects, so insert() and replace_at() reject
-    them on every backend; pass those a label read off the node being mutated (from
-    children, remove_at() or variant()).
+    Every mutator on every backend accepts one and stores the mutated node's own
+    label member in its place: a label is matched by canonical name, not by identity.
+    A label read off a tree keeps whatever object the backend put there.
     """
 
     BLANK: typing.Final[fltk.fegen.pyrt.label_protocol.LabelProtocol] = _ProtocolLabelMember("Spacing.Label.BLANK")
@@ -2184,9 +2184,9 @@ class DocLiteral(typing.Protocol):
 class DocLiteralLabel:
     """Sentinels equal to either backend's DocLiteral labels, for identifying one.
 
-    They are not a backend's own label objects, so insert() and replace_at() reject
-    them on every backend; pass those a label read off the node being mutated (from
-    children, remove_at() or variant()).
+    Every mutator on every backend accepts one and stores the mutated node's own
+    label member in its place: a label is matched by canonical name, not by identity.
+    A label read off a tree keeps whatever object the backend put there.
     """
 
     COMPOUND_LITERAL: typing.Final[fltk.fegen.pyrt.label_protocol.LabelProtocol] = _ProtocolLabelMember(
@@ -2255,9 +2255,9 @@ class TextLiteral(typing.Protocol):
 class TextLiteralLabel:
     """Sentinels equal to either backend's TextLiteral labels, for identifying one.
 
-    They are not a backend's own label objects, so insert() and replace_at() reject
-    them on every backend; pass those a label read off the node being mutated (from
-    children, remove_at() or variant()).
+    Every mutator on every backend accepts one and stores the mutated node's own
+    label member in its place: a label is matched by canonical name, not by identity.
+    A label read off a tree keeps whatever object the backend put there.
     """
 
     TEXT: typing.Final[fltk.fegen.pyrt.label_protocol.LabelProtocol] = _ProtocolLabelMember("TextLiteral.Label.TEXT")
@@ -2322,9 +2322,9 @@ class ConcatLiteral(typing.Protocol):
 class ConcatLiteralLabel:
     """Sentinels equal to either backend's ConcatLiteral labels, for identifying one.
 
-    They are not a backend's own label objects, so insert() and replace_at() reject
-    them on every backend; pass those a label read off the node being mutated (from
-    children, remove_at() or variant()).
+    Every mutator on every backend accepts one and stores the mutated node's own
+    label member in its place: a label is matched by canonical name, not by identity.
+    A label read off a tree keeps whatever object the backend put there.
     """
 
     DOC_LIST_LITERAL: typing.Final[fltk.fegen.pyrt.label_protocol.LabelProtocol] = _ProtocolLabelMember(
@@ -2409,9 +2409,9 @@ class JoinLiteral(typing.Protocol):
 class JoinLiteralLabel:
     """Sentinels equal to either backend's JoinLiteral labels, for identifying one.
 
-    They are not a backend's own label objects, so insert() and replace_at() reject
-    them on every backend; pass those a label read off the node being mutated (from
-    children, remove_at() or variant()).
+    Every mutator on every backend accepts one and stores the mutated node's own
+    label member in its place: a label is matched by canonical name, not by identity.
+    A label read off a tree keeps whatever object the backend put there.
     """
 
     DOC_LIST_LITERAL: typing.Final[fltk.fegen.pyrt.label_protocol.LabelProtocol] = _ProtocolLabelMember(
@@ -2475,9 +2475,9 @@ class DocListLiteral(typing.Protocol):
 class DocListLiteralLabel:
     """Sentinels equal to either backend's DocListLiteral labels, for identifying one.
 
-    They are not a backend's own label objects, so insert() and replace_at() reject
-    them on every backend; pass those a label read off the node being mutated (from
-    children, remove_at() or variant()).
+    Every mutator on every backend accepts one and stores the mutated node's own
+    label member in its place: a label is matched by canonical name, not by identity.
+    A label read off a tree keeps whatever object the backend put there.
     """
 
     DOC_LITERAL: typing.Final[fltk.fegen.pyrt.label_protocol.LabelProtocol] = _ProtocolLabelMember(
@@ -2587,9 +2587,9 @@ class CompoundLiteral(typing.Protocol):
 class CompoundLiteralLabel:
     """Sentinels equal to either backend's CompoundLiteral labels, for identifying one.
 
-    They are not a backend's own label objects, so insert() and replace_at() reject
-    them on every backend; pass those a label read off the node being mutated (from
-    children, remove_at() or variant()).
+    Every mutator on every backend accepts one and stores the mutated node's own
+    label member in its place: a label is matched by canonical name, not by identity.
+    A label read off a tree keeps whatever object the backend put there.
     """
 
     DOC_LITERAL: typing.Final[fltk.fegen.pyrt.label_protocol.LabelProtocol] = _ProtocolLabelMember(
@@ -2662,9 +2662,9 @@ class TriviaPreserve(typing.Protocol):
 class TriviaPreserveLabel:
     """Sentinels equal to either backend's TriviaPreserve labels, for identifying one.
 
-    They are not a backend's own label objects, so insert() and replace_at() reject
-    them on every backend; pass those a label read off the node being mutated (from
-    children, remove_at() or variant()).
+    Every mutator on every backend accepts one and stores the mutated node's own
+    label member in its place: a label is matched by canonical name, not by identity.
+    A label read off a tree keeps whatever object the backend put there.
     """
 
     TRIVIA_NODE_LIST: typing.Final[fltk.fegen.pyrt.label_protocol.LabelProtocol] = _ProtocolLabelMember(
@@ -2725,9 +2725,9 @@ class TriviaNodeList(typing.Protocol):
 class TriviaNodeListLabel:
     """Sentinels equal to either backend's TriviaNodeList labels, for identifying one.
 
-    They are not a backend's own label objects, so insert() and replace_at() reject
-    them on every backend; pass those a label read off the node being mutated (from
-    children, remove_at() or variant()).
+    Every mutator on every backend accepts one and stores the mutated node's own
+    label member in its place: a label is matched by canonical name, not by identity.
+    A label read off a tree keeps whatever object the backend put there.
     """
 
     IDENTIFIER: typing.Final[fltk.fegen.pyrt.label_protocol.LabelProtocol] = _ProtocolLabelMember(
@@ -2786,9 +2786,9 @@ class PreserveBlanks(typing.Protocol):
 class PreserveBlanksLabel:
     """Sentinels equal to either backend's PreserveBlanks labels, for identifying one.
 
-    They are not a backend's own label objects, so insert() and replace_at() reject
-    them on every backend; pass those a label read off the node being mutated (from
-    children, remove_at() or variant()).
+    Every mutator on every backend accepts one and stores the mutated node's own
+    label member in its place: a label is matched by canonical name, not by identity.
+    A label read off a tree keeps whatever object the backend put there.
     """
 
     COUNT: typing.Final[fltk.fegen.pyrt.label_protocol.LabelProtocol] = _ProtocolLabelMember(
@@ -2865,9 +2865,9 @@ class Identifier(typing.Protocol):
 class IdentifierLabel:
     """Sentinels equal to either backend's Identifier labels, for identifying one.
 
-    They are not a backend's own label objects, so insert() and replace_at() reject
-    them on every backend; pass those a label read off the node being mutated (from
-    children, remove_at() or variant()).
+    Every mutator on every backend accepts one and stores the mutated node's own
+    label member in its place: a label is matched by canonical name, not by identity.
+    A label read off a tree keeps whatever object the backend put there.
     """
 
     NAME: typing.Final[fltk.fegen.pyrt.label_protocol.LabelProtocol] = _ProtocolLabelMember("Identifier.Label.NAME")
@@ -2942,9 +2942,9 @@ class Literal(typing.Protocol):
 class LiteralLabel:
     """Sentinels equal to either backend's Literal labels, for identifying one.
 
-    They are not a backend's own label objects, so insert() and replace_at() reject
-    them on every backend; pass those a label read off the node being mutated (from
-    children, remove_at() or variant()).
+    Every mutator on every backend accepts one and stores the mutated node's own
+    label member in its place: a label is matched by canonical name, not by identity.
+    A label read off a tree keeps whatever object the backend put there.
     """
 
     VALUE: typing.Final[fltk.fegen.pyrt.label_protocol.LabelProtocol] = _ProtocolLabelMember("Literal.Label.VALUE")
@@ -3019,9 +3019,9 @@ class Integer(typing.Protocol):
 class IntegerLabel:
     """Sentinels equal to either backend's Integer labels, for identifying one.
 
-    They are not a backend's own label objects, so insert() and replace_at() reject
-    them on every backend; pass those a label read off the node being mutated (from
-    children, remove_at() or variant()).
+    Every mutator on every backend accepts one and stores the mutated node's own
+    label member in its place: a label is matched by canonical name, not by identity.
+    A label read off a tree keeps whatever object the backend put there.
     """
 
     VALUE: typing.Final[fltk.fegen.pyrt.label_protocol.LabelProtocol] = _ProtocolLabelMember("Integer.Label.VALUE")
@@ -3099,9 +3099,9 @@ class Trivia(typing.Protocol):
 class TriviaLabel:
     """Sentinels equal to either backend's Trivia labels, for identifying one.
 
-    They are not a backend's own label objects, so insert() and replace_at() reject
-    them on every backend; pass those a label read off the node being mutated (from
-    children, remove_at() or variant()).
+    Every mutator on every backend accepts one and stores the mutated node's own
+    label member in its place: a label is matched by canonical name, not by identity.
+    A label read off a tree keeps whatever object the backend put there.
     """
 
     LINE_COMMENT: typing.Final[fltk.fegen.pyrt.label_protocol.LabelProtocol] = _ProtocolLabelMember(
@@ -3206,9 +3206,9 @@ class LineComment(typing.Protocol):
 class LineCommentLabel:
     """Sentinels equal to either backend's LineComment labels, for identifying one.
 
-    They are not a backend's own label objects, so insert() and replace_at() reject
-    them on every backend; pass those a label read off the node being mutated (from
-    children, remove_at() or variant()).
+    Every mutator on every backend accepts one and stores the mutated node's own
+    label member in its place: a label is matched by canonical name, not by identity.
+    A label read off a tree keeps whatever object the backend put there.
     """
 
     CONTENT: typing.Final[fltk.fegen.pyrt.label_protocol.LabelProtocol] = _ProtocolLabelMember(

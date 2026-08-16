@@ -1,13 +1,7 @@
 import sys
 
-import astor  # type: ignore
-
-from fltk import pygen
-from fltk.fegen import bootstrap2gsm, bootstrap_parser, gsm, gsm2parser, gsm2tree, naming
+from fltk.fegen import bootstrap2gsm, bootstrap_parser, emit, gsm
 from fltk.fegen.pyrt import terminalsrc
-from fltk.iir.context import create_default_context
-from fltk.iir.py import compiler
-from fltk.iir.py import reg as pyreg
 
 
 def parse_grammar() -> gsm.Grammar:
@@ -24,37 +18,7 @@ def parse_grammar() -> gsm.Grammar:
 
 def gen_parser(grammar: gsm.Grammar) -> None:
     parser_filename, cst_filename, cst_module_name = sys.argv[2:]
-
-    context = create_default_context()
-
-    cst_module = pyreg.Module(cst_module_name.split("."))
-    cstgen = gsm2tree.CstGenerator(grammar=grammar, py_module=cst_module, context=context)
-    pgen = gsm2parser.ParserGenerator(grammar=grammar, cstgen=cstgen, context=context)
-
-    parser_ast = compiler.compile_class(pgen.parser_class, context)
-    imports = [
-        pyreg.Module(("collections", "abc")),
-        pyreg.Module(("typing",)),
-        pyreg.Module(("fltk", "fegen", "pyrt", "errors")),
-        pyreg.Module(("fltk", "fegen", "pyrt", "memo")),
-        cst_module,
-    ]
-
-    parser_mod = pygen.module(module.import_path for module in imports)
-    parser_mod.body.append(parser_ast)
-
-    with open(parser_filename, "w") as parser_file:
-        parser_file.write(astor.to_source(parser_mod))
-
-    cst_mod = cstgen.gen_py_module(naming.protocol_module_name(cst_module_name))
-    with open(cst_filename, "w") as cst_file:
-        cst_file.write(astor.to_source(cst_mod))
-
-    # The CST module imports NodeKind from its protocol module, so the pair must be written
-    # together: a fresh CST module beside a stale protocol module fails at import (or silently
-    # reuses the wrong NodeKind members) as soon as the grammar's rule set changes.
-    with open(naming.protocol_module_path(cst_filename), "w") as protocol_file:
-        protocol_file.write(cstgen.gen_protocol_module_text())
+    emit.write_generated_modules(grammar, parser_filename, cst_filename, cst_module_name)
 
 
 if __name__ == "__main__":

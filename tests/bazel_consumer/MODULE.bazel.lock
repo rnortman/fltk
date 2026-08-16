@@ -498,7 +498,7 @@
           "REPO_MAPPING:rules_rust+,rules_cc rules_cc+",
           "REPO_MAPPING:rules_rust+,rules_rust rules_rust+",
           "FILE:@@fltk+//Cargo.lock e458be02aacb942505a97e4739a600466a45eb17951b173a7058c5cde93621ad",
-          "FILE:@@fltk+//Cargo.toml 880be3139a4ce38aa5e41f3490baf4ab9c6d6875664bab663abe2f730103f4b8"
+          "FILE:@@fltk+//Cargo.toml 589e51bfa70bdca55826d0e31e8689860a84ba616bd8d8901a6f19fda7ec8724"
         ],
         "generatedRepoSpecs": {
           "fltk_crates": {

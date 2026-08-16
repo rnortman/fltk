@@ -310,7 +310,11 @@ Each label produces, on the node class, a nested `Label` enum member and a **qui
 accessor methods** (`_emit_label_quintet`, `gsm2tree.py:820-867`):
 
 - `append_<label>(child)` and `extend_<label>(children)` — mutators.
-- `children_<label>() -> Iterator[T]` — every child carrying that label.
+- `children_<label>() -> Iterator[T]` — every child carrying that label. The returned iterator
+  is **fresh, single-pass, and over a snapshot taken at call time**, identically on both
+  backends: a second pass over the same object is empty, two calls give two independent
+  iterators, and mutating the node afterwards does not change what an already-obtained
+  iterator yields. Call it again, or wrap it in `list(...)`, if you need to iterate twice.
 - `child_<label>() -> T` — exactly one; raises unless exactly one exists
   (`gsm2tree.py:345-357`).
 - `maybe_<label>() -> Optional[T]` — zero or one; raises if more than one
@@ -665,21 +669,37 @@ coverage.** Whitespace consumed at separators is likewise gap-producing unless
 
 ### 10.4 Mutators and strictness
 
-Beyond the per-label quintet (§6.2), every node has generic mutators. The newer named
-mutators are strict and enforce cross-backend-parity ordering:
+Beyond the per-label quintet (§6.2), every node has generic mutators. All of them are strict
+about child types, and the named ones enforce cross-backend-parity ordering:
 
-- `insert` / `replace_at` validate **child type, then label type, then index**, matching the
-  Rust order (`gsm2tree.py:531-603`). Unknown child classes are rejected with `TypeError`
-  (`gsm2tree.py:447-493`); the native `Span` is admitted lazily so the module stays
-  pure-Python-importable.
-- A label-free node rejects any non-`None` label; a labeled node requires `None` or its own
-  `Label` enum (`gsm2tree.py:515-529`).
+- **Every** mutator validates its child on both backends: `append`, `extend`, `insert`,
+  `replace_at` and the per-label `append_<label>` / `extend_<label>` reject an unknown or
+  foreign-backend child with `TypeError: <Class>: unsupported child type <module>.<qualname>`
+  (`gsm2tree.py`, `_check_child_type_for_mutators`). The rejected type is module-qualified because
+  both backends export their node classes under the same Python names; code matching on the older
+  unqualified wording (`unsupported child type Item`) needs updating. The native `Span` is
+  admitted lazily, on the rejection path, so the module stays pure-Python-importable without
+  putting the lookup on the construction path. `extend_children` rejects an `other` that is not
+  the same concrete node class; its message is backend-specific (Python raises the template above,
+  Rust rejects at PyO3 signature extraction).
+- A span child must be a backend-native span object: `terminalsrc.Span` or `fltk._native.Span`
+  on the Python backend, `fltk._native.Span` on the Rust backend. The mutator parameters are
+  annotated `SpanProtocol`, but a third-party structural implementation of that protocol is
+  refused — children are backend-native, and the Rust backend has nowhere to put a foreign span.
+  Convert to one of the two span classes before handing a span to a mutator.
+- The check is against the **node-wide** child union, not the label's own child type, so
+  `append_<label>` accepts any class the node can hold and stores it under that label
+  (`TODO(cst-per-label-mutator-narrow-child-check)`); the Rust per-label mutators have the same
+  ceiling. Only outright foreign or unknown types are refused there.
+- `extend` and `extend_<label>` validate the whole sequence before storing any of it, so a
+  rejected element leaves the node unmutated on both backends.
+- Every mutator validates **label, then child, then index** (where it has one), on both backends.
+  A rejected label therefore costs no child extraction and leaves the node untouched.
+- **Every** mutator that takes a label checks it, on both backends. A label-free node rejects
+  any non-`None` label. A labeled node accepts `None`, one of its own `Label` members, or any
+  object whose `_fltk_canonical_name` names one of them — see §10.5.
 - `insert` clamps out-of-range indices (matching `list.insert` and Rust);
-  `remove_at` / `replace_at` raise `IndexError` out of range (`gsm2tree.py:558-603`).
-- `append` / `extend` / `extend_children` and the per-label `append_<label>` /
-  `extend_<label>` are grandfathered as un-strict (no type check) for backward compatibility;
-  only the newer named mutators are strict (`gsm2tree.py:283-297, 395-396`). The Rust backend
-  checks on `append` as well, so the two backends diverge there (`TODO(cst-mutator-append-parity)`).
+  `remove_at` / `replace_at` raise `IndexError` out of range.
 
 ### 10.5 Node identity and cross-backend equality
 
@@ -699,23 +719,55 @@ namespaces (`cstp.ItemsLabel.NO_WS`) rather than nested on the node protocols; `
 read-only `Sequence` property there, so protocol-typed code mutates through the mutator
 methods. Multiple-arity bare label accessors return `typing.Sequence[...]` on the protocol
 (the concrete accessors still return `list[...]`). The concrete classes keep their nested
-`Label` enums (`cst.Items.Label.NO_WS`) and their mutable `children` list.
+`Label` enums (`cst.Items.Label.NO_WS`) and their `children` list.
+
+`Sequence` is read-only, so protocol-typed code that used to mutate a multiple-arity accessor's
+result in place must copy it first — `tags = list(node.tags())`, then mutate `tags`. Writing the
+change back goes through the node's mutators.
 
 The concrete mutators (`append`, `extend`, `insert`, `replace_at`, `extend_children`, and the
 per-label `append_<label>` / `extend_<label>`) accept the protocol node types and
-`LabelProtocol` labels, so either backend's values type-check as inputs. Runtime rejection of a
-foreign-backend argument follows §10.4's strictness split and no longer has the annotations
-behind it: `insert` and `replace_at` raise `TypeError`, while `append`, `extend`,
-`extend_children` and the per-label mutators store whatever they are given. The Rust backend
-type-checks its `append` too, so a foreign child is a `TypeError` there and silently stored on
-the Python backend. Accessor and `child()` / `remove_at()` / `variant()` return types stay
-concrete.
+`LabelProtocol` labels, so either backend's values type-check as inputs. The annotations are not
+what keeps a foreign value out of the tree — the runtime checks are: a foreign-backend child is a
+`TypeError` from every mutator on both backends (§10.4). Node-typed accessor, `child()` and
+`remove_at()` return types stay concrete on both backends — the Rust extension's `.pyi` declares
+them as its own stub-local classes. Label-typed positions do not: `variant()` is annotated
+`LabelProtocol` on the Rust stub (and `<Class>.Label` there is an alias of the protocol's label
+namespace), where the Python backend returns its nested concrete enum member. Both spell the same
+runtime values (§10.5 above), but an annotation naming a label type binds the code to one backend.
 
-The protocol module's label constants are sentinels, not either backend's label objects: they
-exist to *compare* against a label read off a tree (canonical-name `__eq__`/`__hash__`), and
-`insert` / `replace_at` reject them on both backends even though they type-check. Code that
-mutates a tree passes a label obtained from the node being mutated — from `children`,
-`remove_at()` or `variant()` — or the concrete backend's own `cst.<Class>.Label.<X>`.
+`children` is a plain `list` on both backends, and its element type is the backend's own classes
+— `list` is invariant, so a variable or parameter annotated with the *protocol's* element type does
+not accept it. Protocol-typed code reads the protocol's read-only `children` `Sequence` property
+instead, or copies: `entries = list(node.children)`.
+
+**Never write through `children`.** On the Rust backend the getter rebuilds the list from the
+native children vector on every access, so the list you get is a snapshot: `node.children.append(x)`,
+`sort()` or `children[:] = ...` mutate a throwaway copy and change nothing in the tree. On the
+Python backend the same list *is* the node's backing storage, so those spellings do change the tree
+— and bypass the mutators' validation while doing it. Reading `children` is portable; every write
+goes through the mutators (`append`, `extend`, `insert`, `replace_at`, `remove_at`, `clear`, and the
+per-label pair).
+
+**Children are backend-native; labels are values.** A child must be one of the mutating backend's
+own node or span classes. A label need not be: a label carries no backend-specific storage, so
+every mutator on every backend accepts any object whose `_fltk_canonical_name` names one of the
+mutated node's labels — a protocol sentinel (`cstp.ItemsLabel.ITEM`), the other backend's member
+(`other_cst.Items.Label.ITEM`), the node's own member — and **stores the mutated node's own label
+member** in its place. So the tree's contents are unchanged by which spelling you pass: a Python
+tree holds `cst.Items.Label` enum members, a Rust tree holds native `Items_Label` objects. A
+canonical name naming no label of *this* class (`cstp.ItemsLabel.ITEM` into an `Identifier`
+mutator) and anything carrying no canonical name at all raise
+`TypeError: <Class>.<method>: label argument is not a <Class>_Label; got <type>`. Only a *missing*
+`_fltk_canonical_name` means "not a label": if reading the attribute raises, that exception
+propagates unchanged on both backends rather than being reported as a bad label type.
+
+Matching by canonical name rather than by object identity is deliberate: the sentinels are the
+only label objects a purely protocol-typed consumer can name, so rejecting them would leave a
+pyright-clean call that always raises, and the per-label mutators do not compensate (they cannot
+express a label chosen at runtime). The canonical name is already label identity — it is the
+cross-backend `__eq__`/`__hash__` key — so an arbitrary object carrying a real label's canonical
+name resolves like any other spelling of it. Nothing foreign enters the tree either way.
 
 The two modules are a mandatory pair: `NodeKind` is defined in the protocol module and
 re-exported by the concrete one (`from <grammar>_cst_protocol import NodeKind`), so a node's
@@ -723,7 +775,41 @@ re-exported by the concrete one (`from <grammar>_cst_protocol import NodeKind`),
 therefore always writes both files, and importing a concrete CST module without its protocol
 module beside it raises `ModuleNotFoundError`.
 
-### 10.6 At least one included member per node
+### 10.6 Writing backend-portable code
+
+Code that names a CST class in an annotation has three portable styles. All three work; they
+differ in where the backend stops being visible.
+
+**Annotate against the protocol module.** `import <grammar>_cst_protocol as cstp`, annotate
+parameters `cstp.Rule`, and both backends' nodes satisfy them structurally — the protocol module
+ships beside every generated CST module and both backends are type-checked against it. This is the
+style for library code that must accept whatever its caller parsed. Its one constraint is the
+`Sequence` returns above: copy before mutating.
+
+**Convert to AST at the parse boundary.** The generated AST layer's `from_cst` takes either
+backend's node, and everything below the boundary is annotated with AST types, which name no
+backend at all. This is the style for an application that reads a tree rather than manipulating it.
+
+**Annotate against one concrete backend.** `import <grammar>_cst as cst` (or the Rust extension's
+`cst` submodule), annotate `cst.Rule`, and switch backends by editing the import line. The
+accessors return the importing backend's own classes on both backends — the Rust extension's `.pyi`
+declares stub-local return types for exactly this reason — so a descent through `rule.alternatives()
+.items()` type-checks either way. Mutator *parameters* stay protocol-wide on both backends, so a
+node from the other backend still type-checks going in (and is still refused at runtime, §10.4).
+What binds you to one backend in this style is naming a backend-specific type directly: a
+`terminalsrc.Span` annotation, or a construction call. Two positions are backend-specific even
+though they look like the accessors: a *label* type (`cst.Rule.Label`, or the type of what
+`variant()` returns) is the protocol's label namespace on the Rust stub and a nested concrete enum
+on the Python backend, and the element type of the `children` list is invariant, so neither
+spelling is portable (§10.5). Read labels without annotating them — compare them against
+`cst.Rule.Label.X`, which works on both — and walk `children` through the accessors. Writing is
+narrower still: mutating the `children` list in place is a silent no-op on the Rust backend, so
+every write has to go through the mutators (§10.5).
+
+Mixing is fine: a protocol-typed core with a concrete-typed shell is a common shape, since concrete
+values satisfy protocol parameters.
+
+### 10.7 At least one included member per node
 
 A rule whose every item is suppressed and which has no sub-expression or labeled member
 produces an empty model and is **rejected**: `"Model class ... would have no members"`

@@ -13,6 +13,7 @@ import fltk.fegen.gsm2tree as gsm2tree_mod
 from fltk.fegen import fltk_cst, fltk_cst_protocol, gsm
 from tests.gsm2tree_helpers import make_generator as _make_generator
 from tests.gsm2tree_helpers import make_labeled_grammar as _make_labeled_grammar
+from tests.gsm2tree_helpers import make_multi_label_grammar as _make_multi_label_grammar
 from tests.gsm2tree_helpers import make_rule_ref_grammar as _rule_ref_grammar
 from tests.gsm2tree_helpers import make_zero_label_grammar as _make_zero_label_grammar
 
@@ -75,6 +76,11 @@ class TestLabelFreeConcreteClass:
         """Label-free node must NOT emit a nested Label enum."""
         label_cls = _find_nested_class(klass, "Label")
         assert label_cls is None, "Label-free node should not have a nested Label ClassDef"
+
+    def test_no_children_snapshot_helper(self, klass: ast.ClassDef) -> None:
+        """The snapshot helper's signature names `Foo.Label`, which a label-free node lacks."""
+        assert _find_function(klass, "_children_snapshot") is None
+        assert "_children_snapshot" not in ast.unparse(klass)
 
     def test_children_annotation_none_tuple(self, klass: ast.ClassDef) -> None:
         """children field annotation must be list[tuple[None, T]] (not Optional[Label])."""
@@ -760,77 +766,214 @@ class TestWidenedMutatorInputs:
         assert "label: None" in source, source
 
 
-class TestWidenedEntryDerivation:
-    """The escape-hatch local is emitted exactly when the node's model says the entry can widen.
+class TestMutatorEntryShapes:
+    """Every mutator builds its children entry from the two checkers' returns, never from a raw
+    argument, so no entry needs a ``typing.Any`` escape hatch.
 
-    Widening comes from two independent sources: a rule-reference child (spelled ``"Rule"``
-    concretely and ``_cstp.Rule`` on the protocol surface) and the presence of labels (the
-    concrete nested enum versus ``LabelProtocol``).  All four combinations are pinned here so the
-    derivation cannot drift with the annotation renderers.
+    Both checkers declare concrete returns — the node's own child union and its own ``Label`` — so
+    the entry's arity, its label slot and its element type stay checked by pyright inside every
+    generated module.  The generic mutators inline the label fast path (one isinstance against a
+    constant) and call ``_check_label_type_for_mutators`` only on the miss, because the generated
+    parser appends every trivia child through the generic ``append``.
     """
 
+    _GRAMMARS = (
+        (_make_zero_label_grammar(), "foo", "Foo", False),
+        (_make_labeled_grammar(), "bar", "Bar", True),
+        (_rule_ref_grammar(labeled=False), "baz", "Baz", False),
+        (_rule_ref_grammar(labeled=True), "baz", "Baz", True),
+    )
+
     @staticmethod
-    def _append_source(grammar: gsm.Grammar, rule_name: str, class_name: str, method: str = "append") -> str:
+    def _method_source(grammar: gsm.Grammar, rule_name: str, class_name: str, method: str = "append") -> str:
         gen = _make_generator(grammar)
         klass = _get_class_def(gen.py_class_for_model(class_name, gen.rule_models[rule_name], rule_name), class_name)
         fn = _find_function(klass, method)
         assert fn is not None, f"{method} not found on {class_name}"
         return ast.unparse(fn)
 
-    def test_span_children_without_labels_do_not_widen(self) -> None:
-        """Span-only, label-free: both surfaces spell the entry identically, so no escape hatch."""
-        src = self._append_source(_make_zero_label_grammar(), "foo", "Foo")
-        assert "typing.Any" not in src, src
-        assert "self.children.append((label, child))" in src, src
+    @staticmethod
+    def _label_check(class_name: str, *, labeled: bool, method: str) -> str:
+        if labeled:
+            return (
+                f"checked_label = label if label is None or isinstance(label, {class_name}.Label)"
+                f" else self._check_label_type_for_mutators(label, '{method}')"
+            )
+        return f"if label is not None:\n        self._check_label_type_for_mutators(label, '{method}')"
 
-    def test_labels_alone_widen(self) -> None:
-        """Span-only but labeled: the label slot is LabelProtocol on input, the enum in the list."""
-        src = self._append_source(_make_labeled_grammar(), "bar", "Bar")
-        assert "entry: typing.Any = (label, child)" in src, src
+    @pytest.mark.parametrize("method", ["append", "extend", "insert", "replace_at"])
+    def test_the_label_fast_path_is_inlined(self, method: str) -> None:
+        """The miss-only call keeps the parser's append path at one isinstance and no call."""
+        for grammar, rule, class_name, labeled in self._GRAMMARS:
+            src = self._method_source(grammar, rule, class_name, method=method)
+            assert self._label_check(class_name, labeled=labeled, method=method) in src, (method, class_name, src)
 
-    def test_rule_references_alone_widen(self) -> None:
-        """A rule-reference child widens even with no labels in the node."""
-        src = self._append_source(_rule_ref_grammar(labeled=False), "baz", "Baz")
-        assert "entry: typing.Any = (label, child)" in src, src
+    @pytest.mark.parametrize("method", ["append", "extend", "insert", "replace_at"])
+    def test_the_label_is_checked_before_the_child(self, method: str) -> None:
+        """One validation order on both backends: label, then child, then (where it exists) index."""
+        for grammar, rule, class_name, _labeled in self._GRAMMARS:
+            src = self._method_source(grammar, rule, class_name, method=method)
+            assert src.index("_check_label_type_for_mutators") < src.index("_check_child_type_for_mutators"), (
+                method,
+                class_name,
+                src,
+            )
 
-    def test_rule_references_and_labels_widen(self) -> None:
-        src = self._append_source(_rule_ref_grammar(labeled=True), "baz", "Baz")
-        assert "entry: typing.Any = (label, child)" in src, src
+    def test_append_stores_both_checkers_returns(self) -> None:
+        for grammar, rule, class_name, labeled in self._GRAMMARS:
+            src = self._method_source(grammar, rule, class_name)
+            label_expr = "checked_label" if labeled else "None"
+            assert "checked_child = self._check_child_type_for_mutators(child)" in src, src
+            assert f"self.children.append(({label_expr}, checked_child))" in src, src
+            assert "typing.Any" not in src, src
 
-    def test_per_label_mutators_widen_on_the_child_side_only(self) -> None:
-        """append_<label> supplies the concrete enum member itself, so only its child can widen."""
-        span_labeled = self._append_source(_make_labeled_grammar(), "bar", "Bar", method="append_name")
+    def test_extend_resolves_its_label_once_outside_the_comprehension(self) -> None:
+        """Resolving per element would repeat the lookup; a bad label must abort before any read."""
+        for grammar, rule, class_name, labeled in self._GRAMMARS:
+            src = self._method_source(grammar, rule, class_name, method="extend")
+            label_expr = "checked_label" if labeled else "None"
+            entries = f"[({label_expr}, self._check_child_type_for_mutators(child)) for child in children]"
+            assert f"self.children.extend({entries})" in src, src
+            assert "typing.Any" not in src, src
+
+    @pytest.mark.parametrize("method", ["insert", "replace_at"])
+    def test_the_strict_mutators_store_the_checked_child(self, method: str) -> None:
+        """They build their entry from the checker's return, not from the raw protocol-typed child."""
+        for grammar, rule, class_name, labeled in self._GRAMMARS:
+            src = self._method_source(grammar, rule, class_name, method=method)
+            label_expr = "checked_label" if labeled else "None"
+            stored = (
+                f"self.children.insert(idx, ({label_expr}, checked_child))"
+                if method == "insert"
+                else f"self.children[norm] = ({label_expr}, checked_child)"
+            )
+            assert "checked_child = self._check_child_type_for_mutators(child)" in src, src
+            assert stored in src, src
+            assert "typing.Any" not in src, src
+
+    def test_per_label_mutators_supply_the_member_and_check_the_child(self) -> None:
+        span_labeled = self._method_source(_make_labeled_grammar(), "bar", "Bar", method="append_name")
+        assert "self.children.append((Bar.Label.NAME, self._check_child_type_for_mutators(child)))" in span_labeled, (
+            span_labeled
+        )
         assert "typing.Any" not in span_labeled, span_labeled
 
-        rule_ref = self._append_source(_rule_ref_grammar(labeled=True), "baz", "Baz", method="append_inner")
-        assert "entry: typing.Any = (Baz.Label.INNER, child)" in rule_ref, rule_ref
+        rule_ref = self._method_source(_rule_ref_grammar(labeled=True), "baz", "Baz", method="append_inner")
+        assert "self.children.append((Baz.Label.INNER, self._check_child_type_for_mutators(child)))" in rule_ref, (
+            rule_ref
+        )
+        assert "typing.Any" not in rule_ref, rule_ref
 
-    def test_extend_children_widens_even_when_nothing_else_does(self) -> None:
-        """extend_children forces the escape hatch: its argument is always a protocol node.
-
-        `other: _cstp.Foo` is the protocol class even for the span-only, label-free node whose
-        derived flag is False, so `other.children` is a Sequence of protocol entries regardless.
-        Without the forced widening the emitted `self.children.extend(other.children)` is a pyright
-        error in every generated module — a failure that only surfaces in the repo-wide gate over
-        committed artifacts after a full `make gencode`, and never for a grammar shape not in-tree.
+    def test_extend_children_narrows_other_before_reading_its_children(self) -> None:
+        """`other: _cstp.Foo` is the protocol class, so without the guard `other.children` is a
+        Sequence of protocol entries and the emitted extend is a pyright error in every generated
+        module — a failure that only surfaces in the repo-wide gate over committed artifacts after
+        a full `make gencode`.  The guard is load-bearing statically as well as at runtime.
         """
-        src = self._append_source(_make_zero_label_grammar(), "foo", "Foo", method="extend_children")
-        assert "entries: typing.Any = other.children" in src, src
-        assert "self.children.extend(entries)" in src, src
+        for grammar, rule, class_name, _labeled in self._GRAMMARS:
+            src = self._method_source(grammar, rule, class_name, method="extend_children")
+            assert f"if not isinstance(other, {class_name}):" in src, src
+            assert "self.children.extend(other.children)" in src, src
+            assert "typing.Any" not in src, src
 
-    def test_extend_widens_with_the_node_like_append(self) -> None:
-        """extend takes the same entries as append, so it widens on the same derivation."""
-        plain = self._append_source(_make_zero_label_grammar(), "foo", "Foo", method="extend")
-        assert "typing.Any" not in plain, plain
 
-        widened = self._append_source(_rule_ref_grammar(labeled=True), "baz", "Baz", method="extend")
-        assert "entries: typing.Any = ((label, child) for child in children)" in widened, widened
+class TestChildCheckerShape:
+    """``_check_child_type_for_mutators`` proves the concrete type and says so, isinstance first."""
 
-    def test_insert_and_replace_at_widen_on_the_same_derivation(self) -> None:
-        """The two strict mutators build one entry each, hatched exactly when append is."""
-        for method in ("insert", "replace_at"):
-            plain = self._append_source(_make_zero_label_grammar(), "foo", "Foo", method=method)
-            assert "typing.Any" not in plain, (method, plain)
+    @staticmethod
+    def _checker_source(grammar: gsm.Grammar, rule_name: str, class_name: str) -> ast.FunctionDef:
+        gen = _make_generator(grammar)
+        klass = _get_class_def(gen.py_class_for_model(class_name, gen.rule_models[rule_name], rule_name), class_name)
+        fn = _find_function(klass, "_check_child_type_for_mutators")
+        assert fn is not None, f"_check_child_type_for_mutators not found on {class_name}"
+        return fn
 
-            widened = self._append_source(_rule_ref_grammar(labeled=True), "baz", "Baz", method=method)
-            assert "entry: typing.Any = (label, child)" in widened, (method, widened)
+    def test_the_return_type_is_the_concrete_child_union(self) -> None:
+        """The isinstance guard proves membership in the concrete classes; the annotation says so.
+
+        A protocol-typed return would push a `typing.Any` escape hatch into every entry every
+        mutator builds, leaving the label slot, the tuple arity and the element type unchecked in
+        every generated module.
+        """
+        fn = self._checker_source(_rule_ref_grammar(labeled=True), "baz", "Baz")
+        ret = _annotation_source(fn.returns)
+        assert gsm2tree_mod.PROTOCOL_MODULE_ALIAS not in ret, ret
+        assert "Foo" in ret, ret
+
+    def test_the_native_span_probe_is_off_the_success_path(self) -> None:
+        """A resolvable child returns from the first isinstance; nothing else runs on that path.
+
+        The checker is on the generated parser's construction path (every `append_<label>`), so the
+        lazy `fltk._native` lookup must sit on the miss branch, not ahead of the isinstance.
+        """
+        fn = self._checker_source(_make_zero_label_grammar(), "foo", "Foo")
+        src = ast.unparse(fn)
+        first = ast.unparse(fn.body[0])
+        assert first.startswith("if isinstance(child, "), first
+        assert "return child" in first, first
+        assert src.index("_get_native_span_type()") > src.index("return child"), src
+
+
+class TestLabelCheckerShape:
+    """``_check_label_type_for_mutators`` resolves a label to this node's own member.
+
+    A label carries no backend-specific storage — its identity is the canonical name, already the
+    cross-backend ``__eq__``/``__hash__`` key — so the checker matches by that name and returns the
+    node's own member.  The fast path stays a bare isinstance: it is on the generated parser's
+    construction path through every generic ``append``.
+    """
+
+    @staticmethod
+    def _class_def(grammar: gsm.Grammar, rule_name: str, class_name: str) -> ast.ClassDef:
+        gen = _make_generator(grammar)
+        return _get_class_def(gen.py_class_for_model(class_name, gen.rule_models[rule_name], rule_name), class_name)
+
+    def _checker(self, grammar: gsm.Grammar, rule_name: str, class_name: str) -> ast.FunctionDef:
+        fn = _find_function(self._class_def(grammar, rule_name, class_name), "_check_label_type_for_mutators")
+        assert fn is not None, f"_check_label_type_for_mutators not found on {class_name}"
+        return fn
+
+    def test_the_return_type_is_this_nodes_own_label(self) -> None:
+        """A protocol-typed return would hatch the label slot of every mutator's entry."""
+        fn = self._checker(_make_labeled_grammar(), "bar", "Bar")
+        ret = _annotation_source(fn.returns)
+        assert ret == "typing.Optional[Bar.Label]", ret
+
+    def test_a_label_free_node_still_returns_none(self) -> None:
+        fn = self._checker(_make_zero_label_grammar(), "foo", "Foo")
+        assert _annotation_source(fn.returns) == "None"
+
+    def test_the_canonical_name_lookup_is_off_the_success_path(self) -> None:
+        """Own member and None return from the first branch; nothing else runs on that path."""
+        fn = self._checker(_make_labeled_grammar(), "bar", "Bar")
+        src = ast.unparse(fn)
+        first = ast.unparse(fn.body[0])
+        assert first.startswith("if label is None or isinstance(label, Bar.Label):"), first
+        assert "return label" in first, first
+        assert src.index("_fltk_canonical_name") > src.index("return label"), src
+
+    def test_the_mapping_is_class_scoped_and_keyed_on_the_canonical_name(self) -> None:
+        """Cross-class resolution is impossible by construction: each class carries its own map.
+
+        Pinned on a three-label rule: a one-label rule cannot tell a correct name→member pairing
+        from one that collapses every name onto the first member, and a mispairing silently
+        relabels children on every multi-label node.
+        """
+        src = ast.unparse(self._class_def(_make_multi_label_grammar(), "bar", "Bar"))
+        expected = (
+            "_LABELS_BY_CANONICAL_NAME = types.MappingProxyType("
+            "{'Bar.Label.NAME': Label.NAME, 'Bar.Label.TAIL': Label.TAIL, 'Bar.Label.VALUE': Label.VALUE})"
+        )
+        assert expected in src, src
+        assert "Bar._LABELS_BY_CANONICAL_NAME.get(_canonical)" in src, src
+
+    def test_the_lookup_only_accepts_a_string_canonical_name(self) -> None:
+        """A dict lookup hashes anything; the Rust twin only ever extracts a `String`.
+
+        Without the guard an unhashable canonical name raises `unhashable type` on this backend
+        where the other backend raises the pinned TypeError.
+        """
+        fn = self._checker(_make_labeled_grammar(), "bar", "Bar")
+        src = ast.unparse(fn)
+        assert "if isinstance(_canonical, str):" in src, src
+        assert src.index("isinstance(_canonical, str)") < src.index("_LABELS_BY_CANONICAL_NAME.get"), src

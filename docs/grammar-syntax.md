@@ -179,7 +179,9 @@ Syntax: `label:term` (no space between label, colon, and term due to `.` separat
 
 Labels generate accessor methods in the CST node classes:
 - `child_name()` - returns single child
-- `children_name()` - returns list of children (for repeated items)
+- `children_name()` - returns a fresh single-pass iterator over the children carrying that
+  label (see the label accessor quintet in `docs/fltk-grammar-reference.md` for the full
+  contract; wrap it in `list(...)` if you need to iterate twice)
 
 ## Dispositions
 

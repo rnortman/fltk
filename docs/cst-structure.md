@@ -52,7 +52,7 @@ For each label in the rule, these methods are generated:
 |--------|-------------|-------------|
 | `append_{label}(child)` | `None` | Add child with this label |
 | `extend_{label}(children)` | `None` | Add multiple children with this label |
-| `children_{label}()` | `Iterator[ChildType]` | Iterate over children with this label |
+| `children_{label}()` | `Iterator[ChildType]` | Iterate over children with this label (fresh single-pass iterator over a call-time snapshot) |
 | `child_{label}()` | `ChildType` | Get single child with this label (raises if not exactly 1) |
 | `maybe_{label}()` | `Optional[ChildType]` | Get single child or `None` (raises if > 1) |
 

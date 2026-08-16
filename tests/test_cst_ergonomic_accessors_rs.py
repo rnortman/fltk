@@ -8,7 +8,8 @@ declarations in the ``.pyi`` stub.  These tests cover:
     panic-on-violated-invariant contract that distinguishes it from the checked quintet;
   * the pymethod surface — delegation to the quintet (hence identical ``ValueError`` text) and
     the absence of panics;
-  * the stub — return annotations that keep each class assignable to its protocol counterpart;
+  * the stub — protocol-wide parameters and stub-local returns, which keep each class assignable
+    to its protocol counterpart while still letting concrete annotations descend a tree;
   * cross-surface parity — pymethods, stub and protocol declare the same ergonomic members.
 """
 
@@ -224,9 +225,17 @@ class TestPymethodDelegation:
         block = pymethods_block(rust_src, "Doc")
         assert "-> pyo3::PyResult<::std::option::Option<Py<pyo3::PyAny>>> {\n        self.maybe_body(py)" in block
 
-    def test_collection_delegates_to_children_and_returns_a_list(self, rust_src: str) -> None:
+    def test_collection_delegates_to_the_snapshot_helper_and_returns_a_list(self, rust_src: str) -> None:
         block = pymethods_block(rust_src, "Doc")
-        assert "-> pyo3::PyResult<Py<pyo3::types::PyList>> {\n        self.children_tags(py)" in block
+        assert (
+            "-> pyo3::PyResult<Py<pyo3::types::PyList>> {\n"
+            "        self.py_children_snapshot(py, &DocLabel::Tags)" in block
+        )
+        assert "fn py_children_snapshot" not in block
+
+    def test_the_snapshot_helper_is_emitted_once_per_class(self, rust_src: str) -> None:
+        """The body is label-invariant, so it takes the label rather than being emitted per label."""
+        assert rust_src.count("fn py_children_snapshot(&self, py: Python<'_>, label: &DocLabel)") == 1
 
     def test_rust_keyword_label_keeps_its_python_name(self, rust_src: str) -> None:
         assert '#[pyo3(name = "match")]\n    fn r#match(' in pymethods_block(rust_src, "Kwlbl")
@@ -285,14 +294,48 @@ class TestPymethodRuleMembers:
 
 
 class TestPyiEmission:
+    """Node-typed returns name the stub's own classes; only parameters stay protocol-wide.
+
+    A consumer annotated against these classes can descend the tree with the accessors, which a
+    ``_proto.``-qualified return would forbid.
+    """
+
     def test_required_single(self, pyi_text: str) -> None:
-        assert stub_signature(pyi_text, "Doc", "name") == "def name(self) -> _proto.Ident:"
+        assert stub_signature(pyi_text, "Doc", "name") == "def name(self) -> Ident:"
 
     def test_optional_single(self, pyi_text: str) -> None:
-        assert stub_signature(pyi_text, "Doc", "body") == "def body(self) -> typing.Optional[_proto.Block]:"
+        assert stub_signature(pyi_text, "Doc", "body") == "def body(self) -> typing.Optional[Block]:"
 
     def test_collection(self, pyi_text: str) -> None:
-        assert stub_signature(pyi_text, "Doc", "tags") == "def tags(self) -> list[_proto.Tag]:"
+        assert stub_signature(pyi_text, "Doc", "tags") == "def tags(self) -> list[Tag]:"
+
+    def test_accessor_quintet_splits_parameters_from_returns(self, pyi_text: str) -> None:
+        """The quintet carries both positions for one label, so it pins the rule end to end."""
+        assert stub_signature(pyi_text, "Doc", "append_tags") == "def append_tags(self, child: _proto.Tag) -> None:"
+        assert (
+            stub_signature(pyi_text, "Doc", "extend_tags")
+            == "def extend_tags(self, children: typing.Iterable[_proto.Tag]) -> None:"
+        )
+        assert stub_signature(pyi_text, "Doc", "children_tags") == "def children_tags(self) -> typing.Iterator[Tag]:"
+        assert stub_signature(pyi_text, "Doc", "child_tags") == "def child_tags(self) -> Tag:"
+        assert stub_signature(pyi_text, "Doc", "maybe_tags") == "def maybe_tags(self) -> typing.Optional[Tag]:"
+
+    def test_generic_mutators_and_readers_split_the_same_way(self, pyi_text: str) -> None:
+        klass = class_defs(pyi_text)["Doc"]
+        children = next(
+            stmt for stmt in klass.body if isinstance(stmt, ast.AnnAssign) and ast.unparse(stmt.target) == "children"
+        )
+        assert "_proto." not in ast.unparse(children.annotation)
+        assert "_proto." not in stub_signature(pyi_text, "Doc", "child")
+        assert "_proto." not in stub_signature(pyi_text, "Doc", "remove_at")
+        assert "_proto." in stub_signature(pyi_text, "Doc", "append")
+        assert "_proto." in stub_signature(pyi_text, "Doc", "insert")
+        assert "_proto." in stub_signature(pyi_text, "Doc", "replace_at")
+        # extend_children is the one parameter that names a whole node rather than a child union.
+        assert (
+            stub_signature(pyi_text, "Doc", "extend_children")
+            == "def extend_children(self, other: _proto.Doc) -> None:"
+        )
 
     def test_text_accessors(self, pyi_text: str) -> None:
         assert stub_signature(pyi_text, "Tag", "name_text") == "def name_text(self) -> str:"

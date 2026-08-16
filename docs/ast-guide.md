@@ -93,6 +93,10 @@ uv run python -m fltk.fegen.genparser gen-ast  calc.fltkg calc calc.calc_cst \
 and keyed against it, which is what lets one AST layer convert a CST from either the Python or the
 Rust backend.
 
+Converting at the parse boundary is one of three ways to keep your own code backend-portable; the
+other two annotate CST-reading code against the protocol module or against one concrete backend.
+See §10.6 of `fltk-grammar-reference.md` for what each style costs.
+
 ```python
 from calc.calc_ast import parse, ExprBinary
 

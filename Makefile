@@ -111,6 +111,8 @@ typecheck:
 # Aggregate target: build every native extension the Python test suite requires.
 # Wire this as a prerequisite of `test` so `make test` and `make check` (which
 # calls $(MAKE) test) always build fixtures before running pytest — no stale-SO risk.
+# TODO(bazel-test-fixture-builds): these ad-hoc builds sit outside any dependency graph, so a
+# bare `uv run pytest` after a generator change tests stale cdylibs.
 build-test-fixtures: build-native build-test-user-ext build-fegen-rust-cst build-rust-parser-fixture build-poc-cst
 
 test: build-test-fixtures

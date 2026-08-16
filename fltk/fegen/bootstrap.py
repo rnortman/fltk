@@ -1,3 +1,15 @@
+"""The hand-written GSM for the bootstrap grammar.
+
+The GSM constant below is the chicken-and-egg breaker: it is the only way to regenerate
+``bootstrap_parser.py`` if it is ever lost, because every other path needs a working
+``bootstrap_parser`` to read a grammar file at all.  Run it as
+``python -m fltk.fegen.bootstrap <parser_file> <cst_file> <cst_module_name>``; the modules
+themselves are written by ``fltk.fegen.emit``.
+
+It is a seed, not the source of truth: the committed ``bootstrap_*`` modules are generated from
+``bootstrap.fltkg``, and this constant's output is not expected to be byte-identical to them.
+"""
+
 from fltk.fegen import gsm
 
 rules = [
@@ -458,47 +470,11 @@ rules = [
 
 grammar = gsm.Grammar(rules=rules, identifiers={rule.name: rule for rule in rules})
 
+
 if __name__ == "__main__":
     import sys
 
-    import astor  # type: ignore
-
-    from fltk import pygen
-    from fltk.fegen import gsm2parser, gsm2tree, naming
-    from fltk.iir.context import create_default_context
-    from fltk.iir.py import compiler
-    from fltk.iir.py import reg as pyreg
+    from fltk.fegen import emit
 
     parser_filename, cst_filename, cst_module_name = sys.argv[1:]
-
-    # Create a context for this parser generation
-    context = create_default_context()
-
-    cst_module = pyreg.Module(cst_module_name.split("."))
-    cstgen = gsm2tree.CstGenerator(grammar=grammar, py_module=cst_module, context=context)
-    pgen = gsm2parser.ParserGenerator(grammar=grammar, cstgen=cstgen, context=context)
-
-    parser_ast = compiler.compile_class(pgen.parser_class, context)
-    imports = [
-        pyreg.Module(("collections", "abc")),
-        pyreg.Module(("typing",)),
-        pyreg.Module(("fltk", "fegen", "pyrt", "errors")),
-        pyreg.Module(("fltk", "fegen", "pyrt", "memo")),
-        cst_module,
-    ]
-
-    parser_mod = pygen.module(module.import_path for module in imports)
-    parser_mod.body.append(parser_ast)
-
-    with open(parser_filename, "w") as parser_file:
-        parser_file.write(astor.to_source(parser_mod))
-
-    cst_mod = cstgen.gen_py_module(naming.protocol_module_name(cst_module_name))
-    with open(cst_filename, "w") as cst_file:
-        cst_file.write(astor.to_source(cst_mod))
-
-    # The CST module imports NodeKind from its protocol module, so the pair must be written
-    # together: a fresh CST module beside a stale protocol module fails at import (or silently
-    # reuses the wrong NodeKind members) as soon as the grammar's rule set changes.
-    with open(naming.protocol_module_path(cst_filename), "w") as protocol_file:
-        protocol_file.write(cstgen.gen_protocol_module_text())
+    emit.write_generated_modules(grammar, parser_filename, cst_filename, cst_module_name)

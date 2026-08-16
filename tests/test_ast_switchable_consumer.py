@@ -11,6 +11,10 @@ protocol module and committed Rust stubs:
 * **switchable-import consumer** — two copies of one source whose *only* difference is the backend
   import line, with parameters annotated ``cst.<Class>``.  It converts at the boundary and descends
   in AST space, which is how a consumer of the AST layer is meant to be written.
+* **concrete-annotated CST descent** — the same two-copies shape, but it never reaches the AST
+  layer: it walks the CST with the accessors while every parameter is annotated ``cst.<Class>``.
+  This is the shape that binds accessor *return* types, so it type-checks on the Rust backend only
+  because the stub declares returns as its own classes rather than protocol types.
 
 The static half runs pyright over both shapes plus a freshly generated fegen AST module; the
 runtime half executes the switchable source against a real parse from each backend and compares the
@@ -182,6 +186,69 @@ def grammar_summary(grammar: cst.Grammar) -> list[str]:
     return [describe_rule(rule) for rule in fegen_ast.Grammar.from_cst(grammar).rule]
 '''
 
+_CST_DESCENT_TEMPLATE = '''\
+# ruff: noqa
+"""A grammar summariser that stays in CST space, typed against one concrete backend.
+
+Every parameter is annotated ``cst.<Class>``, and every argument passed to those parameters is an
+accessor result.  So the file type-checks only where the accessors are declared to return the
+backend's own classes: a protocol-typed return is not assignable to a concrete parameter.
+
+Label-typed positions are read but never annotated here, because they are the positions this style
+does *not* make portable: ``variant()`` and the label half of ``children`` are protocol-typed on the
+Rust stub and concrete enums on the Python backend, so an annotation naming either would bind the
+file to one backend.
+"""
+
+from __future__ import annotations
+
+@BACKEND_IMPORT@
+
+
+def term_summary(term: cst.Term) -> str:
+    identifier = term.identifier()
+    if identifier is not None:
+        return "ref:" + identifier.text()
+    literal = term.literal()
+    if literal is not None:
+        return "lit:" + literal.text()
+    regex = term.regex()
+    if regex is not None:
+        return "re:" + regex.value_text()
+    return "alt:" + str(len(term.child_alternatives().items()))
+
+
+def item_summary(item: cst.Item) -> str:
+    label = item.label()
+    quantifier = item.quantifier()
+    return (
+        ("" if label is None else label.text() + ":")
+        + term_summary(item.child_term())
+        + ("" if quantifier is None else quantifier.text())
+    )
+
+
+def items_summary(items: cst.Items) -> list[str]:
+    return [item_summary(item) for item in items.item()]
+
+
+def rule_name(rule: cst.Rule) -> str:
+    """Reads the raw children tuple, whose element type is the backend's own class union."""
+    for _label, child in rule.children:
+        if isinstance(child, cst.Identifier):
+            return child.name_text()
+    return "?"
+
+
+def rule_summary(rule: cst.Rule) -> str:
+    parts = [part for items in rule.alternatives().items() for part in items_summary(items)]
+    return rule_name(rule) + "=" + "|".join(parts)
+
+
+def grammar_summary(grammar: cst.Grammar) -> list[str]:
+    return [rule_summary(rule) for rule in grammar.rule()]
+'''
+
 _CONSUMER_BAD = """\
 # ruff: noqa
 from __future__ import annotations
@@ -203,8 +270,14 @@ def _with_backend(template: str, backend_import: str) -> str:
 
 _PROTOCOL_TYPED_FIXTURES = ("consumer_shared.py", "consumer_py.py", "consumer_rs.py")
 _SWITCHABLE_FIXTURES = ("switchable_py.py", "switchable_rs.py")
+_CST_DESCENT_FIXTURES = ("cst_descent_py.py", "cst_descent_rs.py")
 _NEGATIVE_FIXTURE = "consumer_bad.py"
-_STATIC_FIXTURES = (*_PROTOCOL_TYPED_FIXTURES, *_SWITCHABLE_FIXTURES, _NEGATIVE_FIXTURE)
+_POSITIVE_FIXTURES = (
+    *_PROTOCOL_TYPED_FIXTURES,
+    *_SWITCHABLE_FIXTURES,
+    *_CST_DESCENT_FIXTURES,
+)
+_STATIC_FIXTURES = (*_POSITIVE_FIXTURES, _NEGATIVE_FIXTURE)
 
 
 def _write_fixture_dir(target: pathlib.Path, *, include_static_only: bool) -> None:
@@ -220,6 +293,8 @@ def _write_fixture_dir(target: pathlib.Path, *, include_static_only: bool) -> No
     (target / "switchable_py.py").write_text(_with_backend(_SWITCHABLE_TEMPLATE, _PY_BACKEND_IMPORT))
     (target / "switchable_rs.py").write_text(_with_backend(_SWITCHABLE_TEMPLATE, _RS_BACKEND_IMPORT))
     (target / "consumer_shared.py").write_text(_CONSUMER_SHARED)
+    (target / "cst_descent_py.py").write_text(_with_backend(_CST_DESCENT_TEMPLATE, _PY_BACKEND_IMPORT))
+    (target / "cst_descent_rs.py").write_text(_with_backend(_CST_DESCENT_TEMPLATE, _RS_BACKEND_IMPORT))
     if include_static_only:
         (target / "consumer_py.py").write_text(_with_backend(_CONSUMER_BACKEND, _PY_BACKEND_IMPORT))
         (target / "consumer_rs.py").write_text(_with_backend(_CONSUMER_BACKEND, _RS_BACKEND_IMPORT))
@@ -251,28 +326,26 @@ def consumer_diagnostics(
     return _run_pyright_over_dir(tmpdir, pyright_available=pyright_available)
 
 
-@pytest.mark.parametrize("fixture", _PROTOCOL_TYPED_FIXTURES)
-def test_a_protocol_typed_consumer_takes_either_backend(
+@pytest.mark.parametrize("fixture", _POSITIVE_FIXTURES)
+def test_every_consumer_shape_type_checks(
     consumer_diagnostics: dict[str, list[dict[str, typing.Any]]],
     fixture: str,
 ) -> None:
+    """Each of the three shapes in the module docstring, on each backend it is written for.
+
+    `consumer_*` is the protocol-typed shape, `switchable_*` converts at the boundary, and
+    `cst_descent_*` descends the CST with concrete annotations — which type-checks on the Rust
+    backend only because the stub's accessor returns are its own classes.
+    """
     errors = _diags_for_file(consumer_diagnostics, fixture)
     assert errors == [], f"{fixture} does not type-check:\n{errors}"
 
 
-@pytest.mark.parametrize("fixture", _SWITCHABLE_FIXTURES)
-def test_the_switchable_import_consumer_type_checks_on_both_backends(
-    consumer_diagnostics: dict[str, list[dict[str, typing.Any]]],
-    fixture: str,
-) -> None:
-    errors = _diags_for_file(consumer_diagnostics, fixture)
-    assert errors == [], f"{fixture} does not type-check:\n{errors}"
-
-
-def test_the_two_switchable_copies_differ_only_in_the_backend_import() -> None:
+@pytest.mark.parametrize("template", [_SWITCHABLE_TEMPLATE, _CST_DESCENT_TEMPLATE], ids=["switchable", "cst_descent"])
+def test_the_two_backend_copies_differ_only_in_the_backend_import(template: str) -> None:
     """The claim the two fixtures above make is only worth anything if the sources really match."""
-    python_lines = _with_backend(_SWITCHABLE_TEMPLATE, _PY_BACKEND_IMPORT).splitlines()
-    rust_lines = _with_backend(_SWITCHABLE_TEMPLATE, _RS_BACKEND_IMPORT).splitlines()
+    python_lines = _with_backend(template, _PY_BACKEND_IMPORT).splitlines()
+    rust_lines = _with_backend(template, _RS_BACKEND_IMPORT).splitlines()
     assert len(python_lines) == len(rust_lines)
     differing = [(left, right) for left, right in zip(python_lines, rust_lines, strict=True) if left != right]
     assert differing == [(_PY_BACKEND_IMPORT, _RS_BACKEND_IMPORT)]
@@ -323,7 +396,12 @@ def switchable_modules(tmp_path_factory: pytest.TempPathFactory) -> Iterator[dic
     tmpdir = tmp_path_factory.mktemp("ast_switchable_runtime")
     _write_fixture_dir(tmpdir, include_static_only=False)
     sys.path.insert(0, str(tmpdir))
-    names = ["consumer_shared", "switchable_py", *(["switchable_rs"] if _rust_available else [])]
+    names = [
+        "consumer_shared",
+        "switchable_py",
+        "cst_descent_py",
+        *(["switchable_rs", "cst_descent_rs"] if _rust_available else []),
+    ]
     try:
         yield {name: importlib.import_module(name) for name in names}
     finally:
@@ -405,6 +483,30 @@ def test_the_protocol_typed_consumer_descends_either_backends_tree(
     tree = _python_cst(_GRAMMAR_TEXT, "grammar") if backend == "python" else _rust_cst(_GRAMMAR_TEXT, "grammar")
     expected = switchable_modules["switchable_py"].grammar_summary(_python_cst(_GRAMMAR_TEXT, "grammar"))
     assert switchable_modules["consumer_shared"].grammar_summary(tree) == expected
+
+
+def test_the_cst_descent_summarises_a_python_backed_tree(
+    switchable_modules: dict[str, types.ModuleType],
+) -> None:
+    """Sanity floor for the pure-CST descent: the accessors it names really do exist and read."""
+    summary = switchable_modules["cst_descent_py"].grammar_summary(_python_cst(_GRAMMAR_TEXT, "grammar"))
+    assert summary == [
+        "word=value:re:[a-z]+",
+        'atom=name:ref:word|lit:lit:"x"',
+        "items=item:ref:atom+|tail:ref:atom?",
+        "group=inner:alt:1",
+        'kw=lit:"hello"',
+    ]
+
+
+@_needs_rust
+def test_both_backends_descend_the_cst_identically(
+    switchable_modules: dict[str, types.ModuleType],
+) -> None:
+    """The runtime companion to the static claim: one source, either backend, same answer."""
+    from_python = switchable_modules["cst_descent_py"].grammar_summary(_python_cst(_GRAMMAR_TEXT, "grammar"))
+    from_rust = switchable_modules["cst_descent_rs"].grammar_summary(_rust_cst(_GRAMMAR_TEXT, "grammar"))
+    assert from_python == from_rust
 
 
 @_needs_rust

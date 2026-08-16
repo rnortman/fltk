@@ -125,6 +125,23 @@ def _make_minimal_grammar() -> gsm.Grammar:
     )
 
 
+def _identifier_mutator_body(source: str, method: str) -> str:
+    """The body of one `PyIdentifier` mutator, sliced within that class's pymethods block.
+
+    Class-scoped rather than first-occurrence: a method signature such as `fn append(` appears
+    once per node class, so a file-global `index()` would silently span other classes as soon as a
+    rule sorting before `identifier` is added to the grammar.
+    """
+    impl_at = source.index("#[pymethods]\nimpl PyIdentifier {")
+    impl_end = source.index("\n}\n", impl_at)
+    impl_block = source[impl_at:impl_end]
+    start = impl_block.index(f"    fn {method}(")
+    end = impl_block.find("\n    fn ", start + 1)
+    body = impl_block[start:] if end == -1 else impl_block[start:end]
+    assert body.strip(), (method, "empty slice — the anchors no longer bracket the method body")
+    return body
+
+
 # ---------------------------------------------------------------------------
 # Fixtures
 # ---------------------------------------------------------------------------
@@ -345,6 +362,53 @@ class TestPocGrammarLabels:
     def test_label_eq_uses_canonical_name_marker(self, poc_source: str) -> None:
         """__eq__ must read _fltk_canonical_name from the operand (duck-typed marker)."""
         assert '"_fltk_canonical_name"' in poc_source
+
+    def test_label_from_canonical_name_covers_every_variant(self, poc_source: str) -> None:
+        """The mutators resolve a foreign label spelling through this map, so it must be total."""
+        assert "fn from_canonical_name(name: &str) -> ::std::option::Option<Self> {" in poc_source
+        for member, variant in (("ITEM", "Item"), ("NO_WS", "NoWs"), ("WS_ALLOWED", "WsAllowed")):
+            assert f'"Items.Label.{member}" => Some(ItemsLabel::{variant}),' in poc_source
+
+    def test_label_from_canonical_name_is_not_python_visible(self, poc_source: str) -> None:
+        """It backs the mutators' failure path; exposing it would be a second label API.
+
+        The assertion is on what *precedes* the impl block: `#[pymethods]` is an outer attribute,
+        so it can only ever sit on the line above `impl`, never inside the body.
+        """
+        start = poc_source.index("impl IdentifierLabel {\n    /// The variant with")
+        preceding = poc_source[:start].splitlines()[-2:]
+        assert preceding[-1] == '#[cfg(feature = "python")]', preceding
+        assert "#[pymethods]" not in preceding, preceding
+
+    def test_label_resolution_is_off_the_extract_success_path(self, poc_source: str) -> None:
+        """Own-enum extraction stays a bare `extract`; the getattr sits on the miss branch.
+
+        The parser's own appends pay one `extract` and no Python attribute lookup.
+        """
+        region = _identifier_mutator_body(poc_source, "append")
+        extract_at = region.index("if let Ok(native_lbl) = bound.extract::<IdentifierLabel>() {")
+        miss_branch_at = region.index("} else {", extract_at)
+        getattr_at = region.index('.getattr(pyo3::intern!(py, "_fltk_canonical_name"))')
+        assert extract_at < miss_branch_at < getattr_at, region
+
+    def test_only_a_missing_attribute_falls_through_to_the_type_error(self, poc_source: str) -> None:
+        """A raising `_fltk_canonical_name` must surface, not be reported as a bad label type."""
+        assert "Err(e) if e.is_instance_of::<PyAttributeError>(py) => None," in poc_source
+        assert "Err(e) => return Err(e)," in poc_source
+
+    @pytest.mark.parametrize("method", ["append", "insert", "replace_at", "extend"])
+    def test_every_label_taking_mutator_resolves_the_label_before_the_child(self, poc_source: str, method: str) -> None:
+        """One validation order across mutators and backends, so error precedence has no cases."""
+        body = _identifier_mutator_body(poc_source, method)
+        label_error_at = body.index(f'"Identifier.{method}: label argument is not a Identifier_Label')
+        assert "extract_from_pyobject" not in body[:label_error_at], (method, body)
+
+    @pytest.mark.parametrize("method", ["append", "insert", "replace_at", "extend"])
+    def test_no_fallible_work_precedes_the_label_check(self, poc_source: str, method: str) -> None:
+        """`get_span_type` is fallible, so running it first would preempt the label TypeError."""
+        body = _identifier_mutator_body(poc_source, method)
+        label_error_at = body.index(f'"Identifier.{method}: label argument is not a Identifier_Label')
+        assert "get_span_type" not in body[:label_error_at], (method, body)
 
     def test_allow_non_camel_case_types(self, poc_source: str) -> None:
         # Label enums are CamelCase (IdentifierLabel, etc.); verify Rust names are idiomatic.
@@ -850,6 +914,17 @@ class TestEmptyLabelEnumOmitted:
         source = gen.generate()
         assert "Foo_Label" not in source
 
+    def test_zero_label_rule_omits_children_snapshot_helper(self) -> None:
+        """The helper takes `&Foo_Label`, which a label-free rule does not have."""
+        gen = RustCstGenerator(_make_zero_label_grammar())
+        source = gen.generate()
+        # The generator's own _trivia rule has labels, so the helper exists elsewhere in the
+        # file; scope the assertion to PyFoo's impl blocks.
+        blocks = re.findall(r"impl PyFoo \{(.+?)\n\}", source, re.DOTALL)
+        assert blocks, "impl PyFoo { ... } blocks not found in generated source"
+        for block in blocks:
+            assert "py_children_snapshot" not in block
+
     def test_zero_label_rule_still_emits_struct(self) -> None:
         gen = RustCstGenerator(_make_zero_label_grammar())
         source = gen.generate()
@@ -1291,17 +1366,31 @@ class TestGeneratePyiClasses:
         """Label-free node children: list[tuple[None, <child_ann>]]."""
         assert "list[tuple[None," in zero_label_pyi
 
-    def test_no_stub_local_class_names_in_annotations(self, poc_pyi: str) -> None:
-        """No quoted rule-ref annotations ('"ClassName"') — all replaced with _proto.ClassName."""
+    def test_no_quoted_rule_refs_in_annotations(self, poc_pyi: str) -> None:
+        """Rule references are never quoted: parameters read `_proto.ClassName`, returns bare.
+
+        Node-typed parameters are protocol-wide (`_proto.ClassName`) and node-typed returns are the
+        stub's own classes (bare `ClassName`, a legal forward reference in a `.pyi`). Neither
+        spelling is quoted.
+        """
         import re  # noqa: PLC0415
 
-        assert not re.search(r'"[A-Z][A-Za-z0-9_]*"', poc_pyi), (
-            "Found quoted class name in .pyi; should be _proto-qualified"
-        )
+        assert not re.search(r'"[A-Z][A-Za-z0-9_]*"', poc_pyi), "Found quoted class name in .pyi"
         # This check catches the quoted-string form produced under `from __future__ import
-        # annotations`; a hypothetical bare (unquoted) uppercase name in an annotation context
-        # would not be caught here but would be flagged by the pyright conformance tests.
-        # The pyright conformance tests are the authoritative guard; this is a fast pre-pyright lint only.
+        # annotations`. The pyright conformance tests are the authoritative guard on the
+        # parameter/return split itself; this is a fast pre-pyright lint only.
+
+    def test_returns_are_stub_local_and_parameters_are_proto(self, poc_pyi: str) -> None:
+        """The split, on the generic members of the one PoC node with node-typed children."""
+        node_union = "typing.Union[Identifier, Trivia, fltk.fegen.pyrt.span_protocol.SpanProtocol]"
+        proto_union = "typing.Union[_proto.Identifier, _proto.Trivia, fltk.fegen.pyrt.span_protocol.SpanProtocol]"
+        label = "typing.Optional[fltk.fegen.pyrt.label_protocol.LabelProtocol]"
+
+        assert f"def child(self) -> tuple[{label}, {node_union}]: ..." in poc_pyi
+        assert f"def remove_at(self, index: int) -> tuple[{label}, {node_union}]: ..." in poc_pyi
+        assert f"    children: list[tuple[{label}, {node_union}]]" in poc_pyi
+        assert f"def append(self, child: {proto_union}, label: {label} = ...) -> None: ..." in poc_pyi
+        assert f"def insert(self, index: int, child: {proto_union}, label: {label} = ...) -> None: ..." in poc_pyi
 
     def test_extend_children_present(self, poc_pyi: str) -> None:
         """extend_children uses _proto.ClassName (not stub-local) to avoid contravariance errors."""
@@ -1326,13 +1415,22 @@ class TestGeneratePyiPerLabelAccessors:
         assert "def extend_name(self, children:" in poc_pyi
 
     def test_children_label_typed_iterator(self, poc_pyi: str) -> None:
-        """children_<label> must be Iterator[T], NOT list[T]."""
+        """children_<label> must be Iterator[T], NOT list[T]; T is the stub's own class."""
         assert "def children_name(self) -> typing.Iterator[" in poc_pyi
-        # Must not be list
         assert "def children_name(self) -> list[" not in poc_pyi
+        assert "def children_item(self) -> typing.Iterator[Identifier]: ..." in poc_pyi
 
     def test_child_label_method_present(self, poc_pyi: str) -> None:
         assert "def child_name(self)" in poc_pyi
+
+    def test_node_typed_label_accessors_return_stub_local_classes(self, poc_pyi: str) -> None:
+        """The quintet's readers and the bare accessor return the stub's class; the writers take
+        the protocol's."""
+        assert "def child_item(self) -> Identifier: ..." in poc_pyi
+        assert "def maybe_item(self) -> typing.Optional[Identifier]: ..." in poc_pyi
+        assert "def item(self) -> Identifier: ..." in poc_pyi
+        assert "def append_item(self, child: _proto.Identifier) -> None: ..." in poc_pyi
+        assert "def extend_item(self, children: typing.Iterable[_proto.Identifier]) -> None: ..." in poc_pyi
 
     def test_maybe_label_method_present(self, poc_pyi: str) -> None:
         assert "def maybe_name(self)" in poc_pyi

@@ -146,15 +146,16 @@ class TestAppendChildRoundtrip:
         [(cls, suffix, factory) for cls, _, suffix, factory in CLASS_LABEL_INFO],
         ids=ALL_CLASS_IDS,
     )
-    def test_children_label_returns_list(self, cls: type, method_suffix: str, child_factory) -> None:
-        """AC-8: children_{label} returns a list containing value-equal appended children."""
+    def test_children_label_returns_an_iterator(self, cls: type, method_suffix: str, child_factory) -> None:
+        """AC-8: children_{label} iterates value-equal appended children, in order."""
         parent = cls()
         child1 = child_factory()
         child2 = child_factory()
         getattr(parent, f"append_{method_suffix}")(child1)
         getattr(parent, f"append_{method_suffix}")(child2)
-        result = getattr(parent, f"children_{method_suffix}")()
-        assert isinstance(result, list)
+        got = getattr(parent, f"children_{method_suffix}")()
+        assert iter(got) is got
+        result = list(got)
         assert len(result) == 2
         # Value equality (==) rather than identity (is): native storage clones on extraction.
         assert result[0] == child1
@@ -236,8 +237,7 @@ class TestExtendAndMaybe:
         child1 = child_factory()
         child2 = child_factory()
         getattr(parent, f"extend_{method_suffix}")([child1, child2])
-        result = getattr(parent, f"children_{method_suffix}")()
-        assert isinstance(result, list)
+        result = list(getattr(parent, f"children_{method_suffix}")())
         assert len(result) == 2
         # Value equality (==) rather than identity (is): native storage clones on extraction.
         assert result[0] == child1

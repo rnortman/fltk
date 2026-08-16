@@ -5,6 +5,36 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Changed
+
+- Generated CST mutators (`append`, `extend`, `extend_children`, `append_<label>`,
+  `extend_<label>`, `insert`, `replace_at`) now validate every child on both backends and raise
+  `TypeError` on a value the node cannot hold, where the Python backend previously stored it and
+  failed far away in the unparser or a converter. Children must be backend-native: pass the
+  backend's own node classes and its own span type (`fltk.fegen.pyrt.terminalsrc.Span` for the
+  Python backend, `fltk._native.Span` for the Rust backend) rather than a structural
+  implementation of the protocol. Labels, by contrast, are now matched by canonical name and
+  normalized, so a protocol label sentinel or the other backend's enum member is accepted
+  everywhere it type-checks — a relaxation.
+- Rust generated `children_<label>()` returns a fresh single-pass iterator instead of a `list`,
+  matching the `Iterator[T]` its stub and the generated protocol module have always declared and
+  matching the Python backend. If you index or re-iterate the result, wrap it:
+  `list(node.children_<label>())`. The bare `<label>()` accessor still returns a `list`.
+  The Python backend's return type is unchanged, but its semantics moved: the iterator is now
+  over a snapshot taken at call time, where it previously read `self.children` lazily as it was
+  consumed. Children appended or removed after the call are no longer observed by an iterator
+  already in flight.
+- Generated `.pyi` stubs for a Rust CST extension annotate node-typed *return* positions with the
+  stub's own concrete classes instead of the protocol classes, so code annotated against one
+  backend's concrete node types can descend a tree with the accessors on either backend.
+  Parameter positions keep the protocol annotations. Returns only narrowed, so existing
+  annotations stay valid.
+- Multi-valued accessors on the generated protocol module are declared `typing.Sequence`, not
+  `list`. Protocol-typed code that mutated an accessor result in place must copy it into a
+  `list` first.
+
 ## [0.5.0] - 2026-08-06
 
 ### Added
@@ -305,7 +335,8 @@ cleanups and modernization.
 - Support for left-recursive grammars
 - Development tooling with ruff, pyright, and pytest
 
-[Unreleased]: https://github.com/rnortman/fltk/compare/v0.4.0...HEAD
+[Unreleased]: https://github.com/rnortman/fltk/compare/v0.5.0...HEAD
+[0.5.0]: https://github.com/rnortman/fltk/compare/v0.4.0...v0.5.0
 [0.4.0]: https://github.com/rnortman/fltk/compare/v0.3.0...v0.4.0
 [0.3.0]: https://github.com/rnortman/fltk/compare/v0.2.0...v0.3.0
 [0.2.0]: https://github.com/rnortman/fltk/compare/v0.1.1...v0.2.0

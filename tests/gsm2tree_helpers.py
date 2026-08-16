@@ -64,6 +64,33 @@ def make_labeled_grammar() -> gsm.Grammar:
     return gsm.Grammar(rules=(rule,), identifiers={"bar": rule})
 
 
+def make_multi_label_grammar() -> gsm.Grammar:
+    """Grammar with a single rule carrying three distinct labels.
+
+    A one-label rule cannot distinguish a correct canonical-name → member pairing from one that
+    collapses every name onto the first member, so generator shape pins on the label mapping need
+    a rule with several labels.
+    """
+    rule = gsm.Rule(
+        name="bar",
+        alternatives=[
+            gsm.Items(
+                items=[
+                    gsm.Item(
+                        label=label,
+                        disposition=gsm.Disposition.INCLUDE,
+                        term=gsm.Regex(r"[a-z]+"),
+                        quantifier=gsm.REQUIRED,
+                    )
+                    for label in ("name", "value", "tail")
+                ],
+                sep_after=[gsm.Separator.NO_WS] * 3,
+            ),
+        ],
+    )
+    return gsm.Grammar(rules=(rule,), identifiers={"bar": rule})
+
+
 def make_rule_ref_grammar(*, labeled: bool) -> gsm.Grammar:
     """``foo := $"x"."y";`` plus a rule referencing it, with or without a label."""
     foo = make_zero_label_grammar().rules[0]

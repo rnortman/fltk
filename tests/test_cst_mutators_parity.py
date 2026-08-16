@@ -23,7 +23,9 @@ are in the per-backend sections below (excluded from the exact-parity matrix).
 from __future__ import annotations
 
 import ast
+import subprocess
 import sys
+import textwrap
 
 import pytest
 
@@ -511,20 +513,25 @@ class TestErrorBehavior:
         with pytest.raises(TypeError):
             node.insert("not_an_int", _span(backend, 0, 1))  # type: ignore[arg-type]
 
-    def test_bad_child_wins_over_bad_label_insert(self, backend: str) -> None:
-        """insert: when both child and label are invalid, child TypeError is raised first."""
-        mod = _mod(backend)
-        node = mod.Identifier()
-        with pytest.raises(TypeError, match="unsupported child type"):
-            node.insert(0, "not_a_span", label="bad_label")  # type: ignore[arg-type]
+    @pytest.mark.parametrize("mutator", ["append", "extend", "insert", "replace_at"])
+    def test_bad_label_wins_over_bad_child(self, backend: str, mutator: str) -> None:
+        """One validation order everywhere: the label is resolved before the child is looked at.
 
-    def test_bad_child_wins_over_bad_label_replace_at(self, backend: str) -> None:
-        """replace_at: when both child and label are invalid, child TypeError is raised first."""
+        Error precedence is the only thing this decides for `append` / `extend` (neither can
+        mutate partially), which is exactly why it should not vary per mutator.
+        """
         mod = _mod(backend)
         node = mod.Identifier()
         node.append_name(_span(backend, 0, 1))
-        with pytest.raises(TypeError, match="unsupported child type"):
-            node.replace_at(0, "not_a_span", label="bad_label")  # type: ignore[arg-type]
+        calls = {
+            "append": lambda: node.append("not_a_span", label="bad_label"),
+            "extend": lambda: node.extend(["not_a_span"], label="bad_label"),
+            "insert": lambda: node.insert(0, "not_a_span", label="bad_label"),
+            "replace_at": lambda: node.replace_at(0, "not_a_span", label="bad_label"),
+        }
+        with pytest.raises(TypeError, match="label argument is not a Identifier_Label"):
+            calls[mutator]()
+        assert len(node.children) == 1
 
     def test_wrong_backend_label_on_insert(self, backend: str) -> None:
         """Passing an Items.Label to an Identifier.insert raises TypeError."""
@@ -536,50 +543,221 @@ class TestErrorBehavior:
 
 
 # ---------------------------------------------------------------------------
-# Foreign values accepted by the type signature but rejected at runtime
+# Labels are values: matched by canonical name, normalized to the node's own member
+# ---------------------------------------------------------------------------
+
+_LABELED_MUTATORS = ["append", "extend", "insert", "replace_at"]
+
+
+def _mutate_with_label(node, mutator: str, backend: str, label) -> None:
+    """Drive one labeled mutator so the node ends up holding exactly one labeled child."""
+    span = _span(backend, 0, 1)
+    if mutator == "append":
+        node.append(span, label)
+    elif mutator == "extend":
+        node.extend([span], label)
+    elif mutator == "insert":
+        node.insert(0, span, label)
+    elif mutator == "replace_at":
+        node.append_name(_span(backend, 5, 6))
+        node.replace_at(0, span, label)
+    else:  # pragma: no cover - guards a typo in the parametrization
+        msg = f"unknown mutator {mutator!r}"
+        raise AssertionError(msg)
+
+
+class _SpoofedLabel:
+    """An arbitrary object carrying a real label's canonical name.
+
+    Canonical name *is* label identity — it is already the cross-backend ``__eq__``/``__hash__``
+    key — so this resolves like any other spelling of that label.
+    """
+
+    _fltk_canonical_name = "Identifier.Label.NAME"
+
+
+class _UnhashableCanonicalName:
+    """Canonical name that is not a string and cannot even be hashed."""
+
+    _fltk_canonical_name = ["Identifier.Label.NAME"]  # noqa: RUF012
+
+
+class _NonStringCanonicalName:
+    """Canonical name that is hashable but not a string."""
+
+    _fltk_canonical_name = 7
+
+
+class _CanonicalNameError(RuntimeError):
+    pass
+
+
+class _RaisingLabel:
+    """A label-like object whose canonical name cannot be read."""
+
+    @property
+    def _fltk_canonical_name(self) -> str:
+        raise _CanonicalNameError
+
+
+@pytest.mark.parametrize("backend", _BACKEND_KEYS)
+@pytest.mark.parametrize("mutator", _LABELED_MUTATORS)
+class TestLabelsAreMatchedByCanonicalName:
+    """Every labeled mutator accepts any spelling of one of the node's labels, and stores its own.
+
+    A purely protocol-typed consumer can name only the protocol module's sentinels
+    (`cstp.<Class>Label.<X>`); they type-check into every mutator, so rejecting them would leave a
+    pyright-clean call that always raises.  Labels carry no backend-specific storage — their
+    identity is the canonical name — so a matching spelling resolves to the mutating node's own
+    member and that is what lands in `children`.  The tree's invariant is unchanged: a Python tree
+    holds concrete enum members, a Rust tree holds native label objects.
+    """
+
+    @staticmethod
+    def _stored_label(node):
+        (label, _child) = node.child()
+        return label
+
+    def test_own_label_member(self, backend: str, mutator: str) -> None:
+        mod = _mod(backend)
+        node = mod.Identifier()
+        _mutate_with_label(node, mutator, backend, mod.Identifier.Label.NAME)
+        assert self._stored_label(node) == mod.Identifier.Label.NAME
+
+    def test_none_label(self, backend: str, mutator: str) -> None:
+        node = _mod(backend).Identifier()
+        _mutate_with_label(node, mutator, backend, None)
+        assert self._stored_label(node) is None
+
+    def test_protocol_sentinel_is_normalized(self, backend: str, mutator: str) -> None:
+        """The one label object a protocol-typed consumer holds is accepted, not stored."""
+        mod = _mod(backend)
+        node = mod.Identifier()
+        _mutate_with_label(node, mutator, backend, py_protocol.IdentifierLabel.NAME)
+        stored = self._stored_label(node)
+        assert isinstance(stored, mod.Identifier.Label), type(stored)
+        assert not isinstance(stored, py_protocol._ProtocolLabelMember)
+        assert stored == mod.Identifier.Label.NAME
+
+    def test_other_backends_member_is_normalized(self, backend: str, mutator: str) -> None:
+        """Same rule, no special case: canonical-name equality is what admits it."""
+        mod = _mod(backend)
+        other = rust_cst if backend == "py" else py_cst
+        foreign_label = other.Identifier.Label.NAME
+        assert foreign_label == mod.Identifier.Label.NAME, "the two labels must compare equal"
+        node = mod.Identifier()
+        _mutate_with_label(node, mutator, backend, foreign_label)
+        stored = self._stored_label(node)
+        assert isinstance(stored, mod.Identifier.Label), type(stored)
+        assert not isinstance(stored, other.Identifier.Label)
+
+    def test_a_spoofed_canonical_name_is_normalized(self, backend: str, mutator: str) -> None:
+        """Accepted deliberately: the stored value is still the backend's own member."""
+        mod = _mod(backend)
+        node = mod.Identifier()
+        _mutate_with_label(node, mutator, backend, _SpoofedLabel())
+        stored = self._stored_label(node)
+        assert isinstance(stored, mod.Identifier.Label), type(stored)
+        assert stored == mod.Identifier.Label.NAME
+
+    def test_cross_class_sentinel_is_refused(self, backend: str, mutator: str) -> None:
+        """`ItemsLabel.ITEM` names no `Identifier` label, so the mapping is class-scoped."""
+        node = _mod(backend).Identifier()
+        with pytest.raises(
+            TypeError,
+            match=r"Identifier\.\w+: label argument is not a Identifier_Label; got _ProtocolLabelMember",
+        ):
+            _mutate_with_label(node, mutator, backend, py_protocol.ItemsLabel.ITEM)
+
+    def test_junk_label_is_refused(self, backend: str, mutator: str) -> None:
+        node = _mod(backend).Identifier()
+        with pytest.raises(TypeError, match=r"Identifier\.\w+: label argument is not a Identifier_Label; got str"):
+            _mutate_with_label(node, mutator, backend, "NAME")
+
+    def test_a_raising_canonical_name_propagates(self, backend: str, mutator: str) -> None:
+        """Only a *missing* attribute means "not a label"; anything else is the caller's error.
+
+        Reporting a broken descriptor as `TypeError: ... is not a Identifier_Label` hides the one
+        useful signal, and would hide it on one backend only if the two resolved the attribute
+        differently.
+        """
+        node = _mod(backend).Identifier()
+        with pytest.raises(_CanonicalNameError):
+            _mutate_with_label(node, mutator, backend, _RaisingLabel())
+
+    @pytest.mark.parametrize("label_factory", [_UnhashableCanonicalName, _NonStringCanonicalName])
+    def test_a_non_string_canonical_name_is_not_a_label(self, backend: str, mutator: str, label_factory) -> None:
+        """Only a string canonical name can name a label, and it must fail the same way on both.
+
+        The Python backend looks the name up in a dict, the Rust backend extracts it as a
+        `String`; without a string guard on the Python side an unhashable value would surface as
+        `unhashable type: 'list'` there and as the pinned `TypeError` on Rust.
+        """
+        node = _mod(backend).Identifier()
+        with pytest.raises(TypeError, match=r"Identifier\.\w+: label argument is not a Identifier_Label"):
+            _mutate_with_label(node, mutator, backend, label_factory())
+        assert len(node.children) == (1 if mutator == "replace_at" else 0)
+
+
+@pytest.mark.parametrize("backend", _BACKEND_KEYS)
+@pytest.mark.parametrize("member", ["ITEM", "NO_WS", "WS_ALLOWED"])
+class TestMultiLabelCanonicalNormalization:
+    """Canonical-name resolution pairs each name with *its own* member, not the first one.
+
+    `Identifier` has a single label, so every one-label test passes just as well against a
+    generator that collapsed the whole mapping onto the first member.  `Items` has four, and a
+    mispairing there would silently relabel children — surfacing far from the mutator, in a
+    `children_<label>()` bucket or in `astrt.bucket_children`.
+    """
+
+    def test_sentinel_resolves_to_its_own_member(self, backend: str, member: str) -> None:
+        mod = _mod(backend)
+        node = mod.Items()
+        expected = getattr(mod.Items.Label, member)
+        node.append(_span(backend, 0, 1), getattr(py_protocol.ItemsLabel, member))
+        (stored, _child) = node.child()
+        assert isinstance(stored, mod.Items.Label), type(stored)
+        assert stored == expected
+        if member != "ITEM":
+            assert stored != mod.Items.Label.ITEM
+
+    def test_the_other_backends_member_resolves_to_its_own_member(self, backend: str, member: str) -> None:
+        mod = _mod(backend)
+        other = rust_cst if backend == "py" else py_cst
+        node = mod.Items()
+        node.append(_span(backend, 0, 1), getattr(other.Items.Label, member))
+        (stored, _child) = node.child()
+        assert isinstance(stored, mod.Items.Label), type(stored)
+        assert stored == getattr(mod.Items.Label, member)
+        if member != "ITEM":
+            assert stored != mod.Items.Label.ITEM
+
+
+def test_canonical_name_resolution_is_not_a_public_label_api() -> None:
+    """The Rust label enums resolve canonical names internally; exposing it would be a second API.
+
+    The Python backend has no such method, so a visible one would be a cross-backend divergence on
+    generated public API.
+    """
+    assert not hasattr(rust_cst.Identifier.Label, "from_canonical_name")
+    assert not hasattr(rust_cst.Items.Label, "from_canonical_name")
+
+
+# ---------------------------------------------------------------------------
+# Foreign children accepted by the type signature but rejected at runtime
 # ---------------------------------------------------------------------------
 
 
 @pytest.mark.parametrize("backend", _BACKEND_KEYS)
-class TestForeignLabelsAndChildrenAreRejected:
-    """Values that the widened mutator signatures statically accept must still be refused.
+class TestForeignChildrenAreRejected:
+    """Children the widened mutator signatures statically accept must still be refused.
 
-    `insert` / `replace_at` take the protocol node union and `LabelProtocol | None`, so a protocol
-    label sentinel, another backend's label and another backend's node all type-check into them.
-    The isinstance guards are what stop them reaching `children`, and nothing else does: without
-    these cases a later "the annotations already constrain the input" simplification of
-    `_check_label_type_for_mutators` / `_check_child_type_for_mutators` would store a foreign value
-    silently and surface it far away — in the unparser, in `astrt.bucket_children`, or in a
-    `child()` tuple unpack.
+    `insert` / `replace_at` take the protocol node union, so another backend's node type-checks
+    into them.  The isinstance guards are what stop it reaching `children`, and nothing else does:
+    without these cases a later "the annotations already constrain the input" simplification of
+    `_check_child_type_for_mutators` would store a foreign value silently and surface it far away
+    — in the unparser, in `astrt.bucket_children`, or in a `child()` tuple unpack.
     """
-
-    def test_protocol_label_sentinel_on_insert(self, backend: str) -> None:
-        """A protocol sentinel is not the node's own label object, on either backend."""
-        mod = _mod(backend)
-        node = mod.Identifier()
-        with pytest.raises(
-            TypeError, match=r"Identifier\.insert: label argument is not a Identifier_Label; got _ProtocolLabelMember"
-        ):
-            node.insert(0, _span(backend, 0, 1), label=py_protocol.IdentifierLabel.NAME)
-
-    def test_protocol_label_sentinel_on_replace_at(self, backend: str) -> None:
-        mod = _mod(backend)
-        node = mod.Identifier()
-        node.append_name(_span(backend, 0, 1))
-        with pytest.raises(
-            TypeError,
-            match=r"Identifier\.replace_at: label argument is not a Identifier_Label; got _ProtocolLabelMember",
-        ):
-            node.replace_at(0, _span(backend, 1, 2), label=py_protocol.IdentifierLabel.NAME)
-
-    def test_other_backends_label_on_insert(self, backend: str) -> None:
-        """The other backend's Identifier.Label compares equal by canonical name but is refused."""
-        other = rust_cst if backend == "py" else py_cst
-        node = _mod(backend).Identifier()
-        foreign_label = other.Identifier.Label.NAME
-        assert foreign_label == _mod(backend).Identifier.Label.NAME, "the two labels must compare equal"
-        with pytest.raises(TypeError, match=r"Identifier\.insert: label argument is not a Identifier_Label"):
-            node.insert(0, _span(backend, 0, 1), label=foreign_label)
 
     def test_other_backends_child_on_insert(self, backend: str) -> None:
         """A node from the other backend is not an accepted child type."""
@@ -594,6 +772,184 @@ class TestForeignLabelsAndChildrenAreRejected:
         node.append_item(_span(backend, 0, 1))
         with pytest.raises(TypeError, match="unsupported child type"):
             node.replace_at(0, other.Item())
+
+
+# ---------------------------------------------------------------------------
+# Child validation on the append/extend family
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize("backend", _BACKEND_KEYS)
+class TestAppendFamilyChildValidation:
+    """append / extend / extend_children / per-label mutators reject a child they cannot store.
+
+    The mutator signatures take the protocol node union, so a foreign-backend node and outright
+    junk both type-check into them.  Storing either corrupts the tree and surfaces far from the
+    call — in the unparser, in `astrt.bucket_children`, or in a `child()` tuple unpack — so every
+    mutator validates, on both backends, with the same message template as insert/replace_at.
+    """
+
+    def test_append_rejects_junk(self, backend: str) -> None:
+        node = _mod(backend).Items()
+        with pytest.raises(TypeError, match=r"Items: unsupported child type builtins\.str"):
+            node.append("not_a_span")  # type: ignore[arg-type]
+        assert len(node.children) == 0
+
+    def test_append_rejects_foreign_backend_child(self, backend: str) -> None:
+        other = rust_cst if backend == "py" else py_cst
+        node = _mod(backend).Items()
+        with pytest.raises(TypeError, match="unsupported child type"):
+            node.append(other.Item())
+        assert len(node.children) == 0
+
+    def test_rejected_child_message_names_the_module(self, backend: str) -> None:
+        """The rejected type is qualified: both backends export node classes under the same names.
+
+        A bare ``__name__`` renders the most likely trip — mixing backends — as
+        ``Items: unsupported child type Item``, which tells the consumer nothing.  Both backends
+        spell it ``module.qualname``, so the two agree on any given object.
+        """
+        other = rust_cst if backend == "py" else py_cst
+        foreign = other.Item()
+        expected = f"{type(foreign).__module__}.{type(foreign).__qualname__}"
+        node = _mod(backend).Items()
+        with pytest.raises(TypeError) as exc_info:
+            node.append(foreign)
+        assert str(exc_info.value) == f"Items: unsupported child type {expected}"
+
+    def test_per_label_append_rejects_foreign_backend_child(self, backend: str) -> None:
+        other = rust_cst if backend == "py" else py_cst
+        node = _mod(backend).Items()
+        with pytest.raises(TypeError, match="unsupported child type"):
+            node.append_item(other.Item())
+        assert len(node.children) == 0
+
+    def test_per_label_append_stores_an_off_type_known_child(self, backend: str) -> None:
+        """TODO(cst-per-label-mutator-narrow-child-check): pins the gap, invert when it closes.
+
+        ``append_item`` validates against the node-wide child union, not the ``item`` label's own
+        child annotation, so a ``Trivia`` — a class ``Items`` can hold, but never under ``ITEM`` —
+        is accepted, and ``children_item()`` then hands it back under an ``Item`` annotation.  The
+        assertions are on the child's identity, not on a count: the defect is the type confusion,
+        so an accessor that started filtering by kind must fail here.
+        """
+        mod = _mod(backend)
+        node = mod.Items()
+        node.append_item(mod.Trivia())  # type: ignore[arg-type]
+        assert len(node.children) == 1
+        assert node.children[0][0] == mod.Items.Label.ITEM
+        assert node.children[0][1].kind == mod.NodeKind.TRIVIA
+        (item,) = node.children_item()
+        assert item.kind == mod.NodeKind.TRIVIA
+
+    def test_extend_rejects_junk(self, backend: str) -> None:
+        node = _mod(backend).Items()
+        with pytest.raises(TypeError, match=r"Items: unsupported child type builtins\.str"):
+            node.extend(["not_a_span"])  # type: ignore[list-item]
+        assert len(node.children) == 0
+
+    def test_extend_is_atomic_on_a_mid_sequence_failure(self, backend: str) -> None:
+        """A rejected element leaves the node exactly as it was: no partial extend."""
+        mod = _mod(backend)
+        node = mod.Items()
+        node.append_item(_span(backend, 0, 1))
+        good = _span(backend, 1, 2)
+        with pytest.raises(TypeError, match="unsupported child type"):
+            node.extend([good, "not_a_span"], mod.Items.Label.ITEM)  # type: ignore[list-item]
+        assert len(node.children) == 1
+        assert _span_eq(node.children[0][1], _span(backend, 0, 1))
+
+    def test_per_label_extend_is_atomic_on_a_mid_sequence_failure(self, backend: str) -> None:
+        node = _mod(backend).Items()
+        good = _span(backend, 1, 2)
+        with pytest.raises(TypeError, match="unsupported child type"):
+            node.extend_item([good, "not_a_span"])  # type: ignore[list-item]
+        assert len(node.children) == 0
+
+    def test_extend_children_rejects_foreign_backend_other(self, backend: str) -> None:
+        """The rejection message is backend-specific here, so only Python's is asserted.
+
+        Python raises the ``unsupported child type`` template from its own isinstance guard — the
+        only diagnostic a consumer gets for an ``extend_children`` mix-up, so its class prefix and
+        module-qualified type name are pinned.  Rust rejects at PyO3 signature extraction
+        (``other: &PyItems``) and so carries PyO3's own argument-conversion text, which moves with
+        PyO3 releases; there the guarantee is the exception type and the unmutated node.
+        """
+        other = rust_cst if backend == "py" else py_cst
+        node = _mod(backend).Items()
+        donor = other.Items()
+        donor.append_item(_span("py" if backend == "rust" else "rust", 0, 1))
+        with pytest.raises(TypeError) as exc_info:
+            node.extend_children(donor)
+        if backend == "py":
+            expected = f"{type(donor).__module__}.{type(donor).__qualname__}"
+            assert str(exc_info.value) == f"Items: unsupported child type {expected}"
+        assert len(node.children) == 0
+
+    def test_extend_children_rejects_a_different_node_class(self, backend: str) -> None:
+        """Backend-specific message here too — see the foreign-backend case above."""
+        mod = _mod(backend)
+        node = mod.Items()
+        donor = mod.Identifier()
+        with pytest.raises(TypeError) as exc_info:
+            node.extend_children(donor)  # type: ignore[arg-type]
+        if backend == "py":
+            expected = f"{type(donor).__module__}.{type(donor).__qualname__}"
+            assert str(exc_info.value) == f"Items: unsupported child type {expected}"
+        assert len(node.children) == 0
+
+    def test_extend_children_accepts_the_same_class(self, backend: str) -> None:
+        mod = _mod(backend)
+        node = mod.Items()
+        donor = mod.Items()
+        donor.append_item(_span(backend, 0, 1))
+        node.extend_children(donor)
+        assert len(node.children) == 1
+        assert node.children[0][0] == mod.Items.Label.ITEM
+
+
+class TestExtendLengthHintIsNotTrusted:
+    """A caller-supplied ``__len__`` must not size the Rust backend's staging vector.
+
+    ``extend`` / ``extend_<label>`` pre-size a staging vec from the iterable's length hint.  The
+    hint comes from arbitrary Python code and need not match what the iterator yields; an
+    oversized reservation is not a catchable error in Rust — the allocation-failure path aborts the
+    process, taking the interpreter with it.  Run out-of-process: a regression here kills the
+    session rather than failing a test.
+    """
+
+    _SCRIPT = """\
+        import sys
+
+        sys.path[:] = {path!r}
+
+        import fegen_rust_cst.cst as cst
+        from fltk._native import Span
+
+
+        class LyingLength:
+            def __len__(self):
+                return 2**40
+
+            def __iter__(self):
+                return iter([Span(0, 1)])
+
+
+        node = cst.Identifier()
+        node.extend_name(LyingLength())
+        node.extend(LyingLength(), cst.Identifier.Label.NAME)
+        assert len(node.children) == 2, node.children
+        """
+
+    def _run(self) -> subprocess.CompletedProcess[str]:
+        script = textwrap.dedent(self._SCRIPT).format(path=list(sys.path))
+        return subprocess.run(  # noqa: S603
+            [sys.executable, "-c", script], capture_output=True, text=True, timeout=300, check=False
+        )
+
+    def test_a_huge_length_hint_extends_normally(self) -> None:
+        proc = self._run()
+        assert proc.returncode == 0, f"stdout={proc.stdout!r} stderr={proc.stderr!r}"
 
 
 # ---------------------------------------------------------------------------
@@ -643,11 +999,61 @@ class TestMessageParity:
         emb_msg = self._try_and_capture(TypeError, lambda: emb_node.insert(0, s_emb, label="bad"))  # type: ignore
         assert py_msg == emb_msg
 
+    def test_unhashable_canonical_name_message_parity(self) -> None:
+        """A label whose canonical name is unhashable is diagnosed identically on both backends.
+
+        The Python backend resolves through a dict lookup and the Rust backend through a `String`
+        extraction; only a string guard on the Python side keeps the two texts equal here.
+        """
+        py_node = py_cst.Identifier()
+        emb_node = rust_cst.Identifier()
+        py_msg = self._try_and_capture(
+            TypeError, lambda: py_node.append(terminalsrc.Span(0, 1), _UnhashableCanonicalName())
+        )  # type: ignore
+        emb_msg = self._try_and_capture(
+            TypeError, lambda: emb_node.append(NativeSpan(0, 1), _UnhashableCanonicalName())
+        )  # type: ignore
+        assert py_msg == emb_msg
+
     def test_bad_child_type_insert_message_parity(self) -> None:
         py_node = py_cst.Items()
         emb_node = rust_cst.Items()
         py_msg = self._try_and_capture(TypeError, lambda: py_node.insert(0, "not_a_span"))  # type: ignore
         emb_msg = self._try_and_capture(TypeError, lambda: emb_node.insert(0, "not_a_span"))  # type: ignore
+        assert py_msg == emb_msg
+
+    def test_bad_child_type_append_message_parity(self) -> None:
+        """The same object rejected by both backends' `append` yields the same message text.
+
+        Each backend computing its own expectation would not catch a divergence; the guarantee is
+        that a consumer matching on the message gets the same string whichever backend it holds.
+        `"not_a_span"` is `builtins.str` on both.
+        """
+        py_node = py_cst.Items()
+        emb_node = rust_cst.Items()
+        py_msg = self._try_and_capture(TypeError, lambda: py_node.append("not_a_span"))  # type: ignore
+        emb_msg = self._try_and_capture(TypeError, lambda: emb_node.append("not_a_span"))  # type: ignore
+        assert py_msg == emb_msg
+
+    def test_bad_child_type_extend_message_parity(self) -> None:
+        py_node = py_cst.Items()
+        emb_node = rust_cst.Items()
+        py_msg = self._try_and_capture(TypeError, lambda: py_node.extend(["not_a_span"]))  # type: ignore
+        emb_msg = self._try_and_capture(TypeError, lambda: emb_node.extend(["not_a_span"]))  # type: ignore
+        assert py_msg == emb_msg
+
+    def test_bad_child_type_per_label_append_message_parity(self) -> None:
+        py_node = py_cst.Items()
+        emb_node = rust_cst.Items()
+        py_msg = self._try_and_capture(TypeError, lambda: py_node.append_item("not_a_span"))  # type: ignore
+        emb_msg = self._try_and_capture(TypeError, lambda: emb_node.append_item("not_a_span"))  # type: ignore
+        assert py_msg == emb_msg
+
+    def test_bad_child_type_per_label_extend_message_parity(self) -> None:
+        py_node = py_cst.Items()
+        emb_node = rust_cst.Items()
+        py_msg = self._try_and_capture(TypeError, lambda: py_node.extend_item(["not_a_span"]))  # type: ignore
+        emb_msg = self._try_and_capture(TypeError, lambda: emb_node.extend_item(["not_a_span"]))  # type: ignore
         assert py_msg == emb_msg
 
     def test_remove_at_large_positive_message_parity(self) -> None:
@@ -747,6 +1153,29 @@ class TestSpanHandInPerBackend:
         node = py_cst.Identifier()
         node.insert(0, NativeSpan(0, 1), py_cst.Identifier.Label.NAME)
         assert len(node.children) == 1
+
+    def test_python_append_family_accepts_a_native_span(self) -> None:
+        """The append family resolves a native Span too, not only `insert`.
+
+        The append family routes children through `_check_child_type_for_mutators`, whose miss
+        branch resolves a native Span; without a case here, dropping the lazy `fltk._native`
+        probe would break cross-backend span hand-in with the suite green.
+        """
+        assert "fltk._native" in sys.modules
+        node = py_cst.Identifier()
+        node.append(NativeSpan(0, 1), py_cst.Identifier.Label.NAME)
+        node.append_name(NativeSpan(1, 2))
+        node.extend([NativeSpan(2, 3)], py_cst.Identifier.Label.NAME)
+        node.extend_name([NativeSpan(3, 4)])
+        assert [(c.start, c.end) for _label, c in node.children] == [(0, 1), (1, 2), (2, 3), (3, 4)]
+
+    def test_python_append_family_accepts_a_terminalsrc_span(self) -> None:
+        node = py_cst.Identifier()
+        node.append(terminalsrc.Span(0, 1), py_cst.Identifier.Label.NAME)
+        node.append_name(terminalsrc.Span(1, 2))
+        node.extend([terminalsrc.Span(2, 3)], py_cst.Identifier.Label.NAME)
+        node.extend_name([terminalsrc.Span(3, 4)])
+        assert [(c.start, c.end) for _label, c in node.children] == [(0, 1), (1, 2), (2, 3), (3, 4)]
 
     def test_rust_accepts_native_span(self) -> None:
         """Rust backend accepts native Span in insert."""
@@ -938,3 +1367,25 @@ class TestLabelFreeNodeErrors:
         node.append(terminalsrc.Span(0, 1))
         with pytest.raises(TypeError, match=r"Foo\.replace_at: no labels defined for this node; got str label"):
             node.replace_at(0, terminalsrc.Span(1, 2), label="bad")  # type: ignore[call-arg]
+
+    def test_append_non_none_label_on_label_free_node_raises_type_error(self, foo_cls) -> None:
+        """append checks the label too, and a label-free node has nothing to normalize against."""
+        node = foo_cls()
+        with pytest.raises(TypeError, match=r"Foo\.append: no labels defined for this node; got str label"):
+            node.append(terminalsrc.Span(0, 1), label="bad")  # type: ignore[call-arg]
+        assert len(node.children) == 0
+
+    def test_extend_non_none_label_on_label_free_node_raises_type_error(self, foo_cls) -> None:
+        """The label is checked before any child is read, so the node is left unmutated."""
+        node = foo_cls()
+        with pytest.raises(TypeError, match=r"Foo\.extend: no labels defined for this node; got str label"):
+            node.extend([terminalsrc.Span(0, 1)], "bad")  # type: ignore[call-arg]
+        assert len(node.children) == 0
+
+    def test_a_sentinel_is_refused_by_a_label_free_node(self, foo_cls) -> None:
+        """A protocol sentinel names a label of some other class; this node declares none."""
+        node = foo_cls()
+        with pytest.raises(
+            TypeError, match=r"Foo\.append: no labels defined for this node; got _ProtocolLabelMember label"
+        ):
+            node.append(terminalsrc.Span(0, 1), label=py_protocol.IdentifierLabel.NAME)  # type: ignore[call-arg]
