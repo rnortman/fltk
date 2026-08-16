@@ -2075,8 +2075,8 @@ def test_count_newlines_in_trivia_node_variant_whitespace_arm() -> None:
     # The whitespace-only test lives once in the helper, not repeated per node arm.
     helper = _method_body(src, "_whitespace_node_newlines")
     assert "fn _whitespace_node_newlines(t: Option<&str>) -> usize {" in helper
-    assert "if !t.is_empty() && t.chars().all(char::is_whitespace) {" in helper
-    assert r"return t.matches('\n').count();" in helper
+    assert "Some(t) if !t.is_empty() && t.chars().all(char::is_whitespace) => {" in helper
+    assert r"t.matches('\n').count()" in helper
 
 
 def test_count_newlines_in_trivia_all_node_variants_no_span_arm() -> None:
@@ -2102,7 +2102,7 @@ def test_count_newlines_in_trivia_all_node_variants_no_span_arm() -> None:
     assert "_ => {" not in body
     # The whitespace-only test is written once in the helper.
     helper = _method_body(src, "_whitespace_node_newlines")
-    assert "if !t.is_empty() && t.chars().all(char::is_whitespace) {" in helper
+    assert "Some(t) if !t.is_empty() && t.chars().all(char::is_whitespace) => {" in helper
 
 
 def test_non_trivia_rule_preserve_blanks_from_parsed_clobbering_config() -> None:

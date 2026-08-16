@@ -122,10 +122,17 @@ pyright_lint(
 
 # Generation normalizes its own output, so every generator binary carries the ruff wheel and
 # the pinned config.  See //bzl:gencode_tool.bzl and fltk/fegen/gencode_format.py.
+
+# `python_version` is explicit on every public py_binary here: the module-level
+# `python.toolchain(is_default = True, python_version = "3.10")` in MODULE.bazel is honored
+# only when fltk is the root module.  A downstream consumer's own default wins otherwise, and
+# the cp310-only wheels in @pypi then have no matching distribution — an analysis failure in
+# the consumer's build, at a target the consumer never named.
 py_binary(
     name = "genparser",
     srcs = ["fltk/fegen/genparser.py"],
     data = GENCODE_TOOL_DATA,
+    python_version = "3.10",
     visibility = ["//visibility:public"],
     deps = [
         ":fltk",
@@ -146,6 +153,7 @@ py_binary(
     srcs = ["fltk/fegen/genparser_stage0.py"],
     data = GENCODE_TOOL_DATA,
     main = "fltk/fegen/genparser_stage0.py",
+    python_version = "3.10",
     visibility = ["//visibility:public"],
     deps = [
         ":fltk_src",
@@ -187,6 +195,7 @@ py_binary(
     name = "grammar_lsp",
     srcs = ["fltk/lsp/grammar_cli.py"],
     main = "fltk/lsp/grammar_cli.py",
+    python_version = "3.10",
     visibility = ["//visibility:public"],
     deps = [
         ":fltk",
@@ -201,6 +210,7 @@ py_binary(
     name = "fltk_lsp",
     srcs = ["fltk/lsp/server_cli.py"],
     main = "fltk/lsp/server_cli.py",
+    python_version = "3.10",
     visibility = ["//visibility:public"],
     deps = [
         ":fltk",
@@ -216,6 +226,7 @@ py_binary(
     name = "fltk_highlight",
     srcs = ["fltk/lsp/highlight_cli.py"],
     main = "fltk/lsp/highlight_cli.py",
+    python_version = "3.10",
     visibility = ["//visibility:public"],
     deps = [
         ":fltk",
@@ -229,6 +240,7 @@ py_binary(
     name = "regex_corpus",
     srcs = ["fltk/fegen/regex_corpus.py"],
     main = "fltk/fegen/regex_corpus.py",
+    python_version = "3.10",
     visibility = ["//visibility:public"],
     deps = [
         ":fltk",
@@ -242,6 +254,7 @@ py_binary(
     name = "unparse_cli",
     srcs = ["fltk/unparse_cli.py"],
     main = "fltk/unparse_cli.py",
+    python_version = "3.10",
     visibility = ["//visibility:public"],
     deps = [
         ":fltk",

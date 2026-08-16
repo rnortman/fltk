@@ -1508,13 +1508,16 @@ class RustUnparserGenerator:
                 # preserve_blanks > 0 path; allow(dead_code) keeps preserve_blanks == 0 (the
                 # default, downstream-supported) generated unparsers clippy-clean.
                 "    #[allow(dead_code)]",
+                # One `match` rather than nested `if`s: a consumer whose rustc predates
+                # let-chains cannot collapse them, and clippy's collapsible_if fires on the
+                # nested form under `-D warnings`.
                 "    fn _whitespace_node_newlines(t: Option<&str>) -> usize {",
-                "        if let Some(t) = t {",
-                "            if !t.is_empty() && t.chars().all(char::is_whitespace) {",
-                "                return t.matches('\\n').count();",
+                "        match t {",
+                "            Some(t) if !t.is_empty() && t.chars().all(char::is_whitespace) => {",
+                "                t.matches('\\n').count()",
                 "            }",
+                "            _ => 0,",
                 "        }",
-                "        0",
                 "    }",
             ]
         )

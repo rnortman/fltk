@@ -16,7 +16,7 @@ local_path_override(
 )
 
 bazel_dep(name = "rules_python", version = "1.5.0")  # py_test + Python toolchain
-bazel_dep(name = "rules_rust", version = "0.70.0")   # rust extension for the toolchain pin
+bazel_dep(name = "rules_rust", version = "0.73.0")   # rust extension for the toolchain pin
 
 # Test-only: build_test states the AST codegen target's coverage as a test rather than
 # leaving it to `bazel test //...` incidentally building it.  dev_dependency = True because

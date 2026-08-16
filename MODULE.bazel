@@ -3,7 +3,7 @@ module(
 )
 
 bazel_dep(name = "rules_python", version = "1.5.0")
-bazel_dep(name = "rules_rust", version = "0.70.0")
+bazel_dep(name = "rules_rust", version = "0.73.0")
 
 # Test-only: the skylib unittest/analysistest harness backs //tests/bazel_rules'
 # regression coverage of generate_rust_parser's misconfiguration guards.
@@ -57,9 +57,16 @@ use_repo(pip, "pypi")
 # rules_rust reports listing them again as removable.  The tests/* fixture crates have their
 # own [workspace] declarations and are excluded from this hub.
 crate = use_extension("@rules_rust//crate_universe:extensions.bzl", "crate")
+# `lockfile` is not optional, even though repinning happens here: rules_rust
+# refuses a crate_universe extension call in a NON-root module without one,
+# because repinning cannot cross a module boundary.  A consumer that pulls fltk
+# in as a bazel_dep hits that refusal, so the resolution is checked in and
+# repinned here with `CARGO_BAZEL_REPIN=1 bazel build //...` whenever Cargo.toml
+# or Cargo.lock changes.
 crate.from_cargo(
     name = "fltk_crates",
     cargo_lockfile = "//:Cargo.lock",
+    lockfile = "//:cargo-bazel-lock.json",
     manifests = ["//:Cargo.toml"],
 )
 use_repo(crate, "fltk_crates")
