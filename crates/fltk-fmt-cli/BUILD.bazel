@@ -1,0 +1,25 @@
+load("@rules_rust//rust:defs.bzl", "rust_library", "rust_test")
+
+# CLI scaffolding for standalone formatter binaries: a consumer writes a rust_binary whose
+# main.rs is one fltk_formatter_main! invocation over their generated unparser. No features,
+# no pyo3, one flavor — the crate never touches fltk-cst-core, so there is nothing for a
+# :no_python variant to switch.
+rust_library(
+    name = "fltk-fmt-cli",
+    srcs = glob(["src/**/*.rs"]),
+    crate_name = "fltk_fmt_cli",
+    edition = "2021",
+    visibility = ["//visibility:public"],
+    deps = [
+        "//crates/fltk-unparser-core",
+        "@fltk_crates//:clap",
+    ],
+)
+
+# The run_inner tests: the CLI's check/in-place/exit-code behavior, driven over in-memory
+# buffers. This is the only execution-level coverage of the scaffolding a consumer's
+# formatter binary inherits wholesale.
+rust_test(
+    name = "fltk-fmt-cli_test",
+    crate = ":fltk-fmt-cli",
+)

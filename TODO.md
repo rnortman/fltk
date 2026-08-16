@@ -320,3 +320,66 @@ is a hand-rolled, drift-prone reimplementation of what Bazel already does. Done 
 `rust`-parametrized suite consumes Bazel-built fixture extensions (or equivalent dependency-tracked
 builds) and the bare-`pytest` staleness hole is closed by construction. Location: `Makefile`
 (the `build-test-fixtures` target).
+
+## `bazel-dogfood-checks`
+
+`make check` still runs pytest (5486 tests across five maturin-built extensions), ruff, pyright and
+rustfmt as cargo/uv lanes outside Bazel, so a trivial change re-walks all of them. The Rust unit
+tests and clippy now run under Bazel (`bazel-check`, `bazel-clippy`), which leaves the Python half
+and the feature flavors Bazel does not execute. Sketched path: the five fixture extensions are all
+buildable by fltk's own `fltk_pyo3_cdylib` / `:native_py` under Bazel already — that is the hard
+prerequisite — with lint via aspect_rules_lint or py_binary-wrapped tools from the pip hub. Two
+coverage exclusions to carry over rather than lose: python-featured *test execution* (a test binary
+linking pyo3 without extension-module needs the non-hermetic `PYO3_PYTHON` wiring of
+`cargo-test-python-features`), and `fltk-ast-core` with its features off, which has no Bazel target
+because both flavors turn all three on. Done = the migrated lanes are retired from `CHECK_STEPS`
+with no coverage regression. Location: `Makefile` (the `CHECK_STEPS` block).
+
+## `bazel-py-unparser`
+
+`generate_parser` (the Python backend, `rules.bzl`) cannot emit an unparser, so a Bazel consumer on
+the pure-Python path has to shell out to the generator by hand; the Rust backend grew
+`unparser`/`format_config` attrs in `rust.bzl` and the Python one did not. Blocked on a CLI seam:
+`fltk/unparse/genunparser.py` is a raw `sys.argv` script rather than a `genparser.py` typer
+subcommand, and a Bazel action needs the latter to pass a stable flag set. No named customer wants
+it yet, which is why the seam has not been built. Done = `generate_parser(unparser = True,
+format_config = ...)` emits the Python unparser module through a `genparser` subcommand, with the
+same guard shape `rust.bzl` uses. Location: `fltk/unparse/genunparser.py` (`main`).
+
+## `bazel-codegen-action-fanout`
+
+A fully-configured `generate_rust_parser` target runs five `genparser` processes over the same
+`.fltkg` (gen-rust-cst, gen-rust-parser, gen-rust-unparser, gen-rust-ast, gen-rust-serde). Each
+starts a Python interpreter, imports fltk, and re-parses the grammar and rebuilds the GSM to emit
+one file, and any grammar edit invalidates all five — so a consumer module with N grammars pays 5N
+interpreter startups and 5N identical GSM builds per clean build. The fanout grows with every new
+generated module type. Candidate fix: a `gen-rust-all` subcommand that parses once and writes
+whichever outputs its flags request, driven by one `ctx.actions.run` declaring the outputs the
+five actions produce today. Deliberately not done blind: separate actions do give finer
+invalidation (an ast-only regeneration recompiles nothing else), so the trade needs a measurement
+on a realistic multi-grammar consumer before the collapse is worth its loss of granularity. Done =
+either the merged action lands with numbers behind it, or the measurement shows the fanout is not
+worth collapsing and this entry is closed with that result recorded. Location: `rust.bzl` (the
+action block in `_generate_rust_srcs_impl`).
+
+## `bazel-serde-consumer-hub`
+
+The pure-Rust serde configuration — the consumer resolves fltk's runtime crates in their own
+crate hub so their `#[derive(Deserialize)]` structs and `fltk-serde-core` share one serde
+instance — is a supported configuration with no in-tree exercise: it ships as the recipe in
+`docs/bazel-consumer-guide.md` §6 and nothing in CI builds it. The obvious fixture was tried and
+refused: a `tests/bazel_consumer` `crate.from_cargo` hub over path deps into `../../crates` fails
+in crate_universe's splicer, which rewrites dependency paths relative to the module directory
+(`failed to read /crates/fltk-ast-core/Cargo.toml`), and relocating the crates by symlink makes
+them resolve their workspace root to the consumer manifest and fail on the inherited
+`regex-automata` pin. A git dep would pin a published commit rather than the working tree under
+test. So a fix needs a mechanism decision (a second hub whose manifest mirrors the workspace pins,
+a vendored mini-hub, or accepting downstream-only verification and saying so), not just an
+implementation. What is covered today: the trait-coherence semantics on the cargo side
+(`tests/rust_parser_fixture/src/de_tests.rs`) and extension-mode serde under Bazel
+(`consumer_serde_native`). What is not: the Bazel recipe itself — hub manifest shape, crate
+labels, `default-features = false` on the cst-core edge, the pin-lockstep rule — any of which can
+go stale with no test failing. Done = either a CI-run target builds a consumer-hub serde crate
+against the runtime crates, or the guide states plainly that this configuration is verified only
+downstream and names the consumer that does it. Location:
+`tests/bazel_consumer/BUILD.bazel` (the serde section).

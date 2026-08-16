@@ -1,13 +1,23 @@
-load("@rules_rust//rust:defs.bzl", "rust_library")
+load("@rules_rust//rust:defs.bzl", "rust_test")
+load("//bzl:runtime_crate.bzl", "fltk_runtime_library")
 
-rust_library(
+# The crate itself declares no features and never names pyo3; the two flavors exist only to
+# carry the fltk-cst-core flavor through. See that crate's BUILD for why this is parallel
+# targets rather than a select(), and for the never-link-both rule.
+fltk_runtime_library(
     name = "fltk-parser-core",
     srcs = glob(["src/**/*.rs"]),
     crate_name = "fltk_parser_core",
+    fltk_deps = ["//crates/fltk-cst-core"],
+    hub_deps = ["@fltk_crates//:regex-automata"],
+)
+
+# tests/memo_toy.rs is an integration test: rust_test(crate = ...) compiles only the library
+# under cfg(test) and would never see it, so it needs its own target linking the library as
+# an ordinary dependency.
+rust_test(
+    name = "memo_toy_test",
+    srcs = ["tests/memo_toy.rs"],
     edition = "2021",
-    visibility = ["//visibility:public"],
-    deps = [
-        "//crates/fltk-cst-core",
-        "@fltk_crates//:regex-automata",
-    ],
+    deps = [":no_python"],
 )

@@ -1,0 +1,9 @@
+// Format spec baked into the consumer lane's generated unparser at generation time.
+//
+// The two anchors around "+" are what make the rendered output differ from unformatted
+// input, so a round-trip test can tell a working unparser from a no-op one.
+
+ws_allowed: bsp;
+
+before "+" { nbsp; }
+after "+" { nbsp; }

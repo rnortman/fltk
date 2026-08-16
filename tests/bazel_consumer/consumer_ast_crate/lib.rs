@@ -1,7 +1,7 @@
 //! Crate root for the consumer-lane AST smoke target.
 //!
-//! The generated modules reference each other as siblings (super::cst, super::parser),
-//! so all three must sit under this root.
+//! The generated modules reference each other as siblings (super::cst, super::parser), so
+//! they must sit as submodules of this root.
 //!
 //! The two accessors below name the coerced types themselves, so the lane fails to build on
 //! either half of what it exists to prove: the runtime target dropping its `uuid`/`decimal`

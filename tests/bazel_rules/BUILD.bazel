@@ -26,6 +26,52 @@ rust_bzl_internals.generate_rust_srcs(
     tags = ["manual"],
 )
 
+# Negative target: a format_config with unparser = False. Same "manual" tag
+# rationale as above.
+rust_bzl_internals.generate_rust_srcs(
+    name = "neg_format_config_without_unparser",
+    src = "dummy.fltkg",
+    format_config = "dummy.fltkfmt",
+    tags = ["manual"],
+)
+
+# Negative target: an out_dir that escapes the package. Same "manual" tag rationale as
+# above.
+rust_bzl_internals.generate_rust_srcs(
+    name = "neg_out_dir_escape",
+    src = "dummy.fltkg",
+    out_dir = "../escapes",
+    tags = ["manual"],
+)
+
+# Negative target: out_dir alongside the extension-mode attrs. The macro refuses out_dir
+# when python_extension is set, but python_extension is a macro concept; the rule reads the
+# exclusion off extension_name / protocol_module instead, and this is the only place that
+# guard fires.
+rust_bzl_internals.generate_rust_srcs(
+    name = "neg_out_dir_with_extension_name",
+    src = "dummy.fltkg",
+    extension_name = "neg_out_dir_ext",
+    out_dir = "gensrc",
+    tags = ["manual"],
+)
+
+# Target-under-test for the out_dir layout analysistest: every optional generated module is
+# enabled, so the test sees all five basenames and can assert none of them stayed behind at
+# the default <name>/ subdirectory. "manual" for the same reason as the other codegen
+# targets — the test analyzes it and dummy.fltkg is not a grammar the generators accept.
+rust_bzl_internals.generate_rust_srcs(
+    name = "out_dir_srcs",
+    src = "dummy.fltkg",
+    ast = True,
+    ast_config = "dummy.fltkast",
+    format_config = "dummy.fltkfmt",
+    out_dir = "gensrc/grammar",
+    serde = True,
+    tags = ["manual"],
+    unparser = True,
+)
+
 # Target-under-test for the codegen-argv analysistest: every attr the ast/serde
 # actions consume is set, so the test can read them back off the action command
 # lines. "manual" keeps it out of wildcard builds — the analysistest only
@@ -40,6 +86,21 @@ rust_bzl_internals.generate_rust_srcs(
     tags = ["manual"],
 )
 
+# Target-under-test for the unparser-argv analysistest: unparser enabled alongside
+# ast and the stub-package knobs, so the test can read back the gen-rust-unparser
+# argv, the --unparser-mod-path the ast action gains, and the --submodules list the
+# cst action carries. "manual" for the same reason as the other argv targets.
+rust_bzl_internals.generate_rust_srcs(
+    name = "argv_unparser_srcs",
+    src = "dummy.fltkg",
+    ast = True,
+    extension_name = "argv_unparser",
+    format_config = "dummy.fltkfmt",
+    protocol_module = "tests.dummy_cst_protocol",
+    tags = ["manual"],
+    unparser = True,
+)
+
 # Target-under-test for the plain-module analysistest: the generate_rust_lib hop
 # from the plain_modules attr to the repeatable --plain-module flag. An .rs file
 # that reaches a crate's srcs but no `mod` declaration is simply not compiled, so
@@ -52,6 +113,16 @@ generate_rust_lib(
         "de",
     ],
     tags = ["manual"],
+)
+
+# Target-under-test for the gen-rust-lib --unparser analysistest. The unparser is a
+# registered submodule, so it reaches the crate root through its own flag rather than
+# --plain-module; the negative side of that test reuses :argv_plain_modules_lib.
+generate_rust_lib(
+    name = "argv_unparser_lib",
+    module_name = "argv_unparser_lib",
+    tags = ["manual"],
+    unparser = True,
 )
 
 rust_bzl_test_suite(name = "rust_bzl_tests")

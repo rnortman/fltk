@@ -1,0 +1,3 @@
+# Package marker for fltk's internal Starlark helpers. These are loaded by fltk's own
+# BUILD files only; nothing here is part of the consumer-facing surface (that is
+# //:rules.bzl and //:rust.bzl).

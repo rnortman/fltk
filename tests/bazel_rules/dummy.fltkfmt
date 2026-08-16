@@ -1,0 +1,4 @@
+// Minimal format config for the analysistest target-under-test's format_config
+// attribute. The test only reads the action command lines, so this file is never
+// parsed; it exists so the fixture declares a real .fltkfmt input.
+ws_allowed: bsp;

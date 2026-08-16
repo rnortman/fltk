@@ -2,10 +2,11 @@
 # path a real consumer uses, NOT the same-repo // path the root BUILD.bazel uses —
 # that difference is the whole point of this module.
 load("@bazel_skylib//rules:build_test.bzl", "build_test")
+load("@bazel_skylib//rules:diff_test.bzl", "diff_test")
 load("@fltk//:rules.bzl", "generate_parser")
 load("@fltk//:rust.bzl", "fltk_pyo3_cdylib", "generate_rust_parser")
 load("@rules_python//python:defs.bzl", "py_library", "py_test")
-load("@rules_rust//rust:defs.bzl", "rust_library")
+load("@rules_rust//rust:defs.bzl", "rust_binary", "rust_library", "rust_test")
 
 # ── Python-parser path ────────────────────────────────────────────────────────
 # Pure-Python path: no @fltk//:native_py dependency.
@@ -64,41 +65,21 @@ generate_rust_parser(
     src = "consumer_ast.fltkg",
     ast = True,
     ast_config = "consumer_ast.fltkast",
+    out_dir = "consumer_ast_crate",
 )
 
-# The generated modules are siblings (super::cst, super::parser) and must sit
-# next to the hand-authored crate root, hence the copy into one directory.
-genrule(
-    name = "consumer_ast_crate_srcs",
-    srcs = [
-        "consumer_ast_lib.rs",
-        ":consumer_ast_srcs",
-    ],
-    outs = [
-        "consumer_ast_crate/ast.rs",
-        "consumer_ast_crate/cst.rs",
-        "consumer_ast_crate/lib.rs",
-        "consumer_ast_crate/parser.rs",
-    ],
-    cmd = """
-        OUTDIR=$$(dirname $(execpath consumer_ast_crate/lib.rs))
-        cp $(execpath consumer_ast_lib.rs) $$OUTDIR/lib.rs
-        for f in $(locations :consumer_ast_srcs); do
-            cp $$f $$OUTDIR/$$(basename $$f)
-        done
-    """,
-)
-
+# The :no_python flavor of every runtime crate: this target is the pure-Rust consumer
+# configuration, and `make bazel-consumer-check` asserts pyo3 is absent from its graph.
 rust_library(
     name = "consumer_ast",
-    srcs = [":consumer_ast_crate_srcs"],
+    srcs = glob(["consumer_ast_crate/**/*.rs"]) + [":consumer_ast_srcs"],
     crate_name = "consumer_ast",
     crate_root = "consumer_ast_crate/lib.rs",
     edition = "2021",
     deps = [
-        "@fltk//crates/fltk-ast-core",
-        "@fltk//crates/fltk-cst-core",
-        "@fltk//crates/fltk-parser-core",
+        "@fltk//crates/fltk-ast-core:no_python",
+        "@fltk//crates/fltk-cst-core:no_python",
+        "@fltk//crates/fltk-parser-core:no_python",
     ],
 )
 
@@ -109,10 +90,109 @@ build_test(
     targets = [":consumer_ast"],
 )
 
+# ── pure-Rust unparser + formatter path ───────────────────────────────────────
+# A consumer whose deliverable is a formatter: generated unparser.rs with a .fltkfmt spec
+# baked in, linked against @fltk//crates/fltk-unparser-core, plus a binary built from
+# @fltk//crates/fltk-fmt-cli.  Nothing here touches Python or pyo3.
+#
+# ast = True is here because ast + unparser is the combination that makes the AST module
+# `use super::unparser;` and emit unparse_str, and this is the only Bazel target that
+# compiles it.  Without it the sibling-module path reaches the generator (an analysistest
+# pins that) but nothing ever checks the generated import resolves at the layout out_dir
+# produced.
+generate_rust_parser(
+    name = "consumer_fmt_srcs",
+    src = "consumer_unparser.fltkg",
+    ast = True,
+    format_config = "consumer_unparser.fltkfmt",
+    out_dir = "consumer_fmt_crate",
+    unparser = True,
+)
+
+rust_library(
+    name = "consumer_fmt",
+    srcs = glob(["consumer_fmt_crate/**/*.rs"]) + [":consumer_fmt_srcs"],
+    crate_name = "consumer_fmt",
+    crate_root = "consumer_fmt_crate/lib.rs",
+    edition = "2021",
+    deps = [
+        "@fltk//crates/fltk-ast-core:no_python",
+        "@fltk//crates/fltk-cst-core:no_python",
+        "@fltk//crates/fltk-parser-core:no_python",
+        "@fltk//crates/fltk-unparser-core",
+    ],
+)
+
+rust_test(
+    name = "consumer_fmt_test",
+    crate = ":consumer_fmt",
+)
+
+rust_binary(
+    name = "consumer_fmt_bin",
+    srcs = ["consumer_fmt_main.rs"],
+    edition = "2021",
+    deps = [
+        ":consumer_fmt",
+        "@fltk//crates/fltk-fmt-cli",
+    ],
+)
+
+# End-to-end run of the formatter binary: the library test covers the render path, this
+# covers the CLI scaffolding around it (argument handling, file input, stdout output),
+# which is the part a consumer gets from fltk rather than from their own code.
+genrule(
+    name = "consumer_fmt_actual",
+    srcs = ["consumer_fmt_input.txt"],
+    outs = ["consumer_fmt_actual.txt"],
+    cmd = "$(location :consumer_fmt_bin) $(location consumer_fmt_input.txt) > $@",
+    tools = [":consumer_fmt_bin"],
+)
+
+# consumer_fmt_expected.txt has no trailing newline: the CLI writes exactly what the
+# renderer produced, and the comparison is byte-exact on purpose — a formatter silently
+# gaining or losing a trailing byte is a real change to a consumer's diffs.
+diff_test(
+    name = "consumer_fmt_cli_test",
+    file1 = ":consumer_fmt_actual",
+    file2 = "consumer_fmt_expected.txt",
+)
+
+# ── extension-mode unparser path ──────────────────────────────────────────────
+# The same unparser through the Python-extension mode: the generated crate root must
+# declare and register `mod unparser;` and the cdylib must link fltk-unparser-core, or the
+# submodule is missing at import time with no build-time complaint.
+generate_rust_parser(
+    name = "consumer_unparser_native",
+    src = "consumer_unparser.fltkg",
+    format_config = "consumer_unparser.fltkfmt",
+    python_extension = True,
+    unparser = True,
+)
+
+py_test(
+    name = "consumer_unparser_test",
+    srcs = ["consumer_unparser_test.py"],
+    deps = [":consumer_unparser_native"],
+)
+
 # ── serde path ────────────────────────────────────────────────────────────────
-# The serde frontend across the module boundary: ast.rs + de.rs compiled into a
-# cdylib.  Uses python_extension mode because `serde` lives in fltk's module-private
-# crate hub, which a downstream module cannot name directly.
+# The serde frontend across the module boundary: ast.rs + de.rs compiled into a cdylib.
+#
+# Extension mode, and only extension mode, is what fltk's own targets can cover here. A
+# pure-Rust serde consumer's model structs #[derive(Deserialize)] from their own serde, and
+# trait coherence then requires fltk-serde-core to be compiled against that same instance —
+# which fltk's module-private @fltk_crates hub is not. Such a consumer resolves the runtime
+# crates in their own crate hub (cargo git deps pinned to the rev their bazel_dep names) and
+# uses fltk's module for codegen only.
+#
+# That channel is not fixture-verifiable from inside this repo: a hub over path deps into
+# ../../crates is refused by crate_universe, whose splicer rewrites dependency paths relative
+# to the module directory ("failed to read `/crates/fltk-ast-core/Cargo.toml`"), and a git dep
+# would pin a published commit rather than the working tree under test. It is verified
+# downstream by a real consumer instead; docs/bazel-consumer-guide.md is the recipe, and
+# nothing in CI builds that recipe.
+# TODO(bazel-serde-consumer-hub)
 generate_rust_parser(
     name = "consumer_serde_native",
     src = "consumer_ast.fltkg",

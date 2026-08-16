@@ -1,16 +1,25 @@
-load("@rules_rust//rust:defs.bzl", "rust_library")
+load("//bzl:runtime_crate.bzl", "fltk_runtime_library")
 
-rust_library(
+# No crate_features: the crate declares no features, and everything a generated `de.rs`
+# names is unconditional. The two flavors carry the fltk-cst-core / fltk-ast-core flavor
+# through; see fltk-cst-core's BUILD.
+#
+# Both flavors link @fltk_crates//:serde, fltk's module-private hub instance. That is
+# usable for a cdylib whose de.rs is the only thing naming serde, but NOT for a pure-Rust
+# consumer whose own model structs #[derive(Deserialize)]: those derives come from the
+# consumer's serde, and trait coherence needs one instance. Such a consumer resolves the
+# runtime crates in their own crate hub instead of linking these targets.
+#
+# serde_json is a dev-dependency only: the wrapper types must fail loudly under a foreign
+# Deserializer, and the tests prove it with a real second implementation.
+fltk_runtime_library(
     name = "fltk-serde-core",
     srcs = glob(["src/**/*.rs"]),
-    # No crate_features: the crate declares no features, and everything a generated `de.rs`
-    # names is unconditional.
     crate_name = "fltk_serde_core",
-    edition = "2021",
-    visibility = ["//visibility:public"],
-    deps = [
+    fltk_deps = [
         "//crates/fltk-ast-core",
         "//crates/fltk-cst-core",
-        "@fltk_crates//:serde",
     ],
+    hub_deps = ["@fltk_crates//:serde"],
+    test_deps = ["@fltk_crates//:serde_json"],
 )

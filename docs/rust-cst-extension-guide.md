@@ -56,7 +56,10 @@ python = ["fltk-cst-core/python"]
 
 [dependencies]
 # fltk-cst-core is not published to crates.io. Use whichever pin method suits your setup
-# (uncomment one):
+# (uncomment one).  `features = ["python"]` is what pulls in pyo3: fltk-cst-core has no
+# default features, so an edge that does not ask for it gets a pure-Rust library.
+# `default-features = false` is therefore redundant, and harmless to keep as documentation
+# of intent.
 #
 # Path pin (local FLTK checkout):
 #   fltk-cst-core = { path = "../fltk/crates/fltk-cst-core", default-features = false, features = ["python"] }

@@ -7,7 +7,32 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- Bazel: `generate_rust_parser` gains `unparser` (emit `unparser.rs`), `format_config` (bake a
+  `.fltkfmt` spec into it), and `out_dir` (declare the generated `.rs` files at a
+  package-relative directory such as `src/`, so a pure-Rust `rust_library` can glob its own
+  sources alongside them and needs no copy genrule). `fltk_pyo3_cdylib` gains `unparser`; as
+  with `ast` / `serde`, a hand-authored `lib_rs` must declare and register the module itself.
+- Bazel: every runtime crate now has a pyo3-free `:no_python` target
+  (`//crates/fltk-cst-core:no_python` and the same on `fltk-parser-core`, `fltk-ast-core`,
+  `fltk-serde-core`), and `//crates/fltk-unparser-core` and `//crates/fltk-fmt-cli` have Bazel
+  targets for the first time. The existing default target labels, features, and deps are
+  unchanged. Never link both flavors of a runtime crate into one binary — rustc refuses two
+  crates with the same name.
+- `docs/bazel-consumer-guide.md`: per-configuration recipes (pure Python, PyO3 extension, pure
+  Rust, unparser/formatter, serde), the one-serde rule for serde-mode pure-Rust consumers, the
+  pin-lockstep rule, and no-pyo3 verification queries for both build systems.
+
 ### Changed
+
+- **Breaking (cargo):** `fltk-cst-core`'s `python` feature is no longer a default feature
+  (`default = ["python"]` → `default = []`), so a cargo consumer that took the crate without
+  `default-features = false` and relied on the default now builds without pyo3 and without the
+  `#[pyclass]` surface. If you want the PyO3 flavor, ask for it explicitly:
+  `fltk-cst-core = { version = "...", features = ["python"] }`. Pure-Rust consumers are the
+  ones this fixes: they no longer link pyo3 by accident. Bazel targets are unaffected —
+  `//crates/fltk-cst-core` still carries the feature and `:no_python` still does not.
 
 - Generated CST mutators (`append`, `extend`, `extend_children`, `append_<label>`,
   `extend_<label>`, `insert`, `replace_at`) now validate every child on both backends and raise

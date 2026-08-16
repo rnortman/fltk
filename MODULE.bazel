@@ -40,7 +40,10 @@ use_repo(pip, "pypi")
 
 # Third-party Rust dependencies (pyo3, regex-automata, indexmap, serde, and transitive graph).
 # This hub is module-private: FLTK's macros reference it as internal labels.
-# Clockwork and other consumers do NOT need a use_repo for this hub.
+# Clockwork and other consumers do NOT need a use_repo for this hub.  A pure-Rust consumer
+# using the serde frontend resolves the runtime crates in their OWN crate hub instead, so
+# that fltk-serde-core and their #[derive(Deserialize)] structs share one serde instance;
+# docs/bazel-consumer-guide.md carries that recipe and the rest of the consumer surface.
 #
 # Membership note: only the workspace root Cargo.toml belongs in `manifests` — from_cargo
 # reads its [workspace] members (".", "crates/fltk-cst-core", "crates/fltk-parser-core",

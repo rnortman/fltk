@@ -1,29 +1,31 @@
-load("@rules_rust//rust:defs.bzl", "rust_library")
+load("//bzl:runtime_crate.bzl", "fltk_runtime_library")
 
-rust_library(
+# Bazel crate_features do not read Cargo defaults, so every feature is stated here. All
+# three are on in BOTH flavors because a Bazel consumer has no way to re-enable a feature
+# this target left off: generated AST code for a sidecar using `key:` names
+# ::fltk_ast_core::IndexMap, and code for a `type: uuid` / `type: decimal` field names
+# ::fltk_ast_core::Uuid / ::fltk_ast_core::Decimal. A pure-Rust consumer who wants any of
+# the three dependencies gone builds through Cargo with default-features = false.
+#
+# The uuid / rust_decimal labels below come from the @fltk_crates hub only because
+# fltk-ast-core declares both as unconditional dev-dependencies: crate_universe's
+# from_cargo resolution sees an optional dependency no workspace member activates as
+# absent. Cargo.toml documents the mirroring requirement.
+#
+# The flavors differ only in which fltk-cst-core they carry; see that crate's BUILD. The
+# feature-gated tests need no extra deps: uuid and rust_decimal are already library deps
+# here, because both flavors turn all three features on.
+fltk_runtime_library(
     name = "fltk-ast-core",
     srcs = glob(["src/**/*.rs"]),
-    # Bazel crate_features do not read Cargo defaults, so every feature is stated here. All
-    # three are on because a Bazel consumer has no way to re-enable a feature this target left
-    # off: generated AST code for a sidecar using `key:` names ::fltk_ast_core::IndexMap, and
-    # code for a `type: uuid` / `type: decimal` field names ::fltk_ast_core::Uuid /
-    # ::fltk_ast_core::Decimal. A pure-Rust consumer who wants any of the three dependencies
-    # gone builds through Cargo with default-features = false.
-    #
-    # The uuid / rust_decimal labels below come from the @fltk_crates hub only because
-    # fltk-ast-core declares both as unconditional dev-dependencies: crate_universe's
-    # from_cargo resolution sees an optional dependency no workspace member activates as
-    # absent. Cargo.toml documents the mirroring requirement.
-    crate_features = [
+    crate_name = "fltk_ast_core",
+    features = [
         "decimal",
         "indexmap",
         "uuid",
     ],
-    crate_name = "fltk_ast_core",
-    edition = "2021",
-    visibility = ["//visibility:public"],
-    deps = [
-        "//crates/fltk-cst-core",
+    fltk_deps = ["//crates/fltk-cst-core"],
+    hub_deps = [
         "@fltk_crates//:indexmap",
         "@fltk_crates//:regex-automata",
         "@fltk_crates//:rust_decimal",

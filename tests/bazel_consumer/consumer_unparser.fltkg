@@ -1,0 +1,13 @@
+// Grammar for the consumer-lane unparser/formatter smoke targets.
+//
+// Deliberately tiny, like the other consumer grammars: this lane's job is the cross-module
+// path from `generate_rust_parser(unparser = True)` to a linked, running unparser, not
+// generator breadth.
+//
+// It does need one thing consumer.fltkg lacks — a rule whose items the format spec can put
+// spacing between — or rendering could not differ from the input text and the round-trip
+// test would pass on a formatter that did nothing.
+
+sum := lhs:num , "+" , rhs:num ;
+
+num := value:/[0-9]+/ ;

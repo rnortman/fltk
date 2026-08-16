@@ -105,6 +105,8 @@ def parse_source(source_path: Path):
     return result.result
 
 
+# TODO(bazel-py-unparser): this raw sys.argv entry point is what blocks Python-backend unparser
+# generation under Bazel; a `genparser` subcommand is the seam a build action needs.
 def main():
     """Main entry point."""
     if len(sys.argv) not in [EXPECTED_ARGC_MINIMAL, EXPECTED_ARGC_FULL]:

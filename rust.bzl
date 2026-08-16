@@ -3,8 +3,10 @@
 This file provides:
   - generate_rust_parser: the public macro consumers call. In its default
     (pure-Rust) mode it runs FLTK's Rust codegen on a grammar file and emits
-    cst.rs + parser.rs as Bazel action outputs — plus ast.rs (ast = True) and
-    de.rs (serde = True, which also needs the .fltkast sidecar as ast_config).
+    cst.rs + parser.rs as Bazel action outputs — plus ast.rs (ast = True),
+    de.rs (serde = True, which also needs the .fltkast sidecar as ast_config),
+    and unparser.rs (unparser = True, optionally baked with a .fltkfmt spec
+    passed as format_config).
     With python_extension = True it additionally assembles the crate, compiles
     the PyO3 cdylib, generates the .pyi stub package, and wraps the result in a
     py_library.
@@ -48,18 +50,25 @@ def _require_protocol_module(protocol, protocol_module):
     if msg != None:
         fail(msg)
 
-def _codegen_mode_violation(ast, serde, has_ast_config, goal = ""):
-    """Return the ast/serde/ast_config/goal misconfiguration message, or None.
+def _codegen_mode_violation(ast, serde, has_ast_config, goal = "", unparser = False, has_format_config = False):
+    """Return the ast/serde/ast_config/goal/format_config misconfiguration message, or None.
 
-    Three conditions:
+    Four conditions:
       - `serde = True` requires ast_config.
       - An `ast_config` with neither `ast` nor `serde` has no consumer and would be
         silently ignored.
       - A `goal` with neither `ast` nor `serde` is the same: only the gen-rust-ast and
         gen-rust-serde actions take --goal; the cst and parser actions never see it.
+      - A `format_config` without `unparser`: only the gen-rust-unparser action takes
+        --format-config.
 
     `ast = True` without a sidecar is NOT a violation — a grammar-derived (Tier 0) AST is a
-    supported mode.
+    supported mode. Neither is `unparser = True` without a format_config: that is the
+    default-FormatterConfig mode.
+
+    Call this with keyword arguments only. The parameter list is five booleans around one
+    string, so a transposed pair reads as a plausible guard and the message-pinning tests
+    would carry the same transposition rather than catch it.
     """
     if serde and not has_ast_config:
         return "generate_rust_parser: serde = True requires ast_config (the .fltkast sidecar shaping the tree)."
@@ -67,13 +76,82 @@ def _codegen_mode_violation(ast, serde, has_ast_config, goal = ""):
         return "generate_rust_parser: ast_config requires ast = True or serde = True; nothing else reads it."
     if goal and not (ast or serde):
         return "generate_rust_parser: goal requires ast = True or serde = True; nothing else reads it."
+    if has_format_config and not unparser:
+        return "generate_rust_parser: format_config requires unparser = True; nothing else reads it."
     return None
 
-def _require_codegen_mode(ast, serde, has_ast_config, goal = ""):
-    """Fire the ast/serde/ast_config/goal guard (fail on violation)."""
-    msg = _codegen_mode_violation(ast, serde, has_ast_config, goal)
+def _require_codegen_mode(ast, serde, has_ast_config, goal = "", unparser = False, has_format_config = False):
+    """Fire the ast/serde/ast_config/goal/format_config guard (fail on violation)."""
+    msg = _codegen_mode_violation(
+        ast = ast,
+        serde = serde,
+        has_ast_config = has_ast_config,
+        goal = goal,
+        unparser = unparser,
+        has_format_config = has_format_config,
+    )
     if msg != None:
         fail(msg)
+
+def _out_dir_violation(out_dir, python_extension = False):
+    """Return the out_dir misconfiguration message, or None.
+
+    Three conditions:
+      - out_dir in python_extension mode: the crate-assembly genrule already owns the
+        layout there, so the value would be silently ignored.
+      - An absolute out_dir: declare_file only names files inside the package.
+      - An out_dir with a `..` segment: same reason, stated as the escape it is.
+
+    An empty out_dir is the default (generated files land under the rule's own
+    <name>/ subdirectory) and never violates.
+    """
+    if not out_dir:
+        return None
+    if python_extension:
+        return "generate_rust_parser: out_dir is only valid with python_extension = False; in extension mode the assembled crate owns the layout."
+    if out_dir.startswith("/"):
+        return "generate_rust_parser: out_dir must be a package-relative directory; '{}' is absolute.".format(out_dir)
+    if ".." in out_dir.split("/"):
+        return "generate_rust_parser: out_dir must stay inside the package; '{}' escapes it via '..'.".format(out_dir)
+    return None
+
+def _require_out_dir(out_dir, python_extension = False):
+    """Fire the out_dir guard (fail on violation)."""
+    msg = _out_dir_violation(out_dir, python_extension = python_extension)
+    if msg != None:
+        fail(msg)
+
+def _out_dir_mode_violation(out_dir, extension_name, protocol_module):
+    """Return the out_dir/extension-attrs exclusion message, or None.
+
+    `python_extension` is a macro concept the rule never sees, but the two attributes the
+    macro sets in that mode — `extension_name` (which names the stub package) and
+    `protocol_module` (which turns stub emission on) — are usable proxies for it at analysis
+    time. Combining either with out_dir would split the layout: .rs files under out_dir, the
+    stub package under the extension-name directory.
+    """
+    if not out_dir:
+        return None
+    if extension_name or protocol_module:
+        return "generate_rust_parser: out_dir is only valid in pure-Rust mode; it cannot be combined with extension_name or protocol_module."
+    return None
+
+def _require_out_dir_mode(out_dir, extension_name, protocol_module):
+    """Fire the out_dir/extension-attrs exclusion guard (fail on violation)."""
+    msg = _out_dir_mode_violation(out_dir, extension_name, protocol_module)
+    if msg != None:
+        fail(msg)
+
+def _generated_path(out_subdir, basename):
+    """The package-relative path a generated file is declared at.
+
+    Empty and "." both mean the package root, where a bare basename is the declared path;
+    a trailing slash on a real directory is absorbed rather than doubled.
+    """
+    subdir = out_subdir.rstrip("/")
+    if subdir == "" or subdir == ".":
+        return basename
+    return subdir + "/" + basename
 
 def _plain_modules_for(ast, serde):
     """The Rust-only modules a generated crate root declares, in `mod` order.
@@ -147,6 +225,8 @@ def _generate_rust_lib_impl(ctx):
     args.add(lib_out)
     args.add("--module-name")
     args.add(ctx.attr.module_name)
+    if ctx.attr.unparser:
+        args.add("--unparser")
     if ctx.attr.no_cst:
         args.add("--no-cst")
     if ctx.attr.register_span_types:
@@ -173,6 +253,14 @@ generate_rust_lib = rule(
         "module_name": attr.string(
             mandatory = True,
             doc = "The Rust module name passed to gen-rust-lib as --module-name. Must be a valid Rust identifier and match the #[pymodule] fn name in the generated lib.rs.",
+        ),
+        "unparser": attr.bool(
+            default = False,
+            doc = (
+                "Pass --unparser to gen-rust-lib: the generated crate root gains `mod unparser;` " +
+                "and registers it as a Python submodule. The unparser is registered rather than " +
+                "plain because unparser.rs exports a feature-gated register_classes."
+            ),
         ),
         "no_cst": attr.bool(
             default = False,
@@ -236,6 +324,8 @@ def _generate_rust_srcs_impl(ctx):
     protocol_module = ctx.attr.protocol_module
     protocol = ctx.attr.protocol
     ast_config = ctx.file.ast_config
+    format_config = ctx.file.format_config
+    unparser = ctx.attr.unparser
 
     # Mirror the CLI's `--protocol-output requires --protocol-module` check,
     # surfacing the misconfiguration at analysis time.
@@ -243,7 +333,21 @@ def _generate_rust_srcs_impl(ctx):
 
     # Defense-in-depth: the public macro checks at loading time; this guard catches
     # direct instantiation of the internal rule.
-    _require_codegen_mode(ctx.attr.ast, ctx.attr.serde, ast_config != None, ctx.attr.goal)
+    _require_codegen_mode(
+        ast = ctx.attr.ast,
+        serde = ctx.attr.serde,
+        has_ast_config = ast_config != None,
+        goal = ctx.attr.goal,
+        unparser = unparser,
+        has_format_config = format_config != None,
+    )
+
+    # The out_dir path shape decides where declare_file lands, so it is enforced here as
+    # well as in the macro. The mode exclusion is enforced through the two attrs the macro
+    # sets in extension mode, since python_extension itself is a macro concept the rule
+    # never sees.
+    _require_out_dir(ctx.attr.out_dir)
+    _require_out_dir_mode(ctx.attr.out_dir, ctx.attr.extension_name, protocol_module)
 
     # The output subdirectory and the --extension-name CLI flag are both driven
     # by extension_name when it is set, and fall back to the rule's own target
@@ -251,11 +355,15 @@ def _generate_rust_srcs_impl(ctx):
     # decouples the stub-package directory / extension name from the rule's
     # target name: the wrapping macro sets extension_name to the single owner
     # module name so the stub package is named after the compiled module.
-    out_subdir = ctx.attr.extension_name or ctx.attr.name
+    #
+    # extension_name names the stub package, out_dir re-roots the generated .rs files, and
+    # the guard above refuses the combination, so the two variables below never disagree.
+    # They stay separate because each has its own owner.
+    stub_subdir = ctx.attr.extension_name or ctx.attr.name
+    out_subdir = ctx.attr.out_dir or stub_subdir
 
-    # Declare the two output files in the output subdirectory.
-    cst_out = ctx.actions.declare_file(out_subdir + "/cst.rs")
-    parser_out = ctx.actions.declare_file(out_subdir + "/parser.rs")
+    cst_out = ctx.actions.declare_file(_generated_path(out_subdir, "cst.rs"))
+    parser_out = ctx.actions.declare_file(_generated_path(out_subdir, "parser.rs"))
 
     # cst_out is always produced by the gen-rust-cst action; the .pyi / marker /
     # protocol outputs are appended below when protocol_module (and optionally
@@ -268,6 +376,12 @@ def _generate_rust_srcs_impl(ctx):
     # group returned below.
     stub_outputs = []
 
+    # A fully-configured grammar runs five separate genparser processes below (cst, parser,
+    # unparser, ast, serde), each starting a Python interpreter and rebuilding the GSM from
+    # the same .fltkg. Separate actions buy finer invalidation; whether that pays for 5N
+    # interpreter startups on a consumer with N grammars is unmeasured.
+    # TODO(bazel-codegen-action-fanout)
+    #
     # --- Action 1: gen-rust-cst ---
     cst_args = ctx.actions.args()
     cst_args.add("gen-rust-cst")
@@ -280,8 +394,8 @@ def _generate_rust_srcs_impl(ctx):
         # the Bazel output tree.  The marker is generator-produced via
         # --init-pyi-output (not a ctx.actions.write fixed body), keeping it on the
         # same dogfooded path as the in-tree markers.
-        cst_pyi = ctx.actions.declare_file(out_subdir + "/cst.pyi")
-        init_pyi = ctx.actions.declare_file(out_subdir + "/__init__.pyi")
+        cst_pyi = ctx.actions.declare_file(stub_subdir + "/cst.pyi")
+        init_pyi = ctx.actions.declare_file(stub_subdir + "/__init__.pyi")
         cst_args.add("--protocol-module")
         cst_args.add(protocol_module)
         cst_args.add("--pyi-output")
@@ -289,17 +403,20 @@ def _generate_rust_srcs_impl(ctx):
         cst_args.add("--init-pyi-output")
         cst_args.add(init_pyi)
         cst_args.add("--extension-name")
-        cst_args.add(out_subdir)
+        cst_args.add(stub_subdir)
         cst_args.add("--submodules")
-        cst_args.add("cst,parser")
+
+        # The marker's submodule list must match what the crate root actually registers,
+        # or a downstream `from <ext> import unparser` type-checks against nothing.
+        cst_args.add(",".join(["cst", "parser"] + (["unparser"] if unparser else [])))
         cst_outputs.append(cst_pyi)
         cst_outputs.append(init_pyi)
         stub_outputs.append(cst_pyi)
         stub_outputs.append(init_pyi)
 
         if protocol:
-            # Opt-in protocol .py output (Change 1, Rust side).
-            protocol_out = ctx.actions.declare_file(out_subdir + "/cst_protocol.py")
+            # Opt-in protocol .py output.
+            protocol_out = ctx.actions.declare_file(stub_subdir + "/cst_protocol.py")
             cst_args.add("--protocol-output")
             cst_args.add(protocol_out)
             cst_outputs.append(protocol_out)
@@ -329,13 +446,53 @@ def _generate_rust_srcs_impl(ctx):
         progress_message = "Generating Rust parser for grammar %s" % grammar.short_path,
     )
 
-    # --- Actions 3 and 4: gen-rust-ast / gen-rust-serde (opt-in) ---
     rule_srcs = [cst_out, parser_out]
     config_inputs = [ast_config] if ast_config != None else []
     parser_mod_path = _sibling_mod_path(ctx.attr.cst_mod_path, "parser")
 
+    # --- Action 3: gen-rust-unparser (opt-in) ---
+    #
+    # The .fltkfmt spec is baked into the generated methods at generation time, so it is an
+    # ordinary action input: editing it re-runs codegen like any other source change.
+    if unparser:
+        unparser_out = ctx.actions.declare_file(_generated_path(out_subdir, "unparser.rs"))
+        unparser_args = ctx.actions.args()
+        unparser_args.add("gen-rust-unparser")
+        unparser_args.add(grammar)
+        unparser_args.add(unparser_out)
+        unparser_args.add("--cst-mod-path")
+        unparser_args.add(ctx.attr.cst_mod_path)
+
+        unparser_outputs = [unparser_out]
+        unparser_inputs = [grammar]
+        if format_config != None:
+            unparser_args.add("--format-config")
+            unparser_args.add(format_config)
+            unparser_inputs.append(format_config)
+
+        if protocol_module:
+            # The stub package is owned by the gen-rust-cst action (it writes __init__.pyi);
+            # this action contributes the unparser half of it.
+            unparser_pyi = ctx.actions.declare_file(stub_subdir + "/unparser.pyi")
+            unparser_args.add("--protocol-module")
+            unparser_args.add(protocol_module)
+            unparser_args.add("--pyi-output")
+            unparser_args.add(unparser_pyi)
+            unparser_outputs.append(unparser_pyi)
+            stub_outputs.append(unparser_pyi)
+
+        ctx.actions.run(
+            inputs = unparser_inputs,
+            outputs = unparser_outputs,
+            arguments = [unparser_args],
+            executable = ctx.executable._gen_tool,
+            progress_message = "Generating Rust unparser for grammar %s" % grammar.short_path,
+        )
+        rule_srcs.append(unparser_out)
+
+    # --- Actions 4 and 5: gen-rust-ast / gen-rust-serde (opt-in) ---
     if ctx.attr.ast:
-        ast_out = ctx.actions.declare_file(out_subdir + "/ast.rs")
+        ast_out = ctx.actions.declare_file(_generated_path(out_subdir, "ast.rs"))
         ast_args = ctx.actions.args()
         ast_args.add("gen-rust-ast")
         ast_args.add(grammar)
@@ -344,6 +501,11 @@ def _generate_rust_srcs_impl(ctx):
         ast_args.add(ctx.attr.cst_mod_path)
         ast_args.add("--parser-mod-path")
         ast_args.add(parser_mod_path)
+        if unparser:
+            # The ast module's unparse_str entry point requires a sibling unparser module;
+            # without this flag the generated code has no referent for the import.
+            ast_args.add("--unparser-mod-path")
+            ast_args.add(_sibling_mod_path(ctx.attr.cst_mod_path, "unparser"))
         if ast_config != None:
             ast_args.add("--ast-config")
             ast_args.add(ast_config)
@@ -361,7 +523,7 @@ def _generate_rust_srcs_impl(ctx):
         rule_srcs.append(ast_out)
 
     if ctx.attr.serde:
-        de_out = ctx.actions.declare_file(out_subdir + "/de.rs")
+        de_out = ctx.actions.declare_file(_generated_path(out_subdir, "de.rs"))
         serde_args = ctx.actions.args()
         serde_args.add("gen-rust-serde")
         serde_args.add(grammar)
@@ -394,11 +556,11 @@ def _generate_rust_srcs_impl(ctx):
     # output groups so the wrapping macro can route heterogeneous outputs without
     # addressing individual declared files by label:
     #   rust_srcs — the .rs files (fed to crate assembly): cst.rs and parser.rs
-    #               always, plus ast.rs / de.rs when those are enabled.
+    #               always, plus unparser.rs / ast.rs / de.rs when those are enabled.
     #   stub_srcs — the .pyi stub package + optional protocol .py (fed to
     #               py_library.data); an empty depset when protocol_module is empty.
     return [
-        DefaultInfo(files = depset(cst_outputs + rule_srcs)),
+        DefaultInfo(files = depset(cst_outputs + rule_srcs + stub_outputs)),
         OutputGroupInfo(
             rust_srcs = depset(rule_srcs),
             stub_srcs = depset(stub_outputs),
@@ -470,6 +632,25 @@ _generate_rust_srcs = rule(
                 "generated AST type."
             ),
         ),
+        "unparser": attr.bool(
+            default = False,
+            doc = (
+                "When True, a gen-rust-unparser action also emits <name>/unparser.rs — the " +
+                "generated unparser over the CST module named by cst_mod_path, linking the " +
+                "fltk-unparser-core runtime. With ast = True the AST module additionally gains " +
+                "its unparse_str entry point. Valid in both modes."
+            ),
+        ),
+        "format_config": attr.label(
+            allow_single_file = True,
+            doc = (
+                "A .fltkfmt formatter-config file, passed to gen-rust-unparser as " +
+                "--format-config. Its spacing/anchor/disposition decisions are baked into the " +
+                "generated unparser at generation time, so editing it is an ordinary input " +
+                "change. Omitting it selects the default FormatterConfig. Requires unparser = " +
+                "True: no other action reads it."
+            ),
+        ),
         "goal": attr.string(
             default = "",
             doc = (
@@ -477,6 +658,18 @@ _generate_rust_srcs = rule(
                 "gen-rust-serde). Empty (the default) leaves each generator's own default: " +
                 "the first rule carrying an AST type for ast.rs, the first rule for de.rs. " +
                 "Requires ast or serde: no other action reads it."
+            ),
+        ),
+        "out_dir": attr.string(
+            default = "",
+            doc = (
+                "Package-relative directory the generated .rs files are declared in. Empty " +
+                "(the default) puts them under <name>/, matching the historical layout. Set " +
+                "it to the directory holding the consumer's own crate sources (e.g. \"src\") " +
+                "so a rust_library can take srcs = glob([\"src/**/*.rs\"]) + [\":gen\"] with " +
+                "crate_root = \"src/lib.rs\" and no copying step. Must be package-relative " +
+                "and must not contain a '..' segment. Pure-Rust mode only: the crate " +
+                "assembly genrule owns the layout in python_extension mode."
             ),
         ),
         "extension_name": attr.string(
@@ -503,6 +696,11 @@ Always emits two action outputs:
   <name>/cst.rs    — generated CST node classes (PyO3 Rust)
   <name>/parser.rs — generated parser (PyO3 Rust)
 
+With `out_dir` set, the .rs files are declared under that package-relative
+directory instead (<out_dir>/cst.rs, ...). The .pyi stub package always stays
+under the extension-name subdirectory; the two never coexist, because out_dir
+together with extension_name or protocol_module is refused at analysis time.
+
 When `protocol_module` is non-empty, the gen-rust-cst action additionally emits
 and declares:
   <name>/cst.pyi       — type stub for the compiled extension
@@ -511,18 +709,21 @@ and declares:
 When `protocol = True` (requires `protocol_module`), it also emits:
   <name>/cst_protocol.py — the backend-agnostic protocol module
 
-When `ast = True` it emits <name>/ast.rs, and when `serde = True` (which requires
-`ast_config`) it emits <name>/de.rs. Both ride the rust_srcs output group with
-cst.rs / parser.rs, so crate assembly picks them up unchanged.
+When `ast = True` it emits <name>/ast.rs, when `serde = True` (which requires
+`ast_config`) it emits <name>/de.rs, and when `unparser = True` it emits
+<name>/unparser.rs (optionally baked with a `format_config` .fltkfmt spec). All
+three ride the rust_srcs output group with cst.rs / parser.rs, so crate assembly
+picks them up unchanged. With `protocol_module`, the unparser action also emits
+<name>/unparser.pyi into the stub package.
 
 These files are designed to be consumed by fltk_pyo3_cdylib, which assembles
 them alongside a consumer-authored lib.rs into a single crate directory and
 compiles the result into a PyO3 cdylib.
 
-The fixed basenames (cst.rs / parser.rs / ast.rs / de.rs) are load-bearing: a
-consumer lib.rs that contains `mod cst;` and `mod parser;` (and `pub mod ast;` /
-`pub mod de;`) relies on these exact names, and the generated modules name each
-other as siblings of cst_mod_path.
+The fixed basenames (cst.rs / parser.rs / unparser.rs / ast.rs / de.rs) are
+load-bearing: a consumer lib.rs that contains `mod cst;`, `mod parser;` and
+`mod unparser;` (and `pub mod ast;` / `pub mod de;`) relies on these exact names,
+and the generated modules name each other as siblings of cst_mod_path.
 
 This is an internal rule wrapped by the public generate_rust_parser macro; it is
 not loaded or instantiated directly by consumers.
@@ -546,6 +747,7 @@ def fltk_pyo3_cdylib(
         lib_rs = None,
         ast = False,
         serde = False,
+        unparser = False,
         deps = [],
         crate_features = [],
         recursion_limit = _DEFAULT_RECURSION_LIMIT,
@@ -622,6 +824,11 @@ def fltk_pyo3_cdylib(
         serde: True when rs_srcs also carries de.rs. Links fltk-serde-core and
                serde, requires de.rs in the assembled crate, and (when lib_rs is
                generated) adds `pub mod de;` to it.
+        unparser: True when rs_srcs also carries unparser.rs. Links
+                  fltk-unparser-core, requires unparser.rs in the assembled crate,
+                  and (when lib_rs is generated) declares and registers
+                  `mod unparser;` as a Python submodule. A hand-authored lib_rs
+                  must declare and register it itself.
         deps: Extra rust_library deps to link into the cdylib (for consumer
               native Rust code that coexists with the generated modules).
         crate_features: Extra crate features beyond the mandatory
@@ -652,6 +859,7 @@ def fltk_pyo3_cdylib(
             name = name + "_gen_lib",
             module_name = name,
             plain_modules = plain_modules,
+            unparser = unparser,
         )
         lib_rs = ":" + name + "_gen_lib"
 
@@ -673,6 +881,8 @@ def fltk_pyo3_cdylib(
     # into the gendir is not staged into the compile action's sandbox, so `pub mod ast;`
     # would fail to resolve there while succeeding in a non-sandboxed build.
     crate_srcs = [name + "_crate_root/cst.rs", name + "_crate_root/parser.rs"]
+    if unparser:
+        crate_srcs.append(name + "_crate_root/unparser.rs")
     if ast:
         crate_srcs.append(name + "_crate_root/ast.rs")
     if serde:
@@ -713,8 +923,11 @@ def fltk_pyo3_cdylib(
 
     # Step 2: Compile the cdylib.
     #
-    # ast.rs requires fltk-ast-core; de.rs requires fltk-serde-core and serde.
+    # ast.rs requires fltk-ast-core; de.rs requires fltk-serde-core and serde;
+    # unparser.rs requires fltk-unparser-core.
     generated_deps = []
+    if unparser:
+        generated_deps.append(Label("//crates/fltk-unparser-core"))
     if ast:
         generated_deps.append(Label("//crates/fltk-ast-core"))
     if serde:
@@ -786,7 +999,10 @@ def generate_rust_parser(
         ast_config = None,
         ast = False,
         serde = False,
+        unparser = False,
+        format_config = None,
         goal = "",
+        out_dir = "",
         protocol_module = "",
         protocol = False,
         lib_rs = None,
@@ -802,13 +1018,16 @@ def generate_rust_parser(
 
     **python_extension = False (default — pure Rust).**
     Instantiates only the internal codegen rule as the public `:name` target,
-    emitting `<name>/cst.rs` and `<name>/parser.rs`. No cdylib, no .pyi, no
-    protocol module. The consumer drops the .rs files into their own crate.
+    emitting `<name>/cst.rs` and `<name>/parser.rs` — or, with `out_dir`, the same
+    files under a package-relative directory of the consumer's choosing, which is
+    what lets their own `rust_library` glob its crate sources alongside them. No
+    cdylib, no .pyi, no protocol module.
     The Python-extension-only knobs (`protocol_module`, `protocol`, `lib_rs`,
     `deps`, `crate_features`, a non-default `recursion_limit`) must be left at
     their defaults; setting any of them is a misconfiguration and fails fast.
-    `ast` / `serde` / `ast_config` / `goal` are valid in BOTH modes: the extra
-    generated modules are ordinary Rust sources either way.
+    `ast` / `serde` / `ast_config` / `unparser` / `format_config` / `goal` are
+    valid in BOTH modes: the extra generated modules are ordinary Rust sources
+    either way.
 
     **python_extension = True (full Python extension).**
     Instantiates the internal codegen rule as `<name>_srcs` with
@@ -842,9 +1061,24 @@ def generate_rust_parser(
                fltk-serde-core and serde, and the generated lib.rs declares
                `pub mod de;`. With ast = True, de.rs also carries a Deserialize
                impl per generated AST type.
+        unparser: When True, also emit <name>/unparser.rs (the generated unparser).
+                  In python_extension mode the cdylib links fltk-unparser-core, the
+                  generated lib.rs declares and registers `mod unparser;`, and (with
+                  protocol_module) the stub package gains unparser.pyi. With
+                  ast = True, ast.rs also gains its unparse_str entry point.
+        format_config: A .fltkfmt spec baked into the generated unparser at
+                       generation time. Requires unparser = True; omitting it
+                       selects the default FormatterConfig.
         goal: Rule the ast.rs / de.rs entry points target (--goal). Empty (the
               default) leaves each generator's own default. Requires ast = True
               or serde = True; nothing else reads it.
+        out_dir: Package-relative directory the generated .rs files land in, so a
+                 consumer's rust_library can glob its own sources alongside them
+                 (srcs = glob(["src/**/*.rs"]) + [":gen"], crate_root =
+                 "src/lib.rs") instead of copying everything into one gendir.
+                 Empty (the default) keeps the historical <name>/ layout. Must be
+                 package-relative with no '..' segment. python_extension = False
+                 only.
         protocol_module: Dotted Python import path of the protocol module; when
                          non-empty (python_extension = True only) triggers .pyi
                          stub-package emission.
@@ -866,7 +1100,15 @@ def generate_rust_parser(
                   than the curated python_extension guidance the named knobs give.
     """
     _require_protocol_module(protocol, protocol_module)
-    _require_codegen_mode(ast, serde, ast_config != None, goal)
+    _require_codegen_mode(
+        ast = ast,
+        serde = serde,
+        has_ast_config = ast_config != None,
+        goal = goal,
+        unparser = unparser,
+        has_format_config = format_config != None,
+    )
+    _require_out_dir(out_dir, python_extension = python_extension)
 
     if not python_extension:
         # Pure-Rust mode: the Python-extension-only knobs must be at defaults.
@@ -891,7 +1133,10 @@ def generate_rust_parser(
             ast_config = ast_config,
             ast = ast,
             serde = serde,
+            unparser = unparser,
+            format_config = format_config,
             goal = goal,
+            out_dir = out_dir,
             visibility = visibility,
             **kwargs
         )
@@ -909,6 +1154,8 @@ def generate_rust_parser(
         ast_config = ast_config,
         ast = ast,
         serde = serde,
+        unparser = unparser,
+        format_config = format_config,
         goal = goal,
         extension_name = name,
         protocol_module = protocol_module,
@@ -937,6 +1184,7 @@ def generate_rust_parser(
         lib_rs = lib_rs,
         ast = ast,
         serde = serde,
+        unparser = unparser,
         deps = deps,
         crate_features = crate_features,
         recursion_limit = recursion_limit,
@@ -951,6 +1199,9 @@ rust_bzl_internals = struct(
     pure_rust_mode_violation = _pure_rust_mode_violation,
     protocol_module_violation = _protocol_module_violation,
     codegen_mode_violation = _codegen_mode_violation,
+    out_dir_violation = _out_dir_violation,
+    out_dir_mode_violation = _out_dir_mode_violation,
+    generated_path = _generated_path,
     plain_modules_for = _plain_modules_for,
     sibling_mod_path = _sibling_mod_path,
     generate_rust_srcs = _generate_rust_srcs,

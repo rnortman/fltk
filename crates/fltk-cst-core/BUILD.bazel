@@ -1,19 +1,19 @@
-load("@rules_rust//rust:defs.bzl", "rust_library")
+load("//bzl:runtime_crate.bzl", "fltk_runtime_library")
 
-rust_library(
+# Two flavors of one crate, mirroring the cargo `python` feature. Bazel crate_features are
+# per-target and do not forward transitively, so a select() over a config_setting cannot serve
+# a build containing both a PyO3 cdylib and a pure-Rust library; parallel targets can.
+#
+# Never link both flavors into one binary: rustc refuses two crates with the same name.
+#
+# The PyO3 flavor (`:fltk-cst-core`) is what fltk_pyo3_cdylib links, and out-of-tree consumers
+# may name it directly, so its label, features and deps are frozen public API. It is the cargo
+# `--features python` build; `:no_python` is the cargo default build, with no pyo3 edge and
+# nothing downstream of it that can reintroduce one.
+fltk_runtime_library(
     name = "fltk-cst-core",
     srcs = glob(["src/**/*.rs"]),
-    # "python" is hardcoded here because all current Bazel consumers are PyO3 cdylibs.
-    # Cargo.toml documents that pure-Rust consumers can omit this feature to exclude pyo3
-    # entirely, but the Bazel build currently has no config_setting-based variant to express
-    # that.  If a pure-Rust Bazel consumer is ever added (e.g. a CLI tool or native test
-    # that uses CST data structures without Python), a separate target or select() over a
-    # config_setting will be needed.
-    crate_features = ["python"],
     crate_name = "fltk_cst_core",
-    edition = "2021",
-    visibility = ["//visibility:public"],
-    deps = [
-        "@fltk_crates//:pyo3",
-    ],
+    python_deps = ["@fltk_crates//:pyo3"],
+    python_features = ["python"],
 )

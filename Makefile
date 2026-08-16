@@ -1,7 +1,7 @@
 .PHONY: check check-ci check-common lint format-check typecheck test cargo-check cargo-test cargo-clippy \
         cargo-test-no-python cargo-clippy-no-python check-no-pyo3 cargo-deny \
         cargo-test-python-features check-locks check-bazel-locks regen-locks bazel-toolchain-guard \
-        bazel-check bazel-consumer-check \
+        bazel-check bazel-clippy bazel-consumer-check \
         build-native build-test-user-ext build-fegen-rust-cst build-rust-parser-fixture \
         build-test-fixtures build-poc-cst gen-rust-cst gen-rust-parser gen-rust-unparser \
         gen-ast gen-rust-ast gen-rust-serde \
@@ -52,9 +52,11 @@
 #     place (bzlmod's default lockfile_mode is `update`), exactly as the maturin builds are
 #     for Cargo.lock.  A new step appended after it that rewrites a lockfile would reopen
 #     the blind spot; put such a step before it.
+# TODO(bazel-dogfood-checks): pytest, ruff, pyright and rustfmt still run outside Bazel here.
 CHECK_STEPS := lint format-check typecheck test cargo-check cargo-clippy cargo-test \
                cargo-test-python-features cargo-test-no-python cargo-clippy-no-python \
-               check-no-pyo3 check-locks bazel-check bazel-consumer-check check-bazel-locks
+               check-no-pyo3 check-locks bazel-check bazel-clippy bazel-consumer-check \
+               check-bazel-locks
 
 check-common:
 	@steps="$(CHECK_STEPS)"; \
@@ -182,12 +184,17 @@ cargo-test-no-python:
 	cargo test -q --locked --manifest-path tests/rust_poc_cst/Cargo.toml --no-default-features
 	cargo test -q --locked --manifest-path crates/fltkfmt/Cargo.toml
 
+# The python-off crates whose every target the bazel-clippy aspect visits at the same
+# feature set with the same -D warnings gate are linted there, not here:
+#   fltk-cst-core  (:no_python == --no-default-features) and its unit tests
+#   fltk-parser-core (:no_python) + its unit tests + tests/memo_toy.rs
+#   fltk-ast-core --all-features (the Bazel targets turn all three features on) + tests
+#   fltk-serde-core (:no_python) + its unit tests
+#   fltk-unparser-core, fltk-fmt-cli (single flavor, also in the workspace lane above)
+# What stays below is what has no Bazel target to visit: fltk-ast-core with its features
+# OFF, and the out-of-workspace manifests Bazel does not build.
 cargo-clippy-no-python:
-	cargo clippy -q --locked -p fltk-cst-core --no-default-features --all-targets -- -D warnings
-	cargo clippy -q --locked -p fltk-parser-core --all-targets -- -D warnings
 	cargo clippy -q --locked -p fltk-ast-core --no-default-features --all-targets -- -D warnings
-	cargo clippy -q --locked -p fltk-ast-core --all-features --all-targets -- -D warnings
-	cargo clippy -q --locked -p fltk-serde-core --all-targets -- -D warnings
 	cargo clippy -q --locked --manifest-path tests/rust_parser_fixture/Cargo.toml --all-targets -- -D warnings
 	cargo clippy -q --locked --manifest-path crates/fegen-rust/Cargo.toml --no-default-features --all-targets -- -D warnings
 	cargo clippy -q --locked --manifest-path tests/rust_poc_cst/Cargo.toml --no-default-features --all-targets -- -D warnings
@@ -202,6 +209,9 @@ check-no-pyo3:
 	core="$$(cargo tree --locked -p fltk-cst-core --no-default-features --edges normal,build)"; \
 	echo "$$core" | grep -q fltk-cst-core || { echo "FAIL: check-no-pyo3 broken: cargo tree output lacks fltk-cst-core"; exit 1; }; \
 	! echo "$$core" | grep -q pyo3 || { echo "FAIL: pyo3 present in fltk-cst-core --no-default-features graph"; exit 1; }; \
+	core_default="$$(cargo tree --locked -p fltk-cst-core --edges normal,build)"; \
+	echo "$$core_default" | grep -q fltk-cst-core || { echo "FAIL: check-no-pyo3 broken: cargo tree output lacks fltk-cst-core"; exit 1; }; \
+	! echo "$$core_default" | grep -q pyo3 || { echo "FAIL: pyo3 present in the fltk-cst-core DEFAULT graph; the python feature must stay opt-in"; exit 1; }; \
 	parser="$$(cargo tree --locked -p fltk-parser-core --edges normal,build)"; \
 	echo "$$parser" | grep -q fltk-cst-core || { echo "FAIL: check-no-pyo3 broken: cargo tree output lacks fltk-cst-core"; exit 1; }; \
 	! echo "$$parser" | grep -q pyo3 || { echo "FAIL: pyo3 present in fltk-parser-core dependency graph"; exit 1; }; \
@@ -288,13 +298,62 @@ bazel-toolchain-guard:
 
 # Bazel verification lane for fltk's OWN Bazel surface.  Consumer-facing breakage
 # (a downstream module importing @fltk) is caught by bazel-consumer-check below.
+#
+# bazel-consumer-check only reaches the :no_python flavors its two consumer targets happen
+# to link, which leaves any unlinked :no_python target (fltk-serde-core's, today) with no
+# gate at all — and a :no_python target whose deps point at the python flavor still builds
+# and still passes its tests, it just links libpython.
 bazel-check: bazel-toolchain-guard
 	bazel test //...
+	@set -e; \
+	err="$$(mktemp)"; trap 'rm -f "$$err"' EXIT; \
+	labels="$$(bazel query 'attr(name, "^no_python$$", //crates/...)' 2>"$$err")" \
+	    || { echo "FAIL: bazel-check broken: query for :no_python targets failed"; cat "$$err"; exit 1; }; \
+	test -n "$$labels" || { echo "FAIL: bazel-check broken: no //crates/*:no_python targets found"; exit 1; }; \
+	for target in $$labels; do \
+	    graph="$$(bazel cquery "deps($$target)" 2>"$$err")" \
+	        || { echo "FAIL: bazel-check broken: cquery for $$target failed"; cat "$$err"; exit 1; }; \
+	    echo "$$graph" | grep -q 'fltk-cst-core:no_python' \
+	        || { echo "FAIL: bazel-check broken: cquery output for $$target lacks fltk-cst-core:no_python"; cat "$$err"; exit 1; }; \
+	    ! echo "$$graph" | grep -qi pyo3 \
+	        || { echo "FAIL: pyo3 present in the $$target Bazel graph"; exit 1; }; \
+	    echo "bazel-check: pyo3 absent from $$target"; \
+	done
+
+# Clippy over everything Bazel builds, via the rules_rust aspect (config in .bazelrc).
+# `-D warnings` comes from the clippy_flags setting, matching the cargo lanes' gate;
+# without it clippy prints and passes.
+bazel-clippy: bazel-toolchain-guard
+	bazel build --config=clippy //...
 
 # Bazel verification lane for fltk's CONSUMER surface: exercises the cross-module
 # @fltk// load path that `bazel test //...` in the root cannot cover (same-repo //).
+#
+# The cquery step is the Bazel-side twin of check-no-pyo3: //:consumer_ast and
+# //:consumer_fmt_bin are the pure-Rust consumer configurations (AST and unparser/formatter),
+# and a pyo3 edge reaching either means a runtime crate's :no_python flavor started carrying
+# the python one.  Nothing about the build fails when that happens — the crate still compiles,
+# it just links libpython — so the assertion is the only witness.  Positive control first, for
+# the same reason the cargo lane has one: a silently failing cquery would otherwise pass the
+# negative assertion vacuously.
+#
+# cquery's stderr goes to a file rather than /dev/null so the ordinary progress output stays
+# out of a passing run while the reason for a failing one (analysis error, renamed label,
+# stale crate_universe repos wanting CARGO_BAZEL_REPIN) is printed with the failure — the
+# gate has to be diagnosable from a CI log alone.
 bazel-consumer-check: bazel-toolchain-guard
 	cd tests/bazel_consumer && bazel test //...
+	@set -e; cd tests/bazel_consumer; \
+	err="$$(mktemp)"; trap 'rm -f "$$err"' EXIT; \
+	for target in //:consumer_ast //:consumer_fmt_bin; do \
+	    graph="$$(bazel cquery "deps($$target)" 2>"$$err")" \
+	        || { echo "FAIL: bazel-consumer-check broken: cquery for $$target failed"; cat "$$err"; exit 1; }; \
+	    echo "$$graph" | grep -q 'fltk-cst-core:no_python' \
+	        || { echo "FAIL: bazel-consumer-check broken: cquery output for $$target lacks fltk-cst-core:no_python"; cat "$$err"; exit 1; }; \
+	    ! echo "$$graph" | grep -qi pyo3 \
+	        || { echo "FAIL: pyo3 present in the $$target Bazel graph"; exit 1; }; \
+	    echo "bazel-consumer-check: pyo3 absent from $$target"; \
+	done
 
 # Supply-chain gate: RustSec advisories, license allow-list, banned/duplicate crates,
 # and source allow-listing (cargo-deny). The standalone fixture crates have their own

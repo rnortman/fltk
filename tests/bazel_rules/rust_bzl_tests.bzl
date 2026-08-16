@@ -1,17 +1,19 @@
 """Regression coverage for generate_rust_parser's misconfiguration guards.
 
-The public Bazel macro protects downstream consumers with ten misconfiguration
+The public Bazel macro protects downstream consumers with fourteen misconfiguration
 conditions (six pure-Rust-mode python-extension-only knob checks, the
-protocol/protocol_module coupling, and the three ast/serde/ast_config/goal
-conditions). This suite pins each condition and its exact user-facing message so a
+protocol/protocol_module coupling, the three ast/serde/ast_config/goal conditions,
+the format_config/unparser coupling, and the three out_dir conditions). This suite pins
+each condition and its exact user-facing message so a
 future edit that disables a guard or reworks a message fails a test. It also pins
 the cst_mod_path → sibling module-path derivation the generated ast.rs / de.rs name
-each other through, the ast/serde → plain-module mapping, and — by reading action
-command lines — that the rule attrs actually reach the generators.
+each other through, the ast/serde → plain-module mapping, the out_dir → declared-output
+layout, and — by reading action command lines — that the rule attrs actually reach the
+generators.
 
 Every condition fires at loading time (BUILD-file evaluation), so no target exists
 for analysistest to wrap; their condition + message logic is extracted into pure
-functions in rust.bzl and exercised here via skylib unittest. The two guards that
+functions in rust.bzl and exercised here via skylib unittest. The guards that
 are also enforced at analysis time (inside the internal _generate_rust_srcs rule
 impl) are covered end-to-end with analysistest.
 
@@ -21,6 +23,7 @@ load that symbol.
 
 load("@bazel_skylib//lib:unittest.bzl", "analysistest", "asserts", "unittest")
 load("//:rust.bzl", "rust_bzl_internals")
+load("//bzl:runtime_crate.bzl", "runtime_crate_internals")
 
 _PURE_RUST_MSG_TMPL = "generate_rust_parser: {} is only valid with python_extension = True."
 _COUPLING_MSG = "generate_rust_parser: protocol = True requires a non-empty protocol_module."
@@ -126,10 +129,11 @@ coupling_protocol_off_test = unittest.make(_coupling_protocol_off_impl)
 _SERDE_NEEDS_CONFIG_MSG = "generate_rust_parser: serde = True requires ast_config (the .fltkast sidecar shaping the tree)."
 _UNUSED_CONFIG_MSG = "generate_rust_parser: ast_config requires ast = True or serde = True; nothing else reads it."
 _UNUSED_GOAL_MSG = "generate_rust_parser: goal requires ast = True or serde = True; nothing else reads it."
+_UNUSED_FORMAT_CONFIG_MSG = "generate_rust_parser: format_config requires unparser = True; nothing else reads it."
 
 def _serde_without_config_impl(ctx):
     env = unittest.begin(ctx)
-    msg = rust_bzl_internals.codegen_mode_violation(False, True, False)
+    msg = rust_bzl_internals.codegen_mode_violation(ast = False, serde = True, has_ast_config = False)
     asserts.equals(env, _SERDE_NEEDS_CONFIG_MSG, msg, "serde = True without a sidecar must violate")
     return unittest.end(env)
 
@@ -137,7 +141,7 @@ codegen_serde_without_config_test = unittest.make(_serde_without_config_impl)
 
 def _config_without_consumer_impl(ctx):
     env = unittest.begin(ctx)
-    msg = rust_bzl_internals.codegen_mode_violation(False, False, True)
+    msg = rust_bzl_internals.codegen_mode_violation(ast = False, serde = False, has_ast_config = True)
     asserts.equals(env, _UNUSED_CONFIG_MSG, msg, "a sidecar with neither ast nor serde must violate")
     return unittest.end(env)
 
@@ -145,7 +149,7 @@ codegen_config_without_consumer_test = unittest.make(_config_without_consumer_im
 
 def _ast_without_config_impl(ctx):
     env = unittest.begin(ctx)
-    msg = rust_bzl_internals.codegen_mode_violation(True, False, False)
+    msg = rust_bzl_internals.codegen_mode_violation(ast = True, serde = False, has_ast_config = False)
     asserts.equals(env, None, msg, "ast = True without a sidecar is the grammar-derived mode, not a violation")
     return unittest.end(env)
 
@@ -153,7 +157,7 @@ codegen_ast_without_config_test = unittest.make(_ast_without_config_impl)
 
 def _codegen_off_impl(ctx):
     env = unittest.begin(ctx)
-    msg = rust_bzl_internals.codegen_mode_violation(False, False, False)
+    msg = rust_bzl_internals.codegen_mode_violation(ast = False, serde = False, has_ast_config = False)
     asserts.equals(env, None, msg, "neither knob set and no sidecar is the default configuration")
     return unittest.end(env)
 
@@ -161,7 +165,7 @@ codegen_off_test = unittest.make(_codegen_off_impl)
 
 def _codegen_both_with_config_impl(ctx):
     env = unittest.begin(ctx)
-    msg = rust_bzl_internals.codegen_mode_violation(True, True, True)
+    msg = rust_bzl_internals.codegen_mode_violation(ast = True, serde = True, has_ast_config = True)
     asserts.equals(env, None, msg, "ast + serde + sidecar is the full configuration")
     return unittest.end(env)
 
@@ -169,7 +173,7 @@ codegen_both_with_config_test = unittest.make(_codegen_both_with_config_impl)
 
 def _codegen_serde_only_impl(ctx):
     env = unittest.begin(ctx)
-    msg = rust_bzl_internals.codegen_mode_violation(False, True, True)
+    msg = rust_bzl_internals.codegen_mode_violation(ast = False, serde = True, has_ast_config = True)
     asserts.equals(env, None, msg, "serde + sidecar without ast is the bring-your-own-structs mode")
     return unittest.end(env)
 
@@ -177,7 +181,7 @@ codegen_serde_only_test = unittest.make(_codegen_serde_only_impl)
 
 def _codegen_goal_without_consumer_impl(ctx):
     env = unittest.begin(ctx)
-    msg = rust_bzl_internals.codegen_mode_violation(False, False, False, "config")
+    msg = rust_bzl_internals.codegen_mode_violation(ast = False, serde = False, has_ast_config = False, goal = "config")
     asserts.equals(env, _UNUSED_GOAL_MSG, msg, "a goal with neither ast nor serde is read by nothing")
     return unittest.end(env)
 
@@ -185,11 +189,234 @@ codegen_goal_without_consumer_test = unittest.make(_codegen_goal_without_consume
 
 def _codegen_goal_with_ast_impl(ctx):
     env = unittest.begin(ctx)
-    msg = rust_bzl_internals.codegen_mode_violation(True, False, False, "config")
+    msg = rust_bzl_internals.codegen_mode_violation(ast = True, serde = False, has_ast_config = False, goal = "config")
     asserts.equals(env, None, msg, "gen-rust-ast reads goal, so ast = True makes it legal")
     return unittest.end(env)
 
 codegen_goal_with_ast_test = unittest.make(_codegen_goal_with_ast_impl)
+
+# The unparser half of the same guard family: only the gen-rust-unparser action takes
+# --format-config, so a format_config with unparser = False is read by nothing. The
+# reverse (unparser without a spec) is the default-FormatterConfig mode and is legal.
+
+def _codegen_format_config_without_unparser_impl(ctx):
+    env = unittest.begin(ctx)
+    msg = rust_bzl_internals.codegen_mode_violation(
+        ast = False,
+        serde = False,
+        has_ast_config = False,
+        goal = "",
+        unparser = False,
+        has_format_config = True,
+    )
+    asserts.equals(
+        env,
+        _UNUSED_FORMAT_CONFIG_MSG,
+        msg,
+        "a format_config with unparser = False is read by nothing",
+    )
+    return unittest.end(env)
+
+codegen_format_config_without_unparser_test = unittest.make(_codegen_format_config_without_unparser_impl)
+
+def _codegen_unparser_without_format_config_impl(ctx):
+    env = unittest.begin(ctx)
+    msg = rust_bzl_internals.codegen_mode_violation(
+        ast = False,
+        serde = False,
+        has_ast_config = False,
+        goal = "",
+        unparser = True,
+        has_format_config = False,
+    )
+    asserts.equals(env, None, msg, "unparser without a spec is the default-FormatterConfig mode")
+    return unittest.end(env)
+
+codegen_unparser_without_format_config_test = unittest.make(_codegen_unparser_without_format_config_impl)
+
+def _codegen_unparser_with_format_config_impl(ctx):
+    env = unittest.begin(ctx)
+    msg = rust_bzl_internals.codegen_mode_violation(
+        ast = True,
+        serde = False,
+        has_ast_config = False,
+        goal = "nest_sum",
+        unparser = True,
+        has_format_config = True,
+    )
+    asserts.equals(env, None, msg, "ast + unparser + a baked spec is the full unparser configuration")
+    return unittest.end(env)
+
+codegen_unparser_with_format_config_test = unittest.make(_codegen_unparser_with_format_config_impl)
+
+# ---- Unit tests: _out_dir_violation and _generated_path --------------------------
+#
+# out_dir re-roots the generated files at a consumer-chosen package-relative directory so
+# a pure-Rust consumer's rust_library can glob its own sources alongside them. Three ways
+# to get it wrong, each with its own message: setting it in extension mode (where the crate
+# assembly genrule owns the layout), an absolute path, and a path escaping the package.
+
+_OUT_DIR_EXTENSION_MSG = "generate_rust_parser: out_dir is only valid with python_extension = False; in extension mode the assembled crate owns the layout."
+_OUT_DIR_ABSOLUTE_MSG_TMPL = "generate_rust_parser: out_dir must be a package-relative directory; '{}' is absolute."
+_OUT_DIR_ESCAPE_MSG_TMPL = "generate_rust_parser: out_dir must stay inside the package; '{}' escapes it via '..'."
+
+def _out_dir_in_extension_mode_impl(ctx):
+    env = unittest.begin(ctx)
+    msg = rust_bzl_internals.out_dir_violation("src", python_extension = True)
+    asserts.equals(env, _OUT_DIR_EXTENSION_MSG, msg, "out_dir has no effect in extension mode")
+    return unittest.end(env)
+
+out_dir_in_extension_mode_test = unittest.make(_out_dir_in_extension_mode_impl)
+
+def _out_dir_absolute_impl(ctx):
+    env = unittest.begin(ctx)
+    msg = rust_bzl_internals.out_dir_violation("/etc/src")
+    asserts.equals(env, _OUT_DIR_ABSOLUTE_MSG_TMPL.format("/etc/src"), msg, "an absolute out_dir must violate")
+    return unittest.end(env)
+
+out_dir_absolute_test = unittest.make(_out_dir_absolute_impl)
+
+def _out_dir_escape_impl(ctx):
+    env = unittest.begin(ctx)
+    asserts.equals(
+        env,
+        _OUT_DIR_ESCAPE_MSG_TMPL.format("../sibling"),
+        rust_bzl_internals.out_dir_violation("../sibling"),
+        "a leading .. must violate",
+    )
+    asserts.equals(
+        env,
+        _OUT_DIR_ESCAPE_MSG_TMPL.format("src/../../out"),
+        rust_bzl_internals.out_dir_violation("src/../../out"),
+        "an interior .. segment must violate too",
+    )
+    asserts.equals(
+        env,
+        None,
+        rust_bzl_internals.out_dir_violation("src/..sneaky"),
+        "a segment merely starting with dots is an ordinary directory name",
+    )
+    return unittest.end(env)
+
+out_dir_escape_test = unittest.make(_out_dir_escape_impl)
+
+def _out_dir_legal_impl(ctx):
+    env = unittest.begin(ctx)
+    asserts.equals(env, None, rust_bzl_internals.out_dir_violation(""), "unset out_dir keeps the default layout")
+    asserts.equals(env, None, rust_bzl_internals.out_dir_violation("src"), "a plain package-relative directory is legal")
+    asserts.equals(env, None, rust_bzl_internals.out_dir_violation("src/grammar"), "a nested directory is legal")
+    asserts.equals(
+        env,
+        None,
+        rust_bzl_internals.out_dir_violation("", python_extension = True),
+        "leaving out_dir unset is legal in extension mode",
+    )
+    return unittest.end(env)
+
+out_dir_legal_test = unittest.make(_out_dir_legal_impl)
+
+# The mode exclusion. python_extension is a macro concept, so the rule enforces it through
+# the two attrs the macro sets in extension mode; without this the rule would accept both
+# and emit .rs files under out_dir with the stub package elsewhere.
+
+_OUT_DIR_MODE_MSG = "generate_rust_parser: out_dir is only valid in pure-Rust mode; it cannot be combined with extension_name or protocol_module."
+
+def _out_dir_mode_impl(ctx):
+    env = unittest.begin(ctx)
+    asserts.equals(
+        env,
+        _OUT_DIR_MODE_MSG,
+        rust_bzl_internals.out_dir_mode_violation("src", "myext", ""),
+        "out_dir with extension_name must violate",
+    )
+    asserts.equals(
+        env,
+        _OUT_DIR_MODE_MSG,
+        rust_bzl_internals.out_dir_mode_violation("src", "", "my.pkg.cst_protocol"),
+        "out_dir with protocol_module must violate",
+    )
+    asserts.equals(
+        env,
+        None,
+        rust_bzl_internals.out_dir_mode_violation("src", "", ""),
+        "out_dir alone is the pure-Rust configuration",
+    )
+    asserts.equals(
+        env,
+        None,
+        rust_bzl_internals.out_dir_mode_violation("", "myext", "my.pkg.cst_protocol"),
+        "the extension attrs without out_dir are the extension-mode configuration",
+    )
+    return unittest.end(env)
+
+out_dir_mode_test = unittest.make(_out_dir_mode_impl)
+
+def _generated_path_impl(ctx):
+    env = unittest.begin(ctx)
+    asserts.equals(env, "src/cst.rs", rust_bzl_internals.generated_path("src", "cst.rs"))
+    asserts.equals(env, "src/grammar/cst.rs", rust_bzl_internals.generated_path("src/grammar", "cst.rs"))
+    asserts.equals(
+        env,
+        "cst.rs",
+        rust_bzl_internals.generated_path(".", "cst.rs"),
+        "'.' is the package root, not a directory literally named '.'",
+    )
+    asserts.equals(
+        env,
+        "src/cst.rs",
+        rust_bzl_internals.generated_path("src/", "cst.rs"),
+        "a trailing slash must not double up",
+    )
+    asserts.equals(env, "cst.rs", rust_bzl_internals.generated_path("", "cst.rs"))
+    return unittest.end(env)
+
+generated_path_test = unittest.make(_generated_path_impl)
+
+# ---- Unit tests: the runtime-crate flavor derivation -----------------------------
+#
+# fltk_runtime_library derives each :no_python target's deps from the bare fltk_deps
+# labels, which is what makes a flavor divergence between the two libraries of a runtime
+# crate unrepresentable. Nothing compiles differently when that derivation breaks: the
+# :no_python target still builds, it just links the python flavor of its sibling crate.
+
+_FLAVOR_LABEL_MSG_TMPL = ("fltk_runtime_library: fltk_deps take bare package labels (the macro derives " +
+                          "the :no_python flavor); got '{}'.")
+
+def _flavor_derivation_impl(ctx):
+    env = unittest.begin(ctx)
+    asserts.equals(
+        env,
+        "//crates/fltk-cst-core:no_python",
+        runtime_crate_internals.no_python_flavor("//crates/fltk-cst-core"),
+        "a bare package label gains the :no_python flavor",
+    )
+    asserts.equals(
+        env,
+        None,
+        runtime_crate_internals.flavor_label_violation("//crates/fltk-ast-core"),
+        "a bare package label is what the macro asks for",
+    )
+    return unittest.end(env)
+
+runtime_crate_flavor_test = unittest.make(_flavor_derivation_impl)
+
+def _flavor_label_violation_impl(ctx):
+    env = unittest.begin(ctx)
+    asserts.equals(
+        env,
+        _FLAVOR_LABEL_MSG_TMPL.format("//crates/fltk-cst-core:no_python"),
+        runtime_crate_internals.flavor_label_violation("//crates/fltk-cst-core:no_python"),
+        "an already-flavored label would derive a target that does not exist",
+    )
+    asserts.equals(
+        env,
+        _FLAVOR_LABEL_MSG_TMPL.format("@fltk_crates//:pyo3"),
+        runtime_crate_internals.flavor_label_violation("@fltk_crates//:pyo3"),
+        "a hub label has no flavor to derive; it belongs in hub_deps",
+    )
+    return unittest.end(env)
+
+runtime_crate_flavor_violation_test = unittest.make(_flavor_label_violation_impl)
 
 # ---- Unit tests: _plain_modules_for ----------------------------------------------
 #
@@ -228,6 +455,7 @@ def _sibling_default_impl(ctx):
     env = unittest.begin(ctx)
     asserts.equals(env, "super::parser", rust_bzl_internals.sibling_mod_path("super::cst", "parser"))
     asserts.equals(env, "super::ast", rust_bzl_internals.sibling_mod_path("super::cst", "ast"))
+    asserts.equals(env, "super::unparser", rust_bzl_internals.sibling_mod_path("super::cst", "unparser"))
     return unittest.end(env)
 
 sibling_default_test = unittest.make(_sibling_default_impl)
@@ -287,6 +515,84 @@ def _serde_config_analysis_impl(ctx):
 serde_config_analysis_test = analysistest.make(
     _serde_config_analysis_impl,
     expect_failure = True,
+)
+
+# Same defense-in-depth shape for the format_config → unparser coupling.
+
+def _format_config_analysis_impl(ctx):
+    env = analysistest.begin(ctx)
+    asserts.expect_failure(env, _UNUSED_FORMAT_CONFIG_MSG)
+    return analysistest.end(env)
+
+format_config_analysis_test = analysistest.make(
+    _format_config_analysis_impl,
+    expect_failure = True,
+)
+
+# The out_dir path shape is intrinsic to the rule (it decides where declare_file lands),
+# so unlike the mode exclusion it is enforced at analysis time as well as by the macro.
+
+def _out_dir_escape_analysis_impl(ctx):
+    env = analysistest.begin(ctx)
+    asserts.expect_failure(env, _OUT_DIR_ESCAPE_MSG_TMPL.format("../escapes"))
+    return analysistest.end(env)
+
+out_dir_escape_analysis_test = analysistest.make(
+    _out_dir_escape_analysis_impl,
+    expect_failure = True,
+)
+
+# The out_dir / extension-attrs exclusion has no loading-time shadow at all: the macro
+# refuses out_dir in extension mode, but the rule is what would otherwise accept both and
+# split the layout, so this analysis-time guard is the only enforcement of it.
+
+def _out_dir_mode_analysis_impl(ctx):
+    env = analysistest.begin(ctx)
+    asserts.expect_failure(env, _OUT_DIR_MODE_MSG)
+    return analysistest.end(env)
+
+out_dir_mode_analysis_test = analysistest.make(
+    _out_dir_mode_analysis_impl,
+    expect_failure = True,
+)
+
+# ---- Analysis test: out_dir re-roots every declared output -----------------------
+#
+# The whole point of out_dir is that the generated files land at package-relative paths a
+# consumer's rust_library can name; a partial re-rooting (one action's declare_file left on
+# the old path) still builds the codegen target and only breaks the consumer's crate root.
+
+def _out_dir_layout_impl(ctx):
+    env = analysistest.begin(ctx)
+    target = analysistest.target_under_test(env)
+    paths = [f.short_path for f in target[DefaultInfo].files.to_list()]
+    asserts.true(env, len(paths) > 0, "the target under test must declare outputs")
+    expected_dir = "tests/bazel_rules/" + ctx.attr.expected_dir
+    for p in paths:
+        asserts.equals(
+            env,
+            expected_dir,
+            p[:p.rindex("/")],
+            "every generated file must be declared under out_dir: %s" % p,
+        )
+    for basename in ctx.attr.expected_basenames:
+        asserts.true(
+            env,
+            expected_dir + "/" + basename in paths,
+            "expected %s under out_dir; got %s" % (basename, paths),
+        )
+    return analysistest.end(env)
+
+out_dir_layout_test = analysistest.make(
+    _out_dir_layout_impl,
+    attrs = {
+        "expected_dir": attr.string(
+            doc = "The package-relative directory every declared output must sit in.",
+        ),
+        "expected_basenames": attr.string_list(
+            doc = "Basenames that must be present under that directory.",
+        ),
+    },
 )
 
 # ---- Analysis tests: what the codegen actions are actually invoked with ----------
@@ -354,9 +660,97 @@ def _codegen_argv_impl(ctx):
             (_flag_value(de_argv, "--ast-config") or "").endswith(".fltkast"),
             "the sidecar must reach gen-rust-serde: %s" % de_argv,
         )
+
+    asserts.true(
+        env,
+        _argv_of_output(env, "unparser.rs") == None,
+        "unparser = False must run no gen-rust-unparser action",
+    )
+    if ast_argv != None:
+        asserts.equals(
+            env,
+            None,
+            _flag_value(ast_argv, "--unparser-mod-path"),
+            "without unparser there is no unparser module for gen-rust-ast to name",
+        )
     return analysistest.end(env)
 
 codegen_argv_test = analysistest.make(_codegen_argv_impl)
+
+# ---- Analysis test: the unparser action and what enabling it changes elsewhere ----
+#
+# Enabling unparser touches three action command lines: gen-rust-unparser (the new action),
+# gen-rust-ast (--unparser-mod-path), and gen-rust-cst (--submodules). A drop in any of the
+# three still builds — the generators fall back to their defaults — so argv is the witness.
+
+def _unparser_argv_impl(ctx):
+    env = analysistest.begin(ctx)
+    unparser_argv = _argv_of_output(env, "unparser.rs")
+    asserts.true(env, unparser_argv != None, "unparser = True must run a gen-rust-unparser action")
+
+    if unparser_argv != None:
+        asserts.equals(
+            env,
+            "super::cst",
+            _flag_value(unparser_argv, "--cst-mod-path"),
+            "cst_mod_path must reach gen-rust-unparser",
+        )
+        asserts.true(
+            env,
+            (_flag_value(unparser_argv, "--format-config") or "").endswith(".fltkfmt"),
+            "the format spec must reach gen-rust-unparser: %s" % unparser_argv,
+        )
+        asserts.equals(
+            env,
+            "tests.dummy_cst_protocol",
+            _flag_value(unparser_argv, "--protocol-module"),
+            "protocol_module must reach gen-rust-unparser so the stub package gains unparser.pyi",
+        )
+        asserts.true(
+            env,
+            (_flag_value(unparser_argv, "--pyi-output") or "").endswith("/unparser.pyi"),
+            "the unparser stub must be written into the stub package: %s" % unparser_argv,
+        )
+
+    ast_argv = _argv_of_output(env, "ast.rs")
+    asserts.true(env, ast_argv != None, "the target under test sets ast = True")
+    if ast_argv != None:
+        asserts.equals(
+            env,
+            "super::unparser",
+            _flag_value(ast_argv, "--unparser-mod-path"),
+            "ast + unparser must name the unparser module derived by sibling_mod_path",
+        )
+
+    cst_argv = _argv_of_output(env, "cst.rs")
+    asserts.true(env, cst_argv != None, "every codegen target runs a gen-rust-cst action")
+    if cst_argv != None:
+        asserts.equals(
+            env,
+            "cst,parser,unparser",
+            _flag_value(cst_argv, "--submodules"),
+            "the stub-package marker must list the unparser submodule",
+        )
+
+    # Declaring unparser.pyi is only half of it: the macro feeds the stub_srcs output group
+    # to the py_library's data, so a stub left out of that group is absent from the consumer's
+    # installed stub package while everything still builds and imports.
+    target = analysistest.target_under_test(env)
+    stub_paths = [f.short_path for f in target[OutputGroupInfo].stub_srcs.to_list()]
+    default_paths = [f.short_path for f in target[DefaultInfo].files.to_list()]
+    for expected in ["argv_unparser/unparser.pyi", "argv_unparser/cst.pyi", "argv_unparser/__init__.pyi"]:
+        full = "tests/bazel_rules/" + expected
+        asserts.true(env, full in stub_paths, "expected %s in stub_srcs; got %s" % (full, stub_paths))
+        asserts.true(env, full in default_paths, "expected %s in DefaultInfo; got %s" % (full, default_paths))
+    for path in stub_paths:
+        asserts.true(
+            env,
+            not path.endswith(".rs"),
+            "stub_srcs carries only the stub package, never generated Rust: %s" % path,
+        )
+    return analysistest.end(env)
+
+unparser_argv_test = analysistest.make(_unparser_argv_impl)
 
 def _plain_modules_argv_impl(ctx):
     env = analysistest.begin(ctx)
@@ -396,6 +790,31 @@ plain_modules_argv_test = analysistest.make(
     },
 )
 
+# The unparser is a registered submodule (--unparser, not --plain-module). Same invisibility
+# as the plain modules: an undeclared unparser.rs is simply not compiled and rustc says nothing.
+
+def _lib_unparser_argv_impl(ctx):
+    env = analysistest.begin(ctx)
+    argv = _argv_of_output(env, "lib.rs")
+    asserts.true(env, argv != None, "the target under test must run a gen-rust-lib action")
+    if argv != None:
+        asserts.equals(
+            env,
+            ctx.attr.expect_unparser,
+            "--unparser" in argv,
+            "gen-rust-lib --unparser presence must track the rule's unparser attr: %s" % argv,
+        )
+    return analysistest.end(env)
+
+lib_unparser_argv_test = analysistest.make(
+    _lib_unparser_argv_impl,
+    attrs = {
+        "expect_unparser": attr.bool(
+            doc = "Whether the gen-rust-lib action is expected to carry --unparser.",
+        ),
+    },
+)
+
 # ---- Suite -----------------------------------------------------------------------
 
 def rust_bzl_test_suite(name):
@@ -427,6 +846,17 @@ def rust_bzl_test_suite(name):
         codegen_serde_only_test,
         codegen_goal_without_consumer_test,
         codegen_goal_with_ast_test,
+        codegen_format_config_without_unparser_test,
+        codegen_unparser_without_format_config_test,
+        codegen_unparser_with_format_config_test,
+        out_dir_in_extension_mode_test,
+        out_dir_absolute_test,
+        out_dir_escape_test,
+        out_dir_legal_test,
+        out_dir_mode_test,
+        generated_path_test,
+        runtime_crate_flavor_test,
+        runtime_crate_flavor_violation_test,
         plain_modules_for_test,
         sibling_default_test,
         sibling_nested_test,
@@ -443,9 +873,42 @@ def rust_bzl_test_suite(name):
         target_under_test = ":neg_serde_without_config",
     )
 
+    format_config_analysis_test(
+        name = name + "_format_config_analysis_test",
+        target_under_test = ":neg_format_config_without_unparser",
+    )
+
+    out_dir_escape_analysis_test(
+        name = name + "_out_dir_escape_analysis_test",
+        target_under_test = ":neg_out_dir_escape",
+    )
+
+    out_dir_mode_analysis_test(
+        name = name + "_out_dir_mode_analysis_test",
+        target_under_test = ":neg_out_dir_with_extension_name",
+    )
+
+    out_dir_layout_test(
+        name = name + "_out_dir_layout_test",
+        target_under_test = ":out_dir_srcs",
+        expected_basenames = [
+            "ast.rs",
+            "cst.rs",
+            "de.rs",
+            "parser.rs",
+            "unparser.rs",
+        ],
+        expected_dir = "gensrc/grammar",
+    )
+
     codegen_argv_test(
         name = name + "_codegen_argv_test",
         target_under_test = ":argv_ast_serde_srcs",
+    )
+
+    unparser_argv_test(
+        name = name + "_unparser_argv_test",
+        target_under_test = ":argv_unparser_srcs",
     )
 
     plain_modules_argv_test(
@@ -455,13 +918,32 @@ def rust_bzl_test_suite(name):
         forbidden_plain_modules = ["cst"],
     )
 
+    lib_unparser_argv_test(
+        name = name + "_lib_unparser_argv_test",
+        target_under_test = ":argv_unparser_lib",
+        expect_unparser = True,
+    )
+
+    lib_unparser_argv_test(
+        name = name + "_lib_no_unparser_argv_test",
+        target_under_test = ":argv_plain_modules_lib",
+        expect_unparser = False,
+    )
+
     native.test_suite(
         name = name,
         tests = [
             ":" + name + "_unit_tests",
             ":" + name + "_coupling_analysis_test",
             ":" + name + "_serde_config_analysis_test",
+            ":" + name + "_format_config_analysis_test",
+            ":" + name + "_out_dir_escape_analysis_test",
+            ":" + name + "_out_dir_mode_analysis_test",
+            ":" + name + "_out_dir_layout_test",
             ":" + name + "_codegen_argv_test",
+            ":" + name + "_unparser_argv_test",
             ":" + name + "_plain_modules_argv_test",
+            ":" + name + "_lib_unparser_argv_test",
+            ":" + name + "_lib_no_unparser_argv_test",
         ],
     )

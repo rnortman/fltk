@@ -141,6 +141,20 @@ generate_rust_parser(
     serde = True,
 )
 
+# Pure-Rust smoke target for the unparser codegen action, with a .fltkfmt spec baked
+# in and ast = True so the AST module's unparse_str entry point is generated too. The
+# fixture's own .fltkfmt is the same spec the cargo fixture crate bakes, so a spec
+# feature the Bazel action mishandles fails here rather than in a consumer's build.
+generate_rust_parser(
+    name = "bootstrap_rust_unparser_srcs",
+    src = "fltk/fegen/test_data/rust_parser_fixture.fltkg",
+    ast = True,
+    ast_config = "tests/rust_parser_fixture/rust_parser_fixture.fltkast",
+    format_config = "fltk/fegen/test_data/rust_parser_fixture.fltkfmt",
+    goal = "nest_sum",
+    unparser = True,
+)
+
 # Python-extension smoke target for the generate_rust_parser macro
 # (python_extension = True) exercising the full Python path — crate assembly +
 # rust_shared_library cdylib + abi3 rename + py_library — AND stub-package
@@ -171,6 +185,19 @@ generate_rust_parser(
     goal = "nest_sum",
     python_extension = True,
     serde = True,
+)
+
+# Compile test for the extension-mode unparser path: the generated lib.rs must declare
+# and register `mod unparser;`, the assembly genrule must stage unparser.rs, and the
+# cdylib must link fltk-unparser-core. protocol_module is set so the stub package also
+# exercises unparser.pyi emission and the `unparser` entry in the __init__.pyi marker.
+generate_rust_parser(
+    name = "bootstrap_unparser_native",
+    src = "fltk/fegen/test_data/rust_parser_fixture.fltkg",
+    format_config = "fltk/fegen/test_data/rust_parser_fixture.fltkfmt",
+    protocol_module = "bootstrap_unparser_native.cst_protocol",
+    python_extension = True,
+    unparser = True,
 )
 
 # Compile test for the serde-without-ast mode — the pure bring-your-own-structs

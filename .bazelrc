@@ -1,1 +1,9 @@
 common --enable_bzlmod
+
+# Clippy, as an aspect over whatever //... builds. Kept in a named config rather than the
+# default build so an ordinary `bazel build` stays a build; `make bazel-clippy` selects it.
+# --@rules_rust//:clippy_flags carries the deny-all gate the cargo lanes use; without it a
+# warning is printed and the build still succeeds.
+build:clippy --aspects=@rules_rust//rust:defs.bzl%rust_clippy_aspect
+build:clippy --output_groups=+clippy_checks
+build:clippy --@rules_rust//:clippy_flags=-Dwarnings
