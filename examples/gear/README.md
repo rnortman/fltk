@@ -24,16 +24,20 @@ The resolver-enabled server is launched like this (the same argv the VS Code cli
 and the automated e2e tests drive):
 
 ```bash
-uv --project <repo> run --extra lsp fltk-lsp \
+bazel run --run_under="cd $PWD &&" //:fltk_lsp -- \
   --grammar examples/gear/gear.fltkg \
   --lsp     examples/gear/gear.fltklsp \
   --fmt     examples/gear/gear.fltkfmt \
   --resolver examples/gear/gear_resolver.py:create_resolver
 ```
 
-`--extra lsp` is load-bearing: `pygls` lives only in the `lsp` optional extra, and a plain
-`uv run` syncs default groups only, so without it a clean checkout gets a `pygls`-less
-environment and the server exits 1 before any protocol I/O.
+`--run_under="cd $PWD &&"` is what makes those relative paths mean what they say: `bazel run`
+executes in the runfiles tree, where `examples/gear/gear.fltkg` is a different file (or no file
+at all). Absolute paths need no such wrapper.
+
+The VS Code client uses the checked-in launcher `vscode/run-gear-lsp` instead, which builds
+`//:fltk_lsp` and then execs the built server, so the running server holds no Bazel workspace
+lock.
 
 ## VS Code
 
@@ -41,10 +45,11 @@ environment and the server exits 1 before any protocol I/O.
 
 - **Node / npm** — only to install the extension's one dependency
   (`vscode-languageclient`). No Python test needs Node.
-- **The Rust toolchain** (`rustup` + `cargo`) — `fltk` is a mixed Python/Rust package, so
-  `uv run` cannot build it without Rust. Install via <https://rustup.rs/>.
-- The **first launch is slow**: it pays the one-time maturin debug build of the Rust
-  extension. This is a visibly slow first start, not a hang; subsequent launches are fast.
+- **Bazel** (via `bazelisk`, honoring `.bazelversion`) — it builds and launches the server;
+  `pygls` and the rest come from the Bazel-managed pip hub, so there is no install step.
+- The **first launch is slow**: it pays a one-time Bazel build of the Rust extension and the
+  generated parsers. This is a visibly slow first start, not a hang; later launches hit the
+  Bazel cache and are fast.
 
 ### Run it (Extension Development Host)
 
@@ -60,8 +65,9 @@ Then either:
 - `code --extensionDevelopmentPath=<repo>/examples/gear/vscode`
 
 Both work against the in-repo defaults with zero configuration beyond `npm install`: the
-extension computes the repo root from its own location and builds the `uv … --extra lsp
-fltk-lsp …` command shown above. In the Development Host, open `examples/gear/sample/` as
+extension computes the repo root from its own location and builds a
+`vscode/run-gear-lsp --grammar … --lsp … --fmt … --resolver …` command with absolute paths.
+In the Development Host, open `examples/gear/sample/` as
 the workspace folder and open `main.gear`.
 
 ### Packaged `.vsix` (optional)
@@ -77,7 +83,7 @@ the full argv) to point at your checkout, e.g.:
 
 ```json
 "gear.server.command": [
-  "uv", "--project", "/path/to/fltk", "run", "--extra", "lsp", "fltk-lsp",
+  "/path/to/fltk/examples/gear/vscode/run-gear-lsp",
   "--grammar", "/path/to/fltk/examples/gear/gear.fltkg",
   "--lsp", "/path/to/fltk/examples/gear/gear.fltklsp",
   "--fmt", "/path/to/fltk/examples/gear/gear.fltkfmt",

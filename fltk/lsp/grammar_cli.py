@@ -1,11 +1,10 @@
-#!/usr/bin/env -S uv run python
 """``fltk-grammar-lsp``: one friendly entry point serving fltk's own grammar DSLs.
 
 fltk ships three DSLs -- ``.fltkg`` grammars, ``.fltkfmt`` formatting specs, and ``.fltklsp``
 editor-tooling specs -- each with its grammar and sidecar specs inside the ``fltk`` package. This
 CLI resolves those packaged files and starts the generic ``fltk-lsp`` server for one of them:
 
-    fltk-grammar-lsp {fltkg,fltkfmt,fltklsp} [--width N] [--indent N]
+    bazel run //:grammar_lsp -- {fltkg,fltkfmt,fltklsp} [--width N] [--indent N]
 
 The registry supplies every path, so no ``--grammar/--lsp/--fmt/--rule`` flags are needed. Files are
 resolved through ``importlib.resources`` so the same command works for editable installs, built

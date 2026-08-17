@@ -1,6 +1,6 @@
 """Cross-backend parity tests: Python fixture parser vs rust_parser_fixture.Parser.
 
-Requires rust_parser_fixture to be built: run 'make build-rust-parser-fixture' first.
+Requires rust_parser_fixture, which the py_test target takes from //tests/rust_parser_fixture:rust_parser_fixture.
 A CI lane where every test here is skipped is a failure signal.
 """
 
@@ -12,7 +12,7 @@ import pytest
 
 rust_parser_fixture = pytest.importorskip(
     "rust_parser_fixture",
-    reason="rust_parser_fixture not built; run 'make build-rust-parser-fixture' first",
+    reason="rust_parser_fixture not importable; it is built by //tests/rust_parser_fixture:rust_parser_fixture",
 )
 
 from fltk.fegen.pyrt import terminalsrc as tsrc  # noqa: E402

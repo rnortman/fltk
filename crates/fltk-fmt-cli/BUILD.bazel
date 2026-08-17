@@ -1,4 +1,5 @@
 load("@rules_rust//rust:defs.bzl", "rust_library", "rust_test")
+load("//bzl:cargo_gate.bzl", "cargo_gate_files")
 
 # CLI scaffolding for standalone formatter binaries: a consumer writes a rust_binary whose
 # main.rs is one fltk_formatter_main! invocation over their generated unparser. No features,
@@ -23,3 +24,7 @@ rust_test(
     name = "fltk-fmt-cli_test",
     crate = ":fltk-fmt-cli",
 )
+
+# Nothing the compile gates build depends on this crate, but it is a member of the root
+# workspace and cargo loads every member's manifest before it resolves anything.
+cargo_gate_files()

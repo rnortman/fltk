@@ -61,10 +61,16 @@ def fltk_runtime_library(
       python_deps: deps only the default flavor takes (pyo3).
       test_deps: extra deps for the unit-test target (dev-dependencies).
 
-    The tests ride the `:no_python` flavor: a test binary linking pyo3 without
-    extension-module links libpython, which needs the non-hermetic PYO3_PYTHON wiring
-    the cargo-test-python-features lane supplies and a Bazel sandbox does not.
-    Python-featured test execution stays a cargo lane.
+    The tests ride the `:no_python` flavor, which is the whole feature set for every
+    crate whose python-gated code is a pyclass surface with no unit tests of its own.
+    A crate that does need its tests run at the python feature set declares its own
+    `rust_test` beside this call — see `//crates/fltk-cst-core:python_test`. That works
+    because the @fltk_crates hub unifies pyo3's `extension-module`, so such a binary
+    links no libpython and needs no interpreter at build or run time; without that
+    unification it would need non-hermetic PYO3_PYTHON wiring a Bazel sandbox cannot
+    supply. Note `crate = ":<lib>"` is not a shortcut for it: rust_test does not inherit
+    crate_features, so it would silently produce a second copy of the `:no_python`
+    binary.
     """
     rust_library(
         name = name,

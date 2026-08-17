@@ -1,4 +1,3 @@
-#!/usr/bin/env -S uv run python
 """``fltk-highlight``: a standalone semantic highlighter for FLTK grammars.
 
 Loads a ``.fltkg`` grammar and an optional ``.fltklsp`` spec, parses an input file, and

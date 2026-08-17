@@ -39,13 +39,16 @@ this section reproduces its essentials.
 
 ```bash
 # CST node classes (one struct per rule + label enums)
-uv run python -m fltk.fegen.genparser gen-rust-cst      my_grammar.fltkg src/cst.rs
+bazel run --run_under="cd $PWD &&" @fltk//:genparser -- gen-rust-cst      my_grammar.fltkg src/cst.rs
 # Parser (start-rule methods named apply__parse_<rule>)
-uv run python -m fltk.fegen.genparser gen-rust-parser   my_grammar.fltkg src/parser.rs
+bazel run --run_under="cd $PWD &&" @fltk//:genparser -- gen-rust-parser   my_grammar.fltkg src/parser.rs
 # Unparser (start-rule methods named unparse_<rule>); the format spec is baked in here
-uv run python -m fltk.fegen.genparser gen-rust-unparser my_grammar.fltkg src/unparser.rs \
+bazel run --run_under="cd $PWD &&" @fltk//:genparser -- gen-rust-unparser my_grammar.fltkg src/unparser.rs \
     --format-config my_grammar.fltkfmt
 ```
+
+`--run_under="cd $PWD &&"` makes the relative paths after `--` resolve in the directory you
+invoked Bazel from rather than in the runfiles tree; see [usage.md](usage.md#quick-start-source-generation).
 
 The generated `parser.rs` does `use fltk_parser_core::...` and `unparser.rs` does
 `use fltk_unparser_core::...`, so the crate must depend on **both** of those plus
@@ -55,7 +58,7 @@ The generated `parser.rs` does `use fltk_parser_core::...` and `unparser.rs` doe
 
 The crate must build as an `rlib` (a `cdylib`-only crate cannot be used as a normal Cargo
 library dependency) and must keep pyo3 behind an optional feature so the formatter can consume
-it with `default-features = false`. Mirror `crates/fegen-rust/Cargo.toml`:
+it with `default-features = false`:
 
 ```toml
 [package]

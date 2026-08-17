@@ -8,19 +8,17 @@ two must produce byte-identical output at matching `--width`/`--indent`.
 
 This is the strongest guarantee that the standalone pure-Rust formatter matches the
 established Python formatter (including trailing-whitespace handling) and guards against
-future drift between `fegen.fltkfmt` and the committed Rust `unparser.rs`.
+future drift between `fegen.fltkfmt` and the generated Rust `unparser.rs`.
 
-Mirrors `tests/test_rust_unparser_parity_fixture.py`. Unlike the importable Rust
-extension fixtures, `fltkfmt` is a standalone binary with no `make` build wiring, so a
-session-scoped fixture builds it with `cargo`. The Rust toolchain is mandatory for this
-repo (CLAUDE.md), so a missing `cargo` is a hard failure rather than a skip — the parity
-guarantee can never be silently bypassed, and these tests are never all-skipped.
+Mirrors `tests/test_rust_unparser_parity_fixture.py`. The binary is a built dependency of
+this test, named by `FLTKFMT_BIN`; an absent variable is a hard failure rather than a skip,
+so the parity guarantee can never be silently bypassed.
 """
 
 from __future__ import annotations
 
 import functools
-import shutil
+import os
 import subprocess
 from pathlib import Path
 
@@ -33,8 +31,6 @@ from tests.unparser_parity import render_config_ids
 _REPO_ROOT = Path(__file__).parent.parent
 _FEGEN_FLTKG = _REPO_ROOT / "fltk" / "fegen" / "fegen.fltkg"
 _FEGEN_FLTKFMT = _REPO_ROOT / "fltk" / "fegen" / "fegen.fltkfmt"
-_FLTKFMT_MANIFEST = _REPO_ROOT / "crates" / "fltkfmt" / "Cargo.toml"
-_FLTKFMT_BINARY = _REPO_ROOT / "crates" / "fltkfmt" / "target" / "debug" / "fltkfmt"
 
 # Corpus: every real `.fltkg` in the tree (the canonical grammars plus the test-data
 # grammars). Each is parsed and re-rendered by both backends; pinned explicitly so the
@@ -105,25 +101,17 @@ def _py_format(text: str, max_width: int, indent_width: int) -> str:
 
 @pytest.fixture(scope="session")
 def fltkfmt_binary() -> Path:
-    """Build (with cargo) and locate the standalone `fltkfmt` binary.
+    """The standalone `fltkfmt` binary the test target named in `FLTKFMT_BIN`.
 
-    Cargo is mandatory for this repo (CLAUDE.md), so its absence is a hard failure, not a
-    skip: the parity guarantee must never be silently bypassed. A build failure is
-    likewise a hard error.
+    The same variable `crates/fltkfmt/tests/cli.rs` reads. A missing one is a broken target,
+    not an environment to fall back from: the parity guarantee must never be silently bypassed.
     """
-    assert shutil.which("cargo") is not None, (
-        "cargo not available; the Rust toolchain is required for this repo (CLAUDE.md) "
-        "and the fltkfmt parity tests must not be skipped"
-    )
-    build = subprocess.run(  # noqa: S603
-        ["cargo", "build", "--manifest-path", str(_FLTKFMT_MANIFEST)],  # noqa: S607
-        capture_output=True,
-        text=True,
-        check=False,
-    )
-    assert build.returncode == 0, f"failed to build fltkfmt:\n{build.stderr}"
-    assert _FLTKFMT_BINARY.exists(), f"fltkfmt binary not found at {_FLTKFMT_BINARY}"
-    return _FLTKFMT_BINARY
+    prebuilt = os.environ.get("FLTKFMT_BIN")
+    assert prebuilt, "FLTKFMT_BIN is not set; the test target must supply the built binary"
+    # Resolve so assertion failures name the actual path, not a bare runfiles-relative one.
+    binary = Path(prebuilt).resolve()
+    assert binary.exists(), f"FLTKFMT_BIN names no file: {prebuilt}"
+    return binary
 
 
 @pytest.mark.parametrize("max_width,indent_width", _CONFIGS, ids=_CONFIG_IDS)

@@ -10,7 +10,7 @@ Two error classes are deliberately asserted per-backend rather than across backe
 from surfaces that predate this module (the quintet pymethods and `Span`), and both already
 differ between the backends; each new member is pinned against its own backend's producer.
 
-Requires rust_parser_fixture to be built: run 'make build-rust-parser-fixture' first.
+Requires rust_parser_fixture, which the py_test target takes from //tests/rust_parser_fixture:rust_parser_fixture.
 """
 
 from __future__ import annotations
@@ -22,7 +22,7 @@ import pytest
 
 rust_parser_fixture = pytest.importorskip(
     "rust_parser_fixture",
-    reason="rust_parser_fixture not built; run 'make build-rust-parser-fixture' first",
+    reason="rust_parser_fixture not importable; it is built by //tests/rust_parser_fixture:rust_parser_fixture",
 )
 
 from fltk import _native  # noqa: E402

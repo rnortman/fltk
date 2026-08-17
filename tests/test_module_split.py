@@ -20,27 +20,27 @@ import pytest
 
 fltk_native = pytest.importorskip(
     "fltk._native",
-    reason="fltk._native not built; run 'uv run maturin develop' first",
+    reason="fltk._native not importable; it is built by //:native_py",
 )
 
 rust_parser_fixture = pytest.importorskip(
     "rust_parser_fixture",
-    reason="rust_parser_fixture not built; run 'make build-rust-parser-fixture' first",
+    reason="rust_parser_fixture not importable; it is built by //tests/rust_parser_fixture:rust_parser_fixture",
 )
 
 fegen_rust_cst = pytest.importorskip(
     "fegen_rust_cst",
-    reason="fegen_rust_cst not built; run 'make build-fegen-rust-cst' first",
+    reason="fegen_rust_cst not importable; it is built by //crates/fegen-rust:fegen_rust_cst",
 )
 
 phase4_roundtrip_cst = pytest.importorskip(
     "phase4_roundtrip_cst",
-    reason="phase4_roundtrip_cst not built; run 'make build-test-user-ext' first",
+    reason="phase4_roundtrip_cst not importable; it is built by //tests/rust_cst_fixture:phase4_roundtrip_cst",
 )
 
 poc_cst = pytest.importorskip(
     "poc_cst",
-    reason="poc_cst not built; run 'make build-poc-cst' first",
+    reason="poc_cst not importable; it is built by //tests/rust_poc_cst:poc_cst",
 )
 
 # Top-level imports that are used inside tests (E402: after importorskip guards, F811:

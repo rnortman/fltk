@@ -3,7 +3,7 @@
 The user-facing claim of the protocol-typed forward direction is that a downstream application can
 switch CST backends without rewriting its own code.  Two shapes of that claim are checked here over
 the fegen family, which is the only grammar with a committed concrete CST module, a committed
-protocol module and committed Rust stubs:
+protocol module and generated Rust stubs:
 
 * **protocol-typed consumer** — one module annotated purely against
   ``fltk.fegen.fltk_cst_protocol``, fed by a thin per-backend caller.  It descends the tree with
@@ -31,6 +31,7 @@ import typing
 import pytest
 
 from fltk.fegen import fltk_parser
+from tests import tree_paths
 from tests.fegen_ast_fixture import AST_MODULE_NAME, FEGEN_FLTKG, write_fegen_ast_module
 from tests.parser_parity import parse_py_cst, parse_rust_cst
 from tests.pyright_test_utils import (
@@ -313,11 +314,11 @@ def consumer_diagnostics(
 ) -> dict[str, list[dict[str, typing.Any]]]:
     """Both consumer shapes plus the AST module, checked in one pyright invocation.
 
-    Needs no built extension: pyright reads ``fltk/_stubs/fegen_rust_cst/cst.pyi`` for the Rust
+    Needs no built extension: pyright reads the generated ``fegen_rust_cst`` stub package for the Rust
     backend, which is exactly what a downstream consumer's own pyright run does.
     """
     tmpdir = tmp_path_factory.mktemp("ast_switchable_consumer")
-    write_pyright_config(tmpdir, extra_paths=[str(_REPO_ROOT), str(_REPO_ROOT / "fltk" / "_stubs"), str(tmpdir)])
+    write_pyright_config(tmpdir, extra_paths=[str(_REPO_ROOT), str(tree_paths.FEGEN_RUST_CST_STUB_ROOT), str(tmpdir)])
     _write_fixture_dir(tmpdir, include_static_only=True)
     # A fixture the tests below name but nobody wrote would yield no diagnostics, so every
     # zero-error assertion would pass on a file that does not exist.
@@ -380,7 +381,7 @@ kw := %"hello" ;
 _rust_available = importlib.util.find_spec("fegen_rust_cst") is not None
 _needs_rust = pytest.mark.skipif(
     not _rust_available,
-    reason="fegen_rust_cst not built; run 'make build-fegen-rust-cst' first",
+    reason="fegen_rust_cst not importable; it is built by //crates/fegen-rust:fegen_rust_cst",
 )
 
 

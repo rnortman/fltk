@@ -1,4 +1,3 @@
-#!/usr/bin/env -S uv run python
 """CLI for unparsing and rendering source files using FLTK.
 
 This tool takes a grammar file, format specification, and input file to produce

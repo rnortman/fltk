@@ -5,13 +5,15 @@ from __future__ import annotations
 import ast
 import pathlib
 import subprocess
+import sys
 import textwrap
 from typing import Any
 
 import pytest
 
 from fltk.fegen import gsm, gsm2tree
-from fltk.fegen.genparser import _parse_grammar_raw, create_default_context
+from fltk.fegen.genparser import _parse_grammar_raw
+from fltk.iir.context import create_default_context
 from fltk.iir.py import reg as pyreg
 from tests.pyright_test_utils import (
     _diags_for_file,
@@ -241,7 +243,7 @@ def cst_protocol_pyright_diagnostics(
     """Run pyright once over all positive CST-protocol fixture files.
 
     Writes all positive fixture files into a shared tmpdir and runs a single
-    `uv run pyright --outputjson <dir>` invocation.  Returns diagnostics
+    `pyright --outputjson <dir>` invocation.  Returns diagnostics
     partitioned by absolute file path.  Negative-test fixtures (which deliberately
     contain errors) are batched separately to keep error attribution unambiguous.
     """
@@ -519,10 +521,8 @@ def test_fltk2gsm_imports_protocol_not_concrete_at_runtime() -> None:
     Uses a subprocess to guarantee a clean sys.modules state.
     """
     result = subprocess.run(
-        [  # noqa: S607
-            "uv",
-            "run",
-            "python",
+        [
+            sys.executable,
             "-c",
             (
                 "import fltk.fegen.fltk2gsm; "

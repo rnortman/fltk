@@ -17,7 +17,7 @@ is exactly one copy of the enumeration and oracle logic.
 
 CLI usage (grammar-agnostic; pass any .fltkg path):
 
-    uv run python -m fltk.fegen.regex_corpus <path/to/grammar.fltkg>
+    bazel run --run_under="cd $PWD &&" //:regex_corpus -- <path/to/grammar.fltkg>
 
 Exit code is 0 if every extracted pattern is accepted, non-zero otherwise.
 """

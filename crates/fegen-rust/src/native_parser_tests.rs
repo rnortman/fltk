@@ -2,6 +2,16 @@
 mod tests {
     use crate::parser::Parser;
 
+    /// The text of `fltk/fegen/fegen.fltkg`, named by `FEGEN_FLTKG` and read at run time.
+    ///
+    /// Not `include_str!`ed: a path relative to this source file does not survive being
+    /// compiled from a staged copy, so the file arrives as test data instead.
+    fn fegen_grammar() -> String {
+        let path = std::env::var("FEGEN_FLTKG")
+            .expect("FEGEN_FLTKG is not set; the test target must stage fegen.fltkg as data");
+        std::fs::read_to_string(&path).unwrap_or_else(|e| panic!("read fegen.fltkg at {path}: {e}"))
+    }
+
     #[test]
     fn test_parse_simple_grammar() {
         let src = "grammar := rule+ ;";
@@ -14,7 +24,7 @@ mod tests {
 
     #[test]
     fn test_parse_fegen_fltkg() {
-        let src = include_str!(concat!(env!("CARGO_MANIFEST_DIR"), "/../../fltk/fegen/fegen.fltkg"));
+        let src = &fegen_grammar();
         let mut parser = Parser::new(src, None, false);
         let result = parser.apply__parse_grammar(0);
         assert!(
@@ -54,7 +64,7 @@ mod tests {
     // test-3: parse fegen.fltkg with capture_trivia=true (exercises all trivia-capture sites)
     #[test]
     fn test_parse_fegen_fltkg_with_capture_trivia() {
-        let src = include_str!(concat!(env!("CARGO_MANIFEST_DIR"), "/../../fltk/fegen/fegen.fltkg"));
+        let src = &fegen_grammar();
         let mut parser = Parser::new(src, None, true);
         let result = parser.apply__parse_grammar(0);
         assert!(

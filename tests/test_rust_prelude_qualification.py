@@ -14,7 +14,8 @@ close those gaps:
 
 - the emitters' own Rust strings, so an emission site no grammar in the suite reaches is covered
   too (`.map(Box::new)` on an optional boxed hoist has no occurrence in any committed artifact);
-- the committed artifacts, so an emitter fix that was never followed by a regeneration fails here;
+- the generated artifacts of every in-tree crate, so an emission site the emitter scan reads as
+  prose is covered as real output;
 - one throwaway pyo3 crate over a shadowing grammar, so the pyo3 half of `cst.rs` — accessors,
   mutators, `__repr__`, the `PyResult` returns — is compiled under the shadow rather than scanned.
   That is also the one check here not bounded by a name list: it fails on a bare std name nobody
@@ -35,7 +36,7 @@ import pytest
 
 from fltk.fegen import ast_test_grammars as fixtures
 from fltk.fegen.gsm2tree_rs import RustCstGenerator
-from tests.generated_rust_gate import run_cargo
+from tests.generated_rust_gate import cargo_target_dir, run_cargo
 from tests.test_generated_rust_gate import PRELUDE_GRAMMAR
 
 _REPO_ROOT = pathlib.Path(__file__).parent.parent
@@ -100,8 +101,8 @@ def _emitted_strings(module_source: str) -> list[str]:
     ]
 
 
-def _tracked_artifacts() -> list[pathlib.Path]:
-    """The committed generated CST and AST modules."""
+def _generated_artifacts() -> list[pathlib.Path]:
+    """The generated CST and AST modules of every in-tree crate, from the runfiles tree."""
     found = [
         path
         for root in ("crates/*/src", "tests/*/src")
@@ -124,25 +125,27 @@ def test_a_shadowable_emitter_spells_no_std_item_bare(emitter: str) -> None:
     assert not bare, f"{emitter} emits a bare std spelling; name it through the fltk.fegen.rust_emit table: {bare}"
 
 
-def test_the_committed_cst_and_ast_artifacts_spell_no_std_item_bare() -> None:
-    """The tracked generated modules carry the qualification the emitters write.
+def test_the_generated_cst_and_ast_artifacts_spell_no_std_item_bare() -> None:
+    """The generated modules carry the qualification the emitters write.
 
-    An emitter fix that was not followed by `make gencode` leaves an artifact that still compiles —
-    every crate in this repo has a grammar without a prelude-colliding rule name — and ships the
-    stale spelling to the next consumer who reads it as the shape to expect.
+    The scan above reads the emitters' string literals; this one reads what they actually
+    produced over every grammar in the tree, so a bare spelling assembled from pieces no single
+    literal contains is caught too. Every crate here has a grammar without a prelude-colliding
+    rule name, so the modules still compile and nothing else would notice.
     """
     stale = {
         str(path.relative_to(_REPO_ROOT)): bare
-        for path in _tracked_artifacts()
+        for path in _generated_artifacts()
         if (bare := _bare_spellings(path.read_text()))
     }
-    assert not stale, f"tracked generated modules name a std item bare; run `make gencode` then `make fix`: {stale}"
+    assert not stale, f"generated modules name a std item bare; fix fltk.fegen.rust_emit: {stale}"
 
 
-# The pyo3 requirement is read off the fixture crate rather than repeated, so the probe crate below
-# is always linted against the pyo3 the repo actually depends on; an unresolvable requirement fails
-# the offline build loudly instead of quietly testing a different macro expansion.
-_FIXTURE_MANIFEST = _REPO_ROOT / "tests" / "rust_parser_fixture" / "Cargo.toml"
+# The pyo3 requirement is read off the workspace root manifest rather than repeated, so the probe
+# crate below is always linted against the pyo3 the repo actually depends on; an unresolvable
+# requirement fails the offline build loudly instead of quietly testing a different macro
+# expansion.
+_FIXTURE_MANIFEST = _REPO_ROOT / "Cargo.toml"
 _PYO3_REQUIREMENT = re.compile(r'^pyo3 = \{ version = "([^"]+)"', re.MULTILINE)
 
 _PROBE_MANIFEST = """[workspace]
@@ -189,7 +192,8 @@ def test_the_python_gated_half_of_a_shadowing_cst_module_compiles(tmp_path: path
     manifest = tmp_path / "Cargo.toml"
     manifest.write_text(_PROBE_MANIFEST.format(root=_REPO_ROOT, pyo3=requirement.group(1)))
 
-    result = run_cargo("clippy", manifest, tmp_path / "target", "--features", "python", "--", "-D", "warnings")
+    target_dir = cargo_target_dir("prelude-qualification")
+    result = run_cargo("clippy", manifest, target_dir, "--features", "python", "--", "-D", "warnings")
     assert result.returncode == 0, result.stdout + result.stderr
 
 

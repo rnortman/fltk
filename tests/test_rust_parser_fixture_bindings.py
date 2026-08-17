@@ -4,7 +4,7 @@ Tests T5, T6, T7 exercise the nest/nest_sum rules, which have apply-depth propor
 to input nesting — unlike other fixture rules which are left-recursive (seed-grow handles
 them at constant depth).
 
-Requires rust_parser_fixture to be built: run 'make build-rust-parser-fixture' first.
+Requires rust_parser_fixture, which the py_test target takes from //tests/rust_parser_fixture:rust_parser_fixture.
 """
 
 from __future__ import annotations
@@ -13,7 +13,7 @@ import pytest
 
 rust_parser_fixture = pytest.importorskip(
     "rust_parser_fixture",
-    reason="rust_parser_fixture not built; run 'make build-rust-parser-fixture' first",
+    reason="rust_parser_fixture not importable; it is built by //tests/rust_parser_fixture:rust_parser_fixture",
 )
 
 

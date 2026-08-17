@@ -26,7 +26,7 @@ name = "fltk-native"
 # 0.6.0 cut.
 version = "0.4.0"
 edition = "2021"
-# Ships to PyPI via maturin, not crates.io. Guards against accidental `cargo publish`
+# Built by Bazel (//:native) and published nowhere. Guards against accidental `cargo publish`
 # and exempts this crate from cargo-deny license enforcement ([licenses.private]).
 publish = false
 

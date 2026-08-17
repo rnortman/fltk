@@ -21,7 +21,7 @@ confidence-threshold = 0.8
 
 [licenses.private]
 # Skip license enforcement for our own unpublished crates (publish = false):
-# fltk-native (ships via PyPI/maturin) and the tests/* fixtures.
+# fltk-native, which is built by Bazel and published nowhere, and the workspace members.
 ignore = true
 
 [bans]

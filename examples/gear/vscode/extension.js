@@ -1,5 +1,5 @@
-// VS Code client for the gear demo language. Spawns fltk-lsp over stdio via uv,
-// straight from the local repo checkout. Provisional demo wiring, not for publication.
+// VS Code client for the gear demo language. Spawns the generic fltk language server over
+// stdio, straight from the local repo checkout. Provisional demo wiring, not for publication.
 
 const path = require("path");
 const { workspace } = require("vscode");
@@ -12,21 +12,13 @@ function repoRoot() {
   return path.resolve(__dirname, "..", "..", "..");
 }
 
-// The in-repo default launch argv. `--extra lsp` is load-bearing: pygls lives only in
-// the `lsp` optional extra, and plain `uv run` syncs default groups only, so without it
-// a clean checkout gets a pygls-less environment and the server exits before any protocol
-// I/O. See examples/gear/README.md.
+// The in-repo default launch argv. The launcher builds //:fltk_lsp and execs the built
+// server, so the running server holds no Bazel workspace lock. See examples/gear/README.md.
 function defaultCommand() {
   const root = repoRoot();
   const gear = path.join(root, "examples", "gear");
   return [
-    "uv",
-    "--project",
-    root,
-    "run",
-    "--extra",
-    "lsp",
-    "fltk-lsp",
+    path.join(gear, "vscode", "run-gear-lsp"),
     "--grammar",
     path.join(gear, "gear.fltkg"),
     "--lsp",

@@ -1,6 +1,6 @@
 """Cross-backend parity tests: Python fegen parser vs fegen_rust_cst.Parser.
 
-Requires fegen_rust_cst to be built: run 'make build-fegen-rust-cst' first.
+Requires fegen_rust_cst, which the py_test target takes from //crates/fegen-rust:fegen_rust_cst.
 A CI lane where every test here is skipped is a failure signal.
 """
 
@@ -12,7 +12,7 @@ import pytest
 
 fegen_rust_cst = pytest.importorskip(
     "fegen_rust_cst",
-    reason="fegen_rust_cst not built; run 'make build-fegen-rust-cst' first",
+    reason="fegen_rust_cst not importable; it is built by //crates/fegen-rust:fegen_rust_cst",
 )
 
 import fltk.fegen.fltk_parser as py_parser_mod  # noqa: E402

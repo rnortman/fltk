@@ -1,5 +1,5 @@
 // VS Code client for fltk's own grammar DSLs (.fltkg / .fltkfmt / .fltklsp).
-// One LanguageClient per language, each spawning fltk-grammar-lsp over stdio via uv,
+// One LanguageClient per language, each spawning the grammar language server over stdio,
 // started lazily when the first document of that language appears. In-repo wiring,
 // not for publication.
 
@@ -18,15 +18,16 @@ function repoRoot() {
 }
 
 // The in-repo default launch argv prefix; the language id is appended per client.
-// `--extra lsp` is load-bearing: pygls lives only in the `lsp` optional extra, and plain
-// `uv run` syncs default groups only, so without it a clean checkout gets a pygls-less
-// environment and the server exits before any protocol I/O. See editors/vscode/README.md.
+// The launcher builds //:grammar_lsp and execs the built server, so the server process does
+// not hold the Bazel workspace lock while it runs -- which matters here, because a session
+// with three fltk languages open starts three clients in the same tick. See
+// editors/vscode/README.md.
 function commandPrefix() {
   const override = workspace.getConfiguration("fltk.grammars").get("server.command");
   if (Array.isArray(override) && override.length > 0) {
     return override;
   }
-  return ["uv", "--project", repoRoot(), "run", "--extra", "lsp", "fltk-grammar-lsp"];
+  return [path.join(repoRoot(), "editors", "vscode", "run-grammar-lsp")];
 }
 
 function startClient(languageId) {
@@ -52,7 +53,7 @@ function startClient(languageId) {
     clientOptions,
   );
   clients.set(languageId, client);
-  // If the server fails to launch (uv missing, bad server.command, pygls-less env, transient
+  // If the server fails to launch (bazel missing, bad server.command, a build failure, transient
   // contention), surface it and drop the dead client so a later document-open can retry rather
   // than caching a permanently-broken client for the whole session.
   client.start().catch((err) => {

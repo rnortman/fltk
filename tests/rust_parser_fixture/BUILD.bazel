@@ -1,0 +1,210 @@
+load("@rules_rust//rust:defs.bzl", "rust_library", "rust_shared_library", "rust_test")
+load("//:rust.bzl", "generate_rust_parser", "pyo3_extension_py_library")
+
+# The .fltkast sidecar shapes the generated AST and serde modules.  The root package's
+# ast/serde codegen smoke targets run over this same grammar and sidecar pair, so it crosses
+# the package boundary to them.
+exports_files(
+    ["rust_parser_fixture.fltkast"],
+    visibility = [
+        "//:__pkg__",
+        "//tests:__pkg__",
+    ],
+)
+
+# The fixture parser extension: the widest generated surface in the tree — CST, parser,
+# .fltkfmt-baked unparser, default-config unparser, AST, serde frontend, and a second grammar
+# hosted in the same cdylib.
+#
+# Hand-assembled rather than built through fltk_pyo3_cdylib: that macro takes one grammar and
+# generates or copies a crate root, while this crate's hand-written lib.rs registers six
+# submodules drawn from three separate codegen targets.
+
+# The eight action outputs, excluded from the glob so a stray in-tree copy cannot be named by
+# the same target as the output that shares its path.
+_HAND_WRITTEN_RS = glob(
+    ["src/**/*.rs"],
+    exclude = [
+        "src/ast.rs",
+        "src/collision_cst.rs",
+        "src/collision_parser.rs",
+        "src/cst.rs",
+        "src/de.rs",
+        "src/parser.rs",
+        "src/unparser.rs",
+        "src/unparser_default.rs",
+    ],
+    allow_empty = False,
+)
+
+# The primary grammar: five modules and the extension's stub package from one action.
+# out_dir = "src" lands the .rs beside the hand-written crate root, so the bare `pub mod`
+# declarations there resolve with no copying step and the generated modules reach each other as
+# siblings of super::cst; the .pyi go to rust_parser_fixture/ instead, named by extension_name.
+#
+# The stubs ride this target rather than a second codegen target because a second one would
+# re-parse the grammar and regenerate this tree's largest artifact to throw it away.
+# submodules names all six modules the hand-written crate root registers — three of them come
+# from the two auxiliary codegen targets below, which the marker would otherwise not mention.
+generate_rust_parser(
+    name = "fixture_srcs",
+    src = "//:fltk/fegen/test_data/rust_parser_fixture.fltkg",
+    ast = True,
+    ast_config = "rust_parser_fixture.fltkast",
+    extension_name = "rust_parser_fixture",
+    format_config = "//:fltk/fegen/test_data/rust_parser_fixture.fltkfmt",
+    goal = "nest_sum",
+    out_dir = "src",
+    protocol_module = "tests.rust_parser_fixture_cst_protocol",
+    serde = True,
+    submodules = [
+        "cst",
+        "parser",
+        "unparser",
+        "unparser_default",
+        "collision_cst",
+        "collision_parser",
+    ],
+    unparser = True,
+    visibility = ["//visibility:public"],
+)
+
+# The default-FormatterConfig variant of the same grammar, for default-config cross-backend
+# parity.  Only its unparser.rs is wanted, and unparser.rs is generated against the CST, so
+# parser = False drops the one artifact that would be generated for nothing; the cst.rs it also
+# emits is the module the unparser is generated against and cannot be skipped.
+generate_rust_parser(
+    name = "unparser_default_srcs",
+    src = "//:fltk/fegen/test_data/rust_parser_fixture.fltkg",
+    parser = False,
+    unparser = True,
+)
+
+# The second grammar, proving a cdylib can host two: the generated Parser / ApplyResult CST
+# classes and the parser machinery coexist without colliding.  cst_mod_path names the renamed
+# module below, so the generated parser looks for its CST where the crate root actually puts it.
+generate_rust_parser(
+    name = "collision_srcs",
+    src = "//:fltk/fegen/test_data/collision_fixture.fltkg",
+    cst_mod_path = "super::collision_cst",
+)
+
+# The codegen rule emits fixed basenames, and two of the three targets above would collide on
+# them inside one crate root.  These genrules rename by basename into src/, which is what the
+# crate root's `mod` declarations name.
+genrule(
+    name = "unparser_default_rs",
+    srcs = [":unparser_default_srcs"],
+    outs = ["src/unparser_default.rs"],
+    cmd = """
+        for f in $(locations :unparser_default_srcs); do
+            case $$(basename $$f) in
+                unparser.rs) cp $$f $(location src/unparser_default.rs) ;;
+            esac
+        done
+        test -s $(location src/unparser_default.rs)
+    """,
+)
+
+genrule(
+    name = "collision_rs",
+    srcs = [":collision_srcs"],
+    outs = [
+        "src/collision_cst.rs",
+        "src/collision_parser.rs",
+    ],
+    cmd = """
+        for f in $(locations :collision_srcs); do
+            case $$(basename $$f) in
+                cst.rs) cp $$f $(location src/collision_cst.rs) ;;
+                parser.rs) cp $$f $(location src/collision_parser.rs) ;;
+            esac
+        done
+        test -s $(location src/collision_cst.rs)
+        test -s $(location src/collision_parser.rs)
+    """,
+)
+
+# :fixture_srcs carries the .pyi stub package as well as the .rs, so the crate takes its
+# rust_srcs output group (the filegroup the macro declares beside it) rather than the target.
+_ALL_SRCS = _HAND_WRITTEN_RS + [
+    ":fixture_srcs_rust_srcs",
+    ":unparser_default_rs",
+    ":collision_rs",
+]
+
+# ── Pure-Rust flavor ──────────────────────────────────────────────────────────
+# The cargo default build (this manifest declares no default features): no pyo3 in the graph,
+# which the cquery loop in `make bazel-test` asserts by target name.
+#
+# The serde edge is the //crates/fltk-serde-core:serde flag, not the hub label: the generated
+# de.rs names ::serde and hands values to fltk-serde-core's traits, so the two must be one
+# instance whichever hub the flag points at.
+rust_library(
+    name = "no_python",
+    srcs = _ALL_SRCS,
+    crate_features = [],
+    crate_name = "rust_parser_fixture",
+    crate_root = "src/lib.rs",
+    edition = "2021",
+    visibility = ["//visibility:public"],
+    deps = [
+        "//crates/fltk-ast-core:no_python",
+        "//crates/fltk-cst-core:no_python",
+        "//crates/fltk-parser-core:no_python",
+        "//crates/fltk-serde-core:no_python",
+        "//crates/fltk-serde-core:serde",
+        "//crates/fltk-unparser-core",
+    ],
+)
+
+# All #[cfg(test)] modules of the crate, so one target runs the set.
+# serde's `derive` is on in the hub build, which is what de_tests.rs's target types need.
+rust_test(
+    name = "no_python_test",
+    crate = ":no_python",
+)
+
+# ── Python-extension flavor ───────────────────────────────────────────────────
+# "python" must be listed explicitly alongside "extension-module": Cargo forwards it through
+# the feature definition, Bazel crate_features do not.
+rust_shared_library(
+    name = "rust_parser_fixture_cdylib",
+    srcs = _ALL_SRCS,
+    crate_features = [
+        "extension-module",
+        "python",
+    ],
+    crate_name = "rust_parser_fixture",
+    crate_root = "src/lib.rs",
+    edition = "2021",
+    deps = [
+        "//crates/fltk-ast-core",
+        "//crates/fltk-cst-core",
+        "//crates/fltk-parser-core",
+        "//crates/fltk-serde-core",
+        "//crates/fltk-serde-core:serde",
+        "//crates/fltk-unparser-core",
+        "@fltk_crates//:pyo3",
+    ],
+)
+
+pyo3_extension_py_library(
+    name = "rust_parser_fixture",
+    cdylib = ":rust_parser_fixture_cdylib",
+    data = [":fixture_srcs_stub_srcs"],
+    visibility = ["//visibility:public"],
+)
+
+# The generated modules, for tests/test_rust_prelude_qualification.py's scan.  The raw outputs
+# of the two auxiliary codegen targets reach the crate only through the renaming genrules
+# above, so the genrules are what is named here.
+filegroup(
+    name = "generated_rs",
+    srcs = [
+        ":collision_rs",
+        ":fixture_srcs_rust_srcs",
+        ":unparser_default_rs",
+    ],
+    visibility = ["//tests:__pkg__"],
+)

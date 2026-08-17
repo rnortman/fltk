@@ -66,11 +66,14 @@ rule config  { field setting { name: settings; } }
 Generate the CST, the parser and the serde module:
 
 ```bash
-uv run python -m fltk.fegen.genparser gen-rust-cst    app.fltkg src/cst.rs
-uv run python -m fltk.fegen.genparser gen-rust-parser app.fltkg src/parser.rs
-uv run python -m fltk.fegen.genparser gen-rust-serde  app.fltkg src/de.rs \
+bazel run --run_under="cd $PWD &&" @fltk//:genparser -- gen-rust-cst    app.fltkg src/cst.rs
+bazel run --run_under="cd $PWD &&" @fltk//:genparser -- gen-rust-parser app.fltkg src/parser.rs
+bazel run --run_under="cd $PWD &&" @fltk//:genparser -- gen-rust-serde  app.fltkg src/de.rs \
     --ast-config app.fltkast --parser-mod-path super::parser --goal config
 ```
+
+`--run_under="cd $PWD &&"` makes the relative paths after `--` resolve in the directory you
+invoked Bazel from rather than in the runfiles tree; see [usage.md](usage.md#quick-start-source-generation).
 
 Your types, and one call:
 
@@ -125,7 +128,7 @@ feature, for your own targets) and `fltk-serde-core`.
 ### `gen-rust-serde`
 
 ```bash
-uv run python -m fltk.fegen.genparser gen-rust-serde GRAMMAR_FILE OUTPUT_FILE --ast-config PATH [options]
+bazel run --run_under="cd $PWD &&" @fltk//:genparser -- gen-rust-serde GRAMMAR_FILE OUTPUT_FILE --ast-config PATH [options]
 ```
 
 | Argument / option | Required | Meaning |
@@ -158,17 +161,6 @@ default is the grammar's first rule whatever its shape. Naming a trivia rule is 
 
 Without `--ast-mod-path` the frontend generates **zero public types** — the pure
 bring-your-own-structs mode.
-
-### Makefile
-
-```bash
-make gen-rust-serde GRAMMAR=app.fltkg RS_OUT=src/de.rs \
-     EXTRA_ARGS="--ast-config app.fltkast --parser-mod-path super::parser \
-                 --ast-mod-path super::ast --goal config"
-```
-
-Generated code is not expected to be rustfmt-clean straight out of the generator: the intended
-flow is generate → `make fix` → commit.
 
 ### Bazel
 

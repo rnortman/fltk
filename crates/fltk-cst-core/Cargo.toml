@@ -12,8 +12,8 @@ crate-type = ["rlib"]
 # cross-cdylib helpers. A cdylib crate enables it explicitly, usually by forwarding its own
 # `python` feature (see docs/rust-cst-extension-guide.md). Pure-Rust consumers get no pyo3
 # without asking for it, which is why the feature is not in `default`: a silent pyo3 edge in
-# a build that wanted none is invisible until link time. `make check-no-pyo3` asserts the
-# default graph stays clean.
+# a build that wanted none is invisible until link time. The cquery loop in `make bazel-test`
+# asserts the default graph stays clean.
 [dependencies]
 pyo3 = { version = "0.29", features = ["abi3-py310"], optional = true }
 

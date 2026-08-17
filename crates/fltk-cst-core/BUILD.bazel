@@ -1,4 +1,13 @@
+load("@rules_rust//rust:defs.bzl", "rust_library", "rust_test")
+load("//bzl:cargo_gate.bzl", "cargo_gate_files")
 load("//bzl:runtime_crate.bzl", "fltk_runtime_library")
+
+# The crate's sources and its pyo3 edge, stated once. Four targets below compile this crate at
+# different feature sets, and a src or dep reaching only some of them is a divergence with no
+# build failure to announce it: the extra flavors would keep compiling against a stale graph.
+_SRCS = glob(["src/**/*.rs"])
+
+_PY_DEPS = ["@fltk_crates//:pyo3"]
 
 # Two flavors of one crate, mirroring the cargo `python` feature. Bazel crate_features are
 # per-target and do not forward transitively, so a select() over a config_setting cannot serve
@@ -12,8 +21,55 @@ load("//bzl:runtime_crate.bzl", "fltk_runtime_library")
 # nothing downstream of it that can reintroduce one.
 fltk_runtime_library(
     name = "fltk-cst-core",
-    srcs = glob(["src/**/*.rs"]),
+    srcs = _SRCS,
     crate_name = "fltk_cst_core",
-    python_deps = ["@fltk_crates//:pyo3"],
+    python_deps = _PY_DEPS,
     python_features = ["python"],
 )
+
+# A third flavor, for test fixture extensions only: `python` plus `test-introspection`, the
+# feature that exposes the registry snapshot helpers the fixture cdylibs assert against.
+# rules_rust features are per-target and do not forward, so a fixture cdylib cannot turn the
+# feature on from its own crate_features the way its Cargo manifest does — it links this
+# target instead.
+#
+# Deliberately NOT reachable through fltk_pyo3_cdylib: that macro's dep list is frozen
+# consumer surface and production extensions must never carry test-only plumbing. The fixture
+# targets hand-assemble their crates and name this label directly.
+rust_library(
+    name = "test_introspection",
+    srcs = _SRCS,
+    crate_features = [
+        "python",
+        "test-introspection",
+    ],
+    crate_name = "fltk_cst_core",
+    edition = "2021",
+    visibility = ["//visibility:public"],
+    deps = _PY_DEPS,
+)
+
+# The unit tests at the `python` feature set — the four `abi_probe_tests` that assert the
+# pyclass ABI layout probes, which no other target compiles.
+#
+# It restates features rather than taking `crate = ":fltk-cst-core"`: rust_test does NOT inherit
+# crate_features from the crate it wraps, so `crate =` silently produces a second copy of the
+# :no_python test binary (61 tests instead of 65) that passes while compiling none of the
+# python-gated code.
+#
+# No interpreter needed at build or run time: pyo3's `extension-module` feature (unified by
+# the @fltk_crates hub) disables libpython linking.
+#
+# Visible to //tests/bazel_rules, whose analysistest reads this target's rustc argv for the
+# feature — the restatement above is otherwise unenforced.
+rust_test(
+    name = "python_test",
+    srcs = _SRCS,
+    crate_features = ["python"],
+    crate_name = "fltk_cst_core",
+    edition = "2021",
+    visibility = ["//tests/bazel_rules:__pkg__"],
+    deps = _PY_DEPS,
+)
+
+cargo_gate_files(srcs = _SRCS)

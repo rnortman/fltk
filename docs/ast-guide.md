@@ -57,11 +57,14 @@ rule expr   { fold_left: op; }
 Generate the CST, the parser and the AST module:
 
 ```bash
-uv run python -m fltk.fegen.genparser gen-rust-cst    calc.fltkg src/cst.rs
-uv run python -m fltk.fegen.genparser gen-rust-parser calc.fltkg src/parser.rs
-uv run python -m fltk.fegen.genparser gen-rust-ast    calc.fltkg src/ast.rs \
+bazel run --run_under="cd $PWD &&" @fltk//:genparser -- gen-rust-cst    calc.fltkg src/cst.rs
+bazel run --run_under="cd $PWD &&" @fltk//:genparser -- gen-rust-parser calc.fltkg src/parser.rs
+bazel run --run_under="cd $PWD &&" @fltk//:genparser -- gen-rust-ast    calc.fltkg src/ast.rs \
     --ast-config calc.fltkast --parser-mod-path super::parser --goal expr
 ```
+
+`--run_under="cd $PWD &&"` makes the relative paths after `--` resolve in the directory you
+invoked Bazel from rather than in the runfiles tree; see [usage.md](usage.md#quick-start-source-generation).
 
 Then:
 
@@ -83,8 +86,8 @@ the reason under [Runtime dependencies](#runtime-dependencies).
 ### Python
 
 ```bash
-uv run python -m fltk.fegen.genparser generate calc.fltkg calc calc.calc_cst -o calc/
-uv run python -m fltk.fegen.genparser gen-ast  calc.fltkg calc calc.calc_cst \
+bazel run --run_under="cd $PWD &&" @fltk//:genparser -- generate calc.fltkg calc calc.calc_cst -o calc/
+bazel run --run_under="cd $PWD &&" @fltk//:genparser -- gen-ast  calc.fltkg calc calc.calc_cst \
     --ast-config calc.fltkast --parser-module calc.calc_parser --goal expr -o calc/
 ```
 
@@ -112,7 +115,7 @@ The Python runtime is `fltk.fegen.pyrt.astrt`, which ships with FLTK; there is n
 ### `gen-ast` (Python backend)
 
 ```bash
-uv run python -m fltk.fegen.genparser gen-ast GRAMMAR_FILE BASE_NAME CST_MODULE [options]
+bazel run --run_under="cd $PWD &&" @fltk//:genparser -- gen-ast GRAMMAR_FILE BASE_NAME CST_MODULE [options]
 ```
 
 Writes `{BASE_NAME}_ast.py`.
@@ -132,7 +135,7 @@ Writes `{BASE_NAME}_ast.py`.
 ### `gen-rust-ast` (Rust backend)
 
 ```bash
-uv run python -m fltk.fegen.genparser gen-rust-ast GRAMMAR_FILE OUTPUT_FILE [options]
+bazel run --run_under="cd $PWD &&" @fltk//:genparser -- gen-rust-ast GRAMMAR_FILE OUTPUT_FILE [options]
 ```
 
 | Argument / option | Required | Meaning |
@@ -153,19 +156,6 @@ entries.
 The Rust module's header comment names the `fltk-ast-core` cargo features it needs — `indexmap`
 for `key:` collections, `uuid` / `decimal` for those two builtins. Enable them on the runtime
 crate.
-
-### Makefile
-
-```bash
-make gen-ast GRAMMAR=calc.fltkg BASE=calc CST_MODULE=calc.calc_cst OUT_DIR=calc \
-     EXTRA_ARGS="--ast-config calc.fltkast --parser-module calc.calc_parser"
-
-make gen-rust-ast GRAMMAR=calc.fltkg RS_OUT=src/ast.rs \
-     EXTRA_ARGS="--ast-config calc.fltkast --parser-mod-path super::parser --goal expr"
-```
-
-Generated code is not expected to be ruff/rustfmt-clean straight out of the generator: the
-intended flow is generate → `make fix` → commit.
 
 ### Bazel (Rust)
 

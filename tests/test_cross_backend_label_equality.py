@@ -20,7 +20,7 @@ import pytest
 
 fegen_rust_cst = pytest.importorskip(
     "fegen_rust_cst",
-    reason="fegen_rust_cst not built; run 'make build-fegen-rust-cst' first",
+    reason="fegen_rust_cst not importable; it is built by //crates/fegen-rust:fegen_rust_cst",
 )
 
 from fltk.fegen import fltk_cst as py_cst  # noqa: E402

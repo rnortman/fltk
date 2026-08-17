@@ -674,7 +674,7 @@ raise ValueError(msg)
 
         # Deduplicate and sort for deterministic output.
         # Sort is required because model.types is a set (hash order varies per PYTHONHASHSEED);
-        # without sorting, each make gencode run can produce differently-ordered isinstance unions
+        # without sorting, each generation run can produce differently-ordered isinstance unions
         # with no semantic difference — pure churn.
         # The sorted-annotation precedent is py_annotation_for_model_types (gsm2tree.py:88).
         seen: set[str] = set()
@@ -1072,11 +1072,11 @@ class _ProtocolLabelMember:
         File-level ruff suppressions:
         - N802: CstModule @property methods have PascalCase names matching module attributes
           (intentional).
-        - E501 is NOT added: ``make fix`` reformats the generated file so no line exceeds the
-          limit, and including E501 causes RUF100 (unused noqa) after ``make fix``.
+        - E501 is NOT added: the generator normalises what it writes (``ruff format``), so no
+          line exceeds the limit and an E501 suppression would itself be RUF100 (unused noqa).
         - F821 is NOT added: forward references to protocol classes resolve via ``from __future__
-          import annotations`` and ruff does not raise F821 for them; including F821 causes
-          RUF100 (unused noqa) after ``make fix``.
+          import annotations`` and ruff does not raise F821 for them, so that suppression would
+          be RUF100 too.
         """
         return "# ruff: noqa: N802\n" + ast.unparse(self.gen_protocol_module(emit_kind_literal=emit_kind_literal))
 

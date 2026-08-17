@@ -18,22 +18,23 @@ Covers design section 4 items 1-9:
 from __future__ import annotations
 
 import enum
-import json
 import pathlib
 import subprocess
+import sys
 
 import pytest
 
-# fltk._native is always available in the project (Rust extension built by maturin develop)
+# Bazel dep: //:native_py.
 from fltk._native import Span as RustSpan
 from fltk.fegen import fltk_cst as py_cst
 from fltk.fegen import fltk_cst_protocol as proto_cst
-from fltk.fegen import fltk_parser
+from fltk.fegen import fltk_parser, gencode_format
 from fltk.fegen.pyrt import terminalsrc
 from fltk.fegen.pyrt.terminalsrc import SpanKind
 from tests.pyright_test_utils import (
     _diags_for_file,
     _run_pyright_over_dir,
+    run_pyright_over_file,
     write_pyright_config,
 )
 
@@ -41,7 +42,7 @@ from tests.pyright_test_utils import (
 # Module-level availability guards
 # ---------------------------------------------------------------------------
 
-# fegen_rust_cst is optional (needs `make build-fegen-rust-cst`).
+# fegen_rust_cst is optional (it is built by //crates/fegen-rust:fegen_rust_cst).
 # Import it tentatively so tests that don't need it still run; tests that use
 # fegen_rust_cst directly are gated by the `fegen_rust_cst_module` fixture below.
 try:
@@ -54,15 +55,16 @@ except ImportError:
 
 _FEGEN_RUST_CST_SKIP = pytest.mark.skipif(
     not _FEGEN_RUST_CST_AVAILABLE,
-    reason="fegen_rust_cst not built; run 'make build-fegen-rust-cst' first",
+    reason="fegen_rust_cst not importable; it is built by //crates/fegen-rust:fegen_rust_cst",
 )
 
 # ---------------------------------------------------------------------------
 # Paths / constants
 # ---------------------------------------------------------------------------
 
-FLTK2GSM_PATH = pathlib.Path(__file__).parent.parent / "fltk" / "fegen" / "fltk2gsm.py"
-PROTOCOL_MODULE_PATH = pathlib.Path(__file__).parent.parent / "fltk" / "fegen" / "fltk_cst_protocol.py"
+_REPO_ROOT = pathlib.Path(__file__).parent.parent
+FLTK2GSM_PATH = _REPO_ROOT / "fltk" / "fegen" / "fltk2gsm.py"
+PROTOCOL_MODULE_PATH = _REPO_ROOT / "fltk" / "fegen" / "fltk_cst_protocol.py"
 
 # A grammar text with Items nodes that have heterogeneous children (Item, Trivia, Span).
 # "hello" separated by a comma (WS_ALLOWED separator) → produces Items with two Items
@@ -74,22 +76,19 @@ _SIMPLE_GRAMMAR_TEXT = 'test := "hello" , "world" ;'
 # ---------------------------------------------------------------------------
 
 
-def _run_pyright(file_path: pathlib.Path, *, pyright_available: bool) -> list[dict]:
-    """Run pyright --outputjson on file_path; return list of error diagnostics."""
-    if not pyright_available:
-        pytest.skip("pyright not available in this environment")
-    result = subprocess.run(  # noqa: S603
-        ["uv", "run", "pyright", "--outputjson", str(file_path)],  # noqa: S607
-        capture_output=True,
-        text=True,
-        timeout=60,
-        check=False,
+def _run_pyright(file_path: pathlib.Path, *, pyright_available: bool, config_dir: pathlib.Path) -> list[dict]:
+    """Run pyright --outputjson on file_path; return list of error diagnostics.
+
+    The file being checked lives in the source tree, so the config it is checked under is
+    written into config_dir and named explicitly.
+    """
+    write_pyright_config(config_dir)
+    return run_pyright_over_file(
+        file_path,
+        pyright_available=pyright_available,
+        cwd=config_dir,
+        project=config_dir,
     )
-    try:
-        data = json.loads(result.stdout)
-    except json.JSONDecodeError:
-        pytest.fail(f"pyright produced non-JSON output:\n{result.stdout[:500]}")
-    return [d for d in data.get("generalDiagnostics", []) if d.get("severity") == "error"]
 
 
 @pytest.fixture(scope="module")
@@ -100,12 +99,12 @@ def protocol_pyright_diagnostics(
     """Run pyright once over all batched protocol tmp-fixture files.
 
     Writes shapes_fixture.py, castless_probe.py, and python_backend_consumer.py
-    into a shared tmpdir with a pyrightconfig.json that resolves the repo venv,
-    then runs a single `uv run pyright --outputjson <dir>` invocation.
+    into a shared tmpdir with a pyrightconfig.json resolving this interpreter's imports,
+    then runs a single `pyright --outputjson <dir>` invocation.
     Returns error diagnostics partitioned by absolute file path.
 
     test_fltk2gsm_pyright_clean is NOT batched here — it runs against the real repo
-    file using the repo-root pyright config and must remain a separate subprocess.
+    file and must remain a separate subprocess.
     """
     tmpdir = tmp_path_factory.mktemp("protocol_pyright")
     write_pyright_config(tmpdir)
@@ -116,9 +115,20 @@ def protocol_pyright_diagnostics(
 
 
 def _run_ruff(file_path: pathlib.Path) -> list[str]:
-    """Run ruff check on file_path; return list of violation lines."""
+    """Run ruff check on file_path; return list of violation lines.
+
+    The binary is the pinned wheel's, and the config is the repo's `pyproject.toml` named
+    explicitly rather than discovered from the working directory — which is the repo root in
+    a checkout but a runfiles tree under Bazel.
+    """
     result = subprocess.run(  # noqa: S603
-        ["uv", "run", "ruff", "check", str(file_path)],  # noqa: S607
+        [
+            str(gencode_format.find_ruff()),
+            "check",
+            "--config",
+            str(_REPO_ROOT / "pyproject.toml"),
+            str(file_path),
+        ],
         capture_output=True,
         text=True,
         timeout=30,
@@ -303,9 +313,10 @@ def test_fltk2gsm_no_cst_forced_suppressions() -> None:
 
 def test_fltk2gsm_pyright_clean(
     pyright_available: bool,  # noqa: FBT001
+    tmp_path: pathlib.Path,
 ) -> None:
     """pyright is clean on fltk2gsm.py."""
-    errors = _run_pyright(FLTK2GSM_PATH, pyright_available=pyright_available)
+    errors = _run_pyright(FLTK2GSM_PATH, pyright_available=pyright_available, config_dir=tmp_path)
     assert errors == [], f"Unexpected pyright errors in fltk2gsm.py:\n{errors}"
 
 
@@ -368,10 +379,8 @@ def test_protocol_nodekind_members_have_runtime_values() -> None:
 def test_protocol_import_does_not_import_concrete_backends() -> None:
     """Importing only the protocol module must not import concrete backends."""
     result = subprocess.run(
-        [  # noqa: S607
-            "uv",
-            "run",
-            "python",
+        [
+            sys.executable,
             "-c",
             (
                 "import fltk.fegen.fltk_cst_protocol; "

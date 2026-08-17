@@ -14,24 +14,21 @@ updates:
     schedule:
       interval: "weekly"
 
-  # pyproject.toml + uv.lock.  requirements_lock.txt is regenerated from uv.lock by
-  # `make regen-locks` (its single writer); check-locks fails a uv bump PR until that
-  # is run on the branch.  No separate pip updater — a second writer would be clobbered.
-  - package-ecosystem: "uv"
+  # requirements.in + requirements_lock.txt — the Python dependency surface that feeds the
+  # Bazel pip hub.  Complete a bump PR by running `bazel run //:requirements.update` on the
+  # branch; //:requirements.test fails until the lock matches the manifest.
+  - package-ecosystem: "pip"
     directory: "/"
     schedule:
       interval: "weekly"
 
-  # All six Cargo workspaces (root + standalone crates/fixtures), each with a tracked
-  # Cargo.lock.  Grouped into a single PR set to keep volume sane across directories.
+  # The two Cargo workspaces with a tracked Cargo.lock: the root one and the consumer
+  # module's serde hub.  Every other crate in the tree is Bazel-only and has no manifest.
+  # Grouped into a single PR set to keep volume sane across directories.
   - package-ecosystem: "cargo"
     directories:
       - "/"
-      - "/crates/fegen-rust"
-      - "/crates/fltkfmt"
-      - "/tests/rust_cst_fixture"
-      - "/tests/rust_parser_fixture"
-      - "/tests/rust_poc_cst"
+      - "/tests/bazel_consumer/serde_hub"
     schedule:
       interval: "weekly"
     groups:

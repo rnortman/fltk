@@ -11,7 +11,7 @@ The grammar LSP gives you syntax highlighting, document formatting, document out
 ## Running the server
 
 ```bash
-fltk-grammar-lsp {fltkg,fltkfmt,fltklsp}
+bazel run //:grammar_lsp -- {fltkg,fltkfmt,fltklsp}
 ```
 
 The single positional argument is the language to serve. That is the only required argument. The server resolves its grammar and sidecar spec files from the installed fltk package automatically; there are no `--grammar`, `--lsp`, or `--fmt` flags to set.
@@ -25,17 +25,11 @@ The server speaks LSP over stdio. Editors start it as a subprocess and communica
 
 ### Prerequisites
 
-`pygls` must be installed. It lives in the `lsp` optional extra, not in fltk's base dependencies. If it is missing, the server prints an actionable message (`pip install 'fltk[lsp]'`) and exits.
+Bazel (via `bazelisk`, which honors the repo's `.bazelversion`). Everything the server needs -- `pygls`, the Python interpreter, the Rust toolchain that builds fltk's native extension -- is fetched and built by Bazel, so there is no install step and no virtualenv. If `pygls` is somehow missing (an environment assembled by hand rather than by Bazel), the server prints an actionable message and exits.
 
-When running from a source checkout with `uv`, pass `--extra lsp` so `uv` syncs the extra:
+The first launch from a clean checkout is slow: it pays a one-time build of the Rust extension and the generated parsers. Later launches hit the Bazel cache and are fast.
 
-```bash
-uv --project /path/to/fltk run --extra lsp fltk-grammar-lsp fltkg
-```
-
-`--extra lsp` is load-bearing: without it, a clean checkout has no `pygls` and the server exits before doing anything.
-
-fltk is a mixed Python/Rust package, so a Rust toolchain (`rustup` + `cargo`, from <https://rustup.rs/>) must also be available for the build step. The first launch from a clean checkout is slow because it pays for a one-time debug build of the Rust extension; subsequent launches are fast.
+From a workspace that vendors fltk as a Bazel module, the same target is reachable as `@fltk//:grammar_lsp`.
 
 ## What each language gets
 
@@ -62,7 +56,7 @@ Then either press F5 from the `editors/vscode` folder in VS Code (this launches 
 code --extensionDevelopmentPath=/path/to/fltk/editors/vscode
 ```
 
-No configuration is needed beyond `npm install`. The extension computes the fltk repo root from its own file location and builds the `uv ... --extra lsp fltk-grammar-lsp <language>` command automatically.
+No configuration is needed beyond `npm install`. The extension computes the fltk repo root from its own file location and launches `editors/vscode/run-grammar-lsp <language>`, a checked-in script that builds `//:grammar_lsp` and then execs the built server (so the running server holds no Bazel workspace lock).
 
 Open any `.fltkg` file (for example, `fltk/fegen/fegen.fltkg`) to see it working.
 
@@ -76,9 +70,7 @@ npx @vscode/vsce package
 Install the resulting `.vsix` file. Because the packaged extension no longer lives inside the repo tree, the auto-detected repo root is wrong. You must set the `fltk.grammars.server.command` setting (a string array) to tell the extension how to launch the server:
 
 ```json
-"fltk.grammars.server.command": [
-  "uv", "--project", "/path/to/fltk", "run", "--extra", "lsp", "fltk-grammar-lsp"
-]
+"fltk.grammars.server.command": ["/path/to/fltk/editors/vscode/run-grammar-lsp"]
 ```
 
 The extension appends the language id (`fltkg`, `fltkfmt`, or `fltklsp`) as the final argument. You can append `--width` and `--indent` to the array to tune formatting.
@@ -87,27 +79,21 @@ This setting is machine-scoped: it can only be set in user or machine settings, 
 
 The extension is not published to the VS Code marketplace. Installation is from source or from a locally built `.vsix`.
 
-## Bazel (`@fltk//`) -- experimental
+## From a consumer workspace (`@fltk//`)
 
-If your project vendors fltk as a Bazel submodule (`@fltk//...`), you can launch the server directly from that submodule without a separate fltk install:
+If your project vendors fltk as a Bazel module (`@fltk//...`), the server target is public and needs no separate fltk install:
 
 ```bash
 bazel run @fltk//:grammar_lsp -- fltkg
 ```
 
-To use this from VS Code, set the command prefix:
+Do not point the VS Code setting at `bazel run` itself. Two reasons:
 
-```json
-"fltk.grammars.server.command": ["bazel", "run", "@fltk//:grammar_lsp", "--"]
-```
-
-This path is experimental. Two caveats:
-
-**Lock contention.** Every `bazel run` grabs the Bazel workspace lock. If VS Code restores a session with `.fltkg`, `.fltkfmt`, and `.fltklsp` files all open, it tries to start three server processes at once; the extra Bazel invocations queue on the lock. The result is slow or timed-out client startup (not data corruption -- LSP traffic uses stdout while Bazel's build output goes to stderr).
+**Lock contention.** Every `bazel run` grabs the Bazel workspace lock and holds it for as long as the server runs. If VS Code restores a session with `.fltkg`, `.fltkfmt`, and `.fltklsp` files all open, it tries to start three server processes at once; the extra Bazel invocations queue on the lock. The result is slow or timed-out client startup (not data corruption -- LSP traffic uses stdout while Bazel's build output goes to stderr).
 
 **Cold-cache latency.** With an empty Bazel cache, there is a visible build before the server begins responding.
 
-When you use more than one fltk language, the recommended workaround is to generate a launcher script once and point the setting at that script, which avoids the per-launch lock contention:
+Instead, generate a launcher script once and point the setting at that script (this is what the in-repo `editors/vscode/run-grammar-lsp` does per launch):
 
 ```bash
 bazel run --script_path=/path/to/grammar_lsp.sh @fltk//:grammar_lsp
@@ -119,4 +105,4 @@ bazel run --script_path=/path/to/grammar_lsp.sh @fltk//:grammar_lsp
 
 ## The generic `fltk-lsp` server
 
-`fltk-grammar-lsp` is a convenience wrapper. Under the hood it calls the same generic `fltk-lsp` server that powers any fltk-based language (including the gear demo in `examples/gear/`). If you are building your own language on fltk, you use `fltk-lsp` directly with explicit `--grammar`, `--lsp`, `--fmt`, and optionally `--resolver` flags pointing at your own spec files. See `examples/gear/` for a complete example including a VS Code extension and a cross-file resolver plugin.
+`fltk-grammar-lsp` is a convenience wrapper. Under the hood it calls the same generic `fltk-lsp` server that powers any fltk-based language (including the gear demo in `examples/gear/`). If you are building your own language on fltk, you run `//:fltk_lsp` (`@fltk//:fltk_lsp` from a consumer workspace) directly with explicit `--grammar`, `--lsp`, `--fmt`, and optionally `--resolver` flags pointing at your own spec files. See `examples/gear/` for a complete example including a VS Code extension and a cross-file resolver plugin.

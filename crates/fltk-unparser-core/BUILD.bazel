@@ -1,4 +1,5 @@
 load("@rules_rust//rust:defs.bzl", "rust_library", "rust_test")
+load("//bzl:cargo_gate.bzl", "cargo_gate_files")
 
 # Runtime for the generated unparser.rs. No features, no dependencies (see
 # Cargo.toml): pyo3-free by construction, safe for both pure-Rust and cdylib consumers.
@@ -15,3 +16,5 @@ rust_test(
     name = "fltk-unparser-core_test",
     crate = ":fltk-unparser-core",
 )
+
+cargo_gate_files()

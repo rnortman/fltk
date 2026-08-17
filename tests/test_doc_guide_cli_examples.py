@@ -1,14 +1,13 @@
 """What the AST and serde guides print is checked against the CLI, and run.
 
 The guides tell out-of-tree consumers how to generate public API for their own code, so a
-renamed flag, a dropped command or a Makefile target that stopped taking a variable is a
-downstream break that no other test in the repo notices — nothing mechanically connects the
-prose to `genparser` or to the Makefile.
+renamed flag or a dropped command is a downstream break that no other test in the repo notices
+— nothing mechanically connects the prose to `genparser`.
 
 Two things are pinned here:
 
-- The mechanical surface: command names, option spellings (in the invocations *and* in each
-  command's option table), Makefile target names and the variables those recipes read.
+- The mechanical surface: command names and option spellings, in the invocations *and* in each
+  command's option table.
 - The runnable examples, which are the path a consumer copies whole. The serde guide's worked
   example and the AST guide's quick start are cases in `tests/test_generated_rust_gate.py`, and
   the join tests here hold what those cases compile to what the guides print, so the compiled
@@ -79,7 +78,6 @@ def _click_commands() -> dict[str, set[str]]:
 
 
 COMMANDS = _click_commands()
-MAKEFILE = (REPO_ROOT / "Makefile").read_text()
 
 
 _SHELL_FENCES = frozenset({"bash", "sh", "shell", "console"})
@@ -119,6 +117,24 @@ def _flags(tokens: list[str]) -> list[str]:
     return [token.split("=", 1)[0] for token in tokens if _FLAG.match(token.split("=", 1)[0])]
 
 
+# The label the guides launch the generator by. Everything before it is Bazel's own argv
+# (`bazel run --run_under=... `), and the `--` after it separates Bazel's flags from the CLI's.
+_GENPARSER_LABEL = "@fltk//:genparser"
+
+
+def _genparser_argv(line: str) -> list[str] | None:
+    """The genparser argv a printed shell line carries, or None if it invokes something else."""
+    if _GENPARSER_LABEL not in line:
+        return None
+    tokens = shlex.split(line)
+    index = tokens.index(_GENPARSER_LABEL)
+    argv = tokens[index + 1 :]
+    assert argv and argv[0] == "--", (
+        f"`{line}`: a `bazel run` invocation must separate the CLI's arguments with `--`, or Bazel eats them"
+    )
+    return argv[1:]
+
+
 def _guide_text(guide: str) -> str:
     return (REPO_ROOT / guide).read_text()
 
@@ -128,13 +144,12 @@ def test_guide_genparser_invocations_use_real_commands_and_flags(guide: str) -> 
     """Every `genparser <command> --flag` a guide prints exists on the CLI."""
     seen = 0
     for line in _logical_lines(_guide_text(guide)):
-        if "fltk.fegen.genparser" not in line:
+        argv = _genparser_argv(line)
+        if argv is None:
             continue
-        tokens = shlex.split(line)
-        index = next(i for i, token in enumerate(tokens) if token.endswith("genparser"))
-        command = tokens[index + 1]
+        command = argv[0]
         assert command in COMMANDS, f"{guide}: `{command}` is not a genparser command"
-        for flag in _flags(tokens[index + 2 :]):
+        for flag in _flags(argv[1:]):
             assert flag in COMMANDS[command], f"{guide}: `{command}` has no option `{flag}`"
         seen += 1
     assert seen, f"{guide}: no genparser invocation found — the extractor stopped matching"
@@ -298,11 +313,10 @@ def test_the_ast_guides_python_quick_start_runs_as_printed(
     runner = CliRunner()
     invocations = 0
     for line in _join_continuations(commands.splitlines()):
-        if "fltk.fegen.genparser" not in line:
+        argv = _genparser_argv(line)
+        if argv is None:
             continue
-        tokens = shlex.split(line)
-        index = next(i for i, token in enumerate(tokens) if token.endswith("genparser"))
-        result = runner.invoke(app, tokens[index + 1 :])
+        result = runner.invoke(app, argv)
         assert result.exit_code == 0, f"`{line}` failed:\n{result.output}\n{result.exception}"
         invocations += 1
     assert invocations == 2, "the Python quick start prints a `generate` and a `gen-ast` invocation"
@@ -326,27 +340,3 @@ def test_the_ast_guides_python_quick_start_runs_as_printed(
     assert isinstance(value, expr_binary), "the printed isinstance arm is the one taken"
     assert value.op.name == "MINUS", "the outer link of a left fold carries the last operator"
     assert (value.lhs.lhs, value.lhs.rhs, value.rhs) == (1, 2, 3), "the operands coerce in source order"
-
-
-@pytest.mark.parametrize("guide", GUIDES)
-def test_guide_make_recipes_name_real_targets_and_variables(guide: str) -> None:
-    """A `make gen-… VAR=…` recipe names a Makefile target that reads every variable it sets."""
-    seen = 0
-    for line in _logical_lines(_guide_text(guide)):
-        tokens = shlex.split(line)
-        if not tokens or tokens[0] != "make":
-            continue
-        target = tokens[1]
-        assert re.search(rf"^{re.escape(target)}:", MAKEFILE, re.MULTILINE), (
-            f"{guide}: the Makefile has no `{target}` target"
-        )
-        for assignment in tokens[2:]:
-            variable, _, value = assignment.partition("=")
-            assert f"$({variable})" in MAKEFILE, f"{guide}: the Makefile never reads $({variable})"
-            if variable == "EXTRA_ARGS":
-                # The Makefile targets are named after the command they run, so the flags a
-                # recipe forwards are that command's.
-                for flag in _flags(shlex.split(value)):
-                    assert flag in COMMANDS[target], f"{guide}: `{target}` has no option `{flag}`"
-        seen += 1
-    assert seen, f"{guide}: no make recipe found — the extractor stopped matching"

@@ -10,7 +10,6 @@ from __future__ import annotations
 import json
 import pathlib
 import re
-import subprocess
 from typing import Any
 
 import pytest
@@ -19,7 +18,7 @@ from fltk.fegen import gsm
 from fltk.fegen.gsm2tree_rs import RustCstGenerator, _escape_source_name
 from tests.gsm2tree_helpers import make_generator as _make_generator
 from tests.gsm2tree_helpers import make_zero_label_grammar as _make_zero_label_grammar
-from tests.pyright_test_utils import _run_pyright_over_dir
+from tests.pyright_test_utils import _run_pyright_over_dir, pyright_config, run_pyright_over_file
 
 # ---------------------------------------------------------------------------
 # PoC grammar construction
@@ -2387,39 +2386,19 @@ def _run_pyright_in_tmpdir(
     Raises pytest.skip if pyright unavailable.
     cwd: directory to run pyright from (defaults to file_path.parent).
     """
-    if not pyright_available:
-        pytest.skip("pyright not available in this environment")
-    run_cwd = cwd if cwd is not None else file_path.parent
-    result = subprocess.run(  # noqa: S603
-        ["uv", "run", "pyright", "--outputjson", str(file_path)],  # noqa: S607
-        capture_output=True,
-        text=True,
-        timeout=60,
-        check=False,
-        cwd=str(run_cwd),
-    )
-    try:
-        data = json.loads(result.stdout)
-    except json.JSONDecodeError:
-        pytest.fail(f"pyright produced non-JSON output: {result.stdout[:500]}")
-    return [d for d in data.get("generalDiagnostics", []) if d.get("severity") == "error"]
-
-
-_REPO_ROOT = pathlib.Path(__file__).parent.parent
+    return run_pyright_over_file(file_path, pyright_available=pyright_available, cwd=cwd)
 
 
 def _write_pyi_tmpdir(tmp_path: pathlib.Path, pyi_text: str, mod_name: str = "fegen_cst") -> pathlib.Path:
     """Write the stub to tmp_path/<mod_name>.pyi plus an empty <mod_name>.py and pyrightconfig.json.
 
-    The pyrightconfig.json points to the repo venv so fltk imports resolve.
+    The pyrightconfig.json carries this interpreter's import paths so fltk imports resolve.
     Returns the path to the .pyi file.
     """
     pyi_path = tmp_path / f"{mod_name}.pyi"
     pyi_path.write_text(pyi_text)
     (tmp_path / f"{mod_name}.py").write_text("")
-    (tmp_path / "pyrightconfig.json").write_text(
-        json.dumps({"pythonVersion": "3.10", "venvPath": str(_REPO_ROOT), "venv": ".venv"})
-    )
+    (tmp_path / "pyrightconfig.json").write_text(json.dumps(pyright_config()))
     return pyi_path
 
 
@@ -2440,7 +2419,7 @@ def fegen_pyright_diagnostics(
     Writes: fegen_cst.pyi (stub), fegen_cst.py (empty), pyrightconfig.json,
     conformance_fixture.py (whole-module), per_class_fixture.py (per-class),
     poc_cst.pyi (PoC stub), poc_cst.py (empty).
-    Runs a single `uv run pyright --outputjson <dir>` invocation and returns
+    Runs a single `pyright --outputjson <dir>` invocation and returns
     diagnostics partitioned by absolute file path.
 
     Batching all four pyright tests (fegen self-check, whole-module, per-class,

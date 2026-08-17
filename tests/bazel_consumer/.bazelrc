@@ -1,0 +1,8 @@
+# Point fltk's serde flag at this module's own hub, for every target in this module.
+#
+# This is the line a real pure-Rust serde consumer writes, and it is here rather than on one
+# target because the flag has to hold for whatever links fltk-serde-core, directly or not.
+# Setting it module-wide also keeps the extension-mode serde target (//:consumer_serde_native)
+# on one instance: rust.bzl's cdylib assembly reads the same flag for the serde it gives a
+# generated de.rs.
+build --@fltk//crates/fltk-serde-core:serde=@consumer_crates//:serde

@@ -3,13 +3,13 @@
 The Rust unparser generator emits a ``.pyi`` describing the ``Unparser`` / ``Doc`` Python
 surface (``gsm2unparser_rs.RustUnparserGenerator.generate_pyi``).  For the
 ``rust_parser_fixture`` grammar that stub is committed at
-``fltk/_stubs/rust_parser_fixture/unparser.pyi`` and types each ``unparse_{rule}`` method's
+the generated ``rust_parser_fixture/unparser.pyi`` and types each ``unparse_{rule}`` method's
 ``node`` parameter against the committed CST protocol module
 ``tests/rust_parser_fixture_cst_protocol.py`` (the analog of the CST backend's
-``fltk/_stubs/fegen_rust_cst/cst.pyi`` + ``fltk.fegen.fltk_cst_protocol`` precedent).
+``fegen_rust_cst/cst.pyi`` + ``fltk.fegen.fltk_cst_protocol`` precedent).
 
 The committed stub is already in pyright's checked set (it lives under ``fltk/``, which the
-project ``[tool.pyright]`` ``include`` covers), so ``make typecheck`` guards the stub's own
+project ``[tool.pyright]`` ``include`` covers), so ``//:pyright`` guards the stub's own
 internal consistency.  These tests add what the project run does not: a *consumer-facing*
 guard that a downstream caller gets a genuinely typed surface --
 
@@ -17,8 +17,8 @@ guard that a downstream caller gets a genuinely typed surface --
 - a misuse (passing a non-node where a ``_proto`` node type is required) is a pyright error,
 
 so the stub demonstrably *constrains* types rather than degrading to ``Any``.  These run via
-the committed ``.pyi`` alone (no built extension), so they do not require
-``make build-rust-parser-fixture``.
+the committed ``.pyi`` alone, so they do not require the compiled
+``rust_parser_fixture`` extension.
 """
 
 from __future__ import annotations
@@ -27,6 +27,7 @@ import pathlib
 
 import pytest
 
+from tests import tree_paths
 from tests.pyright_test_utils import (
     _diags_for_file,
     _run_pyright_over_dir,
@@ -34,7 +35,7 @@ from tests.pyright_test_utils import (
 )
 
 _REPO_ROOT = pathlib.Path(__file__).parent.parent
-_STUB_DIR = _REPO_ROOT / "fltk" / "_stubs" / "rust_parser_fixture"
+_STUB_DIR = tree_paths.RUST_PARSER_FIXTURE_STUB_DIR
 _UNPARSER_PYI = _STUB_DIR / "unparser.pyi"
 _STUB_INIT_PYI = _STUB_DIR / "__init__.pyi"
 _PROTOCOL_MODULE = _REPO_ROOT / "tests" / "rust_parser_fixture_cst_protocol.py"
@@ -109,15 +110,15 @@ def consumer_pyright_diagnostics(
     pyright_available: bool,  # noqa: FBT001
     tmp_path_factory: pytest.TempPathFactory,
 ) -> dict[str, list[dict]]:
-    """Run pyright once over the consumer fixtures, resolving the committed stub.
+    """Run pyright once over the consumer fixtures, resolving the generated stub.
 
-    The tmpdir pyrightconfig adds the repo root (for ``tests.rust_parser_fixture_cst_protocol``
-    and the stub package) and ``fltk/_stubs`` (for the ``rust_parser_fixture`` stub package) to
-    ``extraPaths``, so pyright resolves ``rust_parser_fixture.unparser`` to the committed
-    ``unparser.pyi`` exactly as the project-wide run does via ``pyproject``'s ``extraPaths``.
+    The tmpdir pyrightconfig adds the runfiles root (for
+    ``tests.rust_parser_fixture_cst_protocol``) and the directory holding the generated
+    ``rust_parser_fixture`` stub package to ``extraPaths``, so pyright resolves
+    ``rust_parser_fixture.unparser`` to ``unparser.pyi`` exactly as the project-wide run does.
     """
     tmpdir = tmp_path_factory.mktemp("unparser_pyi")
-    write_pyright_config(tmpdir, extra_paths=[str(_REPO_ROOT), str(_REPO_ROOT / "fltk" / "_stubs")])
+    write_pyright_config(tmpdir, extra_paths=[str(_REPO_ROOT), str(tree_paths.RUST_PARSER_FIXTURE_STUB_ROOT)])
     (tmpdir / "consumer_ok.py").write_text(_CONSUMER_OK)
     (tmpdir / "consumer_bad.py").write_text(_CONSUMER_BAD)
     (tmpdir / "consumer_bad_narrowing.py").write_text(_CONSUMER_BAD_NARROWING)
@@ -125,13 +126,13 @@ def consumer_pyright_diagnostics(
     return _run_pyright_over_dir(tmpdir, pyright_available=pyright_available)
 
 
-def test_committed_stub_artifacts_exist() -> None:
-    """The committed stub, its package marker, and its protocol module are present.
+def test_generated_stub_artifacts_exist() -> None:
+    """The unparser stub, its package marker, and its protocol module are present.
 
-    A missing file here means `make gencode` was not run (or its output was not committed),
-    which would silently disable the pyright coverage below.
+    A missing file here means the target does not carry the stub package as data, which would
+    silently disable the pyright coverage below.
     """
-    assert _UNPARSER_PYI.is_file(), f"missing committed unparser stub: {_UNPARSER_PYI}"
+    assert _UNPARSER_PYI.is_file(), f"missing unparser stub: {_UNPARSER_PYI}"
     assert _STUB_INIT_PYI.is_file(), f"missing stub package marker: {_STUB_INIT_PYI}"
     assert _PROTOCOL_MODULE.is_file(), f"missing CST protocol module: {_PROTOCOL_MODULE}"
     text = _UNPARSER_PYI.read_text()

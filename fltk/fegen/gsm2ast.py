@@ -1,7 +1,8 @@
 """Python AST emitter: turns an ``AstModel`` into a self-contained ``<base>_ast.py``.
 
 Emission is direct source-text generation rather than IIR: the AST module needs no type
-registry.  Generated source is normalised by the usual regen -> ``make fix`` -> commit flow.
+registry.  The generator normalises what it writes with ruff before exiting, so the emitted
+source is already format-clean.
 
 The emitted module holds one dataclass per product, terminal-only and enum-shaped rule,
 payload dataclasses plus a union alias per sum rule, a chain-link dataclass plus a union

@@ -1,14 +1,30 @@
+load("//bzl:cargo_gate.bzl", "cargo_gate_files")
 load("//bzl:runtime_crate.bzl", "fltk_runtime_library")
+
+# The serde instance every fltk Bazel target compiles against, as a consumer-settable flag.
+#
+# It has to be settable. A pure-Rust consumer's model structs `#[derive(Deserialize)]` from
+# the consumer's own serde, and trait coherence requires fltk-serde-core to have been
+# compiled against that same instance; @fltk_crates//:serde, fltk's module-private hub, is a
+# different build. A consumer points this at their hub's serde in their .bazelrc:
+#
+#     build --@fltk//crates/fltk-serde-core:serde=@their_crates//:serde
+#
+# The default preserves fltk's in-repo behavior, so nothing here changes for a consumer who
+# never sets it. rust.bzl's cdylib assembly reads the same flag for the serde it hands to a
+# generated de.rs, so both codegen modes stay on one instance whichever way the flag is set.
+label_flag(
+    name = "serde",
+    build_setting_default = "@fltk_crates//:serde",
+    visibility = ["//visibility:public"],
+)
 
 # No crate_features: the crate declares no features, and everything a generated `de.rs`
 # names is unconditional. The two flavors carry the fltk-cst-core / fltk-ast-core flavor
 # through; see fltk-cst-core's BUILD.
 #
-# Both flavors link @fltk_crates//:serde, fltk's module-private hub instance. That is
-# usable for a cdylib whose de.rs is the only thing naming serde, but NOT for a pure-Rust
-# consumer whose own model structs #[derive(Deserialize)]: those derives come from the
-# consumer's serde, and trait coherence needs one instance. Such a consumer resolves the
-# runtime crates in their own crate hub instead of linking these targets.
+# The crate's own requirement is plain `serde = "1"` with hand-written impls, so any serde
+# 1.x build a consumer injects through the flag above satisfies it.
 #
 # serde_json is a dev-dependency only: the wrapper types must fail loudly under a foreign
 # Deserializer, and the tests prove it with a real second implementation.
@@ -20,6 +36,16 @@ fltk_runtime_library(
         "//crates/fltk-ast-core",
         "//crates/fltk-cst-core",
     ],
-    hub_deps = ["@fltk_crates//:serde"],
+    hub_deps = [":serde"],
     test_deps = ["@fltk_crates//:serde_json"],
 )
+
+# tests/test_gsm2serde_rs.py reads src/wrappers.rs to pin the generated code against the
+# wrappers the runtime actually provides.
+filegroup(
+    name = "src_rs",
+    srcs = glob(["src/**/*.rs"]),
+    visibility = ["//tests:__pkg__"],
+)
+
+cargo_gate_files()

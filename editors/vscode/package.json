@@ -67,7 +67,7 @@
           },
           "default": [],
           "scope": "machine",
-          "markdownDescription": "Override the argv prefix used to launch `fltk-grammar-lsp` (a string array). The extension appends the language id (`fltkg`, `fltkfmt`, or `fltklsp`) as the final argument. Empty means use the in-repo `uv` default computed from the extension's location. Required when the extension is installed as a packaged `.vsix` outside the repo. Machine-scoped: workspace settings cannot set it, so a cloned repo's `.vscode/settings.json` cannot redirect the launched executable."
+          "markdownDescription": "Override the argv prefix used to launch `fltk-grammar-lsp` (a string array). The extension appends the language id (`fltkg`, `fltkfmt`, or `fltklsp`) as the final argument. Empty means use the in-repo `editors/vscode/run-grammar-lsp` launcher, resolved from the extension's location. Required when the extension is installed as a packaged `.vsix` outside the repo. Machine-scoped: workspace settings cannot set it, so a cloned repo's `.vscode/settings.json` cannot redirect the launched executable."
         }
       }
     },

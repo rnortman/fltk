@@ -15,7 +15,10 @@ from __future__ import annotations
 import pytest
 
 pytest.importorskip("fltk._native", reason="Rust extension not available")
-pytest.importorskip("fegen_rust_cst", reason="fegen_rust_cst not built; run 'make build-fegen-rust-cst' first")
+pytest.importorskip(
+    "fegen_rust_cst",
+    reason="fegen_rust_cst not importable; it is built by //crates/fegen-rust:fegen_rust_cst",
+)
 
 import fegen_rust_cst.cst as rust_cst
 

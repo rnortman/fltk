@@ -1,13 +1,13 @@
 """Tier-2 Phase 4 tests: the Rust fegen CST backend.
 
 These tests require the fegen_rust_cst extension to be built.
-They are skipped automatically when the module is not importable (run
-`make build-fegen-rust-cst` first, or use CI which builds it before pytest).
+They are skipped automatically when the module is not importable; under Bazel the
+py_test target deps on //crates/fegen-rust:fegen_rust_cst, so it always is.
 A CI lane where every test here is skipped is a failure signal — the artifact
 is not being built.
 
 Test coverage:
-  AC6 (partial) — make build-fegen-rust-cst produces an importable fegen_rust_cst module
+  AC6 (partial) — //crates/fegen-rust:fegen_rust_cst produces an importable fegen_rust_cst module
   AC9 — label comparisons are backend-independent
   Self-hosting — Rust parser → Rust CST → real Cst2Gsm equals the Python path
 """
@@ -26,7 +26,7 @@ import pytest
 
 fegen_rust_cst = pytest.importorskip(
     "fegen_rust_cst",
-    reason="fegen_rust_cst not built; run 'make build-fegen-rust-cst' first",
+    reason="fegen_rust_cst not importable; it is built by //crates/fegen-rust:fegen_rust_cst",
 )
 
 from fltk._native import SourceText, Span  # noqa: E402

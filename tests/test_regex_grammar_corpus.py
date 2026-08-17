@@ -9,7 +9,7 @@ of truth); this module is the committed corpus harness that exercises the *in-tr
 
 Out-of-tree grammars (e.g. clockwork) are exercised ad hoc via the grammar-agnostic CLI:
 
-    uv run python -m fltk.fegen.regex_corpus <path/to/grammar.fltkg>
+    bazel run --run_under="cd $PWD &&" //:regex_corpus -- <path/to/grammar.fltkg>
 
 Nothing clockwork-specific is committed here.
 """
@@ -60,7 +60,7 @@ try:
 except Exception as exc:
     msg = (
         f"Could not load corpus from grammar files ({_FEGEN_FLTKG}, {_REGEX_FLTKG}): {exc}\n"
-        "Hint: run 'uv run --group dev maturin develop' to build the fltk._native extension."
+        "Hint: the fltk._native extension is //:native_py; run this under Bazel."
     )
     raise pytest.UsageError(msg) from exc
 
@@ -205,7 +205,7 @@ def test_cli_entry_point_accepts_fegen_grammar() -> None:
     out-of-tree grammars like clockwork, whose path is supplied by the developer on the
     command line and is never committed here):
 
-        uv run python -m fltk.fegen.regex_corpus <path/to/grammar.fltkg>
+        bazel run --run_under="cd $PWD &&" //:regex_corpus -- <path/to/grammar.fltkg>
     """
     exit_code = run_cli([str(_FEGEN_FLTKG)])
     assert exit_code == 0, f"CLI exited {exit_code}; expected 0 (all patterns accepted) for fegen.fltkg"

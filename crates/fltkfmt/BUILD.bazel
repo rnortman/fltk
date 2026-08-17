@@ -1,0 +1,34 @@
+load("@rules_rust//rust:defs.bzl", "rust_binary", "rust_test")
+
+# pyo3 must be absent from this target's graph (the cquery loop in `make bazel-test` asserts it),
+# which is why the fegen dependency is the `:no_python` flavor.
+rust_binary(
+    name = "fltkfmt",
+    srcs = ["src/main.rs"],
+    edition = "2021",
+    visibility = ["//visibility:public"],
+    deps = [
+        "//crates/fegen-rust:no_python",
+        "//crates/fltk-fmt-cli",
+    ],
+)
+
+# The tests spawn the built binary and format a corpus of real grammars, so the binary, the
+# corpus and the golden fixture are all data.
+#
+# FLTKFMT_TEST_ROOT is "." because the corpus data lands at its workspace-relative paths in
+# the runfiles tree (the test's working directory).
+rust_test(
+    name = "cli_test",
+    srcs = ["tests/cli.rs"],
+    data = [
+        "tests/golden/fegen.fltkg.golden",
+        "//:fltkfmt_corpus",
+        ":fltkfmt",
+    ],
+    edition = "2021",
+    env = {
+        "FLTKFMT_BIN": "$(rootpath :fltkfmt)",
+        "FLTKFMT_TEST_ROOT": ".",
+    },
+)

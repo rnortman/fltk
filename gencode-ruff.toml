@@ -1,0 +1,70 @@
+# Ruff settings that shape *generated* Python.
+#
+# Generated output must be a function of (grammar, generator version, pinned ruff, pinned
+# config) and nothing else.  A Bazel action sees only its declared inputs, so config
+# *discovery* from the action's working directory would make generated formatting depend on
+# whatever pyproject.toml happens to sit in the execroot — in a downstream consumer's build,
+# the consumer's own ruff config.  This file is therefore passed explicitly
+# (`--config <this file>`) by every normalization invocation.
+#
+# fltk's own pyproject.toml `[tool.ruff]` extends this file, so the settings that decide what
+# generated code looks like are shared with //:ruff_check and //:ruff_format_check by
+# construction and cannot drift.  Repo-local-only settings (per-file-ignores and the like)
+# stay in pyproject.toml; anything that shapes emitted code belongs here.
+
+target-version = "py310"
+line-length = 120
+
+[format]
+skip-magic-trailing-comma = false
+
+[lint]
+select = [
+  "A",
+  "ARG",
+  "B",
+  "C",
+  "DTZ",
+  "E",
+  "EM",
+  "F",
+  "FBT",
+  "I",
+  "ICN",
+  "ISC",
+  "N",
+  "PLC",
+  "PLE",
+  "PLR",
+  "PLW",
+  "Q",
+  "RUF",
+  "S",
+  "T",
+  "TID",
+  "UP",
+  "W",
+  "YTT",
+]
+ignore = [
+  # Allow non-abstract empty methods in abstract base classes
+  "B027",
+  # Allow boolean positional values in function calls, like `dict.get(... True)`
+  "FBT003",
+  # Ignore checks for possible passwords
+  "S105", "S106", "S107",
+  # Ignore complexity
+  "C901", "PLR0911", "PLR0912", "PLR0913", "PLR0915",
+  # Allow assert statements in non-test code (used for narrowing asserts in Shape 1 consumer pattern)
+  "S101",
+]
+unfixable = [
+  # Don't touch unused imports
+  "F401",
+]
+
+[lint.isort]
+known-first-party = ["fltk"]
+
+[lint.flake8-tidy-imports]
+ban-relative-imports = "all"

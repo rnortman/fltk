@@ -1,0 +1,77 @@
+load("@rules_rust//rust:defs.bzl", "rust_library", "rust_test")
+load("//:rust.bzl", "generate_rust_parser")
+
+# Each flavor runs its own codegen action: the extension flavor additionally emits the .pyi
+# stub package, and its outputs land under a different directory (the assembled crate owns the
+# layout there, while the pure flavor writes into src/).  The .rs files themselves are the same
+# bytes in both — the #[pyclass] surface is #[cfg(feature = "python")]-gated inside cst.rs, so
+# the flags that select the flavor add stub outputs rather than change the Rust.
+#
+# Only src/lib.rs and src/native_parser_tests.rs are in git; cst.rs, parser.rs and unparser.rs
+# are action outputs and the glob would pick up a stray in-tree copy ahead of them.
+_HAND_WRITTEN_RS = glob(
+    ["src/**/*.rs"],
+    exclude = [
+        "src/cst.rs",
+        "src/parser.rs",
+        "src/unparser.rs",
+    ],
+    allow_empty = False,
+)
+
+# ── Pure-Rust flavor ──────────────────────────────────────────────────────────
+# out_dir = "src" lands the generated modules beside the hand-written crate root, so
+# `mod cst;` in src/lib.rs resolves without a copying step.
+generate_rust_parser(
+    name = "fegen_rust_srcs",
+    src = "//:fltk/fegen/fegen.fltkg",
+    format_config = "//:fltk/fegen/fegen.fltkfmt",
+    out_dir = "src",
+    unparser = True,
+)
+
+# pyo3 must be absent from this target's graph (the cquery loop in `make bazel-test` asserts it).
+# No crate_features needed: lib.rs gates all pyo3 uses on #[cfg(feature = "python")].
+rust_library(
+    name = "no_python",
+    srcs = _HAND_WRITTEN_RS + [":fegen_rust_srcs"],
+    crate_name = "fegen_rust_cst",
+    crate_root = "src/lib.rs",
+    edition = "2021",
+    visibility = ["//visibility:public"],
+    deps = [
+        "//crates/fltk-cst-core:no_python",
+        "//crates/fltk-parser-core:no_python",
+        "//crates/fltk-unparser-core",
+    ],
+)
+
+# The grammar is data rather than srcs because the test reads it at run time via FEGEN_FLTKG.
+rust_test(
+    name = "native_parser_test",
+    crate = ":no_python",
+    data = ["//:fltk/fegen/fegen.fltkg"],
+    env = {"FEGEN_FLTKG": "$(rootpath //:fltk/fegen/fegen.fltkg)"},
+)
+
+# ── Python-extension flavor ───────────────────────────────────────────────────
+# lib_rs is explicit because this crate root is hand-written.
+generate_rust_parser(
+    name = "fegen_rust_cst",
+    src = "//:fltk/fegen/fegen.fltkg",
+    format_config = "//:fltk/fegen/fegen.fltkfmt",
+    lib_rs = "src/lib.rs",
+    protocol_module = "fltk.fegen.fltk_cst_protocol",
+    python_extension = True,
+    unparser = True,
+    visibility = ["//visibility:public"],
+)
+
+# tests/test_rust_prelude_qualification.py scans the generated modules for bare std spellings,
+# so it needs them in its runfiles.  The pure-Rust flavor stands in for both: the two flavors'
+# .rs outputs are the same bytes (see the header comment).
+filegroup(
+    name = "generated_rs",
+    srcs = [":fegen_rust_srcs"],
+    visibility = ["//tests:__pkg__"],
+)

@@ -2,7 +2,7 @@
 
 Emission is direct source-text generation, like every other Rust backend
 (:mod:`fltk.fegen.gsm2tree_rs`, :mod:`fltk.unparse.gsm2unparser_rs`); the emitted file is
-normalised by the usual regen -> ``make fix`` -> commit flow.
+already rustfmt-shaped, so nothing formats it after the fact.
 
 The emitted module holds the same shapes the Python emitter produces, under the same names: one
 struct per product, terminal-only and enum-shaped rule, a payload struct plus an enum per sum

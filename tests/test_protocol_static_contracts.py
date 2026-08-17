@@ -21,6 +21,7 @@ from typing import Any
 
 import pytest
 
+from tests import tree_paths
 from tests.fegen_ast_fixture import AST_MODULE_NAME, write_fegen_ast_module
 from tests.pyright_test_utils import (
     _diags_for_file,
@@ -144,7 +145,7 @@ def static_contract_diagnostics(
 ) -> dict[str, list[dict[str, Any]]]:
     """Write every fixture plus a freshly generated fegen AST module; run pyright once."""
     tmpdir = tmp_path_factory.mktemp("protocol_static_contracts")
-    write_pyright_config(tmpdir, extra_paths=[str(_REPO_ROOT), str(_REPO_ROOT / "fltk" / "_stubs")])
+    write_pyright_config(tmpdir, extra_paths=[str(_REPO_ROOT), str(tree_paths.FEGEN_RUST_CST_STUB_ROOT)])
     write_fegen_ast_module(tmpdir)
     for name, source in _FIXTURE_SOURCES.items():
         (tmpdir / name).write_text(source)

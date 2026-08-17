@@ -1,0 +1,347 @@
+load("@rules_python//python:defs.bzl", "py_library")
+load("//:rules.bzl", "generate_parser")
+load("//bzl:gencode_tool.bzl", "GENCODE_TOOL_DATA", "GENCODE_TOOL_DEPS")
+load("//bzl:py_test.bzl", "fltk_py_tests")
+load("//bzl:pyright_tool.bzl", "PYRIGHT_TOOL_DEPS")
+
+# Files the root package's targets reference across this package boundary.
+exports_files([
+    "bazel_generated_py_import_check.py",
+    "bazel_pytest_main.py",
+])
+
+# The .py files in this package, for the root package's ruff and pyright targets: their
+# `tests/**/*.py` glob stops at this BUILD file.
+#
+# The generated protocol module's source path is excluded for the same reason the root package
+# excludes the other generated paths — the generator normalizes its own output against the
+# pinned config, and a stray in-tree copy must not be linted as if it were hand-written.
+filegroup(
+    name = "lint_py_srcs",
+    srcs = glob(
+        ["*.py"],
+        exclude = ["rust_parser_fixture_cst_protocol.py"],
+    ),
+    visibility = ["//:__pkg__"],
+)
+
+# Non-test modules the suites import as `tests.<name>`.  They resolve as a namespace package
+# from the runfiles root, which //:fltk's `imports = ["."]` already puts on sys.path.
+py_library(
+    name = "test_support",
+    srcs = [
+        "fegen_ast_fixture.py",
+        "fixture_ast_layer.py",
+        "generated_rust_gate.py",
+        "gsm2tree_helpers.py",
+        "parser_parity.py",
+        "pyright_test_utils.py",
+        "tree_paths.py",
+        "unparser_parity.py",
+        "uv_scan.py",
+    ],
+    data = [
+        # fixture_ast_layer.py reads the fixture grammar, so every suite importing these
+        # helpers gets the corpus without naming it.
+        "//:fegen_test_data",
+        "//tests/rust_parser_fixture:rust_parser_fixture.fltkast",
+    ],
+    visibility = ["//:__pkg__"],
+    deps = [
+        "//:fltk",
+        "@pypi//pytest",
+    ],
+)
+
+# The typing-protocol source the rust_parser_fixture extension's .pyi files annotate their
+# `node` parameters against.  The compiled fixture supplies the CST and the parsers, so only
+# the protocol module is wanted here — hence protocol_only.  It lands in this package because
+# the module it must be importable as is `tests.rust_parser_fixture_cst_protocol`.
+generate_parser(
+    name = "rust_parser_fixture_protocol_py",
+    src = "//:fltk/fegen/test_data/rust_parser_fixture.fltkg",
+    base_name = "rust_parser_fixture",
+    cst_mod_path = "rust_parser_fixture_cst",
+    gen_tool = "//:genparser_stage0",
+    protocol_only = True,
+    visibility = ["//:__pkg__"],
+)
+
+_FEGEN_RUST_CST = ["//crates/fegen-rust:fegen_rust_cst"]
+
+# The generated PEP 561 stub package, for the suites that read or type-check against the .pyi
+# rather than importing the compiled module.
+_FEGEN_RUST_CST_STUBS = ["//crates/fegen-rust:fegen_rust_cst_stub_srcs"]
+
+_RUST_PARSER_FIXTURE = ["//tests/rust_parser_fixture:rust_parser_fixture"]
+
+_PHASE4_ROUNDTRIP_CST = ["//tests/rust_cst_fixture:phase4_roundtrip_cst"]
+
+_POC_CST = ["//tests/rust_poc_cst:poc_cst"]
+
+# The pyright-invoking suites all run the tool over fixtures written into a tmpdir with a
+# generated pyrightconfig.json whose `extraPaths` is this interpreter's `sys.path`.  So
+# whatever a fixture imports has to be a dep of the target, exactly as if the test imported it
+# itself: the type-checker resolves imports out of the same runfiles tree.
+_PYRIGHT = PYRIGHT_TOOL_DEPS + [":test_support"]
+
+# The compile gates: pytest files that write a throwaway crate with path dependencies on this
+# repo and hand it to cargo, because "does the generated Rust compile" needs a Rust compiler
+# driver.  They are the one deliberate exception to the all-Bazel rule —
+# TODO(bazel-rustc-gate-tests) is the hermetic replacement.
+#
+# They run unsandboxed — cargo wants a real toolchain, a writable target dir and the registry
+# cache in $CARGO_HOME — through the `local` *attribute* rather than the `local` tag, because a
+# tag reaches further than the test: tags propagate into every action of the target, including
+# the PyCompile of the shared pytest main, whose output path the other 47 targets in this
+# package also produce.  The differing action keys are then a conflict Bazel rejects at
+# analysis, which is also why the `requires-cargo` tag comes with `precompile = "disabled"`.
+# That tag itself is inert — it is there so a lane without a toolchain can filter these out.
+#
+# The inherited variables are what cargo needs: it lives on PATH under $HOME (rustup), reads the
+# registry cache out of $CARGO_HOME, and picks its toolchain through $RUSTUP_HOME plus the
+# rust-toolchain.toml in the runfiles root.  $RUSTUP_TOOLCHAIN is deliberately NOT inherited:
+# rustup ranks it above the pin file, so inheriting it would let a contributor's ambient
+# `RUSTUP_TOOLCHAIN=nightly` compile and clippy the generated code under a different compiler
+# than CI, silently.  Bazel scrubs it, so the staged pin governs.  Resolution stays `--offline`,
+# so a warm registry cache is a precondition: `cargo fetch --locked` after a fresh clone.
+# $HOME also holds the gates' build directories (tests/generated_rust_gate.py's
+# cargo_target_dir): the scratch directory Bazel wipes per run would make every gate recompile
+# the runtime crates, and all three are invalidated together by //:cargo_workspace_files.
+#
+# `large` because a cold compile of the generated crate is minutes.
+_CARGO_GATE = {
+    "env_inherit": [
+        "CARGO_HOME",
+        "HOME",
+        "PATH",
+        "RUSTUP_HOME",
+    ],
+    "local": True,
+    "precompile": "disabled",
+    "size": "large",
+    "tags": ["requires-cargo"],
+}
+
+# One py_test per file, declared explicitly rather than by glob: a glob would absorb a new file
+# with whatever deps the pattern happened to carry, and keep passing when one is deleted.  The
+# macro checks this dict against `glob_pattern` and `deferred` at load time.
+_TESTS = {
+    "test_ast_core_manifest.py": {"data": ["//crates/fltk-ast-core:Cargo.toml"]},
+    "test_ast_switchable_consumer.py": {
+        # The Rust-backend consumer fixture is type-checked against the generated
+        # fegen_rust_cst stub package, which is what a downstream consumer reads too; one
+        # test additionally imports the built extension.
+        "data": _FEGEN_RUST_CST_STUBS,
+        "deps": _PYRIGHT + _FEGEN_RUST_CST,
+        "size": "medium",
+    },
+    "test_ast_cross_backend.py": {"deps": _RUST_PARSER_FIXTURE + [":test_support"]},
+    "test_ast_error_message_parity.py": {"data": ["//crates/fltk-ast-core:src_rs"]},
+    "test_ast_fold_roundtrip.py": {"deps": _RUST_PARSER_FIXTURE + [":test_support"]},
+    "test_bazel_pytest_main.py": {},
+    # Spawns `python -m fltk.fegen.bootstrap` and `python runbs.py` from the runfiles root.
+    "test_bootstrap_writers.py": {"data": ["//:runbs.py"]},
+    # Reads the gate modules' sources to check the per-gate directory names are distinct; it
+    # runs no cargo itself, so it is an ordinary sandboxed test rather than a _CARGO_GATE one.
+    "test_cargo_gate_target_dir.py": {
+        "data": [
+            "test_generated_rust_gate.py",
+            "test_nullable_loop_guard.py",
+            "test_rust_prelude_qualification.py",
+        ],
+        "deps": [":test_support"],
+    },
+    # It reads the workspace members off the root manifest and the collection off the root BUILD
+    # file, and checks the collected groups actually deliver their manifests here.
+    "test_cargo_workspace_files.py": {"data": [
+        "//:BUILD.bazel",
+        "//:cargo_workspace_files",
+    ]},
+    "test_check_step_order.py": {
+        # :test_support carries uv_scan, the one matcher all three uv-retirement lanes share.
+        "data": ["//:Makefile"],
+        "deps": [":test_support"],
+    },
+    # The two properties of the CI runner that `make check-ci` cannot state itself: no uv, and
+    # a warm cargo registry for the --offline compile gates.
+    "test_ci_workflow.py": {
+        "data": ["//:.github/workflows/ci.yml"],
+        "deps": [":test_support"],
+    },
+    "test_cli_binary_targets.py": {
+        # Reads the root BUILD file for the py_binary declarations, and the launcher scripts
+        # and VS Code clients that name them.
+        "data": [
+            "//:BUILD.bazel",
+            "//:editor_launchers",
+        ],
+    },
+    "test_clean_protocol_consumer_api.py": {
+        # It ruff-checks two source-tree files under the repo's own ruff config, which is
+        # named explicitly rather than discovered from the working directory.
+        "data": GENCODE_TOOL_DATA + ["//:pyproject.toml"],
+        "deps": _PYRIGHT + _FEGEN_RUST_CST + GENCODE_TOOL_DEPS,
+    },
+    "test_cross_backend_label_equality.py": {"deps": _FEGEN_RUST_CST},
+    "test_cst_accessors_parity.py": {"deps": _FEGEN_RUST_CST},
+    "test_cst_ergonomic_accessors.py": {"deps": _PYRIGHT},
+    "test_cst_ergonomic_accessors_rs.py": {"deps": _PYRIGHT},
+    "test_cst_ergonomic_accessors_runtime_rs.py": {
+        "data": ["//:fegen_test_data"],
+        "deps": _RUST_PARSER_FIXTURE,
+    },
+    "test_cst_mutators_identity.py": {"deps": _PHASE4_ROUNDTRIP_CST},
+    "test_cst_mutators_parity.py": {"deps": _FEGEN_RUST_CST + [":test_support"]},
+    "test_doc_guide_cli_examples.py": {
+        # It pins the guides' CLI invocations against the real CLI, and imports the cargo-gate
+        # test module for its grammar fixtures (no cargo runs from this file).
+        "data": GENCODE_TOOL_DATA + [
+            "test_generated_rust_gate.py",
+            "//:Makefile",
+            "//:doc_guides",
+        ],
+        "deps": GENCODE_TOOL_DEPS + [":test_support"],
+    },
+    "test_error_formatter.py": {},
+    "test_fltkfmt_parity.py": {
+        # The Bazel-built binary, named through FLTKFMT_BIN, replaces the cargo build the
+        # fixture falls back to outside Bazel; the corpus is the same list cli.rs formats.
+        "data": [
+            "//:fltkfmt_corpus",
+            "//crates/fltkfmt:fltkfmt",
+        ],
+        "deps": [":test_support"],
+        "env": {"FLTKFMT_BIN": "$(rootpath //crates/fltkfmt:fltkfmt)"},
+    },
+    "test_fegen_rust_cst.py": {"deps": _FEGEN_RUST_CST},
+    "test_fltk_native_stub.py": {
+        "data": _FEGEN_RUST_CST_STUBS,
+        # :test_support carries tree_paths, which is where the generated stub package's path
+        # is stated.
+        "deps": [":test_support"],
+    },
+    "test_gen_rust_all.py": {
+        "data": GENCODE_TOOL_DATA + [
+            "//:fegen_test_data",
+            "//tests/rust_parser_fixture:rust_parser_fixture.fltkast",
+        ],
+        "deps": GENCODE_TOOL_DEPS,
+    },
+    "test_generated_rust_gate.py": dict(
+        _CARGO_GATE,
+        data = ["//:cargo_workspace_files"],
+        deps = [":test_support"],
+    ),
+    "test_gencode_format.py": {
+        "data": GENCODE_TOOL_DATA,
+        "deps": GENCODE_TOOL_DEPS,
+    },
+    "test_genunparser.py": {},
+    "test_gsm2ast_rs.py": {},
+    "test_gsm2serde_rs.py": {"data": ["//crates/fltk-serde-core:src_rs"]},
+    "test_gsm2tree_py.py": {"deps": [":test_support"]},
+    "test_gsm2tree_rs.py": {"deps": _PYRIGHT},
+    "test_gsm_walk.py": {},
+    # The zero-skip gate: this file importorskips all five extension modules, so a fixture that
+    # silently fails to build or link under Bazel would otherwise be a green run of nothing.
+    "test_module_split.py": {
+        "deps": _FEGEN_RUST_CST + _RUST_PARSER_FIXTURE + _PHASE4_ROUNDTRIP_CST + _POC_CST,
+        "fail_on_skip": True,
+    },
+    "test_naming.py": {},
+    "test_native.py": {},
+    "test_nullable_loop_guard.py": dict(
+        _CARGO_GATE,
+        data = ["//:cargo_workspace_files"],
+        deps = [":test_support"],
+    ),
+    "test_phase4_fegen_rust_backend.py": {"deps": _FEGEN_RUST_CST},
+    "test_phase4_rust_fixture.py": {
+        "data": ["//:fegen_test_data"],
+        "deps": _PHASE4_ROUNDTRIP_CST,
+    },
+    "test_protocol_static_contracts.py": {
+        "data": _FEGEN_RUST_CST_STUBS,
+        "deps": _PYRIGHT,
+        "size": "medium",
+    },
+    "test_pyright_test_utils.py": {
+        "deps": _PYRIGHT,
+        # Every assertion here is about the tool actually resolving; a skipped file would be
+        # exactly the failure mode this file exists to catch.
+        "fail_on_skip": True,
+    },
+    "test_pyright_config_mirror.py": {"data": [
+        "//:BUILD.bazel",
+        "//:pyproject.toml",
+    ]},
+    "test_pyrt_errors.py": {},
+    "test_python_parser_span_backend.py": {},
+    "test_regex_grammar_adversarial.py": {},
+    "test_regex_grammar_corpus.py": {},
+    "test_regex_portability.py": {
+        # It spawns `python -m fltk.fegen.genparser` and reads the committed target grammars.
+        "data": ["//:fegen_test_data"],
+    },
+    "test_registry_gc_eviction.py": {"deps": _PHASE4_ROUNDTRIP_CST},
+    "test_rust_cst_poc.py": {"deps": _POC_CST},
+    "test_rust_parser_bindings.py": {"deps": _FEGEN_RUST_CST},
+    "test_rust_parser_fixture_bindings.py": {"deps": _RUST_PARSER_FIXTURE},
+    "test_rust_parser_parity_fegen.py": {"deps": _FEGEN_RUST_CST + [":test_support"]},
+    "test_rust_parser_parity_fixture.py": {"deps": _RUST_PARSER_FIXTURE + [":test_support"]},
+    "test_rust_span.py": {"deps": _FEGEN_RUST_CST + _PHASE4_ROUNDTRIP_CST},
+    # It scans the generated CST/AST modules of every in-tree crate out of the runfiles tree,
+    # reads the pyo3 requirement off the workspace root manifest, and takes its shadowing
+    # grammar from `test_generated_rust_gate.py`; hence the four `:generated_rs` deps plus
+    # `//:cargo_workspace_files`.
+    "test_rust_prelude_qualification.py": dict(
+        _CARGO_GATE,
+        data = [
+            "test_generated_rust_gate.py",
+            "//:cargo_workspace_files",
+            "//crates/fegen-rust:generated_rs",
+            "//tests/rust_cst_fixture:generated_rs",
+            "//tests/rust_parser_fixture:generated_rs",
+            "//tests/rust_poc_cst:generated_rs",
+        ],
+        deps = [":test_support"],
+    ),
+    "test_rust_unparser_generator.py": {
+        "data": GENCODE_TOOL_DATA,
+        "deps": GENCODE_TOOL_DEPS,
+    },
+    "test_rust_unparser_pyi.py": {
+        # The stub package it type-checks against and the protocol module its `node`
+        # annotations name are both Bazel outputs.
+        "data": [
+            ":rust_parser_fixture_protocol_py",
+            "//tests/rust_parser_fixture:fixture_srcs_stub_srcs",
+        ],
+        "deps": _PYRIGHT,
+    },
+    "test_rust_unparser_none_path_diagnostics.py": {"deps": _RUST_PARSER_FIXTURE},
+    "test_rust_unparser_parity_fixture.py": {"deps": _RUST_PARSER_FIXTURE + [":test_support"]},
+    "test_seed_fixed_point.py": {
+        "data": GENCODE_TOOL_DATA + ["//:BUILD.bazel"],
+        "deps": GENCODE_TOOL_DEPS,
+    },
+    "test_span.py": {},
+    "test_span_protocol.py": {},
+    "test_uv_retirement.py": {
+        # The root BUILD file is an input, not documentation: the scan set is derived from the
+        # //:repo_docs glob and the //:editor_launchers srcs rather than restated here.
+        "data": [
+            "//:BUILD.bazel",
+            "//:editor_launchers",
+            "//:repo_docs",
+            "//:repo_tooling_files",
+        ],
+        "deps": [":test_support"],
+    },
+}
+
+fltk_py_tests(
+    tests = _TESTS,
+    glob_pattern = "test_*.py",
+)

@@ -1,15 +1,14 @@
-#!/usr/bin/env -S uv run python
 """``fltk-lsp``: a generic pygls language server for any FLTK grammar.
 
-Invoked as ``fltk-lsp --grammar lang.fltkg [--lsp lang.fltklsp] [--fmt lang.fltkfmt]
-[--rule START_RULE] [--width N] [--indent N]``. One process serves one language (one grammar);
-editors spawn a separate server per language, the LSP-standard shape.
+Invoked as ``bazel run //:fltk_lsp -- --grammar lang.fltkg [--lsp lang.fltklsp]
+[--fmt lang.fltkfmt] [--rule START_RULE] [--width N] [--indent N]``. One process serves one
+language (one grammar); editors spawn a separate server per language, the LSP-standard shape.
 
 Startup is fail-fast: the grammar, optional ``.fltklsp`` spec, optional ``.fltkfmt`` config, and
 ``--rule`` are all validated before any protocol I/O, so a misconfiguration surfaces as a clear
 stderr message and a non-zero exit (which editors show in their logs) rather than as a broken
-running server. ``pygls`` is an optional extra; its absence is reported with an actionable install
-hint before anything else runs.
+running server. ``pygls`` comes from the target's deps; its absence (an environment assembled by
+hand rather than by Bazel) is reported with an actionable hint before anything else runs.
 """
 
 from __future__ import annotations

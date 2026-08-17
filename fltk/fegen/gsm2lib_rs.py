@@ -48,8 +48,8 @@ def render_stub_package_init(extension_name: str, submodules: Sequence[str]) -> 
     The marker makes ``{extension_name}`` a recognized stub package for pyright: its
     top-level module exports nothing directly — only the listed compiled submodules, each
     of which carries its own generated ``.pyi``.  The output is pure comments plus a
-    trailing newline, so it is byte-stable under ``ruff format`` / ``ruff check`` and
-    survives the ``make gencode`` → ``make fix`` → commit drift check unchanged.
+    trailing newline, so it is byte-stable under the ``ruff format`` / ``ruff check``
+    normalization every generated file goes through.
 
     Args:
         extension_name: The compiled extension's importable name (e.g. ``fegen_rust_cst``).

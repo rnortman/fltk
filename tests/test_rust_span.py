@@ -10,7 +10,10 @@ _native_module = pytest.importorskip("fltk._native", reason="Rust extension not 
 
 from fltk._native import LineColPos, SourceText, Span, UnknownSpan  # noqa: E402
 
-pytest.importorskip("fegen_rust_cst", reason="fegen_rust_cst not built; run 'make build-fegen-rust-cst' first")
+pytest.importorskip(
+    "fegen_rust_cst",
+    reason="fegen_rust_cst not importable; it is built by //crates/fegen-rust:fegen_rust_cst",
+)
 from fegen_rust_cst.cst import Grammar  # noqa: E402
 
 
@@ -415,12 +418,12 @@ class TestAbiMarkerClassattr:
     def test_with_source_keeps_exact_behavior(self):
         """Public with_source still rejects foreign-cdylib SourceText (pinned behavior).
 
-        Requires make build-test-user-ext; skipped if the fixture is not available.
+        Requires phase4_roundtrip_cst; skipped if the fixture is not available.
         A CI lane where this test is always skipped is a gap, not a pass.
         """
         phase4 = pytest.importorskip(
             "phase4_roundtrip_cst",
-            reason="phase4_roundtrip_cst not built; run 'make build-test-user-ext' first",
+            reason="phase4_roundtrip_cst not importable; it is built by //tests/rust_cst_fixture:phase4_roundtrip_cst",
         )
         foreign_st = phase4.SourceText("hello world")  # type: ignore[attr-defined]
         with pytest.raises(TypeError, match="SourceText"):
@@ -430,7 +433,7 @@ class TestAbiMarkerClassattr:
         """Span._with_source_unchecked accepts a foreign-cdylib SourceText (the cross-cdylib case)."""
         phase4 = pytest.importorskip(
             "phase4_roundtrip_cst",
-            reason="phase4_roundtrip_cst not built; run 'make build-test-user-ext' first",
+            reason="phase4_roundtrip_cst not importable; it is built by //tests/rust_cst_fixture:phase4_roundtrip_cst",
         )
         foreign_st = phase4.SourceText("hello world")  # type: ignore[attr-defined]
         s = Span._with_source_unchecked(0, 5, foreign_st)  # type: ignore[attr-defined]
@@ -440,7 +443,7 @@ class TestAbiMarkerClassattr:
         """Two spans built from the same foreign SourceText via _with_source_unchecked merge successfully."""
         phase4 = pytest.importorskip(
             "phase4_roundtrip_cst",
-            reason="phase4_roundtrip_cst not built; run 'make build-test-user-ext' first",
+            reason="phase4_roundtrip_cst not importable; it is built by //tests/rust_cst_fixture:phase4_roundtrip_cst",
         )
         foreign_st = phase4.SourceText("hello world")  # type: ignore[attr-defined]
         s1 = Span._with_source_unchecked(0, 5, foreign_st)  # type: ignore[attr-defined]
@@ -519,7 +522,7 @@ class TestSpanPathAbiGate:
         """Control: without patching, a node span read from the consumer cdylib succeeds."""
         phase4 = pytest.importorskip(
             "phase4_roundtrip_cst",
-            reason="phase4_roundtrip_cst not built; run 'make build-test-user-ext' first",
+            reason="phase4_roundtrip_cst not importable; it is built by //tests/rust_cst_fixture:phase4_roundtrip_cst",
         )
         del phase4  # only needed for skip check; real work is in subprocess
 
@@ -543,7 +546,7 @@ print("OK")
         """Patching fltk._native.Span to have a wrong _fltk_cst_core_abi fires TypeError on first span cross."""
         phase4 = pytest.importorskip(
             "phase4_roundtrip_cst",
-            reason="phase4_roundtrip_cst not built; run 'make build-test-user-ext' first",
+            reason="phase4_roundtrip_cst not importable; it is built by //tests/rust_cst_fixture:phase4_roundtrip_cst",
         )
         del phase4
 
@@ -578,7 +581,7 @@ except TypeError as e:
         """Patching _fltk_cst_core_abi_layout to wrong value fires TypeError even with correct ABI string."""
         phase4 = pytest.importorskip(
             "phase4_roundtrip_cst",
-            reason="phase4_roundtrip_cst not built; run 'make build-test-user-ext' first",
+            reason="phase4_roundtrip_cst not importable; it is built by //tests/rust_cst_fixture:phase4_roundtrip_cst",
         )
         del phase4
 
@@ -621,7 +624,7 @@ except TypeError as e:
         """
         phase4 = pytest.importorskip(
             "phase4_roundtrip_cst",
-            reason="phase4_roundtrip_cst not built; run 'make build-test-user-ext' first",
+            reason="phase4_roundtrip_cst not importable; it is built by //tests/rust_cst_fixture:phase4_roundtrip_cst",
         )
         del phase4
 
@@ -659,7 +662,7 @@ except TypeError as e:
         """
         phase4 = pytest.importorskip(
             "phase4_roundtrip_cst",
-            reason="phase4_roundtrip_cst not built; run 'make build-test-user-ext' first",
+            reason="phase4_roundtrip_cst not importable; it is built by //tests/rust_cst_fixture:phase4_roundtrip_cst",
         )
         del phase4
 
@@ -699,7 +702,7 @@ except TypeError as e:
         """
         phase4 = pytest.importorskip(
             "phase4_roundtrip_cst",
-            reason="phase4_roundtrip_cst not built; run 'make build-test-user-ext' first",
+            reason="phase4_roundtrip_cst not importable; it is built by //tests/rust_cst_fixture:phase4_roundtrip_cst",
         )
         del phase4
 
@@ -739,7 +742,7 @@ except TypeError as e:
         """
         phase4 = pytest.importorskip(
             "phase4_roundtrip_cst",
-            reason="phase4_roundtrip_cst not built; run 'make build-test-user-ext' first",
+            reason="phase4_roundtrip_cst not importable; it is built by //tests/rust_cst_fixture:phase4_roundtrip_cst",
         )
         del phase4
 
@@ -787,7 +790,7 @@ class TestSpanToPyobjectCaching:
         """Repeated span reads via consumer cdylib return correct results (caches initialized once)."""
         phase4 = pytest.importorskip(
             "phase4_roundtrip_cst",
-            reason="phase4_roundtrip_cst not built; run 'make build-test-user-ext' first",
+            reason="phase4_roundtrip_cst not importable; it is built by //tests/rust_cst_fixture:phase4_roundtrip_cst",
         )
         node = phase4.cst.Config(span=phase4.Span(3, 7))  # type: ignore[attr-defined]
         results = [node.span for _ in range(5)]
@@ -797,7 +800,7 @@ class TestSpanToPyobjectCaching:
         """WITH_SOURCE_UNCHECKED_METHOD cache: source-bearing spans from a consumer cdylib are correct across reads."""
         phase4 = pytest.importorskip(
             "phase4_roundtrip_cst",
-            reason="phase4_roundtrip_cst not built; run 'make build-test-user-ext' first",
+            reason="phase4_roundtrip_cst not importable; it is built by //tests/rust_cst_fixture:phase4_roundtrip_cst",
         )
         src = phase4.SourceText("hello world")  # type: ignore[attr-defined]
         node = phase4.cst.Config(span=phase4.Span.with_source(0, 11, src))  # type: ignore[attr-defined]
@@ -992,7 +995,7 @@ except TypeError:
         phase4 = pytest.importorskip(
             "phase4_roundtrip_cst",
             reason=(
-                "phase4_roundtrip_cst not built; run 'make build-test-user-ext' first — "
+                "phase4_roundtrip_cst not importable; it is built by //tests/rust_cst_fixture:phase4_roundtrip_cst — "
                 "skipping this test means the basicsize gate's accept-branch precondition "
                 "(foreign __basicsize__ == native layout) is unverified in this lane"
             ),
@@ -1206,7 +1209,7 @@ print("OK")
         phase4 = pytest.importorskip(
             "phase4_roundtrip_cst",
             reason=(
-                "phase4_roundtrip_cst not built; run 'make build-test-user-ext' first — "
+                "phase4_roundtrip_cst not importable; it is built by //tests/rust_cst_fixture:phase4_roundtrip_cst — "
                 "skipping leaves the foreign-Span accept-branch precondition unverified"
             ),
         )

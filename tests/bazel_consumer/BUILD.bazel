@@ -37,6 +37,11 @@ py_test(
 # ── Rust-extension path ───────────────────────────────────────────────────────
 # Exercises the cross-module cdylib build; fltk_pyo3_cdylib must remain exported
 # from @fltk//:rust.bzl.
+#
+# The sibling macro pyo3_extension_py_library — wrapping a cdylib the consumer compiled
+# itself — has no target here, because a hand-assembled cdylib needs a direct pyo3 dep and
+# this module has no way to name the pyo3 instance @fltk//crates/fltk-cst-core links.
+# TODO(bazel-consumer-pyo3-seam).
 generate_rust_parser(
     name = "consumer_rs_srcs",
     src = "consumer.fltkg",
@@ -51,6 +56,33 @@ py_test(
     name = "consumer_rust_test",
     srcs = ["consumer_rust_test.py"],
     deps = [":consumer_native"],
+)
+
+# ── CST-only path ─────────────────────────────────────────────────────────────
+# A pure-Rust consumer whose crate compiles the CST and nothing else: `parser = False` drops
+# the grammar's largest generated artifact for a crate that never parses (it consumes CSTs
+# built elsewhere).  Declared here because the attribute is public consumer surface and its
+# in-repo uses are all same-repo `//` loads, which resolve differently from this module's
+# `@fltk//` one.
+generate_rust_parser(
+    name = "consumer_cst_only_srcs",
+    src = "consumer.fltkg",
+    out_dir = "consumer_cst_crate",
+    parser = False,
+)
+
+rust_library(
+    name = "consumer_cst_only",
+    srcs = glob(["consumer_cst_crate/**/*.rs"]) + [":consumer_cst_only_srcs"],
+    crate_name = "consumer_cst_only",
+    crate_root = "consumer_cst_crate/lib.rs",
+    edition = "2021",
+    deps = ["@fltk//crates/fltk-cst-core:no_python"],
+)
+
+build_test(
+    name = "consumer_cst_only_build_test",
+    targets = [":consumer_cst_only"],
 )
 
 # ── AST path ──────────────────────────────────────────────────────────────────
@@ -177,22 +209,11 @@ py_test(
 )
 
 # ── serde path ────────────────────────────────────────────────────────────────
-# The serde frontend across the module boundary: ast.rs + de.rs compiled into a cdylib.
+# The serde frontend across the module boundary, in both codegen modes. Each links the serde
+# this module's .bazelrc points //crates/fltk-serde-core:serde at (@consumer_crates//:serde,
+# a hub distinct from fltk's own), so both are also the coverage for the injection seam.
 #
-# Extension mode, and only extension mode, is what fltk's own targets can cover here. A
-# pure-Rust serde consumer's model structs #[derive(Deserialize)] from their own serde, and
-# trait coherence then requires fltk-serde-core to be compiled against that same instance —
-# which fltk's module-private @fltk_crates hub is not. Such a consumer resolves the runtime
-# crates in their own crate hub (cargo git deps pinned to the rev their bazel_dep names) and
-# uses fltk's module for codegen only.
-#
-# That channel is not fixture-verifiable from inside this repo: a hub over path deps into
-# ../../crates is refused by crate_universe, whose splicer rewrites dependency paths relative
-# to the module directory ("failed to read `/crates/fltk-ast-core/Cargo.toml`"), and a git dep
-# would pin a published commit rather than the working tree under test. It is verified
-# downstream by a real consumer instead; docs/bazel-consumer-guide.md is the recipe, and
-# nothing in CI builds that recipe.
-# TODO(bazel-serde-consumer-hub)
+# First, extension mode: ast.rs + de.rs compiled into a cdylib.
 generate_rust_parser(
     name = "consumer_serde_native",
     src = "consumer_ast.fltkg",
@@ -205,4 +226,37 @@ generate_rust_parser(
 build_test(
     name = "consumer_serde_build_test",
     targets = [":consumer_serde_native"],
+)
+
+# Then the pure-Rust mode, the configuration the injection seam exists for: no ast = True, so
+# the only typed surface is the hand-written model in consumer_serde_crate/lib.rs, whose
+# derives come from @consumer_crates//:serde. That crate compiles only if fltk-serde-core was
+# compiled against the same instance — so the seam being wired is not asserted by a query
+# here, it is what makes this target build at all.
+generate_rust_parser(
+    name = "consumer_serde_srcs",
+    src = "consumer_ast.fltkg",
+    ast_config = "consumer_ast.fltkast",
+    goal = "payment",
+    out_dir = "consumer_serde_crate",
+    serde = True,
+)
+
+rust_library(
+    name = "consumer_serde",
+    srcs = glob(["consumer_serde_crate/**/*.rs"]) + [":consumer_serde_srcs"],
+    crate_name = "consumer_serde",
+    crate_root = "consumer_serde_crate/lib.rs",
+    edition = "2021",
+    deps = [
+        "@consumer_crates//:serde",
+        "@fltk//crates/fltk-cst-core:no_python",
+        "@fltk//crates/fltk-parser-core:no_python",
+        "@fltk//crates/fltk-serde-core:no_python",
+    ],
+)
+
+rust_test(
+    name = "consumer_serde_test",
+    crate = ":consumer_serde",
 )

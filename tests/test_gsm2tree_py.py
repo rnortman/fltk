@@ -867,8 +867,8 @@ class TestMutatorEntryShapes:
     def test_extend_children_narrows_other_before_reading_its_children(self) -> None:
         """`other: _cstp.Foo` is the protocol class, so without the guard `other.children` is a
         Sequence of protocol entries and the emitted extend is a pyright error in every generated
-        module — a failure that only surfaces in the repo-wide gate over committed artifacts after
-        a full `make gencode`.  The guard is load-bearing statically as well as at runtime.
+        module — a failure that otherwise surfaces only in the repo-wide pyright gate over the
+        generated artifacts.  The guard is load-bearing statically as well as at runtime.
         """
         for grammar, rule, class_name, _labeled in self._GRAMMARS:
             src = self._method_source(grammar, rule, class_name, method="extend_children")

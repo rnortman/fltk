@@ -1,7 +1,6 @@
 //! End-to-end integration tests for the `fltkfmt` binary.
 //!
-//! These drive the *built binary* as a subprocess (via `env!("CARGO_BIN_EXE_fltkfmt")`,
-//! which Cargo injects for integration tests of the owning package), so they exercise the
+//! These drive the *built binary* as a subprocess (see `fltkfmt_bin`), so they exercise the
 //! full pure-Rust pipeline — argument parsing, file/stdin I/O, parse, unparse, render,
 //! error reporting, and exit codes — exactly as a user invokes it. This is the only place
 //! the `fltk_formatter_main!` macro's error branches (partial-parse and parse-`None`) run
@@ -23,26 +22,35 @@ use std::path::PathBuf;
 use std::process::{Command, Stdio};
 use std::sync::atomic::{AtomicU64, Ordering};
 
-/// Path to the built `fltkfmt` binary, injected by Cargo for integration tests.
-const FLTKFMT: &str = env!("CARGO_BIN_EXE_fltkfmt");
+/// This crate has no Cargo manifest: the `rust_test` target names the binary, the corpus root
+/// and the temp directory, so a missing variable is a broken target rather than a lane that
+/// needs a fallback.
+fn from_env(var: &str) -> String {
+    std::env::var(var).unwrap_or_else(|_| panic!("{var} is not set; the test target must supply it"))
+}
+
+/// Absolute path to the built `fltkfmt` binary. Absolute because `run` sets the child's
+/// working directory, which a relative program path would then be resolved against.
+fn fltkfmt_bin() -> PathBuf {
+    let path = PathBuf::from(from_env("FLTKFMT_BIN"));
+    std::fs::canonicalize(&path).unwrap_or_else(|e| panic!("resolve fltkfmt binary at {}: {e}", path.display()))
+}
 
 /// The `about` string threaded through `fltk_formatter_main!` in `crates/fltkfmt/src/main.rs`.
 /// Kept in sync by hand; the `--help` test below is the end-to-end check that the macro →
 /// `run_main` → `clap` wiring actually surfaces it.
 const ABOUT: &str = "Format FLTK grammar (.fltkg) files.";
 
-/// Repo root, resolved from this crate's manifest dir (`crates/fltkfmt` → `../..`) so tests
-/// are cwd-independent.
+/// Directory the corpus and golden paths below are relative to, so tests are cwd-independent:
+/// wherever the runner staged the data files.
 fn repo_root() -> PathBuf {
-    PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-        .join("..")
-        .join("..")
+    PathBuf::from(from_env("FLTKFMT_TEST_ROOT"))
 }
 
 /// Run `fltkfmt` with `args` (repo-root cwd) and optional stdin bytes.
 /// Returns `(exit_code, stdout, stderr)` with outputs as raw bytes.
 fn run(args: &[&str], stdin: Option<&[u8]>) -> (i32, Vec<u8>, Vec<u8>) {
-    let mut cmd = Command::new(FLTKFMT);
+    let mut cmd = Command::new(fltkfmt_bin());
     cmd.args(args)
         .current_dir(repo_root())
         .stdin(Stdio::piped())
@@ -77,13 +85,12 @@ fn run_ok(args: &[&str], stdin: Option<&[u8]>, ctx: &str) -> Vec<u8> {
 }
 
 /// Create a fresh temp file with `content` and a pid+counter-unique name, returning its path.
-/// Files go under `CARGO_TARGET_TMPDIR` (Cargo's per-crate integration-test temp dir, inside
-/// `target/`), not the shared world-writable system temp dir, so predictable names can't be
-/// pre-seeded/symlinked by another local user.
+/// Files go under the runner's private temp dir (`TEST_TMPDIR`), not the shared world-writable
+/// system temp dir, so predictable names can't be pre-seeded/symlinked by another local user.
 fn temp_file(tag: &str, content: &[u8]) -> PathBuf {
     static COUNTER: AtomicU64 = AtomicU64::new(0);
     let n = COUNTER.fetch_add(1, Ordering::Relaxed);
-    let mut path = PathBuf::from(env!("CARGO_TARGET_TMPDIR"));
+    let mut path = PathBuf::from(from_env("TEST_TMPDIR"));
     path.push(format!(
         "fltkfmt-cli-{}-{}-{}.fltkg",
         tag,

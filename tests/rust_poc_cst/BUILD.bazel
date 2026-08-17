@@ -1,0 +1,82 @@
+load("@rules_rust//rust:defs.bzl", "rust_library", "rust_shared_library", "rust_test")
+load("//:rust.bzl", "generate_rust_parser", "pyo3_extension_py_library")
+
+# The PoC CST fixture extension: the toy three-rule grammar compiled into an importable
+# `poc_cst` module, plus the pure-Rust flavor its spike tests run on.
+#
+# Assembled by hand rather than through fltk_pyo3_cdylib: the crate root is hand-written and
+# the two flavors need different fltk-cst-core edges, neither of which that macro's
+# single-grammar, extension-only shape covers.
+
+# cst.rs is an action output; the exclude keeps a stray in-tree copy from being named by the
+# same target as it.
+_HAND_WRITTEN_RS = glob(
+    ["src/**/*.rs"],
+    exclude = ["src/cst.rs"],
+    allow_empty = False,
+)
+
+# out_dir = "src" lands cst.rs beside the hand-written crate root, so `pub mod cst;` resolves
+# with no copying step.  parser = False because this crate's lib.rs declares no parser module:
+# generating one would be the grammar's largest artifact, produced on every clean build and
+# compiled by nothing.
+generate_rust_parser(
+    name = "poc_cst_srcs",
+    src = "//:fltk/fegen/test_data/poc_grammar.fltkg",
+    out_dir = "src",
+    parser = False,
+)
+
+# ── Pure-Rust flavor ──────────────────────────────────────────────────────────
+# The cargo `--no-default-features` build: no pyo3 anywhere in the graph, which the cquery
+# loop in `make bazel-test` asserts by target name.
+rust_library(
+    name = "no_python",
+    srcs = _HAND_WRITTEN_RS + [":poc_cst_srcs"],
+    crate_features = [],
+    crate_name = "poc_cst",
+    crate_root = "src/lib.rs",
+    edition = "2021",
+    visibility = ["//visibility:public"],
+    deps = ["//crates/fltk-cst-core:no_python"],
+)
+
+# #[cfg(test)] module of the crate, so `crate =` is the right shape; the flavor carries no
+# crate_features for that attribute to drop.
+rust_test(
+    name = "no_python_test",
+    crate = ":no_python",
+)
+
+# ── Python-extension flavor ───────────────────────────────────────────────────
+# "python" must be listed explicitly alongside "extension-module": Cargo forwards it through
+# the feature definition, Bazel crate_features do not.  Without it the generated
+# register_classes is compiled out and the crate root's register_submodule call fails to link.
+rust_shared_library(
+    name = "poc_cst_cdylib",
+    srcs = _HAND_WRITTEN_RS + [":poc_cst_srcs"],
+    crate_features = [
+        "extension-module",
+        "python",
+    ],
+    crate_name = "poc_cst",
+    crate_root = "src/lib.rs",
+    edition = "2021",
+    deps = [
+        "//crates/fltk-cst-core",
+        "@fltk_crates//:pyo3",
+    ],
+)
+
+pyo3_extension_py_library(
+    name = "poc_cst",
+    cdylib = ":poc_cst_cdylib",
+    visibility = ["//visibility:public"],
+)
+
+# The generated module, for tests/test_rust_prelude_qualification.py's scan.
+filegroup(
+    name = "generated_rs",
+    srcs = [":poc_cst_srcs"],
+    visibility = ["//tests:__pkg__"],
+)

@@ -15,6 +15,7 @@ because the generated CST gates items on them; nothing here enables either, so n
 from __future__ import annotations
 
 import dataclasses
+import os
 import shutil
 import subprocess
 from pathlib import Path
@@ -151,6 +152,52 @@ def write_crate(directory: Path, cases: list[Case]) -> Path:
     return manifest
 
 
+def cargo_target_dir(name: str) -> Path:
+    """Where one compile gate's throwaway crate builds, across runs.
+
+    A directory under the test's own scratch space would be wiped every run, so each gate would
+    recompile fltk-cst-core, fltk-parser-core, regex-automata and friends from scratch — and all
+    of the gates share `//:cargo_workspace_files`, so editing any runtime crate re-runs all of
+    them at once. Cargo fingerprints its artifacts, so a persistent directory outside the tree is
+    safe to keep and is what makes the second run cheap. These tests already run unsandboxed with
+    $CARGO_HOME and $HOME inherited, so this reaches no further than they already do.
+
+    One directory per gate rather than one shared by all: the gates run in parallel and cargo
+    takes an exclusive lock on a target directory.
+
+    Every candidate root is private to the caller: an explicit override, the XDG cache, $HOME, or
+    the runner's own scratch directory. There is deliberately no shared-temp fallback — the
+    directory holds rlibs, build-script outputs and a binary one gate then executes, so a fixed
+    name under a world-writable directory is a path another local user can pre-create as a
+    symlink or as a build tree of their own.
+
+    Args:
+        name: a per-gate directory name; two gates must not share one.
+
+    Raises:
+        RuntimeError: when none of the four variables names a private root.
+    """
+    override = os.environ.get("FLTK_CARGO_GATE_TARGET_DIR")
+    if override:
+        root = Path(override)
+    elif os.environ.get("XDG_CACHE_HOME"):
+        root = Path(os.environ["XDG_CACHE_HOME"]) / "fltk-cargo-gate"
+    elif os.environ.get("HOME"):
+        root = Path(os.environ["HOME"]) / ".cache" / "fltk-cargo-gate"
+    elif os.environ.get("TEST_TMPDIR"):
+        # No home to cache under, but the runner gave us scratch: pay the cold compile.
+        root = Path(os.environ["TEST_TMPDIR"]) / "fltk-cargo-gate"
+    else:
+        message = (
+            "no private directory to build the compile gate in: set FLTK_CARGO_GATE_TARGET_DIR "
+            "(or HOME / XDG_CACHE_HOME / TEST_TMPDIR)"
+        )
+        raise RuntimeError(message)
+    target = root / name
+    target.mkdir(parents=True, exist_ok=True)
+    return target
+
+
 def run_cargo(command: str, manifest: Path, target_dir: Path, *arguments: str) -> subprocess.CompletedProcess[str]:
     """Run one cargo subcommand over the gate crate.
 
@@ -158,11 +205,12 @@ def run_cargo(command: str, manifest: Path, target_dir: Path, *arguments: str) -
     failure rather than a skip: a compile gate that can silently not run is not a gate.
 
     Resolution is offline. Every third-party crate the gate needs — `indexmap`, `regex-automata`,
-    `uuid`, `rust_decimal` and their transitive deps — is already in the root workspace's
-    `Cargo.lock` and therefore in the local registry cache once the repo has been built, so the
-    gate crate resolves from that cache instead of reaching the network and picking whatever
-    versions happen to be current. Its own lockfile is throwaway and untracked, which is why
-    `make check-locks` never sees it.
+    `uuid`, `rust_decimal` and their transitive deps — is in the root workspace's `Cargo.lock`,
+    so the gate crate resolves from the local registry cache instead of reaching the network and
+    picking whatever versions happen to be current. Nothing in `make check` populates that cache,
+    so a fresh clone needs one `cargo fetch --locked` first (CI has a step for it). The gate
+    crate's own lockfile is throwaway and untracked, which is why `make check-cargo-lock` never
+    sees it.
     """
     cargo = shutil.which("cargo")
     assert cargo is not None, "cargo is required to compile the generated Rust modules"

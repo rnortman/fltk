@@ -21,8 +21,11 @@ extension if you upgrade FLTK and `Span`/`UnknownSpan` changed.
 ## Step 1: Emit Rust CST source
 
 ```bash
-uv run python -m fltk.fegen.genparser gen-rust-cst my_grammar.fltkg cst.rs
+bazel run --run_under="cd $PWD &&" @fltk//:genparser -- gen-rust-cst my_grammar.fltkg cst.rs
 ```
+
+`--run_under="cd $PWD &&"` makes the relative paths after `--` resolve in the directory you
+invoked Bazel from rather than in the runfiles tree; see [usage.md](usage.md#quick-start-source-generation).
 
 This writes `cst.rs` — a Rust source file containing one struct per grammar rule, their label
 enums, and a `register_classes` function that registers all types with a PyO3 module.
@@ -158,8 +161,8 @@ as a dependency, you need to make two changes before or alongside upgrading:
    `#[pymodule]` init.
 
 Both changes are required regardless of whether you regenerate `cst.rs`. Apply them first, then
-rebuild. If you then regenerate (`make gencode` equivalent), the new cfg-gated output is compatible
-with the same `Cargo.toml`.
+rebuild. If you then regenerate, the new cfg-gated output is compatible with the same
+`Cargo.toml`.
 
 `node.children` returns a snapshot on the Rust backend; mutate via the named mutator API.
 
@@ -179,8 +182,9 @@ with the same `Cargo.toml`.
 
 ## FLTK's own test artifacts
 
-`tests/rust_cst_fixture/` follows this exact pattern and serves as a working example. Build it with `make build-test-user-ext`.
-`crates/fegen-rust/` (built via `make build-fegen-rust-cst`) is a more complete example: it
+`tests/rust_cst_fixture/` follows this exact pattern and serves as a working example. Build it with
+`bazel build //tests/rust_cst_fixture:phase4_roundtrip_cst`.
+`crates/fegen-rust/` (`bazel build //crates/fegen-rust:fegen_rust_cst`) is a more complete example: it
 includes a `.pyi` stub and demonstrates the `extension-module`/`python` feature split used
 to keep pyo3 out of non-Python builds.
 These are FLTK-internal; they are not the user build recipe.

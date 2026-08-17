@@ -12,6 +12,7 @@ Trigger grammar: rule := (r"a*" .)+
 from __future__ import annotations
 
 import ast
+import os
 import pathlib
 import shutil
 import subprocess
@@ -27,6 +28,7 @@ from fltk.iir.context import create_default_context
 from fltk.iir.py import compiler
 from fltk.iir.py import reg as pyreg
 from fltk.plumbing import generate_parser
+from tests.generated_rust_gate import cargo_target_dir
 
 # ---------------------------------------------------------------------------
 # Trigger grammar construction (shared by all tests)
@@ -370,27 +372,28 @@ def test_rust_backend_guard(tmp_path: pathlib.Path, _repo_root: pathlib.Path):
     )
     (crate_dir / "Cargo.toml").write_text(cargo_toml)
 
+    # cargo runs with the throwaway crate as its cwd, which is outside the runfiles tree, so
+    # rustup would never walk up to the staged pin and would fall back to whatever toolchain is
+    # default on the machine.  Give the crate its own copy.
+    shutil.copyfile(_repo_root / "rust-toolchain.toml", crate_dir / "rust-toolchain.toml")
+
     # Build (long timeout — debug cargo build can be slow).
-    # Reuse a persistent CARGO_TARGET_DIR under the repo root so dependency crates
-    # (fltk-parser-core, fltk-cst-core, regex-automata) are only compiled once
-    # across test sessions rather than cold-rebuilt in every tmp_path.
-    # The repo's existing .gitignore covers target/ already.
-    cargo_target_dir = _repo_root / "target" / "nullable-loop-guard-test"
+    cargo_target = cargo_target_dir("nullable-loop-guard")
     cargo_bin = shutil.which("cargo") or "cargo"
     build_result = subprocess.run(  # noqa: S603
-        [cargo_bin, "build"],
+        [cargo_bin, "build", "--offline"],
         capture_output=True,
         text=True,
         timeout=300,
         check=False,
         cwd=crate_dir,
-        env={**__import__("os").environ, "CARGO_TARGET_DIR": str(cargo_target_dir)},
+        env={**os.environ, "CARGO_TARGET_DIR": str(cargo_target)},
     )
     assert build_result.returncode == 0, (
         f"cargo build failed:\nstdout: {build_result.stdout}\nstderr: {build_result.stderr}"
     )
 
-    binary = cargo_target_dir / "debug" / "nullable-loop-test"
+    binary = cargo_target / "debug" / "nullable-loop-test"
 
     # Run binary with short timeout — a hang indicates an infinite loop (missing loop guard).
     try:

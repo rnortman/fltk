@@ -221,8 +221,11 @@ rule term
 Format specs are used with the unparse CLI:
 
 ```bash
-uv run python -m fltk.unparse_cli GRAMMAR FORMAT_SPEC INPUT_FILE -o OUTPUT_FILE
+bazel run --run_under="cd $PWD &&" @fltk//:unparse_cli -- GRAMMAR FORMAT_SPEC INPUT_FILE -o OUTPUT_FILE
 ```
+
+`--run_under="cd $PWD &&"` makes the relative paths after `--` resolve in the directory you
+invoked Bazel from rather than in the runfiles tree; see [usage.md](usage.md#quick-start-source-generation).
 
 Or programmatically:
 

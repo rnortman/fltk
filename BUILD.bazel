@@ -1,21 +1,188 @@
-load("@rules_python//python:defs.bzl", "py_binary", "py_library")
+load("@rules_python//python:defs.bzl", "py_binary", "py_library", "py_test")
+load("@rules_python//python:pip.bzl", "compile_pip_requirements")
 load("@rules_rust//rust:defs.bzl", "rust_shared_library")
 load("//:rules.bzl", "generate_parser")
-load("//:rust.bzl", "generate_rust_parser")
+load("//:rust.bzl", "generate_rust_lib", "generate_rust_parser")
+load(
+    "//bzl:aux_grammars.bzl",
+    "GENERATED_PY",
+    "GENERATED_PY_MODULE_ARGS",
+    "GENERATED_PY_TARGETS",
+    "aux_generate_parsers",
+)
+load("//bzl:gencode_tool.bzl", "GENCODE_TOOL_DATA", "GENCODE_TOOL_DEPS")
+load("//bzl:py_lint.bzl", "ruff_fix", "ruff_lint")
+load("//bzl:py_test.bzl", "fltk_py_tests")
+load("//bzl:pyright.bzl", "pyright_lint")
+load("//bzl:pyright_tool.bzl", "PYRIGHT_TOOL_DEPS")
+load("//bzl:regen_seed.bzl", "regen_seed")
 
+# ── Python dependency lock ────────────────────────────────────────────────────
+# Single writer for requirements_lock.txt: `bazel run //:requirements.update`.
+compile_pip_requirements(
+    name = "requirements",
+    src = "requirements.in",
+    requirements_txt = "requirements_lock.txt",
+    tags = ["requires-network"],
+)
+
+# Source paths of the generated modules.  Nothing in git occupies them — they are produced by
+# the :*_py targets below — and the globs that build :fltk_src and the lint targets exclude them
+# anyway, defensively: an ad-hoc `bazel run //:genparser` aimed at the source tree can leave an
+# in-tree copy behind.  Without the exclude that stale copy would be picked up ahead of the
+# generated output, and the build would be green against code no grammar produces.
+#
+# The four seed files (fltk_cst, fltk_cst_protocol, fltk_parser, fltk_trivia_parser) are
+# deliberately absent: they are the committed self-hosting seed, and :fltk_src is exactly what
+# a generator may import.
+_GENERATED_PY = GENERATED_PY
+
+_GENERATED_PY_TARGETS = GENERATED_PY_TARGETS
+
+# ── Lint ──────────────────────────────────────────────────────────────────────
+# Everything here is inert unless --//bzl:lint is set (the `lint` config in .bazelrc sets
+# it), so `bazel build //...` stays a build and `bazel build --config lint //...` is the
+# gate.  See //bzl:py_lint.bzl.
+
+# The hand-written sources.  Generated modules are out of scope for ruff: the generator
+# normalizes its own output against the same pinned config, so a finding here could only ever
+# be a lint rule the generator does not satisfy, reported at a file nobody edits.  pyright
+# still type-checks them — it takes the Bazel-generated copies, below.
+#
+# tests/bazel_consumer is absent because it is .bazelignore'd — see
+# TODO(bazel-lint-consumer-module).
+#
+# tests/ is its own package (it holds the per-file py_tests), so the glob below stops at its
+# BUILD file and //tests:lint_py_srcs carries that directory's files instead.
+_LINT_PY_SRCS = glob(
+    [
+        "*.py",
+        "fltk/**/*.py",
+        "fltk/**/*.pyi",
+        "examples/**/*.py",
+    ],
+    exclude = _GENERATED_PY,
+    allow_empty = False,
+) + ["//tests:lint_py_srcs"]
+
+_RUFF_CONFIG_DEPS = ["gencode-ruff.toml"]
+
+ruff_lint(
+    name = "ruff_check",
+    srcs = _LINT_PY_SRCS,
+    config = "pyproject.toml",
+    config_deps = _RUFF_CONFIG_DEPS,
+    mode = "check",
+)
+
+ruff_lint(
+    name = "ruff_format_check",
+    srcs = _LINT_PY_SRCS,
+    config = "pyproject.toml",
+    config_deps = _RUFF_CONFIG_DEPS,
+    mode = "format",
+)
+
+ruff_fix(
+    name = "ruff_fix",
+)
+
+# Whole-program type check.  include/exclude/extraPaths/pythonVersion mirror the
+# [tool.pyright] table in pyproject.toml; venvPath has no successor — third-party imports
+# resolve through the deps below instead of through a virtualenv.
+#
+# The generated modules staged here are the Bazel-generated copies, not the committed ones:
+# they carry the same short_paths, so they land at their package paths beside the hand-written
+# sources, and what gets type-checked is what //:fltk actually ships.
+pyright_lint(
+    name = "pyright",
+    srcs = _LINT_PY_SRCS + glob(["fltk/**/*.typed"]) + _GENERATED_PY_TARGETS + [
+        "//crates/fegen-rust:fegen_rust_cst_stub_srcs",
+        "//tests:rust_parser_fixture_protocol_py",
+    ],
+    exclude = ["**/__pycache__"],
+    # The fegen_rust_cst stub package is a Bazel output staged at its own package path, so the
+    # search-path entry is the directory that holds it rather than a tree in git.
+    extra_paths = ["crates/fegen-rust"],
+    include = [
+        "fltk",
+        "*.py",
+        "tests/typecheck_fegen_cst_conformance.py",
+    ],
+    deps = [
+        "@pypi//astor",
+        "@pypi//coverage",
+        "@pypi//pygls",
+        "@pypi//pytest",
+        "@pypi//pytest_lsp",
+        "@pypi//ruff",
+        "@pypi//typer",
+    ],
+)
+
+# Generation normalizes its own output, so every generator binary carries the ruff wheel and
+# the pinned config.  See //bzl:gencode_tool.bzl and fltk/fegen/gencode_format.py.
 py_binary(
     name = "genparser",
     srcs = ["fltk/fegen/genparser.py"],
+    data = GENCODE_TOOL_DATA,
     visibility = ["//visibility:public"],
     deps = [
         ":fltk",
         "@pypi//astor",
         "@pypi//typer",
-    ],
+    ] + GENCODE_TOOL_DEPS,
 )
+
+# Stage-0 generator: the `generate` command over the Python backend alone.
+#
+# :genparser cannot generate the aux Python modules, because the Rust-backend generators it
+# also carries import them at module level (gsm2parser_rs -> regex_parser, ast_config ->
+# fltkast_parser, plumbing -> unparsefmt_parser + fltklsp_parser).  This binary depends on
+# :fltk_src, which excludes every generated module, so the cycle cannot close.  Pass it as
+# generate_parser(gen_tool = ...) for those grammars.
+py_binary(
+    name = "genparser_stage0",
+    srcs = ["fltk/fegen/genparser_stage0.py"],
+    data = GENCODE_TOOL_DATA,
+    main = "fltk/fegen/genparser_stage0.py",
+    visibility = ["//visibility:public"],
+    deps = [
+        ":fltk_src",
+        "@pypi//astor",
+        "@pypi//typer",
+    ] + GENCODE_TOOL_DEPS,
+)
+
+# `bazel run //:regen_seed` — the only regeneration entry point that writes into the source
+# tree.  It refreshes the four committed seed modules from fegen.fltkg; run it after editing
+# fegen.fltkg or a Python-backend generator, and commit the result.  //tests/test_seed_fixed_point.py
+# is the gate that fails when the committed seed and this target's output disagree.
+#
+# :genparser_stage0 rather than :genparser: the seed is pure Python-backend output, and the
+# stage-0 binary is the one whose imports are guaranteed not to reach a generated module.
+regen_seed(
+    name = "regen_seed",
+    base_name = "fltk",
+    cst_mod_path = "fltk.fegen.fltk_cst",
+    gen_tool = ":genparser_stage0",
+    grammar = "fltk/fegen/fegen.fltkg",
+    out_dir = "fltk/fegen",
+)
+
+# ── Runtime CLIs ──────────────────────────────────────────────────────────────
+# `bazel run` executes in the runfiles tree, so a relative path means something else there
+# than it does in the shell.  Run them as
+#
+#     bazel run --run_under="cd $PWD &&" //:unparse_cli -- ...
+#
+# to keep relative arguments meaning what they say.
 
 # fltk-grammar-lsp entry point: serves fltk's own DSLs from the @fltk// submodule.
 # Pure-Python path (like :genparser), so no :native_py dependency is needed.
+#
+# Named :grammar_lsp rather than :fltk_grammar_lsp because it is the one CLI target that
+# predates this set and is documented consumer surface (docs/bazel-consumer-guide.md).
 py_binary(
     name = "grammar_lsp",
     srcs = ["fltk/lsp/grammar_cli.py"],
@@ -29,16 +196,314 @@ py_binary(
     ],
 )
 
+# fltk-lsp: the generic server, one process per grammar.
+py_binary(
+    name = "fltk_lsp",
+    srcs = ["fltk/lsp/server_cli.py"],
+    main = "fltk/lsp/server_cli.py",
+    visibility = ["//visibility:public"],
+    deps = [
+        ":fltk",
+        "@pypi//astor",
+        "@pypi//pygls",
+        "@pypi//typer",
+    ],
+)
+
+# fltk-highlight: the standalone ANSI highlighter.  pygls is not in its deps — it drives the
+# analysis engine directly and never speaks LSP.
+py_binary(
+    name = "fltk_highlight",
+    srcs = ["fltk/lsp/highlight_cli.py"],
+    main = "fltk/lsp/highlight_cli.py",
+    visibility = ["//visibility:public"],
+    deps = [
+        ":fltk",
+        "@pypi//astor",
+        "@pypi//typer",
+    ],
+)
+
+# The grammar-agnostic regex extract/classify tool, used ad hoc against out-of-tree grammars.
+py_binary(
+    name = "regex_corpus",
+    srcs = ["fltk/fegen/regex_corpus.py"],
+    main = "fltk/fegen/regex_corpus.py",
+    visibility = ["//visibility:public"],
+    deps = [
+        ":fltk",
+        "@pypi//astor",
+    ],
+)
+
+# The unparse/format CLI.  It compiles an unparser at run time through fltk.iir, so it needs
+# the same deps :genparser does, and :native_py for the Span types the compiled unparser uses.
+py_binary(
+    name = "unparse_cli",
+    srcs = ["fltk/unparse_cli.py"],
+    main = "fltk/unparse_cli.py",
+    visibility = ["//visibility:public"],
+    deps = [
+        ":fltk",
+        ":native_py",
+        "@pypi//astor",
+        "@pypi//typer",
+    ],
+)
+
+# ── Generated Python modules ──────────────────────────────────────────────────
+# The six aux grammars whose generated modules the package imports at runtime.  All of them
+# use :genparser_stage0, because :genparser transitively imports the very modules these
+# targets produce (gsm2parser_rs -> regex_parser, ast_config -> fltkast_parser, plumbing ->
+# unparsefmt_parser + fltklsp_parser).
+#
+# out_dir puts the outputs at their Python package paths under the root package.  A
+# fltk/fegen/BUILD.bazel would let each grammar own its own targets, but it would also cut the
+# root package's fltk/** globs off at that directory, so the targets live here instead.
+aux_generate_parsers(gen_tool = ":genparser_stage0")
+
+# ── Files the crate packages need across the package boundary ─────────────────
+exports_files(
+    [
+        "fltk/fegen/fegen.fltkg",
+        "fltk/fegen/fegen.fltkfmt",
+    ],
+    visibility = [
+        "//crates/fegen-rust:__pkg__",
+        "//crates/fltkfmt:__pkg__",
+    ],
+)
+
+# The fixture grammars and their sidecars, for the three fixture-extension packages under
+# tests/.  They live here because fltk/fegen/test_data belongs to the root package; each
+# fixture package names them across the boundary.
+exports_files(
+    [
+        "fltk/fegen/test_data/collision_fixture.fltkg",
+        "fltk/fegen/test_data/phase4_roundtrip.fltkg",
+        "fltk/fegen/test_data/poc_grammar.fltkg",
+        "fltk/fegen/test_data/rust_parser_fixture.fltkfmt",
+        "fltk/fegen/test_data/rust_parser_fixture.fltkg",
+    ],
+    visibility = [
+        "//tests:__pkg__",
+        "//tests/rust_cst_fixture:__pkg__",
+        "//tests/rust_parser_fixture:__pkg__",
+        "//tests/rust_poc_cst:__pkg__",
+    ],
+)
+
+# Repo-root files the pytest targets under //tests read from the runfiles root.
+exports_files(
+    [
+        ".github/workflows/ci.yml",
+        "BUILD.bazel",
+        "Makefile",
+        "conftest.py",
+        "gencode-ruff.toml",
+        "pyproject.toml",
+        "pytest.ini",
+        "runbs.py",
+    ],
+    visibility = ["//tests:__pkg__"],
+)
+
+# Everything cargo has to read off disk to build a throwaway crate with path dependencies on
+# this repo's runtime crates: the workspace root manifest and its own package sources (cargo
+# loads every member's manifest before it resolves anything), the toolchain pin so the gates
+# compile with the same rustc the Bazel lanes do, and each member's manifest and sources.
+#
+# Used by the compile-gate pytest targets in //tests, which are tagged `requires-cargo` and run
+# unsandboxed — TODO(bazel-rustc-gate-tests) is the hermetic replacement.
+filegroup(
+    name = "cargo_workspace_files",
+    srcs = [
+        "Cargo.lock",
+        "Cargo.toml",
+        "rust-toolchain.toml",
+        "//crates/fltk-ast-core:cargo_gate_files",
+        "//crates/fltk-cst-core:cargo_gate_files",
+        "//crates/fltk-fmt-cli:cargo_gate_files",
+        "//crates/fltk-parser-core:cargo_gate_files",
+        "//crates/fltk-serde-core:cargo_gate_files",
+        "//crates/fltk-unparser-core:cargo_gate_files",
+    ] + glob(["src/*.rs"]),
+    visibility = ["//tests:__pkg__"],
+)
+
+# The editor launch path: the two checked-in launcher scripts and the VS Code clients whose
+# default server command names them.
+filegroup(
+    name = "editor_launchers",
+    srcs = [
+        "editors/run-lsp-target",
+        "editors/vscode/extension.js",
+        "editors/vscode/run-grammar-lsp",
+        "examples/gear/vscode/extension.js",
+        "examples/gear/vscode/run-gear-lsp",
+    ],
+    visibility = ["//tests:__pkg__"],
+)
+
+# The guides tests/test_doc_guide_cli_examples.py pins against the real CLI.
+filegroup(
+    name = "doc_guides",
+    srcs = [
+        "docs/ast-guide.md",
+        "docs/rust-serde-guide.md",
+    ],
+    visibility = ["//tests:__pkg__"],
+)
+
+# Every prose doc in the repo, for the uv-retirement gate in //tests.  A glob rather than a
+# list so a guide added later is scanned the day it lands — including one filed under a new
+# docs/ subdirectory, which is why the docs pattern is recursive.  CHANGELOG.md is excluded:
+# it records what past releases did, including the migration onto uv, and is not a recipe
+# anyone follows.  docs/adr/ holds untracked working notes and is excluded for the same reason.
+# The node_modules carve-outs are the same rule applied to vendored npm trees: those docs are
+# third-party, untracked and present only where someone ran `npm install`, so without the
+# carve-out the gate's contents — and whether it is red — would differ per checkout.
+filegroup(
+    name = "repo_docs",
+    srcs = glob(
+        [
+            "*.md",
+            "docs/**/*.md",
+            "editors/**/*.md",
+            "examples/**/*.md",
+            "projects/*.md",
+        ],
+        exclude = [
+            "CHANGELOG.md",
+            "docs/adr/**",
+            "editors/**/node_modules/**",
+            "examples/**/node_modules/**",
+        ],
+    ),
+    visibility = ["//tests:__pkg__"],
+)
+
+# Tracked tooling config that can carry a command, for the same gate.  Prose docs are not the
+# only place a uv recipe can survive: pyproject.toml is where `[tool.uv]` lived, and .bazelrc
+# can name a tool in an --action_env or a --run_under.
+#
+# TODO(uv-retired-agent-hook): .claude/settings.json belongs in this group.  Its PostToolUse
+# hook still shells out to `uv run ruff format`, so adding it here today turns the gate red on
+# a file the owner configures.
+filegroup(
+    name = "repo_tooling_files",
+    srcs = [
+        ".bazelrc",
+        "pyproject.toml",
+    ],
+    visibility = ["//tests:__pkg__"],
+)
+
+# Coupled to the CORPUS list in crates/fltkfmt/tests/cli.rs; a file missing here is a
+# missing-data failure at run time, not a silent skip.
+filegroup(
+    name = "fltkfmt_corpus",
+    srcs = [
+        "fltk/fegen/bootstrap.fltkg",
+        "fltk/fegen/fegen.fltkg",
+        "fltk/fegen/fltk.fltkg",
+        "fltk/fegen/regex.fltkg",
+        "fltk/fegen/test_data/collision_fixture.fltkg",
+        "fltk/fegen/test_data/phase4_roundtrip.fltkg",
+        "fltk/fegen/test_data/poc_grammar.fltkg",
+        "fltk/fegen/test_data/rust_parser_fixture.fltkg",
+    ],
+    visibility = [
+        "//crates/fltkfmt:__pkg__",
+        "//tests:__pkg__",
+    ],
+)
+
+# Fixture inputs tests read from disk.  Separate from _FLTK_DATA (which is the package's own
+# runtime data) so a test fixture cannot end up in a consumer's runfiles, and split by corpus
+# rather than pooled into the py_test base data: editing one fixture grammar should invalidate
+# the targets that read it, not every pytest target in the tree.
+filegroup(
+    name = "fegen_test_data",
+    srcs = glob(
+        ["fltk/fegen/test_data/**"],
+        exclude = ["**/__pycache__/**"],
+    ),
+    visibility = ["//tests:__pkg__"],
+)
+
+filegroup(
+    name = "lsp_test_data",
+    srcs = glob(
+        ["fltk/lsp/test_data/**"],
+        exclude = ["**/__pycache__/**"],
+    ),
+    visibility = ["//tests:__pkg__"],
+)
+
+_FLTK_DATA = ["fltk/py.typed"] + glob([
+    "fltk/**/*.fltkg",
+    "fltk/**/*.fltklsp",
+    "fltk/**/*.fltkfmt",
+])
+
+# The hand-written half of the package plus the committed seed: what a code generator is
+# allowed to import.  Not public — consumers want :fltk, which is this plus the generated
+# modules.
+py_library(
+    name = "fltk_src",
+    srcs = glob(
+        ["fltk/**/*.py"],
+        exclude = _GENERATED_PY,
+    ),
+    data = _FLTK_DATA,
+    imports = ["."],
+)
+
+# The generated modules' source paths are excluded from :fltk_src, so nothing here is shadowed
+# by, or shadows, a stray in-tree file.
 py_library(
     name = "fltk",
-    srcs = glob(["fltk/**/*.py"]),
-    data = ["fltk/py.typed"] + glob([
-        "fltk/**/*.fltkg",
-        "fltk/**/*.fltklsp",
-        "fltk/**/*.fltkfmt",
-    ]),
+    srcs = _GENERATED_PY_TARGETS,
+    data = _FLTK_DATA,
     imports = ["."],
     visibility = ["//visibility:public"],
+    deps = [":fltk_src"],
+)
+
+# End-to-end check that the generated modules land at importable package paths: only an actual
+# import proves out_dir and cst_mod_path agree with where Python looks.
+py_test(
+    name = "generated_py_import_test",
+    srcs = ["//tests:bazel_generated_py_import_check.py"],
+    main = "//tests:bazel_generated_py_import_check.py",
+    args = GENERATED_PY_MODULE_ARGS,
+    size = "small",
+    deps = [":fltk"],
+)
+
+# src/lib.rs is generator output — the span-only module wiring, with no grammar submodules.
+# It is the one generated Rust file still tracked, because cargo needs a crate root for the
+# root package's [lib] target and cargo-deny, `cargo metadata --locked` and the compile-gate
+# tests all fail to parse the workspace manifest without one (TODO(bazel-generated-native-lib)).
+# This pair keeps that copy honest: the target regenerates lib.rs and the genrule fails the
+# build if the tracked file has drifted from it.
+generate_rust_lib(
+    name = "native_lib_rs",
+    module_name = "_native",
+    no_cst = True,
+    register_span_types = True,
+    unknown_span_static = True,
+)
+
+genrule(
+    name = "native_lib_parity",
+    srcs = [
+        "src/lib.rs",
+        ":native_lib_rs",
+    ],
+    outs = ["native_lib_parity.stamp"],
+    cmd = "diff -u $(location src/lib.rs) $(location :native_lib_rs) >&2 && : > $@",
 )
 
 # fltk._native cdylib — the Rust extension that provides the canonical Span/SourceText types.
@@ -117,6 +582,33 @@ generate_parser(
     cst_mod_path = "fegen_test_cst",
 )
 
+# Smoke target for the stage-0 generator and the out_dir attr together: the two knobs the
+# aux-module targets will use.  A build failure here is the stage-0 binary failing to import
+# or the out_dir declaration not matching where the generator writes — neither of which the
+# analysis tests in //tests/bazel_rules can see, since they never run the action.
+generate_parser(
+    name = "bootstrap_stage0",
+    src = "fltk/fegen/bootstrap.fltkg",
+    base_name = "bootstrap_stage0",
+    cst_mod_path = "gensub.bootstrap_stage0_cst",
+    gen_tool = ":genparser_stage0",
+    out_dir = "gensub",
+)
+
+# Smoke target for the Python-backend unparser action: the generated unparser module is
+# emitted beside the CST and parsers, with a .fltkfmt spec baked in. The analysis tests in
+# //tests/bazel_rules assert the argv and the declared outputs but never run the action, so
+# a gen-py-unparser that cannot actually generate would only fail here.
+generate_parser(
+    name = "fixture_py_unparser",
+    src = "fltk/fegen/test_data/rust_parser_fixture.fltkg",
+    base_name = "fixture_unp",
+    cst_mod_path = "gen_py_unparser.fixture_unp_cst",
+    format_config = "fltk/fegen/test_data/rust_parser_fixture.fltkfmt",
+    out_dir = "gen_py_unparser",
+    unparser = True,
+)
+
 # Pure-Rust smoke target for the generate_rust_parser macro (python_extension =
 # False): verifies FLTK's own Bazel surface for Rust codegen works against a
 # fixture grammar, emitting only bootstrap_rust_srcs/cst.rs and
@@ -136,7 +628,7 @@ generate_rust_parser(
     name = "bootstrap_rust_ast_srcs",
     src = "fltk/fegen/test_data/rust_parser_fixture.fltkg",
     ast = True,
-    ast_config = "tests/rust_parser_fixture/rust_parser_fixture.fltkast",
+    ast_config = "//tests/rust_parser_fixture:rust_parser_fixture.fltkast",
     goal = "nest_sum",
     serde = True,
 )
@@ -149,7 +641,7 @@ generate_rust_parser(
     name = "bootstrap_rust_unparser_srcs",
     src = "fltk/fegen/test_data/rust_parser_fixture.fltkg",
     ast = True,
-    ast_config = "tests/rust_parser_fixture/rust_parser_fixture.fltkast",
+    ast_config = "//tests/rust_parser_fixture:rust_parser_fixture.fltkast",
     format_config = "fltk/fegen/test_data/rust_parser_fixture.fltkfmt",
     goal = "nest_sum",
     unparser = True,
@@ -181,7 +673,7 @@ generate_rust_parser(
     name = "bootstrap_ast_native",
     src = "fltk/fegen/test_data/rust_parser_fixture.fltkg",
     ast = True,
-    ast_config = "tests/rust_parser_fixture/rust_parser_fixture.fltkast",
+    ast_config = "//tests/rust_parser_fixture:rust_parser_fixture.fltkast",
     goal = "nest_sum",
     python_extension = True,
     serde = True,
@@ -208,8 +700,152 @@ generate_rust_parser(
 generate_rust_parser(
     name = "bootstrap_serde_only_native",
     src = "fltk/fegen/test_data/rust_parser_fixture.fltkg",
-    ast_config = "tests/rust_parser_fixture/rust_parser_fixture.fltkast",
+    ast_config = "//tests/rust_parser_fixture:rust_parser_fixture.fltkast",
     goal = "nest_sum",
     python_extension = True,
     serde = True,
+)
+
+# ── The pytest suite: one target per test file ────────────────────────────────
+# Test files that live under fltk/ are declared here rather than in a package of their own: a
+# BUILD file under fltk/ would cut this package's fltk/** globs off at that directory, taking
+# :fltk_src, :fltk and the lint targets with it.  The files under tests/ get their own package.
+#
+# The dict is an explicit inventory rather than a glob: a glob would absorb a new file with
+# whatever deps the pattern happened to carry, and keep passing when one is deleted.  The macro
+# checks it against `glob_pattern` and `deferred` at load time, so a file in none of the three
+# fails the build.
+_LSP_DEPS = [
+    "@pypi//pygls",
+    "@pypi//pytest_lsp",
+]
+
+_FLTK_TESTS = {
+    "fltk/fegen/pyrt/test_astrt.py": {},
+    "fltk/fegen/pyrt/test_label_protocol.py": {},
+    "fltk/fegen/pyrt/test_memo.py": {},
+    "fltk/fegen/pyrt/test_span_protocol_assignability.py": {},
+    "fltk/fegen/pyrt/test_span_protocol_native_free.py": {},
+    "fltk/fegen/test_ast_config.py": {},
+    "fltk/fegen/test_ast_model.py": {},
+    "fltk/fegen/test_cst_ergonomics.py": {},
+    "fltk/fegen/test_cst_protocol.py": {
+        # It writes consumer fixtures into a tmpdir and type-checks them with pyright, whose
+        # config resolves imports out of this target's own runfiles — so the fixtures' imports
+        # are the target's deps.  `//tests:test_support` carries the shared pyright harness.
+        "deps": PYRIGHT_TOOL_DEPS + ["//tests:test_support"],
+    },
+    "fltk/fegen/test_genparser.py": {
+        # Generation normalizes its own output, so the CLI tests this file drives need the same
+        # ruff wheel and pinned config the generator binaries carry.
+        "data": GENCODE_TOOL_DATA + [":fegen_test_data"],
+        "deps": GENCODE_TOOL_DEPS,
+    },
+    "fltk/fegen/test_grammar_trivia_discovery.py": {},
+    "fltk/fegen/test_gsm2ast.py": {},
+    "fltk/fegen/test_gsm2lib_rs.py": {},
+    "fltk/fegen/test_gsm2parser.py": {},
+    "fltk/fegen/test_gsm2parser_rs.py": {},
+    "fltk/fegen/test_gsm2tree.py": {},
+    "fltk/fegen/test_gsm_inline.py": {},
+    "fltk/fegen/test_leading_separators.py": {},
+    "fltk/fegen/test_name_validation.py": {},
+    "fltk/fegen/test_nil_validation.py": {},
+    "fltk/fegen/test_regression_empty_nary.py": {},
+    "fltk/fegen/test_regression_error_reporting.py": {},
+    "fltk/fegen/test_regression_line_col_error.py": {},
+    "fltk/fegen/test_regression_recursive_inlining.py": {},
+    "fltk/fegen/test_regression_subexpr_separators.py": {},
+    "fltk/fegen/test_regression_toplevel_recursion.py": {},
+    "fltk/fegen/test_regression_ws_required.py": {},
+    "fltk/fegen/test_trailing_character_bug.py": {},
+    "fltk/fegen/test_trivia_capture.py": {},
+    "fltk/fegen/test_trivia_whitespace_capture.py": {},
+    "fltk/iir/test_context.py": {},
+    "fltk/lsp/test_analysis.py": {"deps": _LSP_DEPS},
+    "fltk/lsp/test_classify.py": {"deps": _LSP_DEPS},
+    "fltk/lsp/test_classify_painter.py": {"deps": _LSP_DEPS},
+    "fltk/lsp/test_dogfood.py": {"deps": _LSP_DEPS},
+    "fltk/lsp/test_engine.py": {"deps": _LSP_DEPS},
+    "fltk/lsp/test_engine_analyze.py": {"deps": _LSP_DEPS},
+    "fltk/lsp/test_features.py": {"deps": _LSP_DEPS},
+    "fltk/lsp/test_fltklsp_parse.py": {"deps": _LSP_DEPS},
+    "fltk/lsp/test_gear_demo.py": {
+        "data": [":gear_example"],
+        "deps": _LSP_DEPS,
+    },
+    "fltk/lsp/test_grammar_index.py": {"deps": _LSP_DEPS},
+    "fltk/lsp/test_grammar_lsp.py": {"deps": _LSP_DEPS},
+    "fltk/lsp/test_highlight_cli.py": {"deps": _LSP_DEPS},
+    "fltk/lsp/test_load_lsp_config.py": {"deps": _LSP_DEPS},
+    "fltk/lsp/test_lsp_config.py": {"deps": _LSP_DEPS},
+    "fltk/lsp/test_lsp_resolve.py": {"deps": _LSP_DEPS},
+    "fltk/lsp/test_lsp_validation.py": {"deps": _LSP_DEPS},
+    "fltk/lsp/test_plumbing_error_pos.py": {"deps": _LSP_DEPS},
+    "fltk/lsp/test_plumbing_lsp_config.py": {"deps": _LSP_DEPS},
+    "fltk/lsp/test_plumbing_prefix.py": {"deps": _LSP_DEPS},
+    "fltk/lsp/test_positions.py": {"deps": _LSP_DEPS},
+    "fltk/lsp/test_project.py": {"deps": _LSP_DEPS},
+    "fltk/lsp/test_resolver_api.py": {"deps": _LSP_DEPS},
+    # Spawns a real `python -m fltk.lsp.server_cli` per test over the LSP protocol.
+    "fltk/lsp/test_server.py": {
+        "data": [":lsp_test_data"],
+        "deps": _LSP_DEPS,
+        "size": "medium",
+    },
+    "fltk/lsp/test_server_cli.py": {
+        "data": [":lsp_test_data"],
+        "deps": _LSP_DEPS,
+    },
+    "fltk/lsp/test_server_crossfile.py": {
+        "data": [
+            ":gear_example",
+            ":lsp_test_data",
+        ],
+        "deps": _LSP_DEPS,
+        "size": "medium",
+    },
+    "fltk/lsp/test_symbols.py": {"deps": _LSP_DEPS},
+    "fltk/test_plumbing.py": {},
+    "fltk/test_plumbing_integration.py": {},
+    "fltk/unparse/test_after_directive.py": {},
+    "fltk/unparse/test_control_nodes.py": {},
+    "fltk/unparse/test_fmt_config.py": {},
+    "fltk/unparse/test_formatter_config_integration.py": {},
+    "fltk/unparse/test_group_afterspec_fix.py": {},
+    "fltk/unparse/test_group_nest_combination.py": {},
+    "fltk/unparse/test_group_support.py": {},
+    "fltk/unparse/test_initial_sep_unparser.py": {},
+    "fltk/unparse/test_is_span_guard.py": {},
+    "fltk/unparse/test_join_support.py": {},
+    "fltk/unparse/test_labeled_literal_text.py": {},
+    "fltk/unparse/test_nest_fmt_config.py": {},
+    "fltk/unparse/test_nest_support.py": {},
+    "fltk/unparse/test_omit_functionality.py": {},
+    "fltk/unparse/test_pyrt.py": {},
+    "fltk/unparse/test_renderer.py": {},
+    "fltk/unparse/test_resolve_specs.py": {},
+    "fltk/unparse/test_unparser.py": {"data": [
+        "fltk/unparse/example.toy",
+        "fltk/unparse/example_expected_combinators.txt",
+    ]},
+    "fltk/unparse/test_unparser_edge_cases.py": {},
+}
+
+fltk_py_tests(
+    tests = _FLTK_TESTS,
+    glob_pattern = "fltk/**/test_*.py",
+)
+
+# The gear example doubles as an LSP fixture project; node_modules is the VSCode extension's
+# and has no business in a test's runfiles.
+filegroup(
+    name = "gear_example",
+    srcs = glob(
+        ["examples/gear/**"],
+        exclude = [
+            "examples/gear/**/node_modules/**",
+            "**/__pycache__/**",
+        ],
+    ),
 )

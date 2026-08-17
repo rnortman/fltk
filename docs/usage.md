@@ -52,8 +52,15 @@ number := value:/[0-9]+/ ;
 
 **2. Generate parser source files:**
 ```bash
-uv run python -m fltk.fegen.genparser calc.fltkg calc calc_cst -v
+bazel run --run_under="cd $PWD &&" @fltk//:genparser -- generate calc.fltkg calc calc_cst -v
 ```
+
+The generator is a Bazel target: `@fltk//:genparser` from a workspace that depends on fltk,
+`//:genparser` from an fltk checkout (both names work in either place). `bazel run` executes in
+the runfiles tree, so `--run_under="cd $PWD &&"` is what makes the relative paths after `--`
+mean paths in the directory you invoked it from. Absolute paths need no wrapper. The same shape
+applies to every fltk CLI: `@fltk//:unparse_cli`, `@fltk//:fltk_highlight`, `@fltk//:fltk_lsp`,
+`@fltk//:grammar_lsp`.
 
 This generates:
 - `calc_cst.py` - CST node classes
@@ -82,19 +89,19 @@ else:
 
 ```bash
 # Generate both parser variants (default)
-uv run python -m fltk.fegen.genparser grammar.fltkg mylang mylang_cst
+bazel run --run_under="cd $PWD &&" @fltk//:genparser -- generate grammar.fltkg mylang mylang_cst
 
 # Generate only trivia-preserving parser (for formatters)
-uv run python -m fltk.fegen.genparser grammar.fltkg mylang mylang_cst --trivia-only
+bazel run --run_under="cd $PWD &&" @fltk//:genparser -- generate grammar.fltkg mylang mylang_cst --trivia-only
 
 # Generate only non-trivia parser (for compilers)
-uv run python -m fltk.fegen.genparser grammar.fltkg mylang mylang_cst --no-trivia-only
+bazel run --run_under="cd $PWD &&" @fltk//:genparser -- generate grammar.fltkg mylang mylang_cst --no-trivia-only
 
 # Specify output directory
-uv run python -m fltk.fegen.genparser grammar.fltkg mylang mylang_cst -o output/
+bazel run --run_under="cd $PWD &&" @fltk//:genparser -- generate grammar.fltkg mylang mylang_cst -o output/
 
 # Verbose output
-uv run python -m fltk.fegen.genparser grammar.fltkg mylang mylang_cst -v
+bazel run --run_under="cd $PWD &&" @fltk//:genparser -- generate grammar.fltkg mylang mylang_cst -v
 ```
 
 | Argument | Description |
@@ -466,7 +473,7 @@ print(output)  # "1 + 2 * (3 + 4)"
 FLTK includes a CLI tool for parsing and formatting files using a grammar and format specification:
 
 ```bash
-uv run python -m fltk.unparse_cli GRAMMAR FORMAT_SPEC INPUT_FILE [OPTIONS]
+bazel run --run_under="cd $PWD &&" @fltk//:unparse_cli -- GRAMMAR FORMAT_SPEC INPUT_FILE [OPTIONS]
 ```
 
 ### Formatting FLTK Grammar Files
@@ -475,13 +482,13 @@ FLTK includes a formatter for `.fltkg` grammar files:
 
 ```bash
 # Format a grammar file (output to stdout)
-uv run python -m fltk.unparse_cli \
+bazel run --run_under="cd $PWD &&" @fltk//:unparse_cli -- \
     fltk/fegen/fegen.fltkg \
     fltk/fegen/fegen.fltkfmt \
     mygrammar.fltkg
 
 # Format in place
-uv run python -m fltk.unparse_cli \
+bazel run --run_under="cd $PWD &&" @fltk//:unparse_cli -- \
     fltk/fegen/fegen.fltkg \
     fltk/fegen/fegen.fltkfmt \
     mygrammar.fltkg \

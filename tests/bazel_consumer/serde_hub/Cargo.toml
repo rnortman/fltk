@@ -1,0 +1,20 @@
+# The consumer-side crate hub for the serde-injection lane: serde and nothing else.
+#
+# Its whole purpose is to be a *different* serde build from @fltk_crates//:serde, so that
+# setting //crates/fltk-serde-core:serde to it proves the flag actually reaches
+# fltk-serde-core. `derive` is on because the model struct in consumer_serde_crate is what
+# needs one coherent instance with fltk-serde-core.
+[package]
+name = "consumer_serde_hub"
+version = "0.0.0"
+edition = "2021"
+publish = false
+
+[lib]
+path = "src/lib.rs"
+
+[dependencies]
+serde = { version = "1", features = ["derive"] }
+
+# Its own workspace: this manifest is a hub input, not a member of fltk's workspace.
+[workspace]

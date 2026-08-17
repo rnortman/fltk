@@ -42,3 +42,16 @@ rust.toolchain(
     edition = "2021",
     versions = ["1.97.1"],
 )
+
+# This module's own crate hub, holding serde and nothing else.  It is what
+# //crates/fltk-serde-core:serde is pointed at in .bazelrc, and being a hub distinct from
+# @fltk_crates is the whole content of the assertion: the pure-Rust serde consumer
+# (//:consumer_serde) derives Deserialize from this serde and hands values through
+# fltk-serde-core, which only compiles if the flag reached it.
+crate = use_extension("@rules_rust//crate_universe:extensions.bzl", "crate")
+crate.from_cargo(
+    name = "consumer_crates",
+    cargo_lockfile = "//serde_hub:Cargo.lock",
+    manifests = ["//serde_hub:Cargo.toml"],
+)
+use_repo(crate, "consumer_crates")

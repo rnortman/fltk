@@ -1,4 +1,4 @@
-"""B4 runtime-agreement tests: fltk/_stubs/fegen_rust_cst/cst.pyi vs the compiled fegen_rust_cst.cst.
+"""B4 runtime-agreement tests: the generated fegen_rust_cst/cst.pyi vs the compiled fegen_rust_cst.cst.
 
 Validates two directions over the generated fegen_cst surface:
   1. Every class, method, and classattr declared in the .pyi exists on the runtime module.
@@ -14,10 +14,11 @@ from __future__ import annotations
 
 import ast
 import functools
-import pathlib
 from types import ModuleType
 
 import pytest
+
+from tests import tree_paths
 
 # --------------------------------------------------------------------------- #
 # Skip guard                                                                    #
@@ -37,14 +38,14 @@ _FEGEN_CST_MODULE = _try_import_fegen_rust_cst_cst()
 
 skip_if_no_fegen_rust_cst = pytest.mark.skipif(
     _FEGEN_CST_MODULE is None,
-    reason="fegen_rust_cst not importable — run 'make build-fegen-rust-cst' first",
+    reason="fegen_rust_cst not importable; it is built by //crates/fegen-rust:fegen_rust_cst",
 )
 
 # --------------------------------------------------------------------------- #
-# Parse the committed .pyi stub                                                 #
+# Parse the generated .pyi stub                                                 #
 # --------------------------------------------------------------------------- #
 
-_STUB_PATH = pathlib.Path(__file__).parent.parent / "fltk" / "_stubs" / "fegen_rust_cst" / "cst.pyi"
+_STUB_PATH = tree_paths.FEGEN_RUST_CST_STUB_DIR / "cst.pyi"
 
 
 @functools.cache
@@ -141,7 +142,7 @@ class TestRuntimeToStub:
         missing = runtime_public - stub_names - _KNOWN_RUNTIME_EXTRAS
         assert not missing, (
             f"Runtime classes missing from stub: {sorted(missing)}. "
-            "Add them to fltk/_stubs/fegen_rust_cst/cst.pyi or _KNOWN_RUNTIME_EXTRAS if intentionally omitted."
+            "Add them to the generated cst.pyi (fltk/fegen/gsm2tree_rs.py) or _KNOWN_RUNTIME_EXTRAS."
         )
 
     def test_runtime_module_attrs_in_stub(self) -> None:
@@ -156,7 +157,7 @@ class TestRuntimeToStub:
         missing = runtime_non_class - stub_names - _KNOWN_RUNTIME_EXTRAS
         assert not missing, (
             f"Runtime module attrs missing from stub: {sorted(missing)}. "
-            "Add them to fltk/_stubs/fegen_rust_cst/cst.pyi."
+            "Add them to the generated cst.pyi (fltk/fegen/gsm2tree_rs.py)."
         )
 
 

@@ -8,7 +8,10 @@ from __future__ import annotations
 
 import pytest
 
-pytest.importorskip("fegen_rust_cst", reason="fegen_rust_cst not built; run 'make build-fegen-rust-cst' first")
+pytest.importorskip(
+    "fegen_rust_cst",
+    reason="fegen_rust_cst not importable; it is built by //crates/fegen-rust:fegen_rust_cst",
+)
 
 from fegen_rust_cst.cst import (
     Alternatives,

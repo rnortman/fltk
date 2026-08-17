@@ -1,4 +1,10 @@
+load("@rules_rust//rust:defs.bzl", "rust_library", "rust_test")
+load("//bzl:cargo_gate.bzl", "cargo_gate_files")
 load("//bzl:runtime_crate.bzl", "fltk_runtime_library")
+
+# Stated once for the three library targets below: the macro's two flavors and :no_features all
+# compile the same sources, and a src reaching only some of them is a divergence nothing fails on.
+_SRCS = glob(["src/**/*.rs"])
 
 # Bazel crate_features do not read Cargo defaults, so every feature is stated here. All
 # three are on in BOTH flavors because a Bazel consumer has no way to re-enable a feature
@@ -17,7 +23,7 @@ load("//bzl:runtime_crate.bzl", "fltk_runtime_library")
 # here, because both flavors turn all three features on.
 fltk_runtime_library(
     name = "fltk-ast-core",
-    srcs = glob(["src/**/*.rs"]),
+    srcs = _SRCS,
     crate_name = "fltk_ast_core",
     features = [
         "decimal",
@@ -32,3 +38,43 @@ fltk_runtime_library(
         "@fltk_crates//:uuid",
     ],
 )
+
+# Features-off flavor. This is the one configuration in the tree that the two flavors above
+# cannot express: they turn all three features on, so nothing there compiles the `#[cfg(not(
+# feature = "indexmap"))]` arms or proves the crate builds with no optional dependency at all
+# — the property "a consumer with no keyed collections can drop indexmap" rests on.
+#
+# Explicit target rather than a knob on fltk_runtime_library: this is the only runtime crate
+# whose feature set is not fully covered by its two flavors.
+rust_library(
+    name = "no_features",
+    srcs = _SRCS,
+    crate_features = [],
+    crate_name = "fltk_ast_core",
+    edition = "2021",
+    visibility = ["//visibility:public"],
+    deps = [
+        "//crates/fltk-cst-core:no_python",
+        "@fltk_crates//:regex-automata",
+    ],
+)
+
+rust_test(
+    name = "no_features_test",
+    crate = ":no_features",
+)
+
+# Sources the Python-side tests read as data: tests/test_ast_core_manifest.py parses the
+# manifest, and tests/test_ast_error_message_parity.py reads the runtime's error strings.
+exports_files(
+    ["Cargo.toml"],
+    visibility = ["//tests:__pkg__"],
+)
+
+filegroup(
+    name = "src_rs",
+    srcs = glob(["src/**/*.rs"]),
+    visibility = ["//tests:__pkg__"],
+)
+
+cargo_gate_files(srcs = _SRCS)

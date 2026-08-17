@@ -15,6 +15,7 @@ Test plan:
 from __future__ import annotations
 
 import subprocess
+import sys
 import tempfile
 from pathlib import Path
 
@@ -454,12 +455,8 @@ def test_genparser_cli_exits_nonzero_on_non_portable_grammar() -> None:
         output_file = Path(tmpdir) / "bad_grammar_parser.rs"
         grammar_file.write_text(grammar_src)
         result = subprocess.run(  # noqa: S603
-            [  # noqa: S607
-                "uv",
-                "run",
-                "--group",
-                "dev",
-                "python",
+            [
+                sys.executable,
                 "-m",
                 "fltk.fegen.genparser",
                 "gen-rust-parser",
@@ -483,18 +480,16 @@ def test_genparser_cli_exits_nonzero_on_non_portable_grammar() -> None:
 # ===========================================================================
 # Every regex in every Rust-parser-target grammar must be portable.
 #
-# Parser targets (the three grammars fed to gen-rust-parser in make gencode):
+# Parser targets (the three grammars whose Bazel codegen targets emit a parser):
 #   fegen.fltkg, rust_parser_fixture.fltkg, collision_fixture.fltkg
-# (see Makefile lines 276, 279, 284-285).
 #
-# The other two grammars -- poc_grammar.fltkg, phase4_roundtrip.fltkg -- are
-# gen-rust-cst-only (Makefile lines 269-272); the portability check never runs
-# against them in production.  Their regexes happen to be portable but they are
-# listed as CST-only in the comment below.
+# The other two grammars -- poc_grammar.fltkg, phase4_roundtrip.fltkg -- come from targets with
+# `parser = False`; the portability check never runs against them in production.  Their regexes
+# happen to be portable but they are listed as CST-only in the comment below.
 #
-# Note: this list is hand-copied from Makefile's gencode recipe.  If a new grammar is
-# added to gen-rust-parser in the Makefile without being added here, the whole-tree
-# completeness test will silently fail to cover it.
+# Note: this list is hand-copied from those BUILD files.  If a grammar gains a parser-emitting
+# codegen target without being added here, the whole-tree completeness test will silently fail
+# to cover it.
 
 
 _RUST_PARSER_TARGET_GRAMMARS = [
@@ -523,7 +518,7 @@ try:
 except Exception as _exc:
     _msg = (
         f"Could not load grammar files for portability completeness check: {_exc}\n"
-        "Hint: run 'uv run --group dev maturin develop' to build the fltk._native extension."
+        "Hint: the fltk._native extension is //:native_py; run this under Bazel."
     )
     raise pytest.UsageError(_msg) from _exc
 

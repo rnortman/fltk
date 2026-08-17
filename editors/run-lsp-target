@@ -1,0 +1,58 @@
+#!/usr/bin/env bash
+# Build an fltk language server target with Bazel and exec it.  Usage:
+#
+#     run-lsp-target //:some_lsp [server args...]
+#
+# The editor launchers under editors/ and examples/ are one-line wrappers over this script;
+# every editor path shares one implementation of the two non-obvious rules below.
+#
+# 1. A long-lived process started directly by `bazel run` holds the workspace lock for its whole
+#    lifetime, which blocks every other Bazel command in the checkout -- including the next
+#    language client an extension starts.  So the lock is taken only long enough to build:
+#    `--script_path` writes a launcher for the built binary, and that launcher is exec'd
+#    afterwards, outside Bazel.
+# 2. stdout is the LSP stream and must carry protocol traffic only, so build output goes to
+#    stderr.
+#
+# Arguments after the target are passed to the server unchanged.
+set -euo pipefail
+
+if [ "$#" -lt 1 ]; then
+    echo "usage: $(basename -- "$0") <bazel-target> [server args...]" >&2
+    exit 2
+fi
+
+target=$1
+shift
+
+repo_root=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd)
+
+# A private per-user directory, not a bare path in the shared temp dir: Bazel writes the launcher
+# and this script execs it, so a world-writable location lets another local user pre-create the
+# name as a symlink or a file of their own and have it run as us.  Refuse anything we do not own.
+launcher_dir="${XDG_RUNTIME_DIR:-${TMPDIR:-/tmp}}/fltk-lsp-$(id -u)"
+mkdir -p -m 700 "$launcher_dir"
+if [ -L "$launcher_dir" ] || [ ! -d "$launcher_dir" ] || [ ! -O "$launcher_dir" ]; then
+    echo "refusing to use $launcher_dir: not a directory we own" >&2
+    exit 1
+fi
+chmod 700 "$launcher_dir"
+
+# A stable name rather than mktemp: exec replaces this shell, so nothing here can clean up
+# afterwards, and one rewritten file per (checkout, target) beats an unbounded pile of them.  The
+# checkout is part of the key so two clones do not exec each other's build.
+key=$(printf '%s|%s' "$repo_root" "$target" | cksum | cut -d' ' -f1)
+launcher="$launcher_dir/lsp-$key.sh"
+
+# Bazel writes the script in place, so two clients starting at once -- the normal case, a VS Code
+# session restoring with several language ids open -- can have one exec the file while the other's
+# build rewrites it, half-written.  Each invocation builds into a name of its own and renames it
+# over the shared one: rename is atomic within the directory, and an already-exec'd path is
+# unaffected by it.
+staging="$launcher.$$"
+trap 'rm -f -- "$staging"' EXIT
+(cd -- "$repo_root" && bazel run --script_path="$staging" "$target" >&2)
+mv -f -- "$staging" "$launcher"
+trap - EXIT
+
+exec "$launcher" "$@"

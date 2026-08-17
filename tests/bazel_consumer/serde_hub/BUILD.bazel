@@ -1,0 +1,6 @@
+# The manifest pair crate_universe reads for @consumer_crates (see ../MODULE.bazel).
+# Nothing is built here; the package exists to make these two files addressable as labels.
+exports_files([
+    "Cargo.toml",
+    "Cargo.lock",
+])

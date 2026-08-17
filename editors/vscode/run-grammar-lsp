@@ -1,0 +1,6 @@
+#!/usr/bin/env bash
+# Launch the fltk grammar language server (//:grammar_lsp) for VS Code.
+# Arguments are passed through unchanged (the extension appends the language id).
+set -euo pipefail
+
+exec "$(dirname -- "${BASH_SOURCE[0]}")/../run-lsp-target" //:grammar_lsp "$@"

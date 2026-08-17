@@ -22,6 +22,10 @@ import pytest
 from fltk import plumbing
 from fltk.fegen import emit, gsm2tree
 
+# The scripts below are run as subprocesses with this as their working directory, so it has to be
+# the runfiles root — which is what this is under Bazel, pytest reporting the collected file's
+# unresolved path.  The spawns must stay `-m runbs`: `python runbs.py` puts the *resolved* script
+# directory first on sys.path, and from the source tree `fltk.fegen` has no generated modules.
 _REPO_ROOT = pathlib.Path(__file__).parent.parent
 
 _PARSE_BOOTSTRAP_GRAMMAR = """
@@ -95,7 +99,11 @@ def test_runbs_writes_the_protocol_module_beside_the_cst_module(tmp_path: pathli
         pytest.skip("bootstrap grammar missing")
     parser_file = tmp_path / "bs_parser.py"
     cst_file = tmp_path / "bs_cst.py"
-    result = _run([sys.executable, "runbs.py", str(grammar), str(parser_file), str(cst_file), "bs_cst"])
+    # `-m runbs` rather than the `runbs.py` path a maintainer types: a script path makes
+    # sys.path[0] the script's directory *with symlinks resolved*, and every runfiles entry for
+    # a tracked file resolves back into the checkout — where the generated modules runbs.py
+    # imports do not exist.  `-m` uses the working directory as given.
+    result = _run([sys.executable, "-m", "runbs", str(grammar), str(parser_file), str(cst_file), "bs_cst"])
     assert result.returncode == 0, result.stderr
     _assert_pair(cst_file, tmp_path / "bs_cst_protocol.py", "bs_cst")
 

@@ -1,9 +1,26 @@
 common --enable_bzlmod
 
-# Clippy, as an aspect over whatever //... builds. Kept in a named config rather than the
-# default build so an ordinary `bazel build` stays a build; `make bazel-clippy` selects it.
+# The clippy half of the lint gate, and the `--config=clippy` spelling on its own for anyone
+# still typing it.  `--config=lint` below expands from this block, so the two move together:
+# retiring the `clippy` spelling means inlining these three lines under `build:lint`, not
+# deleting them.
+#
+# Clippy, as an aspect over whatever //... builds.
 # --@rules_rust//:clippy_flags carries the deny-all gate the cargo lanes use; without it a
 # warning is printed and the build still succeeds.
 build:clippy --aspects=@rules_rust//rust:defs.bzl%rust_clippy_aspect
 build:clippy --output_groups=+clippy_checks
 build:clippy --@rules_rust//:clippy_flags=-Dwarnings
+
+# The whole linting surface, Rust and Python: `bazel build --config lint //...`.  The clippy
+# half is the config above rather than a copy of its flags, so there is one place to edit
+# when the aspect or the deny gate changes.  --//bzl:lint gates the Python lint targets,
+# which are no-op stamps without it.
+build:lint --config=clippy
+build:lint --//bzl:lint=true
+
+# `bazel coverage //...` collects the Python suite.  Instrumentation defaults to the package
+# under test — which is //tests, holding no library code — so without this filter every report
+# is empty.  The library is the root package's //:fltk, and naming it explicitly also keeps the
+# hub wheels (external/) out of the report.
+coverage --instrumentation_filter=^//:

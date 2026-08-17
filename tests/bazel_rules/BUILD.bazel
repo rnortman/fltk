@@ -1,5 +1,137 @@
-load("//:rust.bzl", "generate_rust_lib", "rust_bzl_internals")
+load("//:rules.bzl", "generate_parser")
+load("//:rust.bzl", "generate_rust_lib", "generate_rust_parser", "rust_bzl_internals")
+load(":crate_flavor_tests.bzl", "crate_flavor_test_suite")
+load(":generated_parity_tests.bzl", "generated_parity_test_suite")
+load(":py_test_tests.bzl", "py_test_test_suite")
+load(":rules_bzl_tests.bzl", "rules_bzl_test_suite")
 load(":rust_bzl_tests.bzl", "rust_bzl_test_suite")
+
+# ── generate_parser targets under test ────────────────────────────────────────
+#
+# Every one carries "manual" for the standard reason: the analysis tests only analyze
+# them, and dummy.fltkg is not a grammar the Python generator would accept, so a wildcard
+# build must not try to run the action.
+
+generate_parser(
+    name = "py_default_srcs",
+    src = "dummy.fltkg",
+    base_name = "pydefault",
+    cst_mod_path = "pydefault_cst",
+    tags = ["manual"],
+)
+
+generate_parser(
+    name = "py_out_dir_srcs",
+    src = "dummy.fltkg",
+    base_name = "pyoutdir",
+    cst_mod_path = "pyoutdir_cst",
+    out_dir = "gensrc/pkg",
+    tags = ["manual"],
+)
+
+generate_parser(
+    name = "py_protocol_only_srcs",
+    src = "dummy.fltkg",
+    base_name = "pyproto",
+    cst_mod_path = "pyproto_cst",
+    protocol_only = True,
+    tags = ["manual"],
+)
+
+generate_parser(
+    name = "py_trivia_only_srcs",
+    src = "dummy.fltkg",
+    base_name = "pytrivia",
+    cst_mod_path = "pytrivia_cst",
+    tags = ["manual"],
+    trivia_only = True,
+)
+
+generate_parser(
+    name = "py_no_trivia_only_srcs",
+    src = "dummy.fltkg",
+    base_name = "pynotrivia",
+    cst_mod_path = "pynotrivia_cst",
+    no_trivia_only = True,
+    tags = ["manual"],
+)
+
+generate_parser(
+    name = "py_stage0_srcs",
+    src = "dummy.fltkg",
+    base_name = "pystage0",
+    cst_mod_path = "pystage0_cst",
+    gen_tool = "//:genparser_stage0",
+    tags = ["manual"],
+)
+
+generate_parser(
+    name = "py_unparser_srcs",
+    src = "dummy.fltkg",
+    base_name = "pyunparser",
+    cst_mod_path = "pyunparser_cst",
+    format_config = "dummy.fltkfmt",
+    tags = ["manual"],
+    unparser = True,
+)
+
+generate_parser(
+    name = "py_unparser_out_dir_srcs",
+    src = "dummy.fltkg",
+    base_name = "pyunpout",
+    cst_mod_path = "pyunpout_cst",
+    out_dir = "gensrc/unp",
+    tags = ["manual"],
+    unparser = True,
+)
+
+generate_parser(
+    name = "py_neg_format_config_without_unparser",
+    src = "dummy.fltkg",
+    base_name = "pynegfmt",
+    cst_mod_path = "pynegfmt_cst",
+    format_config = "dummy.fltkfmt",
+    tags = ["manual"],
+)
+
+generate_parser(
+    name = "py_neg_unparser_with_protocol_only",
+    src = "dummy.fltkg",
+    base_name = "pynegunp",
+    cst_mod_path = "pynegunp_cst",
+    protocol_only = True,
+    tags = ["manual"],
+    unparser = True,
+)
+
+generate_parser(
+    name = "py_neg_unparser_with_stage0",
+    src = "dummy.fltkg",
+    base_name = "pynegstage0",
+    cst_mod_path = "pynegstage0_cst",
+    gen_tool = "//:genparser_stage0",
+    tags = ["manual"],
+    unparser = True,
+)
+
+generate_parser(
+    name = "py_neg_out_dir_escape",
+    src = "dummy.fltkg",
+    base_name = "pynegout",
+    cst_mod_path = "pynegout_cst",
+    out_dir = "../escapes",
+    tags = ["manual"],
+)
+
+generate_parser(
+    name = "py_neg_protocol_only_with_selector",
+    src = "dummy.fltkg",
+    base_name = "pynegsel",
+    cst_mod_path = "pynegsel_cst",
+    protocol_only = True,
+    tags = ["manual"],
+    trivia_only = True,
+)
 
 # Target-under-test for the analysistest: instantiates the internal codegen rule
 # directly (the only way the analysis-time coupling guard fires; via the public
@@ -44,15 +176,35 @@ rust_bzl_internals.generate_rust_srcs(
     tags = ["manual"],
 )
 
-# Negative target: out_dir alongside the extension-mode attrs. The macro refuses out_dir
-# when python_extension is set, but python_extension is a macro concept; the rule reads the
-# exclusion off extension_name / protocol_module instead, and this is the only place that
-# guard fires.
+# Negative target: parser = False alongside ast, which is generated against the parser module.
+# Same "manual" tag rationale as above.
 rust_bzl_internals.generate_rust_srcs(
-    name = "neg_out_dir_with_extension_name",
+    name = "neg_parser_off_with_ast",
     src = "dummy.fltkg",
-    extension_name = "neg_out_dir_ext",
-    out_dir = "gensrc",
+    ast = True,
+    parser = False,
+    tags = ["manual"],
+)
+
+# Negative target: a submodules list with no protocol_module, so nothing emits the marker it
+# describes. Same "manual" tag rationale as above.
+rust_bzl_internals.generate_rust_srcs(
+    name = "neg_submodules_without_protocol",
+    src = "dummy.fltkg",
+    protocol_module = "",
+    submodules = [
+        "cst",
+        "parser",
+    ],
+    tags = ["manual"],
+)
+
+# Target-under-test for the parser = False layout analysistest: the CST-only shape the two
+# cst-only fixtures use. "manual" for the same reason as the other codegen targets.
+rust_bzl_internals.generate_rust_srcs(
+    name = "parser_off_srcs",
+    src = "dummy.fltkg",
+    parser = False,
     tags = ["manual"],
 )
 
@@ -101,6 +253,43 @@ rust_bzl_internals.generate_rust_srcs(
     unparser = True,
 )
 
+# Target-under-test for the merged-action analysistest: every artifact enabled at once.
+# "manual" for the same reason as the other codegen targets.
+rust_bzl_internals.generate_rust_srcs(
+    name = "argv_merged_srcs",
+    src = "dummy.fltkg",
+    ast = True,
+    ast_config = "dummy.fltkast",
+    extension_name = "argv_merged",
+    format_config = "dummy.fltkfmt",
+    goal = "nest_sum",
+    protocol = True,
+    protocol_module = "tests.dummy_cst_protocol",
+    serde = True,
+    tags = ["manual"],
+    unparser = True,
+)
+
+# Target-under-test for the stub-package analysistests: the hand-assembled-extension shape —
+# pure-Rust codegen into the crate's own src/ plus the .pyi stub package, from one action, with
+# an explicit submodules list naming a module no codegen target here produces (which is what
+# that attribute exists for). "manual" because it is analyzed, not built.
+generate_rust_parser(
+    name = "argv_stubs",
+    src = "dummy.fltkg",
+    extension_name = "argv_stubs_ext",
+    format_config = "dummy.fltkfmt",
+    out_dir = "gensrc",
+    protocol_module = "tests.dummy_cst_protocol",
+    submodules = [
+        "cst",
+        "unparser",
+        "extra",
+    ],
+    tags = ["manual"],
+    unparser = True,
+)
+
 # Target-under-test for the plain-module analysistest: the generate_rust_lib hop
 # from the plain_modules attr to the repeatable --plain-module flag. An .rs file
 # that reaches a crate's srcs but no `mod` declaration is simply not compiled, so
@@ -124,5 +313,13 @@ generate_rust_lib(
     tags = ["manual"],
     unparser = True,
 )
+
+crate_flavor_test_suite(name = "crate_flavor_tests")
+
+generated_parity_test_suite(name = "generated_parity_tests")
+
+py_test_test_suite(name = "py_test_tests")
+
+rules_bzl_test_suite(name = "rules_bzl_tests")
 
 rust_bzl_test_suite(name = "rust_bzl_tests")

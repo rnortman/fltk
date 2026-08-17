@@ -1,135 +1,21 @@
-[build-system]
-requires = ["maturin>=1.7,<2"]
-build-backend = "maturin"
-
-[project]
-name = "fltk"
-dynamic = []
-description = 'Formal Language ToolKit'
-# TODO(version-bump-0-6-0): still reads 0.4.0 while v0.5.0 is tagged; bump every manifest at the
-# 0.6.0 cut.
-version = "0.4.0"
-requires-python = ">=3.10"
-license = "MIT"
-keywords = []
-authors = [
-  { name = "Randall Nortman", email = "github@randallnortman.net" },
-]
-classifiers = [
-  "Development Status :: 4 - Beta",
-  "Programming Language :: Python",
-  "Programming Language :: Python :: 3.10",
-  "Programming Language :: Python :: 3.11",
-  "Programming Language :: Python :: 3.12",
-  "Programming Language :: Python :: Implementation :: CPython",
-  "Programming Language :: Python :: Implementation :: PyPy",
-]
-dependencies = ["astor", "typer"]
-
-[project.optional-dependencies]
-lsp = ["pygls>=2,<3"]
-
-[project.scripts]
-fltk-highlight = "fltk.lsp.highlight_cli:app"
-fltk-lsp = "fltk.lsp.server_cli:app"
-fltk-grammar-lsp = "fltk.lsp.grammar_cli:app"
-
-[tool.uv]
-# Exact pin: the lock drift gate (make check-locks) is sensitive to uv's export
-# output format, so a floating uv could break CI on an unchanged commit.
-# Bump: edit this, run `make check`, commit.
-required-version = "==0.11.28"
-
-[tool.maturin]
-python-packages = ["fltk"]
-module-name = "fltk._native"
-features = ["pyo3/extension-module"]
-
-[project.urls]
-Documentation = "https://github.com/rnortman/fltk#readme"
-Issues = "https://github.com/rnortman/fltk/issues"
-Source = "https://github.com/rnortman/fltk"
-
-[dependency-groups]
-dev = ["maturin>=1.7,<2"]
-test = [
-  "coverage[toml]>=6.5",
-  "pytest",
-  "pytest-lsp",
-  # `tomllib` is stdlib from 3.11; the floor is 3.10, and the manifest-mirror guard in
-  # tests/ has to parse TOML on every supported interpreter rather than skip on the oldest.
-  "tomli>=2; python_version < '3.11'",
-]
-lint = [
-  "pyright>=1.1.0",
-  "ruff>=0.0.243",
-]
+# Tool configuration only.  fltk is built, tested and packaged by Bazel: there is no
+# [project] table, no [build-system], and no dependency tables here.  The Python
+# dependency manifest is requirements.in (compiled to requirements_lock.txt by
+# `bazel run //:requirements.update`), and every CLI is a py_binary rather than a
+# console entry point.
 
 [tool.pyright]
 pythonVersion = "3.10"
 include = ["fltk", "*.py", "tests/typecheck_fegen_cst_conformance.py"]
 exclude = ["**/__pycache__"]
 stubPath = ""
-extraPaths = ["fltk/_stubs"]
-venvPath = ".venv"
+extraPaths = ["crates/fegen-rust"]
 
 [tool.ruff]
-target-version = "py310"
-line-length = 120
-
-[tool.ruff.format]
-skip-magic-trailing-comma = false
-
-[tool.ruff.lint]
-select = [
-  "A",
-  "ARG",
-  "B",
-  "C",
-  "DTZ",
-  "E",
-  "EM",
-  "F",
-  "FBT",
-  "I",
-  "ICN",
-  "ISC",
-  "N",
-  "PLC",
-  "PLE",
-  "PLR",
-  "PLW",
-  "Q",
-  "RUF",
-  "S",
-  "T",
-  "TID",
-  "UP",
-  "W",
-  "YTT",
-]
-ignore = [
-  # Allow non-abstract empty methods in abstract base classes
-  "B027",
-  # Allow boolean positional values in function calls, like `dict.get(... True)`
-  "FBT003",
-  # Ignore checks for possible passwords
-  "S105", "S106", "S107",
-  # Ignore complexity
-  "C901", "PLR0911", "PLR0912", "PLR0913", "PLR0915",
-  # Allow assert statements in non-test code (used for narrowing asserts in Shape 1 consumer pattern)
-  "S101",
-]
-unfixable = [
-  # Don't touch unused imports
-  "F401",
-]
-
-[tool.ruff.lint.isort]
-known-first-party = ["fltk"]
-
-[tool.ruff.lint.flake8-tidy-imports]
-ban-relative-imports = "all"
+# Codegen actions pass gencode-ruff.toml directly (--config) so generated
+# output never depends on config discovery.  Repo-local-only settings go below;
+# anything that shapes emitted code belongs in gencode-ruff.toml.
+extend = "gencode-ruff.toml"
 
 [tool.ruff.lint.per-file-ignores]
 # Tests can use magic values, assertions, and relative imports

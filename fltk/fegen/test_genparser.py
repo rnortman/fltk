@@ -12,10 +12,10 @@ from typer.testing import CliRunner
 from fltk.fegen import ast_config as ac
 from fltk.fegen import ast_model as am
 from fltk.fegen import ast_test_grammars as fixtures
-from fltk.fegen import gsm, gsm2ast_rs, gsm2serde_rs
+from fltk.fegen import gencode_format, gsm, gsm2ast_rs, gsm2serde_rs
 from fltk.fegen.genparser import _parse_grammar_raw, app
 from fltk.fegen.pyrt import astrt
-from fltk.plumbing import parse_grammar
+from fltk.plumbing import generate_unparser_source, parse_grammar
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -396,8 +396,8 @@ def test_generate_protocol_matches_protocol_only(simple_grammar_file: pathlib.Pa
 def test_generate_protocol_only_emits_only_protocol(simple_grammar_file: pathlib.Path, tmp_path: pathlib.Path) -> None:
     """generate --protocol-only writes only <base>_cst_protocol.py — no CST module, no parsers.
 
-    The gencode recipe uses this to produce the fixture protocol typing source without the
-    redundant CST/parser codegen the Rust backend supplies.
+    `//tests:rust_parser_fixture_protocol_py` uses this to produce the fixture protocol typing
+    source without the redundant CST/parser codegen the Rust backend supplies.
     """
     runner = CliRunner()
     result = runner.invoke(
@@ -425,8 +425,8 @@ def test_generate_protocol_only_emits_only_protocol(simple_grammar_file: pathlib
 def test_generate_protocol_only_matches_full_run(simple_grammar_file: pathlib.Path, tmp_path: pathlib.Path) -> None:
     """--protocol-only emits a byte-identical protocol module to a full `generate` run.
 
-    Guards the equivalence the gencode rewire relies on: dropping the temp-dir + full-suite
-    dance must not change the committed protocol output.
+    Guards the equivalence `protocol_only` rests on: dropping the temp-dir + full-suite dance
+    must not change the emitted protocol output.
     """
     full_dir = tmp_path / "full"
     only_dir = tmp_path / "only"
@@ -2730,3 +2730,151 @@ def test_gen_rust_serde_ast_impls_match_the_generator_it_wraps(
     )
 
     assert output_rs.read_text() == expected
+
+
+# ---------------------------------------------------------------------------
+# gen-py-unparser
+# ---------------------------------------------------------------------------
+
+# A real, spacing-sensitive grammar/.fltkfmt pair: the config puts nbsp around "+" and
+# drives group/nest/join, none of which a single-token fixture grammar can show.
+FIXTURE_FLTKG = pathlib.Path(__file__).parent / "test_data" / "rust_parser_fixture.fltkg"
+FIXTURE_FLTKFMT = pathlib.Path(__file__).parent / "test_data" / "rust_parser_fixture.fltkfmt"
+
+
+def test_gen_py_unparser_writes_the_module(simple_grammar_file: pathlib.Path, tmp_path: pathlib.Path) -> None:
+    """The subcommand writes {base_name}_unparser.py holding the Unparser class."""
+    runner = CliRunner()
+    result = runner.invoke(
+        app,
+        [
+            "gen-py-unparser",
+            str(simple_grammar_file),
+            "simple",
+            "simple_cst",
+            "--output-dir",
+            str(tmp_path),
+        ],
+    )
+
+    assert result.exit_code == 0, f"gen-py-unparser failed:\n{result.output}\n{result.exception}"
+    output = tmp_path / "simple_unparser.py"
+    assert output.exists(), f"expected {output} to be written; got {sorted(p.name for p in tmp_path.iterdir())}"
+
+    src = output.read_text()
+    assert "class Unparser" in src
+    assert "import simple_cst" in src
+    compile(src, str(output), "exec")
+
+
+def test_gen_py_unparser_creates_the_output_dir(simple_grammar_file: pathlib.Path, tmp_path: pathlib.Path) -> None:
+    """A missing --output-dir is created, matching `generate`."""
+    out_dir = tmp_path / "nested" / "pkg"
+    runner = CliRunner()
+    result = runner.invoke(
+        app,
+        ["gen-py-unparser", str(simple_grammar_file), "simple", "simple_cst", "--output-dir", str(out_dir)],
+    )
+
+    assert result.exit_code == 0, f"gen-py-unparser failed:\n{result.output}\n{result.exception}"
+    assert (out_dir / "simple_unparser.py").exists()
+
+
+def test_gen_py_unparser_output_is_normalized(simple_grammar_file: pathlib.Path, tmp_path: pathlib.Path) -> None:
+    """Generation normalizes what it wrote, so re-normalizing is a no-op."""
+    runner = CliRunner()
+    result = runner.invoke(
+        app,
+        ["gen-py-unparser", str(simple_grammar_file), "simple", "simple_cst", "--output-dir", str(tmp_path)],
+    )
+    assert result.exit_code == 0, f"gen-py-unparser failed:\n{result.output}\n{result.exception}"
+
+    output = tmp_path / "simple_unparser.py"
+    before = output.read_text()
+    gencode_format.normalize([output])
+    assert output.read_text() == before
+
+
+def test_gen_py_unparser_bakes_the_format_config(tmp_path: pathlib.Path) -> None:
+    """--format-config reaches the generator: the emitted module differs from the default one."""
+    plain_dir = tmp_path / "plain"
+    baked_dir = tmp_path / "baked"
+
+    runner = CliRunner()
+    plain = runner.invoke(
+        app,
+        ["gen-py-unparser", str(FIXTURE_FLTKG), "rpf", "rpf_cst", "--output-dir", str(plain_dir)],
+    )
+    assert plain.exit_code == 0, f"gen-py-unparser failed:\n{plain.output}\n{plain.exception}"
+    baked = runner.invoke(
+        app,
+        [
+            "gen-py-unparser",
+            str(FIXTURE_FLTKG),
+            "rpf",
+            "rpf_cst",
+            "--format-config",
+            str(FIXTURE_FLTKFMT),
+            "--output-dir",
+            str(baked_dir),
+        ],
+    )
+    assert baked.exit_code == 0, f"gen-py-unparser failed:\n{baked.output}\n{baked.exception}"
+
+    assert (plain_dir / "rpf_unparser.py").read_text() != (baked_dir / "rpf_unparser.py").read_text()
+
+
+def test_gen_py_unparser_matches_the_library_generator(
+    simple_grammar_file: pathlib.Path, tmp_path: pathlib.Path
+) -> None:
+    """The subcommand is a wrapper, not a second writer: same source as plumbing emits."""
+    runner = CliRunner()
+    result = runner.invoke(
+        app,
+        ["gen-py-unparser", str(simple_grammar_file), "simple", "simple_cst", "--output-dir", str(tmp_path)],
+    )
+    assert result.exit_code == 0, f"gen-py-unparser failed:\n{result.output}\n{result.exception}"
+
+    expected = tmp_path / "expected_unparser.py"
+    expected.write_text(generate_unparser_source(_parse_grammar_raw(simple_grammar_file), "simple_cst", None) + "\n")
+    gencode_format.normalize([expected])
+
+    assert (tmp_path / "simple_unparser.py").read_text() == expected.read_text()
+
+
+def test_gen_py_unparser_rejects_a_malformed_cst_module_name(
+    simple_grammar_file: pathlib.Path, tmp_path: pathlib.Path
+) -> None:
+    """The CST module name is interpolated into an import line, so it is validated."""
+    runner = CliRunner()
+    result = runner.invoke(
+        app,
+        ["gen-py-unparser", str(simple_grammar_file), "simple", "not a module", "--output-dir", str(tmp_path)],
+    )
+
+    assert result.exit_code == 1
+    assert "not a valid Python module path" in result.output
+    assert not (tmp_path / "simple_unparser.py").exists()
+
+
+def test_gen_py_unparser_reports_a_missing_format_config(
+    simple_grammar_file: pathlib.Path, tmp_path: pathlib.Path
+) -> None:
+    """An unreadable --format-config is a CLI error, not a traceback, and writes nothing."""
+    runner = CliRunner()
+    result = runner.invoke(
+        app,
+        [
+            "gen-py-unparser",
+            str(simple_grammar_file),
+            "simple",
+            "simple_cst",
+            "--format-config",
+            str(tmp_path / "missing.fltkfmt"),
+            "--output-dir",
+            str(tmp_path),
+        ],
+    )
+
+    assert result.exit_code == 1
+    assert not (tmp_path / "simple_unparser.py").exists()

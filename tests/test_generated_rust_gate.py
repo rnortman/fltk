@@ -39,7 +39,7 @@ from pathlib import Path
 import pytest
 
 from fltk.fegen import ast_test_grammars as fixtures
-from tests.generated_rust_gate import Case, run_cargo, write_crate
+from tests.generated_rust_gate import Case, cargo_target_dir, run_cargo, write_crate
 
 # What the config language's converters must actually do, run against a parse of `CONFIG_TEXT`.
 CONFIG_RUNTIME = """//! `from_cst` over a real parse of the config language.
@@ -2706,14 +2706,14 @@ def gate(tmp_path_factory: pytest.TempPathFactory) -> Path:
 
 @pytest.fixture(scope="module")
 def clippy(gate: Path) -> subprocess.CompletedProcess[str]:
-    return run_cargo("clippy", gate, gate.parent / "target", "--all-targets", "--", "-D", "warnings")
+    return run_cargo("clippy", gate, cargo_target_dir("generated-rust-gate"), "--all-targets", "--", "-D", "warnings")
 
 
 @pytest.fixture(scope="module")
 def cargo_test(gate: Path, clippy: subprocess.CompletedProcess[str]) -> subprocess.CompletedProcess[str]:
     """The runtime half, ordered after clippy so a compile failure is reported once."""
     assert clippy.returncode == 0, clippy.stdout + clippy.stderr
-    return run_cargo("test", gate, gate.parent / "target")
+    return run_cargo("test", gate, cargo_target_dir("generated-rust-gate"))
 
 
 def test_the_generated_modules_compile_without_a_warning(clippy: subprocess.CompletedProcess[str]) -> None:

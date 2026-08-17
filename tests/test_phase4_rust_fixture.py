@@ -1,8 +1,8 @@
 """Tier-2 Phase 4 tests: standalone non-FLTK user-extension fixture.
 
 These tests require the phase4_roundtrip_cst extension to be built.
-They are skipped automatically when the fixture is not importable (run
-`make build-test-user-ext` first, or use CI which builds it before pytest).
+They are skipped automatically when the fixture is not importable; under Bazel the
+py_test target deps on //tests/rust_cst_fixture:phase4_roundtrip_cst, so it always is.
 A CI lane where every test here is skipped is a failure signal — the artifacts
 are not being built.
 
@@ -30,7 +30,7 @@ import pytest
 # The genuine config-2 Rust CST classes (the standalone extension ships no parser).
 _rust_cst = pytest.importorskip(
     "phase4_roundtrip_cst.cst",
-    reason="phase4_roundtrip_cst not built; run 'make build-test-user-ext' first",
+    reason="phase4_roundtrip_cst not importable; it is built by //tests/rust_cst_fixture:phase4_roundtrip_cst",
 )
 
 # These imports only execute if the module is available (importorskip handles it)

@@ -35,7 +35,7 @@ import pytest
 
 phase4_roundtrip_cst = pytest.importorskip(
     "phase4_roundtrip_cst",
-    reason="phase4_roundtrip_cst not built; run 'make build-test-user-ext' first",
+    reason="phase4_roundtrip_cst not importable; it is built by //tests/rust_cst_fixture:phase4_roundtrip_cst",
 )
 
 _registry_snapshot = phase4_roundtrip_cst._registry_snapshot

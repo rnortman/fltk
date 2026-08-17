@@ -2,12 +2,12 @@
 """Static conformance fixture: both CST backends satisfy CstModule without a cast.
 
 This file is checked in and named explicitly in `[tool.pyright] include` (pyproject.toml), so the
-repo-wide `uv run pyright` gate type-checks it — the rest of `tests/` is outside that gate.
-It uses the stub at fltk/_stubs/fegen_rust_cst/cst.pyi — pyright reads the stub, not the compiled
+repo-wide `//:pyright` gate type-checks it — the rest of `tests/` is outside that gate.
+It uses the generated fegen_rust_cst/cst.pyi stub — pyright reads the stub, not the compiled
 extension — so no Rust toolchain is needed for the check.
 
 If pyright reports errors here, one backend's annotations diverge from the CstModule protocol.
-Fix the emitter (and re-run make gencode) rather than adding a cast: a cast here would hide
+Fix the emitter rather than adding a cast: a cast here would hide
 exactly the breakage this file exists to catch — a consumer whose source is annotated against the
 protocol can then no longer pass that backend's nodes.
 """

@@ -94,40 +94,57 @@ rule := label:identifier , "literal" , /regex_pattern/ ;
 ## Development
 
 ### Setup
-```bash
-# Install dependencies
-uv sync --group test --group lint
-```
+
+Bazel (through `bazelisk`, which honours `.bazelversion`) and a Rust toolchain from
+<https://rustup.rs/>. Everything else — the Python interpreter, the third-party wheels, the
+tools — comes from the build graph.
+
+A few tests compile a throwaway crate with `cargo --offline`, so run `cargo fetch --locked`
+once in a fresh clone to warm the registry cache.
 
 ### Testing
 ```bash
 # Run all tests
-uv run pytest
+bazel test //...
 
-# Run with coverage
-uv run coverage run -m pytest && uv run coverage report
+# Run one test file
+bazel test //tests:test_span
+
+# Run with coverage (add --combined_report=lcov for one report over the whole suite)
+bazel coverage //...
 ```
 
 ### Linting and Formatting
 ```bash
-# Check style and types
-uv run ruff check . && uv run pyright
+# Check style and types: clippy, ruff check, ruff format --check, pyright
+bazel build --config lint //...
 
-# Format code
-uv run ruff format .
+# Format code and apply auto-fixes
+make fix
 
-# Fix auto-fixable issues
-uv run ruff check --fix .
+# Everything the CI gate runs
+make check
 ```
 
 ### Build
 ```bash
-# Using setuptools
-uv build
-
-# Using Bazel
 bazel build //...
 ```
+
+### Running the CLIs
+```bash
+# Generate a parser from a grammar (see docs/usage.md)
+bazel run --run_under="cd $PWD &&" //:genparser -- generate calc.fltkg calc calc_cst
+
+# Format a file against a grammar + format spec
+bazel run --run_under="cd $PWD &&" //:unparse_cli -- grammar.fltkg spec.fltkfmt input.txt
+
+# Language server for fltk's own .fltkg / .fltkfmt / .fltklsp files (see docs/lsp.md)
+bazel run //:grammar_lsp -- fltkg
+```
+
+`--run_under="cd $PWD &&"` makes relative path arguments resolve where you invoked Bazel
+rather than in the runfiles tree.
 
 ## Examples
 
@@ -150,7 +167,7 @@ MIT License - see [LICENSE](LICENSE) for details.
 1. Fork the repository
 2. Create a feature branch
 3. Make your changes with tests
-4. Run `uv run ruff check . && uv run pyright` to check style and types
+4. Run `bazel build --config lint //...` to check style and types
 5. Submit a pull request
 
 ## Support

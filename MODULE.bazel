@@ -25,7 +25,12 @@ rust.toolchain(
 )
 
 python = use_extension("@rules_python//python/extensions:python.bzl", "python")
+
+# configure_coverage_tool wires rules_python's coverage.py into every py_test, so
+# `bazel coverage //...` collects the Python suite.  The [tool.coverage] settings in
+# pyproject.toml still apply.
 python.toolchain(
+    configure_coverage_tool = True,
     is_default = True,
     python_version = "3.10",
 )

@@ -62,8 +62,8 @@ FLTK's own third-party Rust hub (`@fltk_crates`) is module-private. You never ne
 | Pure Rust + AST | same, `ast = True` | the above + `fltk-ast-core:no_python` | §5 |
 | Pure Rust + unparser | same, `unparser = True` | the above + `fltk-unparser-core` | §5.2 |
 | Pure Rust + formatter binary | same | the above + `fltk-fmt-cli` | §5.3 |
-| Pure Rust + serde (your own model structs) | codegen from `@fltk`, runtime crates from **your** crate hub | none — see §6 | §6 |
-| Grammar LSP tooling | `@fltk//:grammar_lsp` (py_binary) | n/a, no codegen | §7 |
+| Pure Rust + serde (your own model structs) | same, `serde = True` | the above + `fltk-serde-core:no_python`, with the serde flag pointed at your hub | §6 |
+| Editor tooling and CLIs | `@fltk//:grammar_lsp`, `@fltk//:fltk_lsp`, `@fltk//:unparse_cli`, … (py_binary) | n/a, no codegen | §7 |
 
 The two `generate_*` macros are the only public entry points. `generate_rust_parser` has two
 modes selected by `python_extension`; everything else is an attribute on one of them.
@@ -101,6 +101,22 @@ match the import root your `py_library` establishes: with `imports = ["."]` in p
 that puts `fltk/_native.abi3.so` on the path) if something in your graph does import
 `fltk._native` — a Rust CST extension resolving `UnknownSpan` at runtime is the usual
 reason.
+
+The emitted modules are formatter-normalized by the generator itself, against a ruff version
+and config that FLTK pins. Your own ruff settings do not apply to them and cannot: generated
+output is a function of the grammar, the generator and that pin, so it is identical in your
+build and in FLTK's. Nothing needs (or gets) a formatting pass after codegen.
+
+### 3.1 Optional attributes
+
+| Attribute | Effect |
+|---|---|
+| `trivia_only` / `no_trivia_only` | Emit only one of the two parser variants. Mutually exclusive. |
+| `protocol_only` | Emit only `<base_name>_cst_protocol.py` — no CST module, no parsers. This is the typing-protocol surface on its own, which is what you want when the CST and parser come from a Rust extension and you only need something to type a `.pyi` against. Cannot be combined with the two selectors above. |
+| `out_dir` | Package-relative directory the modules are declared in, instead of the package root. Use it when the modules have to land at a Python package path that cannot have its own `BUILD` file. Must be package-relative with no `..` segment. |
+| `gen_tool` | The generator binary. Defaults to `@fltk//:genparser`. `@fltk//:genparser_stage0` is the same `generate` command over the Python backend alone; FLTK uses it internally to break a bootstrap cycle, and a consumer has no reason to override the default. |
+| `unparser` | Also emit `<base_name>_unparser.py`: the `Unparser` class that walks the CST and renders it back to source text. It reads the trivia the trivia-preserving parser captures, so leave that parser in place (do not pair it with `no_trivia_only`). Cannot be combined with `protocol_only`, which emits no CST module for the unparser to walk, and needs the default `gen_tool` — only the full generator carries the unparser subcommand. |
+| `format_config` | A `.fltkfmt` spec baked into the generated unparser at generation time (spacing, anchors, dispositions). Editing it is an ordinary input change. Requires `unparser = True`; omitting it selects the default `FormatterConfig`. |
 
 ---
 
@@ -143,12 +159,62 @@ time. Let the macro generate the crate root unless you have a reason not to.
 `protocol_module` turns on `.pyi` emission into a stub package named after the target; the
 stub package lists exactly the submodules you enabled.
 
+**If you compile the cdylib yourself** — a crate root hosting two grammars, a runtime crate
+flavor the macro does not link — use `pyo3_extension_py_library(name, cdylib)` from the same
+file for the last two steps. It does the abi3 rename CPython's stable-ABI loader requires and
+wraps the result in a `py_library` carrying `@fltk//:native_py`, which is what keeps
+`import fltk._native` resolving; without it the generated CST silently falls back to its
+pure-Python Span. `name` is the importable module name.
+
+**Caveat — this recipe is not yet usable from a downstream module.** `pyo3_extension_py_library`
+is currently exercised only by targets inside fltk's own module. A cdylib you assemble yourself
+must compile the generated `#[pyclass]` code, which needs a direct `pyo3` dependency, and it must
+be the *same* pyo3 instance `@fltk//crates/fltk-cst-core` links — otherwise the
+`Bound<'_, PyModule>` types in the generated `register_classes` come from two distinct crates and
+the crate does not compile. fltk's in-repo targets name `@fltk_crates//:pyo3` directly, but
+crate_universe hub repos are module-local, so a downstream module cannot; there is no injection
+seam for pyo3 the way `//crates/fltk-serde-core:serde` (a `label_flag`) is one for serde. Until
+that is resolved, use `fltk_pyo3_cdylib` — see `TODO(bazel-consumer-pyo3-seam)` in `TODO.md`.
+
+A hand-assembled cdylib gets its `.pyi` stub package from the same codegen target that emits its
+`.rs`: set `protocol_module` and `extension_name` on the pure-Rust `generate_rust_parser` call
+your crate already uses.
+
+```starlark
+generate_rust_parser(
+    name = "mylang_srcs",
+    src = "mylang.fltkg",
+    out_dir = "src",                                  # the crate's own source directory
+    extension_name = "mylang",                        # the importable module name
+    protocol_module = "mypkg.mylang_cst_protocol",
+    submodules = ["cst", "parser", "unparser", "other_cst"],
+    unparser = True,
+    format_config = "mylang.fltkfmt",
+)
+```
+
+The `.rs` land under `out_dir` and the stub package under `<package>/<extension_name>/`, from one
+action — a second, stubs-only codegen target would re-parse the grammar and regenerate the CST to
+throw it away. Because the target's outputs are now of two kinds, the macro also declares
+`:mylang_srcs_rust_srcs` (feed that to your `rust_library`'s `srcs`) and `:mylang_srcs_stub_srcs`
+(pass that as `data` to `pyo3_extension_py_library`).
+
+`submodules` is the list written into the `__init__.pyi` marker. Leave it empty and the marker
+names only what this action generated, which understates a crate root registering modules from
+another grammar; state it explicitly when that is the case. It belongs to this hand-assembly
+recipe only: with `python_extension = True` the macro builds the cdylib out of that one target's
+sources, so a wider list would name submodules no stub file backs, and setting it there is an
+error. A type checker reaches the package
+by putting the directory *holding* it on its search path (`extraPaths`), since the directory
+name is the import name.
+
 ---
 
 ## 5. Pure Rust
 
-In pure-Rust mode `generate_rust_parser` emits `.rs` files and nothing else — no cdylib, no
-`.pyi`, no Python. You compile them into your own crate.
+In pure-Rust mode `generate_rust_parser` emits `.rs` files and no cdylib. You compile them into
+your own crate. (It emits the `.pyi` stub package too if you ask for one — see §4 for that
+shape; without `protocol_module` there is no Python in the output at all.)
 
 Use `out_dir` to declare the generated files inside your crate's source directory. The
 generated modules address each other as `super::` siblings, so they must land next to your
@@ -187,6 +253,12 @@ pub mod cst;
 pub mod parser;
 ```
 
+If your crate compiles only the CST — or only the unparser, which is generated against the
+CST — add `parser = False`. The parser is the largest generated artifact for a grammar of any
+size, and one nothing compiles is invisible: it is generated on every clean build, declared,
+and simply never named by a `mod` declaration. `parser = False` is pure-Rust mode only, and
+cannot be combined with `ast` or `serde` (both are generated against the parser module).
+
 `out_dir` must be package-relative with no `..` segment, and is rejected in
 `python_extension = True` mode (there the crate assembly owns the layout). Mixing tree
 sources and generated sources in one `srcs` is supported by rules_rust; the copy-genrule
@@ -201,7 +273,7 @@ layouts `out_dir` cannot express.
 | `parser.rs` | `@fltk//crates/fltk-parser-core:no_python` |
 | `ast.rs` | `@fltk//crates/fltk-ast-core:no_python` |
 | `unparser.rs` | `@fltk//crates/fltk-unparser-core` |
-| `de.rs` | not linkable from `@fltk` — see §6 |
+| `de.rs` | `@fltk//crates/fltk-serde-core:no_python`, plus the serde flag — see §6 |
 
 **Always the `:no_python` flavor** for cst/parser/ast/serde-core. The default labels
 (`@fltk//crates/fltk-cst-core` etc.) carry pyo3 — they are what the cdylib path needs. The
@@ -260,28 +332,33 @@ the binary's output.
 ## 6. Pure Rust + serde: the one-serde rule
 
 **Rule: `fltk-serde-core` must be compiled against the same `serde` instance your model
-structs derive from.** This is the whole story, and it is why serde-mode pure-Rust
-consumption does not go through FLTK's Bazel crate targets.
+structs derive from.** This is the whole story, and one flag is all it takes.
 
 Generated `de.rs` describes your grammar's tree to the `fltk-serde-core` deserializer and
 hands values to *your* `#[derive(Deserialize)]` structs. Those derives are generated by your
-`serde_derive` and implement traits from your `serde`. `@fltk//crates/fltk-serde-core` links
-`@fltk_crates//:serde` — FLTK's module-private hub instance, a different crate instance by
-construction. Trait coherence then fails: your structs implement *your* `serde::Deserialize`,
-and FLTK's deserializer wants *its* one. No target FLTK can ship from its own module fixes
-this, and exporting a `serde` alias from FLTK's hub would only move the problem — your model
-types would then be split from the rest of your serde ecosystem.
+`serde_derive` and implement traits from your `serde`. By default
+`@fltk//crates/fltk-serde-core` links `@fltk_crates//:serde` — FLTK's module-private hub
+instance, a different crate instance by construction — and trait coherence then fails: your
+structs implement *your* `serde::Deserialize`, and FLTK's deserializer wants *its* one.
 
-**The recipe: codegen from FLTK's module, runtime crates from your own crate hub.**
+**The recipe: point the serde flag at your hub.** `@fltk//crates/fltk-serde-core:serde` is a
+`label_flag` naming the serde every FLTK Bazel target compiles against. Set it once, in your
+`.bazelrc`, and every FLTK target in your build — the `:no_python` runtime library and the
+cdylib assembly in `rust.bzl` alike — is on your instance:
 
-`MODULE.bazel`:
+```
+build --@fltk//crates/fltk-serde-core:serde=@crates//:serde
+```
+
+`MODULE.bazel` then needs only the module pin and whatever hub your model structs already
+resolve serde from:
 
 ```starlark
 bazel_dep(name = "fltk", version = "")
 git_override(
     module_name = "fltk",
     remote = "https://github.com/rnortman/fltk",
-    commit = "<sha>",              # same sha as the cargo revs below
+    commit = "<sha>",
 )
 
 crate = use_extension("@rules_rust//crate_universe:extensions.bzl", "crate")
@@ -293,29 +370,16 @@ crate.from_cargo(
 use_repo(crate, "crates")
 ```
 
-Your `Cargo.toml` (the manifest that hub resolves — it need not build anything with cargo,
-but it does have to be a complete manifest: `crate.from_cargo` runs cargo over it, so it needs
-a `[package]` stanza and a target — an empty `src/lib.rs` next to it is enough):
+Your manifest declares `serde` and nothing of FLTK's: the runtime crates come from the module,
+so there are no FLTK entries in your `Cargo.toml` or `Cargo.lock` and no second pin to keep in
+lockstep with the `git_override`.
 
 ```toml
-[package]
-name = "mylang-deps"
-version = "0.0.0"
-edition = "2021"
-publish = false
-
 [dependencies]
 serde = { version = "1", features = ["derive"] }
-fltk-cst-core   = { git = "https://github.com/rnortman/fltk", rev = "<sha>" }
-fltk-parser-core = { git = "https://github.com/rnortman/fltk", rev = "<sha>" }
-fltk-ast-core   = { git = "https://github.com/rnortman/fltk", rev = "<sha>" }
-fltk-serde-core = { git = "https://github.com/rnortman/fltk", rev = "<sha>" }
 ```
 
-`fltk-cst-core` has no default features, so this graph is pyo3-free without further ceremony;
-add `features = ["python"]` only if you actually want the pyo3 bindings.
-
-Then generate with FLTK's macro and link the hub-resolved crates:
+Then generate with FLTK's macro and link the `:no_python` targets exactly as §5 does:
 
 ```starlark
 generate_rust_parser(
@@ -333,48 +397,58 @@ rust_library(
     crate_root = "src/lib.rs",
     edition = "2021",
     deps = [
-        "@crates//:fltk-ast-core",
-        "@crates//:fltk-cst-core",
-        "@crates//:fltk-parser-core",
-        "@crates//:fltk-serde-core",
         "@crates//:serde",
+        "@fltk//crates/fltk-ast-core:no_python",
+        "@fltk//crates/fltk-cst-core:no_python",
+        "@fltk//crates/fltk-parser-core:no_python",
+        "@fltk//crates/fltk-serde-core:no_python",
     ],
 )
 ```
 
 Generated code names runtime crates by plain paths (`::fltk_serde_core`, `::serde`), so it
-resolves against whatever your graph provides — that is what makes this work. The runtime
-crates are consumable this way by design: no build scripts, no `[patch]` requirements, no
-MSRV floor.
+resolves against whatever your graph provides — that is what makes this work. FLTK's crate
+requirement is plain `serde = "1"` with hand-written impls, so any serde 1.x build satisfies
+it; a `derive`-featured one is a superset.
 
-Two consequences worth stating plainly:
+What goes wrong if you forget the flag: `fltk-serde-core` silently keeps FLTK's serde and
+your crate fails to compile with "two different versions of crate `serde`" walls that name
+neither the flag nor this page. If you want that failure to arrive by name instead, assert
+over your own graph that `@fltk_crates//:serde` is absent:
 
-- Only serde-mode consumers need a hub. Parser / AST / unparser consumers link FLTK's
-  `:no_python` targets and never resolve a Cargo graph (§5).
-- A serde-mode consumer already has a hub, because their model structs already need serde.
-  This recipe adds four crates to a manifest that exists anyway.
+```bash
+bazel cquery 'deps(//mylang:mylang)' | grep fltk_crates.*serde && echo "FAIL: fltk's serde is in the graph"
+```
 
-**Why FLTK has no in-tree fixture for this path.** A hub over *path* deps into `../../crates`
-is refused by crate_universe: its splicer rewrites dependency paths relative to the module
-directory and fails with ``failed to read `/crates/fltk-ast-core/Cargo.toml` ``. A git dep
-would pin a published commit rather than the working tree under test, so it would verify the
-previous release instead of the change in front of you. The channel is therefore verified by
-real downstream consumers; FLTK's own fixture covers serde in extension mode, where the hub
-question does not arise.
+`tests/bazel_consumer` runs this configuration in CI: `//:consumer_serde` is a pure-Rust
+serde crate whose model structs derive from a hub of the consumer module's own, and it
+compiles only because the flag reaches `fltk-serde-core`.
 
 ---
 
-## 7. Grammar LSP tooling
+## 7. Runtime CLIs
 
-`@fltk//:grammar_lsp` is a `py_binary` running the FLTK grammar language server. It takes the
-language id as its argument (`fltkg`, `fltkfmt`, or `fltklsp`):
+FLTK's command-line tools are public `py_binary` targets — there is no wheel and no console
+entry point, so `bazel run` is the launch path:
+
+| Target | What it is |
+|---|---|
+| `@fltk//:grammar_lsp` | Language server for FLTK's own DSLs; takes the language id (`fltkg`, `fltkfmt`, `fltklsp`) |
+| `@fltk//:fltk_lsp` | The generic language server for *your* grammar (`--grammar`/`--lsp`/`--fmt`/`--resolver`) |
+| `@fltk//:fltk_highlight` | Standalone ANSI semantic highlighter for a file in your language |
+| `@fltk//:unparse_cli` | Format a file against a grammar + `.fltkfmt` spec |
+| `@fltk//:genparser` | The generator CLI, for ad-hoc runs outside the codegen rules |
 
 ```bash
 bazel run @fltk//:grammar_lsp -- fltkg
+bazel run --run_under="cd $PWD &&" @fltk//:unparse_cli -- lang.fltkg lang.fltkfmt input.src
 ```
 
-It is a runtime tool, not codegen — nothing about it integrates with your grammar targets, and
-it serves your own `.fltkg`/`.fltkfmt`/`.fltklsp` files as-is. `docs/lsp.md` has the editor
+`--run_under="cd $PWD &&"` is needed wherever an argument is a relative path: `bazel run`
+executes in the runfiles tree, so a relative path otherwise names a different file or none.
+
+These are runtime tools, not codegen — nothing about them integrates with your grammar targets,
+and they serve your own `.fltkg`/`.fltkfmt`/`.fltklsp` files as-is. `docs/lsp.md` has the editor
 wiring, including the Bazel workspace-lock caveat when several servers start at once.
 
 ---
@@ -393,7 +467,7 @@ echo "$graph" | grep -q 'fltk-cst-core:no_python' || { echo "query broken"; exit
 ! echo "$graph" | grep -qi pyo3 || { echo "FAIL: pyo3 in the graph"; exit 1; }
 ```
 
-Cargo (for the §6 hub graph):
+Cargo (if you consume the runtime crates as cargo git deps rather than through the module):
 
 ```bash
 tree="$(cargo tree --locked -p my-grammar --edges normal,build)"
@@ -401,8 +475,9 @@ echo "$tree" | grep -q fltk-cst-core || { echo "query broken"; exit 1; }
 ! echo "$tree" | grep -q pyo3 || { echo "FAIL: pyo3 in the graph"; exit 1; }
 ```
 
-FLTK runs both shapes over its own graphs (`make check-no-pyo3`,
-`make bazel-consumer-check`).
+FLTK runs the Bazel shape over its own graphs, in `make bazel-test` (every `:no_python`
+target and every `rust_binary`) and `make bazel-consumer-check` (the cross-module consumer
+targets).
 
 The one edge to watch is `fltk-cst-core`: it is the only runtime crate with a `python`
 feature, and everything else reaches pyo3 through it. In Bazel that means taking
@@ -415,12 +490,18 @@ feature set is empty, so plain `default-features = false` is redundant but harml
 
 | Situation | What happens |
 |---|---|
-| `format_config` without `unparser = True` | error at loading time |
+| `format_config` without `unparser = True` | error at loading time (`generate_rust_parser`) / at analysis time (`generate_parser`) |
+| `parser = False` with `ast`, `serde`, or `python_extension = True` | error at loading time |
+| `unparser` with `protocol_only = True` | error at analysis time |
 | `out_dir` with `python_extension = True` | error at loading time |
+| `submodules` or `extension_name` without `protocol_module` | error at loading time |
+| `protocol_module` in pure-Rust mode without `extension_name` | error at loading time |
+| `extension_name` or `submodules` with `python_extension = True` | error at loading time |
 | `out_dir` absolute or containing `..` | error at loading time |
 | `serde = True` without `ast_config` | error at loading time |
-| Python-extension-only attrs in pure-Rust mode | error at loading time |
+| cdylib-only attrs (`lib_rs`, `deps`, `crate_features`, `recursion_limit`) in pure-Rust mode | error at loading time |
 | Both crate flavors in one binary | rustc duplicate-crate-name error |
 | Hand-authored `lib_rs` missing a `mod` declaration | green build, submodule silently absent |
 | Rev pinned that is not published | consumer fetch fails |
 | `git_override` commit ≠ cargo rev | codegen/runtime skew, compile error at best |
+| Serde mode with the serde flag left at its default | "two different versions of crate `serde`" at compile time (§6) |

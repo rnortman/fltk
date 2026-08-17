@@ -1,0 +1,7 @@
+#!/usr/bin/env bash
+# Launch the generic fltk language server (//:fltk_lsp) for the gear demo.
+# The gear spec files are passed by the caller (the VS Code client builds them from its own
+# location), so everything after the script name is forwarded unchanged.
+set -euo pipefail
+
+exec "$(dirname -- "${BASH_SOURCE[0]}")/../../../editors/run-lsp-target" //:fltk_lsp "$@"

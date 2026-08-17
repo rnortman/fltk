@@ -6,7 +6,7 @@ text (here a sourceless span) is an invariant violation. The generated Rust unpa
 child position, and span, rather than silently returning ``None`` and deleting the term's
 text from the output.
 
-Requires rust_parser_fixture to be built: run 'make build-rust-parser-fixture' first.
+Requires rust_parser_fixture, which the py_test target takes from //tests/rust_parser_fixture:rust_parser_fixture.
 """
 
 from __future__ import annotations
@@ -15,7 +15,7 @@ import pytest
 
 rust_parser_fixture = pytest.importorskip(
     "rust_parser_fixture",
-    reason="rust_parser_fixture not built; run 'make build-rust-parser-fixture' first",
+    reason="rust_parser_fixture not importable; it is built by //tests/rust_parser_fixture:rust_parser_fixture",
 )
 
 from fltk._native import Span  # noqa: E402

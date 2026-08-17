@@ -42,7 +42,7 @@
           },
           "default": [],
           "scope": "machine",
-          "markdownDescription": "Override the command used to launch `fltk-lsp` (argv as a string array). Empty means use the in-repo `uv` default computed from the extension's location. Required when the extension is installed as a packaged `.vsix` outside the repo. Machine-scoped: workspace settings cannot set it, so a cloned repo's `.vscode/settings.json` cannot redirect the launched executable."
+          "markdownDescription": "Override the command used to launch `fltk-lsp` (argv as a string array). Empty means use the in-repo `vscode/run-gear-lsp` launcher, resolved from the extension's location. Required when the extension is installed as a packaged `.vsix` outside the repo. Machine-scoped: workspace settings cannot set it, so a cloned repo's `.vscode/settings.json` cannot redirect the launched executable."
         }
       }
     },

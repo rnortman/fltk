@@ -19,7 +19,7 @@ os.environ["_TYPER_FORCE_DISABLE_TERMINAL"] = "1"
 
 @pytest.fixture(scope="session")
 def pyright_available() -> bool:
-    """Return True when uv + pyright are runnable in this environment."""
+    """Return True when pyright is runnable in this environment."""
     from tests.pyright_test_utils import pyright_runnable  # noqa: PLC0415
 
     return pyright_runnable()

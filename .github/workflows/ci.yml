@@ -15,15 +15,6 @@ jobs:
         with:
           persist-credentials: false
 
-      - name: Install uv
-        uses: astral-sh/setup-uv@c771a70e6277c0a99b617c7a806ffedaca235ff9  # v9.0.0
-        with:
-          python-version: "3.10"
-          enable-cache: true
-          # pyproject.toml's [tool.uv] required-version is the single source of
-          # truth for the uv version; install exactly that so CI matches local.
-          version-file: pyproject.toml
-
       # rust-toolchain.toml is the single source of truth for the Rust version.
       # dtolnay/rust-toolchain does not read that file (its `toolchain` input is
       # required), so the channel is extracted here and passed in.  Installing
@@ -42,6 +33,24 @@ jobs:
         with:
           toolchain: ${{ steps.rust-toolchain-file.outputs.channel }}
           components: clippy, rustfmt
+
+      # The three compile-gate tests (tests/test_generated_rust_gate.py and friends) build a
+      # throwaway crate with `cargo --offline`, so their dependencies must already be in
+      # $CARGO_HOME.  No check step fetches anymore — the cargo build lanes that used to warm
+      # the registry as a side effect are retired — so the warm-up is explicit here.  The
+      # cache makes it a no-op on most runs; correctness does not depend on a hit.
+      - name: Cache cargo registry
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9  # v6.1.0
+        with:
+          path: |
+            ~/.cargo/registry/index
+            ~/.cargo/registry/cache
+          key: cargo-registry-${{ runner.os }}-${{ hashFiles('Cargo.lock') }}
+          restore-keys: |
+            cargo-registry-${{ runner.os }}-
+
+      - name: Fetch cargo dependencies
+        run: cargo fetch --locked
 
       # Performance-only: a shared disk cache lets the consumer lane reuse
       # crate artifacts the root lane built instead of recompiling cold.

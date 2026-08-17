@@ -3,17 +3,15 @@
 Generates parsers from FLTK grammar files with options for trivia handling.
 """
 
-import ast
 import re
 from pathlib import Path
-from typing import TYPE_CHECKING, Annotated, cast
+from typing import Annotated
 
 import typer
 
-from fltk import pygen
 from fltk.fegen import (
     fltk2gsm,
-    fltk_parser,
+    gencode_format,
     gsm,
     gsm2lib_rs,
     gsm2parser,
@@ -21,9 +19,10 @@ from fltk.fegen import (
     gsm2tree,
     gsm2tree_rs,
     naming,
+    pybackend,
 )
-from fltk.fegen.ast_config import Backend
-from fltk.fegen.pyrt import errors, terminalsrc
+from fltk.fegen.ast_config import Backend, ResolvedAstConfig
+from fltk.fegen.pybackend import generate_parser, parse_grammar_file, validate_python_module
 from fltk.iir.context import CompilerContext, create_default_context
 from fltk.iir.py import compiler
 from fltk.iir.py import reg as pyreg
@@ -31,121 +30,32 @@ from fltk.plumbing import (
     generate_ast_source,
     generate_rust_ast_source,
     generate_rust_serde_source,
+    generate_unparser_source,
     parse_ast_config_file,
     parse_format_config_file,
 )
 from fltk.unparse import gsm2unparser_rs
+from fltk.unparse.fmt_config import FormatterConfig
 
-if TYPE_CHECKING:
-    from fltk.fegen import fltk_cst_protocol as cst
+__all__ = [
+    "CompilerContext",
+    "app",
+    "compiler",
+    "create_default_context",
+    "fltk2gsm",
+    "generate_parser",
+    "gsm2parser",
+    "gsm2tree",
+    "parse_grammar_file",
+    "pyreg",
+    "validate_python_module",
+]
 
 app = typer.Typer(
     name="genparser",
     help="Generate parsers from FLTK grammar files",
     add_completion=False,
 )
-
-
-def _read_and_parse_grammar(grammar_file: Path) -> gsm.Grammar:
-    """Read a grammar file and return the GSM, with CLI-friendly error handling.
-
-    Runs the full file-read + TerminalSource + fltk_parser + Cst2Gsm pipeline plus inline
-    (``!``) expansion, and exits via typer on any failure.  Does NOT apply trivia processing;
-    callers are responsible for calling add_trivia_rule_to_grammar / classify_trivia_rules
-    if needed.
-    """
-    if not grammar_file.exists():
-        typer.echo(f"Error: Grammar file '{grammar_file}' not found", err=True)
-        raise typer.Exit(1)
-
-    try:
-        with grammar_file.open() as f:
-            terminals = terminalsrc.TerminalSource(f.read())
-    except Exception as e:
-        typer.echo(f"Error: Failed to read grammar file '{grammar_file}': {e}", err=True)
-        raise typer.Exit(1) from e
-
-    parser = fltk_parser.Parser(terminalsrc=terminals)
-    result = parser.apply__parse_grammar(0)
-
-    if not result or result.pos != len(terminals.terminals):
-        error_msg = errors.format_error_message(
-            parser.error_tracker,
-            terminals,
-            lambda rule_id: parser.rule_names[rule_id],
-        )
-        typer.echo(f"Error: Failed to parse grammar file '{grammar_file}':", err=True)
-        typer.echo(error_msg, err=True)
-        raise typer.Exit(1)
-
-    cst2gsm = fltk2gsm.Cst2Gsm(terminals.terminals)
-    # result.result is typed Any (ParseResult.cst: Any); cast to satisfy visit_grammar's annotation.
-    grammar = cst2gsm.visit_grammar(cast("cst.Grammar", result.result))
-
-    try:
-        return gsm.expand_inline_dispositions(grammar)
-    except ValueError as e:
-        typer.echo(f"Error: Invalid grammar file '{grammar_file}': {e}", err=True)
-        raise typer.Exit(1) from e
-
-
-def parse_grammar_file(grammar_file: Path) -> gsm.Grammar:
-    """Parse a grammar file and return the GSM representation."""
-    grammar = _read_and_parse_grammar(grammar_file)
-    grammar = gsm.classify_trivia_rules(gsm.add_trivia_rule_to_grammar(grammar, context=create_default_context()))
-    return grammar
-
-
-def generate_parser(
-    grammar: gsm.Grammar,
-    parser_file: Path,
-    cst_module_name: str,
-    *,
-    preserve_trivia: bool,
-    context: CompilerContext | None = None,
-) -> None:
-    """Generate only a parser file using an existing CST module."""
-    if context is None:
-        context = create_default_context()
-
-    # Set trivia capture flag based on user preference
-    context.capture_trivia = preserve_trivia
-
-    grammar = gsm.add_trivia_rule_to_grammar(grammar, context)
-
-    # Generate parser (reusing existing CST module)
-    cst_module = pyreg.Module(cst_module_name.split("."))
-    cstgen = gsm2tree.CstGenerator(grammar=grammar, py_module=cst_module, context=context)
-    pgen = gsm2parser.ParserGenerator(grammar=grammar, cstgen=cstgen, context=context)
-
-    # Compile parser class
-    parser_ast = compiler.compile_class(pgen.parser_class, context)
-    imports = [
-        pyreg.Module(("collections", "abc")),
-        pyreg.Module(("typing",)),
-        pyreg.Module(("fltk", "fegen", "pyrt", "errors")),
-        pyreg.Module(("fltk", "fegen", "pyrt", "memo")),
-        pyreg.Module(("fltk", "fegen", "pyrt", "terminalsrc")),
-        cst_module,
-    ]
-
-    # Generate parser module
-    parser_mod = pygen.module(module.import_path for module in imports)
-    # `from __future__ import annotations` keeps the parser's span-typed annotations as lazy
-    # strings.  The parser annotates its terminal spans with the concrete pure-Python
-    # `fltk.fegen.pyrt.terminalsrc.Span` (runtime-imported above for construction) — it names
-    # neither the `fltk.fegen.pyrt.span` selector nor `fltk._native`, so it never touches
-    # span.py's process-wide native-span probe in any environment.
-    parser_mod.body.insert(0, pygen.stmt("from __future__ import annotations"))
-    parser_mod.body.append(parser_ast)
-
-    # Write parser file
-    try:
-        with parser_file.open("w") as f:
-            f.write(ast.unparse(parser_mod))
-    except Exception as e:
-        typer.echo(f"Error: Failed to write parser file '{parser_file}': {e}", err=True)
-        raise typer.Exit(1) from e
 
 
 @app.command()
@@ -224,117 +134,99 @@ def generate(
         genparser generate grammar.fltkg mylang mylang.mylang_cst --protocol-only
         genparser generate grammar.fltkg mylang mylang.mylang_cst -o output/ --verbose
     """
-    # Validate mutually exclusive options
-    if trivia_only and no_trivia_only:
-        typer.echo("Error: --trivia-only and --no-trivia-only are mutually exclusive", err=True)
-        raise typer.Exit(1)
-    if protocol_only and (trivia_only or no_trivia_only):
-        typer.echo(
-            "Error: --protocol-only cannot be combined with --trivia-only/--no-trivia-only "
-            "(--protocol-only generates no parsers)",
-            err=True,
-        )
-        raise typer.Exit(1)
-    if protocol:
-        typer.echo(
-            "Warning: --protocol is a deprecated no-op; the protocol module is always generated.",
-            err=True,
-        )
-    _validate_python_module(cst_module_name, "CST_MODULE")
-    _warn_on_relocated_module_layout(base_name, cst_module_name)
+    pybackend.generate(
+        grammar_file,
+        base_name,
+        cst_module_name,
+        output_dir=output_dir,
+        trivia_only=trivia_only,
+        no_trivia_only=no_trivia_only,
+        protocol_only=protocol_only,
+        protocol=protocol,
+        verbose=verbose,
+    )
+
+
+@app.command(name="gen-py-unparser")
+def gen_py_unparser(
+    grammar_file: Annotated[Path, typer.Argument(help="Path to the FLTK grammar file (.fltkg)")],
+    base_name: Annotated[str, typer.Argument(help="Base name for the output file (writes {base_name}_unparser.py)")],
+    cst_module_name: Annotated[
+        str, typer.Argument(help='Module import name for CST classes (usually "<base_name>_cst")')
+    ],
+    *,
+    format_config: Annotated[
+        Path | None,
+        typer.Option(
+            "--format-config",
+            help=(
+                "Path to a .fltkfmt formatter-config file. Its spacing/anchor/disposition "
+                "decisions are baked into the generated unparser at generation time. When "
+                "omitted, the default FormatterConfig (no extra spacing) is used."
+            ),
+        ),
+    ] = None,
+    output_dir: Annotated[
+        Path | None,
+        typer.Option("--output-dir", "-o", help="Output directory for the generated module"),
+    ] = None,
+    verbose: Annotated[bool, typer.Option("--verbose", "-v", help="Enable verbose output")] = False,
+) -> None:
+    """Emit the Python unparser module ({base_name}_unparser.py) from a grammar.
+
+    The generated module holds one Unparser class whose unparse_{rule} methods walk the CST
+    named by CST_MODULE and render it back to source text. Generate that CST module first
+    with the `generate` command, and generate it with trivia preservation: the unparser reads
+    the trivia the trivia-preserving parser captures.
+
+    The emitted source is formatter-normalized, like every other generated Python module.
+
+    Examples:
+        genparser gen-py-unparser grammar.fltkg mylang mylang_cst -o mylang/
+        genparser gen-py-unparser grammar.fltkg mylang mylang_cst \\
+            --format-config grammar.fltkfmt -o mylang/
+    """
+    validate_python_module(cst_module_name, "CST_MODULE")
 
     if output_dir is None:
         output_dir = Path(".")
 
-    output_dir.mkdir(parents=True, exist_ok=True)
-
     if verbose:
         typer.echo(f"Parsing grammar file: {grammar_file}")
 
-    grammar = parse_grammar_file(grammar_file)
+    grammar = _parse_grammar_raw(grammar_file)
 
-    # Build the trivia-enhanced grammar and CST generator (contains all possible nodes).
-    # The CstGenerator is the shared source for both the CST module and the protocol module.
-    grammar = gsm.add_trivia_rule_to_grammar(grammar, create_default_context())
-    cst_module = pyreg.Module(cst_module_name.split("."))
-    cstgen = gsm2tree.CstGenerator(grammar=grammar, py_module=cst_module, context=create_default_context())
-
-    # Generate shared CST module first (skipped under --protocol-only)
-    if not protocol_only:
-        shared_cst = output_dir / f"{base_name}_cst.py"
-
+    formatter_config = None
+    if format_config is not None:
         if verbose:
-            typer.echo("Generating shared CST module...")
-
-        cst_mod = cstgen.gen_py_module(naming.protocol_module_name(cst_module_name))
-        cst_text = ast.unparse(cst_mod)  # generate before opening file so an error doesn't leave a partial file
+            typer.echo(f"Parsing format config file: {format_config}")
         try:
-            with shared_cst.open("w", newline="\n") as f:
-                f.write(cst_text)
-        except OSError as e:
-            typer.echo(f"Error: Failed to write shared CST file '{shared_cst}': {e}", err=True)
+            # OSError (not just FileNotFoundError) so a --format-config path that exists but is
+            # unreadable / is a directory surfaces the clean CLI error, not a raw traceback.
+            formatter_config = parse_format_config_file(format_config)
+        except (ValueError, OSError) as e:
+            typer.echo(f"Error: {e}", err=True)
             raise typer.Exit(1) from e
 
-    # Always written: the CST module imports NodeKind from it, so the pair is mandatory.
-    shared_cst_protocol = output_dir / f"{base_name}_cst_protocol.py"
     if verbose:
-        typer.echo("Generating CST Protocol module...")
-    # Generate before opening the file so any AST construction error doesn't leave a partial
-    # artifact.
-    protocol_text = cstgen.gen_protocol_module_text()
+        typer.echo("Generating unparser module...")
+
+    # Generate before creating the output directory or opening the file so a generation error
+    # leaves no artifacts behind.
     try:
-        with shared_cst_protocol.open("w", newline="\n") as f:
-            f.write(protocol_text)
-    except OSError as e:
-        typer.echo(f"Error: Failed to write CST Protocol file '{shared_cst_protocol}': {e}", err=True)
+        src = generate_unparser_source(grammar, cst_module_name, formatter_config)
+    except (ValueError, RuntimeError) as e:
+        typer.echo(f"Error: {e}", err=True)
         raise typer.Exit(1) from e
 
-    if protocol_only:
-        if verbose:
-            typer.echo("✓ Protocol generation completed successfully")
-            typer.echo(f"CST Protocol: {output_dir / f'{base_name}_cst_protocol.py'}")
-        return
-
-    # Determine which parsers to generate
-    generate_no_trivia = not trivia_only
-    generate_trivia = not no_trivia_only
-
-    # Generate non-trivia parser
-    if generate_no_trivia:
-        no_trivia_parser = output_dir / f"{base_name}_parser.py"
-
-        if verbose:
-            typer.echo("Generating parser without trivia preservation...")
-
-        generate_parser(
-            grammar=grammar,
-            parser_file=no_trivia_parser,
-            cst_module_name=cst_module_name,
-            preserve_trivia=False,
-        )
-
-    # Generate trivia-preserving parser
-    if generate_trivia:
-        trivia_parser = output_dir / f"{base_name}_trivia_parser.py"
-
-        if verbose:
-            typer.echo("Generating parser with trivia preservation...")
-
-        generate_parser(
-            grammar=grammar,
-            parser_file=trivia_parser,
-            cst_module_name=cst_module_name,
-            preserve_trivia=True,
-        )
+    output_dir.mkdir(parents=True, exist_ok=True)
+    output_file = output_dir / f"{base_name}_unparser.py"
+    _write_output_file(output_file, src, "unparser module")
+    gencode_format.normalize([output_file])
 
     if verbose:
-        typer.echo("✓ Parser generation completed successfully")
-        typer.echo(f"Shared CST: {output_dir / f'{base_name}_cst.py'}")
-        typer.echo(f"CST Protocol: {output_dir / f'{base_name}_cst_protocol.py'}")
-        if generate_no_trivia:
-            typer.echo(f"Non-trivia parser: {output_dir / f'{base_name}_parser.py'}")
-        if generate_trivia:
-            typer.echo(f"Trivia parser: {output_dir / f'{base_name}_trivia_parser.py'}")
+        typer.echo("✓ Unparser generation completed successfully")
+        typer.echo(f"Unparser module: {output_file}")
 
 
 @app.command(name="gen-ast")
@@ -429,13 +321,13 @@ def gen_ast(
             --parser-module mylang.mylang_parser \\
             --unparser-module mylang.mylang_unparser --goal config -o mylang/
     """
-    _validate_python_module(cst_module_name, "CST_MODULE")
+    validate_python_module(cst_module_name, "CST_MODULE")
     protocol_module = protocol_module if protocol_module is not None else naming.protocol_module_name(cst_module_name)
-    _validate_python_module(protocol_module, "--protocol-module")
+    validate_python_module(protocol_module, "--protocol-module")
     if parser_module is not None:
-        _validate_python_module(parser_module, "--parser-module")
+        validate_python_module(parser_module, "--parser-module")
     if unparser_module is not None:
-        _validate_python_module(unparser_module, "--unparser-module")
+        validate_python_module(unparser_module, "--unparser-module")
 
     if output_dir is None:
         output_dir = Path(".")
@@ -479,6 +371,7 @@ def gen_ast(
     output_dir.mkdir(parents=True, exist_ok=True)
     output_file = output_dir / f"{base_name}_ast.py"
     _write_output_file(output_file, src, "AST module")
+    gencode_format.normalize([output_file])
 
     if verbose:
         typer.echo("✓ AST generation completed successfully")
@@ -492,7 +385,7 @@ def _parse_grammar_raw(grammar_file: Path) -> gsm.Grammar:
     classify_trivia_rules.  This is the correct input for RustCstGenerator, which
     applies trivia processing internally.
     """
-    return _read_and_parse_grammar(grammar_file)
+    return pybackend.read_and_parse_grammar(grammar_file)
 
 
 def _write_output_file(output_file: Path, src: str, artifact_label: str = "output file") -> None:
@@ -509,6 +402,52 @@ def _write_output_file(output_file: Path, src: str, artifact_label: str = "outpu
     except Exception as e:
         typer.echo(f"Error: Failed to write {artifact_label} '{output_file}': {e}", err=True)
         raise typer.Exit(1) from e
+
+
+class _ArtifactWriter:
+    """Where the Rust-backend emitters put their generated text.
+
+    Each ``_emit_rust_*`` helper generates every artifact it owns before writing any of them, so
+    a generation error inside one artifact leaves nothing behind.  ``gen-rust-all`` runs several
+    of them in sequence and needs the same property *across* artifacts: a failure while
+    generating de.rs must not leave a freshly written cst.rs, parser.rs and unparser.rs behind
+    for a build that would then compile a half-updated tree.
+
+    In deferred mode nothing reaches disk until :meth:`flush`, which the merged subcommand calls
+    once every artifact has been generated.  The single-purpose subcommands use the immediate
+    mode, which is the plain write they always did.  Flush itself is a sequence of writes, so an
+    I/O failure part-way through it can still leave a partial tree — the property restored here
+    is that a *generation* failure cannot.
+    """
+
+    def __init__(self, *, deferred: bool = False) -> None:
+        self._deferred = deferred
+        self._pending: list[tuple[Path, str, str, bool]] = []
+
+    def write(
+        self, output_file: Path, src: str, artifact_label: str = "output file", *, normalize: bool = False
+    ) -> None:
+        """Write (or, deferred, record) one artifact.
+
+        ``normalize`` runs the generated-Python formatter over the file once it is on disk; it
+        is set for the ``.py`` artifacts, whose contract is byte-identity with the Python
+        backend's output.
+        """
+        if self._deferred:
+            self._pending.append((output_file, src, artifact_label, normalize))
+            return
+        self._put(output_file, src, artifact_label, normalize=normalize)
+
+    def flush(self) -> None:
+        """Write everything recorded so far, in the order it was recorded."""
+        pending, self._pending = self._pending, []
+        for output_file, src, artifact_label, normalize in pending:
+            self._put(output_file, src, artifact_label, normalize=normalize)
+
+    def _put(self, output_file: Path, src: str, artifact_label: str, *, normalize: bool) -> None:
+        _write_output_file(output_file, src, artifact_label)
+        if normalize:
+            gencode_format.normalize([output_file])
 
 
 @app.command(name="gen-rust-cst")
@@ -638,12 +577,8 @@ def gen_rust_cst(
             --init-pyi-output out/cst/__init__.pyi \\
             --extension-name mylang_cst --submodules cst,parser
     """
-    if pyi_output is not None and protocol_module is None:
-        typer.echo("Error: --pyi-output requires --protocol-module", err=True)
-        raise typer.Exit(1)
-    if protocol_output is not None and protocol_module is None:
-        typer.echo("Error: --protocol-output requires --protocol-module", err=True)
-        raise typer.Exit(1)
+    _require_together(pyi_output, "--pyi-output", protocol_module, "--protocol-module")
+    _require_together(protocol_output, "--protocol-output", protocol_module, "--protocol-module")
     if protocol_module is not None:
         _validate_protocol_module(protocol_module)
     # Render the grammar-independent stub-package marker up front so a malformed marker never
@@ -651,6 +586,62 @@ def gen_rust_cst(
     init_pyi_text = _render_init_pyi(init_pyi_output, extension_name, submodules)
 
     grammar = _parse_grammar_raw(grammar_file)
+    _emit_rust_cst(
+        grammar,
+        grammar_file,
+        output_file,
+        protocol_module=protocol_module,
+        pyi_output=pyi_output,
+        protocol_output=protocol_output,
+        init_pyi_output=init_pyi_output,
+        init_pyi_text=init_pyi_text,
+        writer=_ArtifactWriter(),
+    )
+
+
+def _require_together(dependent: object | None, option: str, required: object | None, required_option: str) -> None:
+    """Exit with a CLI error when ``option`` was given without ``required_option``.
+
+    The one spelling of "these two flags come as a pair" for every Rust-backend subcommand: a
+    flag that shapes an artifact the caller did not request, or names a stub whose protocol
+    module is missing, would otherwise be silently ignored.
+    """
+    if dependent is not None and required is None:
+        typer.echo(f"Error: {option} requires {required_option}", err=True)
+        raise typer.Exit(1)
+
+
+def _parse_ast_config_or_exit(ast_config: Path, grammar: gsm.Grammar, backend: Backend) -> ResolvedAstConfig:
+    """Parse a .fltkast sidecar against ``grammar``, exiting with a CLI error on failure.
+
+    Only one backend's generated code is in play per call, so a ``custom(...)`` list may omit the
+    other backend's entries.  AstConfigError is a ValueError; OSError covers an unreadable path.
+    """
+    try:
+        return parse_ast_config_file(ast_config, grammar, {backend})
+    except (ValueError, OSError) as e:
+        typer.echo(f"Error: {e}", err=True)
+        raise typer.Exit(1) from e
+
+
+def _emit_rust_cst(
+    grammar: gsm.Grammar,
+    grammar_file: Path,
+    output_file: Path,
+    *,
+    protocol_module: str | None,
+    pyi_output: Path | None,
+    protocol_output: Path | None,
+    init_pyi_output: Path | None,
+    init_pyi_text: str | None,
+    writer: _ArtifactWriter,
+) -> None:
+    """Write cst.rs and its optional .pyi / protocol .py / stub-package marker.
+
+    ``grammar`` must be the raw GSM (before trivia processing); callers must have already
+    validated their options and rendered ``init_pyi_text``.  ``writer`` decides when the text
+    reaches disk.
+    """
     try:
         gen = gsm2tree_rs.RustCstGenerator(grammar, source_name=str(grammar_file))
     except ValueError as e:
@@ -670,7 +661,7 @@ def gen_rust_cst(
     except (ValueError, RuntimeError) as e:
         typer.echo(f"Error: {e}", err=True)
         raise typer.Exit(1) from e
-    _write_output_file(output_file, src)
+    writer.write(output_file, src)
 
     if protocol_output is not None:
         # generate_protocol() is the only assignment to protocol_text and any error in it exits
@@ -678,18 +669,24 @@ def gen_rust_cst(
         # (mirroring the init_pyi_text writer below) rather than a double-condition guard that would
         # silently skip the write on a control-flow defect.
         assert protocol_text is not None
-        _write_output_file(protocol_output, protocol_text, "protocol module")
+        # The Rust backend's protocol module must stay byte-identical to the Python
+        # backend's for the same grammar — a consumer types one .pyi against whichever it
+        # got.  The Python path normalizes what it writes, so this one does too.
+        writer.write(protocol_output, protocol_text, "protocol module", normalize=True)
 
     if pyi_text is not None:
         stub_path = pyi_output if pyi_output is not None else output_file.with_suffix(".pyi")
-        _write_output_file(stub_path, pyi_text, ".pyi stub")
+        # Normalized like the .py the generator writes: a stub is Python source a consumer
+        # type-checks and reads, and an unnormalized one cannot be byte-compared against
+        # anything the same pinned ruff produces.
+        writer.write(stub_path, pyi_text, ".pyi stub", normalize=True)
 
     if init_pyi_output is not None:
         # _render_init_pyi returns a non-None string whenever init_pyi_output is set (it exits
         # otherwise), so the marker is always written here; the assert documents that invariant
         # and narrows the type for the writer below.
         assert init_pyi_text is not None
-        _write_output_file(init_pyi_output, init_pyi_text, "stub-package __init__.pyi")
+        writer.write(init_pyi_output, init_pyi_text, "stub-package __init__.pyi")
 
 
 # ``\Z`` rather than ``$``: ``$`` also matches before a trailing newline, which would let a
@@ -718,54 +715,13 @@ def _validate_cst_mod_path(cst_mod_path: str) -> None:
     _validate_rust_mod_path(cst_mod_path, "--cst-mod-path")
 
 
-# ``\Z`` rather than ``$``: ``$`` also matches before a trailing newline, which would let a
-# value carrying one through into an ``import`` line.
-_PROTOCOL_MODULE_RE = re.compile(r"\A[A-Za-z_][A-Za-z0-9_]*(\.[A-Za-z_][A-Za-z0-9_]*)*\Z")
-
-
-def _validate_python_module(module: str, option: str) -> None:
-    """Exit with a CLI error when ``module`` is not a valid Python dotted module path.
-
-    ``option`` names the CLI option or argument in the message.  Every caller interpolates the
-    value verbatim into generated source — a ``.pyi`` stub's ``import <module> as _proto`` line,
-    or an AST module's ``import <module> as cst``.  Without this guard a malformed value (empty,
-    embedded spaces, leading/trailing dot) raises no exception: the generator exits 0 and writes
-    a file that only fails later when something parses it.  Validating up front turns that into
-    an immediate, diagnosable CLI error before any file is written.
-    """
-    if not _PROTOCOL_MODULE_RE.match(module):
-        typer.echo(f"Error: {option} {module!r} is not a valid Python module path", err=True)
-        raise typer.Exit(1)
-
-
-def _warn_on_relocated_module_layout(base_name: str, cst_module_name: str) -> None:
-    """Warn when the written filenames only work after the caller relocates them.
-
-    ``generate`` writes ``{base_name}_cst.py`` and ``{base_name}_cst_protocol.py`` but bakes
-    ``from {cst_module_name}_protocol import NodeKind`` into the first.  Those agree in place only
-    when ``cst_module_name``'s last component is ``{base_name}_cst``.  Any other value describes a
-    layout the caller intends to move the files into, which is supported (and is what the dotted
-    ``mylang.cst`` form means) — so this warns rather than failing, naming both halves so a caller
-    who did not intend to relocate sees the cause before the ``ModuleNotFoundError`` at import.
-    """
-    if cst_module_name.rsplit(".", 1)[-1] == f"{base_name}_cst":
-        return
-    typer.echo(
-        f"Warning: CST_MODULE {cst_module_name!r} does not match the written file "
-        f"'{base_name}_cst.py'. The emitted CST module imports NodeKind from "
-        f"'{naming.protocol_module_name(cst_module_name)}', so '{base_name}_cst_protocol.py' must "
-        f"be importable under that name — relocate both files, or pass '{base_name}_cst'.",
-        err=True,
-    )
-
-
 def _validate_protocol_module(protocol_module: str) -> None:
     """Exit with a CLI error when ``--protocol-module`` is not a valid Python dotted module path.
 
     Shared by gen-rust-cst / gen-rust-unparser, which both interpolate the value into the
     generated ``.pyi`` stub.
     """
-    _validate_python_module(protocol_module, "--protocol-module")
+    validate_python_module(protocol_module, "--protocol-module")
 
 
 def _render_init_pyi(
@@ -812,6 +768,18 @@ def gen_rust_parser(
     _validate_cst_mod_path(cst_mod_path)
 
     grammar = _parse_grammar_raw(grammar_file)
+    _emit_rust_parser(grammar, grammar_file, output_file, cst_mod_path=cst_mod_path, writer=_ArtifactWriter())
+
+
+def _emit_rust_parser(
+    grammar: gsm.Grammar,
+    grammar_file: Path,
+    output_file: Path,
+    *,
+    cst_mod_path: str,
+    writer: _ArtifactWriter,
+) -> None:
+    """Write parser.rs from the raw GSM."""
     try:
         gen = gsm2parser_rs.RustParserGenerator(grammar, cst_mod_path=cst_mod_path, source_name=str(grammar_file))
         src = gen.generate()
@@ -819,7 +787,7 @@ def gen_rust_parser(
         typer.echo(f"Error: {e}", err=True)
         raise typer.Exit(1) from e
 
-    _write_output_file(output_file, src)
+    writer.write(output_file, src)
 
 
 @app.command(name="gen-rust-unparser")
@@ -935,9 +903,7 @@ def gen_rust_unparser(
     """
     _validate_cst_mod_path(cst_mod_path)
 
-    if pyi_output is not None and protocol_module is None:
-        typer.echo("Error: --pyi-output requires --protocol-module", err=True)
-        raise typer.Exit(1)
+    _require_together(pyi_output, "--pyi-output", protocol_module, "--protocol-module")
     if protocol_module is not None:
         _validate_protocol_module(protocol_module)
     # Render the grammar-independent stub-package marker up front so a malformed marker never
@@ -945,18 +911,51 @@ def gen_rust_unparser(
     init_pyi_text = _render_init_pyi(init_pyi_output, extension_name, submodules)
 
     grammar = _parse_grammar_raw(grammar_file)
+    formatter_config = _parse_format_config_or_exit(format_config)
+    _emit_rust_unparser(
+        grammar,
+        grammar_file,
+        output_file,
+        cst_mod_path=cst_mod_path,
+        formatter_config=formatter_config,
+        protocol_module=protocol_module,
+        pyi_output=pyi_output,
+        init_pyi_output=init_pyi_output,
+        init_pyi_text=init_pyi_text,
+        writer=_ArtifactWriter(),
+    )
 
-    formatter_config = None
-    if format_config is not None:
-        try:
-            formatter_config = parse_format_config_file(format_config)
-        except (ValueError, OSError) as e:
-            # OSError (not just FileNotFoundError) so a --format-config path that exists but is
-            # unreadable / is a directory surfaces the clean CLI error, not a raw traceback.
-            # FileNotFoundError is an OSError subclass, so the not-found message still applies.
-            typer.echo(f"Error: {e}", err=True)
-            raise typer.Exit(1) from e
 
+def _parse_format_config_or_exit(format_config: Path | None) -> FormatterConfig | None:
+    """Parse a .fltkfmt file into a FormatterConfig, or return None when none was given.
+
+    OSError (not just FileNotFoundError) so a --format-config path that exists but is
+    unreadable / is a directory surfaces the clean CLI error, not a raw traceback.
+    FileNotFoundError is an OSError subclass, so the not-found message still applies.
+    """
+    if format_config is None:
+        return None
+    try:
+        return parse_format_config_file(format_config)
+    except (ValueError, OSError) as e:
+        typer.echo(f"Error: {e}", err=True)
+        raise typer.Exit(1) from e
+
+
+def _emit_rust_unparser(
+    grammar: gsm.Grammar,
+    grammar_file: Path,
+    output_file: Path,
+    *,
+    cst_mod_path: str,
+    formatter_config: FormatterConfig | None,
+    protocol_module: str | None,
+    pyi_output: Path | None,
+    init_pyi_output: Path | None,
+    init_pyi_text: str | None,
+    writer: _ArtifactWriter,
+) -> None:
+    """Write unparser.rs and its optional .pyi / stub-package marker from the raw GSM."""
     # Generate the .pyi text (when requested) and the .rs together, before writing either file,
     # so a generation error leaves no partial artifacts -- matching gen-rust-cst.
     pyi_text: str | None = None
@@ -974,18 +973,21 @@ def gen_rust_unparser(
         typer.echo(f"Error: {e}", err=True)
         raise typer.Exit(1) from e
 
-    _write_output_file(output_file, src)
+    writer.write(output_file, src)
 
     if pyi_text is not None:
         stub_path = pyi_output if pyi_output is not None else output_file.with_suffix(".pyi")
-        _write_output_file(stub_path, pyi_text, ".pyi stub")
+        # Normalized like the .py the generator writes: a stub is Python source a consumer
+        # type-checks and reads, and an unnormalized one cannot be byte-compared against
+        # anything the same pinned ruff produces.
+        writer.write(stub_path, pyi_text, ".pyi stub", normalize=True)
 
     if init_pyi_output is not None:
         # _render_init_pyi returns a non-None string whenever init_pyi_output is set (it exits
         # otherwise), so the marker is always written here; the assert documents that invariant
         # and narrows the type for the writer below.
         assert init_pyi_text is not None
-        _write_output_file(init_pyi_output, init_pyi_text, "stub-package __init__.pyi")
+        writer.write(init_pyi_output, init_pyi_text, "stub-package __init__.pyi")
 
 
 @app.command(name="gen-rust-ast")
@@ -1076,14 +1078,34 @@ def gen_rust_ast(
 
     resolved_config = None
     if ast_config is not None:
-        try:
-            # Only the Rust backend is generated here, so a `custom(...)` list may omit its
-            # Python entries.  AstConfigError is a ValueError; OSError covers an unreadable path.
-            resolved_config = parse_ast_config_file(ast_config, grammar, {Backend.RUST})
-        except (ValueError, OSError) as e:
-            typer.echo(f"Error: {e}", err=True)
-            raise typer.Exit(1) from e
+        resolved_config = _parse_ast_config_or_exit(ast_config, grammar, Backend.RUST)
 
+    _emit_rust_ast(
+        grammar,
+        grammar_file,
+        output_file,
+        cst_mod_path=cst_mod_path,
+        parser_mod_path=parser_mod_path,
+        unparser_mod_path=unparser_mod_path,
+        goal=goal,
+        resolved_config=resolved_config,
+        writer=_ArtifactWriter(),
+    )
+
+
+def _emit_rust_ast(
+    grammar: gsm.Grammar,
+    grammar_file: Path,
+    output_file: Path,
+    *,
+    cst_mod_path: str,
+    parser_mod_path: str | None,
+    unparser_mod_path: str | None,
+    goal: str | None,
+    resolved_config: ResolvedAstConfig | None,
+    writer: _ArtifactWriter,
+) -> None:
+    """Write ast.rs from the trivia-processed GSM."""
     # Generate before opening the file so a model error leaves no artifact behind.  AstModelError
     # is a ValueError, as are the unknown-goal and missing-Rust-type errors.
     try:
@@ -1100,7 +1122,7 @@ def gen_rust_ast(
         typer.echo(f"Error: {e}", err=True)
         raise typer.Exit(1) from e
 
-    _write_output_file(output_file, src)
+    writer.write(output_file, src)
 
 
 @app.command(name="gen-rust-serde")
@@ -1193,15 +1215,34 @@ def gen_rust_serde(
         _validate_rust_mod_path(ast_mod_path, "--ast-mod-path")
 
     grammar = parse_grammar_file(grammar_file)
+    resolved_config = _parse_ast_config_or_exit(ast_config, grammar, Backend.RUST)
 
-    try:
-        # Only the Rust backend is generated here, so a `custom(...)` list may omit its Python
-        # entries.  AstConfigError is a ValueError; OSError covers an unreadable path.
-        resolved_config = parse_ast_config_file(ast_config, grammar, {Backend.RUST})
-    except (ValueError, OSError) as e:
-        typer.echo(f"Error: {e}", err=True)
-        raise typer.Exit(1) from e
+    _emit_rust_serde(
+        grammar,
+        grammar_file,
+        output_file,
+        cst_mod_path=cst_mod_path,
+        parser_mod_path=parser_mod_path,
+        goal=goal,
+        ast_mod_path=ast_mod_path,
+        resolved_config=resolved_config,
+        writer=_ArtifactWriter(),
+    )
 
+
+def _emit_rust_serde(
+    grammar: gsm.Grammar,
+    grammar_file: Path,
+    output_file: Path,
+    *,
+    cst_mod_path: str,
+    parser_mod_path: str | None,
+    goal: str | None,
+    ast_mod_path: str | None,
+    resolved_config: ResolvedAstConfig,
+    writer: _ArtifactWriter,
+) -> None:
+    """Write de.rs from the trivia-processed GSM."""
     # Generate before opening the file so a model, name-collision or unknown-goal error leaves no
     # artifact behind.  All of them are ValueErrors.
     try:
@@ -1218,7 +1259,254 @@ def gen_rust_serde(
         typer.echo(f"Error: {e}", err=True)
         raise typer.Exit(1) from e
 
-    _write_output_file(output_file, src)
+    writer.write(output_file, src)
+
+
+@app.command(name="gen-rust-all")
+def gen_rust_all(
+    grammar_file: Annotated[Path, typer.Argument(help="Path to the FLTK grammar file (.fltkg)")],
+    *,
+    cst_output: Annotated[Path, typer.Option("--cst-output", help="Path to write the CST .rs source")],
+    parser_output: Annotated[
+        Path | None,
+        typer.Option("--parser-output", help="Path to write the parser .rs source. Omit to skip the parser."),
+    ] = None,
+    unparser_output: Annotated[
+        Path | None,
+        typer.Option("--unparser-output", help="Path to write the unparser .rs source. Omit to skip the unparser."),
+    ] = None,
+    ast_output: Annotated[
+        Path | None,
+        typer.Option("--ast-output", help="Path to write the AST .rs source. Omit to skip the AST."),
+    ] = None,
+    serde_output: Annotated[
+        Path | None,
+        typer.Option(
+            "--serde-output",
+            help="Path to write the serde frontend .rs source (name it de.rs). Requires --ast-config.",
+        ),
+    ] = None,
+    cst_mod_path: Annotated[
+        str,
+        typer.Option("--cst-mod-path", help="Rust module path to the generated CST module (e.g. 'super::cst')"),
+    ] = "super::cst",
+    parser_mod_path: Annotated[
+        str | None,
+        typer.Option("--parser-mod-path", help="Rust module path to the generated parser module, for ast.rs / de.rs"),
+    ] = None,
+    unparser_mod_path: Annotated[
+        str | None,
+        typer.Option("--unparser-mod-path", help="Rust module path to the generated unparser module, for ast.rs"),
+    ] = None,
+    ast_mod_path: Annotated[
+        str | None,
+        typer.Option("--ast-mod-path", help="Rust module path to the generated AST module, for de.rs"),
+    ] = None,
+    ast_config: Annotated[
+        Path | None,
+        typer.Option("--ast-config", help="Path to the .fltkast sidecar shaping ast.rs / de.rs"),
+    ] = None,
+    format_config: Annotated[
+        Path | None,
+        typer.Option("--format-config", help="Path to a .fltkfmt file baked into the generated unparser"),
+    ] = None,
+    goal: Annotated[
+        str | None,
+        typer.Option("--goal", help="Rule the ast.rs / de.rs entry points target"),
+    ] = None,
+    protocol_module: Annotated[
+        str | None,
+        typer.Option("--protocol-module", help="Dotted import path of the CST protocol module, required by the stubs"),
+    ] = None,
+    cst_pyi_output: Annotated[
+        Path | None,
+        typer.Option("--cst-pyi-output", help="Path to write the CST .pyi stub. Requires --protocol-module."),
+    ] = None,
+    unparser_pyi_output: Annotated[
+        Path | None,
+        typer.Option(
+            "--unparser-pyi-output",
+            help="Path to write the unparser .pyi stub. Requires --protocol-module and --unparser-output.",
+        ),
+    ] = None,
+    protocol_output: Annotated[
+        Path | None,
+        typer.Option("--protocol-output", help="Path to write the protocol .py module. Requires --protocol-module."),
+    ] = None,
+    init_pyi_output: Annotated[
+        Path | None,
+        typer.Option(
+            "--init-pyi-output",
+            help="Path to write the stub-package __init__.pyi marker. Requires --extension-name and --submodules.",
+        ),
+    ] = None,
+    extension_name: Annotated[
+        str | None,
+        typer.Option(
+            "--extension-name",
+            help="The compiled extension's importable name, for the __init__.pyi marker. Requires --init-pyi-output.",
+        ),
+    ] = None,
+    submodules: Annotated[
+        str | None,
+        typer.Option(
+            "--submodules",
+            help="Comma-separated submodule names for the __init__.pyi marker. Requires --init-pyi-output.",
+        ),
+    ] = None,
+) -> None:
+    """Emit every requested Rust artifact for a grammar in one process.
+
+    This is the merged form of gen-rust-cst / gen-rust-parser / gen-rust-unparser /
+    gen-rust-ast / gen-rust-serde: it takes the union of their flags, reads and parses the
+    grammar once, and writes whichever outputs were named. The five single-purpose
+    subcommands remain available and produce byte-identical artifacts; this one exists so a
+    build system generating four or five files from one grammar pays for one interpreter
+    startup and one grammar parse instead of five.
+
+    Each output is named by its own option rather than a positional path, so the request is
+    explicit: --cst-output is always required (the CST is what every other artifact is
+    generated against), and each of the others is emitted exactly when its option is given.
+    A flag shaping an artifact that was not requested is an error, not a silent no-op.
+
+    It is all-or-nothing: every artifact is generated before any of them is written, so a
+    failure part-way through leaves the output tree untouched rather than half-updated.
+
+    Examples:
+        genparser gen-rust-all grammar.fltkg \\
+            --cst-output out/cst.rs --parser-output out/parser.rs
+        genparser gen-rust-all grammar.fltkg \\
+            --cst-output out/cst.rs --parser-output out/parser.rs \\
+            --unparser-output out/unparser.rs --format-config grammar.fltkfmt \\
+            --ast-output out/ast.rs --serde-output out/de.rs \\
+            --ast-config grammar.fltkast --goal config \\
+            --parser-mod-path super::parser --unparser-mod-path super::unparser \\
+            --ast-mod-path super::ast
+    """
+    _validate_cst_mod_path(cst_mod_path)
+    if parser_mod_path is not None:
+        _validate_rust_mod_path(parser_mod_path, "--parser-mod-path")
+    if unparser_mod_path is not None:
+        _validate_rust_mod_path(unparser_mod_path, "--unparser-mod-path")
+    if ast_mod_path is not None:
+        _validate_rust_mod_path(ast_mod_path, "--ast-mod-path")
+
+    _require_together(cst_pyi_output, "--cst-pyi-output", protocol_module, "--protocol-module")
+    _require_together(unparser_pyi_output, "--unparser-pyi-output", protocol_module, "--protocol-module")
+    _require_together(protocol_output, "--protocol-output", protocol_module, "--protocol-module")
+    if protocol_module is not None:
+        _validate_protocol_module(protocol_module)
+
+    # Every emitted file must be named by an option; defaulting the .pyi path would put an
+    # unnamed file next to the .rs.
+    _require_together(protocol_module, "--protocol-module", cst_pyi_output, "--cst-pyi-output")
+
+    # The two marker fields shape --init-pyi-output's file and nothing else, so without it they
+    # would be discarded in silence.
+    _require_together(extension_name, "--extension-name", init_pyi_output, "--init-pyi-output")
+    _require_together(submodules, "--submodules", init_pyi_output, "--init-pyi-output")
+
+    _require_together(format_config, "--format-config", unparser_output, "--unparser-output")
+    _require_together(unparser_pyi_output, "--unparser-pyi-output", unparser_output, "--unparser-output")
+
+    # The unparser stub is the only thing --protocol-module shapes on the unparser path. Omitting
+    # its output path would either drop the stub or write it to an unnamed path beside
+    # unparser.rs, and every emitted file here must be named by an option.
+    if protocol_module is not None and unparser_output is not None and unparser_pyi_output is None:
+        typer.echo("Error: --unparser-output with --protocol-module requires --unparser-pyi-output", err=True)
+        raise typer.Exit(1)
+
+    _require_together(unparser_mod_path, "--unparser-mod-path", ast_output, "--ast-output")
+    _require_together(ast_mod_path, "--ast-mod-path", serde_output, "--serde-output")
+
+    _require_together(serde_output, "--serde-output", ast_config, "--ast-config")
+    for value, option in (
+        (ast_config, "--ast-config"),
+        (goal, "--goal"),
+        (parser_mod_path, "--parser-mod-path"),
+    ):
+        if value is not None and ast_output is None and serde_output is None:
+            typer.echo(f"Error: {option} requires --ast-output or --serde-output", err=True)
+            raise typer.Exit(1)
+
+    # Render the grammar-independent stub-package marker up front so a malformed marker never
+    # reaches disk (validation precedes any output write, and even the grammar parse).
+    init_pyi_text = _render_init_pyi(init_pyi_output, extension_name, submodules)
+    formatter_config = _parse_format_config_or_exit(format_config)
+
+    # The _emit_rust_cst/parser/unparser functions take the raw GSM; _emit_rust_ast/serde
+    # take the trivia-processed one, derived below rather than by a second file read.
+    grammar = _parse_grammar_raw(grammar_file)
+
+    # Deferred: nothing this subcommand generates reaches disk until every artifact has been
+    # generated, so a failure part-way through leaves the tree as it was rather than
+    # half-updated.
+    writer = _ArtifactWriter(deferred=True)
+
+    _emit_rust_cst(
+        grammar,
+        grammar_file,
+        cst_output,
+        protocol_module=protocol_module,
+        pyi_output=cst_pyi_output,
+        protocol_output=protocol_output,
+        init_pyi_output=init_pyi_output,
+        init_pyi_text=init_pyi_text,
+        writer=writer,
+    )
+
+    if parser_output is not None:
+        _emit_rust_parser(grammar, grammar_file, parser_output, cst_mod_path=cst_mod_path, writer=writer)
+
+    if unparser_output is not None:
+        _emit_rust_unparser(
+            grammar,
+            grammar_file,
+            unparser_output,
+            cst_mod_path=cst_mod_path,
+            formatter_config=formatter_config,
+            protocol_module=protocol_module,
+            pyi_output=unparser_pyi_output,
+            init_pyi_output=None,
+            init_pyi_text=None,
+            writer=writer,
+        )
+
+    if ast_output is not None or serde_output is not None:
+        trivia_grammar = pybackend.apply_trivia_processing(grammar)
+        resolved_config = None
+        if ast_config is not None:
+            resolved_config = _parse_ast_config_or_exit(ast_config, trivia_grammar, Backend.RUST)
+
+        if ast_output is not None:
+            _emit_rust_ast(
+                trivia_grammar,
+                grammar_file,
+                ast_output,
+                cst_mod_path=cst_mod_path,
+                parser_mod_path=parser_mod_path,
+                unparser_mod_path=unparser_mod_path,
+                goal=goal,
+                resolved_config=resolved_config,
+                writer=writer,
+            )
+
+        if serde_output is not None:
+            # --serde-output requires --ast-config, so resolved_config is set on this path.
+            assert resolved_config is not None
+            _emit_rust_serde(
+                trivia_grammar,
+                grammar_file,
+                serde_output,
+                cst_mod_path=cst_mod_path,
+                parser_mod_path=parser_mod_path,
+                goal=goal,
+                ast_mod_path=ast_mod_path,
+                resolved_config=resolved_config,
+                writer=writer,
+            )
+
+    writer.flush()
 
 
 @app.command(name="gen-rust-lib")

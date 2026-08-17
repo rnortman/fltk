@@ -1,0 +1,83 @@
+load("@rules_rust//rust:defs.bzl", "rust_shared_library", "rust_test")
+load("//:rust.bzl", "generate_rust_parser", "pyo3_extension_py_library")
+
+# The standalone non-FLTK user-extension fixture: the phase4_roundtrip grammar compiled into
+# an importable `phase4_roundtrip_cst` module.  It is the "a consumer's own cdylib" shape the
+# cross-cdylib Span/SourceText and registry suites need — a second, independently linked copy
+# of fltk-cst-core with its own CANONICAL_REGISTRY.
+#
+# One flavor only, matching the Cargo manifest: pyo3 is a non-optional dependency here and the
+# crate root uses it unconditionally, so there is no pyo3-free configuration to build.
+
+# cst.rs is an action output; the exclude keeps a stray in-tree copy from being named by the
+# same target as it.
+_HAND_WRITTEN_RS = glob(
+    ["src/**/*.rs"],
+    exclude = ["src/cst.rs"],
+    allow_empty = False,
+)
+
+# parser = False: this crate compiles a CST only, and the parser is the grammar's largest
+# generated artifact.
+generate_rust_parser(
+    name = "phase4_roundtrip_cst_srcs",
+    src = "//:fltk/fegen/test_data/phase4_roundtrip.fltkg",
+    out_dir = "src",
+    parser = False,
+)
+
+# fltk-cst-core:test_introspection, not the plain python flavor: src/registry_introspection.rs
+# calls the registry snapshot helpers that live behind the runtime's `test-introspection`
+# feature.  Cargo turns it on through this crate's own `python` feature; Bazel crate_features
+# do not forward, so the flavor is named directly.
+_DEPS = [
+    "//crates/fltk-cst-core:test_introspection",
+    "@fltk_crates//:pyo3",
+]
+
+_CRATE_FEATURES = [
+    "extension-module",
+    "python",
+]
+
+rust_shared_library(
+    name = "phase4_roundtrip_cst_cdylib",
+    srcs = _HAND_WRITTEN_RS + [":phase4_roundtrip_cst_srcs"],
+    crate_features = _CRATE_FEATURES,
+    crate_name = "phase4_roundtrip_cst",
+    crate_root = "src/lib.rs",
+    edition = "2021",
+    deps = _DEPS,
+)
+
+pyo3_extension_py_library(
+    name = "phase4_roundtrip_cst",
+    cdylib = ":phase4_roundtrip_cst_cdylib",
+    visibility = ["//visibility:public"],
+)
+
+# Restates srcs/features/deps rather than taking `crate = ":phase4_roundtrip_cst_cdylib"`:
+# rust_test does not inherit crate_features, and without "python" the crate root's
+# unconditional register_submodule call has no generated symbol to reach.  No interpreter is
+# needed — pyo3's extension-module feature, unified by the @fltk_crates hub, links no
+# libpython.
+#
+# Visible to //tests/bazel_rules, whose analysistest reads this target's rustc argv for the
+# features — the restatement above is otherwise unenforced.
+rust_test(
+    name = "native_test",
+    srcs = _HAND_WRITTEN_RS + [":phase4_roundtrip_cst_srcs"],
+    crate_features = _CRATE_FEATURES,
+    crate_name = "phase4_roundtrip_cst",
+    crate_root = "src/lib.rs",
+    edition = "2021",
+    visibility = ["//tests/bazel_rules:__pkg__"],
+    deps = _DEPS,
+)
+
+# The generated module, for tests/test_rust_prelude_qualification.py's scan.
+filegroup(
+    name = "generated_rs",
+    srcs = [":phase4_roundtrip_cst_srcs"],
+    visibility = ["//tests:__pkg__"],
+)

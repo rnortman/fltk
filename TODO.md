@@ -289,97 +289,133 @@ The version fields across the repo still read `0.4.0` even though `v0.5.0` is a 
 decision is to leave `v0.5.0` exactly as it is — no re-tag, no deletion, no `0.5.1`; it is accepted
 as a known-broken release — and to correct the metadata when `0.6.0` is cut. This entry exists
 because a forgotten version bump is the defect that made `v0.5.0` broken in the first place, and the
-edit spans eight manifests: `pyproject.toml` (`version`), the root `Cargo.toml`
-(`[package] version`), and `crates/fltk-cst-core/Cargo.toml`, `crates/fltk-serde-core/Cargo.toml`,
+edit spans seven manifests: the root `Cargo.toml` (`[package] version`), and
+`crates/fltk-cst-core/Cargo.toml`, `crates/fltk-serde-core/Cargo.toml`,
 `crates/fltk-fmt-cli/Cargo.toml`, `crates/fltk-unparser-core/Cargo.toml`,
 `crates/fltk-parser-core/Cargo.toml`, `crates/fltk-ast-core/Cargo.toml` (each `[package] version`).
+`pyproject.toml` is no longer one of them: it carries no `[project]` table and declares no version.
 Done = every one of those fields reads the released version at the `0.6.0` cut, and `v0.5.0` is left
-untouched. Location: `pyproject.toml` and the root `Cargo.toml` carry the
-`TODO(version-bump-0-6-0)` comments; the six crate manifests above are the rest of the edit.
+untouched. Location: the root `Cargo.toml` carries the `TODO(version-bump-0-6-0)` comment; the six
+crate manifests above are the rest of the edit.
 
-## `bazel-test-fixture-builds`
+## `bazel-lint-consumer-module`
 
-A direct `uv run pytest` after a generator change silently tests stale fixture cdylibs: five
-extension modules (`fltk._native`, `phase4_roundtrip_cst`, `fegen_rust_cst`, `rust_parser_fixture`,
-`poc_cst`) are built by `make build-test-fixtures` and installed into the venv, and nothing outside
-`make test` rebuilds them, so the `rust`-parametrized half of the suite imports the previously-built
-`.so` and passes against code that no longer exists in the tree. This fired during this cycle: three
-tests asserting the old list-returning `children_<label>()` stayed green after the generator had
-already changed. The failure direction — silent false green in a suite whose purpose is proving the
-two backends equivalent — is the worst one. Interim mitigation: run `make test` (or at least
-`make build-test-fixtures`) rather than bare `pytest` after touching a generator.
+`tests/bazel_consumer/`'s three Python files (`consumer_python_test.py`, `consumer_rust_test.py`,
+`consumer_unparser_test.py`) are no longer ruff-checked. They used to be swept up by `ruff check .`
+from the repo root; the Bazel `//:ruff_check` / `//:ruff_format_check` targets glob the source tree
+instead, and that directory is `.bazelignore`d (it is its own Bazel module, so the root
+`bazel test //...` must not treat its packages as its own). An ignored directory has no package, so
+no root-module target can name its files. Closing this means giving the consumer module its own
+lint targets and running them from `make bazel-consumer-check`, which requires the lint flag and the
+ruff config to be reachable cross-module (`@fltk//bzl:lint` is not currently consumer-visible for
+this purpose, and the module would need its own pip hub entry for ruff). Small, but it is a real
+gap: a style or import-order regression in those files now passes `make check`. Location:
+`BUILD.bazel` (the `_LINT_PY_SRCS` glob), `tests/bazel_consumer/BUILD.bazel`.
 
-Root cause: generated code is checked in and the fixture cdylibs are built by ad-hoc
-`maturin develop` invocations outside any dependency-tracked build graph. Fix direction: move those
-builds — and, where that is what removes the hole, the generation itself — under Bazel, the build
-system the original request asked for, so a stale binary cannot be imported by construction.
-Closing this by wrapping the existing ad-hoc invocations in Bazel-shaped shell without putting them
-under a dependency graph does not satisfy it. Do **not** close it with an mtime/hash staleness
-checker either: that alternative was considered and rejected by the user, because any such tracker
-is a hand-rolled, drift-prone reimplementation of what Bazel already does. Done = the
-`rust`-parametrized suite consumes Bazel-built fixture extensions (or equivalent dependency-tracked
-builds) and the bare-`pytest` staleness hole is closed by construction. Location: `Makefile`
-(the `build-test-fixtures` target).
+## `bootstrap-fegen-chain`
 
-## `bazel-dogfood-checks`
+The four self-hosting seed files (`fltk/fegen/{fltk_cst,fltk_cst_protocol,fltk_parser,
+fltk_trivia_parser}.py`) are the one generated artifact that stays committed, because the
+generator needs `fltk_parser` to read any grammar file — including `fegen.fltkg`, which is where
+those files come from. The bootstrap system was meant to break that cycle and cannot today:
+`bootstrap.fltkg` is a strict subset grammar (15 rules, no regex terms), `runbs.py
+fltk/fegen/fegen.fltkg` fails at its `assert result`, and no code path goes bootstrap-parse → GSM
+→ full parser. Resurrecting it means designing a staged grammar chain — bootstrap syntax, an
+intermediate grammar expressible in it, then full fegen syntax — which is a language project, not
+a build-system change, so it was deferred rather than attempted. Meanwhile the staleness hole the
+committed seed used to leave open is closed: `tests/test_seed_fixed_point.py` regenerates the seed
+and byte-compares, so a generator change with no regeneration is a red test. Done = the seed is
+generated from `bootstrap.fltkg` through a staged chain and stops being committed, or the
+resurrection is formally abandoned and this entry is closed as won't-do. Location:
+`tests/test_seed_fixed_point.py`, `fltk/fegen/bootstrap.fltkg`, `runbs.py`.
 
-`make check` still runs pytest (5486 tests across five maturin-built extensions), ruff, pyright and
-rustfmt as cargo/uv lanes outside Bazel, so a trivial change re-walks all of them. The Rust unit
-tests and clippy now run under Bazel (`bazel-check`, `bazel-clippy`), which leaves the Python half
-and the feature flavors Bazel does not execute. Sketched path: the five fixture extensions are all
-buildable by fltk's own `fltk_pyo3_cdylib` / `:native_py` under Bazel already — that is the hard
-prerequisite — with lint via aspect_rules_lint or py_binary-wrapped tools from the pip hub. Two
-coverage exclusions to carry over rather than lose: python-featured *test execution* (a test binary
-linking pyo3 without extension-module needs the non-hermetic `PYO3_PYTHON` wiring of
-`cargo-test-python-features`), and `fltk-ast-core` with its features off, which has no Bazel target
-because both flavors turn all three on. Done = the migrated lanes are retired from `CHECK_STEPS`
-with no coverage regression. Location: `Makefile` (the `CHECK_STEPS` block).
+## `bazel-generated-native-lib`
 
-## `bazel-py-unparser`
+`src/lib.rs` — the `fltk._native` module wiring — is generator output (`gen-rust-lib
+--module-name _native --register-span-types --unknown-span-static --no-cst --no-parser`) and is
+the one generated Rust file still tracked in git. Design §5.1 of the all-Bazel ADR has `//:native`
+built from a `generate_rust_lib` output assembled with the hand-written `src/span.rs`, with the
+tracked copy deleted; that cannot land while the root `Cargo.toml` declares the `fltk-native`
+package, because its `[lib]` target has no crate root without the file and *every* cargo
+invocation then fails to parse the workspace manifest — including `cargo metadata --locked`,
+`cargo deny`, and the compile-gate tests that build throwaway crates with path deps on the
+runtime crates.
 
-`generate_parser` (the Python backend, `rules.bzl`) cannot emit an unparser, so a Bazel consumer on
-the pure-Python path has to shell out to the generator by hand; the Rust backend grew
-`unparser`/`format_config` attrs in `rust.bzl` and the Python one did not. Blocked on a CLI seam:
-`fltk/unparse/genunparser.py` is a raw `sys.argv` script rather than a `genparser.py` typer
-subcommand, and a Bazel action needs the latter to pass a stable flag set. No named customer wants
-it yet, which is why the seam has not been built. Done = `generate_parser(unparser = True,
-format_config = ...)` emits the Python unparser module through a `genparser` subcommand, with the
-same guard shape `rust.bzl` uses. Location: `fltk/unparse/genunparser.py` (`main`).
+`//:native_lib_rs` regenerates it and `//:native_lib_parity` diffs it against the tracked copy,
+so the file cannot drift from what the generator produces. Done = either the root manifest stops
+being a package (a virtual workspace manifest, which changes what `@fltk_crates` resolves and
+needs its own look at `Cargo.lock`), or cargo stops being needed at all — after which `//:native`
+takes the generated `lib.rs` and `src/lib.rs` is deleted with the parity genrule.
 
-## `bazel-codegen-action-fanout`
+Location: `BUILD.bazel` (`:native_lib_rs`, `:native_lib_parity`, `:native`), `Cargo.toml`,
+`src/lib.rs`.
 
-A fully-configured `generate_rust_parser` target runs five `genparser` processes over the same
-`.fltkg` (gen-rust-cst, gen-rust-parser, gen-rust-unparser, gen-rust-ast, gen-rust-serde). Each
-starts a Python interpreter, imports fltk, and re-parses the grammar and rebuilds the GSM to emit
-one file, and any grammar edit invalidates all five — so a consumer module with N grammars pays 5N
-interpreter startups and 5N identical GSM builds per clean build. The fanout grows with every new
-generated module type. Candidate fix: a `gen-rust-all` subcommand that parses once and writes
-whichever outputs its flags request, driven by one `ctx.actions.run` declaring the outputs the
-five actions produce today. Deliberately not done blind: separate actions do give finer
-invalidation (an ast-only regeneration recompiles nothing else), so the trade needs a measurement
-on a realistic multi-grammar consumer before the collapse is worth its loss of granularity. Done =
-either the merged action lands with numbers behind it, or the measurement shows the fanout is not
-worth collapsing and this entry is closed with that result recorded. Location: `rust.bzl` (the
-action block in `_generate_rust_srcs_impl`).
+## `bazel-rustc-gate-tests`
 
-## `bazel-serde-consumer-hub`
+Three pytest files are compile gates: they write a throwaway Cargo crate out of freshly
+generated Rust, with path dependencies on this repo's runtime crates, and hand it to `cargo`
+(`tests/test_generated_rust_gate.py`, `tests/test_rust_prelude_qualification.py`,
+`tests/test_nullable_loop_guard.py`). They run under Bazel as `local` + `requires-cargo`
+targets: unsandboxed, inheriting `PATH` / `HOME` / `CARGO_HOME` / `RUSTUP_HOME` so cargo finds
+its toolchain and its registry cache, with `//:cargo_workspace_files` supplying the manifests
+and sources cargo reads off disk. That is a hole in the hermeticity of `bazel test //...` —
+the compiler, its version resolution and the resolved third-party crates come from the
+developer's machine rather than the build graph — and it is why CI still installs a Rust
+toolchain and needs a warm registry cache for `--offline` resolution.
 
-The pure-Rust serde configuration — the consumer resolves fltk's runtime crates in their own
-crate hub so their `#[derive(Deserialize)]` structs and `fltk-serde-core` share one serde
-instance — is a supported configuration with no in-tree exercise: it ships as the recipe in
-`docs/bazel-consumer-guide.md` §6 and nothing in CI builds it. The obvious fixture was tried and
-refused: a `tests/bazel_consumer` `crate.from_cargo` hub over path deps into `../../crates` fails
-in crate_universe's splicer, which rewrites dependency paths relative to the module directory
-(`failed to read /crates/fltk-ast-core/Cargo.toml`), and relocating the crates by symlink makes
-them resolve their workspace root to the consumer manifest and fail on the inherited
-`regex-automata` pin. A git dep would pin a published commit rather than the working tree under
-test. So a fix needs a mechanism decision (a second hub whose manifest mirrors the workspace pins,
-a vendored mini-hub, or accepting downstream-only verification and saying so), not just an
-implementation. What is covered today: the trait-coherence semantics on the cargo side
-(`tests/rust_parser_fixture/src/de_tests.rs`) and extension-mode serde under Bazel
-(`consumer_serde_native`). What is not: the Bazel recipe itself — hub manifest shape, crate
-labels, `default-features = false` on the cst-core edge, the pin-lockstep rule — any of which can
-go stale with no test failing. Done = either a CI-run target builds a consumer-hub serde crate
-against the runtime crates, or the guide states plainly that this configuration is verified only
-downstream and names the consumer that does it. Location:
-`tests/bazel_consumer/BUILD.bazel` (the serde section).
+The hermetic replacement is to compile the generated crates through rules_rust instead: the
+grammar shapes become codegen targets, the hand-written `#[test]` modules become `rust_test`s
+over them, and the runtime crates come in as Bazel rlibs. What that costs is one target per
+shape declared in Starlark instead of a `Case` dataclass in Python, and a way to express the
+negative cases (a shape that must *fail* to compile is a test the build graph cannot hold
+directly).
+
+The gates also keep their build directories outside the sandbox
+(`tests/generated_rust_gate.py`'s `cargo_target_dir`, one persistent directory per gate under
+`$XDG_CACHE_HOME`/`$HOME`), because Bazel's per-run scratch space would make each one recompile
+the runtime crates every time any of them changes. The rules_rust replacement must not inherit
+that: its build outputs belong in bazel-out, and this helper goes away with the cargo lane.
+
+Done = no pytest target carries `requires-cargo`, and `cargo` is not needed to run
+`bazel test //...`. Location: `tests/BUILD.bazel` (`_CARGO_GATE`),
+`tests/generated_rust_gate.py`, `BUILD.bazel` (`:cargo_workspace_files`) and the
+`cargo_gate_files` filegroups in each runtime crate.
+
+## `bazel-consumer-pyo3-seam`
+
+`pyo3_extension_py_library` is exported from `rust.bzl` and published in
+`docs/bazel-consumer-guide.md` §4 as the "if you compile the cdylib yourself" recipe, but no
+target outside fltk's own module exercises it, and it is not clear one can. A hand-assembled
+cdylib needs a direct `pyo3` dependency for the generated `#[pyclass]` code, and it must be the
+*same* pyo3 instance that `@fltk//crates/fltk-cst-core` links, or the `Bound<'_, PyModule>` types
+in the generated `register_classes` come from two different crates. In-repo the fixtures name
+`@fltk_crates//:pyo3` directly; a downstream module cannot — crate-hub repos are module-local,
+and there is no injection seam for pyo3 the way `//crates/fltk-serde-core:serde` is one for serde.
+
+So the recipe is either missing a seam (a `label_flag`/alias making fltk's pyo3 nameable
+cross-module, mirroring the serde one) or missing a documented constraint. Deciding which is a
+consumer-surface design call, not a test to add. Done = the guide's §4 recipe is exercised by a
+target in `tests/bazel_consumer/` that loads `pyo3_extension_py_library` through `@fltk//:rust.bzl`
+and imports the resulting module from a `py_test`. Location: `tests/bazel_consumer/BUILD.bazel`,
+`rust.bzl` (`pyo3_extension_py_library`), `docs/bazel-consumer-guide.md` §4.
+
+## `uv-retired-agent-hook`
+
+`.claude/settings.json`'s `PostToolUse` hook still shells out to uv to format the edited file
+(`... ruff format "$file_path" 2>/dev/null || echo "Formatting completed"`) after every Python
+edit — spelled out in the file, and deliberately not repeated here, because this doc is one of
+the surfaces the retirement gate scans. uv is retired: `pyproject.toml` declares no project and
+no `[tool.uv]` table, and the uv lockfile is gone. On a machine
+without uv the command fails, stderr is discarded, and the `|| echo` reports success while
+formatting nothing; on a machine with uv installed globally it formats with whatever ruff an
+ad-hoc environment resolves, which is not the hub-pinned ruff `//:ruff_format_check` and
+`tests/test_seed_fixed_point.py` enforce — so the hook can produce bytes the lint lane rejects.
+
+Close it by pointing the hook at the pinned toolchain (`//:ruff_fix` currently formats the whole
+workspace and takes no path argument, so this is either a new per-file target or dropping the
+hook in favour of `make fix`) and dropping the failure mask, then adding `.claude/settings.json`
+to `//:repo_tooling_files` so a regression is red. Deferred rather than fixed in review: the file
+configures the repo owner's agent harness, which is the owner's call and not an implementation
+detail of this migration. Location: `.claude/settings.json` (the `PostToolUse` command),
+`BUILD.bazel` (`:repo_tooling_files`), `tests/test_uv_retirement.py`
+(`test_tooling_config_invokes_no_uv`).

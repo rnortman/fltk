@@ -1,11 +1,6 @@
-.PHONY: check check-ci check-common lint format-check typecheck test cargo-check cargo-test cargo-clippy \
-        cargo-test-no-python cargo-clippy-no-python check-no-pyo3 cargo-deny \
-        cargo-test-python-features check-locks check-bazel-locks regen-locks bazel-toolchain-guard \
-        bazel-check bazel-clippy bazel-consumer-check \
-        build-native build-test-user-ext build-fegen-rust-cst build-rust-parser-fixture \
-        build-test-fixtures build-poc-cst gen-rust-cst gen-rust-parser gen-rust-unparser \
-        gen-ast gen-rust-ast gen-rust-serde \
-        build-fegen-rust-parser test-native-parser test-rust-parser-fixture fix gencode
+.PHONY: check check-ci check-common cargo-deny \
+        check-cargo-lock check-bazel-locks bazel-toolchain-guard \
+        bazel-test bazel-lint bazel-consumer-check fix regen-seed
 
 # ══════════════════════════════════════════════════════════════════════════════
 # CHECK TARGET FAMILY — READ BEFORE TOUCHING
@@ -44,19 +39,19 @@
 # (no duplicated literal to drift).  ORDER IS LOAD-BEARING, and the rule behind it is
 # general: a step that only DIFFS a generated file must run after the step that REWRITES
 # it, or it passes vacuously on the stale committed copy.
-#   - check-locks must run AFTER test.  The maturin builds under `test` re-resolve a stale
-#     Cargo.lock in place (cargo without --locked), and the check-locks git diff is what
-#     catches that rewrite — so it has to run afterward to see it.
-#   - check-bazel-locks must run AFTER bazel-check and bazel-consumer-check, and therefore
+#   - check-bazel-locks must run AFTER bazel-test and bazel-consumer-check, and therefore
 #     stays LAST.  Those two lanes are the writer that repairs a stale MODULE.bazel.lock in
-#     place (bzlmod's default lockfile_mode is `update`), exactly as the maturin builds are
-#     for Cargo.lock.  A new step appended after it that rewrites a lockfile would reopen
-#     the blind spot; put such a step before it.
-# TODO(bazel-dogfood-checks): pytest, ruff, pyright and rustfmt still run outside Bazel here.
-CHECK_STEPS := lint format-check typecheck test cargo-check cargo-clippy cargo-test \
-               cargo-test-python-features cargo-test-no-python cargo-clippy-no-python \
-               check-no-pyo3 check-locks bazel-check bazel-clippy bazel-consumer-check \
-               check-bazel-locks
+#     place (bzlmod's default lockfile_mode is `update`).  A new step appended after it that
+#     rewrites a lockfile would reopen the blind spot; put such a step before it.
+#   - Nothing rewrites a Cargo.lock: no cargo build step survives, and every cargo command
+#     left in the tree passes --locked.  check-cargo-lock therefore carries its own staleness
+#     probe rather than depending on an earlier step.
+#
+# Three Bazel lanes plus two lock diffs is the whole gate: `bazel test //...` runs every
+# test (Python, Rust, Starlark) and `bazel build --config lint //...` runs every linter, so
+# a step that duplicates either belongs in the build graph instead of here.
+CHECK_STEPS := bazel-toolchain-guard bazel-test bazel-lint bazel-consumer-check \
+               check-cargo-lock check-bazel-locks
 
 check-common:
 	@steps="$(CHECK_STEPS)"; \
@@ -97,169 +92,73 @@ check: check-ci
 # add them to check-common so `check` (local) also picks them up.
 check-ci: check-common
 
-lint:
-	uv run --group lint --group test ruff check -q .
-
-format-check:
-	uv run --group lint ruff format --check -q .
-
+# All ruff invocations (fix, check, format) share the same pin and config.
 fix:
-	uv run --group lint ruff check --fix .
-	uv run --group lint ruff format .
+	bazel run //:ruff_fix
 
-typecheck:
-	uv run --group lint --group test pyright
+# Regenerate the committed self-hosting seed (fltk_cst.py, fltk_cst_protocol.py,
+# fltk_parser.py, fltk_trivia_parser.py) from fegen.fltkg.  Run it after editing
+# fegen.fltkg or a Python-backend generator; tests/test_seed_fixed_point.py fails when
+# the committed seed and the generator disagree.  Output is already normalized.
+regen-seed:
+	bazel run //:regen_seed
 
-# Aggregate target: build every native extension the Python test suite requires.
-# Wire this as a prerequisite of `test` so `make test` and `make check` (which
-# calls $(MAKE) test) always build fixtures before running pytest — no stale-SO risk.
-# TODO(bazel-test-fixture-builds): these ad-hoc builds sit outside any dependency graph, so a
-# bare `uv run pytest` after a generator change tests stale cdylibs.
-build-test-fixtures: build-native build-test-user-ext build-fegen-rust-cst build-rust-parser-fixture build-poc-cst
+# The pytest suite runs under Bazel: one py_test per file, each depending on the extension
+# modules it imports, so there is no lane in which a stale cdylib can be imported.  Run the
+# whole suite with `make bazel-test`, or one file with `bazel test //tests:test_<name>`.
 
-test: build-test-fixtures
-	uv run --group lint --group test pytest -q
-
-# --workspace is load-bearing in the python-on lanes below. The root Cargo.toml is both
-# the workspace root AND a package (fltk-native), so cargo's default selection is that one
-# package -- a bare `cargo check/test/clippy` here silently skips every other member.
-# Without it fltk-unparser-core and fltk-fmt-cli were never compiled, linted, or tested,
-# and cargo-test ran zero tests. It also keeps new workspace members covered by default.
-# The python-off lane further down deliberately keeps -p selection; see its comment.
-
-# cargo-check: fast compile for the workspace. Test-crate per-feature checks are omitted
-# here because cargo-clippy (a strict superset of cargo-check) already covers them at the
-# same feature sets; running both in make check would double-compile each fixture crate.
-cargo-check:
-	cargo check -q --locked --workspace
-
-cargo-test:
-	cargo test -q --locked --workspace
-
-# Run fltk-cst-core tests with the python feature enabled, linking libpython via a uv-managed
-# interpreter (python-build-standalone ships the unversioned libpython3.10.so required to link).
-# PYO3_PYTHON points pyo3's build script at the managed interpreter; it emits the correct
-# rustc-link-search automatically — no build.rs or RUSTFLAGS needed.
+# There are no cargo build/test/lint lanes.  Every crate in the tree has Bazel targets in
+# both of its feature flavors, so `bazel test //...` compiles and runs them and the
+# rules_rust clippy aspect in `bazel build --config lint //...` lints them — over strictly
+# more configurations than the retired lanes covered (the fegen-rust, fltkfmt and fixture
+# crates have no Cargo manifest at all).  The feature carve-outs the cargo lanes used to own
+# are named targets now: //crates/fltk-ast-core:no_features_test (every feature off, the only
+# build compiling the `cfg(not(feature = "indexmap"))` arms — the uuid and decimal gates are
+# additive, so the all-features flavor subsumes the default one),
+# //crates/fltk-cst-core:python_test (the `python` feature set), and every crate's
+# :no_python_test.  check-no-pyo3 is gone the same way: the cquery loop in bazel-test below
+# asserts the same property over every :no_python target and every rust_binary.
 #
-# `env -u VIRTUAL_ENV` is required: with a venv active, `uv python find --managed-python` returns
-# the venv's interpreter (a system python whose LIBDIR lacks the unversioned libpython3.10.so),
-# and the link fails. Stripping VIRTUAL_ENV forces resolution to a managed standalone regardless
-# of whether the caller's shell has the venv activated.
-cargo-test-python-features:
-	@PYO3_PYTHON=$$(env -u VIRTUAL_ENV uv python find --managed-python --no-project 3.10); \
-	if [ -z "$$PYO3_PYTHON" ]; then \
-	    echo "cargo-test-python-features: no uv-managed CPython 3.10 found. Run: uv python install cpython-3.10"; \
-	    exit 1; \
-	fi; \
-	PYO3_PYTHON=$$PYO3_PYTHON cargo test -q --locked -p fltk-cst-core --features python
+# cargo itself is still required: cargo-deny runs on it, check-cargo-lock probes with it, and
+# the three compile-gate py_tests hand a throwaway crate to it.  Those gates resolve
+# --offline, and no step here fetches anymore, so a fresh clone (and CI) needs one
+# `cargo fetch --locked` to warm the registry cache.
 
-# cargo-clippy covers test crates at their python-on feature set (the only non-default
-# feature that adds code; default features for fegen-rust are already python-on).
-cargo-clippy:
-	cargo clippy -q --locked --workspace --all-targets -- -D warnings
-	cargo clippy -q --locked --manifest-path crates/fegen-rust/Cargo.toml --all-targets -- -D warnings
-	cargo clippy -q --locked --manifest-path tests/rust_poc_cst/Cargo.toml --all-targets -- -D warnings
-	cargo clippy -q --locked --manifest-path tests/rust_parser_fixture/Cargo.toml --all-targets --features python -- -D warnings
-	# rust_cst_fixture's pyo3 dep is non-optional (no python-off configuration to lint),
-	# so it appears only here, at its default (extension-module) feature set.
-	cargo clippy -q --locked --manifest-path tests/rust_cst_fixture/Cargo.toml --all-targets -- -D warnings
-
-# python-off lane: feature isolation requires -p selection (workspace unification would
-# re-enable pyo3 via fltk-native's dependency).
-cargo-test-no-python:
-	cargo test -q --locked -p fltk-cst-core --no-default-features
-	cargo test -q --locked -p fltk-parser-core
-	# fltk-ast-core three times: the workspace lanes above cover its default (indexmap-on)
-	# feature set, the --no-default-features line is what keeps "a consumer with no keyed
-	# collections can drop indexmap" compiling, and --all-features is the only lane that
-	# compiles the uuid and decimal scalar builtins at all.
-	cargo test -q --locked -p fltk-ast-core
-	cargo test -q --locked -p fltk-ast-core --no-default-features
-	cargo test -q --locked -p fltk-ast-core --all-features
-	# fltk-serde-core has no features: the workspace lane above compiles it, and this line is
-	# what keeps it compiling and passing with pyo3 out of the graph.
-	cargo test -q --locked -p fltk-serde-core
-	cargo test -q --locked --manifest-path tests/rust_parser_fixture/Cargo.toml
-	cargo test -q --locked --manifest-path crates/fegen-rust/Cargo.toml --no-default-features
-	cargo test -q --locked --manifest-path tests/rust_poc_cst/Cargo.toml --no-default-features
-	cargo test -q --locked --manifest-path crates/fltkfmt/Cargo.toml
-
-# The python-off crates whose every target the bazel-clippy aspect visits at the same
-# feature set with the same -D warnings gate are linted there, not here:
-#   fltk-cst-core  (:no_python == --no-default-features) and its unit tests
-#   fltk-parser-core (:no_python) + its unit tests + tests/memo_toy.rs
-#   fltk-ast-core --all-features (the Bazel targets turn all three features on) + tests
-#   fltk-serde-core (:no_python) + its unit tests
-#   fltk-unparser-core, fltk-fmt-cli (single flavor, also in the workspace lane above)
-# What stays below is what has no Bazel target to visit: fltk-ast-core with its features
-# OFF, and the out-of-workspace manifests Bazel does not build.
-cargo-clippy-no-python:
-	cargo clippy -q --locked -p fltk-ast-core --no-default-features --all-targets -- -D warnings
-	cargo clippy -q --locked --manifest-path tests/rust_parser_fixture/Cargo.toml --all-targets -- -D warnings
-	cargo clippy -q --locked --manifest-path crates/fegen-rust/Cargo.toml --no-default-features --all-targets -- -D warnings
-	cargo clippy -q --locked --manifest-path tests/rust_poc_cst/Cargo.toml --no-default-features --all-targets -- -D warnings
-	cargo clippy -q --locked --manifest-path crates/fltkfmt/Cargo.toml --all-targets -- -D warnings
-	# python-on clippy for rust_poc_cst is covered by cargo-clippy (default features = extension-module)
-
-# Mechanical check: verify pyo3 is absent from the python-off dependency graphs.
-# Uses a positive control (a crate guaranteed present in that graph) before the negative
-# assertion to prevent false passes when cargo tree fails silently.
-check-no-pyo3:
+# Cargo lock drift gate.  `cargo metadata --locked` is the staleness detector: nothing in
+# the tree rewrites a Cargo.lock anymore, so the git diff below cannot see a lock that no
+# step regenerated -- each tracked manifest is asked directly whether its lock still
+# resolves, and --locked makes a stale one an error rather than a silent repair.  The diff
+# then catches a lock edited by hand or left half-staged.
+#
+# requirements_lock.txt is deliberately absent: //:requirements.test is its gate, and it
+# runs inside `make bazel-test`.
+#
+# The manifest set is DERIVED from the tracked Cargo.lock files rather than written out here,
+# the same way bazel-toolchain-guard derives its mirror list: a hand-written list covers what
+# it happens to name, so a crate that later regains a tracked lock would drift with both halves
+# of the gate agreeing that it does not exist.  A derivation that ends up checking nothing
+# fails rather than passing vacuously.
+#
+# The same derived set pins .github/dependabot.yml's cargo `directories`, which is otherwise a
+# hand-written restatement of it: a manifest that gains a tracked lock would be probed and
+# diffed here but never receive dependency updates, and a directory that leaves the tree would
+# make the updater error out weekly on a file nobody reads.
+check-cargo-lock:
 	@set -e; \
-	core="$$(cargo tree --locked -p fltk-cst-core --no-default-features --edges normal,build)"; \
-	echo "$$core" | grep -q fltk-cst-core || { echo "FAIL: check-no-pyo3 broken: cargo tree output lacks fltk-cst-core"; exit 1; }; \
-	! echo "$$core" | grep -q pyo3 || { echo "FAIL: pyo3 present in fltk-cst-core --no-default-features graph"; exit 1; }; \
-	core_default="$$(cargo tree --locked -p fltk-cst-core --edges normal,build)"; \
-	echo "$$core_default" | grep -q fltk-cst-core || { echo "FAIL: check-no-pyo3 broken: cargo tree output lacks fltk-cst-core"; exit 1; }; \
-	! echo "$$core_default" | grep -q pyo3 || { echo "FAIL: pyo3 present in the fltk-cst-core DEFAULT graph; the python feature must stay opt-in"; exit 1; }; \
-	parser="$$(cargo tree --locked -p fltk-parser-core --edges normal,build)"; \
-	echo "$$parser" | grep -q fltk-cst-core || { echo "FAIL: check-no-pyo3 broken: cargo tree output lacks fltk-cst-core"; exit 1; }; \
-	! echo "$$parser" | grep -q pyo3 || { echo "FAIL: pyo3 present in fltk-parser-core dependency graph"; exit 1; }; \
-	ast="$$(cargo tree --locked -p fltk-ast-core --edges normal,build)"; \
-	echo "$$ast" | grep -q fltk-cst-core || { echo "FAIL: check-no-pyo3 broken: cargo tree output lacks fltk-cst-core"; exit 1; }; \
-	! echo "$$ast" | grep -q pyo3 || { echo "FAIL: pyo3 present in fltk-ast-core dependency graph"; exit 1; }; \
-	ast_all="$$(cargo tree --locked -p fltk-ast-core --all-features --edges normal,build)"; \
-	echo "$$ast_all" | grep -q fltk-cst-core || { echo "FAIL: check-no-pyo3 broken: cargo tree output lacks fltk-cst-core"; exit 1; }; \
-	! echo "$$ast_all" | grep -q pyo3 || { echo "FAIL: pyo3 present in fltk-ast-core --all-features graph"; exit 1; }; \
-	serde="$$(cargo tree --locked -p fltk-serde-core --edges normal,build)"; \
-	echo "$$serde" | grep -q fltk-cst-core || { echo "FAIL: check-no-pyo3 broken: cargo tree output lacks fltk-cst-core"; exit 1; }; \
-	! echo "$$serde" | grep -q pyo3 || { echo "FAIL: pyo3 present in fltk-serde-core dependency graph"; exit 1; }; \
-	fixture="$$(cargo tree --locked --manifest-path tests/rust_parser_fixture/Cargo.toml --edges normal,build)"; \
-	echo "$$fixture" | grep -q fltk-parser-core || { echo "FAIL: check-no-pyo3 broken: cargo tree output lacks fltk-parser-core"; exit 1; }; \
-	! echo "$$fixture" | grep -q pyo3 || { echo "FAIL: pyo3 present in rust_parser_fixture default-features graph"; exit 1; }; \
-	fegen="$$(cargo tree --locked --manifest-path crates/fegen-rust/Cargo.toml --no-default-features --edges normal,build)"; \
-	echo "$$fegen" | grep -q fltk-parser-core || { echo "FAIL: check-no-pyo3 broken: cargo tree output lacks fltk-parser-core"; exit 1; }; \
-	! echo "$$fegen" | grep -q pyo3 || { echo "FAIL: pyo3 present in fegen-rust --no-default-features graph"; exit 1; }; \
-	poc="$$(cargo tree --locked --manifest-path tests/rust_poc_cst/Cargo.toml --no-default-features --edges normal,build)"; \
-	echo "$$poc" | grep -q fltk-cst-core || { echo "FAIL: check-no-pyo3 broken: cargo tree output lacks fltk-cst-core"; exit 1; }; \
-	! echo "$$poc" | grep -q pyo3 || { echo "FAIL: pyo3 present in rust_poc_cst --no-default-features graph"; exit 1; }; \
-	fltkfmt="$$(cargo tree --locked --manifest-path crates/fltkfmt/Cargo.toml --edges normal,build)"; \
-	echo "$$fltkfmt" | grep -q fltk-parser-core || { echo "FAIL: check-no-pyo3 broken: cargo tree output lacks fltk-parser-core"; exit 1; }; \
-	! echo "$$fltkfmt" | grep -q pyo3 || { echo "FAIL: pyo3 present in fltkfmt dependency graph"; exit 1; }; \
-	echo "check-no-pyo3: pyo3 absent from python-off graphs"
-
-# Single writer for the Python/Bazel lock surface: regenerate uv.lock and the
-# Bazel requirements_lock.txt from pyproject.toml/uv.lock.  The uv export command
-# is the exact one recorded in requirements_lock.txt's header — keep them identical.
-# Dependabot uv PRs bump pyproject.toml/uv.lock only; run this on the branch to
-# complete them (check-locks fails until requirements_lock.txt is regenerated).
-regen-locks:
-	uv lock
-	uv export --format requirements-txt --no-editable --no-dev --no-emit-project --extra lsp --output-file requirements_lock.txt
-
-# Lock drift gate.  Regenerate-in-place + git diff --exit-code (the gencode
-# pattern): fails if uv.lock, requirements_lock.txt, or any tracked Cargo.lock
-# differs from what the current manifests resolve to.  A temp-file diff can't be
-# used because the uv-export header embeds the output path.  Runs after `test` in
-# CHECK_STEPS, so any Cargo.lock a maturin build silently re-resolved surfaces here.
-check-locks:
-	uv lock --check
-	$(MAKE) regen-locks
-	git diff --exit-code -- uv.lock requirements_lock.txt Cargo.lock \
-		crates/fegen-rust/Cargo.lock crates/fltkfmt/Cargo.lock \
-		tests/rust_cst_fixture/Cargo.lock tests/rust_parser_fixture/Cargo.lock \
-		tests/rust_poc_cst/Cargo.lock \
-		|| { echo "FAIL: lockfiles drifted; commit the regenerated files"; exit 1; }
+	locks="$$(git ls-files '*Cargo.lock')"; \
+	test -n "$$locks" || { echo "FAIL: no tracked Cargo.lock found; check-cargo-lock is checking nothing"; exit 1; }; \
+	for lock in $$locks; do \
+	    manifest="$${lock%Cargo.lock}Cargo.toml"; \
+	    cargo metadata --locked --format-version 1 --manifest-path $$manifest >/dev/null \
+	        || { echo "FAIL: $$manifest and its lockfile disagree; re-resolve it (cargo metadata --manifest-path $$manifest) and commit the result"; exit 1; }; \
+	done; \
+	derived="$$(for lock in $$locks; do dir="$${lock%Cargo.lock}"; printf '/%s\n' "$${dir%/}"; done | sort)"; \
+	declared="$$(awk '/package-ecosystem:/ { cargo = ($$0 ~ /"cargo"/); dirs = 0 } cargo && /^ *directories:/ { dirs = 1; next } dirs { if ($$0 ~ /^ *- "/) { sub(/^ *- "/, ""); sub(/".*$$/, ""); print } else { dirs = 0 } }' .github/dependabot.yml | sort)"; \
+	test -n "$$declared" || { echo "FAIL: .github/dependabot.yml declares no cargo directories; the manifests get no dependency updates"; exit 1; }; \
+	test "$$derived" = "$$declared" || { echo "FAIL: the cargo updater covers [$$declared] but the tracked locks live in [$$derived]; update .github/dependabot.yml"; exit 1; }
+	@set -e; \
+	git diff --exit-code -- $$(git ls-files '*Cargo.lock') \
+	    || { echo "FAIL: lockfiles drifted; commit the regenerated files"; exit 1; }
 
 # Bazel lock drift gate.  MODULE.bazel.lock and tests/bazel_consumer/MODULE.bazel.lock are
 # tracked, generated files, and bzlmod's default lockfile_mode is `update`: a Bazel run
@@ -267,8 +166,7 @@ check-locks:
 # be committed.  The Bazel lanes above are the regenerating half of the usual
 # regenerate-in-place + diff pattern, which is why this step is a pure diff and why it runs
 # last (see the CHECK_STEPS comment).  Run standalone without a prior Bazel run it passes
-# vacuously, exactly as check-locks does for a Cargo.lock no maturin build has rewritten;
-# `make check` is the gate that clears these.
+# vacuously; `make check` is the gate that clears these.
 check-bazel-locks:
 	git diff --exit-code -- MODULE.bazel.lock tests/bazel_consumer/MODULE.bazel.lock \
 		|| { echo "FAIL: Bazel lockfiles drifted; commit the regenerated files"; exit 1; }
@@ -303,39 +201,52 @@ bazel-toolchain-guard:
 # to link, which leaves any unlinked :no_python target (fltk-serde-core's, today) with no
 # gate at all — and a :no_python target whose deps point at the python flavor still builds
 # and still passes its tests, it just links libpython.
-bazel-check: bazel-toolchain-guard
+#
+# The query spans //... rather than //crates/...: the fixture extensions under tests/ carry
+# :no_python flavors of their own.  It also takes in every rust_binary, which is the only way
+# fltkfmt is covered: it is a pure-Rust binary rather than a two-flavor library, so it has no
+# target named no_python, and swapping its fegen dependency to the python flavor would
+# otherwise link libpython with nothing objecting.
+bazel-test: bazel-toolchain-guard
 	bazel test //...
 	@set -e; \
 	err="$$(mktemp)"; trap 'rm -f "$$err"' EXIT; \
-	labels="$$(bazel query 'attr(name, "^no_python$$", //crates/...)' 2>"$$err")" \
-	    || { echo "FAIL: bazel-check broken: query for :no_python targets failed"; cat "$$err"; exit 1; }; \
-	test -n "$$labels" || { echo "FAIL: bazel-check broken: no //crates/*:no_python targets found"; exit 1; }; \
+	labels="$$(bazel query 'attr(name, "^no_python$$", //...) union kind("rust_binary rule", //...)' 2>"$$err")" \
+	    || { echo "FAIL: bazel-test broken: query for pyo3-free targets failed"; cat "$$err"; exit 1; }; \
+	test -n "$$labels" || { echo "FAIL: bazel-test broken: no pyo3-free targets found"; exit 1; }; \
 	for target in $$labels; do \
 	    graph="$$(bazel cquery "deps($$target)" 2>"$$err")" \
-	        || { echo "FAIL: bazel-check broken: cquery for $$target failed"; cat "$$err"; exit 1; }; \
+	        || { echo "FAIL: bazel-test broken: cquery for $$target failed"; cat "$$err"; exit 1; }; \
 	    echo "$$graph" | grep -q 'fltk-cst-core:no_python' \
-	        || { echo "FAIL: bazel-check broken: cquery output for $$target lacks fltk-cst-core:no_python"; cat "$$err"; exit 1; }; \
+	        || { echo "FAIL: bazel-test broken: cquery output for $$target lacks fltk-cst-core:no_python"; cat "$$err"; exit 1; }; \
 	    ! echo "$$graph" | grep -qi pyo3 \
 	        || { echo "FAIL: pyo3 present in the $$target Bazel graph"; exit 1; }; \
-	    echo "bazel-check: pyo3 absent from $$target"; \
+	    echo "bazel-test: pyo3 absent from $$target"; \
 	done
 
-# Clippy over everything Bazel builds, via the rules_rust aspect (config in .bazelrc).
-# `-D warnings` comes from the clippy_flags setting, matching the cargo lanes' gate;
-# without it clippy prints and passes.
-bazel-clippy: bazel-toolchain-guard
-	bazel build --config=clippy //...
+# The whole lint surface, via one Bazel invocation (config in .bazelrc): the rules_rust
+# clippy aspect over every Rust target, plus the flag-gated Python lint targets
+# (//:ruff_check, //:ruff_format_check, //:pyright).  `-D warnings` comes from the
+# clippy_flags setting; without it clippy prints and passes.
+bazel-lint: bazel-toolchain-guard
+	bazel build --config lint //...
 
 # Bazel verification lane for fltk's CONSUMER surface: exercises the cross-module
 # @fltk// load path that `bazel test //...` in the root cannot cover (same-repo //).
 #
-# The cquery step is the Bazel-side twin of check-no-pyo3: //:consumer_ast and
-# //:consumer_fmt_bin are the pure-Rust consumer configurations (AST and unparser/formatter),
-# and a pyo3 edge reaching either means a runtime crate's :no_python flavor started carrying
-# the python one.  Nothing about the build fails when that happens — the crate still compiles,
-# it just links libpython — so the assertion is the only witness.  Positive control first, for
-# the same reason the cargo lane has one: a silently failing cquery would otherwise pass the
-# negative assertion vacuously.
+# The cquery step is the consumer-side twin of the pyo3 guard in bazel-test: //:consumer_ast
+# and //:consumer_fmt_bin are the pure-Rust consumer configurations (AST and
+# unparser/formatter), and a pyo3 edge reaching either means a runtime crate's :no_python
+# flavor started carrying the python one.  Nothing about the build fails when that happens —
+# the crate still compiles, it just links libpython — so the assertion is the only witness.
+# Positive control first: a silently failing cquery would otherwise pass the negative
+# assertion vacuously.
+#
+# The second cquery step is the serde-injection twin: //:consumer_serde must be on the consumer
+# module's own hub serde and on no other, which is what proves the
+# //crates/fltk-serde-core:serde flag reaches fltk-serde-core.  Unlike the pyo3 assertion this
+# one has a build-time backstop (a mixed graph does not compile), so it is here to name the
+# failure rather than to be the only witness of it.
 #
 # cquery's stderr goes to a file rather than /dev/null so the ordinary progress output stays
 # out of a passing run while the reason for a failing one (analysis error, renamed label,
@@ -345,7 +256,7 @@ bazel-consumer-check: bazel-toolchain-guard
 	cd tests/bazel_consumer && bazel test //...
 	@set -e; cd tests/bazel_consumer; \
 	err="$$(mktemp)"; trap 'rm -f "$$err"' EXIT; \
-	for target in //:consumer_ast //:consumer_fmt_bin; do \
+	for target in //:consumer_ast //:consumer_fmt_bin //:consumer_serde; do \
 	    graph="$$(bazel cquery "deps($$target)" 2>"$$err")" \
 	        || { echo "FAIL: bazel-consumer-check broken: cquery for $$target failed"; cat "$$err"; exit 1; }; \
 	    echo "$$graph" | grep -q 'fltk-cst-core:no_python' \
@@ -354,203 +265,33 @@ bazel-consumer-check: bazel-toolchain-guard
 	        || { echo "FAIL: pyo3 present in the $$target Bazel graph"; exit 1; }; \
 	    echo "bazel-consumer-check: pyo3 absent from $$target"; \
 	done
+	@set -e; cd tests/bazel_consumer; \
+	err="$$(mktemp)"; trap 'rm -f "$$err"' EXIT; \
+	graph="$$(bazel cquery "deps(//:consumer_serde)" 2>"$$err")" \
+	    || { echo "FAIL: bazel-consumer-check broken: cquery for //:consumer_serde failed"; cat "$$err"; exit 1; }; \
+	echo "$$graph" | grep -q 'consumer_crates.*:serde' \
+	    || { echo "FAIL: bazel-consumer-check broken: //:consumer_serde links no serde from the consumer hub"; cat "$$err"; exit 1; }; \
+	! echo "$$graph" | grep -q 'fltk_crates.*:serde' \
+	    || { echo "FAIL: fltk's own serde is in the //:consumer_serde graph; the serde flag is not reaching fltk-serde-core"; exit 1; }; \
+	echo "bazel-consumer-check: //:consumer_serde is on the consumer hub's serde alone"
 
 # Supply-chain gate: RustSec advisories, license allow-list, banned/duplicate crates,
-# and source allow-listing (cargo-deny). The standalone fixture crates have their own
-# Cargo.lock, so each is checked explicitly; all share the single root deny.toml policy
-# via --config (path resolves from cwd = repo root).
+# and source allow-listing (cargo-deny). The two tracked lockfiles are the root workspace's
+# and the consumer module's serde hub; both share the single root deny.toml policy via --config
+# (path resolves from cwd = repo root).  The Bazel-only crates draw their third-party deps
+# from the root lock through @fltk_crates, so they are covered by the first line.
 cargo-deny:
 	cargo deny --manifest-path Cargo.toml check --config deny.toml
-	cargo deny --manifest-path crates/fegen-rust/Cargo.toml check --config deny.toml
-	cargo deny --manifest-path tests/rust_cst_fixture/Cargo.toml check --config deny.toml
-	cargo deny --manifest-path tests/rust_parser_fixture/Cargo.toml check --config deny.toml
-	cargo deny --manifest-path tests/rust_poc_cst/Cargo.toml check --config deny.toml
-	cargo deny --manifest-path crates/fltkfmt/Cargo.toml check --config deny.toml
+	cargo deny --manifest-path tests/bazel_consumer/serde_hub/Cargo.toml check --config deny.toml
 
-# ── FLTK-internal Rust artifact targets ──────────────────────────────────────
-# These build FLTK's own test/dogfooding Rust artifacts.
-# They are NOT the user build recipe; see docs/ for the user build guide.
-
-# Build the fltk._native extension (compiles all committed src/*.rs).
-build-native:
-	uv run --group dev maturin develop
-
-# Build FLTK's committed standalone non-FLTK fixture extension (separate cdylib crate).
-# Produces the importable module 'phase4_roundtrip_cst' used by Tier-2 tests.
-build-test-user-ext:
-	cd tests/rust_cst_fixture && uv run --group dev maturin develop
-
-# Build FLTK's fegen Rust CST extension (separate cdylib crate).
-# Produces the importable module 'fegen_rust_cst' used by the Tier-2 tests
-# (real Cst2Gsm on the Rust fegen backend, cross-backend label equality).
-build-fegen-rust-cst:
-	cd crates/fegen-rust && uv run --group dev maturin develop
-
-# Build the fixture Rust parser extension (separate cdylib crate).
-# Produces the importable module 'rust_parser_fixture' used by parity tests.
-build-rust-parser-fixture:
-	cd tests/rust_parser_fixture && uv run --group dev maturin develop --features extension-module
-
-# Build the PoC CST fixture extension (separate cdylib crate).
-# Produces the importable module 'poc_cst' used by PoC CST tests.
-build-poc-cst:
-	cd tests/rust_poc_cst && uv run --group dev maturin develop
-
-# Emit Rust CST source from a grammar (no compilation).
-# Usage: make gen-rust-cst GRAMMAR=path/to/grammar.fltkg RS_OUT=path/to/output.rs [EXTRA_ARGS=...]
-gen-rust-cst:
-	uv run python -m fltk.fegen.genparser gen-rust-cst $(GRAMMAR) $(RS_OUT) $(EXTRA_ARGS)
-
-# Emit Rust parser source from a grammar (no compilation).
-# Usage: make gen-rust-parser GRAMMAR=path/to/grammar.fltkg RS_OUT=path/to/output.rs
-gen-rust-parser:
-	uv run python -m fltk.fegen.genparser gen-rust-parser $(GRAMMAR) $(RS_OUT)
-
-# Emit Rust unparser source from a grammar (no compilation).
-# Usage: make gen-rust-unparser GRAMMAR=path/to/grammar.fltkg RS_OUT=path/to/output.rs [EXTRA_ARGS=...]
-gen-rust-unparser:
-	uv run python -m fltk.fegen.genparser gen-rust-unparser $(GRAMMAR) $(RS_OUT) $(EXTRA_ARGS)
-
-# Emit a Python AST module (BASE_ast.py) from a grammar.
-# CST_MODULE is the import path of the grammar's generated CST module (make it with
-# `genparser generate` first).  EXTRA_ARGS carries --parser-module / --unparser-module / --goal.
-# Usage: make gen-ast GRAMMAR=path/to/grammar.fltkg BASE=mylang CST_MODULE=pkg.mylang_cst \
-#            OUT_DIR=pkg [EXTRA_ARGS=...]
-gen-ast:
-	uv run python -m fltk.fegen.genparser gen-ast $(GRAMMAR) $(BASE) $(CST_MODULE) \
-		--output-dir $(OUT_DIR) $(EXTRA_ARGS)
-
-# Emit a Rust AST module (ast.rs) from a grammar (no compilation).
-# The module references the grammar's generated Rust CST module (--cst-mod-path, default
-# super::cst), so emit that with gen-rust-cst first.  EXTRA_ARGS carries --ast-config /
-# --parser-mod-path / --unparser-mod-path / --goal.
-# Usage: make gen-rust-ast GRAMMAR=path/to/grammar.fltkg RS_OUT=path/to/ast.rs [EXTRA_ARGS=...]
-gen-rust-ast:
-	uv run python -m fltk.fegen.genparser gen-rust-ast $(GRAMMAR) $(RS_OUT) $(EXTRA_ARGS)
-
-# Emit a Rust serde module (de.rs) from a grammar (no compilation).
-# The module describes the grammar's tree to the fltk-serde-core Deserializer; it references the
-# generated Rust CST module (--cst-mod-path, default super::cst), so emit that with gen-rust-cst
-# first.  EXTRA_ARGS carries --ast-config (required) / --parser-mod-path / --ast-mod-path / --goal.
-# Name the output de.rs, not serde.rs: a crate-root `mod serde` makes `use serde::...` ambiguous.
-# Usage: make gen-rust-serde GRAMMAR=path/to/grammar.fltkg RS_OUT=path/to/de.rs EXTRA_ARGS=...
-gen-rust-serde:
-	uv run python -m fltk.fegen.genparser gen-rust-serde $(GRAMMAR) $(RS_OUT) $(EXTRA_ARGS)
-
-# Regenerate the parser for the fegen grammar into the fegen-rust crate.
-build-fegen-rust-parser:
-	uv run python -m fltk.fegen.genparser gen-rust-parser \
-		fltk/fegen/fegen.fltkg crates/fegen-rust/src/parser.rs
-
-# Run native (no-Python) Rust parser tests for the fegen grammar.
-test-native-parser:
-	cd crates/fegen-rust && cargo test --no-default-features
-
-# Run native Rust parser tests for the fixture grammar.
-test-rust-parser-fixture:
-	cd tests/rust_parser_fixture && cargo test
-
-# Regenerate ALL generated code from their source grammars, then normalize formatting.
-# Covers:
-#   - Python CST/parser/protocol for fltk, fegen/bootstrap, toy, and unparsefmt grammars
-#   - Rust CST source for cst_generated.rs (PoC grammar), cst_fegen.rs, and fixture crates
-# After running, `git diff --stat` reveals any drift between committed generated files and
-# what the generators actually produce (cheat-detection: committed hand-patches show as diffs).
-gencode:
-	# Python: fegen grammar → fltk_cst.py, fltk_cst_protocol.py, fltk_parser.py, fltk_trivia_parser.py
-	# (fltk.fltkg is intentionally broken; fltk_cst.py is generated from fegen.fltkg)
-	uv run python -m fltk.fegen.genparser generate \
-		fltk/fegen/fegen.fltkg fltk fltk.fegen.fltk_cst \
-		--output-dir fltk/fegen
-	# Python: bootstrap grammar → bootstrap_cst.py, bootstrap_cst_protocol.py, bootstrap_parser.py, bootstrap_trivia_parser.py
-	uv run python -m fltk.fegen.genparser generate \
-		fltk/fegen/bootstrap.fltkg bootstrap fltk.fegen.bootstrap_cst \
-		--output-dir fltk/fegen
-	# Python: toy grammar (toy_cst.py, toy_cst_protocol.py, toy_parser.py, toy_trivia_parser.py)
-	uv run python -m fltk.fegen.genparser generate \
-		fltk/unparse/toy.fltkg toy fltk.unparse.toy_cst \
-		--output-dir fltk/unparse
-	# Python: unparsefmt grammar (unparsefmt_cst.py, unparsefmt_cst_protocol.py, unparsefmt_parser.py, unparsefmt_trivia_parser.py)
-	uv run python -m fltk.fegen.genparser generate \
-		fltk/unparse/unparsefmt.fltkg unparsefmt fltk.unparse.unparsefmt_cst \
-		--output-dir fltk/unparse
-	# Python: regex grammar (regex_cst.py, regex_cst_protocol.py, regex_parser.py, regex_trivia_parser.py)
-	uv run python -m fltk.fegen.genparser generate \
-		fltk/fegen/regex.fltkg regex fltk.fegen.regex_cst \
-		--output-dir fltk/fegen
-	# Python: fltkast grammar (fltkast_cst.py, fltkast_cst_protocol.py, fltkast_parser.py, fltkast_trivia_parser.py)
-	uv run python -m fltk.fegen.genparser generate \
-		fltk/fegen/fltkast.fltkg fltkast fltk.fegen.fltkast_cst \
-		--output-dir fltk/fegen
-	# Python: fltklsp grammar (fltklsp_cst.py, fltklsp_cst_protocol.py, fltklsp_parser.py, fltklsp_trivia_parser.py)
-	uv run python -m fltk.fegen.genparser generate \
-		fltk/lsp/fltklsp.fltkg fltklsp fltk.lsp.fltklsp_cst \
-		--output-dir fltk/lsp
-	# Rust: src/lib.rs (fltk._native module wiring — span-only runtime, no grammar submodules)
-	uv run python -m fltk.fegen.genparser gen-rust-lib src/lib.rs \
-		--module-name _native --register-span-types --unknown-span-static --no-cst --no-parser
-	# Rust: tests/rust_poc_cst/src/cst.rs (PoC grammar — fltk/fegen/test_data/poc_grammar.fltkg)
-	uv run python -m fltk.fegen.genparser gen-rust-cst \
-		fltk/fegen/test_data/poc_grammar.fltkg tests/rust_poc_cst/src/cst.rs
-	# Rust: tests/rust_cst_fixture/src/cst.rs (phase4_roundtrip.fltkg)
-	$(MAKE) gen-rust-cst GRAMMAR=fltk/fegen/test_data/phase4_roundtrip.fltkg RS_OUT=tests/rust_cst_fixture/src/cst.rs
-	# Rust: crates/fegen-rust/src/cst.rs (fegen.fltkg) + fltk/_stubs/fegen_rust_cst/cst.pyi stub +
-	# fltk/_stubs/fegen_rust_cst/__init__.pyi stub-package marker (dogfooded via --init-pyi-output)
-	$(MAKE) gen-rust-cst GRAMMAR=fltk/fegen/fegen.fltkg RS_OUT=crates/fegen-rust/src/cst.rs \
-		EXTRA_ARGS="--protocol-module fltk.fegen.fltk_cst_protocol --pyi-output fltk/_stubs/fegen_rust_cst/cst.pyi \
-		            --init-pyi-output fltk/_stubs/fegen_rust_cst/__init__.pyi --extension-name fegen_rust_cst --submodules cst,parser,unparser"
-	# Rust: crates/fegen-rust/src/parser.rs (fegen.fltkg) — generated Rust parser.
-	$(MAKE) build-fegen-rust-parser
-	# Rust: crates/fegen-rust/src/unparser.rs (fegen.fltkg, fegen.fltkfmt-baked) +
-	# fltk/_stubs/fegen_rust_cst/unparser.pyi stub.  Powers the pure-Rust fltkfmt binary.
-	$(MAKE) gen-rust-unparser GRAMMAR=fltk/fegen/fegen.fltkg \
-		RS_OUT=crates/fegen-rust/src/unparser.rs \
-		EXTRA_ARGS="--format-config fltk/fegen/fegen.fltkfmt \
-		            --protocol-module fltk.fegen.fltk_cst_protocol \
-		            --pyi-output fltk/_stubs/fegen_rust_cst/unparser.pyi"
-	# Rust: tests/rust_parser_fixture/src/cst.rs, parser.rs, and unparser.rs (rust_parser_fixture.fltkg)
-	$(MAKE) gen-rust-cst GRAMMAR=fltk/fegen/test_data/rust_parser_fixture.fltkg RS_OUT=tests/rust_parser_fixture/src/cst.rs
-	$(MAKE) gen-rust-parser GRAMMAR=fltk/fegen/test_data/rust_parser_fixture.fltkg RS_OUT=tests/rust_parser_fixture/src/parser.rs
-	# Fixture CST protocol module: the Python typing source the committed unparser .pyi (OQ-3) types
-	# `node` params against.  The Rust backend supplies cst/parser; only the protocol is needed for
-	# typing, so --protocol-only emits just rust_parser_fixture_cst_protocol.py (no CST, no parsers).
-	uv run python -m fltk.fegen.genparser generate --protocol-only \
-		fltk/fegen/test_data/rust_parser_fixture.fltkg rust_parser_fixture rust_parser_fixture_cst \
-		--output-dir tests
-	# unparser.rs (.fltkfmt-baked) + the committed fixture unparser .pyi stub (OQ-3, pyright-checked
-	# via fltk/_stubs) + fltk/_stubs/rust_parser_fixture/__init__.pyi stub-package marker (dogfooded
-	# via --init-pyi-output; the fixture's gen-rust-cst writes no cst.pyi, so the marker rides the
-	# unparser path).  --pyi-output names the stub by the compiled submodule's import name.
-	$(MAKE) gen-rust-unparser GRAMMAR=fltk/fegen/test_data/rust_parser_fixture.fltkg RS_OUT=tests/rust_parser_fixture/src/unparser.rs \
-		EXTRA_ARGS="--format-config fltk/fegen/test_data/rust_parser_fixture.fltkfmt --protocol-module tests.rust_parser_fixture_cst_protocol --pyi-output fltk/_stubs/rust_parser_fixture/unparser.pyi \
-		            --init-pyi-output fltk/_stubs/rust_parser_fixture/__init__.pyi --extension-name rust_parser_fixture --submodules cst,parser,unparser,unparser_default,collision_cst,collision_parser"
-	# Default-FormatterConfig variant (no --format-config) for default-config cross-backend parity.
-	$(MAKE) gen-rust-unparser GRAMMAR=fltk/fegen/test_data/rust_parser_fixture.fltkg RS_OUT=tests/rust_parser_fixture/src/unparser_default.rs
-	# Rust: tests/rust_parser_fixture/src/ast.rs (rust_parser_fixture.fltkg, shaped by
-	# tests/rust_parser_fixture/rust_parser_fixture.fltkast).  Committed artifact: entry points
-	# run against the generated parser and the .fltkfmt-baked unparser above.
-	# Emitted after both, since it imports them.
-	$(MAKE) gen-rust-ast GRAMMAR=fltk/fegen/test_data/rust_parser_fixture.fltkg RS_OUT=tests/rust_parser_fixture/src/ast.rs \
-		EXTRA_ARGS="--ast-config tests/rust_parser_fixture/rust_parser_fixture.fltkast \
-		            --parser-mod-path super::parser --unparser-mod-path super::unparser --goal nest_sum"
-	# Rust: tests/rust_parser_fixture/src/de.rs (same grammar and sidecar).  Committed artifact:
-	# the shape descriptions the fltk-serde-core Deserializer reads, from_str over the generated
-	# parser, and a Deserialize impl per generated AST type.  Emitted after ast.rs, which it names.
-	$(MAKE) gen-rust-serde GRAMMAR=fltk/fegen/test_data/rust_parser_fixture.fltkg RS_OUT=tests/rust_parser_fixture/src/de.rs \
-		EXTRA_ARGS="--ast-config tests/rust_parser_fixture/rust_parser_fixture.fltkast \
-		            --parser-mod-path super::parser --ast-mod-path super::ast --goal nest_sum"
-	# Rust: tests/rust_parser_fixture/src/collision_cst.rs and collision_parser.rs (collision_fixture.fltkg)
-	# Demonstrates that a cdylib can host multiple grammars; proves Parser/ApplyResult CST
-	# classes and the parser machinery coexist without collision after the cst/parser split.
-	$(MAKE) gen-rust-cst GRAMMAR=fltk/fegen/test_data/collision_fixture.fltkg RS_OUT=tests/rust_parser_fixture/src/collision_cst.rs
-	uv run python -m fltk.fegen.genparser gen-rust-parser --cst-mod-path super::collision_cst \
-		fltk/fegen/test_data/collision_fixture.fltkg tests/rust_parser_fixture/src/collision_parser.rs
-	# Normalize formatting. Order matters:
-	# 1. ruff check --fix: upgrades typing.Union[X,Y] → X|Y and similar, so ruff format can then
-	#    wrap the resulting X|Y chains correctly.  Exit code ignored — residuals handled by step 2.
-	# 2. ruff format: applies canonical line-length formatting.
-	# 3. ruff check --fix again: cleans up any issues exposed after formatting.
-	# make check (the gate) is the definitive clean check; intermediate exits are informational.
-	uv run --group lint ruff check --fix . || true
-	uv run --group lint ruff format .
-	uv run --group lint ruff check --fix . || true
+# ── Generated Rust artifacts ─────────────────────────────────────────────────
+# There is no `gencode` target and there are no `gen-*` wrappers: every generated Rust source
+# in this repo is a Bazel action output, produced by the generate_rust_parser targets in
+# crates/fegen-rust, tests/rust_poc_cst, tests/rust_cst_fixture and tests/rust_parser_fixture.
+# For ad-hoc generation run the CLI directly:
+#
+#     bazel run --run_under="cd $(CURDIR) &&" //:genparser -- gen-rust-cst <grammar> <out.rs>
+#
+# --run_under is what makes a relative output path mean a source-tree path: `bazel run` would
+# otherwise execute in the runfiles tree.  `make regen-seed` above is the one target that
+# writes generated code into the tree, and the seed is the one artifact it writes.

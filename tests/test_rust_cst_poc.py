@@ -3,7 +3,7 @@
 import pytest
 
 pytest.importorskip("fltk._native", reason="Rust extension not available")
-pytest.importorskip("poc_cst", reason="poc_cst not built; run 'make build-poc-cst' first")
+pytest.importorskip("poc_cst", reason="poc_cst not importable; it is built by //tests/rust_poc_cst:poc_cst")
 
 from poc_cst.cst import Identifier, Items
 

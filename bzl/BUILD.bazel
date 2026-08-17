@@ -1,3 +1,14 @@
 # Package marker for fltk's internal Starlark helpers. These are loaded by fltk's own
 # BUILD files only; nothing here is part of the consumer-facing surface (that is
 # //:rules.bzl and //:rust.bzl).
+
+load(":lint_flag.bzl", "lint_flag")
+
+# Public visibility because the root BUILD.bazel's lint targets depend on it, and the root
+# package is what consumers load.  The flag itself carries no consumer semantics: with it
+# unset (the default) every lint target is a no-op stamp.
+lint_flag(
+    name = "lint",
+    build_setting_default = False,
+    visibility = ["//visibility:public"],
+)
