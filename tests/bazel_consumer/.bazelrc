@@ -6,3 +6,7 @@
 # on one instance: rust.bzl's cdylib assembly reads the same flag for the serde it gives a
 # generated de.rs.
 build --@fltk//crates/fltk-serde-core:serde=@consumer_crates//:serde
+
+# This module is its own workspace, so the root .bazelrc does not reach it: a consumer-lane
+# failure would otherwise leave its output in a bazel-testlogs tree nobody reads.
+test --test_output=errors

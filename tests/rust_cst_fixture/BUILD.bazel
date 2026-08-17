@@ -1,5 +1,7 @@
 load("@rules_rust//rust:defs.bzl", "rust_shared_library", "rust_test")
-load("//:rust.bzl", "generate_rust_parser", "pyo3_extension_py_library")
+load("//:rust.bzl", "generate_rust_parser")
+load("//bzl:cargo_probe.bzl", "cargo_file_probe")
+load("//bzl:pyo3_ext.bzl", "pyo3_extension_py_library")
 
 # The standalone non-FLTK user-extension fixture: the phase4_roundtrip grammar compiled into
 # an importable `phase4_roundtrip_cst` module.  It is the "a consumer's own cdylib" shape the
@@ -81,3 +83,6 @@ filegroup(
     srcs = [":phase4_roundtrip_cst_srcs"],
     visibility = ["//tests:__pkg__"],
 )
+
+# This package's half of the Cargo retirement gate's declaration probe.
+cargo_file_probe()

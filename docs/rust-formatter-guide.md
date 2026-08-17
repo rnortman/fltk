@@ -9,6 +9,14 @@ parser and unparser types.
 `crates/fltkfmt/` (the `.fltkg` formatter, built from `fegen.fltkg`) is the canonical worked
 example; this guide mirrors it.
 
+> **The Cargo recipes below do not work.** FLTK's runtime crates are Bazel targets and carry no
+> Cargo manifests, so the `path = "../fltk/crates/..."` pins this guide shows resolve to nothing.
+> `crates/fltkfmt/BUILD.bazel` is the same worked example in the form that does build, and
+> `docs/bazel-consumer-guide.md` §5.3 is the consumer recipe for a formatter binary. Rewriting
+> this guide onto that footing is `TODO(cargo-guides-bazel-rewrite)`; the macro semantics, the
+> `pub mod parser/unparser` requirement and the `fltk_formatter_main!` invocation are all still
+> accurate.
+
 ---
 
 ## Overview

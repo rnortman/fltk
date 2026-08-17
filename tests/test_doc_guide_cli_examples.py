@@ -9,7 +9,7 @@ Two things are pinned here:
 - The mechanical surface: command names and option spellings, in the invocations *and* in each
   command's option table.
 - The runnable examples, which are the path a consumer copies whole. The serde guide's worked
-  example and the AST guide's quick start are cases in `tests/test_generated_rust_gate.py`, and
+  example and the AST guide's quick start are cases in `tests/rust_gate_cases.py`, and
   the join tests here hold what those cases compile to what the guides print, so the compiled
   example and the printed one cannot drift apart. For the AST quick start that is the printed Rust
   body as well as the generation input — the gate wraps the printed block itself rather than a
@@ -43,7 +43,7 @@ import typer.main
 from typer.testing import CliRunner
 
 from fltk.fegen.genparser import app
-from tests.test_generated_rust_gate import (
+from tests.rust_gate_cases import (
     AST_GUIDE_GRAMMAR,
     AST_GUIDE_RUNTIME,
     AST_GUIDE_SIDECAR,

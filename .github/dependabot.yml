@@ -5,14 +5,10 @@ updates:
     schedule:
       interval: "weekly"
 
-  # Bumps `channel` in rust-toolchain.toml.  The pin is what makes a given commit
-  # reproducible locally; this updater is what keeps it from going stale.  Because
-  # `make check` runs clippy with -D warnings, a release that adds a lint lands as a
-  # failing PR here instead of breaking main on an unchanged commit.
-  - package-ecosystem: "rust-toolchain"
-    directory: "/"
-    schedule:
-      interval: "weekly"
+  # There is no Rust updater.  The toolchain pin lives in every MODULE.bazel's
+  # rust.toolchain tag and the third-party crates in the root MODULE.bazel's crate.spec
+  # list, neither of which any ecosystem here understands; both are bumped by hand (edit,
+  # repin, `make check`) — see TODO(rust-supply-chain-audit).
 
   # requirements.in + requirements_lock.txt — the Python dependency surface that feeds the
   # Bazel pip hub.  Complete a bump PR by running `bazel run //:requirements.update` on the
@@ -21,17 +17,3 @@ updates:
     directory: "/"
     schedule:
       interval: "weekly"
-
-  # The two Cargo workspaces with a tracked Cargo.lock: the root one and the consumer
-  # module's serde hub.  Every other crate in the tree is Bazel-only and has no manifest.
-  # Grouped into a single PR set to keep volume sane across directories.
-  - package-ecosystem: "cargo"
-    directories:
-      - "/"
-      - "/tests/bazel_consumer/serde_hub"
-    schedule:
-      interval: "weekly"
-    groups:
-      cargo:
-        patterns:
-          - "*"

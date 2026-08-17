@@ -1,5 +1,7 @@
 load("@rules_rust//rust:defs.bzl", "rust_library", "rust_shared_library", "rust_test")
-load("//:rust.bzl", "generate_rust_parser", "pyo3_extension_py_library")
+load("//:rust.bzl", "generate_rust_parser")
+load("//bzl:cargo_probe.bzl", "cargo_file_probe")
+load("//bzl:pyo3_ext.bzl", "pyo3_extension_py_library")
 
 # The .fltkast sidecar shapes the generated AST and serde modules.  The root package's
 # ast/serde codegen smoke targets run over this same grammar and sidecar pair, so it crosses
@@ -208,3 +210,6 @@ filegroup(
     ],
     visibility = ["//tests:__pkg__"],
 )
+
+# This package's half of the Cargo retirement gate's declaration probe.
+cargo_file_probe()

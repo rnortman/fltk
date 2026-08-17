@@ -213,66 +213,24 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "1d07550c9036bf2ae0c684c4297d503f838287c83c53686d05370d0e139ae570"
 
 [[package]]
-name = "equivalent"
-version = "1.0.2"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "877a4ace8713b0bcf2a4e7eec82529c029f1d0619886d18145fea96c3ffe5c0f"
-
-[[package]]
-name = "fltk-ast-core"
-version = "0.4.0"
+name = "direct-cargo-bazel-deps"
+version = "0.0.1"
 dependencies = [
- "fltk-cst-core",
+ "clap",
  "indexmap",
+ "pyo3",
  "regex-automata",
  "rust_decimal",
+ "serde",
+ "serde_json",
  "uuid",
 ]
 
 [[package]]
-name = "fltk-cst-core"
-version = "0.4.0"
-dependencies = [
- "pyo3",
-]
-
-[[package]]
-name = "fltk-fmt-cli"
-version = "0.4.0"
-dependencies = [
- "clap",
- "fltk-unparser-core",
-]
-
-[[package]]
-name = "fltk-native"
-version = "0.4.0"
-dependencies = [
- "fltk-cst-core",
- "pyo3",
-]
-
-[[package]]
-name = "fltk-parser-core"
-version = "0.4.0"
-dependencies = [
- "fltk-cst-core",
- "regex-automata",
-]
-
-[[package]]
-name = "fltk-serde-core"
-version = "0.4.0"
-dependencies = [
- "fltk-ast-core",
- "fltk-cst-core",
- "serde",
- "serde_json",
-]
-
-[[package]]
-name = "fltk-unparser-core"
-version = "0.4.0"
+name = "equivalent"
+version = "1.0.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "877a4ace8713b0bcf2a4e7eec82529c029f1d0619886d18145fea96c3ffe5c0f"
 
 [[package]]
 name = "funty"

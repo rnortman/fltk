@@ -21,7 +21,7 @@ rule name to the newline-spacing emission and read `get_preserve_blanks(rule_nam
 
 ## `fmt-cli-per-consumer-version`
 
-`fltk-fmt-cli`'s `FmtArgs` carries `#[command(version)]`, which clap expands to `CARGO_PKG_VERSION` where `FmtArgs` is defined — the scaffolding crate — so every consumer binary reports `fltk-fmt-cli`'s version, not its own. This is an observable defect today: `fltkfmt` is `0.1.0` (`crates/fltkfmt/Cargo.toml`; deliberately outside the root workspace with its own `[workspace]`), while `fltk-fmt-cli` is `0.2.0` (`crates/fltk-fmt-cli/Cargo.toml`), so `fltkfmt --version` prints `0.2.0` for a `0.1.0` binary. Fix by threading `version` (and possibly `name`) through `run_main` / `fltk_formatter_main!` the same way `about` is threaded (commit for `fmt-cli-per-consumer-about`), so `<consumer> --version` prints the consumer's own version. Do NOT add a second bare `&'static str` positional argument next to `about` on `run_main`: two adjacent indistinguishable string params can be swapped silently (a version string rendered as the `--help` description). Introduce an identity struct instead (e.g. `FormatterInfo::new(about).version(..)`, keeping `about` required) so this fix — and any later per-consumer knob — is a non-breaking addition rather than another signature break. Location: `crates/fltk-fmt-cli/src/lib.rs` (`#[command(version)]` on `FmtArgs`, and `run_main`).
+`fltk-fmt-cli`'s `FmtArgs` carries `#[command(version)]`, which clap expands to `CARGO_PKG_VERSION` where `FmtArgs` is defined — the scaffolding crate — so every consumer binary reports `fltk-fmt-cli`'s version, not its own. This is an observable defect today: `//crates/fltkfmt:fltkfmt` declares no `version` attribute at all, while `//crates/fltk-fmt-cli` declares `0.4.0`, so `fltkfmt --version` prints `0.4.0` for a binary that claims no version of its own. Fix by threading `version` (and possibly `name`) through `run_main` / `fltk_formatter_main!` the same way `about` is threaded (commit for `fmt-cli-per-consumer-about`), so `<consumer> --version` prints the consumer's own version. Do NOT add a second bare `&'static str` positional argument next to `about` on `run_main`: two adjacent indistinguishable string params can be swapped silently (a version string rendered as the `--help` description). Introduce an identity struct instead (e.g. `FormatterInfo::new(about).version(..)`, keeping `about` required) so this fix — and any later per-consumer knob — is a non-breaking addition rather than another signature break. Location: `crates/fltk-fmt-cli/src/lib.rs` (`#[command(version)]` on `FmtArgs`, and `run_main`).
 
 ## `lsp-cst-text-helpers`
 
@@ -280,7 +280,34 @@ whether reverse construction should share one synthetic source per conversion, w
 span should be synthesised rather than merged, and what a consumer reading `.span` off a
 round-tripped node is entitled to — which is a design cycle, not a patch. Pinned by
 `test_fold_roundtrip_raises_on_span_merge` in `tests/test_ast_fold_roundtrip.py`; invert that test
-when this closes. Location: `fltk/fegen/pyrt/astrt.py` (`_merged`).
+when this closes. Location: `fltk/fegen/pyrt/astrt.py` (`_merged`). Shares its resolution with
+`ast-synthesised-literal-spans` — both ask what a synthesised span is worth, and the same design
+cycle should close both.
+
+## `ast-synthesised-literal-spans`
+
+`to_cst()` on a terminal-shaped rule re-matches the node's text and hands each captured group its
+own span, but a non-captured piece — a labeled literal above all — gets the sentinel span
+`(-1, -1)`. The generated `*_text()` accessors panic on such a child
+(`fltk/fegen/gsm2tree_rs.py`, `_native_ergonomic_methods`, whose required- and optional-arity
+branches both `unwrap_or_else(|e| panic!(...))` on an unusable span), so a consumer reading a
+literal-valued label off a round-tripped tree panics inside generated code it did not write and
+cannot edit — generated accessors are public API for out-of-tree consumers. For
+`line := text:/[a-z]+/ . bang:"!" ;`, `Line::to_cst()` gives `bang` no source and `bang_text()`
+panics while `text_text()` and the node's own `text()` work. Closing this means deciding what a
+synthesised non-captured child carries: either attach the statically-known text during synthesis
+(a literal's text is in the grammar, and a non-captured regex piece is recoverable from the match
+the split already performs) on both backends — `fltk/fegen/pyrt/astrt.py` (`terminal_to_cst`) and
+the Rust runtime's `crates/fltk-ast-core/src/synth.rs` (`TerminalShape::split`), as driven by
+`fltk/fegen/gsm2ast_rs.py` (`terminal_to_cst_body`) — or change the accessor contract, which is a
+breaking change to generated public API and is disfavoured. Check Python-backend parity (what the
+Python generated accessor does on the same synthesised child) as part of closing, so both backends
+land the same contract. Shares its resolution with `astrt-fold-roundtrip-span-merge`, the same
+question in its fold form; the same design cycle should close both. Pinned by
+`the_synthesised_cst_splits_the_text_back_into_its_two_children` in `tests/rust_gate_cases.py`
+(the span-only case's runtime module); that assertion inverts when this closes. Location:
+`fltk/fegen/pyrt/astrt.py` (`terminal_to_cst`), `crates/fltk-ast-core/src/synth.rs`
+(`TerminalShape::split`).
 
 ## `version-bump-0-6-0`
 
@@ -288,15 +315,13 @@ The version fields across the repo still read `0.4.0` even though `v0.5.0` is a 
 (pointing at `f33015c`), so any artifact built from that tag self-identifies as `0.4.0`. The
 decision is to leave `v0.5.0` exactly as it is — no re-tag, no deletion, no `0.5.1`; it is accepted
 as a known-broken release — and to correct the metadata when `0.6.0` is cut. This entry exists
-because a forgotten version bump is the defect that made `v0.5.0` broken in the first place, and the
-edit spans seven manifests: the root `Cargo.toml` (`[package] version`), and
-`crates/fltk-cst-core/Cargo.toml`, `crates/fltk-serde-core/Cargo.toml`,
-`crates/fltk-fmt-cli/Cargo.toml`, `crates/fltk-unparser-core/Cargo.toml`,
-`crates/fltk-parser-core/Cargo.toml`, `crates/fltk-ast-core/Cargo.toml` (each `[package] version`).
-`pyproject.toml` is no longer one of them: it carries no `[project]` table and declares no version.
-Done = every one of those fields reads the released version at the `0.6.0` cut, and `v0.5.0` is left
-untouched. Location: the root `Cargo.toml` carries the `TODO(version-bump-0-6-0)` comment; the six
-crate manifests above are the rest of the edit.
+because a forgotten version bump is the defect that made `v0.5.0` broken in the first place. There
+are no Cargo manifests anymore, so the fields are Bazel `version` attributes — and they all read
+one constant, `FLTK_CRATE_VERSION` in `bzl/version.bzl`, so the edit is one line rather than a list
+of sites that goes stale as crates are added. `pyproject.toml` is not part of it: it carries no
+`[project]` table and declares no version. Done = that constant reads the released version at the
+`0.6.0` cut, and `v0.5.0` is left untouched. Location: `bzl/version.bzl` carries the
+`TODO(version-bump-0-6-0)` comment.
 
 ## `bazel-lint-consumer-module`
 
@@ -329,93 +354,62 @@ generated from `bootstrap.fltkg` through a staged chain and stops being committe
 resurrection is formally abandoned and this entry is closed as won't-do. Location:
 `tests/test_seed_fixed_point.py`, `fltk/fegen/bootstrap.fltkg`, `runbs.py`.
 
-## `bazel-generated-native-lib`
-
-`src/lib.rs` — the `fltk._native` module wiring — is generator output (`gen-rust-lib
---module-name _native --register-span-types --unknown-span-static --no-cst --no-parser`) and is
-the one generated Rust file still tracked in git. Design §5.1 of the all-Bazel ADR has `//:native`
-built from a `generate_rust_lib` output assembled with the hand-written `src/span.rs`, with the
-tracked copy deleted; that cannot land while the root `Cargo.toml` declares the `fltk-native`
-package, because its `[lib]` target has no crate root without the file and *every* cargo
-invocation then fails to parse the workspace manifest — including `cargo metadata --locked`,
-`cargo deny`, and the compile-gate tests that build throwaway crates with path deps on the
-runtime crates.
-
-`//:native_lib_rs` regenerates it and `//:native_lib_parity` diffs it against the tracked copy,
-so the file cannot drift from what the generator produces. Done = either the root manifest stops
-being a package (a virtual workspace manifest, which changes what `@fltk_crates` resolves and
-needs its own look at `Cargo.lock`), or cargo stops being needed at all — after which `//:native`
-takes the generated `lib.rs` and `src/lib.rs` is deleted with the parity genrule.
-
-Location: `BUILD.bazel` (`:native_lib_rs`, `:native_lib_parity`, `:native`), `Cargo.toml`,
-`src/lib.rs`.
-
-## `bazel-rustc-gate-tests`
-
-Three pytest files are compile gates: they write a throwaway Cargo crate out of freshly
-generated Rust, with path dependencies on this repo's runtime crates, and hand it to `cargo`
-(`tests/test_generated_rust_gate.py`, `tests/test_rust_prelude_qualification.py`,
-`tests/test_nullable_loop_guard.py`). They run under Bazel as `local` + `requires-cargo`
-targets: unsandboxed, inheriting `PATH` / `HOME` / `CARGO_HOME` / `RUSTUP_HOME` so cargo finds
-its toolchain and its registry cache, with `//:cargo_workspace_files` supplying the manifests
-and sources cargo reads off disk. That is a hole in the hermeticity of `bazel test //...` —
-the compiler, its version resolution and the resolved third-party crates come from the
-developer's machine rather than the build graph — and it is why CI still installs a Rust
-toolchain and needs a warm registry cache for `--offline` resolution.
-
-The hermetic replacement is to compile the generated crates through rules_rust instead: the
-grammar shapes become codegen targets, the hand-written `#[test]` modules become `rust_test`s
-over them, and the runtime crates come in as Bazel rlibs. What that costs is one target per
-shape declared in Starlark instead of a `Case` dataclass in Python, and a way to express the
-negative cases (a shape that must *fail* to compile is a test the build graph cannot hold
-directly).
-
-The gates also keep their build directories outside the sandbox
-(`tests/generated_rust_gate.py`'s `cargo_target_dir`, one persistent directory per gate under
-`$XDG_CACHE_HOME`/`$HOME`), because Bazel's per-run scratch space would make each one recompile
-the runtime crates every time any of them changes. The rules_rust replacement must not inherit
-that: its build outputs belong in bazel-out, and this helper goes away with the cargo lane.
-
-Done = no pytest target carries `requires-cargo`, and `cargo` is not needed to run
-`bazel test //...`. Location: `tests/BUILD.bazel` (`_CARGO_GATE`),
-`tests/generated_rust_gate.py`, `BUILD.bazel` (`:cargo_workspace_files`) and the
-`cargo_gate_files` filegroups in each runtime crate.
-
 ## `bazel-consumer-pyo3-seam`
 
-`pyo3_extension_py_library` is exported from `rust.bzl` and published in
-`docs/bazel-consumer-guide.md` §4 as the "if you compile the cdylib yourself" recipe, but no
-target outside fltk's own module exercises it, and it is not clear one can. A hand-assembled
-cdylib needs a direct `pyo3` dependency for the generated `#[pyclass]` code, and it must be the
-*same* pyo3 instance that `@fltk//crates/fltk-cst-core` links, or the `Bound<'_, PyModule>` types
-in the generated `register_classes` come from two different crates. In-repo the fixtures name
-`@fltk_crates//:pyo3` directly; a downstream module cannot — crate-hub repos are module-local,
-and there is no injection seam for pyo3 the way `//crates/fltk-serde-core:serde` is one for serde.
+Self-compiled cdylibs are unsupported, and the constraint is now documented rather than
+apologized for: a hand-assembled cdylib needs a direct `pyo3` dependency for the generated
+`#[pyclass]` code, and it must be the *same* pyo3 instance that `@fltk//crates/fltk-cst-core`
+links, or the `Bound<'_, PyModule>` types in the generated `register_classes` come from two
+different crates. In-repo the fixtures name `@fltk_crates//:pyo3` directly; a downstream module
+cannot — crate-hub repos are module-local, and there is no injection seam for pyo3 the way
+`//crates/fltk-serde-core:serde` is one for serde. So `pyo3_extension_py_library` left the
+consumer surface (it lives in `bzl/pyo3_ext.bzl` and serves `fltk_pyo3_cdylib` and the in-tree
+fixtures), and the guide says to use `fltk_pyo3_cdylib`.
 
-So the recipe is either missing a seam (a `label_flag`/alias making fltk's pyo3 nameable
-cross-module, mirroring the serde one) or missing a documented constraint. Deciding which is a
-consumer-surface design call, not a test to add. Done = the guide's §4 recipe is exercised by a
-target in `tests/bazel_consumer/` that loads `pyo3_extension_py_library` through `@fltk//:rust.bzl`
-and imports the resulting module from a `py_test`. Location: `tests/bazel_consumer/BUILD.bazel`,
-`rust.bzl` (`pyo3_extension_py_library`), `docs/bazel-consumer-guide.md` §4.
+Add the seam and republish the recipe when a consumer needs to compile its own cdylib: a
+`label_flag`/alias making fltk's pyo3 nameable cross-module, mirroring the serde one. Done = the
+recipe is back in `docs/bazel-consumer-guide.md` §4 and exercised by a target in
+`tests/bazel_consumer/` that loads the packaging macro through `@fltk//:rust.bzl` and imports the
+resulting module from a `py_test`. Location: `tests/bazel_consumer/BUILD.bazel`,
+`bzl/pyo3_ext.bzl`, `rust.bzl`, `docs/bazel-consumer-guide.md` §4.
 
-## `uv-retired-agent-hook`
+## `cargo-guides-bazel-rewrite`
 
-`.claude/settings.json`'s `PostToolUse` hook still shells out to uv to format the edited file
-(`... ruff format "$file_path" 2>/dev/null || echo "Formatting completed"`) after every Python
-edit — spelled out in the file, and deliberately not repeated here, because this doc is one of
-the surfaces the retirement gate scans. uv is retired: `pyproject.toml` declares no project and
-no `[tool.uv]` table, and the uv lockfile is gone. On a machine
-without uv the command fails, stderr is discarded, and the `|| echo` reports success while
-formatting nothing; on a machine with uv installed globally it formats with whatever ruff an
-ad-hoc environment resolves, which is not the hub-pinned ruff `//:ruff_format_check` and
-`tests/test_seed_fixed_point.py` enforce — so the hook can produce bytes the lint lane rejects.
+`docs/rust-cst-extension-guide.md` and `docs/rust-formatter-guide.md` are written around a
+consumer crate with its own `Cargo.toml` pinning FLTK's runtime crates by path or git rev
+(`fltk-cst-core = { path = "../fltk/crates/fltk-cst-core" }` and friends). Those pins name
+manifests that no longer exist — every FLTK crate is a Bazel target now — and consuming FLTK from
+Cargo never actually worked even when they did, so the recipes were dead before they were stale.
+Each guide carries a note at the top saying so and pointing at `docs/bazel-consumer-guide.md`,
+which is the recipe book that does work (§4 for a Python extension, §5.3 for a formatter binary).
+The concepts in both guides are still accurate: what the generated code needs at runtime, the
+`pub mod parser/unparser` requirement, the `fltk_formatter_main!` invocation, the cfg-gated
+`python` feature. Closing this means rewriting the build mechanics of both onto `bazel_dep` +
+`generate_rust_parser` / `fltk_pyo3_cdylib`, or folding what survives into the consumer guide and
+deleting them — a call about how many guides this project wants, not a mechanical edit, which is
+why it is deferred rather than done alongside the cargo retirement. Done = no guide instructs a
+Cargo pin into this repo, and the notes come out with the recipes they warn about. Location:
+`docs/rust-cst-extension-guide.md`, `docs/rust-formatter-guide.md`.
 
-Close it by pointing the hook at the pinned toolchain (`//:ruff_fix` currently formats the whole
-workspace and takes no path argument, so this is either a new per-file target or dropping the
-hook in favour of `make fix`) and dropping the failure mask, then adding `.claude/settings.json`
-to `//:repo_tooling_files` so a regression is red. Deferred rather than fixed in review: the file
-configures the repo owner's agent harness, which is the owner's call and not an implementation
-detail of this migration. Location: `.claude/settings.json` (the `PostToolUse` command),
-`BUILD.bazel` (`:repo_tooling_files`), `tests/test_uv_retirement.py`
-(`test_tooling_config_invokes_no_uv`).
+## `rust-supply-chain-audit`
+
+There is no advisory, license or yanked-crate gate over the Rust dependencies anymore.
+`cargo-deny` was that gate (RustSec advisories, the license allow-list, banned and duplicate
+crates, source allow-listing), it ran in the local pre-commit lane only — never in CI — and it
+needed both the tool and a manifest for it to read. Cargo retirement removed both, deliberately:
+the directive was that no repo workflow may run cargo, and keeping a vestigial manifest pair
+solely to feed an auditor keeps cargo runnable. Two smaller losses ride along: Dependabot no
+longer opens PRs for Rust dependency bumps or for the Rust toolchain, because neither the
+`crate.spec` list in `MODULE.bazel` nor the `rust.toolchain` tag is an ecosystem it understands.
+Both are manual now (edit, `CARGO_BAZEL_REPIN=1 bazel test //...`, `make check`), the same
+workflow the Bazel version pin already uses.
+
+The successor is one tool over `cargo-bazel-lock.json`, which names every resolved crate, its
+version and its checksum: read it, check the names and versions against an advisory database and
+a license allow-list, and fail on a hit. That is a hermetic `py_binary` plus a test target, with
+no cargo and no manifest, and it covers the consumer module's hub as well by pointing at its
+lockfile too. Done = a target in the `bazel test //...` set that reds on a known-vulnerable or
+disallowed crate, and CI covers it — which is strictly more than the retired gate did.
+Location: new tooling; the inputs are `cargo-bazel-lock.json` and
+`tests/bazel_consumer/cargo-bazel-lock.json`, and the policy the retired `deny.toml` held is in
+git history at the commit that deleted it.

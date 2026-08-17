@@ -38,10 +38,9 @@ py_test(
 # Exercises the cross-module cdylib build; fltk_pyo3_cdylib must remain exported
 # from @fltk//:rust.bzl.
 #
-# The sibling macro pyo3_extension_py_library — wrapping a cdylib the consumer compiled
-# itself — has no target here, because a hand-assembled cdylib needs a direct pyo3 dep and
-# this module has no way to name the pyo3 instance @fltk//crates/fltk-cst-core links.
-# TODO(bazel-consumer-pyo3-seam).
+# Wrapping a cdylib the consumer compiled itself has no target here and no consumer-facing
+# macro: a hand-assembled cdylib needs a direct pyo3 dep, and this module has no way to name
+# the pyo3 instance @fltk//crates/fltk-cst-core links.  TODO(bazel-consumer-pyo3-seam).
 generate_rust_parser(
     name = "consumer_rs_srcs",
     src = "consumer.fltkg",

@@ -95,12 +95,9 @@ rule := label:identifier , "literal" , /regex_pattern/ ;
 
 ### Setup
 
-Bazel (through `bazelisk`, which honours `.bazelversion`) and a Rust toolchain from
-<https://rustup.rs/>. Everything else — the Python interpreter, the third-party wheels, the
-tools — comes from the build graph.
-
-A few tests compile a throwaway crate with `cargo --offline`, so run `cargo fetch --locked`
-once in a fresh clone to warm the registry cache.
+Bazel, through `bazelisk`, which honours `.bazelversion`. That is the whole list: the Python
+interpreter, the third-party wheels, the Rust toolchain and every tool come from the build
+graph, so a fresh clone needs no rustup, no virtualenv and no priming step.
 
 ### Testing
 ```bash

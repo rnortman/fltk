@@ -1,5 +1,5 @@
 load("@rules_rust//rust:defs.bzl", "rust_test")
-load("//bzl:cargo_gate.bzl", "cargo_gate_files")
+load("//bzl:cargo_probe.bzl", "cargo_file_probe")
 load("//bzl:runtime_crate.bzl", "fltk_runtime_library")
 
 # The crate itself declares no features and never names pyo3; the two flavors exist only to
@@ -23,4 +23,5 @@ rust_test(
     deps = [":no_python"],
 )
 
-cargo_gate_files()
+# This package's half of the Cargo retirement gate's declaration probe.
+cargo_file_probe()

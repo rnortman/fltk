@@ -24,3 +24,9 @@ build:lint --//bzl:lint=true
 # is empty.  The library is the root package's //:fltk, and naming it explicitly also keeps the
 # hub wheels (external/) out of the report.
 coverage --instrumentation_filter=^//:
+
+# A failing target prints its test.log to the invocation's output instead of leaving it in
+# bazel-testlogs.  `make check` buffers each step and prints it on failure, so this is what puts
+# the assertion in front of a developer; in CI it is what puts it in the job output, where the
+# runner's filesystem does not outlive the failure.  Passing tests stay quiet.
+test --test_output=errors

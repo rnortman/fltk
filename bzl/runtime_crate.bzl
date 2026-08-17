@@ -13,6 +13,7 @@ Loaded by fltk's own crate BUILD files only, never by a consumer, so the
 """
 
 load("@rules_rust//rust:defs.bzl", "rust_library", "rust_test")
+load(":version.bzl", "FLTK_CRATE_VERSION")
 
 _EDITION = "2021"
 
@@ -38,6 +39,7 @@ def fltk_runtime_library(
         name,
         crate_name,
         srcs,
+        version = FLTK_CRATE_VERSION,
         features = [],
         python_features = [],
         fltk_deps = [],
@@ -52,6 +54,7 @@ def fltk_runtime_library(
         derivation both depend on.
       crate_name: the Rust crate name, shared by both flavors.
       srcs: the source list, evaluated by the caller (glob is package-scoped).
+      version: the crate version both flavors report as CARGO_PKG_VERSION.
       features: crate features both flavors turn on.
       python_features: features only the default flavor turns on (just fltk-cst-core's
         `python` today).
@@ -78,6 +81,7 @@ def fltk_runtime_library(
         crate_features = features + python_features,
         crate_name = crate_name,
         edition = _EDITION,
+        version = version,
         visibility = ["//visibility:public"],
         deps = fltk_deps + hub_deps + python_deps,
     )
@@ -88,6 +92,7 @@ def fltk_runtime_library(
         crate_features = features,
         crate_name = crate_name,
         edition = _EDITION,
+        version = version,
         visibility = ["//visibility:public"],
         deps = [_no_python_flavor(dep) for dep in fltk_deps] + hub_deps,
     )

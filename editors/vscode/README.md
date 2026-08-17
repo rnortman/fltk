@@ -34,9 +34,8 @@ checkout — including the next language client this extension starts.
 - **Node / npm** — only to install the extension's one dependency
   (`vscode-languageclient`). No Python test needs Node.
 - **Bazel** (via `bazelisk`, honoring `.bazelversion`) — it builds and launches the server.
-- **The Rust toolchain** (`rustup` + `cargo`) — `fltk` is a mixed Python/Rust package. Bazel
-  fetches its own hermetic Rust toolchain for the build, so this is only needed for the
-  cargo-driven test lanes; install via <https://rustup.rs/> if you run those.
+- No Rust toolchain of your own — `fltk` is a mixed Python/Rust package, and Bazel fetches
+  the hermetic Rust toolchain it compiles with.
 - The **first launch is slow**: it pays a one-time Bazel build of the Rust extension and the
   generated parsers. This is a visibly slow first start, not a hang; later launches hit the
   Bazel cache and are fast.

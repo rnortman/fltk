@@ -1,6 +1,7 @@
 load("@rules_rust//rust:defs.bzl", "rust_library", "rust_test")
-load("//bzl:cargo_gate.bzl", "cargo_gate_files")
+load("//bzl:cargo_probe.bzl", "cargo_file_probe")
 load("//bzl:runtime_crate.bzl", "fltk_runtime_library")
+load("//bzl:version.bzl", "FLTK_CRATE_VERSION")
 
 # Stated once for the three library targets below: the macro's two flavors and :no_features all
 # compile the same sources, and a src reaching only some of them is a divergence nothing fails on.
@@ -11,12 +12,7 @@ _SRCS = glob(["src/**/*.rs"])
 # this target left off: generated AST code for a sidecar using `key:` names
 # ::fltk_ast_core::IndexMap, and code for a `type: uuid` / `type: decimal` field names
 # ::fltk_ast_core::Uuid / ::fltk_ast_core::Decimal. A pure-Rust consumer who wants any of
-# the three dependencies gone builds through Cargo with default-features = false.
-#
-# The uuid / rust_decimal labels below come from the @fltk_crates hub only because
-# fltk-ast-core declares both as unconditional dev-dependencies: crate_universe's
-# from_cargo resolution sees an optional dependency no workspace member activates as
-# absent. Cargo.toml documents the mirroring requirement.
+# the three dependencies gone builds this crate with a narrower crate_features list.
 #
 # The flavors differ only in which fltk-cst-core they carry; see that crate's BUILD. The
 # feature-gated tests need no extra deps: uuid and rust_decimal are already library deps
@@ -52,6 +48,7 @@ rust_library(
     crate_features = [],
     crate_name = "fltk_ast_core",
     edition = "2021",
+    version = FLTK_CRATE_VERSION,
     visibility = ["//visibility:public"],
     deps = [
         "//crates/fltk-cst-core:no_python",
@@ -64,17 +61,13 @@ rust_test(
     crate = ":no_features",
 )
 
-# Sources the Python-side tests read as data: tests/test_ast_core_manifest.py parses the
-# manifest, and tests/test_ast_error_message_parity.py reads the runtime's error strings.
-exports_files(
-    ["Cargo.toml"],
-    visibility = ["//tests:__pkg__"],
-)
-
+# Sources the Python-side tests read as data: tests/test_ast_error_message_parity.py reads the
+# runtime's error strings.
 filegroup(
     name = "src_rs",
     srcs = glob(["src/**/*.rs"]),
     visibility = ["//tests:__pkg__"],
 )
 
-cargo_gate_files(srcs = _SRCS)
+# This package's half of the Cargo retirement gate's declaration probe.
+cargo_file_probe()

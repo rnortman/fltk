@@ -10,12 +10,14 @@ load(
     "GENERATED_PY_TARGETS",
     "aux_generate_parsers",
 )
+load("//bzl:cargo_probe.bzl", "cargo_file_probe")
 load("//bzl:gencode_tool.bzl", "GENCODE_TOOL_DATA", "GENCODE_TOOL_DEPS")
 load("//bzl:py_lint.bzl", "ruff_fix", "ruff_lint")
 load("//bzl:py_test.bzl", "fltk_py_tests")
 load("//bzl:pyright.bzl", "pyright_lint")
 load("//bzl:pyright_tool.bzl", "PYRIGHT_TOOL_DEPS")
 load("//bzl:regen_seed.bzl", "regen_seed")
+load("//bzl:version.bzl", "FLTK_CRATE_VERSION")
 
 # ── Python dependency lock ────────────────────────────────────────────────────
 # Single writer for requirements_lock.txt: `bazel run //:requirements.update`.
@@ -321,29 +323,6 @@ exports_files(
     visibility = ["//tests:__pkg__"],
 )
 
-# Everything cargo has to read off disk to build a throwaway crate with path dependencies on
-# this repo's runtime crates: the workspace root manifest and its own package sources (cargo
-# loads every member's manifest before it resolves anything), the toolchain pin so the gates
-# compile with the same rustc the Bazel lanes do, and each member's manifest and sources.
-#
-# Used by the compile-gate pytest targets in //tests, which are tagged `requires-cargo` and run
-# unsandboxed — TODO(bazel-rustc-gate-tests) is the hermetic replacement.
-filegroup(
-    name = "cargo_workspace_files",
-    srcs = [
-        "Cargo.lock",
-        "Cargo.toml",
-        "rust-toolchain.toml",
-        "//crates/fltk-ast-core:cargo_gate_files",
-        "//crates/fltk-cst-core:cargo_gate_files",
-        "//crates/fltk-fmt-cli:cargo_gate_files",
-        "//crates/fltk-parser-core:cargo_gate_files",
-        "//crates/fltk-serde-core:cargo_gate_files",
-        "//crates/fltk-unparser-core:cargo_gate_files",
-    ] + glob(["src/*.rs"]),
-    visibility = ["//tests:__pkg__"],
-)
-
 # The editor launch path: the two checked-in launcher scripts and the VS Code clients whose
 # default server command names them.
 filegroup(
@@ -396,18 +375,48 @@ filegroup(
     visibility = ["//tests:__pkg__"],
 )
 
-# Tracked tooling config that can carry a command, for the same gate.  Prose docs are not the
-# only place a uv recipe can survive: pyproject.toml is where `[tool.uv]` lived, and .bazelrc
-# can name a tool in an --action_env or a --run_under.
-#
-# TODO(uv-retired-agent-hook): .claude/settings.json belongs in this group.  Its PostToolUse
-# hook still shells out to `uv run ruff format`, so adding it here today turns the gate red on
-# a file the owner configures.
+# Tracked tooling config that can carry a command, for the same gate and for the cargo
+# retirement gate beside it.  Prose docs are not the only place a retired tool's recipe can
+# survive: pyproject.toml is where `[tool.uv]` lived, .bazelrc can name a tool in an
+# --action_env or a --run_under, and .claude/settings.json can run one from an agent hook.
 filegroup(
     name = "repo_tooling_files",
     srcs = [
         ".bazelrc",
+        ".claude/settings.json",
         "pyproject.toml",
+    ],
+    visibility = ["//tests:__pkg__"],
+)
+
+# Roll-up of every package's retirement probe for tests/test_cargo_retirement.py.
+# See bzl/cargo_probe.bzl for the per-package shape and why each package needs its own.
+cargo_file_probe(srcs = [
+    "//bzl:cargo_file_probe",
+    "//crates/fegen-rust:cargo_file_probe",
+    "//crates/fltk-ast-core:cargo_file_probe",
+    "//crates/fltk-cst-core:cargo_file_probe",
+    "//crates/fltk-fmt-cli:cargo_file_probe",
+    "//crates/fltk-parser-core:cargo_file_probe",
+    "//crates/fltk-serde-core:cargo_file_probe",
+    "//crates/fltk-unparser-core:cargo_file_probe",
+    "//crates/fltkfmt:cargo_file_probe",
+    "//tests:cargo_file_probe",
+    "//tests/bazel_rules:cargo_file_probe",
+    "//tests/rust_cst_fixture:cargo_file_probe",
+    "//tests/rust_parser_fixture:cargo_file_probe",
+    "//tests/rust_poc_cst:cargo_file_probe",
+])
+
+# The Starlark the cargo retirement gate scans for invocations and `requires-cargo` tags: the
+# consumer-facing macro files and the internal helpers they load.  The per-package BUILD files
+# are named by the tests that read them.
+filegroup(
+    name = "starlark_srcs",
+    srcs = [
+        "rules.bzl",
+        "rust.bzl",
+        "//bzl:starlark_srcs",
     ],
     visibility = ["//tests:__pkg__"],
 )
@@ -495,12 +504,8 @@ py_test(
     deps = [":fltk"],
 )
 
-# src/lib.rs is generator output — the span-only module wiring, with no grammar submodules.
-# It is the one generated Rust file still tracked, because cargo needs a crate root for the
-# root package's [lib] target and cargo-deny, `cargo metadata --locked` and the compile-gate
-# tests all fail to parse the workspace manifest without one (TODO(bazel-generated-native-lib)).
-# This pair keeps that copy honest: the target regenerates lib.rs and the genrule fails the
-# build if the tracked file has drifted from it.
+# The crate root of fltk._native: generator output — the span-only module wiring, with no
+# grammar submodules.  Nothing generated is tracked, so this is the only copy.
 generate_rust_lib(
     name = "native_lib_rs",
     module_name = "_native",
@@ -509,32 +514,51 @@ generate_rust_lib(
     unknown_span_static = True,
 )
 
+# The hand-written modules of the fltk._native crate.  Flat, because the assembly below copies
+# by basename; `src/lib.rs` is excluded because that path is the *generated* crate root's, and an
+# in-tree copy left behind by an ad-hoc `bazel run //:genparser` would otherwise be copied over
+# the build output and compiled in its place — silently, since nothing tracks that file anymore.
+_NATIVE_HAND_WRITTEN = glob(
+    ["src/*.rs"],
+    exclude = ["src/lib.rs"],
+)
+
+# rustc resolves `mod span;` relative to the directory holding the crate root, so the generated
+# lib.rs and the hand-written modules beside it have to share one directory.  The generated file
+# lands in its rule's own subdirectory, hence this flat assembly.  `outs` is derived from the
+# same glob rather than listed, so a module added under src/ reaches the crate.
 genrule(
-    name = "native_lib_parity",
-    srcs = [
-        "src/lib.rs",
-        ":native_lib_rs",
+    name = "native_crate_srcs",
+    srcs = [":native_lib_rs"] + _NATIVE_HAND_WRITTEN,
+    outs = ["native_crate/lib.rs"] + [
+        "native_crate/" + src[len("src/"):]
+        for src in _NATIVE_HAND_WRITTEN
     ],
-    outs = ["native_lib_parity.stamp"],
-    cmd = "diff -u $(location src/lib.rs) $(location :native_lib_rs) >&2 && : > $@",
+    cmd = """
+        OUTDIR=$$(dirname $(location native_crate/lib.rs))
+        for f in $(SRCS); do
+            cp $$f $$OUTDIR/$$(basename $$f)
+        done
+    """,
 )
 
 # fltk._native cdylib — the Rust extension that provides the canonical Span/SourceText types.
 # Consumers should depend on :native_py (the py_library wrapper) rather than this target directly.
 rust_shared_library(
     name = "native",
-    srcs = glob(["src/**/*.rs"]),
+    srcs = [":native_crate_srcs"],
     crate_name = "fltk_native",
+    crate_root = "native_crate/lib.rs",
     # "extension-module" enables pyo3's no-libpython-link mode (required for cdylibs).
     # "python" must be set explicitly: Span/SourceText pyclass registration in
     # fltk-cst-core is gated on #[cfg(feature = "python")] and is compiled out without it.
-    # Cargo would forward "python" via fltk-cst-core's feature definition, but Bazel
-    # crate_features do not forward transitively — each must be stated explicitly.
+    # Bazel crate_features do not forward transitively — each must be stated explicitly.
     crate_features = [
         "extension-module",
         "python",
     ],
     edition = "2021",
+    version = FLTK_CRATE_VERSION,
     visibility = ["//visibility:public"],
     deps = [
         "//crates/fltk-cst-core",

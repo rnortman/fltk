@@ -17,6 +17,7 @@ import pytest
 from fltk.fegen import gsm
 from fltk.fegen.gsm2tree_rs import RustCstGenerator, _escape_source_name
 from tests.gsm2tree_helpers import make_generator as _make_generator
+from tests.gsm2tree_helpers import make_labeled_grammar as _make_labeled_grammar
 from tests.gsm2tree_helpers import make_zero_label_grammar as _make_zero_label_grammar
 from tests.pyright_test_utils import _run_pyright_over_dir, pyright_config, run_pyright_over_file
 
@@ -240,6 +241,22 @@ class TestPreamble:
         # Phase 2: CstError is the first unconditional import (before Span and Shared).
         assert "use fltk_cst_core::CstError;\n" in poc_source
         assert "use fltk_cst_core::Span;\n" in poc_source
+
+    def test_shared_import_ungated_when_a_rule_has_a_node_child(self, poc_source: str) -> None:
+        assert "use fltk_cst_core::Shared;\n" in poc_source
+        assert '#[cfg(feature = "python")]\nuse fltk_cst_core::Shared;' not in poc_source
+
+    def test_shared_import_python_gated_for_a_span_only_grammar(self) -> None:
+        """An ungated Shared import is an unused-import error under -D warnings for span-only grammars."""
+        gen = RustCstGenerator(_make_labeled_grammar())
+        assert gen._child_class_union() == []
+        src = gen.generate()
+        assert '#[cfg(feature = "python")]\nuse fltk_cst_core::Shared;\n' in src
+        assert "\nuse fltk_cst_core::Shared;\n" not in src.replace(
+            '#[cfg(feature = "python")]\nuse fltk_cst_core::Shared;\n', ""
+        )
+        # The gated import is still needed: the handle pyclass wraps Shared<T> for every grammar.
+        assert "inner: Shared<Bar>," in src
 
     def test_header_with_source_name(self) -> None:
         """_gen_header with source_name emits the 'from `...`' clause."""
@@ -781,9 +798,7 @@ class TestFegenGrammar:
     def test_rule_name_to_class_name_mapping(self) -> None:
         """FEGEN_RULE_NAMES and FEGEN_CLASS_NAMES must agree with class_name_for_rule_node."""
         # Use the shared labeled grammar and _make_generator to access the name helper.
-        from tests.gsm2tree_helpers import make_labeled_grammar  # noqa: PLC0415
-
-        gen = _make_generator(make_labeled_grammar())
+        gen = _make_generator(_make_labeled_grammar())
         for rule_name, expected_class in FEGEN_RULE_TO_CLASS:
             assert gen.class_name_for_rule_node(rule_name) == expected_class, (
                 f"class_name_for_rule_node({rule_name!r}) should be {expected_class!r}"
@@ -1252,9 +1267,7 @@ def minimal_pyi() -> str:
 @pytest.fixture(scope="module")
 def zero_label_pyi() -> str:
     """Generated .pyi stub for the zero-label grammar."""
-    from tests.gsm2tree_helpers import make_zero_label_grammar  # noqa: PLC0415
-
-    gen = RustCstGenerator(make_zero_label_grammar())
+    gen = RustCstGenerator(_make_zero_label_grammar())
     return gen.generate_pyi(_PROTO_MODULE)
 
 

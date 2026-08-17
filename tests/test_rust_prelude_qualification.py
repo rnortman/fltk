@@ -5,21 +5,18 @@ modules, and Rust resolves a module's own item before the prelude — so a rule 
 every bare `Option<…>` in that module into a type error in a file the consumer cannot edit. The two
 emitters therefore spell std items absolute through the table in `fltk.fegen.rust_emit`.
 
-The `prelude` case in `tests/test_generated_rust_gate.py` compiles a grammar whose rule names are
+The `prelude` case in `tests/rust_gate_cases.py` compiles a grammar whose rule names are
 the std prelude's, which is the strongest witness there is — but it witnesses only the emission
 sites that grammar instantiates, and only the halves of `cst.rs` the gate crate's feature set
 compiles: it never enables `python`, so every `#[cfg(feature = "python")]` emission is compiled out
-of it, and no crate in this repo builds a *shadowing* grammar with pyo3 linked. Three tests here
-close those gaps:
+of it. The pyo3 half of that same file is compiled by `//tests:prelude_python_probe`, which is not
+bounded by a name list: it fails on a bare std name nobody thought to add below. Two scans here
+close what neither compilation reaches:
 
 - the emitters' own Rust strings, so an emission site no grammar in the suite reaches is covered
   too (`.map(Box::new)` on an optional boxed hoist has no occurrence in any committed artifact);
 - the generated artifacts of every in-tree crate, so an emission site the emitter scan reads as
-  prose is covered as real output;
-- one throwaway pyo3 crate over a shadowing grammar, so the pyo3 half of `cst.rs` — accessors,
-  mutators, `__repr__`, the `PyResult` returns — is compiled under the shadow rather than scanned.
-  That is also the one check here not bounded by a name list: it fails on a bare std name nobody
-  thought to add below.
+  prose is covered as real output.
 
 Only the two shadowable emitters are scanned. `parser.rs`, `unparser*.rs` and `de.rs` declare no
 grammar-derived module-level item and reach the CST and AST types through `use super::…` aliases,
@@ -33,11 +30,6 @@ import pathlib
 import re
 
 import pytest
-
-from fltk.fegen import ast_test_grammars as fixtures
-from fltk.fegen.gsm2tree_rs import RustCstGenerator
-from tests.generated_rust_gate import cargo_target_dir, run_cargo
-from tests.test_generated_rust_gate import PRELUDE_GRAMMAR
 
 _REPO_ROOT = pathlib.Path(__file__).parent.parent
 
@@ -139,62 +131,6 @@ def test_the_generated_cst_and_ast_artifacts_spell_no_std_item_bare() -> None:
         if (bare := _bare_spellings(path.read_text()))
     }
     assert not stale, f"generated modules name a std item bare; fix fltk.fegen.rust_emit: {stale}"
-
-
-# The pyo3 requirement is read off the workspace root manifest rather than repeated, so the probe
-# crate below is always linted against the pyo3 the repo actually depends on; an unresolvable
-# requirement fails the offline build loudly instead of quietly testing a different macro
-# expansion.
-_FIXTURE_MANIFEST = _REPO_ROOT / "Cargo.toml"
-_PYO3_REQUIREMENT = re.compile(r'^pyo3 = \{ version = "([^"]+)"', re.MULTILINE)
-
-_PROBE_MANIFEST = """[workspace]
-
-[package]
-name = "fltk-prelude-python-probe"
-version = "0.0.0"
-edition = "2021"
-publish = false
-
-[lib]
-# rlib only: nothing here links libpython, so the probe needs no interpreter to lint.
-crate-type = ["rlib"]
-
-[features]
-python = ["dep:pyo3", "fltk-cst-core/python"]
-test-introspection = ["python", "fltk-cst-core/test-introspection"]
-
-[dependencies]
-fltk-cst-core = {{ path = "{root}/crates/fltk-cst-core", default-features = false }}
-pyo3 = {{ version = "{pyo3}", features = ["abi3-py310"], optional = true }}
-"""
-
-
-def test_the_python_gated_half_of_a_shadowing_cst_module_compiles(tmp_path: pathlib.Path) -> None:
-    """The pyo3 items of a generated `cst.rs` compile beside `pub struct Option` and friends.
-
-    The compile gate's crate declares the `python` feature and never enables it, and the only
-    artifacts built with pyo3 come from grammars with no prelude-colliding rule name — so half the
-    file a pyo3 consumer gets was qualified by inspection and by the scans above, never by rustc.
-    Consumers of the Python bindings are out-of-tree and invisible here (CLAUDE.md), which is
-    exactly the surface that needs the compiler rather than a name list: this also fails on a bare
-    std spelling `_STD_NAMES` does not mention, and on a pyo3 macro expansion that stops being
-    hygienic under shadowing.
-    """
-    requirement = _PYO3_REQUIREMENT.search(_FIXTURE_MANIFEST.read_text())
-    assert requirement is not None, f"{_FIXTURE_MANIFEST} no longer declares pyo3 the way this test reads it"
-
-    source = tmp_path / "src"
-    source.mkdir()
-    source.joinpath("lib.rs").write_text("pub mod cst;\n")
-    grammar = fixtures.classified_grammar(PRELUDE_GRAMMAR)
-    source.joinpath("cst.rs").write_text(RustCstGenerator(grammar).generate())
-    manifest = tmp_path / "Cargo.toml"
-    manifest.write_text(_PROBE_MANIFEST.format(root=_REPO_ROOT, pyo3=requirement.group(1)))
-
-    target_dir = cargo_target_dir("prelude-qualification")
-    result = run_cargo("clippy", manifest, target_dir, "--features", "python", "--", "-D", "warnings")
-    assert result.returncode == 0, result.stdout + result.stderr
 
 
 def test_the_scan_reports_each_bare_spelling_it_exists_to_catch() -> None:

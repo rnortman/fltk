@@ -27,9 +27,10 @@ git_override(
 bazel_dep(name = "rules_python", version = "1.5.0")
 bazel_dep(name = "rules_rust", version = "0.70.0")
 
-# Rust consumers: pin the same toolchain FLTK compiles with (see rust-toolchain.toml in
-# the pinned revision). A root module selects its own toolchain; riding the rules_rust
-# default means your crates and FLTK's runtime crates are built by different compilers.
+# Rust consumers: pin the same toolchain FLTK compiles with (the rust.toolchain versions tag
+# in FLTK's own MODULE.bazel at the pinned revision). A root module selects its own toolchain;
+# riding the rules_rust default means your crates and FLTK's runtime crates are built by
+# different compilers.
 rust = use_extension("@rules_rust//rust:extensions.bzl", "rust")
 rust.toolchain(
     edition = "2021",
@@ -41,11 +42,10 @@ Two rules on pins, both load-bearing:
 
 - **Pin only published commits.** A rev that exists solely in a local or rebased-away branch
   breaks every fetch of your module for everyone else. Pin commits reachable from `main`.
-- **Pin in lockstep.** If you also take cargo dependencies on FLTK's runtime crates (§6),
-  the cargo `rev` and the `git_override` `commit` must be the *same* commit. Generated code
-  and the runtime crates it calls into are one unit; a skew shows up as a compile error at
-  best and as behavioral mismatch at worst. Enforce it in your own repo — a script that
-  greps both files and diffs the revs is enough.
+- **One pin, because there is only one.** FLTK's crates carry no Cargo manifests — they are
+  Bazel targets only — so the runtime crates cannot be taken as cargo git dependencies and the
+  `git_override` commit is the whole pin. Generated code and the runtime crates it calls into
+  stay one unit by construction.
 
 FLTK's own third-party Rust hub (`@fltk_crates`) is module-private. You never need a
 `use_repo` for it, and you cannot name its labels from your BUILD files.
@@ -159,26 +159,14 @@ time. Let the macro generate the crate root unless you have a reason not to.
 `protocol_module` turns on `.pyi` emission into a stub package named after the target; the
 stub package lists exactly the submodules you enabled.
 
-**If you compile the cdylib yourself** — a crate root hosting two grammars, a runtime crate
-flavor the macro does not link — use `pyo3_extension_py_library(name, cdylib)` from the same
-file for the last two steps. It does the abi3 rename CPython's stable-ABI loader requires and
-wraps the result in a `py_library` carrying `@fltk//:native_py`, which is what keeps
-`import fltk._native` resolving; without it the generated CST silently falls back to its
-pure-Python Span. `name` is the importable module name.
+**Compiling the cdylib yourself is not supported.** A cdylib you assemble must compile the
+generated `#[pyclass]` code against the *same* pyo3 instance `@fltk//crates/fltk-cst-core` links,
+and crate_universe hub repos are module-local, so a downstream module has no way to name it. Build
+Python extensions with `fltk_pyo3_cdylib` — see `TODO(bazel-consumer-pyo3-seam)` in `TODO.md`.
 
-**Caveat — this recipe is not yet usable from a downstream module.** `pyo3_extension_py_library`
-is currently exercised only by targets inside fltk's own module. A cdylib you assemble yourself
-must compile the generated `#[pyclass]` code, which needs a direct `pyo3` dependency, and it must
-be the *same* pyo3 instance `@fltk//crates/fltk-cst-core` links — otherwise the
-`Bound<'_, PyModule>` types in the generated `register_classes` come from two distinct crates and
-the crate does not compile. fltk's in-repo targets name `@fltk_crates//:pyo3` directly, but
-crate_universe hub repos are module-local, so a downstream module cannot; there is no injection
-seam for pyo3 the way `//crates/fltk-serde-core:serde` (a `label_flag`) is one for serde. Until
-that is resolved, use `fltk_pyo3_cdylib` — see `TODO(bazel-consumer-pyo3-seam)` in `TODO.md`.
-
-A hand-assembled cdylib gets its `.pyi` stub package from the same codegen target that emits its
-`.rs`: set `protocol_module` and `extension_name` on the pure-Rust `generate_rust_parser` call
-your crate already uses.
+A pure-Rust crate gets its `.pyi` stub package from the same codegen target that emits its `.rs`:
+set `protocol_module` and `extension_name` on the pure-Rust `generate_rust_parser` call your crate
+already uses.
 
 ```starlark
 generate_rust_parser(
@@ -197,7 +185,7 @@ The `.rs` land under `out_dir` and the stub package under `<package>/<extension_
 action — a second, stubs-only codegen target would re-parse the grammar and regenerate the CST to
 throw it away. Because the target's outputs are now of two kinds, the macro also declares
 `:mylang_srcs_rust_srcs` (feed that to your `rust_library`'s `srcs`) and `:mylang_srcs_stub_srcs`
-(pass that as `data` to `pyo3_extension_py_library`).
+(the stub package, for whatever target ships it to your type checker).
 
 `submodules` is the list written into the `__init__.pyi` marker. Leave it empty and the marker
 names only what this action generated, which understates a crate root registering modules from
@@ -362,22 +350,23 @@ git_override(
 )
 
 crate = use_extension("@rules_rust//crate_universe:extensions.bzl", "crate")
-crate.from_cargo(
+crate.spec(package = "serde", version = "1", features = ["derive"])
+crate.from_specs(
     name = "crates",
-    cargo_lockfile = "//:Cargo.lock",
-    manifests = ["//:Cargo.toml"],
+    cargo_lockfile = "//:cargo-bazel-resolved.lock",
+    lockfile = "//:cargo-bazel-lock.json",
 )
 use_repo(crate, "crates")
 ```
 
-Your manifest declares `serde` and nothing of FLTK's: the runtime crates come from the module,
-so there are no FLTK entries in your `Cargo.toml` or `Cargo.lock` and no second pin to keep in
-lockstep with the `git_override`.
+Your hub declares `serde` and nothing of FLTK's: the runtime crates come from the module, so
+there is no second pin to keep in lockstep with the `git_override`. This is the form FLTK's own
+hubs use — no Cargo manifest anywhere — but `crate.from_cargo` with a manifest of your own works
+identically for this purpose; the flag below is what matters, not where your serde comes from.
 
-```toml
-[dependencies]
-serde = { version = "1", features = ["derive"] }
-```
+Track both lockfiles and commit them: `crate.from_specs` re-resolves your semver ranges at fetch
+time without them, so a new serde release could change what your build compiles on an unchanged
+commit. `CARGO_BAZEL_REPIN=1 bazel build …` is what rewrites the pair after a spec edit.
 
 Then generate with FLTK's macro and link the `:no_python` targets exactly as §5 does:
 
@@ -467,22 +456,13 @@ echo "$graph" | grep -q 'fltk-cst-core:no_python' || { echo "query broken"; exit
 ! echo "$graph" | grep -qi pyo3 || { echo "FAIL: pyo3 in the graph"; exit 1; }
 ```
 
-Cargo (if you consume the runtime crates as cargo git deps rather than through the module):
-
-```bash
-tree="$(cargo tree --locked -p my-grammar --edges normal,build)"
-echo "$tree" | grep -q fltk-cst-core || { echo "query broken"; exit 1; }
-! echo "$tree" | grep -q pyo3 || { echo "FAIL: pyo3 in the graph"; exit 1; }
-```
-
-FLTK runs the Bazel shape over its own graphs, in `make bazel-test` (every `:no_python`
-target and every `rust_binary`) and `make bazel-consumer-check` (the cross-module consumer
-targets).
+FLTK runs this shape over its own graphs, in `make bazel-test` (every `:no_python` target,
+every `rust_binary`, and the compile-gate crate) and `make bazel-consumer-check` (the
+cross-module consumer targets).
 
 The one edge to watch is `fltk-cst-core`: it is the only runtime crate with a `python`
-feature, and everything else reaches pyo3 through it. In Bazel that means taking
-`:no_python`; in cargo it means not writing `features = ["python"]` (the crate's default
-feature set is empty, so plain `default-features = false` is redundant but harmless).
+feature, and everything else reaches pyo3 through it. Take `:no_python` and the feature is
+never on.
 
 ---
 
@@ -503,5 +483,4 @@ feature set is empty, so plain `default-features = false` is redundant but harml
 | Both crate flavors in one binary | rustc duplicate-crate-name error |
 | Hand-authored `lib_rs` missing a `mod` declaration | green build, submodule silently absent |
 | Rev pinned that is not published | consumer fetch fails |
-| `git_override` commit ≠ cargo rev | codegen/runtime skew, compile error at best |
 | Serde mode with the serde flag left at its default | "two different versions of crate `serde`" at compile time (§6) |

@@ -15,47 +15,15 @@ jobs:
         with:
           persist-credentials: false
 
-      # rust-toolchain.toml is the single source of truth for the Rust version.
-      # dtolnay/rust-toolchain does not read that file (its `toolchain` input is
-      # required), so the channel is extracted here and passed in.  Installing
-      # "stable" instead would both diverge from the pin and make CI break on an
-      # unchanged commit whenever a new stable adds a clippy lint.
-      - name: Read pinned Rust toolchain
-        id: rust-toolchain-file
-        run: |
-          channel=$(sed -n 's/^channel *= *"\(.*\)"/\1/p' rust-toolchain.toml)
-          test -n "$channel" || { echo "no channel found in rust-toolchain.toml" >&2; exit 1; }
-          echo "channel=$channel" >> "$GITHUB_OUTPUT"
-
-      # Pinned to the v1 tag SHA; Dependabot refreshes this weekly.
-      - name: Install Rust toolchain
-        uses: dtolnay/rust-toolchain@e97e2d8cc328f1b50210efc529dca0028893a2d9  # v1
-        with:
-          toolchain: ${{ steps.rust-toolchain-file.outputs.channel }}
-          components: clippy, rustfmt
-
-      # The three compile-gate tests (tests/test_generated_rust_gate.py and friends) build a
-      # throwaway crate with `cargo --offline`, so their dependencies must already be in
-      # $CARGO_HOME.  No check step fetches anymore — the cargo build lanes that used to warm
-      # the registry as a side effect are retired — so the warm-up is explicit here.  The
-      # cache makes it a no-op on most runs; correctness does not depend on a hit.
-      - name: Cache cargo registry
-        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9  # v6.1.0
-        with:
-          path: |
-            ~/.cargo/registry/index
-            ~/.cargo/registry/cache
-          key: cargo-registry-${{ runner.os }}-${{ hashFiles('Cargo.lock') }}
-          restore-keys: |
-            cargo-registry-${{ runner.os }}-
-
-      - name: Fetch cargo dependencies
-        run: cargo fetch --locked
+      # No Rust toolchain is installed here: the Bazel lanes fetch their own hermetic one,
+      # pinned by the rust.toolchain tag in MODULE.bazel, and nothing in the gate runs cargo.
 
       # Performance-only: a shared disk cache lets the consumer lane reuse
       # crate artifacts the root lane built instead of recompiling cold.
       # The toolchain pin lives in MODULE.bazel, not the lock, so both
-      # MODULE.bazel files join both lockfiles in the cache key.
+      # MODULE.bazel files join every tracked lock in the cache key — including
+      # each workspace's cargo-bazel-lock.json, which is what decides the
+      # third-party crate versions the cached artifacts were built from.
       # Correctness does not depend on a hit.
       - name: Configure shared Bazel disk cache
         run: |
@@ -66,16 +34,46 @@ jobs:
         uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9  # v6.1.0
         with:
           path: ~/.cache/bazel-disk
-          key: bazel-${{ runner.os }}-${{ hashFiles('.bazelversion', 'MODULE.bazel', 'tests/bazel_consumer/MODULE.bazel', 'MODULE.bazel.lock', 'tests/bazel_consumer/MODULE.bazel.lock') }}
+          key: bazel-${{ runner.os }}-${{ hashFiles('.bazelversion', 'MODULE.bazel', 'tests/bazel_consumer/MODULE.bazel', 'MODULE.bazel.lock', 'tests/bazel_consumer/MODULE.bazel.lock', 'cargo-bazel-lock.json', 'tests/bazel_consumer/cargo-bazel-lock.json') }}
           restore-keys: |
             bazel-${{ runner.os }}-
 
-      # Deliberately uses check-ci, not check. cargo-deny (the supply-chain /
-      # advisory gate) is not installed on this runner; it is enforced via the
-      # local pre-commit hook instead. check-ci runs the full check-common
-      # suite, which is identical to check minus cargo-deny.
+      # check-ci is an alias for check: the two lanes no longer differ.
       - name: Run checks
         run: make check-ci
+
+      # --test_output=errors puts a failing target's log in the step output above, which covers
+      # the common case.  This covers what it cannot: multi-megabyte logs, the test.xml files,
+      # and undeclared outputs, none of which survive the runner.  bazel-testlogs is a
+      # convenience symlink, so each workspace's tree is resolved and copied; the consumer lane
+      # is its own workspace and has its own.  `bazel info` reuses the running server and
+      # rebuilds nothing.
+      #
+      # Each copy is independent and best-effort.  The step runs under `bash -e`, and a failure
+      # of the root copy — the tree does not exist because the run died before any root test
+      # ran, or `cp -rL` returns nonzero on a dangling link inside a partially-written
+      # test.outputs directory — would otherwise take the consumer lane's logs down with it,
+      # and the consumer lane is where a whole workspace's evidence lives.  A partial tree is
+      # still worth uploading, so a nonzero copy is not allowed to end the step.
+      - name: Collect Bazel test logs
+        if: failure()
+        continue-on-error: true
+        run: |
+          mkdir -p testlogs-artifact
+          root="$(bazel info bazel-testlogs || true)"
+          [ -n "$root" ] && cp -rL "$root" testlogs-artifact/root || true
+          consumer="$(cd tests/bazel_consumer && bazel info bazel-testlogs || true)"
+          [ -n "$consumer" ] && cp -rL "$consumer" testlogs-artifact/consumer || true
+          find testlogs-artifact -maxdepth 1
+
+      - name: Upload Bazel test logs
+        if: failure()
+        continue-on-error: true
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02  # v4
+        with:
+          name: bazel-testlogs
+          path: testlogs-artifact
+          if-no-files-found: ignore
 
       # Bazel's disk cache has no eviction of its own, and the restore-keys prefix
       # makes every key change layer a fresh generation of artifacts (new toolchain,

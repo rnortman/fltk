@@ -555,13 +555,13 @@ class RustCstGenerator:
         """Return a complete, compilable .rs file as a string."""
         parts: list[str] = []
 
+        child_union = self._child_class_union()
+
         parts.append(self._gen_header())
-        parts.append(self._preamble())
+        parts.append(self._preamble(child_union))
 
         # Emit NodeKind enum before node structs so the kind getter can reference it.
         parts.append(self._node_kind_block())
-
-        child_union = self._child_class_union()
 
         for class_name, labels, rule_name in self._rule_info():
             parts.append(self._label_enum_block(class_name, labels))
@@ -594,11 +594,19 @@ class RustCstGenerator:
     # Preamble
     # ------------------------------------------------------------------
 
-    def _preamble(self) -> str:
+    def _preamble(self, child_union: list[str]) -> str:
+        # Shared appears in the non-python half only through node-typed children (child-enum
+        # variants, the write-side accessors, the Drop/PartialEq machinery).  A grammar whose
+        # rules capture only spans has none of those, and a bare import would be an unused
+        # import — a hard failure under -D warnings.  The python-gated half wraps every node in
+        # Shared<T> regardless, so the import moves under that gate rather than disappearing.
+        shared_import = "use fltk_cst_core::Shared;\n"
+        if not child_union:
+            shared_import = f'#[cfg(feature = "python")]\n{shared_import}'
         return (
             "use fltk_cst_core::CstError;\n"
             "use fltk_cst_core::Span;\n"
-            "use fltk_cst_core::Shared;\n"
+            f"{shared_import}"
             "use std::fmt;\n"
             '#[cfg(feature = "python")]\n'
             "use fltk_cst_core::{extract_span, get_span_type, span_to_pyobject};\n"

@@ -106,8 +106,8 @@ impl SourceText {
 
     /// ABI marker: ``"fltk-cst-core/<version>"`` baked into the rlib at compile time.
     ///
-    /// Every cdylib linking the same ``fltk-cst-core`` rlib with the same Cargo.toml
-    /// version exposes this identical string on its locally-registered ``SourceText`` type.
+    /// Every cdylib linking the same ``fltk-cst-core`` rlib with the same crate version
+    /// exposes this identical string on its locally-registered ``SourceText`` type.
     /// ``extract_source_text`` (``cross_cdylib.rs``) reads this classattr to gate
     /// ``downcast_unchecked`` across the cdylib boundary without relying on type-object
     /// identity (which is not available in the canonical→consumer direction).

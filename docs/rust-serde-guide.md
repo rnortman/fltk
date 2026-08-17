@@ -120,8 +120,10 @@ unknown field `prot`, expected one of `host`, `port`, `verbose` at line 2, colum
 
 The message is serde's; the position is FLTK's.
 
-`Cargo.toml` gains exactly two entries beyond the CST/parser crates: `serde` (with its `derive`
-feature, for your own targets) and `fltk-serde-core`.
+Your crate gains exactly two dependencies beyond the CST/parser crates: `serde` (with its
+`derive` feature, for your own types) and `@fltk//crates/fltk-serde-core:no_python`, with the
+serde flag pointed at your own hub — `docs/bazel-consumer-guide.md` §6 is that recipe and the
+reason it is a rule rather than a preference.
 
 ## Generating
 

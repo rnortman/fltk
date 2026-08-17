@@ -112,6 +112,8 @@ impl TerminalShape {
                 .groups
                 .iter()
                 .map(|group| match group {
+                    // TODO(ast-synthesised-literal-spans): a non-captured piece gets no source,
+                    // and the generated text accessors panic on it.
                     None => Span::unknown(),
                     Some(name) => {
                         let matched = captures

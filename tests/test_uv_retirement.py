@@ -213,10 +213,8 @@ def test_launchers_invoke_no_uv() -> None:
 
 
 def test_tooling_config_invokes_no_uv() -> None:
-    """Prose is not the only place a uv recipe survives; `[tool.uv]` lived in pyproject.toml.
-
-    TODO(uv-retired-agent-hook): `.claude/settings.json` is not in this set yet — its
-    PostToolUse hook still runs `uv run ruff format` and would turn this red.
+    """Prose is not the only place a uv recipe survives; `[tool.uv]` lived in pyproject.toml,
+    and `.claude/settings.json` can run a tool from an agent hook on every file edit.
     """
     paths = _tooling()
     assert paths, "//:repo_tooling_files declares no srcs, so the tooling scan is vacuous"

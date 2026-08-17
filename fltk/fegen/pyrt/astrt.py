@@ -929,6 +929,8 @@ def terminal_to_cst(
             continue
         node = node_class(span=terminalsrc.UnknownSpan if redirected else source_span(text))
         for label, group in alternative.pieces:
+            # TODO(ast-synthesised-literal-spans): a non-captured piece gets no source, and the
+            # generated text accessors panic on it.
             child = terminalsrc.UnknownSpan if group is None else source_span(match.group(group))
             node.append(child, None if label is None else getattr(node_class.Label, label))
         return node

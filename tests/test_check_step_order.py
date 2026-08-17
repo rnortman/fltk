@@ -1,20 +1,21 @@
-"""The ``CHECK_STEPS`` order the Makefile's lock gates depend on, and ``check-cargo-lock``' coverage.
+"""The ``CHECK_STEPS`` order the Makefile's lock gate depends on, and the shape of the gate.
 
 A step that only *diffs* a generated file passes vacuously unless the step that *rewrites* that
-file has already run: `check-bazel-locks` diffs the two `MODULE.bazel.lock` files the Bazel lanes
-repair in place (bzlmod's default `lockfile_mode` is `update`). That ordering is stated in a
-comment above the list, and a comment cannot fail: appending a new lockfile-rewriting step after
-`check-bazel-locks` would silently restore the blind spot that gate was added to close — a stale
-tracked lockfile that every gate run repairs locally and no gate run demands be committed.
+file has already run: `check-bazel-locks` diffs the tracked Bazel-written locks — the two
+`MODULE.bazel.lock` files the Bazel lanes repair in place (bzlmod's default `lockfile_mode` is
+`update`) and each workspace's crate_universe pair, which a repin rewrites. That ordering is
+stated in a comment above the list, and a comment cannot fail: appending a new
+lockfile-rewriting step after `check-bazel-locks` would silently restore the blind spot that
+gate was added to close — a stale tracked lockfile that every gate run repairs locally and no
+gate run demands be committed.
 
-`Cargo.lock` has no rewriting step at all, so `check-cargo-lock` probes each manifest with
-`cargo metadata --locked` itself. Both that probe and the diff derive their manifests from the
-tracked `Cargo.lock` set rather than naming them, so neither can go blind to a lock the tree
-gained — which is what the tests below hold in place.
+`check` and `check-ci` are aliases. A divergence between the two lanes is a defect, not a
+policy, which is what `test_the_two_lanes_do_not_diverge` holds in place.
 """
 
 from __future__ import annotations
 
+import fnmatch
 import pathlib
 import re
 
@@ -63,10 +64,55 @@ def test_the_gate_still_runs_every_bazel_lane() -> None:
     assert not missing, f"CHECK_STEPS no longer runs {missing}, so `make check` stopped covering it"
 
 
-def test_both_lock_diffs_are_in_the_gate() -> None:
+def test_the_lock_diff_is_in_the_gate() -> None:
     """A lock nothing diffs is a tracked file every local run repairs and no run demands."""
     diffs = {step for step in check_steps() if step.startswith("check-")}
-    assert diffs == {"check-cargo-lock", "check-bazel-locks"}, diffs
+    assert diffs == {"check-bazel-locks"}, diffs
+
+
+def test_the_lock_diff_derives_its_file_set_from_git() -> None:
+    """A hand-written list covers only what it happens to name.
+
+    A third Bazel workspace, or a second crate_universe hub in an existing one, brings tracked
+    locks that a listed recipe never diffs and that every local run repairs in place — the
+    blind spot this step exists to close, reopened for anything outside the list. So the recipe
+    derives the set with `git ls-files`, and a derivation that comes back empty has to fail
+    rather than diff nothing successfully.
+    """
+    recipe = _recipe("check-bazel-locks")
+    for pattern in ("'*MODULE.bazel.lock'", "'*cargo-bazel-lock.json'", "'*cargo-bazel-resolved.lock'"):
+        assert "git ls-files" in recipe and pattern in recipe, f"{pattern} is not derived from git: {recipe}"
+    assert 'test -n "$$locks"' in recipe, f"an empty lock derivation must fail, not pass: {recipe}"
+    assert "git diff --exit-code -- $$locks" in recipe, f"the diff must run over the derived set: {recipe}"
+
+
+def test_the_derivation_patterns_still_reach_every_tracked_lock() -> None:
+    """The glob patterns themselves can go blind; this is what notices.
+
+    Each of these is rewritten by a lane above the diff step and by nothing else — bzlmod
+    repairs a stale `MODULE.bazel.lock` in place, and a repin rewrites the crate_universe pair.
+    The derivation above is what makes a *new* one covered; this is what makes a pattern that
+    stopped matching a *known* one fail.
+    """
+    patterns = ("*MODULE.bazel.lock", "*cargo-bazel-lock.json", "*cargo-bazel-resolved.lock")
+    for lock in (
+        "MODULE.bazel.lock",
+        "cargo-bazel-lock.json",
+        "cargo-bazel-resolved.lock",
+        "tests/bazel_consumer/MODULE.bazel.lock",
+        "tests/bazel_consumer/cargo-bazel-lock.json",
+        "tests/bazel_consumer/cargo-bazel-resolved.lock",
+    ):
+        assert any(fnmatch.fnmatch(lock, pattern) for pattern in patterns), (
+            f"{lock} is tracked and Bazel-written but no derivation pattern matches it"
+        )
+
+
+def test_the_two_lanes_do_not_diverge() -> None:
+    """`check-ci` is an alias. A step on one lane alone is coverage only one of them has."""
+    text = _MAKEFILE.read_text()
+    assert re.search(r"^check: check-common$", text, re.MULTILINE), text[: text.index("\nfix:")]
+    assert re.search(r"^check-ci: check$", text, re.MULTILINE), text[: text.index("\nfix:")]
 
 
 def test_the_bazel_lock_diff_is_the_last_step() -> None:
@@ -77,49 +123,19 @@ def test_the_bazel_lock_diff_is_the_last_step() -> None:
         assert steps.index(lane) < steps.index("check-bazel-locks"), steps
 
 
-def _check_cargo_lock_recipe() -> str:
-    text = _MAKEFILE.read_text()
-    start = text.index("\ncheck-cargo-lock:")
-    return text[start : text.index("\n\n", start)]
+def test_the_toolchain_guard_derives_its_mirror_set_and_fails_on_an_empty_one() -> None:
+    """The Rust version pin has one home and every other module mirrors it.
 
-
-def test_both_halves_of_the_cargo_gate_derive_their_manifests_from_git() -> None:
-    """Neither half may carry a hand-written list: a list covers only what it happens to name.
-
-    Both the staleness probe and the diff take the tracked `Cargo.lock` set from `git ls-files`,
-    so a crate that later regains a tracked lock is picked up by both at once. A literal path in
-    the recipe is the failure mode this replaces — two hand-written lists that agree with each
-    other and not with the tree.
+    A module with no `rust.toolchain` tag rides rules_rust's default compiler over the same
+    source with nothing objecting, so the guard reads the pin out of the root MODULE.bazel and
+    holds every tracked module that names rules_rust to it. The set is derived from git rather
+    than listed, and a derivation covering only the root — which compares equal to itself — is
+    a guard checking nothing and must fail.
     """
-    recipe = _check_cargo_lock_recipe()
-    assert recipe.count("git ls-files '*Cargo.lock'") == 2, recipe
-    assert "$${lock%Cargo.lock}Cargo.toml" in recipe, f"the probed manifest must come from the lock: {recipe}"
-    assert "--manifest-path $$manifest" in recipe, f"the probe must take the derived manifest: {recipe}"
-    assert "git diff --exit-code -- $$(git ls-files '*Cargo.lock')" in recipe, recipe
-
-    # A path spelled out in a command is a list that has to be maintained; the messages are
-    # prose and may name whatever they like.
-    words = [word.strip(";\\'\"") for word in recipe.split() if not word.startswith("FAIL:")]
-    named = [word for word in words if "/" in word and word.endswith(("Cargo.toml", "Cargo.lock"))]
-    assert not named, f"check-cargo-lock names {named} literally instead of deriving it: {recipe}"
-
-
-def test_the_cargo_gate_fails_rather_than_passing_on_an_empty_derivation() -> None:
-    """A derived list that resolves to nothing must be an error, not a green vacuous run."""
-    recipe = _check_cargo_lock_recipe()
-    assert 'test -n "$$locks"' in recipe, recipe
-
-
-def test_the_dependabot_cargo_directories_are_derived_from_the_same_locks() -> None:
-    """The updater's directory list is the one restatement of the tracked-lock set.
-
-    A crate that regains a tracked lock is probed and diffed by this gate but gets no
-    dependency updates until the updater names it too, and nothing else pairs the two files.
-    """
-    recipe = _check_cargo_lock_recipe()
-    assert ".github/dependabot.yml" in recipe, f"nothing pairs the updater to the tracked locks: {recipe}"
-    assert 'test -n "$$declared"' in recipe, f"an empty parse must fail rather than compare equal: {recipe}"
-    assert 'test "$$derived" = "$$declared"' in recipe, recipe
+    recipe = _recipe("bazel-toolchain-guard")
+    assert "MODULE.bazel" in recipe and "rust-toolchain.toml" not in recipe, recipe
+    assert "git ls-files 'MODULE.bazel' '*/MODULE.bazel'" in recipe, recipe
+    assert 'test "$$checked" -gt 1' in recipe, f"the guard must require a mirror beyond the root: {recipe}"
 
 
 def _recipe(target: str) -> str:
@@ -139,6 +155,19 @@ def test_the_pyo3_guard_survives_in_the_bazel_test_recipe() -> None:
     assert 'test -n "$$labels"' in recipe, f"an empty target derivation must fail, not pass: {recipe}"
     assert "fltk-cst-core:no_python" in recipe, f"the positive control is what proves the cquery ran: {recipe}"
     assert "grep -qi pyo3" in recipe, recipe
+
+
+def test_the_probe_coverage_sweep_survives_in_the_bazel_test_recipe() -> None:
+    """The cargo retirement gate cannot see a package that declares no probe.
+
+    That gate reads a runfiles tree, which a package reaches only through its own
+    `cargo_file_probe`; a package that never declares one carries a manifest and a cargo
+    invocation with every test green. Only a query over the build graph sees the opt-out.
+    """
+    recipe = _recipe("bazel-test")
+    assert 'attr(name, "^cargo_file_probe$$", //...)' in recipe, recipe
+    assert "--output package" in recipe, f"the sweep compares packages, not labels: {recipe}"
+    assert 'test -n "$$probed"' in recipe, f"an empty probe derivation must fail, not pass: {recipe}"
 
 
 def test_the_pyo3_guard_survives_in_the_consumer_recipe() -> None:

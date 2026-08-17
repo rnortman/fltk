@@ -1,5 +1,5 @@
 {
-  "checksum": "6e59e9d789b7d198149d6ed40cf820225eeb2346f2f1e35922e3114368e1ae97",
+  "checksum": "cd5e0e9d68d34b1c9596d30f15dd713a6c429d1d3397082dfd89e7f767a22a86",
   "crates": {
     "ahash 0.7.8": {
       "name": "ahash",
@@ -1311,6 +1311,74 @@
       ],
       "license_file": "LICENSE-APACHE"
     },
+    "direct-cargo-bazel-deps 0.0.1": {
+      "name": "direct-cargo-bazel-deps",
+      "version": "0.0.1",
+      "package_url": null,
+      "repository": null,
+      "targets": [
+        {
+          "Library": {
+            "crate_name": "direct_cargo_bazel_deps",
+            "crate_root": ".direct_cargo_bazel_deps.rs",
+            "srcs": {
+              "allow_empty": true,
+              "include": [
+                "**/*.rs"
+              ]
+            }
+          }
+        }
+      ],
+      "library_target_name": "direct_cargo_bazel_deps",
+      "common_attrs": {
+        "compile_data_glob": [
+          "**"
+        ],
+        "deps": {
+          "common": [
+            {
+              "id": "clap 4.6.4",
+              "target": "clap"
+            },
+            {
+              "id": "indexmap 2.14.0",
+              "target": "indexmap"
+            },
+            {
+              "id": "pyo3 0.29.0",
+              "target": "pyo3"
+            },
+            {
+              "id": "regex-automata 0.4.16",
+              "target": "regex_automata"
+            },
+            {
+              "id": "rust_decimal 1.42.1",
+              "target": "rust_decimal"
+            },
+            {
+              "id": "serde 1.0.229",
+              "target": "serde"
+            },
+            {
+              "id": "serde_json 1.0.151",
+              "target": "serde_json"
+            },
+            {
+              "id": "uuid 1.24.0",
+              "target": "uuid"
+            }
+          ],
+          "selects": {}
+        },
+        "edition": "2018",
+        "version": "0.0.1"
+      },
+      "license": null,
+      "license_ids": [],
+      "license_file": null
+    },
     "equivalent 1.0.2": {
       "name": "equivalent",
       "version": "1.0.2",
@@ -1349,324 +1417,6 @@
         "MIT"
       ],
       "license_file": "LICENSE-APACHE"
-    },
-    "fltk-ast-core 0.4.0": {
-      "name": "fltk-ast-core",
-      "version": "0.4.0",
-      "package_url": null,
-      "repository": null,
-      "targets": [
-        {
-          "Library": {
-            "crate_name": "fltk_ast_core",
-            "crate_root": "src/lib.rs",
-            "srcs": {
-              "allow_empty": true,
-              "include": [
-                "**/*.rs"
-              ]
-            }
-          }
-        }
-      ],
-      "library_target_name": "fltk_ast_core",
-      "common_attrs": {
-        "compile_data_glob": [
-          "**"
-        ],
-        "crate_features": {
-          "common": [
-            "default",
-            "indexmap"
-          ],
-          "selects": {}
-        },
-        "deps": {
-          "common": [
-            {
-              "id": "indexmap 2.14.0",
-              "target": "indexmap"
-            },
-            {
-              "id": "regex-automata 0.4.16",
-              "target": "regex_automata"
-            }
-          ],
-          "selects": {}
-        },
-        "deps_dev": {
-          "common": [
-            {
-              "id": "rust_decimal 1.42.1",
-              "target": "rust_decimal"
-            },
-            {
-              "id": "uuid 1.24.0",
-              "target": "uuid"
-            }
-          ],
-          "selects": {}
-        },
-        "edition": "2021",
-        "version": "0.4.0"
-      },
-      "license": "MIT",
-      "license_ids": [
-        "MIT"
-      ],
-      "license_file": null
-    },
-    "fltk-cst-core 0.4.0": {
-      "name": "fltk-cst-core",
-      "version": "0.4.0",
-      "package_url": null,
-      "repository": null,
-      "targets": [
-        {
-          "Library": {
-            "crate_name": "fltk_cst_core",
-            "crate_root": "src/lib.rs",
-            "srcs": {
-              "allow_empty": true,
-              "include": [
-                "**/*.rs"
-              ]
-            }
-          }
-        }
-      ],
-      "library_target_name": "fltk_cst_core",
-      "common_attrs": {
-        "compile_data_glob": [
-          "**"
-        ],
-        "crate_features": {
-          "common": [
-            "default",
-            "python"
-          ],
-          "selects": {}
-        },
-        "deps": {
-          "common": [
-            {
-              "id": "pyo3 0.29.0",
-              "target": "pyo3"
-            }
-          ],
-          "selects": {}
-        },
-        "edition": "2021",
-        "version": "0.4.0"
-      },
-      "license": "MIT",
-      "license_ids": [
-        "MIT"
-      ],
-      "license_file": null
-    },
-    "fltk-fmt-cli 0.4.0": {
-      "name": "fltk-fmt-cli",
-      "version": "0.4.0",
-      "package_url": null,
-      "repository": null,
-      "targets": [
-        {
-          "Library": {
-            "crate_name": "fltk_fmt_cli",
-            "crate_root": "src/lib.rs",
-            "srcs": {
-              "allow_empty": true,
-              "include": [
-                "**/*.rs"
-              ]
-            }
-          }
-        }
-      ],
-      "library_target_name": "fltk_fmt_cli",
-      "common_attrs": {
-        "compile_data_glob": [
-          "**"
-        ],
-        "deps": {
-          "common": [
-            {
-              "id": "clap 4.6.4",
-              "target": "clap"
-            }
-          ],
-          "selects": {}
-        },
-        "edition": "2021",
-        "version": "0.4.0"
-      },
-      "license": "MIT",
-      "license_ids": [
-        "MIT"
-      ],
-      "license_file": null
-    },
-    "fltk-native 0.4.0": {
-      "name": "fltk-native",
-      "version": "0.4.0",
-      "package_url": null,
-      "repository": null,
-      "targets": [],
-      "library_target_name": null,
-      "common_attrs": {
-        "compile_data_glob": [
-          "**"
-        ],
-        "crate_features": {
-          "common": [
-            "default",
-            "extension-module",
-            "python"
-          ],
-          "selects": {}
-        },
-        "deps": {
-          "common": [
-            {
-              "id": "pyo3 0.29.0",
-              "target": "pyo3"
-            }
-          ],
-          "selects": {}
-        },
-        "edition": "2021",
-        "version": "0.4.0"
-      },
-      "license": null,
-      "license_ids": [],
-      "license_file": null
-    },
-    "fltk-parser-core 0.4.0": {
-      "name": "fltk-parser-core",
-      "version": "0.4.0",
-      "package_url": null,
-      "repository": null,
-      "targets": [
-        {
-          "Library": {
-            "crate_name": "fltk_parser_core",
-            "crate_root": "src/lib.rs",
-            "srcs": {
-              "allow_empty": true,
-              "include": [
-                "**/*.rs"
-              ]
-            }
-          }
-        }
-      ],
-      "library_target_name": "fltk_parser_core",
-      "common_attrs": {
-        "compile_data_glob": [
-          "**"
-        ],
-        "deps": {
-          "common": [
-            {
-              "id": "regex-automata 0.4.16",
-              "target": "regex_automata"
-            }
-          ],
-          "selects": {}
-        },
-        "edition": "2021",
-        "version": "0.4.0"
-      },
-      "license": "MIT",
-      "license_ids": [
-        "MIT"
-      ],
-      "license_file": null
-    },
-    "fltk-serde-core 0.4.0": {
-      "name": "fltk-serde-core",
-      "version": "0.4.0",
-      "package_url": null,
-      "repository": null,
-      "targets": [
-        {
-          "Library": {
-            "crate_name": "fltk_serde_core",
-            "crate_root": "src/lib.rs",
-            "srcs": {
-              "allow_empty": true,
-              "include": [
-                "**/*.rs"
-              ]
-            }
-          }
-        }
-      ],
-      "library_target_name": "fltk_serde_core",
-      "common_attrs": {
-        "compile_data_glob": [
-          "**"
-        ],
-        "deps": {
-          "common": [
-            {
-              "id": "serde 1.0.229",
-              "target": "serde"
-            }
-          ],
-          "selects": {}
-        },
-        "deps_dev": {
-          "common": [
-            {
-              "id": "serde_json 1.0.151",
-              "target": "serde_json"
-            }
-          ],
-          "selects": {}
-        },
-        "edition": "2021",
-        "version": "0.4.0"
-      },
-      "license": "MIT",
-      "license_ids": [
-        "MIT"
-      ],
-      "license_file": null
-    },
-    "fltk-unparser-core 0.4.0": {
-      "name": "fltk-unparser-core",
-      "version": "0.4.0",
-      "package_url": null,
-      "repository": null,
-      "targets": [
-        {
-          "Library": {
-            "crate_name": "fltk_unparser_core",
-            "crate_root": "src/lib.rs",
-            "srcs": {
-              "allow_empty": true,
-              "include": [
-                "**/*.rs"
-              ]
-            }
-          }
-        }
-      ],
-      "library_target_name": "fltk_unparser_core",
-      "common_attrs": {
-        "compile_data_glob": [
-          "**"
-        ],
-        "edition": "2021",
-        "version": "0.4.0"
-      },
-      "license": "MIT",
-      "license_ids": [
-        "MIT"
-      ],
-      "license_file": null
     },
     "funty 2.0.0": {
       "name": "funty",
@@ -6115,13 +5865,7 @@
   },
   "binary_crates": [],
   "workspace_members": {
-    "fltk-ast-core 0.4.0": "crates/fltk-ast-core",
-    "fltk-cst-core 0.4.0": "crates/fltk-cst-core",
-    "fltk-fmt-cli 0.4.0": "crates/fltk-fmt-cli",
-    "fltk-native 0.4.0": "",
-    "fltk-parser-core 0.4.0": "crates/fltk-parser-core",
-    "fltk-serde-core 0.4.0": "crates/fltk-serde-core",
-    "fltk-unparser-core 0.4.0": "crates/fltk-unparser-core"
+    "direct-cargo-bazel-deps 0.0.1": ""
   },
   "conditions": {
     "aarch64-apple-darwin": [
@@ -6182,12 +5926,11 @@
     "indexmap 2.14.0",
     "pyo3 0.29.0",
     "regex-automata 0.4.16",
-    "serde 1.0.229"
-  ],
-  "direct_dev_deps": [
     "rust_decimal 1.42.1",
+    "serde 1.0.229",
     "serde_json 1.0.151",
     "uuid 1.24.0"
   ],
+  "direct_dev_deps": [],
   "unused_patches": []
 }

@@ -79,7 +79,8 @@ match value {
 }
 ```
 
-`Cargo.toml` needs one entry beyond the CST/parser crates: `fltk-ast-core`. The two shape comments
+Your crate needs one dependency beyond the CST/parser crates:
+`@fltk//crates/fltk-ast-core:no_python`. The two shape comments
 name types in shorthand; the emitted file spells std items and runtime types by absolute path, for
 the reason under [Runtime dependencies](#runtime-dependencies).
 
@@ -153,9 +154,9 @@ opening the output file, so a rejected sidecar leaves no artifact behind. Only t
 being generated is required to be complete: a `custom(...)` list may omit the other backend's
 entries.
 
-The Rust module's header comment names the `fltk-ast-core` cargo features it needs — `indexmap`
-for `key:` collections, `uuid` / `decimal` for those two builtins. Enable them on the runtime
-crate.
+The Rust module's header comment names the `fltk-ast-core` crate features it needs — `indexmap`
+for `key:` collections, `uuid` / `decimal` for those two builtins.
+`@fltk//crates/fltk-ast-core:no_python` carries all three.
 
 ### Bazel (Rust)
 
@@ -411,7 +412,7 @@ The coercion replaces the node's `text: String` with `value: <type>`, parsed by 
 shared by both backends: the same lexemes are accepted, the same range refusals are raised, and
 serialization renders the same bytes. `uuid` and `decimal` map to `fltk_ast_core::Uuid` /
 `Decimal` (re-exported so generated code and the runtime cannot be on two versions) and to
-`uuid.UUID` / `decimal.Decimal`, each behind its own cargo feature on the Rust side.
+`uuid.UUID` / `decimal.Decimal`, each behind its own crate feature on the Rust side.
 
 `type: custom(...)` takes six entries, three per backend, and only the backends being generated
 must be complete:

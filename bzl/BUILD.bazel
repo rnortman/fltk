@@ -2,6 +2,7 @@
 # BUILD files only; nothing here is part of the consumer-facing surface (that is
 # //:rules.bzl and //:rust.bzl).
 
+load(":cargo_probe.bzl", "cargo_file_probe")
 load(":lint_flag.bzl", "lint_flag")
 
 # Public visibility because the root BUILD.bazel's lint targets depend on it, and the root
@@ -12,3 +13,14 @@ lint_flag(
     build_setting_default = False,
     visibility = ["//visibility:public"],
 )
+
+# These files, for the retirement gates in //tests that scan Starlark for a retired tool's
+# invocation.  A glob so a helper added later is scanned the day it lands.
+filegroup(
+    name = "starlark_srcs",
+    srcs = glob(["*.bzl"]),
+    visibility = ["//:__pkg__"],
+)
+
+# This package's half of the Cargo retirement gate's declaration probe.
+cargo_file_probe()

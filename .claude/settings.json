@@ -2,18 +2,5 @@
   "agent": "review-chain:orchestrator",
   "env": {
     "CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS": "1"
-  },
-  "hooks": {
-    "PostToolUse": [
-      {
-        "matcher": "Edit|MultiEdit|Write",
-        "hooks": [
-          {
-            "type": "command",
-            "command": "if echo \"$1\" | jq -r '.tool_input.file_path // empty' | grep -q '\\.py$'; then file_path=$(echo \"$1\" | jq -r '.tool_input.file_path'); echo \"Formatting Python file: $file_path\"; cd /home/rnortman/src/fltk && uv run ruff format \"$file_path\" 2>/dev/null || echo \"Formatting completed\"; fi"
-          }
-        ]
-      }
-    ]
   }
 }

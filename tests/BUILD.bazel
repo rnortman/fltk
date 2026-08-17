@@ -1,7 +1,11 @@
-load("@rules_python//python:defs.bzl", "py_library")
+load("@bazel_skylib//rules:build_test.bzl", "build_test")
+load("@rules_python//python:defs.bzl", "py_binary", "py_library")
+load("@rules_rust//rust:defs.bzl", "rust_library", "rust_test")
 load("//:rules.bzl", "generate_parser")
+load("//bzl:cargo_probe.bzl", "cargo_file_probe")
 load("//bzl:gencode_tool.bzl", "GENCODE_TOOL_DATA", "GENCODE_TOOL_DEPS")
 load("//bzl:py_test.bzl", "fltk_py_tests")
+load("//bzl:python_probe.bzl", "python_feature_probe")
 load("//bzl:pyright_tool.bzl", "PYRIGHT_TOOL_DEPS")
 
 # Files the root package's targets reference across this package boundary.
@@ -30,12 +34,13 @@ filegroup(
 py_library(
     name = "test_support",
     srcs = [
+        "cargo_scan.py",
         "fegen_ast_fixture.py",
         "fixture_ast_layer.py",
-        "generated_rust_gate.py",
         "gsm2tree_helpers.py",
         "parser_parity.py",
         "pyright_test_utils.py",
+        "retirement_scan.py",
         "tree_paths.py",
         "unparser_parity.py",
         "uv_scan.py",
@@ -48,9 +53,23 @@ py_library(
     ],
     visibility = ["//:__pkg__"],
     deps = [
+        ":rust_gate_cases",
         "//:fltk",
         "@pypi//pytest",
     ],
+)
+
+# The compile gate's case library, on its own rather than inside :test_support: the code
+# generator below is a genrule tool, so everything reachable from it is in that action's key,
+# and the action rewrites ~100 .rs files that the largest Rust compile in the tree consumes.
+# Through the aggregate that key would cover every helper module and fixture corpus in this
+# package, and an edit to any of them would recompile the gate crate.  :test_support depends on
+# it, so the suites that import `tests.rust_gate_cases` see no difference.
+py_library(
+    name = "rust_gate_cases",
+    srcs = ["rust_gate_cases.py"],
+    visibility = ["//:__pkg__"],
+    deps = ["//:fltk"],
 )
 
 # The typing-protocol source the rust_parser_fixture extension's .pyi files annotate their
@@ -85,49 +104,200 @@ _POC_CST = ["//tests/rust_poc_cst:poc_cst"]
 # itself: the type-checker resolves imports out of the same runfiles tree.
 _PYRIGHT = PYRIGHT_TOOL_DEPS + [":test_support"]
 
-# The compile gates: pytest files that write a throwaway crate with path dependencies on this
-# repo and hand it to cargo, because "does the generated Rust compile" needs a Rust compiler
-# driver.  They are the one deliberate exception to the all-Bazel rule —
-# TODO(bazel-rustc-gate-tests) is the hermetic replacement.
+# ── The generated-Rust compile gate ───────────────────────────────────────────
+# "does the generated Rust compile, and what does it do when it runs" needs a compiler, so the
+# shapes in tests/rust_gate_cases.py are generated into one crate, compiled here, and their
+# `#[test]` modules run by :rust_gate_runtime_test.  Clippy comes from the aspect the lint lane
+# already sweeps every rust target with, so there is no gate-specific lint target.
 #
-# They run unsandboxed — cargo wants a real toolchain, a writable target dir and the registry
-# cache in $CARGO_HOME — through the `local` *attribute* rather than the `local` tag, because a
-# tag reaches further than the test: tags propagate into every action of the target, including
-# the PyCompile of the shared pytest main, whose output path the other 47 targets in this
-# package also produce.  The differing action keys are then a conflict Bazel rejects at
-# analysis, which is also why the `requires-cargo` tag comes with `precompile = "disabled"`.
-# That tag itself is inert — it is there so a lane without a toolchain can filter these out.
-#
-# The inherited variables are what cargo needs: it lives on PATH under $HOME (rustup), reads the
-# registry cache out of $CARGO_HOME, and picks its toolchain through $RUSTUP_HOME plus the
-# rust-toolchain.toml in the runfiles root.  $RUSTUP_TOOLCHAIN is deliberately NOT inherited:
-# rustup ranks it above the pin file, so inheriting it would let a contributor's ambient
-# `RUSTUP_TOOLCHAIN=nightly` compile and clippy the generated code under a different compiler
-# than CI, silently.  Bazel scrubs it, so the staged pin governs.  Resolution stays `--offline`,
-# so a warm registry cache is a precondition: `cargo fetch --locked` after a fresh clone.
-# $HOME also holds the gates' build directories (tests/generated_rust_gate.py's
-# cargo_target_dir): the scratch directory Bazel wipes per run would make every gate recompile
-# the runtime crates, and all three are invalidated together by //:cargo_workspace_files.
-#
-# `large` because a cold compile of the generated crate is minutes.
-_CARGO_GATE = {
-    "env_inherit": [
-        "CARGO_HOME",
-        "HOME",
-        "PATH",
-        "RUSTUP_HOME",
+# The file set is a function of `CASES`, and a Bazel action declares its outputs statically, so
+# the list is written out here.  Drift is caught twice: a file the generator stops writing is a
+# missing declared output, and tests/test_rust_gate_manifest.py holds this list to what `CASES`
+# implies.
+_RUST_GATE_FILES = [
+    "lib.rs",
+    "config/cst.rs",
+    "config/ast.rs",
+    "config/parser.rs",
+    "config/unparser.rs",
+    "config/de.rs",
+    "config/runtime.rs",
+    "config/mod.rs",
+    "fold/cst.rs",
+    "fold/ast.rs",
+    "fold/parser.rs",
+    "fold/de.rs",
+    "fold/runtime.rs",
+    "fold/mod.rs",
+    "literal_labels/cst.rs",
+    "literal_labels/ast.rs",
+    "literal_labels/parser.rs",
+    "literal_labels/unparser.rs",
+    "literal_labels/runtime.rs",
+    "literal_labels/mod.rs",
+    "serialize/cst.rs",
+    "serialize/ast.rs",
+    "serialize/runtime.rs",
+    "serialize/mod.rs",
+    "task/cst.rs",
+    "task/ast.rs",
+    "task/de.rs",
+    "task/runtime.rs",
+    "task/mod.rs",
+    "merged/cst.rs",
+    "merged/ast.rs",
+    "merged/runtime.rs",
+    "merged/mod.rs",
+    "single_kind_sum/cst.rs",
+    "single_kind_sum/ast.rs",
+    "single_kind_sum/mod.rs",
+    "multi_kind_sum/cst.rs",
+    "multi_kind_sum/ast.rs",
+    "multi_kind_sum/mod.rs",
+    "shapes/cst.rs",
+    "shapes/ast.rs",
+    "shapes/runtime.rs",
+    "shapes/mod.rs",
+    "tree/cst.rs",
+    "tree/ast.rs",
+    "tree/mod.rs",
+    "keyed_tree/cst.rs",
+    "keyed_tree/ast.rs",
+    "keyed_tree/mod.rs",
+    "multi_tree/cst.rs",
+    "multi_tree/ast.rs",
+    "multi_tree/parser.rs",
+    "multi_tree/runtime.rs",
+    "multi_tree/mod.rs",
+    "cycle_flatten/cst.rs",
+    "cycle_flatten/ast.rs",
+    "cycle_flatten/mod.rs",
+    "multi_flatten/cst.rs",
+    "multi_flatten/ast.rs",
+    "multi_flatten/mod.rs",
+    "wide_builtins/cst.rs",
+    "wide_builtins/ast.rs",
+    "wide_builtins/mod.rs",
+    "boxed_link_fold/cst.rs",
+    "boxed_link_fold/ast.rs",
+    "boxed_link_fold/runtime.rs",
+    "boxed_link_fold/mod.rs",
+    "union_label/cst.rs",
+    "union_label/ast.rs",
+    "union_label/runtime.rs",
+    "union_label/mod.rs",
+    "no_ast/cst.rs",
+    "no_ast/parser.rs",
+    "no_ast/de.rs",
+    "no_ast/runtime.rs",
+    "no_ast/mod.rs",
+    "serde_guide/cst.rs",
+    "serde_guide/parser.rs",
+    "serde_guide/de.rs",
+    "serde_guide/runtime.rs",
+    "serde_guide/mod.rs",
+    "prelude/cst.rs",
+    "prelude/ast.rs",
+    "prelude/parser.rs",
+    "prelude/unparser.rs",
+    "prelude/de.rs",
+    "prelude/runtime.rs",
+    "prelude/mod.rs",
+    "ast_guide/cst.rs",
+    "ast_guide/ast.rs",
+    "ast_guide/parser.rs",
+    "ast_guide/runtime.rs",
+    "ast_guide/mod.rs",
+    "holder/cst.rs",
+    "holder/ast.rs",
+    "holder/mod.rs",
+    "span_only/cst.rs",
+    "span_only/ast.rs",
+    "span_only/parser.rs",
+    "span_only/unparser.rs",
+    "span_only/de.rs",
+    "span_only/runtime.rs",
+    "span_only/mod.rs",
+    "nullable_loop/cst.rs",
+    "nullable_loop/parser.rs",
+    "nullable_loop/runtime.rs",
+    "nullable_loop/mod.rs",
+]
+
+py_binary(
+    name = "rust_gate_gen",
+    srcs = ["rust_gate_gen.py"],
+    python_version = "3.10",
+    deps = [":rust_gate_cases"],
+)
+
+genrule(
+    name = "rust_gate_srcs",
+    outs = ["rust_gate/src/" + path for path in _RUST_GATE_FILES],
+    cmd = "$(location :rust_gate_gen) --out-dir $(RULEDIR)/rust_gate/src",
+    tools = [":rust_gate_gen"],
+)
+
+# Every runtime-crate dep is the :no_python flavor, uniformly: the default flavor carries the
+# python-featured fltk-cst-core, so mixing the two puts two distinct fltk_cst_core crates in one
+# graph.  make bazel-test names this target in its no-pyo3 cquery sweep.
+rust_library(
+    name = "rust_gate_lib",
+    srcs = [":rust_gate_srcs"],
+    crate_features = [],
+    crate_name = "fltk_generated_rust_gate",
+    crate_root = "rust_gate/src/lib.rs",
+    edition = "2021",
+    deps = [
+        "//crates/fltk-ast-core:no_python",
+        "//crates/fltk-cst-core:no_python",
+        "//crates/fltk-parser-core:no_python",
+        "//crates/fltk-serde-core:no_python",
+        # One flavor only, pyo3-free by construction, so there is no :no_python sibling.
+        "//crates/fltk-unparser-core",
+        "@fltk_crates//:serde",
     ],
-    "local": True,
-    "precompile": "disabled",
-    "size": "large",
-    "tags": ["requires-cargo"],
-}
+)
+
+# `crate =` compiles the library with --test, which is what turns the `#[cfg(test)] mod runtime;`
+# modules on.  A generated parser that loops forever is this target's timeout.
+rust_test(
+    name = "rust_gate_runtime_test",
+    crate = ":rust_gate_lib",
+)
+
+# The same crate outside `cfg(test)`, which is a different warning surface: a generated binding
+# that only a `runtime.rs` uses is dead code in the plain build, and the lint aspect denies
+# warnings.  `bazel test //...` builds the library anyway; this is what keeps it covered under
+# --build_tests_only, where nothing but a test's own dependencies is built.
+build_test(
+    name = "rust_gate_build_test",
+    targets = [":rust_gate_lib"],
+)
+
+# ── Generated CST shapes at the `python` feature set ──────────────────────────
+# The gate crate above compiles every case with no features, so each `#[cfg(feature = "python")]`
+# item is compiled out there.  These probes compile the same generated file with pyo3 linked,
+# the way a Python-extension consumer gets it; see //bzl:python_probe.bzl for what each one
+# declares and why the wiring lives in a macro.
+#
+# prelude: rule names shadowing the std prelude, which no other crate here builds with pyo3.
+# span_only: no node children, so the `Shared` import is cfg-gated — this is what makes the gate
+# sufficient as well as necessary.
+python_feature_probe(
+    name = "prelude_python_probe",
+    case = "prelude",
+)
+
+python_feature_probe(
+    name = "span_only_python_probe",
+    case = "span_only",
+)
 
 # One py_test per file, declared explicitly rather than by glob: a glob would absorb a new file
 # with whatever deps the pattern happened to carry, and keep passing when one is deleted.  The
 # macro checks this dict against `glob_pattern` and `deferred` at load time.
 _TESTS = {
-    "test_ast_core_manifest.py": {"data": ["//crates/fltk-ast-core:Cargo.toml"]},
     "test_ast_switchable_consumer.py": {
         # The Rust-backend consumer fixture is type-checked against the generated
         # fegen_rust_cst stub package, which is what a downstream consumer reads too; one
@@ -142,29 +312,27 @@ _TESTS = {
     "test_bazel_pytest_main.py": {},
     # Spawns `python -m fltk.fegen.bootstrap` and `python runbs.py` from the runfiles root.
     "test_bootstrap_writers.py": {"data": ["//:runbs.py"]},
-    # Reads the gate modules' sources to check the per-gate directory names are distinct; it
-    # runs no cargo itself, so it is an ordinary sandboxed test rather than a _CARGO_GATE one.
-    "test_cargo_gate_target_dir.py": {
+    # The retirement gate for cargo: the declaration probe plus every surface that can carry
+    # an invocation.  BUILD.bazel is this package's own file, so it needs no label.
+    "test_cargo_retirement.py": {
         "data": [
-            "test_generated_rust_gate.py",
-            "test_nullable_loop_guard.py",
-            "test_rust_prelude_qualification.py",
+            "BUILD.bazel",
+            "//:.github/workflows/ci.yml",
+            "//:BUILD.bazel",
+            "//:Makefile",
+            "//:cargo_file_probe",
+            "//:repo_tooling_files",
+            "//:starlark_srcs",
         ],
         "deps": [":test_support"],
     },
-    # It reads the workspace members off the root manifest and the collection off the root BUILD
-    # file, and checks the collected groups actually deliver their manifests here.
-    "test_cargo_workspace_files.py": {"data": [
-        "//:BUILD.bazel",
-        "//:cargo_workspace_files",
-    ]},
     "test_check_step_order.py": {
         # :test_support carries uv_scan, the one matcher all three uv-retirement lanes share.
         "data": ["//:Makefile"],
         "deps": [":test_support"],
     },
-    # The two properties of the CI runner that `make check-ci` cannot state itself: no uv, and
-    # a warm cargo registry for the --offline compile gates.
+    # The properties of the CI runner that `make check-ci` cannot state itself: no uv, no
+    # cargo or rustup, and an upload of the test logs a failing run would otherwise destroy.
     "test_ci_workflow.py": {
         "data": ["//:.github/workflows/ci.yml"],
         "deps": [":test_support"],
@@ -183,6 +351,13 @@ _TESTS = {
         "data": GENCODE_TOOL_DATA + ["//:pyproject.toml"],
         "deps": _PYRIGHT + _FEGEN_RUST_CST + GENCODE_TOOL_DEPS,
     },
+    # The consumer-facing macro files and the guide that prints recipes over them.
+    "test_consumer_api_surface.py": {
+        "data": [
+            "//:repo_docs",
+            "//:starlark_srcs",
+        ],
+    },
     "test_cross_backend_label_equality.py": {"deps": _FEGEN_RUST_CST},
     "test_cst_accessors_parity.py": {"deps": _FEGEN_RUST_CST},
     "test_cst_ergonomic_accessors.py": {"deps": _PYRIGHT},
@@ -194,10 +369,9 @@ _TESTS = {
     "test_cst_mutators_identity.py": {"deps": _PHASE4_ROUNDTRIP_CST},
     "test_cst_mutators_parity.py": {"deps": _FEGEN_RUST_CST + [":test_support"]},
     "test_doc_guide_cli_examples.py": {
-        # It pins the guides' CLI invocations against the real CLI, and imports the cargo-gate
-        # test module for its grammar fixtures (no cargo runs from this file).
+        # It pins the guides' CLI invocations against the real CLI, and imports the compile
+        # gate's case library for its grammar fixtures.
         "data": GENCODE_TOOL_DATA + [
-            "test_generated_rust_gate.py",
             "//:Makefile",
             "//:doc_guides",
         ],
@@ -217,9 +391,13 @@ _TESTS = {
     "test_fegen_rust_cst.py": {"deps": _FEGEN_RUST_CST},
     "test_fltk_native_stub.py": {
         "data": _FEGEN_RUST_CST_STUBS,
+        # Every test here compares the generated stub against the compiled extension and skips
+        # itself when fegen_rust_cst is unimportable, so the extension is a dep and a skip is a
+        # failure — without both, the whole file passes while asserting nothing.
         # :test_support carries tree_paths, which is where the generated stub package's path
         # is stated.
-        "deps": [":test_support"],
+        "deps": [":test_support"] + _FEGEN_RUST_CST,
+        "fail_on_skip": True,
     },
     "test_gen_rust_all.py": {
         "data": GENCODE_TOOL_DATA + [
@@ -228,11 +406,6 @@ _TESTS = {
         ],
         "deps": GENCODE_TOOL_DEPS,
     },
-    "test_generated_rust_gate.py": dict(
-        _CARGO_GATE,
-        data = ["//:cargo_workspace_files"],
-        deps = [":test_support"],
-    ),
     "test_gencode_format.py": {
         "data": GENCODE_TOOL_DATA,
         "deps": GENCODE_TOOL_DEPS,
@@ -251,11 +424,7 @@ _TESTS = {
     },
     "test_naming.py": {},
     "test_native.py": {},
-    "test_nullable_loop_guard.py": dict(
-        _CARGO_GATE,
-        data = ["//:cargo_workspace_files"],
-        deps = [":test_support"],
-    ),
+    "test_nullable_loop_guard.py": {"deps": [":test_support"]},
     "test_phase4_fegen_rust_backend.py": {"deps": _FEGEN_RUST_CST},
     "test_phase4_rust_fixture.py": {
         "data": ["//:fegen_test_data"],
@@ -286,27 +455,34 @@ _TESTS = {
     },
     "test_registry_gc_eviction.py": {"deps": _PHASE4_ROUNDTRIP_CST},
     "test_rust_cst_poc.py": {"deps": _POC_CST},
+    "test_rust_gate_manifest.py": {
+        # It reads the declared output list off this BUILD file and derives the same list from
+        # the case library.
+        "data": ["BUILD.bazel"],
+        "deps": [":test_support"],
+    },
     "test_rust_parser_bindings.py": {"deps": _FEGEN_RUST_CST},
     "test_rust_parser_fixture_bindings.py": {"deps": _RUST_PARSER_FIXTURE},
     "test_rust_parser_parity_fegen.py": {"deps": _FEGEN_RUST_CST + [":test_support"]},
     "test_rust_parser_parity_fixture.py": {"deps": _RUST_PARSER_FIXTURE + [":test_support"]},
-    "test_rust_span.py": {"deps": _FEGEN_RUST_CST + _PHASE4_ROUNDTRIP_CST},
+    # //:starlark_srcs carries bzl/version.bzl, the one place the crate version is spelled and
+    # what the compiled-in ABI marker is checked against.
+    "test_rust_span.py": {
+        "data": ["//:starlark_srcs"],
+        "deps": _FEGEN_RUST_CST + _PHASE4_ROUNDTRIP_CST,
+    },
     # It scans the generated CST/AST modules of every in-tree crate out of the runfiles tree,
-    # reads the pyo3 requirement off the workspace root manifest, and takes its shadowing
-    # grammar from `test_generated_rust_gate.py`; hence the four `:generated_rs` deps plus
-    # `//:cargo_workspace_files`.
-    "test_rust_prelude_qualification.py": dict(
-        _CARGO_GATE,
-        data = [
-            "test_generated_rust_gate.py",
-            "//:cargo_workspace_files",
+    # hence the four `:generated_rs` data labels.  The compiled half of what it covers is
+    # `:prelude_python_probe`, not anything this target runs.
+    "test_rust_prelude_qualification.py": {
+        "data": [
             "//crates/fegen-rust:generated_rs",
             "//tests/rust_cst_fixture:generated_rs",
             "//tests/rust_parser_fixture:generated_rs",
             "//tests/rust_poc_cst:generated_rs",
         ],
-        deps = [":test_support"],
-    ),
+        "deps": [":test_support"],
+    },
     "test_rust_unparser_generator.py": {
         "data": GENCODE_TOOL_DATA,
         "deps": GENCODE_TOOL_DEPS,
@@ -345,3 +521,6 @@ fltk_py_tests(
     tests = _TESTS,
     glob_pattern = "test_*.py",
 )
+
+# This package's half of the Cargo retirement gate's declaration probe.
+cargo_file_probe()

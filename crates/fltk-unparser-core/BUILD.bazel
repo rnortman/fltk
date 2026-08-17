@@ -1,13 +1,15 @@
 load("@rules_rust//rust:defs.bzl", "rust_library", "rust_test")
-load("//bzl:cargo_gate.bzl", "cargo_gate_files")
+load("//bzl:cargo_probe.bzl", "cargo_file_probe")
+load("//bzl:version.bzl", "FLTK_CRATE_VERSION")
 
-# Runtime for the generated unparser.rs. No features, no dependencies (see
-# Cargo.toml): pyo3-free by construction, safe for both pure-Rust and cdylib consumers.
+# Runtime for the generated unparser.rs. No features and no dependencies: pyo3-free by
+# construction, safe for both pure-Rust and cdylib consumers.
 rust_library(
     name = "fltk-unparser-core",
     srcs = glob(["src/**/*.rs"]),
     crate_name = "fltk_unparser_core",
     edition = "2021",
+    version = FLTK_CRATE_VERSION,
     visibility = ["//visibility:public"],
 )
 
@@ -17,4 +19,5 @@ rust_test(
     crate = ":fltk-unparser-core",
 )
 
-cargo_gate_files()
+# This package's half of the Cargo retirement gate's declaration probe.
+cargo_file_probe()

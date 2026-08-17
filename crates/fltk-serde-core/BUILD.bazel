@@ -1,4 +1,4 @@
-load("//bzl:cargo_gate.bzl", "cargo_gate_files")
+load("//bzl:cargo_probe.bzl", "cargo_file_probe")
 load("//bzl:runtime_crate.bzl", "fltk_runtime_library")
 
 # The serde instance every fltk Bazel target compiles against, as a consumer-settable flag.
@@ -48,4 +48,5 @@ filegroup(
     visibility = ["//tests:__pkg__"],
 )
 
-cargo_gate_files()
+# This package's half of the Cargo retirement gate's declaration probe.
+cargo_file_probe()

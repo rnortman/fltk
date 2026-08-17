@@ -1,11 +1,13 @@
-"""The generated Rust compiles, warning-free, and does what the Python backend does.
+"""The shapes whose generated Rust has to compile, warning-free, and behave.
 
 `tests/test_gsm2ast_rs.py` and `tests/test_rust_unparser_generator.py` assert what the emitters
-write; neither asserts that what they write is Rust, or what it does when run. This does: one
-crate holding the generated modules for each shape below, checked with
-`cargo clippy -- -D warnings` and then `cargo test`. Warnings are denied because the repo's own
-gate denies them (CLAUDE.md) and because a downstream consumer building with `-D warnings` gets a
-hard failure from one unused binding in a generated file they cannot edit.
+write; neither asserts that what they write is Rust, or what it does when run. This module is the
+case library that does: `CASES` names one grammar shape per crate module, `write_crate` emits the
+generated modules for all of them, and `//tests:rust_gate_lib` compiles the result while
+`//tests:rust_gate_runtime_test` runs the `#[test]`s each case carries. The clippy aspect lints
+the crate under `-D warnings`, because the repo's own gate denies them (CLAUDE.md) and because a
+downstream consumer building with `-D warnings` gets a hard failure from one unused binding in a
+generated file they cannot edit.
 
 The shapes are chosen to reach the branches a source assertion cannot judge: brace placement in
 the line-breaking helpers, `Box` on cyclic fields (a missing one is an infinitely-sized type), the
@@ -19,27 +21,111 @@ the leaf forms' text synthesis, the labeled-literal trial matching — whose who
 silent-corruption fix — the flattened wrapper's two hoisted fields, the span-child positions at
 every arity, and the merged-product trial with its per-alternative erased and flattened helpers.
 
-Four cases carry the serde frontend as well, three over the same generation inputs as their AST
+Several cases carry the serde frontend as well, most over the same generation inputs as their AST
 half: the emitted `de.rs` is a description of the tree written against `fltk-serde-core`'s
 vocabulary, and only a compiler says the two halves still agree — a renamed member, a mis-rendered
 match arm or a warning that is a hard build failure downstream is invisible to a substring
-assertion. The fourth carries no AST module at all, because a `de.rs` generated without one is a
+assertion. At least one carries no AST module at all, because a `de.rs` generated without one is a
 different module and the frontend's headline mode.
 
 One shape is one module, so a case exists per *generation input*: a shape whose grammar and sidecar
 match another's belongs in that module, because a case of its own compiles a second copy of the
 whole language.
+
+The crate is sources only: `python` and `test-introspection` are cfg names the generated CST gates
+items on, and nothing here turns either on, so no pyo3 is linked.
 """
 
 from __future__ import annotations
 
-import subprocess
+import contextlib
+import dataclasses
+from collections.abc import Callable, Iterator
 from pathlib import Path
 
-import pytest
-
+from fltk.fegen import ast_config as ac
+from fltk.fegen import ast_model as am
 from fltk.fegen import ast_test_grammars as fixtures
-from tests.generated_rust_gate import Case, cargo_target_dir, run_cargo, write_crate
+from fltk.fegen import gsm
+from fltk.fegen.gsm2ast_rs import generate_ast_rs
+from fltk.fegen.gsm2parser_rs import RustParserGenerator
+from fltk.fegen.gsm2serde_rs import generate_de_rs
+from fltk.fegen.gsm2tree_rs import RustCstGenerator
+from fltk.unparse.gsm2unparser_rs import RustUnparserGenerator
+
+
+@dataclasses.dataclass(frozen=True)
+class Case:
+    """One grammar whose generated Rust has to compile, and optionally to behave."""
+
+    name: str
+    """The crate module the generated files land in; a valid Rust identifier."""
+
+    grammar: str
+    sidecar: str | None = None
+
+    runtime: str = ""
+    """Rust ``#[test]`` source for this shape, if it is exercised at runtime as well as compiled.
+
+    Emitted as a child module of the case, so it reads ``super::ast`` / ``super::cst`` and reaches
+    whichever generated parser or unparser the case asked for.
+    """
+
+    support: str = ""
+    """Extra Rust the case's ``mod.rs`` carries — a ``custom(...)`` rule's user-supplied type."""
+
+    ast: bool = True
+    """Whether the AST module is generated; false for a shape that gates the unparser alone."""
+
+    serde: bool = False
+    """Whether the serde description module is emitted, so a derived target can deserialize.
+
+    The emitter writes shape descriptions and entry points against ``fltk-serde-core``'s
+    vocabulary; nothing but a compiler says the two halves still agree, and a warning in the
+    emitted module is a hard build failure in every consumer under ``-D warnings``.
+
+    Where the case also has an AST module, the serde module is generated against it, so the
+    ``Deserialize`` impls on the generated AST types are compiled too.
+    """
+
+    parser: bool = False
+    """Whether a generated Rust parser is emitted, so a runtime test can parse real text."""
+
+    unparser: bool = False
+    """Whether a generated Rust unparser is emitted, for a round trip through the formatter."""
+
+    goal: str | None = None
+    """The rule the ``parse_str`` / ``unparse_str`` conveniences target; the first one by default."""
+
+    bypass_nil_validation: bool = False
+    """Whether generation runs with ``validate_no_repeated_nil_items`` patched to a no-op.
+
+    For a grammar the validator rejects on purpose: the generated parser's loop guard is what has
+    to terminate on it, and reaching that guard means getting past the validator that exists to
+    keep such a grammar from being generated at all.
+    """
+
+    def model(self) -> am.AstModel:
+        grammar = fixtures.classified_grammar(self.grammar)
+        config = None if self.sidecar is None else ac.load_ast_config(self.sidecar, grammar, {ac.Backend.RUST})
+        return am.build_ast_model(grammar, config)
+
+    def files(self) -> list[str]:
+        """The crate-relative paths this case's generation writes, in emission order."""
+        names = ["cst.rs"]
+        if self.ast:
+            names.append("ast.rs")
+        if self.parser:
+            names.append("parser.rs")
+        if self.unparser:
+            names.append("unparser.rs")
+        if self.serde:
+            names.append("de.rs")
+        if self.runtime:
+            names.append("runtime.rs")
+        names.append("mod.rs")
+        return [f"{self.name}/{name}" for name in names]
+
 
 # What the config language's converters must actually do, run against a parse of `CONFIG_TEXT`.
 CONFIG_RUNTIME = """//! `from_cst` over a real parse of the config language.
@@ -2488,6 +2574,110 @@ fn the_snippets_other_arm_is_the_operand_the_coercion_carries() {
 """
 )
 
+# A repetition whose body matches the empty string, which the validator rejects and the emitted
+# loop guard is what survives: the guard discards the zero-progress iteration instead of looping
+# forever. Reaching it means generating a grammar `validate_no_repeated_nil_items` refuses, hence
+# `bypass_nil_validation`. A missing guard is a hang, which is this target's test timeout.
+NULLABLE_LOOP_GRAMMAR = "rule := ( content:word )+ ;\nword := w:/a*/ ;\n"
+
+NULLABLE_LOOP_RUNTIME = """//! The loop guard on a repetition whose body can match nothing.
+
+use super::parser::Parser;
+
+#[test]
+fn a_repetition_stops_at_the_last_position_an_iteration_reached() {
+    // The first iteration consumes "aa"; the second matches the empty string at 2, makes no
+    // progress and is discarded.
+    let mut parser = Parser::new("aab", None, false);
+    let parsed = parser.apply__parse_rule(0).expect("the leading run of a's must match");
+    assert_eq!(parsed.pos, 2);
+}
+
+#[test]
+fn a_first_iteration_with_no_progress_matches_nothing() {
+    // The guard breaks before anything is accumulated, so the `+` has no iteration to report.
+    let mut parser = Parser::new("b", None, false);
+    assert!(parser.apply__parse_rule(0).is_none());
+}
+"""
+
+# Every rule captures only spans — no node children — so the child-class union is empty and
+# `Shared` appears only in the python-gated half.  This is the only case that witnesses the
+# conditional import; an unused bare import is a hard failure under `-D warnings`.
+SPAN_ONLY_GRAMMAR = 'line := text:/[a-z]+/ . bang:"!" ;\n'
+
+SPAN_ONLY_RUNTIME = """//! A grammar with span children only: parsed, read back through the span accessors, converted,
+//! rendered and deserialized.
+
+use super::ast;
+use super::de;
+use super::parser::Parser;
+
+#[test]
+fn a_span_only_rule_consumes_its_two_terminals() {
+    let mut parser = Parser::new("abc!", None, false);
+    let parsed = parser.apply__parse_line(0).expect("`abc!` must match");
+    assert_eq!(parsed.pos, 4);
+}
+
+#[test]
+fn a_missing_terminal_matches_nothing() {
+    let mut parser = Parser::new("abc", None, false);
+    assert!(parser.apply__parse_line(0).is_none());
+}
+
+#[test]
+fn the_span_accessors_carve_the_node_text_up_by_label() {
+    let mut parser = Parser::new("abc!", None, false);
+    let parsed = parser.apply__parse_line(0).expect("`abc!` must match");
+    let node = parsed.result.read();
+    assert_eq!(node.text(), "abc!");
+    assert_eq!(node.text_text(), "abc");
+    assert_eq!(node.bang_text(), "!");
+    assert_eq!(node.children_text().count(), 1);
+    assert_eq!(node.children_bang().count(), 1);
+}
+
+#[test]
+fn a_terminal_only_ast_carries_the_text_of_its_own_span() {
+    let value = ast::parse_str("abc!", None).expect("`abc!` must parse and convert");
+    assert_eq!(value.text, "abc!");
+}
+
+#[test]
+fn the_synthesised_cst_splits_the_text_back_into_its_two_children() {
+    let value = ast::parse_str("abc!", None).expect("`abc!` must parse and convert");
+    let node = value.to_cst().expect("a terminal shape must split its own text");
+    let guard = node.read();
+    assert_eq!(guard.text(), "abc!");
+    assert_eq!(guard.text_text(), "abc");
+    // Only the captured group gets a span back; the literal position is reconstructed from the
+    // pattern, so its child span names no source.
+    // TODO(ast-synthesised-literal-spans): this assertion inverts when a synthesised
+    // non-captured child carries its statically-known text.
+    assert!(guard.child_bang().expect("the literal child is present").text_or_message().is_err());
+    assert_eq!(
+        ast::Line::from_cst(&node).expect("a synthesised CST must convert back"),
+        value
+    );
+}
+
+#[test]
+fn the_formatter_renders_a_span_only_value_back_to_its_source() {
+    let value = ast::parse_str("abc!", None).expect("`abc!` must parse and convert");
+    assert_eq!(
+        ast::unparse_str(&value, 80, 4).expect("the value must render"),
+        "abc!"
+    );
+}
+
+#[test]
+fn the_serde_frontend_serves_a_terminal_rule_as_its_text() {
+    let served: String = de::from_str("abc!", None).expect("the line must parse and deserialize");
+    assert_eq!(served, "abc!");
+}
+"""
+
 CASES = [
     # A sum, a keyed collection, every scalar erasure, a coercion, a renamed field, and a
     # label spelled `type` (so `r#type` is exercised). Carries the entry-point tests too, which
@@ -2694,294 +2884,117 @@ CASES = [
             "}\n"
         ),
     ),
+    # Span children only: the shape whose `cst.rs` names `Shared` nowhere outside the
+    # python-gated half.  Every emitter is turned on, because the hazard this case exists for —
+    # a preamble import or a binding that a shape-dependent branch turns out not to use — is one
+    # each emitter can have, and no other case pairs this shape with the AST, unparser or serde
+    # frontends.
+    Case(
+        "span_only",
+        SPAN_ONLY_GRAMMAR,
+        runtime=SPAN_ONLY_RUNTIME,
+        parser=True,
+        unparser=True,
+        serde=True,
+    ),
+    # A repetition the validator refuses, generated anyway, so the loop guard is run.
+    Case(
+        "nullable_loop",
+        NULLABLE_LOOP_GRAMMAR,
+        runtime=NULLABLE_LOOP_RUNTIME,
+        ast=False,
+        parser=True,
+        bypass_nil_validation=True,
+    ),
 ]
 
 
-@pytest.fixture(scope="module")
-def gate(tmp_path_factory: pytest.TempPathFactory) -> Path:
-    """The generated gate crate's manifest; written once for the whole module."""
-    directory = tmp_path_factory.mktemp("generated_rust_gate")
-    return write_crate(directory, CASES)
+@contextlib.contextmanager
+def _nil_validation_bypassed() -> Iterator[None]:
+    """Run the block with ``validate_no_repeated_nil_items`` a no-op."""
+    original = gsm.validate_no_repeated_nil_items
+    gsm.validate_no_repeated_nil_items = lambda _: None  # type: ignore[assignment]
+    try:
+        yield
+    finally:
+        gsm.validate_no_repeated_nil_items = original  # type: ignore[assignment]
 
 
-@pytest.fixture(scope="module")
-def clippy(gate: Path) -> subprocess.CompletedProcess[str]:
-    return run_cargo("clippy", gate, cargo_target_dir("generated-rust-gate"), "--all-targets", "--", "-D", "warnings")
+def generated_files(cases: list[Case]) -> list[str]:
+    """Every crate-relative path `write_crate` writes for ``cases``, `lib.rs` first."""
+    paths = ["lib.rs"]
+    for case in cases:
+        paths.extend(case.files())
+    return paths
 
 
-@pytest.fixture(scope="module")
-def cargo_test(gate: Path, clippy: subprocess.CompletedProcess[str]) -> subprocess.CompletedProcess[str]:
-    """The runtime half, ordered after clippy so a compile failure is reported once."""
-    assert clippy.returncode == 0, clippy.stdout + clippy.stderr
-    return run_cargo("test", gate, cargo_target_dir("generated-rust-gate"))
+#: How each generated file is declared in its case's `mod.rs`. `runtime.rs` is the odd one: it
+#: holds the `#[test]`s, so the crate carries it only under `cfg(test)`.
+_DECLARATIONS = {
+    "cst.rs": "pub mod cst;\n",
+    "ast.rs": "pub mod ast;\n",
+    "parser.rs": "pub mod parser;\n",
+    "unparser.rs": "pub mod unparser;\n",
+    "de.rs": "pub mod de;\n",
+    "runtime.rs": "#[cfg(test)]\nmod runtime;\n",
+}
 
 
-def test_the_generated_modules_compile_without_a_warning(clippy: subprocess.CompletedProcess[str]) -> None:
-    assert clippy.returncode == 0, clippy.stdout + clippy.stderr
-
-
-def test_every_declared_shape_is_in_the_crate(gate: Path) -> None:
-    """A case that silently stopped being emitted would leave the gate quietly narrower."""
-    assert len(CASES) == len({case.name for case in CASES}), "case names are the module names"
-    declared = gate.parent.joinpath("src", "lib.rs").read_text()
-    for case in CASES:
-        assert f"pub mod {case.name};" in declared
-        assert gate.parent.joinpath("src", case.name, "ast.rs").is_file() == case.ast
-        assert gate.parent.joinpath("src", case.name, "de.rs").is_file() == case.serde
-    assert any(case.serde and not case.ast for case in CASES), "the no-AST serde mode has a compiled witness"
-
-
-def _ran(output: str, case: str) -> set[str]:
-    """The Rust tests of one case that ran and passed, by name.
-
-    ``cargo test`` reports success for a crate holding no tests at all, so a runtime module that
-    stopped being emitted has to fail rather than pass silently.
-    """
-    prefix = f"test {case}::runtime::"
+def _emitters(case: Case) -> dict[str, Callable[[], str]]:
+    """The generated text of each file `case` produces, keyed by filename."""
+    model = case.model()
     return {
-        line.removeprefix(prefix).removesuffix(" ... ok") for line in output.splitlines() if line.startswith(prefix)
+        "cst.rs": lambda: RustCstGenerator(model.grammar).generate(),
+        "ast.rs": lambda: generate_ast_rs(
+            model,
+            cst_mod_path="super::cst",
+            parser_mod_path="super::parser" if case.parser else None,
+            unparser_mod_path="super::unparser" if case.unparser else None,
+            goal_rule=case.goal,
+        ),
+        "parser.rs": lambda: RustParserGenerator(model.grammar).generate(),
+        "unparser.rs": lambda: RustUnparserGenerator(model.grammar).generate(),
+        "de.rs": lambda: generate_de_rs(
+            model,
+            cst_mod_path="super::cst",
+            parser_mod_path="super::parser" if case.parser else None,
+            goal_rule=case.goal,
+            ast_mod_path="super::ast" if case.ast else None,
+        ),
+        "runtime.rs": lambda: case.runtime,
     }
 
 
-def test_the_converters_convert_a_real_parse_and_carry_text_in_and_out(
-    cargo_test: subprocess.CompletedProcess[str],
-) -> None:
-    """The config language's converters, and the `parse_str` / `unparse_str` pipeline around them.
+def _write_case(directory: Path, case: Case) -> None:
+    """Write one case's module directory: the generated files and the `mod.rs` declaring them.
 
-    One module: the two share a grammar, a sidecar and a document, so they share the compile.
+    Driven off ``case.files()``, which is also what the Bazel action declares as its outputs
+    (`tests/test_rust_gate_manifest.py` holds the two together). A file this writes and that list
+    does not name would be dropped by the action and never compiled, so the emission and the
+    prediction are the same list rather than two copies of the same five conditions.
     """
-    assert cargo_test.returncode == 0, cargo_test.stdout + cargo_test.stderr
-    assert _ran(cargo_test.stdout, "config") == {
-        # `from_cst` and `to_cst` over a real parse.
-        "a_keyed_collection_is_looked_up_by_its_key_field",
-        "an_optional_coerced_field_and_a_value_enum_come_through",
-        "two_values_converted_from_identical_text_at_different_offsets_are_equal",
-        "a_difference_in_semantic_data_is_not_equal",
-        "a_parsed_value_synthesises_the_cst_it_was_read_from",
-        "a_mutated_value_round_trips_and_keeps_its_map_in_order",
-        "text_the_rules_terminal_cannot_match_is_refused",
-        # Sum dispatch over a hand-built node, which is the only way to reach either case.
-        "a_child_no_alternative_accepts_under_its_label_matches_no_alternative",
-        "an_unlabeled_child_is_not_counted_against_any_alternative",
-        "a_repeated_key_reports_both_locations",
-        # The entry points, either side of a round trip through text.
-        "one_call_turns_source_text_into_an_ast",
-        "the_round_trip_law_holds_through_text",
-        "a_mutated_value_renders_its_change_and_reads_back_as_itself",
-        "the_renderer_dimensions_reach_the_output",
-        "input_the_goal_rule_did_not_consume_is_the_parse_arm",
-        "a_conversion_failure_is_the_ast_arm",
-        "text_no_terminal_accepts_is_refused_before_anything_is_rendered",
-        # The serde frontend over the same document, against the emitted descriptions.
-        "one_call_turns_source_text_into_the_targets_the_consumer_declared",
-        "the_same_keyed_region_is_a_sequence_where_the_target_asks_for_one",
-        "an_unknown_field_is_serdes_own_message_at_the_offending_child",
-        "a_field_the_target_needs_and_the_source_omits_is_missing_at_the_node",
-        "a_scalar_target_runs_the_gate_its_type_names_over_the_source_text",
-        "a_repeated_key_is_refused_by_the_frontend_rather_than_left_to_the_container",
-        "a_target_can_position_a_field_and_hold_a_subtree_as_cst",
-        # Generated AST types as fields of hand-written targets.
-        "a_field_declared_as_a_generated_ast_type_is_what_from_cst_builds",
-        "an_ast_typed_field_can_be_positioned_like_any_other",
-        "an_ast_type_at_another_rules_position_names_both_rules",
-        "a_conversion_failure_under_an_ast_typed_field_keeps_its_own_position",
-        "a_conversion_failure_keeps_its_own_span_under_a_node_that_covers_more_than_it",
-        "an_ast_typed_field_reaches_every_container_the_model_has",
-    }, cargo_test.stdout
+    emitters = _emitters(case)
+    module = directory / case.name
+    module.mkdir(parents=True, exist_ok=True)
+    names = [name.removeprefix(f"{case.name}/") for name in case.files()]
+    for name in names:
+        if name != "mod.rs":
+            module.joinpath(name).write_text(emitters[name]())
+    declarations = "".join(_DECLARATIONS[name] for name in names if name != "mod.rs")
+    module.joinpath("mod.rs").write_text(declarations + case.support)
 
 
-def test_a_fold_rule_nests_its_operands_and_merges_their_spans(
-    cargo_test: subprocess.CompletedProcess[str],
-) -> None:
-    assert cargo_test.returncode == 0, cargo_test.stdout + cargo_test.stderr
-    assert _ran(cargo_test.stdout, "fold") == {
-        "a_single_operand_stays_a_bare_operand",
-        "a_left_fold_nests_the_earliest_operands_deepest",
-        "the_tighter_precedence_level_folds_inside_the_looser_one",
-        "each_link_span_covers_everything_below_it",
-        "a_parenthesized_operand_closes_the_cycle_by_value",
-        "spans_do_not_take_part_in_equality_but_operators_do",
-        "an_operator_with_no_operand_pair_to_join_is_refused",
-        "a_chain_unfolds_into_the_run_it_was_folded_from",
-        "a_chain_nested_against_the_folds_direction_has_no_grammar_shape",
-        "a_chain_of_two_hundred_thousand_links_tears_down_without_recursing",
-        "a_text_the_goal_rule_cannot_match_is_a_parse_error",
-        "the_convenience_folds_the_chain_it_parsed",
-        # The same chain through the serde frontend.
-        "a_chain_reaches_a_derived_enum_with_the_nesting_the_fold_gives_it",
-        "a_transparent_wrapper_hands_the_target_what_it_holds",
-        "a_variant_the_target_declares_as_a_unit_one_is_refused_not_emptied",
-        "text_the_goal_rule_cannot_match_is_the_parse_arm_of_from_str",
-        # The chain into the generated AST type instead of a hand-written enum.
-        "a_generated_ast_type_is_a_target_like_any_other",
-        "a_chain_held_as_syntax_converts_through_its_own_entry_point_later",
-    }, cargo_test.stdout
+def write_crate(directory: Path, cases: list[Case]) -> None:
+    """Write the gate crate's sources into ``directory``, which is the crate's `src`.
 
-
-def test_a_boxed_link_variant_carries_the_same_iterative_teardown(
-    cargo_test: subprocess.CompletedProcess[str],
-) -> None:
-    """The `Drop` and witness rendering no other case compiles: a boxed link over a struct operand."""
-    assert cargo_test.returncode == 0, cargo_test.stdout + cargo_test.stderr
-    assert _ran(cargo_test.stdout, "boxed_link_fold") == {
-        "a_chain_behind_a_boxed_link_variant_tears_down_without_recursing",
-    }, cargo_test.stdout
-
-
-def test_the_leaf_forms_synthesise_the_cst_they_were_read_from(
-    cargo_test: subprocess.CompletedProcess[str],
-) -> None:
-    """`to_cst` on the terminal-only and enum-shaped forms: what it appends, and the round trip."""
-    assert cargo_test.returncode == 0, cargo_test.stdout + cargo_test.stderr
-    assert _ran(cargo_test.stdout, "serialize") == {
-        "a_terminal_rules_text_comes_back_as_its_child_span",
-        "a_synthesised_terminal_node_carries_its_text_as_its_own_span",
-        "a_redirected_text_leaves_the_node_span_unknown_and_the_quotes_to_the_grammar",
-        "the_alternative_the_text_matches_decides_the_children",
-        "a_coercion_renders_through_the_canonical_renderer",
-        "an_enum_shaped_value_appends_the_label_of_its_alternative",
-        "a_boolean_value_appends_the_label_of_the_alternative_it_names",
-        "text_the_terminal_cannot_match_is_refused",
-        "every_leaf_form_reads_back_as_the_value_it_was_built_from",
-    }, cargo_test.stdout
-
-
-def test_a_flattened_wrapper_is_rebuilt_from_the_fields_hoisted_out_of_it(
-    cargo_test: subprocess.CompletedProcess[str],
-) -> None:
-    assert cargo_test.returncode == 0, cargo_test.stdout + cargo_test.stderr
-    assert _ran(cargo_test.stdout, "task") == {
-        "a_wrapper_with_nothing_to_carry_is_not_rebuilt",
-        "a_populated_wrapper_is_rebuilt_where_the_grammar_spells_it",
-        "a_half_populated_wrapper_names_the_field_it_still_needs",
-        # The hoisted fields read back through the serde frontend.
-        "a_hoisted_field_is_read_down_the_wrapper_the_grammar_spells_it_in",
-        "an_absent_optional_wrapper_leaves_out_every_field_it_carried",
-    }, cargo_test.stdout
-
-
-def test_a_multi_keyed_collection_accumulates_groups_and_compares_them_elementwise(
-    cargo_test: subprocess.CompletedProcess[str],
-) -> None:
-    """`Vec`-valued keys through both directions, over an element type that reaches itself."""
-    assert cargo_test.returncode == 0, cargo_test.stdout + cargo_test.stderr
-    assert _ran(cargo_test.stdout, "multi_tree") == {
-        "elements_sharing_a_key_accumulate_in_source_order",
-        "the_key_stays_a_field_of_each_element",
-        "a_multi_map_of_a_recursive_element_compares_by_key_then_elementwise",
-        "a_parsed_value_synthesises_the_cst_it_was_read_from",
-        "a_key_with_no_element_cannot_be_rendered",
-    }, cargo_test.stdout
-
-
-def test_each_field_value_reaches_the_item_position_the_grammar_gives_it(
-    cargo_test: subprocess.CompletedProcess[str],
-) -> None:
-    assert cargo_test.returncode == 0, cargo_test.stdout + cargo_test.stderr
-    assert _ran(cargo_test.stdout, "shapes") == {
-        "every_position_appends_its_own_occurrences_in_grammar_order",
-        "a_presence_flag_left_unset_appends_nothing",
-        "the_branch_of_the_alternation_follows_the_variant_the_value_carries",
-        "a_field_enum_over_node_payloads_answers_for_the_span_of_whichever_it_holds",
-        "a_required_position_with_no_value_to_take_names_the_shortfall",
-    }, cargo_test.stdout
-
-
-def test_a_trial_picks_the_alternative_the_populated_fields_fit(
-    cargo_test: subprocess.CompletedProcess[str],
-) -> None:
-    assert cargo_test.returncode == 0, cargo_test.stdout + cargo_test.stderr
-    assert _ran(cargo_test.stdout, "merged") == {
-        "the_first_alternative_that_covers_the_populated_fields_wins",
-        "a_document_of_trialled_shapes_reads_back_as_the_value_it_was_built_from",
-        "a_value_no_alternative_covers_is_refused",
-        "a_custom_coercion_goes_out_and_comes_back_through_the_sidecars_functions",
-        "a_custom_rendering_the_terminal_rejects_is_refused",
-        "one_branch_of_an_alternation_has_to_carry_the_populated_fields",
-        "a_flattened_wrapper_with_nothing_to_carry_collapses",
-    }, cargo_test.stdout
-
-
-def test_a_trial_picks_the_alternative_the_values_kinds_fit(
-    cargo_test: subprocess.CompletedProcess[str],
-) -> None:
-    """The kind half of selection, compiled and run: a source assertion cannot say which
-    alternative a value reaches, nor that the container spellings are valid Rust."""
-    assert cargo_test.returncode == 0, cargo_test.stdout + cargo_test.stderr
-    assert _ran(cargo_test.stdout, "union_label") == {
-        "each_kind_selects_the_alternative_whose_position_accepts_it",
-        "a_kind_the_fitting_alternative_cannot_accept_leaves_none_fitting",
-        "an_optional_union_field_constrains_nothing_while_it_is_absent",
-        "every_value_of_a_repeated_union_field_has_to_be_an_accepted_kind",
-        "a_union_field_held_through_a_box_is_tested_where_it_lies",
-    }, cargo_test.stdout
-
-
-def test_a_serde_module_stands_on_its_own_without_an_ast_module(
-    cargo_test: subprocess.CompletedProcess[str],
-) -> None:
-    """The bring-your-own-structs mode: no AST module, no generated public types, still a frontend."""
-    assert cargo_test.returncode == 0, cargo_test.stdout + cargo_test.stderr
-    assert _ran(cargo_test.stdout, "no_ast") == {
-        "a_serde_module_generated_without_an_ast_module_deserializes_on_its_own",
-        "its_errors_are_positioned_by_the_same_frames",
-    }, cargo_test.stdout
-
-
-def test_the_serde_guides_worked_example_works_as_printed(
-    cargo_test: subprocess.CompletedProcess[str],
-) -> None:
-    """The guide's motivating before/after, generated from its own grammar and sidecar and run."""
-    assert cargo_test.returncode == 0, cargo_test.stdout + cargo_test.stderr
-    assert _ran(cargo_test.stdout, "serde_guide") == {
-        "the_keys_the_target_names_are_read_out_of_the_generic_region",
-        "an_option_the_document_omits_is_none",
-        "a_misspelled_key_is_serdes_message_at_the_offending_keys_position",
-    }, cargo_test.stdout
-
-
-def test_a_grammar_whose_rule_names_shadow_the_prelude_compiles_and_runs(
-    cargo_test: subprocess.CompletedProcess[str],
-) -> None:
-    """The compile witness for the absolute std spellings, plus one end-to-end run over them.
-
-    Compiling is most of the point — a bare `Option<T>` in a module declaring `pub struct Option`
-    is `E0107`, a bare `impl Drop` beside `pub enum Drop` is `E0404`, and a bare `String` member on
-    the rule named `string` is an infinitely-sized type. The run is what says the qualification
-    changed no behavior: the same document reaches the same value through both entry points.
+    Sources only: the crate's dependencies, features and test wiring are the Bazel targets in
+    `tests/BUILD.bazel`, and the file set is declared there as build outputs.
     """
-    assert cargo_test.returncode == 0, cargo_test.stdout + cargo_test.stderr
-    assert _ran(cargo_test.stdout, "prelude") == {
-        "a_grammar_named_after_the_prelude_parses_converts_and_deserializes",
-    }, cargo_test.stdout
-
-
-def test_the_ast_guides_quick_start_folds_as_the_guide_prints_it(
-    cargo_test: subprocess.CompletedProcess[str],
-) -> None:
-    """The AST guide's first example, generated from its printed input and run.
-
-    It is what a new consumer copies before anything else, and its printed type comments and match
-    arms are a claim about the fold the sidecar produces — a claim only a run can check.
-    """
-    assert cargo_test.returncode == 0, cargo_test.stdout + cargo_test.stderr
-    assert _ran(cargo_test.stdout, "ast_guide") == {
-        "the_snippet_the_guide_prints_runs_over_the_input_it_prints",
-        "the_printed_expression_folds_left_into_the_types_the_comment_names",
-        "the_snippets_other_arm_is_the_operand_the_coercion_carries",
-    }, cargo_test.stdout
-
-
-def test_the_compiled_formatter_matches_a_labeled_literal_by_text(
-    cargo_test: subprocess.CompletedProcess[str],
-) -> None:
-    """Labeled-literal trial matching on the shipped Rust formatter, which the byte-parity corpus cannot reach."""
-    assert cargo_test.returncode == 0, cargo_test.stdout + cargo_test.stderr
-    assert _ran(cargo_test.stdout, "literal_labels") == {
-        "a_rival_regex_under_the_same_label_keeps_its_own_text",
-        "the_literal_branch_still_renders_the_literal",
-        "the_sequential_spelling_declines_the_child_it_cannot_spell",
-        "a_sibling_spelling_of_one_label_is_accepted_and_canonicalized",
-        "a_hand_built_span_no_position_accepts_fails_the_unparse",
-        "a_synthesized_sourceless_span_still_renders_the_canonical_spelling",
-    }, cargo_test.stdout
+    directory.mkdir(parents=True, exist_ok=True)
+    directory.joinpath("lib.rs").write_text("".join(f"pub mod {case.name};\n" for case in cases))
+    for case in cases:
+        if case.bypass_nil_validation:
+            with _nil_validation_bypassed():
+                _write_case(directory, case)
+        else:
+            _write_case(directory, case)

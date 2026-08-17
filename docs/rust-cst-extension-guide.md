@@ -4,6 +4,13 @@ This guide explains how to compile a Rust CST backend for your grammar and use i
 `generate_parser`. The Rust backend is optional — the Python dataclass backend (the default) works
 without any of this.
 
+> **The Cargo recipes below do not work.** FLTK's runtime crates are Bazel targets and carry no
+> Cargo manifests, so the path and git pins this guide shows resolve to nothing; consume FLTK as a
+> Bazel module instead — `docs/bazel-consumer-guide.md` §4 is the working recipe for a Python
+> extension. Rewriting this guide onto that footing is `TODO(cargo-guides-bazel-rewrite)`; until
+> then, read it for the concepts (what the generated code needs, how the module is wired) and take
+> the build mechanics from the consumer guide.
+
 ---
 
 ## Overview

@@ -1,6 +1,8 @@
 """Tests for nullable-repetition infinite-loop guard + validator gap.
 
-Test order: backend guard, validator gap, generator rejection, source-text guard placement.
+Test order: Python backend guard, cross-backend parity, validator gap, generator rejection,
+source-text guard placement.  The Rust backend's runtime demonstration is the `nullable_loop`
+case of `//tests:rust_gate_runtime_test`; what stays here is the parity check over its source.
 
 Trigger grammar: rule := (r"a*" .)+
   - outer item: ONE_OR_MORE over a sub-expression
@@ -12,9 +14,6 @@ Trigger grammar: rule := (r"a*" .)+
 from __future__ import annotations
 
 import ast
-import os
-import pathlib
-import shutil
 import subprocess
 import sys
 import textwrap
@@ -23,12 +22,11 @@ import pytest
 
 from fltk.fegen import gsm, gsm2parser, gsm2tree
 from fltk.fegen.gsm2parser_rs import RustParserGenerator
-from fltk.fegen.gsm2tree_rs import RustCstGenerator
 from fltk.iir.context import create_default_context
 from fltk.iir.py import compiler
 from fltk.iir.py import reg as pyreg
 from fltk.plumbing import generate_parser
-from tests.generated_rust_gate import cargo_target_dir
+from tests.rust_gate_cases import NULLABLE_LOOP_RUNTIME
 
 # ---------------------------------------------------------------------------
 # Trigger grammar construction (shared by all tests)
@@ -257,183 +255,25 @@ def test_python_backend_guard():
 
 
 # ---------------------------------------------------------------------------
-# Rust backend hang/guard test
+# Cross-backend parity
 # ---------------------------------------------------------------------------
-
-_RUST_MAIN_RS = textwrap.dedent("""\
-    mod cst;
-    mod parser;
-
-    use parser::Parser;
-
-    fn main() {
-        // Test 1: "aab" — should return Some(pos=2) after guard fires on empty iteration.
-        let src = "aab";
-        let mut p = Parser::new(src, None, false);
-        let result = p.apply__parse_rule(0);
-        match &result {
-            Some(r) => {
-                println!("aab result: pos={}", r.pos);
-                assert_eq!(r.pos, 2, "Expected pos=2 for 'aab', got pos={}", r.pos);
-            }
-            None => {
-                // The validator rejects this grammar before we get here; if cargo builds
-                // cleanly then either the guard works or validator rejected it.
-                println!("aab result: None (may be expected if grammar was rejected by validator)");
-                std::process::exit(1);
-            }
-        }
-
-        // Test 2: "b" — first iteration matches empty, guard fires, + check → None.
-        let src2 = "b";
-        let mut p2 = Parser::new(src2, None, false);
-        let result2 = p2.apply__parse_rule(0);
-        match result2 {
-            Some(r) => {
-                println!("b result: Some(pos={}), expected None", r.pos);
-                std::process::exit(1);
-            }
-            None => {
-                println!("b result: None (correct)");
-            }
-        }
-
-        println!("PASS");
-    }
-""")
-
-_RUST_CARGO_TOML_TEMPLATE = """\
-[workspace]
-
-[package]
-name = "nullable-loop-test"
-version = "0.1.0"
-edition = "2021"
-
-[[bin]]
-name = "nullable-loop-test"
-path = "src/main.rs"
-
-[dependencies]
-fltk-cst-core = {{ path = "{fltk_cst_core_path}", default-features = false }}
-fltk-parser-core = {{ path = "{fltk_parser_core_path}" }}
-"""
-
-
-@pytest.fixture(scope="module")
-def _repo_root() -> pathlib.Path:
-    return pathlib.Path(__file__).parent.parent
-
-
-def test_rust_backend_guard(tmp_path: pathlib.Path, _repo_root: pathlib.Path):
-    """Rust backend: loop terminates on empty-match iteration.
-
-    The validator is monkeypatched to a no-op so the loop guard is tested in isolation;
-    the compiled binary is expected to print PASS.
-
-    Skipped if `cargo` is not on PATH (toolchain is a documented repo requirement;
-    cargo absence signals environment misconfiguration, not a test failure).
-    """
-    if not shutil.which("cargo"):
-        pytest.skip("cargo not on PATH — Rust toolchain required (see CLAUDE.md)")
-
-    # Generate parser.rs and cst.rs for the trigger grammar with validator bypassed.
-    trigger_grammar = _make_trigger_grammar()
-
-    # Bypass validation: we monkeypatch at Python level before passing to generator.
-    # RustParserGenerator calls classify_trivia_rules which calls validate_no_repeated_nil_items.
-    # To test the loop guard layer in isolation, we must prevent validator rejection.
-    orig_validate = gsm.validate_no_repeated_nil_items
-    try:
-        gsm.validate_no_repeated_nil_items = lambda _: None  # type: ignore[method-assign]
-
-        gen = RustParserGenerator(trigger_grammar)
-        parser_rs = gen.generate()
-
-        cst_gen = RustCstGenerator(trigger_grammar)
-        cst_rs = cst_gen.generate()
-    finally:
-        gsm.validate_no_repeated_nil_items = orig_validate  # type: ignore[method-assign]
-
-    # Write the temporary Rust binary crate.
-    crate_dir = tmp_path / "nullable-loop-test"
-    src_dir = crate_dir / "src"
-    src_dir.mkdir(parents=True)
-
-    (src_dir / "parser.rs").write_text(parser_rs)
-    (src_dir / "cst.rs").write_text(cst_rs)
-    (src_dir / "main.rs").write_text(_RUST_MAIN_RS)
-
-    fltk_cst_core_path = (_repo_root / "crates" / "fltk-cst-core").resolve()
-    fltk_parser_core_path = (_repo_root / "crates" / "fltk-parser-core").resolve()
-    cargo_toml = _RUST_CARGO_TOML_TEMPLATE.format(
-        fltk_cst_core_path=fltk_cst_core_path,
-        fltk_parser_core_path=fltk_parser_core_path,
-    )
-    (crate_dir / "Cargo.toml").write_text(cargo_toml)
-
-    # cargo runs with the throwaway crate as its cwd, which is outside the runfiles tree, so
-    # rustup would never walk up to the staged pin and would fall back to whatever toolchain is
-    # default on the machine.  Give the crate its own copy.
-    shutil.copyfile(_repo_root / "rust-toolchain.toml", crate_dir / "rust-toolchain.toml")
-
-    # Build (long timeout — debug cargo build can be slow).
-    cargo_target = cargo_target_dir("nullable-loop-guard")
-    cargo_bin = shutil.which("cargo") or "cargo"
-    build_result = subprocess.run(  # noqa: S603
-        [cargo_bin, "build", "--offline"],
-        capture_output=True,
-        text=True,
-        timeout=300,
-        check=False,
-        cwd=crate_dir,
-        env={**os.environ, "CARGO_TARGET_DIR": str(cargo_target)},
-    )
-    assert build_result.returncode == 0, (
-        f"cargo build failed:\nstdout: {build_result.stdout}\nstderr: {build_result.stderr}"
-    )
-
-    binary = cargo_target / "debug" / "nullable-loop-test"
-
-    # Run binary with short timeout — a hang indicates an infinite loop (missing loop guard).
-    try:
-        run_result = subprocess.run(  # noqa: S603
-            [str(binary)],
-            capture_output=True,
-            text=True,
-            timeout=10,
-            check=False,
-        )
-    except subprocess.TimeoutExpired:
-        pytest.fail("Rust backend hung on nullable repetition (infinite loop — loop guard missing)")
-
-    assert run_result.returncode == 0, (
-        f"Rust backend guard test failed:\nstdout: {run_result.stdout}\nstderr: {run_result.stderr}"
-    )
-    assert "PASS" in run_result.stdout, (
-        f"Expected PASS in output:\nstdout: {run_result.stdout}\nstderr: {run_result.stderr}"
-    )
 
 
 def test_cross_backend_parity():
-    """Cross-backend parity: assert expected outcomes shared by both backends.
+    """Both backends' runtime demonstrations expect the same two outcomes.
 
-    Documents the concrete values that test_python_backend_guard (subprocess) and
-    test_rust_backend_guard (cargo binary) must both produce.  Does not re-run Python
-    generation; it consults _RUST_MAIN_RS to verify Rust assertions match.
-
-    The actual runtime demonstration is in test_python_backend_guard (subprocess) and
-    test_rust_backend_guard (cargo); this test is a lightweight cross-reference check.
+    The Rust half is the `nullable_loop` case of `//tests:rust_gate_runtime_test`.
+    This test reads its `#[test]` source so the two demonstrations cannot drift into
+    asserting different things.
     """
     # Both backends must: return pos=2 for "aab" and None for "b".
-    # Verify that _RUST_MAIN_RS encodes those same expectations.
-    assert "assert_eq!(r.pos, 2" in _RUST_MAIN_RS, (
-        "Rust main.rs must assert pos=2 for 'aab' — cross-backend parity requires identical expectations"
+    assert '"aab"' in NULLABLE_LOOP_RUNTIME, "the Rust runtime test must parse 'aab'"
+    assert "assert_eq!(parsed.pos, 2)" in NULLABLE_LOOP_RUNTIME, (
+        "the Rust runtime test must assert pos=2 for 'aab' — cross-backend parity requires identical expectations"
     )
-    assert "std::process::exit(1)" in _RUST_MAIN_RS, "Rust main.rs must exit(1) on unexpected None for 'aab'"
-    # "b" should produce None in both backends — verified in both individual tests.
-    assert '"b result: None (correct)"' in _RUST_MAIN_RS, (
-        "Rust main.rs must accept None for 'b' as correct — cross-backend parity"
+    assert '"b"' in NULLABLE_LOOP_RUNTIME, "the Rust runtime test must parse 'b'"
+    assert "assert!(parser.apply__parse_rule(0).is_none());" in NULLABLE_LOOP_RUNTIME, (
+        "the Rust runtime test must expect no match for 'b' — cross-backend parity"
     )
 
 
@@ -537,14 +377,11 @@ class TestValidatorGap:
             gsm.validate_no_repeated_nil_items(trigger)
 
 
-# The test below updates the assertions in test_nil_validation.py's
-# test_item_nil_detection_with_quantifiers that encode the old (buggy) behavior.
-# These must be checked here since we cannot modify the existing test file in this increment.
 class TestItemNilDetectionUpdated:
     """Correct assertions for Item.can_be_nil."""
 
     def test_required_empty_literal_is_nil(self):
-        """REQUIRED + empty literal IS nil (contradicts old test assertion)."""
+        """REQUIRED + empty literal IS nil."""
         grammar = gsm.Grammar(rules=[], identifiers={})
         required_item = gsm.Item(
             label=None,
@@ -552,7 +389,6 @@ class TestItemNilDetectionUpdated:
             term=gsm.Literal(""),
             quantifier=gsm.REQUIRED,
         )
-        # Old test said False; correct answer is True (term is nil).
         assert required_item.can_be_nil(grammar) is True
 
     def test_one_or_more_empty_literal_is_nil(self):

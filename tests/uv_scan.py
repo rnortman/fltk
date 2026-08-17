@@ -14,6 +14,8 @@ from __future__ import annotations
 import pathlib
 import re
 
+from tests import retirement_scan as scan
+
 # Requiring a subcommand makes this an invocation matcher, not a word matcher: prose about uv
 # reads "uv" or "uv's", never "uv run".  The separator is any whitespace, so a tab-indented
 # `uv	lock` in a Makefile recipe is not a hole.  The alternation is uv's whole top-level
@@ -40,10 +42,10 @@ def names_uv(line: str) -> bool:
 
 
 def offenders(paths: list[pathlib.Path], root: pathlib.Path) -> list[str]:
-    """Every `<path>:<lineno>: <line>` in `paths` that names uv, reported relative to `root`."""
-    hits = []
-    for path in paths:
-        for lineno, line in enumerate(path.read_text().splitlines(), start=1):
-            if names_uv(line):
-                hits.append(f"{path.relative_to(root)}:{lineno}: {line.strip()}")
-    return hits
+    """Every `<path>:<lineno>: <line>` in `paths` that names uv, reported relative to `root`.
+
+    Raw lines, comments included: the surfaces this gate scans are prose docs and launcher
+    scripts, and the matcher already requires an invocation shape, so a documented recipe is a
+    hit worth reporting rather than noise to strip.
+    """
+    return scan.offenders(paths, root, names_uv)

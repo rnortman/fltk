@@ -7,7 +7,7 @@ use pyo3::types::PyType;
 use pyo3::PyTypeInfo;
 
 /// ABI marker baked into the rlib: every cdylib linking the same fltk-cst-core rlib
-/// (with the same Cargo.toml version) exposes this exact string as
+/// (with the same crate version) exposes this exact string as
 /// `SourceText._fltk_cst_core_abi` and `Span._fltk_cst_core_abi` via `#[classattr]`s.
 /// Used by `extract_source_text` and `get_span_type` (below) to gate `cast_unchecked`
 /// without relying on type-object identity (unavailable in the canonical→consumer

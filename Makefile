@@ -1,39 +1,27 @@
-.PHONY: check check-ci check-common cargo-deny \
-        check-cargo-lock check-bazel-locks bazel-toolchain-guard \
+.PHONY: check check-ci check-common \
+        check-bazel-locks bazel-toolchain-guard \
         bazel-test bazel-lint bazel-consumer-check fix regen-seed
 
 # ══════════════════════════════════════════════════════════════════════════════
 # CHECK TARGET FAMILY — READ BEFORE TOUCHING
 # ══════════════════════════════════════════════════════════════════════════════
 #
-# THREE targets, ONE sanctioned difference:
+# ONE gate, no divergence:
 #
-#   check-common  — every check step EXCEPT cargo-deny.
-#                   This is the shared base. BOTH lanes run exactly this.
+#   check-common  — every check step.  This is the whole gate.
 #
-#   check         — check-common + cargo-deny.  LOCAL / PRECOMMIT lane.
-#                   The git pre-commit hook runs this.  cargo-deny MUST run
-#                   locally because it is NOT run in CI (cargo-deny is not
-#                   installed on the GitHub Actions runner).
+#   check         — check-common.  LOCAL / PRECOMMIT lane; the git pre-commit
+#                   hook runs it.
 #
-#   check-ci      — check-common ONLY.  CI lane.
-#                   cargo-deny is intentionally absent: the tool is not
-#                   installed on the GitHub Actions runner and we have chosen
-#                   NOT to install it there.  Supply-chain / advisory checks
-#                   are enforced via the local precommit hook instead.
+#   check-ci      — an alias for `check`, kept because .github/workflows/ci.yml
+#                   and muscle memory name it.
 #
-# ANTI-DRIFT RULE (MANDATORY):
-#   Any new check step MUST be added to check-common so BOTH lanes pick it up
-#   automatically.  Adding a step directly to `check` or `check-ci` (other
-#   than the existing cargo-deny line on `check`) is FORBIDDEN.  Violating
-#   this rule silently breaks either local or CI coverage, and the mismatch
-#   will not be caught by the other lane.
+# Add every new step to check-common: a step added directly to `check` or
+# `check-ci` would reintroduce local/CI divergence.
 #
 # ══════════════════════════════════════════════════════════════════════════════
 
-# Shared base: all checks except cargo-deny.
 # ADD new steps here by appending the target name to CHECK_STEPS below.
-# DO NOT add new steps directly to `check` or `check-ci` — they inherit via this target.
 #
 # Single source for the step list, consumed by both the loop and the success echo
 # (no duplicated literal to drift).  ORDER IS LOAD-BEARING, and the rule behind it is
@@ -41,17 +29,15 @@
 # it, or it passes vacuously on the stale committed copy.
 #   - check-bazel-locks must run AFTER bazel-test and bazel-consumer-check, and therefore
 #     stays LAST.  Those two lanes are the writer that repairs a stale MODULE.bazel.lock in
-#     place (bzlmod's default lockfile_mode is `update`).  A new step appended after it that
-#     rewrites a lockfile would reopen the blind spot; put such a step before it.
-#   - Nothing rewrites a Cargo.lock: no cargo build step survives, and every cargo command
-#     left in the tree passes --locked.  check-cargo-lock therefore carries its own staleness
-#     probe rather than depending on an earlier step.
+#     place (bzlmod's default lockfile_mode is `update`) and the writer that rewrites the
+#     crate_universe locks on a repin.  A new step appended after it that rewrites a lockfile
+#     would reopen the blind spot; put such a step before it.
 #
-# Three Bazel lanes plus two lock diffs is the whole gate: `bazel test //...` runs every
+# Three Bazel lanes plus one lock diff is the whole gate: `bazel test //...` runs every
 # test (Python, Rust, Starlark) and `bazel build --config lint //...` runs every linter, so
 # a step that duplicates either belongs in the build graph instead of here.
 CHECK_STEPS := bazel-toolchain-guard bazel-test bazel-lint bazel-consumer-check \
-               check-cargo-lock check-bazel-locks
+               check-bazel-locks
 
 check-common:
 	@steps="$(CHECK_STEPS)"; \
@@ -67,30 +53,12 @@ check-common:
 	done; \
 	echo "check-common: all steps passed ($(CHECK_STEPS))"
 
-# LOCAL / PRECOMMIT lane: check-ci + cargo-deny (the supply-chain gate).
-# Depends on check-ci (not check-common directly) so the one-sanctioned-divergence
-# relationship is enforced structurally: any step added to check-ci (or check-common)
-# is automatically picked up here, and a future developer cannot accidentally add a
-# step only to `check` without it being visible as a structural anomaly.
-# cargo-deny is NOT installed on the GitHub Actions runner; it is enforced
-# here via the local pre-commit hook.  DO NOT add steps here directly — add
-# them to check-common instead so check-ci also picks them up.
-check: check-ci
-	@tmpfile=$$(mktemp); \
-	if ! $(MAKE) cargo-deny >"$$tmpfile" 2>&1; then \
-	    echo "FAILED: cargo-deny"; \
-	    cat "$$tmpfile"; \
-	    rm -f "$$tmpfile"; \
-	    exit 1; \
-	fi; \
-	rm -f "$$tmpfile"; \
-	echo "check: all steps passed (check-ci + cargo-deny)"
+# The gate.  DO NOT add steps here directly — add them to check-common.
+check: check-common
 
-# CI lane: check-common only.  cargo-deny is deliberately omitted — it is not
-# installed on the GitHub Actions runner and supply-chain checks are enforced
-# via the local pre-commit hook instead.  DO NOT add steps here directly —
-# add them to check-common so `check` (local) also picks them up.
-check-ci: check-common
+# Alias for `check`, so the CI workflow and existing habits keep working.  There is no
+# local/CI divergence left for it to name.
+check-ci: check
 
 # All ruff invocations (fix, check, format) share the same pin and config.
 fix:
@@ -107,92 +75,62 @@ regen-seed:
 # modules it imports, so there is no lane in which a stale cdylib can be imported.  Run the
 # whole suite with `make bazel-test`, or one file with `bazel test //tests:test_<name>`.
 
-# There are no cargo build/test/lint lanes.  Every crate in the tree has Bazel targets in
+# There are no cargo lanes, and no cargo.  Every crate in the tree has Bazel targets in
 # both of its feature flavors, so `bazel test //...` compiles and runs them and the
-# rules_rust clippy aspect in `bazel build --config lint //...` lints them — over strictly
-# more configurations than the retired lanes covered (the fegen-rust, fltkfmt and fixture
-# crates have no Cargo manifest at all).  The feature carve-outs the cargo lanes used to own
-# are named targets now: //crates/fltk-ast-core:no_features_test (every feature off, the only
-# build compiling the `cfg(not(feature = "indexmap"))` arms — the uuid and decimal gates are
-# additive, so the all-features flavor subsumes the default one),
-# //crates/fltk-cst-core:python_test (the `python` feature set), and every crate's
-# :no_python_test.  check-no-pyo3 is gone the same way: the cquery loop in bazel-test below
-# asserts the same property over every :no_python target and every rust_binary.
+# rules_rust clippy aspect in `bazel build --config lint //...` lints them.  Feature
+# carve-outs are named targets: //crates/fltk-ast-core:no_features_test (every feature off,
+# the only build compiling the `cfg(not(feature = "indexmap"))` arms), and
+# //crates/fltk-cst-core:python_test (the `python` feature set).  The cquery loop in
+# bazel-test asserts pyo3 absence over every :no_python target and every rust_binary.
 #
-# cargo itself is still required: cargo-deny runs on it, check-cargo-lock probes with it, and
-# the three compile-gate py_tests hand a throwaway crate to it.  Those gates resolve
-# --offline, and no step here fetches anymore, so a fresh clone (and CI) needs one
-# `cargo fetch --locked` to warm the registry cache.
+# tests/test_cargo_retirement.py is what keeps it that way: no tracked manifest, no cargo
+# invocation in this file, the CI workflow, .bazelrc or any BUILD file.
 
-# Cargo lock drift gate.  `cargo metadata --locked` is the staleness detector: nothing in
-# the tree rewrites a Cargo.lock anymore, so the git diff below cannot see a lock that no
-# step regenerated -- each tracked manifest is asked directly whether its lock still
-# resolves, and --locked makes a stale one an error rather than a silent repair.  The diff
-# then catches a lock edited by hand or left half-staged.
+# Bazel lock drift gate.  Six tracked, Bazel-written locks: the two MODULE.bazel.lock files
+# and the crate_universe pair in each workspace (cargo-bazel-lock.json, the render, and
+# cargo-bazel-resolved.lock, the resolution it was rendered from).  bzlmod's default
+# lockfile_mode is `update`, so a Bazel run rewrites a stale MODULE.bazel.lock in place and
+# still reports green, and a repin rewrites the crate_universe pair the same way; nothing ever
+# demands the repair be committed.  The Bazel lanes above are the regenerating half of the
+# usual regenerate-in-place + diff pattern, which is why this step is a pure diff and why it
+# runs last (see the CHECK_STEPS comment).  Run standalone without a prior Bazel run it passes
+# vacuously; `make check` is the gate that clears these.
 #
 # requirements_lock.txt is deliberately absent: //:requirements.test is its gate, and it
 # runs inside `make bazel-test`.
 #
-# The manifest set is DERIVED from the tracked Cargo.lock files rather than written out here,
-# the same way bazel-toolchain-guard derives its mirror list: a hand-written list covers what
-# it happens to name, so a crate that later regains a tracked lock would drift with both halves
-# of the gate agreeing that it does not exist.  A derivation that ends up checking nothing
-# fails rather than passing vacuously.
-#
-# The same derived set pins .github/dependabot.yml's cargo `directories`, which is otherwise a
-# hand-written restatement of it: a manifest that gains a tracked lock would be probed and
-# diffed here but never receive dependency updates, and a directory that leaves the tree would
-# make the updater error out weekly on a file nobody reads.
-check-cargo-lock:
-	@set -e; \
-	locks="$$(git ls-files '*Cargo.lock')"; \
-	test -n "$$locks" || { echo "FAIL: no tracked Cargo.lock found; check-cargo-lock is checking nothing"; exit 1; }; \
-	for lock in $$locks; do \
-	    manifest="$${lock%Cargo.lock}Cargo.toml"; \
-	    cargo metadata --locked --format-version 1 --manifest-path $$manifest >/dev/null \
-	        || { echo "FAIL: $$manifest and its lockfile disagree; re-resolve it (cargo metadata --manifest-path $$manifest) and commit the result"; exit 1; }; \
-	done; \
-	derived="$$(for lock in $$locks; do dir="$${lock%Cargo.lock}"; printf '/%s\n' "$${dir%/}"; done | sort)"; \
-	declared="$$(awk '/package-ecosystem:/ { cargo = ($$0 ~ /"cargo"/); dirs = 0 } cargo && /^ *directories:/ { dirs = 1; next } dirs { if ($$0 ~ /^ *- "/) { sub(/^ *- "/, ""); sub(/".*$$/, ""); print } else { dirs = 0 } }' .github/dependabot.yml | sort)"; \
-	test -n "$$declared" || { echo "FAIL: .github/dependabot.yml declares no cargo directories; the manifests get no dependency updates"; exit 1; }; \
-	test "$$derived" = "$$declared" || { echo "FAIL: the cargo updater covers [$$declared] but the tracked locks live in [$$derived]; update .github/dependabot.yml"; exit 1; }
-	@set -e; \
-	git diff --exit-code -- $$(git ls-files '*Cargo.lock') \
-	    || { echo "FAIL: lockfiles drifted; commit the regenerated files"; exit 1; }
-
-# Bazel lock drift gate.  MODULE.bazel.lock and tests/bazel_consumer/MODULE.bazel.lock are
-# tracked, generated files, and bzlmod's default lockfile_mode is `update`: a Bazel run
-# rewrites a stale one in place and still reports green, so nothing ever demands the repair
-# be committed.  The Bazel lanes above are the regenerating half of the usual
-# regenerate-in-place + diff pattern, which is why this step is a pure diff and why it runs
-# last (see the CHECK_STEPS comment).  Run standalone without a prior Bazel run it passes
-# vacuously; `make check` is the gate that clears these.
+# The set is DERIVED from git rather than listed: a list covers only what it happens to name,
+# so a third Bazel workspace, or a second crate_universe hub in an existing one, would add a
+# tracked lock that no step diffs and nothing notices.  A derivation that comes back empty is a
+# gate checking nothing and fails rather than passing.
 check-bazel-locks:
-	git diff --exit-code -- MODULE.bazel.lock tests/bazel_consumer/MODULE.bazel.lock \
+	@set -e; \
+	locks="$$(git ls-files '*MODULE.bazel.lock' '*cargo-bazel-lock.json' '*cargo-bazel-resolved.lock')"; \
+	test -n "$$locks" || { echo "FAIL: no tracked Bazel-written lockfile found; this gate is checking nothing"; exit 1; }; \
+	git diff --exit-code -- $$locks \
 		|| { echo "FAIL: Bazel lockfiles drifted; commit the regenerated files"; exit 1; }
 
-# Drift detector for the Rust version: rust-toolchain.toml is the single source of
-# truth, but bzlmod cannot read TOML, so every Bazel module that pulls in rules_rust
-# must mirror the version in a rust.toolchain tag.  Without a mirrored tag a module
-# silently compiles with rules_rust's own default toolchain — a different compiler
-# over the same source.  The mirror list is DERIVED from the tracked MODULE.bazel
-# files, not hardcoded, so a newly added Bazel workspace is guarded the moment it
-# depends on rules_rust; a module that never mentions rules_rust is skipped, and a
-# guard that ends up checking nothing fails rather than passing vacuously.
-# Read-only, and it fails in milliseconds — before a potentially cold multi-minute
-# build with the wrong compiler.
+# Drift detector for the Rust version.  The root MODULE.bazel's rust.toolchain tag is the
+# single pin — there is no host toolchain and no rust-toolchain.toml — and every other Bazel
+# module that pulls in rules_rust must mirror it.  Without a mirrored tag a module silently
+# compiles with rules_rust's own default toolchain: a different compiler over the same source.
+# The mirror list is DERIVED from the tracked MODULE.bazel files, not hardcoded, so a newly
+# added Bazel workspace is guarded the moment it depends on rules_rust; a module that never
+# mentions rules_rust is skipped, and a guard that ends up checking nothing fails rather than
+# passing vacuously.  Read-only, and it fails in milliseconds — before a potentially cold
+# multi-minute build with the wrong compiler.
 bazel-toolchain-guard:
-	@want="$$(sed -n 's/^channel *= *"\(.*\)"/\1/p' rust-toolchain.toml)"; \
-	test -n "$$want" || { echo "FAIL: no channel found in rust-toolchain.toml"; exit 1; }; \
+	@want="$$(sed -n 's/^ *versions *= *\["\([^"]*\)"\].*/\1/p' MODULE.bazel)"; \
+	test -n "$$want" || { echo "FAIL: no rust.toolchain versions pin found in MODULE.bazel"; exit 1; }; \
 	checked=0; \
 	for f in $$(git ls-files 'MODULE.bazel' '*/MODULE.bazel'); do \
 	    grep -qE '@rules_rust|"rules_rust"' $$f || continue; \
 	    checked=$$((checked + 1)); \
 	    grep -qF "versions = [\"$$want\"]" $$f \
-	        || { echo "FAIL: $$f rust.toolchain pin does not match rust-toolchain.toml channel ($$want); edit it to match"; exit 1; }; \
+	        || { echo "FAIL: $$f rust.toolchain pin does not match the root MODULE.bazel pin ($$want); edit it to match"; exit 1; }; \
 	done; \
-	test "$$checked" -gt 0 \
-	    || { echo "FAIL: no tracked MODULE.bazel references rules_rust; the toolchain guard is checking nothing"; exit 1; }
+	test "$$checked" -gt 1 \
+	    || { echo "FAIL: only the root MODULE.bazel references rules_rust; the toolchain guard is checking nothing"; exit 1; }
 
 # Bazel verification lane for fltk's OWN Bazel surface.  Consumer-facing breakage
 # (a downstream module importing @fltk) is caught by bazel-consumer-check below.
@@ -207,11 +145,21 @@ bazel-toolchain-guard:
 # fltkfmt is covered: it is a pure-Rust binary rather than a two-flavor library, so it has no
 # target named no_python, and swapping its fegen dependency to the python flavor would
 # otherwise link libpython with nothing objecting.
+#
+# //tests:rust_gate_lib is named explicitly for the same reason: the compile gate crate links
+# the :no_python flavor of every runtime crate but is neither named no_python nor a binary, so
+# neither pattern sweeps it.
+#
+# The second query is the cargo retirement gate's blind-spot check.  That gate reads a runfiles
+# tree, so it sees a package only through the package's own cargo_file_probe: a package that
+# never declares one can carry a Cargo.toml (including one with its own [workspace] table) and
+# a cargo invocation in its BUILD file with every test green.  Only a query over the build graph
+# can see a package that opted out, which is why this lives here and not in a py_test.
 bazel-test: bazel-toolchain-guard
 	bazel test //...
 	@set -e; \
 	err="$$(mktemp)"; trap 'rm -f "$$err"' EXIT; \
-	labels="$$(bazel query 'attr(name, "^no_python$$", //...) union kind("rust_binary rule", //...)' 2>"$$err")" \
+	labels="$$(bazel query 'attr(name, "^no_python$$", //...) union kind("rust_binary rule", //...) union set(//tests:rust_gate_lib)' 2>"$$err")" \
 	    || { echo "FAIL: bazel-test broken: query for pyo3-free targets failed"; cat "$$err"; exit 1; }; \
 	test -n "$$labels" || { echo "FAIL: bazel-test broken: no pyo3-free targets found"; exit 1; }; \
 	for target in $$labels; do \
@@ -223,6 +171,17 @@ bazel-test: bazel-toolchain-guard
 	        || { echo "FAIL: pyo3 present in the $$target Bazel graph"; exit 1; }; \
 	    echo "bazel-test: pyo3 absent from $$target"; \
 	done
+	@set -e; \
+	err="$$(mktemp)"; trap 'rm -f "$$err"' EXIT; \
+	probed="$$(bazel query 'attr(name, "^cargo_file_probe$$", //...)' --output package 2>"$$err" | sort -u)" \
+	    || { echo "FAIL: bazel-test broken: query for cargo_file_probe targets failed"; cat "$$err"; exit 1; }; \
+	test -n "$$probed" || { echo "FAIL: bazel-test broken: no cargo_file_probe target found"; exit 1; }; \
+	packages="$$(bazel query '//...' --output package 2>"$$err" | sort -u)" \
+	    || { echo "FAIL: bazel-test broken: query for packages failed"; cat "$$err"; exit 1; }; \
+	unprobed="$$(echo "$$packages" | while read -r pkg; do echo "$$probed" | grep -qxF "$$pkg" || echo "$$pkg"; done)"; \
+	test -z "$$unprobed" \
+	    || { echo "FAIL: these packages declare no cargo_file_probe, so the retirement gate cannot see them:"; echo "$$unprobed"; exit 1; }; \
+	echo "bazel-test: every package declares a cargo_file_probe"
 
 # The whole lint surface, via one Bazel invocation (config in .bazelrc): the rules_rust
 # clippy aspect over every Rust target, plus the flag-gated Python lint targets
@@ -274,15 +233,6 @@ bazel-consumer-check: bazel-toolchain-guard
 	! echo "$$graph" | grep -q 'fltk_crates.*:serde' \
 	    || { echo "FAIL: fltk's own serde is in the //:consumer_serde graph; the serde flag is not reaching fltk-serde-core"; exit 1; }; \
 	echo "bazel-consumer-check: //:consumer_serde is on the consumer hub's serde alone"
-
-# Supply-chain gate: RustSec advisories, license allow-list, banned/duplicate crates,
-# and source allow-listing (cargo-deny). The two tracked lockfiles are the root workspace's
-# and the consumer module's serde hub; both share the single root deny.toml policy via --config
-# (path resolves from cwd = repo root).  The Bazel-only crates draw their third-party deps
-# from the root lock through @fltk_crates, so they are covered by the first line.
-cargo-deny:
-	cargo deny --manifest-path Cargo.toml check --config deny.toml
-	cargo deny --manifest-path tests/bazel_consumer/serde_hub/Cargo.toml check --config deny.toml
 
 # ── Generated Rust artifacts ─────────────────────────────────────────────────
 # There is no `gencode` target and there are no `gen-*` wrappers: every generated Rust source

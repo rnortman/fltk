@@ -1074,7 +1074,7 @@ class TestFoldConverters:
     What the emitted source has to get right is the split of work — the nesting order, the span
     merging and the arity diagnostic belong to the runtime, and only the two closures name
     generated types.  That the chain comes out nested the right way round is pinned by the
-    compile-and-run gate (``tests/test_generated_rust_gate.py``).
+    compile-and-run gate (``tests/rust_gate_cases.py``).
     """
 
     RIGHT_SIDECAR = fixtures.FOLD_SIDECAR.replace("fold_left: op", "fold_right: op")

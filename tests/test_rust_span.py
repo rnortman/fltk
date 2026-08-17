@@ -1,6 +1,8 @@
 """Tests for the Rust-backed Span backend (fltk._native)."""
 
 import ctypes
+import pathlib
+import re
 import subprocess
 import sys
 
@@ -299,6 +301,24 @@ class TestAbiMarkerClassattr:
         """SourceText._fltk_cst_core_abi starts with 'fltk-cst-core/'."""
         marker = SourceText._fltk_cst_core_abi  # type: ignore[attr-defined]
         assert marker.startswith("fltk-cst-core/")
+
+    def test_source_text_abi_classattr_carries_the_declared_crate_version(self):
+        """The marker's version half is FLTK_CRATE_VERSION, compiled in as CARGO_PKG_VERSION.
+
+        There are no Cargo manifests: the number reaches the rlib only through the `version`
+        attribute of each Rust target, and rules_rust silently defaults a missing one to
+        "0.0.0". A target declared without it therefore builds green and ships an ABI sentinel
+        that no other extension's matches, so two extensions linking different flavors fail
+        `check_abi_pair` in a downstream consumer's process with nothing here objecting.
+        """
+        version = re.search(
+            r'^FLTK_CRATE_VERSION\s*=\s*"([^"]+)"',
+            (pathlib.Path(__file__).resolve().parents[1] / "bzl" / "version.bzl").read_text(),
+            re.MULTILINE,
+        )
+        assert version, "bzl/version.bzl declares no FLTK_CRATE_VERSION"
+        marker = SourceText._fltk_cst_core_abi  # type: ignore[attr-defined]
+        assert marker == f"fltk-cst-core/{version.group(1)}"
 
     def test_span_to_pyobject_fast_path_arc_sharing(self):
         """span_to_pyobject fast path (same cdylib): fegen_cst nodes share Arc with their source.

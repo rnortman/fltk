@@ -1,4 +1,5 @@
 load("@rules_rust//rust:defs.bzl", "rust_binary", "rust_test")
+load("//bzl:cargo_probe.bzl", "cargo_file_probe")
 
 # pyo3 must be absent from this target's graph (the cquery loop in `make bazel-test` asserts it),
 # which is why the fegen dependency is the `:no_python` flavor.
@@ -32,3 +33,6 @@ rust_test(
         "FLTKFMT_TEST_ROOT": ".",
     },
 )
+
+# This package's half of the Cargo retirement gate's declaration probe.
+cargo_file_probe()

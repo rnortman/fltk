@@ -1,7 +1,7 @@
 load("//:rules.bzl", "generate_parser")
 load("//:rust.bzl", "generate_rust_lib", "generate_rust_parser", "rust_bzl_internals")
+load("//bzl:cargo_probe.bzl", "cargo_file_probe")
 load(":crate_flavor_tests.bzl", "crate_flavor_test_suite")
-load(":generated_parity_tests.bzl", "generated_parity_test_suite")
 load(":py_test_tests.bzl", "py_test_test_suite")
 load(":rules_bzl_tests.bzl", "rules_bzl_test_suite")
 load(":rust_bzl_tests.bzl", "rust_bzl_test_suite")
@@ -316,10 +316,11 @@ generate_rust_lib(
 
 crate_flavor_test_suite(name = "crate_flavor_tests")
 
-generated_parity_test_suite(name = "generated_parity_tests")
-
 py_test_test_suite(name = "py_test_tests")
 
 rules_bzl_test_suite(name = "rules_bzl_tests")
 
 rust_bzl_test_suite(name = "rust_bzl_tests")
+
+# This package's half of the Cargo retirement gate's declaration probe.
+cargo_file_probe()
