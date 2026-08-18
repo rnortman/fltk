@@ -413,3 +413,73 @@ disallowed crate, and CI covers it — which is strictly more than the retired g
 Location: new tooling; the inputs are `cargo-bazel-lock.json` and
 `tests/bazel_consumer/cargo-bazel-lock.json`, and the policy the retired `deny.toml` held is in
 git history at the commit that deleted it.
+
+## `pyo3-guard-shared-helper`
+
+The no-pyo3 cquery guard exists twice in near-identical shell: once in the `bazel-test` recipe
+over the derived `:no_python`/`rust_binary`/`//tests:rust_gate_lib` set, once in
+`bazel-consumer-check` over the consumer module's three targets. Each is now a positive-control
+`rdeps` cquery, a per-target loop over its output, a union `deps` cquery, a pyo3 grep, and an
+attribution loop that ends in an unconditional `exit 1` — and the attribution arm of each runs
+only on a red gate, so a divergence introduced there (a lost `exit 1`, a grep that stopped
+matching) surfaces on the one day the guard must not be wrong. The two copies already differ on
+one real axis, `--config lint`, which the root workspace needs and the consumer workspace does
+not; as duplicated text that difference reads as drift rather than as a decision.
+
+Closing this means one parameterized shell helper — the target list on argv, the extra Bazel
+flags in an environment variable — that both recipes call, so the guard's logic has one home and
+the configuration asymmetry becomes a visible argument at the call site. It is deferred because
+the helper has to be a tracked file both workspaces can reach, and `tests/bazel_consumer/` is
+deliberately a standalone downstream module: whether its gate recipe may reach up into the
+parent repo for a script, or whether the helper ships as something a consumer could use, is a
+call about that module's independence rather than a mechanical extraction. Done = one
+implementation of the guard, called twice, with the existing text-level tests in
+`tests/test_check_step_order.py` asserting over it once. Location: `Makefile`, the `bazel-test`
+and `bazel-consumer-check` recipes.
+
+One assertion-surface repair belongs with that extraction, because the flags argument is where
+it becomes expressible: the root lane's union cquery now runs at `--config lint`, so its pyo3
+assertion holds at `--//bzl:lint=true` rather than at the default configuration downstream
+consumers build. A helper taking the extra Bazel flags as an argument can run the union twice —
+once per configuration — for one more cquery (~6s) and one config switch, paid at the end of the
+lane rather than in the middle of it.
+
+## `check-common-executable-coverage`
+
+`check-common` is a non-trivial shell recipe — a `case`, a `VERBOSE` branch, a nested `if`, two
+`$(( ))` arithmetic expansions and two failure arms — and every test over it in
+`tests/test_check_step_order.py` is a substring or regex match on the Makefile's text. Nothing
+executes it, so a `[ "$(VERBOSE)" = "1" ]` comparing against the wrong token (verbose never
+engages), a step failure that does not propagate a non-zero exit out of the loop, a buffer dumped
+before the `FAILED:` line, or an arithmetic expansion that prints an empty duration would all
+leave the suite green. The mechanism for real coverage is cheap and works today: `make -n
+check-common CHECK_STEPS=<target>` runs the whole loop in under a second without invoking Bazel
+(sub-makes inherit `-n`) and prints the real heartbeat, timing and `FAILED:` lines, and an
+override to a nonexistent step exercises both failure arms.
+
+It is deferred because it needs a decision this change's design explicitly took the other way
+("no test in this repo executes `make`, and this change does not introduce a host-`make`
+dependency"): a `py_test` shelling out to `make` depends on a host tool the build graph does not
+pin, which is the property `genhtml` is documented as the sole exception to. The alternative —
+extracting the recipe text, substituting `$$`→`$` and `$(MAKE)`→a stub, and running it under
+`bash` — swaps the host-`make` dependency for a text-munging harness that can drift from what
+`make` actually expands. Which of the two the repo wants is a hermeticity call, not a mechanical
+one. Done = a test target that runs the recipe in both modes and asserts, behaviorally, a start
+and a `passed in <n>s` line per step in each, streamed sub-make output under `VERBOSE=1` and none
+under a passing quiet run, and a non-zero exit with the `FAILED: <step> after …s` line plus the
+dumped buffer on a failing step. Location: `tests/test_check_step_order.py` (the TODO comment sits
+above the `check-common` tests) and a `fltk_py_tests` entry if it lands as a new file.
+
+## `consumer-serde-single-traversal`
+
+`bazel-consumer-check` walks `//:consumer_serde`'s graph twice per run: once inside the union
+`deps(set(//:consumer_ast //:consumer_fmt_bin //:consumer_serde))` that carries the pyo3
+assertion, and once in the `deps(//:consumer_serde)` cquery the two serde assertions need on
+that target's own graph. Dropping `//:consumer_serde` from the union and moving its pyo3
+assertion into the second cquery's block would give the same two invocations, the same three
+targets covered, and no redundant traversal of the lane's largest graph. It is deferred rather
+than done because the union's membership is a stated part of the design this recipe was built
+from — the double traversal was weighed there and accepted on the grounds that invocation count,
+not graph size, is what the lane pays — so changing the member list is a design revision, not a
+cleanup. Done = each consumer target's graph is traversed once per gate run with every current
+assertion intact. Location: `Makefile`, the `bazel-consumer-check` recipe.

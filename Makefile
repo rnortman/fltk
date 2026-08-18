@@ -21,6 +21,11 @@
 #
 # ══════════════════════════════════════════════════════════════════════════════
 
+# Verbose in CI (GitHub Actions sets CI=true), quiet locally.  $(filter true,...) is an
+# exact-word match: CI=false, CI=1 and an empty CI all stay quiet.  `?=` lets an explicit
+# VERBOSE on the command line or environment win in both directions.
+VERBOSE ?= $(if $(filter true,$(CI)),1,0)
+
 # ADD new steps here by appending the target name to CHECK_STEPS below.
 #
 # Single source for the step list, consumed by both the loop and the success echo
@@ -33,25 +38,49 @@
 #     crate_universe locks on a repin.  A new step appended after it that rewrites a lockfile
 #     would reopen the blind spot; put such a step before it.
 #
-# Three Bazel lanes plus one lock diff is the whole gate: `bazel test //...` runs every
-# test (Python, Rust, Starlark) and `bazel build --config lint //...` runs every linter, so
-# a step that duplicates either belongs in the build graph instead of here.
+# Three Bazel lanes plus one lock diff is the whole gate: `bazel test --config lint //...`
+# runs every test (Python, Rust, Starlark) and `bazel build --config lint //...` runs every
+# linter, so a step that duplicates either belongs in the build graph instead of here.  Both
+# root-workspace lanes run under the SAME configuration on purpose: alternating
+# configurations mid-gate discards Bazel's in-memory analysis cache, which cost this gate
+# tens of seconds on every hot run.
 CHECK_STEPS := bazel-toolchain-guard bazel-test bazel-lint bazel-consumer-check \
                check-bazel-locks
 
+# The heartbeat/timing echoes sit outside the VERBOSE branch: both modes report which step
+# is running and how long it took, giving step-granular timing without instrumentation.  A
+# failing step reports its wall time too — "the gate failed and it took forever" is the case
+# where the number matters most.
+#
+# The per-step notes exist because the step NAMES no longer partition the work: bazel-test's
+# invocation builds the lint surface as well, which makes bazel-lint's time a cache-hit
+# confirmation rather than the cost of linting.  Without the notes the timing surface reads as
+# "lint is free", pointing the next person at the wrong lane.
 check-common:
-	@steps="$(CHECK_STEPS)"; \
+	@steps="$(CHECK_STEPS)"; gate_start=$$(date +%s); \
 	for step in $$steps; do \
-	    tmpfile=$$(mktemp); \
-	    if ! $(MAKE) $$step >"$$tmpfile" 2>&1; then \
-	        echo "FAILED: $$step"; \
-	        cat "$$tmpfile"; \
+	    case "$$step" in \
+	        bazel-test) note=" [builds the lint surface too: same --config lint configuration]";; \
+	        bazel-lint) note=" [same-configuration cache-hit confirmation; lint's cost is in bazel-test]";; \
+	        *) note="";; \
+	    esac; \
+	    echo "check-common: running $$step$$note"; \
+	    step_start=$$(date +%s); \
+	    if [ "$(VERBOSE)" = "1" ]; then \
+	        $(MAKE) $$step || { echo "FAILED: $$step after $$(( $$(date +%s) - step_start ))s (gate ran $$(( $$(date +%s) - gate_start ))s)"; exit 1; }; \
+	    else \
+	        tmpfile=$$(mktemp); \
+	        if ! $(MAKE) $$step >"$$tmpfile" 2>&1; then \
+	            echo "FAILED: $$step after $$(( $$(date +%s) - step_start ))s (gate ran $$(( $$(date +%s) - gate_start ))s)"; \
+	            cat "$$tmpfile"; \
+	            rm -f "$$tmpfile"; \
+	            exit 1; \
+	        fi; \
 	        rm -f "$$tmpfile"; \
-	        exit 1; \
 	    fi; \
-	    rm -f "$$tmpfile"; \
+	    echo "check-common: $$step passed in $$(( $$(date +%s) - step_start ))s$$note"; \
 	done; \
-	echo "check-common: all steps passed ($(CHECK_STEPS))"
+	echo "check-common: all steps passed in $$(( $$(date +%s) - gate_start ))s ($(CHECK_STEPS))"
 
 # The gate.  DO NOT add steps here directly — add them to check-common.
 check: check-common
@@ -76,11 +105,11 @@ regen-seed:
 # whole suite with `make bazel-test`, or one file with `bazel test //tests:test_<name>`.
 
 # There are no cargo lanes, and no cargo.  Every crate in the tree has Bazel targets in
-# both of its feature flavors, so `bazel test //...` compiles and runs them and the
-# rules_rust clippy aspect in `bazel build --config lint //...` lints them.  Feature
+# both of its feature flavors, so `bazel test --config lint //...` compiles and runs them and
+# the rules_rust clippy aspect it carries lints them.  Feature
 # carve-outs are named targets: //crates/fltk-ast-core:no_features_test (every feature off,
 # the only build compiling the `cfg(not(feature = "indexmap"))` arms), and
-# //crates/fltk-cst-core:python_test (the `python` feature set).  The cquery loop in
+# //crates/fltk-cst-core:python_test (the `python` feature set).  The cquery guard in
 # bazel-test asserts pyo3 absence over every :no_python target and every rust_binary.
 #
 # tests/test_cargo_retirement.py is what keeps it that way: no tracked manifest, no cargo
@@ -155,22 +184,75 @@ bazel-toolchain-guard:
 # never declares one can carry a Cargo.toml (including one with its own [workspace] table) and
 # a cargo invocation in its BUILD file with every test green.  Only a query over the build graph
 # can see a package that opted out, which is why this lives here and not in a py_test.
+#
+# The pyo3 assertion is ONE cquery over the union of the derived targets, not one per
+# target: `deps(set(a b c))` is `deps(a) ∪ deps(b) ∪ deps(c)`, so the property is the same
+# and a cquery costs ~6s even fully hot.  On a hit the per-target loop attributes the
+# failure; the gate fails unconditionally after it (including when the loop finds nothing —
+# a union/per-target disagreement is itself a bug).
+#
+# The positive control is TWO facts, because a negative assertion over a graph that is not
+# what you think it is passes vacuously:
+#   - the union cquery's output reaches fltk-cst-core:no_python, which is what proves the
+#     cquery itself ran and printed a real graph rather than nothing;
+#   - EVERY derived target reaches it, which a union-level control cannot prove: over a
+#     union, one member reaching the
+#     runtime crates satisfies the control for all the others, so a target that stopped
+#     reaching them at all (retargeted, stubbed, aliased somewhere harmless) would go on
+#     passing "no pyo3" while proving nothing about itself.
+# The second is `rdeps(set($labels), X)`, which names every member on a path to X.  It runs
+# as a loading-phase `bazel query` (~2s) rather than a cquery (~25s here, reverse-dep
+# inversion over the whole configured graph): "this target still reaches the runtime crates"
+# is a structural fact about the unconfigured graph, where `query` unions every select()
+# branch.
+#
+# Residual, accepted: no per-target CONFIGURED fact is asserted anywhere.  A target whose edge
+# to the runtime crates sits in a select() branch the gate's configuration does not take passes
+# the unconfigured control while contributing nothing to the union, whose own control the other
+# members satisfy — so that one target's pyo3 assertion is vacuous again.  Buying the fact back
+# costs a cquery per target, which is the 53s this guard was batched to remove.
+#
+# TODO(pyo3-guard-shared-helper): this block and its twin in bazel-consumer-check are
+# near-duplicate shell, and the attribution arm of each runs only on a red gate, so a
+# divergence introduced there surfaces on the one day it must not be wrong.
+#
+# Every configured invocation here carries --config lint, matching bazel-test and bazel-lint:
+# a different configuration mid-gate discards the analysis cache.  Plain `bazel query` is
+# exempt — query is loading-phase only.
+#
+# That narrows what the pyo3 assertion states, deliberately: it holds at --//bzl:lint=true, not
+# at the default configuration a downstream consumer builds.  A pyo3 edge behind a select() on
+# the lint setting would therefore be invisible here.  No such select exists on a Rust dep
+# today, and a second union cquery at the default configuration would cost ~6s plus the
+# config-switch penalty this lane's uniform configuration exists to avoid;
+# TODO(pyo3-guard-shared-helper) is where restoring the default-config fact belongs.
 bazel-test: bazel-toolchain-guard
-	bazel test //...
+	bazel test --config lint //...
 	@set -e; \
 	err="$$(mktemp)"; trap 'rm -f "$$err"' EXIT; \
 	labels="$$(bazel query 'attr(name, "^no_python$$", //...) union kind("rust_binary rule", //...) union set(//tests:rust_gate_lib)' 2>"$$err")" \
 	    || { echo "FAIL: bazel-test broken: query for pyo3-free targets failed"; cat "$$err"; exit 1; }; \
 	test -n "$$labels" || { echo "FAIL: bazel-test broken: no pyo3-free targets found"; exit 1; }; \
+	reaching="$$(bazel query "rdeps(set($$(echo $$labels)), //crates/fltk-cst-core:no_python)" 2>"$$err")" \
+	    || { echo "FAIL: bazel-test broken: rdeps query for the positive control failed"; cat "$$err"; exit 1; }; \
 	for target in $$labels; do \
-	    graph="$$(bazel cquery "deps($$target)" 2>"$$err")" \
-	        || { echo "FAIL: bazel-test broken: cquery for $$target failed"; cat "$$err"; exit 1; }; \
-	    echo "$$graph" | grep -q 'fltk-cst-core:no_python' \
-	        || { echo "FAIL: bazel-test broken: cquery output for $$target lacks fltk-cst-core:no_python"; cat "$$err"; exit 1; }; \
-	    ! echo "$$graph" | grep -qi pyo3 \
-	        || { echo "FAIL: pyo3 present in the $$target Bazel graph"; exit 1; }; \
-	    echo "bazel-test: pyo3 absent from $$target"; \
-	done
+	    echo "$$reaching" | grep -qxF "$$target" \
+	        || { echo "FAIL: bazel-test broken: $$target does not reach fltk-cst-core:no_python, so its pyo3 assertion proves nothing"; cat "$$err"; exit 1; }; \
+	done; \
+	graph="$$(bazel cquery --config lint "deps(set($$(echo $$labels)))" 2>"$$err")" \
+	    || { echo "FAIL: bazel-test broken: union cquery over the pyo3-free targets failed"; cat "$$err"; exit 1; }; \
+	echo "$$graph" | grep -q 'fltk-cst-core:no_python' \
+	    || { echo "FAIL: bazel-test broken: union cquery output lacks fltk-cst-core:no_python"; cat "$$err"; exit 1; }; \
+	if echo "$$graph" | grep -qi pyo3; then \
+	    echo "FAIL: pyo3 present in the union of the pyo3-free Bazel graphs; attributing per target:"; \
+	    for target in $$labels; do \
+	        one="$$(bazel cquery --config lint "deps($$target)" 2>"$$err")" \
+	            || { echo "  cquery for $$target failed"; cat "$$err"; continue; }; \
+	        ! echo "$$one" | grep -qi pyo3 || echo "  pyo3 present in the $$target Bazel graph"; \
+	    done; \
+	    exit 1; \
+	fi; \
+	echo "bazel-test: pyo3 absent from every derived pyo3-free target"
 	@set -e; \
 	err="$$(mktemp)"; trap 'rm -f "$$err"' EXIT; \
 	probed="$$(bazel query 'attr(name, "^cargo_file_probe$$", //...)' --output package 2>"$$err" | sort -u)" \
@@ -187,6 +269,10 @@ bazel-test: bazel-toolchain-guard
 # clippy aspect over every Rust target, plus the flag-gated Python lint targets
 # (//:ruff_check, //:ruff_format_check, //:pyright).  `-D warnings` comes from the
 # clippy_flags setting; without it clippy prints and passes.
+#
+# Hot after bazel-test this is a cache-hit confirmation (same --config lint configuration).
+# It stays: it keeps the lint surface addressable on its own (`make bazel-lint`) and is the
+# backstop if `test` ever stops covering an output group the `build` form does.
 bazel-lint: bazel-toolchain-guard
 	bazel build --config lint //...
 
@@ -199,13 +285,26 @@ bazel-lint: bazel-toolchain-guard
 # flavor started carrying the python one.  Nothing about the build fails when that happens —
 # the crate still compiles, it just links libpython — so the assertion is the only witness.
 # Positive control first: a silently failing cquery would otherwise pass the negative
-# assertion vacuously.
+# assertion vacuously.  All three targets go into one union cquery (same `deps(set(...))`
+# equivalence as in bazel-test), with the per-target loop kept for failure attribution, and
+# the control stays per target through one loading-phase `rdeps(set(...), X)` query — over a
+# union it would be one fact, and a consumer target that stopped reaching fltk's runtime
+# crates at all would pass the negative assertion vacuously.  Same accepted residual as the
+# root lane: `query` unions every select() branch, so a target reaching the runtime crates only
+# through an untaken branch still passes its own control.
+#
+# TODO(pyo3-guard-shared-helper): near-duplicate of the guard in bazel-test.
 #
 # The second cquery step is the serde-injection twin: //:consumer_serde must be on the consumer
 # module's own hub serde and on no other, which is what proves the
 # //crates/fltk-serde-core:serde flag reaches fltk-serde-core.  Unlike the pyo3 assertion this
 # one has a build-time backstop (a mixed graph does not compile), so it is here to name the
-# failure rather than to be the only witness of it.
+# failure rather than to be the only witness of it.  It stays on //:consumer_serde's own graph
+# rather than riding the union above: "the serde target links the consumer hub's serde" asserted
+# over a union is satisfiable by any member, which is a weaker claim than the one intended.
+#
+# TODO(consumer-serde-single-traversal): //:consumer_serde's graph is walked twice per run,
+# once inside the union above and once here.
 #
 # cquery's stderr goes to a file rather than /dev/null so the ordinary progress output stays
 # out of a passing run while the reason for a failing one (analysis error, renamed label,
@@ -215,15 +314,27 @@ bazel-consumer-check: bazel-toolchain-guard
 	cd tests/bazel_consumer && bazel test //...
 	@set -e; cd tests/bazel_consumer; \
 	err="$$(mktemp)"; trap 'rm -f "$$err"' EXIT; \
-	for target in //:consumer_ast //:consumer_fmt_bin //:consumer_serde; do \
-	    graph="$$(bazel cquery "deps($$target)" 2>"$$err")" \
-	        || { echo "FAIL: bazel-consumer-check broken: cquery for $$target failed"; cat "$$err"; exit 1; }; \
-	    echo "$$graph" | grep -q 'fltk-cst-core:no_python' \
-	        || { echo "FAIL: bazel-consumer-check broken: cquery output for $$target lacks fltk-cst-core:no_python"; cat "$$err"; exit 1; }; \
-	    ! echo "$$graph" | grep -qi pyo3 \
-	        || { echo "FAIL: pyo3 present in the $$target Bazel graph"; exit 1; }; \
-	    echo "bazel-consumer-check: pyo3 absent from $$target"; \
-	done
+	targets="//:consumer_ast //:consumer_fmt_bin //:consumer_serde"; \
+	reaching="$$(bazel query "rdeps(set($$targets), @fltk//crates/fltk-cst-core:no_python)" 2>"$$err")" \
+	    || { echo "FAIL: bazel-consumer-check broken: rdeps query for the positive control failed"; cat "$$err"; exit 1; }; \
+	for target in $$targets; do \
+	    echo "$$reaching" | grep -qxF "$$target" \
+	        || { echo "FAIL: bazel-consumer-check broken: $$target does not reach fltk-cst-core:no_python, so its pyo3 assertion proves nothing"; cat "$$err"; exit 1; }; \
+	done; \
+	graph="$$(bazel cquery "deps(set($$targets))" 2>"$$err")" \
+	    || { echo "FAIL: bazel-consumer-check broken: union cquery over $$targets failed"; cat "$$err"; exit 1; }; \
+	echo "$$graph" | grep -q 'fltk-cst-core:no_python' \
+	    || { echo "FAIL: bazel-consumer-check broken: union cquery output lacks fltk-cst-core:no_python"; cat "$$err"; exit 1; }; \
+	if echo "$$graph" | grep -qi pyo3; then \
+	    echo "FAIL: pyo3 present in the union of the consumer Bazel graphs; attributing per target:"; \
+	    for target in $$targets; do \
+	        one="$$(bazel cquery "deps($$target)" 2>"$$err")" \
+	            || { echo "  cquery for $$target failed"; cat "$$err"; continue; }; \
+	        ! echo "$$one" | grep -qi pyo3 || echo "  pyo3 present in the $$target Bazel graph"; \
+	    done; \
+	    exit 1; \
+	fi; \
+	echo "bazel-consumer-check: pyo3 absent from $$targets"
 	@set -e; cd tests/bazel_consumer; \
 	err="$$(mktemp)"; trap 'rm -f "$$err"' EXIT; \
 	graph="$$(bazel cquery "deps(//:consumer_serde)" 2>"$$err")" \
