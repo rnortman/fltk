@@ -448,7 +448,12 @@ def _mutate_standalone_after_before(working_set: deque[Doc]) -> list[Doc] | None
 
 
 def _mutate_text_newline(working_set: deque[Doc]) -> list[Doc] | None:
-    """Pattern: Text('\n') followed by SeparatorSpec with spacing -> HARDLINE."""
+    """Pattern: Text('\n') followed by SeparatorSpec with spacing -> a single HardLine.
+
+    The Text supplies the line break and the separator supplies the blank count, so a
+    separator carrying HardLine(blank_lines=k) resolves to HardLine(k); any other spacing
+    resolves to a plain HardLine.
+    """
     min_consecutive_size = 2
     if len(working_set) < min_consecutive_size:
         return None
@@ -457,7 +462,8 @@ def _mutate_text_newline(working_set: deque[Doc]) -> list[Doc] | None:
         # Check if next element is a SeparatorSpec with spacing
         next_doc = working_set[1]
         if isinstance(next_doc, SeparatorSpec) and next_doc.spacing is not None:
-            # Convert Text('\n') + SeparatorSpec to just HARDLINE
+            if isinstance(next_doc.spacing, HardLine):
+                return [next_doc.spacing]
             return [HARDLINE]
 
     return None

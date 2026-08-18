@@ -322,3 +322,54 @@ fn help_shows_consumer_about() {
         );
     }
 }
+
+/// A group-header comment separated from the preceding group by a blank line keeps both the
+/// comment and the blank. The reformatted output is a fixed point.
+#[test]
+fn group_header_comments_keep_their_blank_lines() {
+    let input = b"a := \"x\" ;\n\n// group two\nb := \"y\" ;\nc := \"z\" ;\n";
+
+    let out = run_ok(&["-w", "80", "-i", "2"], Some(input), "group-header format");
+    let text = String::from_utf8_lossy(&out).into_owned();
+
+    assert!(
+        text.contains("\n\n// group two\nb"),
+        "the blank must stay between the first group and its header comment:\n{text}"
+    );
+    let blanks = text
+        .trim()
+        .lines()
+        .filter(|line| line.trim().is_empty())
+        .count();
+    assert_eq!(
+        blanks, 1,
+        "the blank line before the group header must survive:\n{text}"
+    );
+
+    let out2 = run_ok(&["-w", "80", "-i", "2"], Some(&out), "group-header reformat");
+    assert_eq!(out2, out, "group-header output is not a formatting fixed point");
+}
+
+/// A blank line *after* a group-header comment survives. `fegen.fltkfmt` sets
+/// `preserve_blanks: 1`, so exactly one blank survives on each side of the comment.
+#[test]
+fn a_blank_after_a_preserved_comment_survives() {
+    let input = b"a := \"x\" ;\n// header\n\nb := \"y\" ;\n";
+
+    let out = run_ok(&["-w", "80", "-i", "2"], Some(input), "blank-after format");
+    let text = String::from_utf8_lossy(&out).into_owned();
+
+    assert!(
+        text.contains("// header\n\nb"),
+        "the blank must stay between the comment and the code it heads:\n{text}"
+    );
+    let blanks = text
+        .trim()
+        .lines()
+        .filter(|line| line.trim().is_empty())
+        .count();
+    assert_eq!(blanks, 1, "the blank after the comment must survive:\n{text}");
+
+    let out2 = run_ok(&["-w", "80", "-i", "2"], Some(&out), "blank-after reformat");
+    assert_eq!(out2, out, "blank-after output is not a formatting fixed point");
+}

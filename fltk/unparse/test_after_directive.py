@@ -430,13 +430,13 @@ rule expr {
 }
 """)
 
-    # Test multiple spacing in after block uses first
+    # Multiple spacings in one after block are rejected by the anchor processor itself,
+    # which reports the directive rather than a CST accessor arity error.
     config_text = """
     after operator {
         nbsp;
         hard;
     }
     """
-    # Determine selector type and value from the anchor
-    with pytest.raises(ValueError, match="Expected at most one position_spec_statement child but have 2"):
+    with pytest.raises(ValueError, match="After statement must have exactly one position_spec_statement"):
         plumbing.parse_format_config(config_text)

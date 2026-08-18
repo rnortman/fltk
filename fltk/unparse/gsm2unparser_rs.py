@@ -68,6 +68,12 @@ class RustUnparserGenerator:
         # import on ``self._regex_patterns`` (gsm2parser_rs.py).
         self._uses_doc_type = False
 
+        # Trivia rules whose gap emission needs the generated ``_prev_comment_newline_{rule}``
+        # dispatch (rule name -> CST class name), populated during rule emission and read
+        # afterwards to gate both that per-rule method and the shared
+        # ``_comment_trailing_newline`` it calls, so neither is emitted unused.
+        self._prev_comment_newline_rules: dict[str, str] = {}
+
     def generate(self) -> str:
         """Generate the complete ``.rs`` unparser source.
 
@@ -283,10 +289,12 @@ class RustUnparserGenerator:
         relies on (``_has_preservable_trivia`` / ``_count_newlines_in_trivia``) are emitted once
         at the head of the impl block (:meth:`_gen_trivia_helper_methods`).
         """
+        # Rules first: their emission records which trivia helpers are actually called, which
+        # is what _gen_trivia_helper_methods gates the preserve_blanks-only helpers on.
+        rule_parts = [self._gen_rule(rule) for rule in self._grammar.rules]
         parts: list[str] = ["impl Unparser {"]
         parts.extend(self._gen_trivia_helper_methods())
-        for rule in self._grammar.rules:
-            parts.append(self._gen_rule(rule))
+        parts.extend(rule_parts)
         parts.append("}")
         return "\n".join(parts)
 
@@ -301,6 +309,8 @@ class RustUnparserGenerator:
         blocks = [self._gen_rule_entry(rule, class_name)]
         for alt_idx, alt in enumerate(rule.alternatives):
             blocks.extend(self._gen_alternative(prefix, rule.name, class_name, alt_idx, alt))
+        if rule.name in self._prev_comment_newline_rules:
+            blocks.append(self._gen_prev_comment_newline_method(rule.name, class_name))
         return "\n\n".join(blocks)
 
     def _gen_rule_entry(self, rule: gsm.Rule, class_name: str) -> str:
@@ -1282,8 +1292,9 @@ class RustUnparserGenerator:
         whitespace child (advancing ``pos``), counts its newlines, and emits the appropriate
         ``SeparatorSpec``:
 
-        - ``preserve_blanks > 0``: a blank line (``>= 2`` newlines) emits a ``HardLine`` with the
-          configured blank-line count; a single newline (``>= 1``) emits a plain ``HardLine``
+        - ``preserve_blanks > 0``: a blank line (``>= 2`` newlines) emits a ``HardLine`` carrying
+          the source blank count capped at the configured maximum; a single newline (``>= 1``)
+          emits a plain ``HardLine``
           (line structure for comments); no newline uses the default separator spacing.
         - ``preserve_blanks == 0``: a newline (``>= 1``) emits a plain ``HardLine``; no newline
           uses the default separator spacing.
@@ -1294,12 +1305,12 @@ class RustUnparserGenerator:
         ``WS_REQUIRED`` gap likewise fails and a ``WS_ALLOWED`` gap emits nothing (matching the
         Python ``if_in_bounds`` having an ``orelse`` only for ``WS_REQUIRED``, ``:1113``/``:1259``).
 
-        ``preserve_blanks`` reads the *global* ``trivia_config.preserve_blanks`` exactly as the
-        Python branch does (``:1168``), not the rule-aware ``get_preserve_blanks``.
+        ``preserve_blanks`` reads the *global* ``trivia_config.preserve_blanks``: the shared
+        ``unparse__trivia`` has no enclosing-rule identity at generation time.
         """
         is_required = separator == gsm.Separator.WS_REQUIRED
         child_enum = self._cst.child_enum_name(class_name)
-        preserve_blanks = self._get_preserve_blanks()
+        preserve_blanks = self._get_global_preserve_blanks()
 
         i0 = indent
         i1 = indent + "    "
@@ -1311,9 +1322,19 @@ class RustUnparserGenerator:
         # Unlabeled whitespace span: label is None and the child value is a Span. A labeled or
         # non-Span child takes the else arm (the Python `is_unlabeled and is_span` guard, :1140).
         lines.append(f"{i1}if let (None, cst::{child_enum}::Span(span)) = &node.children()[pos] {{")
-        lines.append(f"{i2}pos += 1;")
         # Borrowing accessor (no per-gap String allocation); the slice is only scanned for newlines.
         lines.append(f"{i2}let newline_count = span.text_str().map(|t| t.matches('\\n').count()).unwrap_or(0);")
+        count_expr = "newline_count"
+        if preserve_blanks > 0:
+            # A preceding line comment carried its terminating newline inside its own span, so
+            # this whitespace span holds one fewer newline than the source shows. The collapse
+            # arm has no use for the adjustment.
+            count_expr = "total_newlines"
+            self._prev_comment_newline_rules[rule_name] = class_name
+            lines.append(
+                f"{i2}let total_newlines = newline_count + Self::_prev_comment_newline_{rule_name}(node, pos);"
+            )
+        lines.append(f"{i2}pos += 1;")
         # Trivia-rule branch preserves comment line structure even at preserve_blanks == 0
         # (preserve_line_at_zero=True), matching gsm2unparser.py:1216-1242.
         lines.extend(
@@ -1325,6 +1346,7 @@ class RustUnparserGenerator:
                 preserve_line_at_zero=True,
                 outer_indent=i2,
                 inner_indent=i3,
+                count_expr=count_expr,
             )
         )
         lines.append(f"{i1}}} else {{")
@@ -1343,6 +1365,38 @@ class RustUnparserGenerator:
         else:
             lines.append(f"{i0}}}")
         return lines
+
+    def _gen_prev_comment_newline_method(self, rule_name: str, class_name: str) -> str:
+        """Emit ``_prev_comment_newline_{rule}`` — 0 or 1 from the trivia child before ``pos``.
+
+        Written once per trivia rule; the per-variant dispatch is the same at every gap
+        (only input is ``pos``), paralleling ``_count_newlines_in_trivia``.
+        """
+        child_enum = self._cst.child_enum_name(class_name)
+        lines = [
+            f"    fn _prev_comment_newline_{rule_name}(node: &cst::{class_name}, pos: usize) -> usize {{",
+            "        if pos > 0 {",
+            "            match &node.children()[pos - 1].1 {",
+        ]
+        if self._cst.has_span_child(rule_name):
+            lines.append(
+                f"                cst::{child_enum}::Span(s) => Self::_comment_trailing_newline(s.text_str()),"
+            )
+        for cls in self._cst.child_class_names_for_rule(rule_name):
+            lines.append(
+                f"                cst::{child_enum}::{cls}(n) => "
+                "Self::_comment_trailing_newline(n.read().span().text_str()),"
+            )
+        lines.extend(
+            [
+                "            }",
+                "        } else {",
+                "            0usize",
+                "        }",
+                "    }",
+            ]
+        )
+        return "\n".join(lines)
 
     def _gen_non_trivia_rule_processing(
         self, rule_name: str, class_name: str, separator: gsm.Separator, indent: str
@@ -1386,14 +1440,14 @@ class RustUnparserGenerator:
         error.  A WS separator on a non-trivia rule always implies a ``Trivia`` child variant
         (the captured inter-item trivia), so the ``Trivia`` arm itself always resolves.
 
-        ``preserve_blanks`` reads the *global* ``trivia_config.preserve_blanks`` exactly as the
-        Python branch does (``:1341``), not the rule-aware ``get_preserve_blanks``.
+        ``preserve_blanks`` is the rule-aware ``FormatterConfig.get_preserve_blanks(rule_name)``,
+        so a rule-level directive governs the gaps in that rule's own layout.
         """
         is_required = separator == gsm.Separator.WS_REQUIRED
         child_enum = self._cst.child_enum_name(class_name)
         trivia_class = self._cst.class_name_for_rule(gsm.TRIVIA_RULE_NAME)
         num_variants = self._cst.num_child_variants(rule_name)
-        preserve_blanks = self._get_preserve_blanks()
+        preserve_blanks = self._formatter_config.get_preserve_blanks(rule_name)
 
         i0 = indent
         i1 = indent + "    "
@@ -1485,10 +1539,43 @@ class RustUnparserGenerator:
             self._gen_has_preservable_trivia_method(),
             self._gen_count_newlines_in_trivia_method(),
         ]
+        comment_helper = self._gen_comment_trailing_newline_method()
+        if comment_helper is not None:
+            methods.append(comment_helper)
         whitespace_helper = self._gen_whitespace_node_newlines_method()
         if whitespace_helper is not None:
             methods.append(whitespace_helper)
         return methods
+
+    def _gen_comment_trailing_newline_method(self) -> str | None:
+        """Emit ``_comment_trailing_newline``.
+
+        Returns 1 when a trivia child's span text is a non-whitespace run ending in a newline —
+        a line comment, whose terminating newline belongs to the comment child's span rather
+        than to the whitespace span that follows it. Whitespace-only text, empty text and a
+        block comment (whose text does not end in a newline) all return 0.
+
+        Returns ``None`` when no ``_prev_comment_newline_{rule}`` dispatch was emitted (the
+        only caller), so a generated unparser carries no unreachable helper.
+        """
+        if not self._prev_comment_newline_rules:
+            return None
+        return "\n".join(
+            [
+                "    fn _comment_trailing_newline(t: Option<&str>) -> usize {",
+                "        match t {",
+                # ends_with is O(1) and rejects most text before the per-character scan.
+                "            Some(t)",
+                "                if t.ends_with('\\n')",
+                "                    && !t.chars().all(char::is_whitespace) =>",
+                "            {",
+                "                1",
+                "            }",
+                "            _ => 0,",
+                "        }",
+                "    }",
+            ]
+        )
 
     def _gen_whitespace_node_newlines_method(self) -> str | None:
         """Emit the ``_whitespace_node_newlines`` helper each node arm of the count method delegates to.
@@ -1641,15 +1728,13 @@ class RustUnparserGenerator:
         )
         return "\n".join(lines)
 
-    def _get_preserve_blanks(self) -> int:
-        """Return the configured ``preserve_blanks`` (0 when no ``trivia_config``).
+    def _get_global_preserve_blanks(self) -> int:
+        """Return the *global* configured ``preserve_blanks`` (0 when no ``trivia_config``).
 
-        Shared by both trivia branches, which read the *global*
-        ``trivia_config.preserve_blanks`` exactly as the Python backend does
-        (``gsm2unparser.py:1168``/``:1341``), not the rule-aware ``get_preserve_blanks``.
-
-        TODO(rule-preserve-blanks): read the rule-aware ``get_preserve_blanks(rule_name)``
-        instead of the global field so per-rule preserve_blanks is honored.
+        The trivia-rule branch uses this: the separators inside a preserved trivia doc are
+        emitted by the shared ``unparse__trivia``, which has no enclosing-rule identity at
+        generation time. The non-trivia branch reads the rule-aware
+        ``FormatterConfig.get_preserve_blanks`` instead.
         """
         if self._formatter_config.trivia_config:
             return self._formatter_config.trivia_config.preserve_blanks
@@ -1665,18 +1750,20 @@ class RustUnparserGenerator:
         preserve_line_at_zero: bool,
         outer_indent: str,
         inner_indent: str,
+        count_expr: str = "newline_count",
     ) -> list[str]:
         """Emit the ``newline_count`` -> ``SeparatorSpec`` ladder shared by both trivia branches.
 
-        Assumes a ``newline_count`` binding is already in scope (the trivia-rule branch counts
-        the whitespace span's newlines inline; the non-trivia branch counts them via
-        ``_count_newlines_in_trivia``).  Ports the ``preserve_blanks`` branching of
+        Assumes the binding named by ``count_expr`` is already in scope (the trivia-rule branch
+        counts the whitespace span's newlines inline and adds the preceding comment's consumed
+        terminator; the non-trivia branch counts them via ``_count_newlines_in_trivia``).
+        Ports the ``preserve_blanks`` branching of
         ``_gen_trivia_processing`` (``gsm2unparser.py:1172``/``:1216`` for the trivia-rule branch,
         ``:1348``/``:1392`` for the non-trivia branch):
 
         - ``preserve_blanks > 0``: a blank line (``>= 2`` newlines) emits a ``HardLine`` carrying
-          the configured count; a single newline (``>= 1``) emits a plain ``HardLine``; otherwise
-          the default separator spacing.
+          the source blank count capped at the configured maximum; a single newline (``>= 1``)
+          emits a plain ``HardLine``; otherwise the default separator spacing.
         - ``preserve_blanks == 0`` with ``preserve_line_at_zero`` (the trivia-rule branch): a
           newline (``>= 1``) emits a plain ``HardLine`` to keep comment line structure; otherwise
           the default spacing.
@@ -1689,18 +1776,20 @@ class RustUnparserGenerator:
         i = inner_indent
         lines: list[str] = []
         if preserve_blanks > 0:
-            lines.append(f"{o}if newline_count >= 2 {{")
+            lines.append(f"{o}if {count_expr} >= 2 {{")
+            # `>= 2` guarantees the subtraction cannot underflow.
+            blank_expr = f"(({count_expr} - 1).min({preserve_blanks}) as u32)"
             lines.extend(
                 self._add_separator_spec_lines(
                     rule_name=rule_name,
-                    spacing=HardLine(blank_lines=preserve_blanks),
+                    spacing=f"Doc::HardLine {{ blank_lines: {blank_expr} }}",
                     preserved_trivia_expr=None,
                     required=is_required,
                     indent=i,
                     context="trivia blank-line spacing",
                 )
             )
-            lines.append(f"{o}}} else if newline_count >= 1 {{")
+            lines.append(f"{o}}} else if {count_expr} >= 1 {{")
             lines.extend(
                 self._add_separator_spec_lines(
                     rule_name=rule_name,
@@ -1715,7 +1804,7 @@ class RustUnparserGenerator:
             lines.extend(self._add_default_separator_spec_lines(rule_name, separator, i))
             lines.append(f"{o}}}")
         elif preserve_line_at_zero:
-            lines.append(f"{o}if newline_count >= 1 {{")
+            lines.append(f"{o}if {count_expr} >= 1 {{")
             lines.extend(
                 self._add_separator_spec_lines(
                     rule_name=rule_name,
@@ -1737,7 +1826,7 @@ class RustUnparserGenerator:
         self,
         *,
         rule_name: str,
-        spacing: Doc | None,
+        spacing: Doc | str | None,
         preserved_trivia_expr: str | None,
         required: bool,
         indent: str,
@@ -1752,8 +1841,14 @@ class RustUnparserGenerator:
         in the ``fltk_unparser_core::separator_spec(spacing, preserved_trivia, required)``
         constructor.  ``preserved_trivia_expr`` is a pre-built Rust expression string (or ``None``);
         the trivia-rule branch always passes ``None`` (the non-trivia branch will supply it).
+        ``spacing`` may also be a pre-built Rust expression string for a runtime-computed
+        spacing; a ``Doc::`` reference in it records the ``Doc`` import the header gates.
         """
-        if spacing is None:
+        if isinstance(spacing, str):
+            if "Doc::" in spacing:
+                self._uses_doc_type = True
+            spacing_arg = f"Some({spacing})"
+        elif spacing is None:
             spacing_arg = "None"
         else:
             try:

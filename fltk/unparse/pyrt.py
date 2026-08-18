@@ -114,6 +114,17 @@ def _is_unicode_whitespace_only(text: str) -> bool:
     return bool(text) and all(ch.isspace() and ch not in _C0_SEPARATORS for ch in text)
 
 
+def _child_span_text(child: object, terminals: str) -> str | None:
+    """Return the source text of a Trivia child's span, or None when it has no span.
+
+    A child is either a direct span or a node carrying one; both reach the same text.
+    """
+    span = child if is_span(child) else getattr(child, "span", None)
+    if span is None:
+        return None
+    return extract_span_text(cast(Span, span), terminals)
+
+
 def count_whitespace_newlines(child: object, terminals: str) -> int:
     """Count the newlines a Trivia child contributes toward blank-line detection.
 
@@ -125,13 +136,45 @@ def count_whitespace_newlines(child: object, terminals: str) -> int:
     """
     if is_span(child):
         return count_span_newlines(cast(Span, child), terminals)
-    span = getattr(child, "span", None)
-    if span is None:
-        return 0
-    text = extract_span_text(cast(Span, span), terminals)
-    if _is_unicode_whitespace_only(text):
+    text = _child_span_text(child, terminals)
+    if text is not None and _is_unicode_whitespace_only(text):
         return text.count("\n")
     return 0
+
+
+def preceding_comment_trailing_newline(children: Sequence[tuple[object, object]], pos: int, terminals: str) -> int:
+    """Return 1 when the trivia child before ``pos`` is a comment ending in a newline.
+
+    A line comment's terminating newline belongs to the comment child's span, not to the
+    whitespace span that follows it, so a gap rendered as ``// c\\n`` + ``'\\n'`` holds one
+    fewer newline than the source visually shows. This restores it. Whitespace-only children
+    and empty spans return 0, so consecutive whitespace never inflates the count, and a block
+    comment (whose span does not end in a newline) consumes no newline and returns 0 too.
+
+    A ``pos`` past the end of ``children`` is a caller invariant violation and raises
+    ``IndexError``, the same loud failure the Rust helper gives, rather than formatting on
+    with a silently wrong blank count.
+    """
+    if pos <= 0:
+        return 0
+    text = _child_span_text(children[pos - 1][1], terminals)
+    # endswith is O(1) and answers 0 for most gaps; the per-character whitespace
+    # classification runs only for text that could still qualify.
+    if text is None or not text.endswith("\n"):
+        return 0
+    return 0 if _is_unicode_whitespace_only(text) else 1
+
+
+def capped_blank_lines(newline_count: int, cap: int) -> int:
+    """Blank lines to emit for a gap holding ``newline_count`` newlines, capped at ``cap``.
+
+    ``k`` newlines separate ``k - 1`` blank lines; the result is clamped to ``[0, cap]``, so
+    blanks are never invented and never exceed the configured maximum.
+    """
+    blanks = newline_count - 1
+    if blanks < 0:
+        return 0
+    return min(blanks, cap)
 
 
 def is_span(obj: object) -> bool:

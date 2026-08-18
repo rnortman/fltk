@@ -4,17 +4,6 @@
 
 This is a placeholder entry. Leave it here so the file is never empty. It is not a real TODO. You would reference it in code with `// TODO(example-placeholder)` comments. This is the basic TODO system design: An entry here with a slug used to join to code comments. Add real TODOs below this one in this format.
 
-## `rule-preserve-blanks`
-
-Rule-level `preserve_blanks` is parsed and stored but never consumed. `RuleConfig.preserve_blanks`
-(`fltk/unparse/fmt_config.py`) and `FormatterConfig.get_preserve_blanks(rule_name)` exist, but both
-unparser generators read the *global* `trivia_config.preserve_blanks` as a generation-time constant
-rather than calling the rule-aware method, so a per-rule `preserve_blanks` directive has no effect.
-Pre-existing feature gap, orthogonal to the blank-line-preservation bug fix. To close it, thread the
-rule name to the newline-spacing emission and read `get_preserve_blanks(rule_name)`. Location:
-`fltk/unparse/gsm2unparser.py` (both `# Get preserve_blanks from config` sites in
-`_gen_trivia_processing`), `fltk/unparse/gsm2unparser_rs.py` (`_get_preserve_blanks`).
-
 ## `extend-children-owned`
 
 `extend_children(&Self)` clones every child Arc even though the donor node is immediately dropped after the call (inline-to-parent sub-expression and `+`/`*` loop paths). A consuming variant `extend_children_owned(other: Self)` using `Vec::append` would avoid the atomic inc+dec pairs per child on the parse hot path. Blocked on `gsm2tree_rs.py` adding the method to the generated CST node API. Location: `fltk/fegen/gsm2parser_rs.py` (`_gen_item_multiple`, `_gen_append_code`), `fltk/fegen/gsm2tree_rs.py` (generated `impl <Node>` blocks). Re-open only with profiling evidence.
@@ -22,6 +11,14 @@ rule name to the newline-spacing emission and read `get_preserve_blanks(rule_nam
 ## `fmt-cli-per-consumer-version`
 
 `fltk-fmt-cli`'s `FmtArgs` carries `#[command(version)]`, which clap expands to `CARGO_PKG_VERSION` where `FmtArgs` is defined — the scaffolding crate — so every consumer binary reports `fltk-fmt-cli`'s version, not its own. This is an observable defect today: `//crates/fltkfmt:fltkfmt` declares no `version` attribute at all, while `//crates/fltk-fmt-cli` declares `0.4.0`, so `fltkfmt --version` prints `0.4.0` for a binary that claims no version of its own. Fix by threading `version` (and possibly `name`) through `run_main` / `fltk_formatter_main!` the same way `about` is threaded (commit for `fmt-cli-per-consumer-about`), so `<consumer> --version` prints the consumer's own version. Do NOT add a second bare `&'static str` positional argument next to `about` on `run_main`: two adjacent indistinguishable string params can be swapped silently (a version string rendered as the `--help` description). Introduce an identity struct instead (e.g. `FormatterInfo::new(about).version(..)`, keeping `about` required) so this fix — and any later per-consumer knob — is a non-breaking addition rather than another signature break. Location: `crates/fltk-fmt-cli/src/lib.rs` (`#[command(version)]` on `FmtArgs`, and `run_main`).
+
+## `multi-position-spec`
+
+The `.fltkfmt` grammar allows multiple `position_spec_statement*` inside an `after`/`before` anchor block, but `_position_spec_spacing` assumes exactly one spacing statement per block. Supporting multiple spacings (e.g. combining directives) would require defining how they compose. Deferred because single-spacing blocks cover all current use cases. Location: `fltk/unparse/fmt_config.py` (`_position_spec_spacing`).
+
+## `position-preserve-blanks`
+
+The `.fltkfmt` grammar admits a `preserve_blanks` directive inside an `after`/`before` anchor block (`fltk/unparse/unparsefmt.fltkg`'s `position_spec_statement`), but there is no per-anchor blank policy in the config model or either unparser generator, so the directive was silently ignored. `parse_format_config` now rejects it with an error rather than swallowing it. Implementing per-anchor blank policy — the next granularity after global and rule-level, for languages that want blanks preserved only at specific positions (e.g. between struct fields but not inside an expression) — means an `AnchorConfig` operation carrying the count and threading it through both generators' anchor-spacing paths. Location: `fltk/unparse/fmt_config.py` (`_position_spec_spacing`).
 
 ## `lsp-cst-text-helpers`
 

@@ -448,6 +448,19 @@ class UnparserGenerator:
             msg = f"Unknown Doc type: {doc}"
             raise ValueError(msg)
 
+    def _capped_hardline_expr(self, newline_count: iir.Expr, cap: int) -> iir.Expr:
+        """Build ``hardline(capped_blank_lines(<newline_count>, <cap>))``.
+
+        The newline count is a runtime value; the cap is baked in at generation time.
+        """
+        combinators = self._get_combinators_module()
+        pyrt_module = self._get_pyrt_module()
+        blanks = pyrt_module.method.capped_blank_lines.call(
+            newline_count,
+            iir.LiteralInt(typ=iir.IndexInt, value=cap),
+        )
+        return combinators.method.hardline.call(blanks)
+
     def _create_after_spec(self, spacing: Doc) -> iir.Expr:
         """Create an AfterSpec control node."""
         self._get_combinators_module()
@@ -467,10 +480,23 @@ class UnparserGenerator:
         )
 
     def _create_separator_spec(
-        self, *, spacing: Doc | None, preserved_trivia: iir.Expr | None, required: bool
+        self,
+        *,
+        spacing: Doc | iir.Expr | None,
+        preserved_trivia: iir.Expr | None,
+        required: bool,
     ) -> iir.Expr:
-        """Create a SeparatorSpec control node."""
-        spacing_expr = iir.LiteralNull() if spacing is None else self._doc_to_combinator_expr(spacing)
+        """Create a SeparatorSpec control node.
+
+        ``spacing`` is either a generation-time ``Doc``, an already-built expression for a
+        runtime-computed spacing, or ``None`` for no spacing.
+        """
+        if spacing is None:
+            spacing_expr: iir.Expr = iir.LiteralNull()
+        elif isinstance(spacing, iir.Expr):
+            spacing_expr = spacing
+        else:
+            spacing_expr = self._doc_to_combinator_expr(spacing)
         trivia_expr = preserved_trivia if preserved_trivia is not None else iir.LiteralNull()
 
         return iir.Construct.make(
@@ -1174,6 +1200,45 @@ class UnparserGenerator:
                 init=child_value,
             )
 
+            # Separators inside a preserved trivia doc use the global preserve_blanks: the
+            # shared unparse__trivia has no enclosing-rule identity at generation time.
+            preserve_blanks = 0
+            if self.formatter_config.trivia_config:
+                preserve_blanks = self.formatter_config.trivia_config.preserve_blanks
+
+            # A preceding line comment carried its terminating newline inside its own span, so
+            # the whitespace span here holds one fewer newline than the source shows. The
+            # collapse arm has no use for the adjustment, so it is not emitted when nothing
+            # is preserved.
+            newline_count = iir.SelfExpr().method._count_newlines.call(span_var.load())
+            if preserve_blanks > 0:
+                pyrt_module = self._get_pyrt_module()
+                prev_newline_var = if_whitespace.block.var(
+                    name="prev_comment_newline",
+                    typ=iir.IndexInt,
+                    ref_type=iir.RefType.VALUE,
+                    mutable=False,
+                    init=pyrt_module.method.preceding_comment_trailing_newline.call(
+                        node_var.load().fld.children.load(),
+                        current_pos_var.load(),
+                        iir.SelfExpr().fld.terminals.load(),
+                    ),
+                )
+                # Bound to a local so the three ladder sites read it once instead of
+                # re-scanning the whitespace span's text per test.
+                total_newlines_var = if_whitespace.block.var(
+                    name="total_newlines",
+                    typ=iir.IndexInt,
+                    ref_type=iir.RefType.VALUE,
+                    mutable=False,
+                    init=iir.BinOp(
+                        lhs=newline_count,
+                        op="+",
+                        rhs=prev_newline_var.load(),
+                    ),
+                )
+                newline_count = total_newlines_var.load()
+
             # Consume the whitespace span
             if_whitespace.block.assign(
                 current_pos_var.store(),
@@ -1184,16 +1249,6 @@ class UnparserGenerator:
                 ),
             )
 
-            # Count newlines in whitespace span
-            newline_count = iir.SelfExpr().method._count_newlines.call(span_var.load())
-
-            # Get preserve_blanks from config (generation-time constant)
-            # TODO(rule-preserve-blanks): read the rule-aware get_preserve_blanks(rule_name)
-            # instead of the global field so per-rule preserve_blanks is honored.
-            preserve_blanks = 0
-            if self.formatter_config.trivia_config:
-                preserve_blanks = self.formatter_config.trivia_config.preserve_blanks
-
             if preserve_blanks > 0:
                 # Check for blank lines (2+ newlines) first
                 has_blank_lines = iir.BinOp(
@@ -1203,11 +1258,10 @@ class UnparserGenerator:
                 )
                 if_has_blank_lines = if_whitespace.block.if_(has_blank_lines, orelse=True)
 
-                # Emit HardLine with configured blank_lines count
                 self._add_separator_spec(
                     if_has_blank_lines.block,
                     accumulator_var,
-                    spacing=HardLine(blank_lines=preserve_blanks),
+                    spacing=self._capped_hardline_expr(newline_count, preserve_blanks),
                     preserved_trivia=None,
                     required=(separator == gsm.Separator.WS_REQUIRED),
                 )
@@ -1374,12 +1428,9 @@ class UnparserGenerator:
         assert isinstance(if_has_preservable.orelse, iir.Block)
         no_preserve_block = if_has_preservable.orelse
 
-        # Get preserve_blanks from config (generation-time constant)
-        # TODO(rule-preserve-blanks): read the rule-aware get_preserve_blanks(rule_name)
-        # instead of the global field so per-rule preserve_blanks is honored.
-        preserve_blanks = 0
-        if self.formatter_config.trivia_config:
-            preserve_blanks = self.formatter_config.trivia_config.preserve_blanks
+        # Effective preserve_blanks for this rule (generation-time constant): a rule-level
+        # directive overrides the global one for the gaps in that rule's own layout.
+        preserve_blanks = self.formatter_config.get_preserve_blanks(rule_name)
 
         # Count newlines in the trivia to check for blank lines
         newline_count = iir.SelfExpr().method._count_newlines_in_trivia.call(trivia_var.load())
@@ -1393,11 +1444,11 @@ class UnparserGenerator:
             )
             if_has_blank_lines = no_preserve_block.if_(has_blank_lines, orelse=True)
 
-            # Emit HardLine with configured blank_lines count
+            # No comment text is emitted on this path, so no terminator adjustment applies.
             self._add_separator_spec(
                 if_has_blank_lines.block,
                 accumulator_var,
-                spacing=HardLine(blank_lines=preserve_blanks),
+                spacing=self._capped_hardline_expr(newline_count, preserve_blanks),
                 preserved_trivia=None,
                 required=(separator == gsm.Separator.WS_REQUIRED),
             )
@@ -1469,7 +1520,7 @@ class UnparserGenerator:
         self,
         block: iir.Block,
         accumulator_var: iir.Var,
-        spacing: Doc | None,
+        spacing: Doc | iir.Expr | None,
         preserved_trivia: iir.Expr | None,
         *,
         required: bool,

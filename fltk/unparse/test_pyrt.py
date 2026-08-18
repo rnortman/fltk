@@ -11,7 +11,13 @@ from dataclasses import dataclass
 import pytest
 
 from fltk.fegen.pyrt import terminalsrc
-from fltk.unparse.pyrt import count_whitespace_newlines, literal_span_matches, raise_preserved_trivia_failure
+from fltk.unparse.pyrt import (
+    capped_blank_lines,
+    count_whitespace_newlines,
+    literal_span_matches,
+    preceding_comment_trailing_newline,
+    raise_preserved_trivia_failure,
+)
 
 
 @dataclass
@@ -85,3 +91,66 @@ def test_raise_preserved_trivia_failure_names_rule_and_pos() -> None:
     assert "my_rule" in msg
     assert "child position 3" in msg
     assert "unparse__trivia returned None" in msg
+
+
+def _children(*texts: str) -> list[tuple[object, object]]:
+    """Trivia children in ``(label, child)`` form, one node per span text."""
+    return [(None, _FakeNode(_span(text))) for text in texts]
+
+
+class TestPrecedingCommentTrailingNewline:
+    """The child before ``pos`` contributes 1 only when it is a comment ending in a newline."""
+
+    def test_line_comment_before_pos_contributes_one(self):
+        # The terminating newline lives in the comment's span, so it is added back.
+        assert preceding_comment_trailing_newline(_children("// c\n", "\n"), 1, "") == 1
+
+    def test_position_zero_contributes_nothing(self):
+        # Nothing precedes the first child.
+        assert preceding_comment_trailing_newline(_children("// c\n"), 0, "") == 0
+
+    def test_position_past_the_end_raises(self):
+        # A stale pos is a generated-code invariant violation; both backends fail loudly.
+        with pytest.raises(IndexError):
+            preceding_comment_trailing_newline(_children("// c\n"), 2, "")
+
+    def test_child_with_no_span_contributes_nothing(self):
+        assert preceding_comment_trailing_newline([(None, object())], 1, "") == 0
+
+    def test_whitespace_child_ending_in_newline_contributes_nothing(self):
+        # The guard that stops consecutive whitespace children inflating the count by one
+        # per gap: a whitespace run is not a comment, however it ends.
+        assert preceding_comment_trailing_newline(_children("\n\n", "\n"), 1, "") == 0
+
+    def test_block_comment_contributes_nothing(self):
+        # A block comment's span does not end in a newline, so it consumed none.
+        assert preceding_comment_trailing_newline(_children("/* c */", "\n\n"), 1, "") == 0
+
+    def test_c0_separator_child_counts_as_a_comment(self):
+        # C0 separators are not Unicode White_Space, so a child mixing them with newlines is
+        # not whitespace-only and contributes its terminator -- the same answer Rust's
+        # char::is_whitespace gives in the generated `_comment_trailing_newline`.
+        # `count_whitespace_newlines` classifies the same child as non-whitespace too, so the
+        # two helpers agree: it counts 0 newlines of its own and yields 1 here.
+        child = _children("\n\x1c\n")
+        assert count_whitespace_newlines(child[0][1], "") == 0
+        assert preceding_comment_trailing_newline([*child, (None, _FakeNode(_span("\n")))], 1, "") == 1
+
+
+class TestCappedBlankLines:
+    """``k`` newlines yield ``k - 1`` blank lines, clamped to ``[0, cap]``."""
+
+    def test_two_newlines_yield_one_blank(self):
+        assert capped_blank_lines(2, 2) == 1
+
+    def test_the_cap_is_a_maximum(self):
+        assert capped_blank_lines(5, 2) == 2
+
+    def test_a_single_newline_yields_no_blank(self):
+        assert capped_blank_lines(1, 2) == 0
+
+    def test_zero_newlines_clamp_to_zero_rather_than_negative(self):
+        assert capped_blank_lines(0, 2) == 0
+
+    def test_a_zero_cap_yields_no_blanks(self):
+        assert capped_blank_lines(5, 0) == 0

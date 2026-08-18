@@ -2745,6 +2745,155 @@ fn trivia_that_is_not_whitespace_counts_no_newlines_of_its_own() {
 }
 """
 
+# The same path with comments actually preserved: a line comment's terminating newline lives in
+# the comment child's span, so the blank counting has to add it back.
+PRESERVED_COMMENT_BLANKS_GRAMMAR = (
+    "doc := stmt* ;\n"
+    'stmt := name:word . semi:";" , ;\n'
+    "word := chars:/[a-z]+/ ;\n"
+    "_trivia := ( line_comment | line_comment? : | block_comment )+ ;\n"
+    'line_comment := prefix:"//" . text:/[^\\n]*/ . nl:"\\n" ;\n'
+    'block_comment := start:"/*" . text:/(?:[^*]|\\*+[^\\/\\*])*/ . end:/\\*+\\// ;\n'
+)
+
+PRESERVED_COMMENT_BLANKS_FORMATTER = (
+    "preserve_blanks: 2;\ntrivia_preserve: LineComment, BlockComment;\nws_allowed: nil;\n"
+    'ws_required: bsp;\nafter ";" { hard; }\nrule _trivia { ws_required: nbsp; }\n'
+)
+
+PRESERVED_COMMENT_BLANKS_RUNTIME = """//! Blank lines around *preserved* comments, at `preserve_blanks: 2`.
+
+use super::parser::Parser;
+use super::unparser::Unparser;
+use ::fltk_unparser_core::{resolve_spacing_specs, Renderer, RendererConfig};
+
+fn format(src: &str) -> String {
+    let mut parser = Parser::new(src, None, true);
+    let parsed = parser.apply__parse_doc(0).expect("the document must parse");
+    assert!(parsed.pos as usize == src.len(), "the parse must consume {src:?}");
+    let guard = parsed.result.read();
+    let unparsed = Unparser::new()
+        .unparse_doc(&guard)
+        .expect("a parser-produced CST must unparse");
+    let resolved = resolve_spacing_specs(unparsed.doc());
+    Renderer::new(RendererConfig {
+        indent_width: 2,
+        max_width: 80,
+    })
+    .render(&resolved)
+}
+
+fn blank_lines(rendered: &str) -> usize {
+    rendered
+        .trim()
+        .lines()
+        .filter(|line| line.trim().is_empty())
+        .count()
+}
+
+#[test]
+fn a_blank_after_a_preserved_line_comment_survives() {
+    let rendered = format("a;\\n// c\\n\\nb;\\n");
+    assert!(rendered.contains("// c\\n\\nb;"), "the blank must follow the comment: {rendered}");
+    assert_eq!(blank_lines(&rendered), 1);
+}
+
+#[test]
+fn a_blank_between_two_preserved_line_comments_survives() {
+    let rendered = format("a;\\n// c1\\n\\n// c2\\nb;\\n");
+    assert!(
+        rendered.contains("// c1\\n\\n// c2\\nb;"),
+        "the blank must land between the two comments: {rendered}"
+    );
+    assert_eq!(blank_lines(&rendered), 1);
+}
+
+#[test]
+fn adjacent_preserved_line_comments_invent_no_blank() {
+    let rendered = format("a;\\n// c1\\n// c2\\nb;\\n");
+    assert!(
+        rendered.contains("// c1\\n// c2\\nb;"),
+        "no blank may be invented between the comments: {rendered}"
+    );
+    assert_eq!(blank_lines(&rendered), 0);
+}
+
+#[test]
+fn a_blank_after_a_preserved_block_comment_survives() {
+    let rendered = format("a;\\n/* c */\\n\\nb;\\n");
+    assert!(
+        rendered.contains("/* c */\\n\\nb;"),
+        "the blank must follow the block comment: {rendered}"
+    );
+    assert_eq!(blank_lines(&rendered), 1);
+}
+
+#[test]
+fn the_source_blank_count_is_capped_not_normalized() {
+    // One source blank stays one; four are capped at the configured two.
+    assert_eq!(blank_lines(&format("a;\\n// c\\n\\nb;\\n")), 1);
+    assert_eq!(blank_lines(&format("a;\\n// c\\n\\n\\n\\n\\nb;\\n")), 2);
+}
+"""
+
+# A rule-level `preserve_blanks` under a nonzero global: the per-rule cap must govern the
+# gap after a statement even when the global setting would keep blanks.
+RULE_LEVEL_BLANKS_FORMATTER = (
+    "preserve_blanks: 2;\ntrivia_preserve: LineComment, BlockComment;\nws_allowed: nil;\n"
+    'ws_required: bsp;\nafter ";" { hard; }\nrule _trivia { ws_required: nbsp; }\n'
+    "rule stmt { preserve_blanks: 0; }\n"
+)
+
+RULE_LEVEL_BLANKS_RUNTIME = """//! A rule-level `preserve_blanks: 0` under a global 2.
+
+use super::parser::Parser;
+use super::unparser::Unparser;
+use ::fltk_unparser_core::{resolve_spacing_specs, Renderer, RendererConfig};
+
+fn format(src: &str) -> String {
+    let mut parser = Parser::new(src, None, true);
+    let parsed = parser.apply__parse_doc(0).expect("the document must parse");
+    assert!(parsed.pos as usize == src.len(), "the parse must consume {src:?}");
+    let guard = parsed.result.read();
+    let unparsed = Unparser::new()
+        .unparse_doc(&guard)
+        .expect("a parser-produced CST must unparse");
+    let resolved = resolve_spacing_specs(unparsed.doc());
+    Renderer::new(RendererConfig {
+        indent_width: 2,
+        max_width: 80,
+    })
+    .render(&resolved)
+}
+
+fn blank_lines(rendered: &str) -> usize {
+    rendered
+        .trim()
+        .lines()
+        .filter(|line| line.trim().is_empty())
+        .count()
+}
+
+#[test]
+fn the_rule_level_zero_collapses_a_blank_the_global_two_would_keep() {
+    let rendered = format("a;\\n\\n\\nb;\\n");
+    assert!(rendered.contains("a;\\nb;"), "the blank must collapse: {rendered}");
+    assert_eq!(blank_lines(&rendered), 0);
+}
+
+#[test]
+fn the_trivia_interior_follows_the_global_setting_not_the_rule_override() {
+    // Separators inside a preserved trivia doc are emitted by the shared trivia unparser,
+    // which has no enclosing-rule identity, so they keep the global 2.
+    let rendered = format("a;\\n// c\\n\\nb;\\n");
+    assert!(
+        rendered.contains("// c\\n\\nb;"),
+        "the blank inside the trivia run follows the global setting: {rendered}"
+    );
+    assert_eq!(blank_lines(&rendered), 1);
+}
+"""
+
 CASES = [
     # A sum, a keyed collection, every scalar erasure, a coercion, a renamed field, and a
     # label spelled `type` (so `r#type` is exercised). Carries the entry-point tests too, which
@@ -2973,6 +3122,28 @@ CASES = [
         parser=True,
         unparser=True,
         formatter=PRESERVE_BLANKS_FORMATTER,
+        goal="doc",
+    ),
+    # The same path with comments preserved, so the comment-terminator adjustment is run.
+    Case(
+        "preserved_comment_blanks",
+        PRESERVED_COMMENT_BLANKS_GRAMMAR,
+        runtime=PRESERVED_COMMENT_BLANKS_RUNTIME,
+        ast=False,
+        parser=True,
+        unparser=True,
+        formatter=PRESERVED_COMMENT_BLANKS_FORMATTER,
+        goal="doc",
+    ),
+    # The same grammar with a rule-level override, so the per-rule constant is executed.
+    Case(
+        "rule_level_blanks",
+        PRESERVED_COMMENT_BLANKS_GRAMMAR,
+        runtime=RULE_LEVEL_BLANKS_RUNTIME,
+        ast=False,
+        parser=True,
+        unparser=True,
+        formatter=RULE_LEVEL_BLANKS_FORMATTER,
         goal="doc",
     ),
     # A repetition the validator refuses, generated anyway, so the loop guard is run.

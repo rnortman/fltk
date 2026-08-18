@@ -1112,11 +1112,10 @@ rule2 := "b" ;
             del sys.modules[parser_result.cst_module_name]
 
 
-def test_preserve_blanks_two_normalizes_to_two_blanks():
-    """Test that preserve_blanks: 2 normalizes any blanks to exactly 2.
+def test_preserve_blanks_two_caps_at_two_blanks():
+    """preserve_blanks: 2 caps the source blank count at 2 rather than inflating to exactly 2.
 
-    When preserve_blanks is 2, any number of blank lines in source should become
-    exactly 2 blank lines in output.
+    One source blank line stays one; three source blank lines come out as two.
     """
     script_dir = Path(__file__).parent.parent / "fegen"
     grammar = parse_grammar_file(script_dir / "fegen.fltkg")
@@ -1124,30 +1123,25 @@ def test_preserve_blanks_two_normalizes_to_two_blanks():
     try:
         fmt_config = parse_format_config_file(script_dir / "fegen.fltkfmt")
         assert fmt_config.trivia_config is not None
-        # Set preserve_blanks to 2
         fmt_config.trivia_config.preserve_blanks = 2
 
         unparser_result = generate_unparser(
             parser_result.grammar, parser_result.cst_module_name, formatter_config=fmt_config
         )
 
-        # Input with just 1 blank line (but we want 2 in output)
-        test_input = """rule1 := "a" ;
+        for source_blanks, expected in ((1, 1), (3, 2)):
+            test_input = 'rule1 := "a" ;\n' + "\n" * source_blanks + 'rule2 := "b" ;\n'
+            parse_result = parse_text(parser_result, test_input, "grammar")
+            assert parse_result.success, f"Failed to parse: {parse_result.error_message}"
 
-rule2 := "b" ;
-"""
-        parse_result = parse_text(parser_result, test_input, "grammar")
-        assert parse_result.success, f"Failed to parse: {parse_result.error_message}"
+            doc = unparse_cst(unparser_result, parse_result.cst, test_input, "grammar")
+            output = render_doc(doc, RendererConfig(max_width=80))
 
-        doc = unparse_cst(unparser_result, parse_result.cst, test_input, "grammar")
-        output = render_doc(doc, RendererConfig(max_width=80))
-
-        # Count blank lines in output
-        lines = output.strip().split("\n")
-        blank_count = sum(1 for line in lines if line.strip() == "")
-
-        # With preserve_blanks: 2, should have exactly 2 blank lines
-        assert blank_count == 2, f"Expected exactly 2 blank lines with preserve_blanks: 2, got {blank_count}:\n{output}"
+            blank_count = sum(1 for line in output.strip().split("\n") if line.strip() == "")
+            assert blank_count == expected, (
+                f"Expected {expected} blank lines from {source_blanks} source blanks "
+                f"with preserve_blanks: 2, got {blank_count}:\n{output}"
+            )
 
     finally:
         if parser_result.cst_module_name in sys.modules:
@@ -1261,6 +1255,172 @@ def test_preserve_blanks_custom_trivia_comment_terminator_not_counted():
 
         blank_count = sum(1 for line in output.strip().split("\n") if line.strip() == "")
         assert blank_count == 0, f"Comment-terminator newline must not create a blank line:\n{output}"
+    finally:
+        if parser_result.cst_module_name in sys.modules:
+            del sys.modules[parser_result.cst_module_name]
+
+
+# Blank-line preservation across preserved comments.
+
+_PRESERVING_CONFIG = (
+    "trivia_preserve: LineComment, BlockComment;\npreserve_blanks: 1;\n"
+    'ws_allowed: nil;\nws_required: bsp;\nafter ";" { hard; }\n'
+)
+
+
+def _format_fegen(test_input: str, config_text: str) -> str:
+    """Parse and reformat a fegen grammar source under a parsed format config."""
+    script_dir = Path(__file__).parent.parent / "fegen"
+    grammar = parse_grammar_file(script_dir / "fegen.fltkg")
+    parser_result = generate_parser(grammar, capture_trivia=True)
+    try:
+        fmt_config = parse_format_config(config_text)
+        unparser_result = generate_unparser(
+            parser_result.grammar, parser_result.cst_module_name, formatter_config=fmt_config
+        )
+        parse_result = parse_text(parser_result, test_input, "grammar")
+        assert parse_result.success, f"Failed to parse: {parse_result.error_message}"
+        doc = unparse_cst(unparser_result, parse_result.cst, test_input, "grammar")
+        return render_doc(doc, RendererConfig(max_width=80))
+    finally:
+        if parser_result.cst_module_name in sys.modules:
+            del sys.modules[parser_result.cst_module_name]
+
+
+def _blank_count(output: str) -> int:
+    return sum(1 for line in output.strip().split("\n") if line.strip() == "")
+
+
+def test_preserve_blanks_blank_after_preserved_comment_survives():
+    """A blank line between a preserved comment and the following code is kept."""
+    output = _format_fegen('rule1 := "a" ;\n// c\n\nrule2 := "b" ;\n', _PRESERVING_CONFIG)
+
+    assert "// c\n\nrule2" in output, f"The blank must land between the comment and rule2:\n{output}"
+    assert _blank_count(output) == 1, f"Expected exactly one blank after the comment:\n{output}"
+
+
+def test_preserve_blanks_blank_between_preserved_comments_survives():
+    """A blank line between two preserved comments is kept.
+
+    The first comment's terminating newline is inside its own span, so the whitespace span
+    between them holds only one newline; without the terminator adjustment the blank measures
+    as absent.
+    """
+    output = _format_fegen('rule1 := "a" ;\n// c1\n\n// c2\nrule2 := "b" ;\n', _PRESERVING_CONFIG)
+
+    assert "// c1\n\n// c2\nrule2" in output, f"The blank must land between the two comments:\n{output}"
+    assert _blank_count(output) == 1, f"Expected exactly one blank between the comments:\n{output}"
+
+
+def test_preserve_blanks_blank_before_preserved_comment_survives():
+    """Regression pin: a blank line before a preserved comment is kept."""
+    output = _format_fegen('rule1 := "a" ;\n\n// c\nrule2 := "b" ;\n', _PRESERVING_CONFIG)
+
+    assert "\n\n// c\nrule2" in output, f"The blank must land before the comment:\n{output}"
+    assert _blank_count(output) == 1, f"Expected exactly one blank before the comment:\n{output}"
+
+
+def test_preserve_blanks_adjacent_preserved_comments_invent_no_blank():
+    """Two preserved comments on consecutive lines produce no blank line.
+
+    The terminator adjustment must not overshoot into inventing a blank that the source
+    does not have.
+    """
+    output = _format_fegen('rule1 := "a" ;\n// c1\n// c2\nrule2 := "b" ;\n', _PRESERVING_CONFIG)
+
+    assert "// c1\n// c2\nrule2" in output, f"No blank line may be invented between the comments:\n{output}"
+
+
+def test_preserve_blanks_blank_after_preserved_block_comment_survives():
+    """A blank line after a preserved block comment is kept.
+
+    A block comment's span does not end in a newline, so it consumes none and the whitespace
+    span holds the full two newlines on its own.
+    """
+    output = _format_fegen('rule1 := "a" ;\n/* c */\n\nrule2 := "b" ;\n', _PRESERVING_CONFIG)
+
+    assert "/* c */\n\nrule2" in output, f"The blank must land between the block comment and rule2:\n{output}"
+    assert _blank_count(output) == 1, f"Expected exactly one blank after the block comment:\n{output}"
+
+
+def test_preserve_blanks_zero_collapses_blanks_around_preserved_comments():
+    """The canonical form has no blank lines when ``preserve_blanks`` is left at its default.
+
+    Preserved comments are the configuration the terminator adjustment touches, so the
+    collapse arm has to stay free of it: comments survive, every blank around them goes.
+    """
+    config = (
+        "trivia_preserve: LineComment, BlockComment;\npreserve_blanks: 0;\n"
+        'ws_allowed: nil;\nws_required: bsp;\nafter ";" { hard; }\n'
+    )
+
+    output = _format_fegen('rule1 := "a" ;\n\n// c1\n\n// c2\n\nrule2 := "b" ;\n', config)
+
+    assert "// c1\n// c2\nrule2" in output, f"The comments must survive, with no blanks:\n{output}"
+    assert _blank_count(output) == 0, f"preserve_blanks: 0 must collapse every blank:\n{output}"
+
+
+def test_preserve_blanks_rule_level_zero_suppresses_blanks():
+    """A rule-level ``preserve_blanks: 0`` collapses blanks in that rule's own gaps.
+
+    The gap after a rule's terminating ``;`` belongs to the ``rule`` rule, so overriding it to
+    0 under a global 1 collapses blanks between rules while a blank inside a rule body, which
+    belongs to ``items``, still survives.
+    """
+    config = (
+        'preserve_blanks: 1;\nws_allowed: nil;\nws_required: bsp;\nafter ";" { hard; }\n'
+        "rule rule { preserve_blanks: 0; }\n"
+    )
+
+    between = _format_fegen('rule1 := "a" ;\n\nrule2 := "b" ;\n', config)
+    assert ";\nrule2" in between, f"Rule-level 0 must collapse blanks between rules:\n{between}"
+    assert _blank_count(between) == 0, f"Rule-level 0 must collapse blanks between rules:\n{between}"
+
+    inside = _format_fegen('rule1 := "a" ,\n\n"b" ;\n', config)
+    assert _blank_count(inside) == 1, f"A blank inside a rule keeps the global value:\n{inside}"
+
+
+def test_preserve_blanks_rule_level_nonzero_over_global_zero():
+    """A rule-level ``preserve_blanks: 1`` takes effect under a global default of 0."""
+    config = 'ws_allowed: nil;\nws_required: bsp;\nafter ";" { hard; }\nrule rule { preserve_blanks: 1; }\n'
+
+    output = _format_fegen('rule1 := "a" ;\n\n\nrule2 := "b" ;\n', config)
+    assert ";\n\nrule2" in output, f"Rule-level 1 must keep the blank between the rules:\n{output}"
+    assert _blank_count(output) == 1, f"Rule-level 1 must preserve the blank under a global 0:\n{output}"
+
+
+# A trivia rule whose comment and following whitespace can be consumed by the *same*
+# alternative, so the terminator adjustment must be visible within one loop iteration.
+_SAME_ARM_TRIVIA_GRAMMAR = """
+doc := stmt* ;
+stmt := name:/[a-z]+/ . ";" , ;
+_trivia := ( line_comment? : )+ ;
+line_comment := prefix:"//" . text:/[^\\n]*/ . nl:"\\n" ;
+"""
+
+
+def test_preserve_blanks_same_arm_comment_and_whitespace():
+    """A blank after a comment survives when both sit in one trivia alternative."""
+    grammar = parse_grammar(_SAME_ARM_TRIVIA_GRAMMAR)
+    parser_result = generate_parser(grammar, capture_trivia=True)
+    try:
+        fmt_config = parse_format_config(
+            "trivia_preserve: LineComment;\npreserve_blanks: 1;\nws_allowed: nil;\n"
+            'ws_required: nil;\nafter ";" { hard; }\n'
+        )
+        unparser_result = generate_unparser(
+            parser_result.grammar, parser_result.cst_module_name, formatter_config=fmt_config
+        )
+
+        test_input = "foo;\n// c\n\nbar;\n"
+        parse_result = parse_text(parser_result, test_input, "doc")
+        assert parse_result.success, f"Failed to parse: {parse_result.error_message}"
+
+        doc = unparse_cst(unparser_result, parse_result.cst, test_input, "doc")
+        output = render_doc(doc, RendererConfig(max_width=80))
+
+        assert "// c\n\nbar" in output, f"The blank must land between the comment and bar:\n{output}"
+        assert _blank_count(output) == 1, f"Expected exactly one blank after the comment:\n{output}"
     finally:
         if parser_result.cst_module_name in sys.modules:
             del sys.modules[parser_result.cst_module_name]

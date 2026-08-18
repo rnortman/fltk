@@ -454,8 +454,10 @@ fn pick_spacing_with_blank_lines(primary: &Rc<Doc>, sep_spacing: &Option<Rc<Doc>
     primary.clone()
 }
 
-/// Pattern: `Text("\n"), SeparatorSpec(spacing=Some(_))` -> `HardLine`. Port of
-/// `_mutate_text_newline`.
+/// Pattern: `Text("\n"), SeparatorSpec(spacing=Some(_))` -> a single `HardLine`.
+///
+/// A separator carrying `HardLine { blank_lines: k }` yields `HardLine(k)`; any other
+/// spacing yields a plain `HardLine`. Port of `_mutate_text_newline`.
 fn mutate_text_newline(ws: &VecDeque<Rc<Doc>>) -> Option<Vec<Rc<Doc>>> {
     if ws.len() < 2 {
         return None;
@@ -463,9 +465,13 @@ fn mutate_text_newline(ws: &VecDeque<Rc<Doc>>) -> Option<Vec<Rc<Doc>>> {
     if let Doc::Text(content) = &*ws[0] {
         if content == "\n" {
             if let Doc::SeparatorSpec {
-                spacing: Some(_), ..
+                spacing: Some(spacing),
+                ..
             } = &*ws[1]
             {
+                if matches!(&**spacing, Doc::HardLine { .. }) {
+                    return Some(vec![spacing.clone()]);
+                }
                 return Some(vec![Rc::new(Doc::HardLine { blank_lines: 0 })]);
             }
         }
@@ -1052,6 +1058,18 @@ mod tests {
         let doc = cat(vec![text("\n"), sep(Some(line()), None, false), text("x")]);
         let resolved = resolve_spacing_specs(doc);
         assert_eq!(resolved, cat(vec![hardline(0), text("x")]));
+    }
+
+    #[test]
+    fn text_newline_before_separator_keeps_separator_blank_lines() {
+        // The Text supplies the break, the separator's HardLine supplies the blank count.
+        let doc = cat(vec![
+            text("\n"),
+            sep(Some(hardline(2)), None, true),
+            text("x"),
+        ]);
+        let resolved = resolve_spacing_specs(doc);
+        assert_eq!(resolved, cat(vec![hardline(2), text("x")]));
     }
 
     #[test]

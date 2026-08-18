@@ -716,3 +716,27 @@ def test_consecutive_leading_specs_in_group():
             ),
         )
     )
+
+
+def test_text_newline_before_separator_becomes_hardline():
+    """Text('\\n') + a non-blank separator collapses to a single plain HardLine."""
+    doc = Concat([Text("\n"), SeparatorSpec(spacing=LINE, preserved_trivia=None, required=True), Text("x")])
+
+    resolved = resolve_spacing_specs(doc)
+
+    assert resolved == Concat((HardLine(), Text("x")))
+
+
+def test_text_newline_before_separator_keeps_separator_blank_lines():
+    """The Text supplies the break; the separator's HardLine supplies the blank count."""
+    doc = Concat(
+        [
+            Text("\n"),
+            SeparatorSpec(spacing=HardLine(blank_lines=2), preserved_trivia=None, required=True),
+            Text("x"),
+        ]
+    )
+
+    resolved = resolve_spacing_specs(doc)
+
+    assert resolved == Concat((HardLine(blank_lines=2), Text("x")))

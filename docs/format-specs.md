@@ -56,12 +56,41 @@ This preserves line comments and block comments in the formatted output. Without
 Control whether blank lines from the source are preserved:
 
 ```
-preserve_blanks: 1;   // Normalize blank lines to exactly 1
+preserve_blanks: 1;   // Keep at most 1 blank line
 preserve_blanks: 0;   // Collapse all blank lines (default)
-preserve_blanks: 2;   // Normalize blank lines to exactly 2
+preserve_blanks: 2;   // Keep at most 2 blank lines
 ```
 
-When `preserve_blanks` is N > 0, any sequence of blank lines (2+ consecutive newlines) in the source becomes exactly N blank lines in the output. If the source has no blank lines at a location, none are added.
+`preserve_blanks: N` **caps**: a gap holding `B` blank lines in the source renders `min(B, N)` blank lines. Blank lines are never invented — a gap with no blank line in the source gets none — and never exceed `N`. With the default `preserve_blanks: 0` every blank line collapses, which is the canonical form the formatter otherwise enforces everywhere.
+
+Blank preservation is the one deliberate exception to that canonical form, and it exists so source can carry logical grouping: groups of rules in a `.fltkg` file, groups of struct fields, runs of related functions — with or without a group-header comment above each group.
+
+Blank lines are counted around preserved comments, not just around code. A blank line separated from the code by a preserved comment is still a blank line: in
+
+```
+a;
+
+// group 2
+b;
+```
+
+the blank before `// group 2` survives, and so does a blank placed *after* the comment or between two consecutive comments. A line comment's terminating newline is accounted for, so two adjacent comment lines with no blank between them do not gain one. This applies only to comments that `trivia_preserve` actually keeps; in a gap whose comments are dropped, the dropped comments' line terminators do not manufacture blank lines.
+
+#### Scope of a rule-level override
+
+A `preserve_blanks` inside a `rule` block governs the gaps in that rule's own layout — which is how you say "no blank lines inside an `expr`" while still allowing them between top-level items:
+
+```
+preserve_blanks: 1;
+
+rule expr {
+    preserve_blanks: 0;
+}
+```
+
+The inverse works too: a global `preserve_blanks: 0` with a rule-level `preserve_blanks: N` opts a single rule in. The interior of a run of preserved comments follows the **global** setting, since the trivia is formatted by one shared routine with no enclosing-rule identity.
+
+A `preserve_blanks` inside an `after` or `before` anchor block is an **error**. The grammar admits it, but there is no per-anchor blank policy, so the directive is rejected rather than silently ignored. Use a global or rule-level directive instead.
 
 ## Positional Spacing
 
@@ -112,7 +141,7 @@ rule item
 
 - `ws_allowed: <spacing>;` - Override default ws_allowed spacing
 - `ws_required: <spacing>;` - Override default ws_required spacing
-- `preserve_blanks: N;` - Override blank line preservation
+- `preserve_blanks: N;` - Override blank line preservation for gaps in this rule's own layout
 - `group` / `nest` / `join` - Grouping directives
 - `before` / `after` - Positional spacing
 - `omit` / `render` - Item disposition
@@ -175,7 +204,7 @@ render separator as nbsp;     // Replace separator with space
 Here's a complete format spec for FLTK grammar files:
 
 ```
-// Preserve comments and blank lines
+// Preserve comments, and up to one blank line between logical groups
 trivia_preserve: LineComment, BlockComment;
 preserve_blanks: 1;
 

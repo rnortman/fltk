@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from ast import literal_eval
+from collections.abc import Iterable
 from dataclasses import dataclass, field
 from enum import Enum
 
@@ -52,9 +53,9 @@ class TriviaConfig:
     # If empty, all trivia is discarded. If None, all trivia is preserved.
     preserve_node_names: set[str] | None = field(default_factory=set)
 
-    # Blank line preservation: 0 = don't preserve (default), N > 0 = normalize blanks to N
-    # When preserve_blanks > 0, blank lines (2+ consecutive newlines) in source are
-    # preserved but normalized to exactly preserve_blanks blank lines.
+    # Blank line preservation: 0 = don't preserve (default), N > 0 = cap blank runs at N
+    # When preserve_blanks > 0, a gap holding B blank lines in the source renders
+    # min(B, preserve_blanks) blank lines: a cap, never an inflation.
     # When preserve_blanks == 0, blank lines are collapsed (not preserved).
     preserve_blanks: int = 0
 
@@ -148,7 +149,7 @@ class RuleConfig:
     # Examples: "after:label:condition", "before:literal:(", "before:rule_start:"
     anchor_configs: dict[str, AnchorConfig] = field(default_factory=dict)
 
-    # Per-rule blank line preservation: None = use global, 0 = don't preserve, N > 0 = normalize to N
+    # Per-rule blank line preservation: None = use global, 0 = don't preserve, N > 0 = cap at N
     preserve_blanks: int | None = None
 
 
@@ -315,7 +316,7 @@ class FormatterConfig:
             rule_name: Name of the grammar rule
 
         Returns:
-            preserve_blanks value: 0 = don't preserve, N > 0 = normalize to N blanks
+            preserve_blanks value: 0 = don't preserve, N > 0 = cap blank runs at N
         """
         # Check for rule-specific config
         rule_config = self.rule_configs.get(rule_name)
@@ -531,6 +532,35 @@ def _process_preserve_blanks_statement(
     config.trivia_config.preserve_blanks = count
 
 
+def _position_spec_spacing(
+    position_spec_csts: Iterable[fmt_cst.PositionSpecStatement], terminal_src: TerminalSource, context: str
+) -> Doc:
+    """Extract the spacing from an anchor block's position_spec_statements.
+
+    The preserve_blanks rejection runs over every statement in the block before the
+    exactly-one-spacing check, so ``after ";" { hard; preserve_blanks: 1; }`` reports the
+    unsupported directive rather than a CST accessor's arity error.
+    """
+    statements = list(position_spec_csts)
+
+    for statement in statements:
+        if statement.maybe_preserve_blanks():
+            # TODO(position-preserve-blanks)
+            msg = (
+                f"{context}: position-level preserve_blanks is not supported. "
+                "Use a global or rule-level preserve_blanks directive instead."
+            )
+            raise ValueError(msg)
+
+    # TODO(multi-position-spec) The grammar allows multiple position_spec_statement*,
+    # but the implementation assumes exactly one spacing.
+    if len(statements) != 1:
+        msg = f"{context} must have exactly one position_spec_statement"
+        raise ValueError(msg)
+
+    return _spacing_cst_to_doc(statements[0].child_spacing(), terminal_src)
+
+
 def _process_after_statement(
     after: fmt_cst.After, target: FormatterConfig | RuleConfig, terminal_src: TerminalSource
 ) -> None:
@@ -550,16 +580,7 @@ def _process_after_statement(
         msg = "After statement's anchor must have either label or literal"
         raise ValueError(msg)
 
-    # Process position_spec_statement - for now we expect only one spacing
-    # TODO: The grammar allows multiple position_spec_statement*, but the current
-    # implementation assumes one spacing. We'll take the first one.
-    position_spec_cst = after.maybe_position_spec_statement()
-    if not position_spec_cst:
-        msg = "After statement must have at exactly one position_spec_statement"
-        raise ValueError(msg)
-
-    spacing_cst = position_spec_cst.child_spacing()
-    spacing_doc = _spacing_cst_to_doc(spacing_cst, terminal_src)
+    spacing_doc = _position_spec_spacing(after.children_position_spec_statement(), terminal_src, "After statement")
 
     anchor_key = f"after:{selector_type.value}:{selector_value}"
 
@@ -590,16 +611,7 @@ def _process_before_statement(
         msg = "Before statement's anchor must have either label or literal"
         raise ValueError(msg)
 
-    # Process position_spec_statement - for now we expect only one spacing
-    # TODO: The grammar allows multiple position_spec_statement*, but the current
-    # implementation assumes one spacing. We'll take the first one.
-    position_spec_cst = before.maybe_position_spec_statement()
-    if not position_spec_cst:
-        msg = "Before statement must have exactly one position_spec_statement"
-        raise ValueError(msg)
-
-    spacing_cst = position_spec_cst.child_spacing()
-    spacing_doc = _spacing_cst_to_doc(spacing_cst, terminal_src)
+    spacing_doc = _position_spec_spacing(before.children_position_spec_statement(), terminal_src, "Before statement")
 
     anchor_key = f"before:{selector_type.value}:{selector_value}"
 

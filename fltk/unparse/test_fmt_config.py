@@ -1,5 +1,7 @@
 """Tests for formatter configuration."""
 
+import pytest
+
 from fltk.fegen import gsm
 from fltk.plumbing import parse_format_config
 from fltk.unparse.combinators import (
@@ -1655,3 +1657,34 @@ class TestTriviaConfigDirectiveOwnership:
             "preserve_blanks: 2;\ntrivia_preserve: LineComment;\ntrivia_preserve: BlockComment;\n"
         )
         assert config.trivia_config == TriviaConfig(preserve_node_names={"BlockComment"}, preserve_blanks=2)
+
+
+class TestPositionLevelPreserveBlanks:
+    """A preserve_blanks inside an anchor block is rejected rather than silently ignored."""
+
+    def test_after_block_preserve_blanks_raises(self):
+        with pytest.raises(ValueError, match="position-level preserve_blanks is not supported"):
+            parse_format_config('after ";" { preserve_blanks: 1; };\n')
+
+    def test_before_block_preserve_blanks_raises(self):
+        with pytest.raises(ValueError, match="position-level preserve_blanks is not supported"):
+            parse_format_config('before ";" { preserve_blanks: 1; };\n')
+
+    def test_rule_scoped_anchor_preserve_blanks_raises(self):
+        with pytest.raises(ValueError, match="position-level preserve_blanks is not supported"):
+            parse_format_config('rule expr {\n    after ";" { preserve_blanks: 2; };\n}\n')
+
+    def test_multi_statement_after_block_reports_preserve_blanks(self):
+        # The most natural spelling puts the directive beside a spacing. The rejection runs
+        # over every statement in the block, so the consumer is told what to change instead
+        # of getting the CST accessor's "at most one position_spec_statement" arity error.
+        with pytest.raises(ValueError, match="position-level preserve_blanks is not supported"):
+            parse_format_config('after ";" { hard; preserve_blanks: 1; };\n')
+
+    def test_multi_statement_before_block_reports_preserve_blanks(self):
+        with pytest.raises(ValueError, match="position-level preserve_blanks is not supported"):
+            parse_format_config('before ";" { preserve_blanks: 1; hard; };\n')
+
+    def test_anchor_block_with_spacing_still_parses(self):
+        config = parse_format_config('after ";" { hard; };\n')
+        assert config.anchor_configs["after:literal:;"].operations[0].spacing == HARDLINE

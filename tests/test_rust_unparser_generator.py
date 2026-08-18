@@ -1869,17 +1869,23 @@ def test_trivia_rule_ws_allowed_never_returns_none() -> None:
 def test_trivia_rule_preserve_blanks_emits_blank_line_branch() -> None:
     """preserve_blanks>0 adds a ``>= 2`` blank-line branch ahead of the single-newline branch.
 
-    Ports the ``preserve_blanks > 0`` arm (``gsm2unparser.py:1172``): 2+ newlines => a ``HardLine``
-    carrying the configured blank-line count; a single newline => a plain ``HardLine``; otherwise
-    the default spacing.
+    2+ newlines => a ``HardLine`` carrying the source blank count capped at the configured
+    maximum; a single newline => a plain ``HardLine``; otherwise the default spacing. The count
+    is the whitespace span's newlines plus a preceding line comment's consumed terminator.
     """
     cfg = FormatterConfig(trivia_config=TriviaConfig(preserve_blanks=2))
     src = RustUnparserGenerator(parse_grammar(_TRIVIA_WS_ALLOWED), formatter_config=cfg).generate()
     body = _method_body(src, "unparse__trivia__alt0")
-    assert "if newline_count >= 2 {" in body
-    assert "} else if newline_count >= 1 {" in body
-    # The blank-line branch carries the configured count; the single-newline branch is plain.
-    assert "separator_spec(Some(Doc::HardLine { blank_lines: 2 }), None, false)" in body
+    # The comment-terminator adjustment is threaded into the count the ladder reads.
+    assert "fn _prev_comment_newline__trivia(node: &cst::Trivia, pos: usize) -> usize {" in src
+    assert "Self::_comment_trailing_newline(" in src
+    assert "let total_newlines = newline_count + Self::_prev_comment_newline__trivia(node, pos);" in body
+    assert "if total_newlines >= 2 {" in body
+    assert "} else if total_newlines >= 1 {" in body
+    # The blank-line branch caps the runtime count; the single-newline branch is plain.
+    assert (
+        "separator_spec(Some(Doc::HardLine { blank_lines: ((total_newlines - 1).min(2) as u32) }), None, false)" in body
+    )
     assert "separator_spec(Some(Doc::HardLine { blank_lines: 0 }), None, false)" in body
 
 
@@ -2012,18 +2018,44 @@ def test_non_trivia_rule_ws_allowed_uses_required_false_and_nil_default() -> Non
 def test_non_trivia_rule_preserve_blanks_emits_blank_line_branch() -> None:
     """preserve_blanks>0 adds the ``>= 2`` blank-line branch to the non-trivia no-preservable path.
 
-    Ports the ``preserve_blanks > 0`` arm (``gsm2unparser.py:1348``): 2+ newlines -> a ``HardLine``
-    with the configured count; a single newline -> a plain ``HardLine``; otherwise default spacing.
-    The empty (default) preserve_node_names means ``_has_preservable_trivia`` is ``false``, so the
-    no-preservable path is the one exercised.
+    2+ newlines -> a ``HardLine`` carrying the source blank count capped at the configured
+    maximum; a single newline -> a plain ``HardLine``; otherwise default spacing. No comment
+    text is emitted on this path, so there is no terminator adjustment. The empty (default)
+    preserve_node_names means ``_has_preservable_trivia`` is ``false``, so the no-preservable
+    path is the one exercised.
     """
     cfg = FormatterConfig(trivia_config=TriviaConfig(preserve_blanks=2))
     src = RustUnparserGenerator(parse_grammar('r := a:"x" : b:"y" ;'), formatter_config=cfg).generate()
     body = _method_body(src, "unparse_r__alt0")
     assert "if newline_count >= 2 {" in body
     assert "} else if newline_count >= 1 {" in body
-    assert "separator_spec(Some(Doc::HardLine { blank_lines: 2 }), None, true)" in body
+    assert (
+        "separator_spec(Some(Doc::HardLine { blank_lines: ((newline_count - 1).min(2) as u32) }), None, true)" in body
+    )
     assert "separator_spec(Some(Doc::HardLine { blank_lines: 0 }), None, true)" in body
+
+
+def test_non_trivia_rule_preserve_blanks_is_per_rule() -> None:
+    """Each rule bakes in its own effective ``preserve_blanks``.
+
+    A rule-level directive governs the gaps in that rule's own layout, so two rules under one
+    global setting emit two different caps -- and a rule-level 0 emits no blank-line branch at
+    all.
+    """
+    cfg = parse_format_config("preserve_blanks: 3;\nrule r { preserve_blanks: 1; }\nrule s { preserve_blanks: 0; }\n")
+    grammar = parse_grammar('r := a:"x" : b:"y" ;\ns := c:"p" : d:"q" ;\nt := e:"m" : f:"n" ;')
+    src = RustUnparserGenerator(grammar, formatter_config=cfg).generate()
+
+    r_body = _method_body(src, "unparse_r__alt0")
+    assert "((newline_count - 1).min(1) as u32)" in r_body
+
+    # Rule-level 0 collapses: the non-trivia branch emits the default spacing unconditionally.
+    s_body = _method_body(src, "unparse_s__alt0")
+    assert "if newline_count >= 2 {" not in s_body
+
+    # A rule with no override keeps the global value.
+    t_body = _method_body(src, "unparse_t__alt0")
+    assert "((newline_count - 1).min(3) as u32)" in t_body
 
 
 def test_non_trivia_rule_single_variant_omits_catchall() -> None:
@@ -2129,7 +2161,9 @@ def test_non_trivia_rule_preserve_blanks_from_parsed_clobbering_config() -> None
     src = RustUnparserGenerator(parse_grammar('r := a:"x" : b:"y" ;'), formatter_config=cfg).generate()
     body = _method_body(src, "unparse_r__alt0")
     assert "if newline_count >= 2 {" in body
-    assert "separator_spec(Some(Doc::HardLine { blank_lines: 2 }), None, true)" in body
+    assert (
+        "separator_spec(Some(Doc::HardLine { blank_lines: ((newline_count - 1).min(2) as u32) }), None, true)" in body
+    )
 
 
 def test_default_separator_uses_per_rule_spacing_override() -> None:
