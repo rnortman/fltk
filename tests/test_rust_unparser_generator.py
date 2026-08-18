@@ -57,6 +57,21 @@ def _method_body(src: str, fn_name: str) -> str:
     return rest[:end]
 
 
+def _assert_whitespace_helper_shape(src: str) -> None:
+    """The generated ``_whitespace_node_newlines`` helper, asserted in one place.
+
+    Every node arm of ``_count_newlines_in_trivia`` delegates here, so the helper's shape is the
+    same claim in each of those tests; stating it once means a spelling change is one edit. The
+    guard arm and the expression it guards are asserted *together* — the count expression alone
+    is a substring that a body computing it and discarding it would satisfy too.
+    """
+    lines = [line.strip() for line in _method_body(src, "_whitespace_node_newlines").splitlines()]
+    assert "fn _whitespace_node_newlines(t: Option<&str>) -> usize {" in lines, lines
+    arm = "Some(t) if !t.is_empty() && t.chars().all(char::is_whitespace) => {"
+    assert arm in lines, lines
+    assert lines[lines.index(arm) + 1] == r"t.matches('\n').count()", lines
+
+
 def _expected_span_text_panic(rule: str, item_desc: str) -> str:
     """The site-2 (regex text extraction) panic literal the generator emits for a given item.
 
@@ -2073,10 +2088,7 @@ def test_count_newlines_in_trivia_node_variant_whitespace_arm() -> None:
     assert "_ => {}" not in body
     assert "_ => {" not in body
     # The whitespace-only test lives once in the helper, not repeated per node arm.
-    helper = _method_body(src, "_whitespace_node_newlines")
-    assert "fn _whitespace_node_newlines(t: Option<&str>) -> usize {" in helper
-    assert "Some(t) if !t.is_empty() && t.chars().all(char::is_whitespace) => {" in helper
-    assert r"t.matches('\n').count()" in helper
+    _assert_whitespace_helper_shape(src)
 
 
 def test_count_newlines_in_trivia_all_node_variants_no_span_arm() -> None:
@@ -2101,8 +2113,7 @@ def test_count_newlines_in_trivia_all_node_variants_no_span_arm() -> None:
     assert body.count("count += Self::_whitespace_node_newlines(node.read().span().text_str());") == 2
     assert "_ => {" not in body
     # The whitespace-only test is written once in the helper.
-    helper = _method_body(src, "_whitespace_node_newlines")
-    assert "Some(t) if !t.is_empty() && t.chars().all(char::is_whitespace) => {" in helper
+    _assert_whitespace_helper_shape(src)
 
 
 def test_non_trivia_rule_preserve_blanks_from_parsed_clobbering_config() -> None:

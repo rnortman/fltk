@@ -19,6 +19,7 @@ Two things make it hermetic:
 
 load("@rules_python//python:defs.bzl", "PyInfo")
 load("//bzl:lint_flag.bzl", "LintFlagInfo")
+load("//bzl:python_version.bzl", "FLTK_PYTHON_VERSION")
 
 # The execroot is only knowable at action time, so absolute extraPaths entries are written
 # as this placeholder and substituted by the action.
@@ -132,7 +133,7 @@ pyright_lint = rule(
             mandatory = True,
             doc = "pyrightconfig `include`, relative to the staged tree.",
         ),
-        "python_version": attr.string(default = "3.10"),
+        "python_version": attr.string(default = FLTK_PYTHON_VERSION),
         "srcs": attr.label_list(
             allow_files = True,
             doc = "Files staged into the checked tree at their package paths.",

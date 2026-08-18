@@ -16,6 +16,8 @@ local_path_override(
 )
 
 bazel_dep(name = "rules_python", version = "1.5.0")  # py_test + Python toolchain
+# 0.73.0 mirrors the root module's dep.  MVS makes the version here inert (fltk's own dep
+# already forces it), but the mirror keeps the two modules readable as one pin.
 bazel_dep(name = "rules_rust", version = "0.73.0")   # rust extension for the toolchain pin
 
 # Test-only: build_test states the AST codegen target's coverage as a test rather than
@@ -23,10 +25,17 @@ bazel_dep(name = "rules_rust", version = "0.73.0")   # rust extension for the to
 # nothing this module exports carries skylib into another module graph.
 bazel_dep(name = "bazel_skylib", version = "1.8.2", dev_dependency = True)
 
+# DELIBERATELY NOT fltk's own interpreter pin.  fltk's generator binaries carry
+# python_version because a consumer's default otherwise wins and the cp310-only wheels in
+# @pypi have no matching distribution; with this default equal to that pin, the attributes
+# could all be deleted and this lane would stay green.  A version fltk does not pin is what
+# makes the lane falsify: //:fltk carries no @pypi deps, so this module's own py_tests run at
+# any version, while the generator tools invoked by generate_parser / generate_rust_parser
+# fail analysis here the moment one of them stops naming its version.
 python = use_extension("@rules_python//python/extensions:python.bzl", "python")
 python.toolchain(
     is_default = True,
-    python_version = "3.10",
+    python_version = "3.12",
 )
 
 # Rust toolchain for this consumer workspace.  As a root module it selects its own

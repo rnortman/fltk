@@ -139,10 +139,22 @@ check-bazel-locks:
 	git diff --exit-code -- $$locks \
 		|| { echo "FAIL: Bazel lockfiles drifted; commit the regenerated files"; exit 1; }
 
+# Also the drift detector for the Python interpreter version, which has the same shape: the
+# constant in bzl/python_version.bzl is the pin, MODULE.bazel files cannot load() it, so the
+# root module's python.toolchain tags are matched against it here.  The reverse is asserted for
+# every OTHER tracked MODULE.bazel that declares a Python toolchain: the version on its
+# default python.toolchain tag must DIFFER from the pin, because that is the only thing that
+# makes a missing python_version on a py_binary observable — a consumer whose default equals the
+# pin builds those targets whether they name a version or not, and the consumer lane certifies
+# nothing.  Every tracked BUILD file and .bzl helper beside the constant's own is also swept for
+# a spelled-out python_version, which reaches the packages
+# tests/test_python_version_pin.py is not given as data.
+#
 # Drift detector for the Rust version.  The root MODULE.bazel's rust.toolchain tag is the
 # single pin — there is no host toolchain and no rust-toolchain.toml — and every other Bazel
-# module that pulls in rules_rust must mirror it.  Without a mirrored tag a module silently
-# compiles with rules_rust's own default toolchain: a different compiler over the same source.
+# module that pulls in rules_rust must mirror it, along with the rules_rust bazel_dep version
+# itself.  Without a mirrored tag a module silently compiles with rules_rust's own default
+# toolchain: a different compiler over the same source.
 # The mirror list is DERIVED from the tracked MODULE.bazel files, not hardcoded, so a newly
 # added Bazel workspace is guarded the moment it depends on rules_rust; a module that never
 # mentions rules_rust is skipped, and a guard that ends up checking nothing fails rather than
@@ -151,15 +163,47 @@ check-bazel-locks:
 bazel-toolchain-guard:
 	@want="$$(sed -n 's/^ *versions *= *\["\([^"]*\)"\].*/\1/p' MODULE.bazel)"; \
 	test -n "$$want" || { echo "FAIL: no rust.toolchain versions pin found in MODULE.bazel"; exit 1; }; \
+	want_dep="$$(sed -n 's/^ *bazel_dep( *name *= *"rules_rust" *, *version *= *"\([^"]*\)".*/\1/p' MODULE.bazel)"; \
+	test -n "$$want_dep" || { echo "FAIL: no rules_rust bazel_dep version found in MODULE.bazel"; exit 1; }; \
 	checked=0; \
 	for f in $$(git ls-files 'MODULE.bazel' '*/MODULE.bazel'); do \
 	    grep -qE '@rules_rust|"rules_rust"' $$f || continue; \
 	    checked=$$((checked + 1)); \
 	    grep -qF "versions = [\"$$want\"]" $$f \
 	        || { echo "FAIL: $$f rust.toolchain pin does not match the root MODULE.bazel pin ($$want); edit it to match"; exit 1; }; \
+	    dep="$$(sed -n 's/^ *bazel_dep( *name *= *"rules_rust" *, *version *= *"\([^"]*\)".*/\1/p' $$f)"; \
+	    test "$$dep" = "$$want_dep" \
+	        || { echo "FAIL: $$f declares rules_rust [$$dep], not the root MODULE.bazel version ($$want_dep); edit it to match"; exit 1; }; \
 	done; \
 	test "$$checked" -gt 1 \
 	    || { echo "FAIL: only the root MODULE.bazel references rules_rust; the toolchain guard is checking nothing"; exit 1; }
+	@want_py="$$(sed -n 's/^FLTK_PYTHON_VERSION = "\([^"]*\)".*/\1/p' bzl/python_version.bzl)"; \
+	test -n "$$want_py" || { echo "FAIL: no FLTK_PYTHON_VERSION found in bzl/python_version.bzl"; exit 1; }; \
+	root_py="$$(sed -n 's/^ *python_version *= *"\([^"]*\)".*/\1/p' MODULE.bazel | sort -u)"; \
+	test "$$root_py" = "$$want_py" \
+	    || { echo "FAIL: MODULE.bazel python.toolchain pins [$$root_py], not FLTK_PYTHON_VERSION ($$want_py)"; exit 1; }; \
+	other=0; \
+	for f in $$(git ls-files '*/MODULE.bazel'); do \
+	    grep -q 'python.toolchain' $$f || continue; \
+	    other=$$((other + 1)); \
+	    other_py="$$(awk '/python\.toolchain\(/ { in_tag = 1 } \
+	        in_tag && /is_default *= *True/ { is_default = 1 } \
+	        in_tag && match($$0, /python_version *= *"[^"]*"/) { \
+	            tag_version = substr($$0, RSTART, RLENGTH); \
+	            sub(/^python_version *= *"/, "", tag_version); sub(/"$$/, "", tag_version) } \
+	        in_tag && /\)/ { if (is_default && tag_version != "") print tag_version; \
+	            in_tag = 0; is_default = 0; tag_version = "" }' $$f)"; \
+	    test -n "$$other_py" \
+	        || { echo "FAIL: $$f declares a python.toolchain but no default tag with a python_version; the consumer-default check cannot read its interpreter"; exit 1; }; \
+	    test "$$other_py" != "$$want_py" \
+	        || { echo "FAIL: $$f defaults to the same interpreter as the root pin ($$want_py), so the pins on fltk's py_binary targets are unobservable there; pick another version"; exit 1; }; \
+	done; \
+	test "$$other" -gt 0 \
+	    || { echo "FAIL: no non-root MODULE.bazel declares a Python toolchain; the consumer-default check is checking nothing"; exit 1; }
+	@starlark="$$(git ls-files '*BUILD.bazel' '*.bzl' | grep -v '^bzl/python_version.bzl$$')"; \
+	test -n "$$starlark" || { echo "FAIL: no tracked Starlark files found; the literal sweep is checking nothing"; exit 1; }; \
+	! grep -nE "python_version *= *['\"]" $$starlark \
+	    || { echo "FAIL: the interpreter version is spelled out above; load FLTK_PYTHON_VERSION from //bzl:python_version.bzl instead"; exit 1; }
 
 # Bazel verification lane for fltk's OWN Bazel surface.  Consumer-facing breakage
 # (a downstream module importing @fltk) is caught by bazel-consumer-check below.

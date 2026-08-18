@@ -5,6 +5,7 @@ load("//:rules.bzl", "generate_parser")
 load("//bzl:cargo_probe.bzl", "cargo_file_probe")
 load("//bzl:gencode_tool.bzl", "GENCODE_TOOL_DATA", "GENCODE_TOOL_DEPS")
 load("//bzl:py_test.bzl", "fltk_py_tests")
+load("//bzl:python_version.bzl", "FLTK_PYTHON_VERSION")
 load("//bzl:python_probe.bzl", "python_feature_probe")
 load("//bzl:pyright_tool.bzl", "PYRIGHT_TOOL_DEPS")
 
@@ -218,6 +219,11 @@ _RUST_GATE_FILES = [
     "span_only/de.rs",
     "span_only/runtime.rs",
     "span_only/mod.rs",
+    "preserve_blanks/cst.rs",
+    "preserve_blanks/parser.rs",
+    "preserve_blanks/unparser.rs",
+    "preserve_blanks/runtime.rs",
+    "preserve_blanks/mod.rs",
     "nullable_loop/cst.rs",
     "nullable_loop/parser.rs",
     "nullable_loop/runtime.rs",
@@ -227,7 +233,7 @@ _RUST_GATE_FILES = [
 py_binary(
     name = "rust_gate_gen",
     srcs = ["rust_gate_gen.py"],
-    python_version = "3.10",
+    python_version = FLTK_PYTHON_VERSION,
     deps = [":rust_gate_cases"],
 )
 
@@ -447,6 +453,16 @@ _TESTS = {
     ]},
     "test_pyrt_errors.py": {},
     "test_python_parser_span_backend.py": {},
+    # Reads every BUILD file it is given for the py_binary declarations, and bzl/ for the
+    # constant and the pyright rule that must agree with them.  A BUILD file dropped from this
+    # list stops being checked, which the test asserts against by name.
+    "test_python_version_pin.py": {
+        "data": [
+            "BUILD.bazel",
+            "//:BUILD.bazel",
+            "//:starlark_srcs",
+        ],
+    },
     "test_regex_grammar_adversarial.py": {},
     "test_regex_grammar_corpus.py": {},
     "test_regex_portability.py": {

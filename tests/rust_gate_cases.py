@@ -51,6 +51,7 @@ from fltk.fegen.gsm2ast_rs import generate_ast_rs
 from fltk.fegen.gsm2parser_rs import RustParserGenerator
 from fltk.fegen.gsm2serde_rs import generate_de_rs
 from fltk.fegen.gsm2tree_rs import RustCstGenerator
+from fltk.plumbing import parse_format_config
 from fltk.unparse.gsm2unparser_rs import RustUnparserGenerator
 
 
@@ -93,6 +94,9 @@ class Case:
 
     unparser: bool = False
     """Whether a generated Rust unparser is emitted, for a round trip through the formatter."""
+
+    formatter: str | None = None
+    """Formatter config text the unparser is generated under; the defaults when there is none."""
 
     goal: str | None = None
     """The rule the ``parse_str`` / ``unparse_str`` conveniences target; the first one by default."""
@@ -2678,6 +2682,69 @@ fn the_serde_frontend_serves_a_terminal_rule_as_its_text() {
 }
 """
 
+# The one shape that turns preserve_blanks on, so the generated blank-line path is compiled and
+# run rather than only spelled.
+PRESERVE_BLANKS_GRAMMAR = (
+    "doc := stmt* ;\n"
+    'stmt := name:word . semi:";" , ;\n'
+    "word := chars:/[a-z]+/ ;\n"
+    "_trivia := ( ws | line_comment )+ ;\n"
+    "ws := chars:/\\s+/ ;\n"
+    'line_comment := prefix:"//" . text:/[^\\n]*/ . nl:"\\n" ;\n'
+)
+
+PRESERVE_BLANKS_FORMATTER = (
+    'preserve_blanks: 2;\ntrivia_preserve: nil;\nws_allowed: nil;\nws_required: bsp;\nafter ";" { hard; }\n'
+)
+
+PRESERVE_BLANKS_RUNTIME = """//! Blank lines through the compiled newline counter, at `preserve_blanks: 2`.
+
+use super::parser::Parser;
+use super::unparser::Unparser;
+use ::fltk_unparser_core::{resolve_spacing_specs, Renderer, RendererConfig};
+
+fn format(src: &str) -> String {
+    let mut parser = Parser::new(src, None, true);
+    let parsed = parser.apply__parse_doc(0).expect("the document must parse");
+    assert!(parsed.pos as usize == src.len(), "the parse must consume {src:?}");
+    let guard = parsed.result.read();
+    let unparsed = Unparser::new()
+        .unparse_doc(&guard)
+        .expect("a parser-produced CST must unparse");
+    let resolved = resolve_spacing_specs(unparsed.doc());
+    Renderer::new(RendererConfig {
+        indent_width: 2,
+        max_width: 80,
+    })
+    .render(&resolved)
+}
+
+fn blank_lines(rendered: &str) -> usize {
+    rendered
+        .trim()
+        .lines()
+        .filter(|line| line.trim().is_empty())
+        .count()
+}
+
+#[test]
+fn whitespace_trivia_carrying_a_blank_line_renders_the_configured_two() {
+    assert_eq!(blank_lines(&format("a;\\n\\n\\nb;\\n")), 2);
+}
+
+#[test]
+fn whitespace_trivia_with_one_newline_renders_no_blank_line() {
+    assert_eq!(blank_lines(&format("a;\\nb;\\n")), 0);
+}
+
+#[test]
+fn trivia_that_is_not_whitespace_counts_no_newlines_of_its_own() {
+    let rendered = format("a;\\n// note\\nb;\\n");
+    assert_eq!(blank_lines(&rendered), 0);
+    assert!(!rendered.contains("// note"), "nothing is preserved here: {rendered}");
+}
+"""
+
 CASES = [
     # A sum, a keyed collection, every scalar erasure, a coercion, a renamed field, and a
     # label spelled `type` (so `r#type` is exercised). Carries the entry-point tests too, which
@@ -2897,6 +2964,17 @@ CASES = [
         unparser=True,
         serde=True,
     ),
+    # The generated unparser's blank-line preservation path.
+    Case(
+        "preserve_blanks",
+        PRESERVE_BLANKS_GRAMMAR,
+        runtime=PRESERVE_BLANKS_RUNTIME,
+        ast=False,
+        parser=True,
+        unparser=True,
+        formatter=PRESERVE_BLANKS_FORMATTER,
+        goal="doc",
+    ),
     # A repetition the validator refuses, generated anyway, so the loop guard is run.
     Case(
         "nullable_loop",
@@ -2953,7 +3031,10 @@ def _emitters(case: Case) -> dict[str, Callable[[], str]]:
             goal_rule=case.goal,
         ),
         "parser.rs": lambda: RustParserGenerator(model.grammar).generate(),
-        "unparser.rs": lambda: RustUnparserGenerator(model.grammar).generate(),
+        "unparser.rs": lambda: RustUnparserGenerator(
+            model.grammar,
+            formatter_config=None if case.formatter is None else parse_format_config(case.formatter),
+        ).generate(),
         "de.rs": lambda: generate_de_rs(
             model,
             cst_mod_path="super::cst",

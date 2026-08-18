@@ -3,6 +3,9 @@ module(
 )
 
 bazel_dep(name = "rules_python", version = "1.5.0")
+# 0.73.0 is not free-floating: crate_universe's checked-in lockfile below carries a digest
+# of the rules_rust version that computed it, so the declared version has to be the one a
+# consumer selects, or every consumer build re-resolves. Bumping it repins those locks.
 bazel_dep(name = "rules_rust", version = "0.73.0")
 
 # Test-only: the skylib unittest/analysistest harness backs //tests/bazel_rules'

@@ -94,6 +94,7 @@ _RUNTIME_TEST_COUNTS = {
     "no_ast": 2,
     "nullable_loop": 2,
     "prelude": 1,
+    "preserve_blanks": 3,
     "serde_guide": 3,
     "serialize": 9,
     "shapes": 5,
