@@ -480,3 +480,37 @@ from — the double traversal was weighed there and accepted on the grounds that
 not graph size, is what the lane pays — so changing the member list is a design revision, not a
 cleanup. Done = each consumer target's graph is traversed once per gate run with every current
 assertion intact. Location: `Makefile`, the `bazel-consumer-check` recipe.
+
+## `unparse-cursor-fallback-signal`
+
+When the source cursor goes unknown — a hand-built or mutated CST, a foreign-source child, an
+optional suppressed non-literal, or a literal alternation whose emitted spelling differs from the
+source's — both unparser backends silently revert to consuming trivia in child order *and* skip the
+`raise_dropped_trivia` / `_check_dropped_trivia_*` guard. So the one path on which a comment can
+still vanish is the one path that emits no diagnostic, and a caller has no way to ask whether a
+document was unparsed with exact ownership. The `literal_canonicalization` gate case pins the
+mangled layout as expected output, which is honest but gives a real user no explanation. Fixing it
+means deciding what the signal is and where it surfaces — a flag or count on the top-level unparse
+result, threaded to `fltkfmt`/consumer CLIs as a verbose or warning mode — which is public surface
+on `fltk-unparser-core` and on every consumer binary, so it wants a design pass rather than a patch.
+The same signal question covers a second bypass: the guard runs on the rule entry's success path,
+so a rule that returns `None` for any reason — including an alternative that fails on a child a gap
+left unconsumed — never reaches it, and the caller sees only "unparser returned None".
+Location: `fltk/unparse/pyrt.py` (the `TODO(unparse-cursor-fallback-signal)` comment in the source
+cursor section), with the generated counterparts in `fltk/unparse/gsm2unparser.py` and
+`fltk/unparse/gsm2unparser_rs.py`.
+
+## `unparse-quadratic-scaling`
+
+Formatting time grows quadratically with document size: `brennfmt` over a synthetic `.brenn` of
+N one-line statements takes 0.34s at N=500, 1.21s at N=1000, 4.52s at N=2000 and 18.07s at
+N=4000 — 4x per doubling. This predates the trivia-ownership work (the same measurement on the
+`preserve_blanks` commit gives the same numbers), so it is not the source cursor; the candidates
+are the per-gap span reads that resolve a codepoint index by scanning the source from byte 0
+(`Span::text_str`; `Span::line_col` and `Span::spells_at` cache their index tables), and the
+accumulator/renderer's handling of a long
+statement list. Small inputs hide it — every in-tree grammar and config formats in well under a
+second — but the ceiling is real for any consumer formatting a large generated document. Needs
+profiling before a fix is designed; do not guess at the site. Location: `crates/fltk-cst-core/src/span.rs`
+(`text_str`, `line_col`), `crates/fltk-unparser-core` (accumulator/renderer), and the generated
+unparser's per-gap trivia processing.

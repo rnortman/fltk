@@ -74,6 +74,22 @@ class RustUnparserGenerator:
         # ``_comment_trailing_newline`` it calls, so neither is emitted unused.
         self._prev_comment_newline_rules: dict[str, str] = {}
 
+        # Source-cursor helpers actually called by the emitted rules (see
+        # _gen_cursor_helper_methods), populated during rule emission and read afterwards so a
+        # grammar that never reaches one does not carry it as dead code under ``-D warnings``.
+        # ``_cursor_start`` is unconditional: every rule entry seeds the cursor from the node's
+        # span, so a grammar with rules always calls it.
+        self._cursor_helpers: set[str] = set()
+
+        # Rules whose emission calls the generated ``_child_span_{rule}`` accessor (rule name ->
+        # CST class name), gating that per-rule method the same way.
+        self._child_span_rules: dict[str, str] = {}
+
+        # Rules whose entry method checks for trivia children left unconsumed by the winning
+        # alternative (rule name -> CST class name): only rules whose child enum has a
+        # ``Trivia`` variant can have one.
+        self._dropped_trivia_rules: dict[str, str] = {}
+
     def generate(self) -> str:
         """Generate the complete ``.rs`` unparser source.
 
@@ -187,6 +203,9 @@ class RustUnparserGenerator:
         # -- otherwise a python-off build sees them as unused imports (the names stay
         # available to the wrapper).
         lines.append("use fltk_unparser_core::{DocAccumulator, UnparseResult};")
+        # `Span` is the source-cursor helpers' currency; `_cursor_start` is emitted for every
+        # grammar (every rule entry seeds the cursor), so the import is never unused.
+        lines.append("use fltk_cst_core::Span;")
         if self._uses_doc_type:
             lines.append("use fltk_unparser_core::Doc;")
         lines.append('#[cfg(feature = "python")]')
@@ -257,11 +276,20 @@ class RustUnparserGenerator:
         A genuine ``node`` use (``node.children()`` ...) is never inside a string literal, so
         blanking literal content is lossless.
         """
-        return (
-            "node"
-            if any(re.search(r"\bnode\b", cls._RUST_STR_LITERAL_RE.sub('""', line)) for line in body_lines)
-            else "_node"
-        )
+        return cls._param_name("node", body_lines)
+
+    @classmethod
+    def _param_name(cls, name: str, body_lines: Sequence[str]) -> str:
+        """Return ``name`` if any body line references it, else ``_name``.
+
+        The scan blanks Rust string-literal *content* first, for the reason
+        :meth:`_node_param` documents: a re-emitted literal whose text contains the
+        parameter's name would otherwise read as a use and leave a genuinely unused
+        parameter unprefixed, tripping ``unused_variables`` under ``-D warnings``.
+        """
+        pattern = rf"\b{re.escape(name)}\b"
+        used = any(re.search(pattern, cls._RUST_STR_LITERAL_RE.sub('""', line)) for line in body_lines)
+        return name if used else f"_{name}"
 
     # ------------------------------------------------------------------
     # Per-rule unparse methods: rule entry + alternative dispatch
@@ -294,9 +322,210 @@ class RustUnparserGenerator:
         rule_parts = [self._gen_rule(rule) for rule in self._grammar.rules]
         parts: list[str] = ["impl Unparser {"]
         parts.extend(self._gen_trivia_helper_methods())
+        parts.extend(self._gen_cursor_helper_methods())
         parts.extend(rule_parts)
         parts.append("}")
         return "\n".join(parts)
+
+    def _gen_cursor_helper_methods(self) -> list[str]:
+        """Emit the source-cursor helpers the rules actually call.
+
+        The cursor is the source counterpart of ``pos``: a codepoint offset into the rule
+        node's source that the alternative walk advances alongside the child index.  It exists
+        because a rule node's children are *not* index-aligned with its alternative's
+        item/separator sequence -- a suppressed literal contributes no child, and the parser
+        pushes a ``Trivia`` child only where whitespace or a comment actually matched -- so a
+        separator standing for an empty gap would otherwise take the trivia belonging to a
+        later one and re-emit it ahead of the suppressed text between them.
+
+        ``_cursor_start`` is emitted unconditionally (every rule entry seeds the cursor); the
+        rest are gated on :attr:`_cursor_helpers`, populated while the rules are emitted, so a
+        grammar that never reaches one does not carry it as dead code under ``-D warnings``.
+        """
+        methods: list[str] = [
+            "\n".join(
+                [
+                    "    /// The source cursor at a rule node's start.",
+                    "    ///",
+                    "    /// `None` when the node's span carries no source or no position: the tree's",
+                    "    /// positions are not positions in one source, so trivia binds by child order.",
+                    "    fn _cursor_start(node_span: &Span) -> Option<i64> {",
+                    "        if node_span.has_source() && node_span.start() >= 0 {",
+                    "            Some(node_span.start())",
+                    "        } else {",
+                    "            None",
+                    "        }",
+                    "    }",
+                ]
+            )
+        ]
+        if "_cursor_after" in self._cursor_helpers:
+            methods.append(
+                "\n".join(
+                    [
+                        "    /// The cursor after consuming a CST child: the child's span end.",
+                        "    ///",
+                        "    /// `None` when the child's positions are not positions in `anchor`'s source --",
+                        "    /// a sourceless or foreign-source span, or one starting behind the cursor. That",
+                        "    /// is the hand-built or mutated tree, where the cursor resyncs at the next child",
+                        "    /// carrying the anchor's source.",
+                        "    fn _cursor_after(cursor: Option<i64>, anchor: &Span, child: &Span) -> Option<i64> {",
+                        "        let cur = cursor?;",
+                        "        if !anchor.shares_source(child) {",
+                        "            return None;",
+                        "        }",
+                        "        if child.start() < cur || child.end() < child.start() {",
+                        "            return None;",
+                        "        }",
+                        "        Some(child.end())",
+                        "    }",
+                    ]
+                )
+            )
+        if "_cursor_owns" in self._cursor_helpers:
+            methods.append(
+                "\n".join(
+                    [
+                        "    /// Whether a child was written in the gap the cursor stands at.",
+                        "    fn _cursor_owns(cursor: Option<i64>, anchor: &Span, child: &Span) -> bool {",
+                        "        match cursor {",
+                        "            Some(cur) => {",
+                        "                anchor.shares_source(child) && child.start() == cur",
+                        "            }",
+                        "            None => false,",
+                        "        }",
+                        "    }",
+                    ]
+                )
+            )
+        if "_cursor_behind" in self._cursor_helpers:
+            methods.append(
+                "\n".join(
+                    [
+                        "    /// Whether a child sits *behind* the cursor in the cursor's own source.",
+                        "    ///",
+                        "    /// A parser-produced tree never does: the walk advances the cursor only to the end",
+                        "    /// of what it consumed, so an unconsumed child starts at or after it. Behind means",
+                        "    /// the walk ran past a gap without claiming the trivia written in it, and the",
+                        "    /// ownership answers from here on are guesses.",
+                        "    fn _cursor_behind(cursor: Option<i64>, anchor: &Span, child: &Span) -> bool {",
+                        "        match cursor {",
+                        "            Some(cur) => {",
+                        "                anchor.shares_source(child) && child.start() < cur",
+                        "            }",
+                        "            None => false,",
+                        "        }",
+                        "    }",
+                    ]
+                )
+            )
+        if "_cursor_where" in self._cursor_helpers:
+            methods.append(
+                "\n".join(
+                    [
+                        "    /// A `line:col` description of a span's start, for diagnostics.",
+                        "    fn _cursor_where(span: &Span) -> String {",
+                        "        match span.line_col_inner() {",
+                        '            Some(lc) => format!("line {}, col {}", lc.line + 1, lc.col + 1),',
+                        '            None => "an unresolvable position".to_owned(),',
+                        "        }",
+                        "    }",
+                    ]
+                )
+            )
+        if "_cursor_probe" in self._cursor_helpers:
+            methods.append(
+                "\n".join(
+                    [
+                        "    /// The cursor past an *optional* literal that occupies no child position.",
+                        "    ///",
+                        "    /// The literal was matched iff the source at the cursor spells it: the parser is",
+                        "    /// greedy at an optional and does not backtrack out of a successful match. A miss",
+                        "    /// means the literal is absent and occupies nothing, so the cursor stays put.",
+                        "    fn _cursor_probe(cursor: Option<i64>, anchor: &Span, literal: &str) -> Option<i64> {",
+                        "        let cur = cursor?;",
+                        "        if anchor.spells_at(cur, literal) {",
+                        "            Some(cur + literal.chars().count() as i64)",
+                        "        } else {",
+                        "            Some(cur)",
+                        "        }",
+                        "    }",
+                    ]
+                )
+            )
+        if "_cursor_expect" in self._cursor_helpers:
+            methods.append(
+                "\n".join(
+                    [
+                        "    /// The cursor past a *required* literal that occupies no child position.",
+                        "    ///",
+                        "    /// A miss means the source does not spell what is being emitted -- an alternation of",
+                        "    /// equivalent spellings renders its canonical one, so an unparse of `use x` under",
+                        '    /// `("import" | "use")` emits `import` over a source three codepoints shorter. How',
+                        "    /// much source the token really occupies is then unknown, so the cursor is.",
+                        "    fn _cursor_expect(cursor: Option<i64>, anchor: &Span, literal: &str) -> Option<i64> {",
+                        "        let cur = cursor?;",
+                        "        if anchor.spells_at(cur, literal) {",
+                        "            Some(cur + literal.chars().count() as i64)",
+                        "        } else {",
+                        "            None",
+                        "        }",
+                        "    }",
+                    ]
+                )
+            )
+        methods.extend(
+            self._gen_dropped_trivia_check_method(rule_name, class_name)
+            for rule_name, class_name in self._dropped_trivia_rules.items()
+        )
+        return methods
+
+    def _gen_dropped_trivia_check_method(self, rule_name: str, class_name: str) -> str:
+        """Emit ``_check_dropped_trivia_{rule}`` — halt on a comment no separator claimed.
+
+        Runs on the rule entry's success path.  With the cursor known, every gap's ownership
+        was decided from source positions, so a ``Trivia`` child the winning alternative left
+        behind is content the formatter would delete without a trace; halt instead.  With the
+        cursor unknown the ownership question was never asked, so the check does not fire --
+        trivia falls back to child order.
+        """
+        child_enum = self._cst.child_enum_name(class_name)
+        trivia_class = self._cst.class_name_for_rule(gsm.TRIVIA_RULE_NAME)
+        num_variants = self._cst.num_child_variants(rule_name)
+        rule_lit = rust_str_lit(rule_name)
+        lines = [
+            "    /// Halt if the winning alternative left a comment-bearing `Trivia` child behind.",
+            (
+                f"    fn _check_dropped_trivia_{rule_name}"
+                f"(&self, node: &cst::{class_name}, pos: usize, cursor: Option<i64>) {{"
+            ),
+            "        if cursor.is_none() {",
+            "            return;",
+            "        }",
+            "        for (idx, (_, child)) in node.children().iter().enumerate().skip(pos) {",
+        ]
+        if num_variants > 1:
+            lines.append(f"            let cst::{child_enum}::{trivia_class}(trivia_shared) = child else {{")
+            lines.append("                continue;")
+            lines.append("            };")
+        else:
+            lines.append(f"            let cst::{child_enum}::{trivia_class}(trivia_shared) = child;")
+        lines.extend(
+            [
+                "            let trivia_node = trivia_shared.read();",
+                "            assert!(",
+                "                !self._has_preservable_trivia(&trivia_node),",
+                (
+                    f'                "unparse_{rule_lit}: trivia at child position {{}} was claimed by no '
+                    'separator; refusing to silently drop comments",'
+                ),
+                "                idx",
+                "            );",
+                "        }",
+                "    }",
+            ]
+        )
+        return "\n".join(lines)
 
     def _gen_rule(self, rule: gsm.Rule) -> str:
         """Emit the entry method, per-alternative bodies, and per-item methods for one rule."""
@@ -325,6 +554,8 @@ class RustUnparserGenerator:
         lines: list[str] = []
         lines.append(f"    pub fn unparse_{rule_name}(&self, node: &cst::{class_name}) -> Option<UnparseResult> {{")
         lines.append("        let acc = DocAccumulator::new();")
+        # The cursor decides which gap a Trivia child was written in.
+        lines.append("        let cur = Self::_cursor_start(node.span());")
 
         # RULE_START anchors: rebind `acc` through the push operations, in config order.
         start_anchor = self._formatter_config.get_anchor_config(rule_name, "before", ItemSelector.RULE_START, "")
@@ -372,12 +603,27 @@ class RustUnparserGenerator:
                     msg = f"Unsupported OperationType in RULE_END anchor for rule {rule_name!r}: {op.operation_type!r}"
                     raise ValueError(msg)
 
+        # A rule that reads trivia at a whitespace gap gets the dropped-comment check on the
+        # success path: with the cursor known, a Trivia child no separator claimed is content
+        # the formatter would silently delete. The predicate is shared with the Python backend
+        # so the two cannot disagree about which rules carry the check.
+        check_fn = None
+        if gsm.rule_reads_trivia_at_gap(rule):
+            self._dropped_trivia_rules[rule_name] = class_name
+            check_fn = f"_check_dropped_trivia_{rule_name}"
+
         # Dispatch alternatives: clone `acc` for every attempt but the last, which moves it.
-        lines.extend(self._gen_alt_dispatch_loop(f"unparse_{rule_name}", len(rule.alternatives), "0", pop_chain))
+        lines.extend(
+            self._gen_alt_dispatch_loop(
+                f"unparse_{rule_name}", len(rule.alternatives), "0", pop_chain, check_fn=check_fn
+            )
+        )
         lines.append("    }")
         return "\n".join(lines)
 
-    def _gen_alt_dispatch_loop(self, prefix: str, n_alts: int, start_pos: str, pop_chain: str = "") -> list[str]:
+    def _gen_alt_dispatch_loop(
+        self, prefix: str, n_alts: int, start_pos: str, pop_chain: str = "", *, check_fn: str | None = None
+    ) -> list[str]:
         """Emit the shared "try each ``{prefix}__alt{N}``, return the first success" dispatch loop.
 
         Shared by :meth:`_gen_rule_entry` (rule entry, ``start_pos="0"``, optional RULE_END
@@ -386,15 +632,21 @@ class RustUnparserGenerator:
         last, which moves it; the loop ends with the ``None`` all-alternatives-failed
         fall-through.  When ``pop_chain`` is non-empty the success path rebuilds the result
         accumulator through the RULE_END pops before returning; otherwise it returns the
-        alternative's result unchanged.
+        alternative's result unchanged.  ``check_fn`` names the rule's dropped-comment check
+        (rule entry only): it runs on the success path, before the return.
+
+        The source cursor is threaded like ``pos``: the alternative takes the caller's ``cur``
+        and its result carries the cursor the consumed items reach.
         """
         lines: list[str] = []
         for alt_idx in range(n_alts):
             acc_arg = "acc" if alt_idx == n_alts - 1 else "acc.clone()"
-            lines.append(f"        if let Some(r) = self.{prefix}__alt{alt_idx}(node, {start_pos}, {acc_arg}) {{")
+            lines.append(f"        if let Some(r) = self.{prefix}__alt{alt_idx}(node, {start_pos}, cur, {acc_arg}) {{")
+            if check_fn:
+                lines.append(f"            self.{check_fn}(node, r.new_pos, r.cursor);")
             if pop_chain:
                 lines.append(f"            let acc = r.accumulator{pop_chain};")
-                lines.append("            return Some(UnparseResult::new(acc, r.new_pos));")
+                lines.append("            return Some(UnparseResult::with_cursor(acc, r.new_pos, r.cursor));")
             else:
                 lines.append("            return Some(r);")
             lines.append("        }")
@@ -472,17 +724,18 @@ class RustUnparserGenerator:
         node_param = "node" if alt.items else "_node"
         lines.append(
             f"    fn {prefix}__alt{alt_idx}"
-            f"(&self, {node_param}: &cst::{class_name}, pos: usize, acc: DocAccumulator) -> Option<UnparseResult> {{"
+            f"(&self, {node_param}: &cst::{class_name}, pos: usize, cur: Option<i64>, acc: DocAccumulator)"
+            " -> Option<UnparseResult> {"
         )
         if not alt.items:
-            # Degenerate empty alternative: pass the accumulator/position through unchanged.
-            lines.append("        Some(UnparseResult::new(acc, pos))")
+            lines.append("        Some(UnparseResult::with_cursor(acc, pos, cur))")
             lines.append("    }")
             return "\n".join(lines)
 
-        # Thread `pos`/`acc` through the items (cheap-clone the accumulator for optional
+        # Thread `pos`/`cur`/`acc` through the items (cheap-clone the accumulator for optional
         # attempts so a missing optional item leaves the prior accumulator intact).
         lines.append("        let mut pos = pos;")
+        lines.append("        let mut cur = cur;")
         lines.append("        let mut acc = acc;")
         # Initial separator before the first item (Python gen_alternative_unparser :1588).
         lines.extend(self._gen_trivia_processing(rule_name, class_name, alt.initial_sep, "        "))
@@ -503,8 +756,9 @@ class RustUnparserGenerator:
             if item.quantifier.is_optional():
                 # Optional: always clone acc for the call so an absent optional leaves the prior
                 # accumulator intact; the disposition-dependent merge runs only on the matched path.
-                lines.append(f"        if let Some(r) = self.{item_fn}(node, pos, acc.clone()) {{")
+                lines.append(f"        if let Some(r) = self.{item_fn}(node, pos, cur, acc.clone()) {{")
                 lines.append("            pos = r.new_pos;")
+                lines.append("            cur = r.cursor;")
                 lines.extend(self._item_disposition_success_lines(rule_name, item, item_disposition, "            "))
                 lines.append("        }")
             else:
@@ -512,8 +766,9 @@ class RustUnparserGenerator:
                 # result; an Omit/RenderAs item needs the prior acc afterward (to leave it
                 # unchanged or rebuild it with the render-as spacing), so it clones acc instead.
                 acc_arg = "acc" if is_normal else "acc.clone()"
-                lines.append(f"        let r = self.{item_fn}(node, pos, {acc_arg})?;")
+                lines.append(f"        let r = self.{item_fn}(node, pos, cur, {acc_arg})?;")
                 lines.append("        pos = r.new_pos;")
+                lines.append("        cur = r.cursor;")
                 lines.extend(self._item_disposition_success_lines(rule_name, item, item_disposition, "        "))
             # Item-level after-anchor push/pop — unconditional (8-space indent), *after* the
             # item block (outside the optional `if let`), matching the Python after-anchor's
@@ -523,7 +778,7 @@ class RustUnparserGenerator:
             # mirrors `item_idx < len(items.sep_after)` (item_idx < len(items.items) always holds).
             if item_idx < len(alt.sep_after):
                 lines.extend(self._gen_trivia_processing(rule_name, class_name, alt.sep_after[item_idx], "        "))
-        lines.append("        Some(UnparseResult::new(acc, pos))")
+        lines.append("        Some(UnparseResult::with_cursor(acc, pos, cur))")
         lines.append("    }")
         return "\n".join(lines)
 
@@ -742,10 +997,11 @@ class RustUnparserGenerator:
         # A SUPPRESS or INLINE-literal item body never reads `node`; name the param accordingly
         # so the generated method is unused-variable clean under -D warnings.
         node_param = self._node_param(body)
+        cur_param = self._param_name("cur", body)
         lines: list[str] = [
             (
                 f"    fn {item_prefix}"
-                f"(&self, {node_param}: &cst::{class_name}, pos: usize, acc: "
+                f"(&self, {node_param}: &cst::{class_name}, pos: usize, {cur_param}: Option<i64>, acc: "
                 "DocAccumulator) -> Option<UnparseResult> {"
             )
         ]
@@ -834,15 +1090,17 @@ class RustUnparserGenerator:
         is_plus = item.quantifier.min() == gsm.Arity.ONE
         lines: list[str] = []
         lines.append("        let mut current_pos = pos;")
+        lines.append("        let mut current_cur = cur;")
         lines.append("        let mut acc = acc;")
         if is_plus:
             lines.append("        let mut match_count = 0usize;")
         lines.append("        while current_pos < node.children().len() {")
-        lines.append(f"            let Some(r) = self.{inner_fn}(node, current_pos, acc.clone()) else {{")
+        lines.append(f"            let Some(r) = self.{inner_fn}(node, current_pos, current_cur, acc.clone()) else {{")
         lines.append("                break;")
         lines.append("            };")
         lines.append("            acc = r.accumulator;")
         lines.append("            current_pos = r.new_pos;")
+        lines.append("            current_cur = r.cursor;")
         if is_plus:
             lines.append("            match_count += 1;")
         lines.append("        }")
@@ -850,7 +1108,7 @@ class RustUnparserGenerator:
             lines.append("        if match_count == 0 {")
             lines.append("            return None;")
             lines.append("        }")
-        lines.append("        Some(UnparseResult::new(acc, current_pos))")
+        lines.append("        Some(UnparseResult::with_cursor(acc, current_pos, current_cur))")
         return lines
 
     def _gen_inner_methods(self, item_prefix: str, rule_name: str, class_name: str, item: gsm.Item) -> list[str]:
@@ -869,10 +1127,11 @@ class RustUnparserGenerator:
         # A single-occurrence INLINE-literal inner body never reads `node`; name the param to
         # match so the generated inner method is unused-variable clean under -D warnings.
         node_param = self._node_param(body)
+        cur_param = self._param_name("cur", body)
         lines: list[str] = [
             (
                 f"    fn {inner_prefix}"
-                f"(&self, {node_param}: &cst::{class_name}, pos: usize, acc: "
+                f"(&self, {node_param}: &cst::{class_name}, pos: usize, {cur_param}: Option<i64>, acc: "
                 "DocAccumulator) -> Option<UnparseResult> {"
             )
         ]
@@ -921,7 +1180,7 @@ class RustUnparserGenerator:
         as sibling methods by :meth:`_gen_subexpr_methods` (invoked from
         :meth:`_gen_item_method`).
         """
-        return [f"        self.{item_prefix}__alts(node, pos, acc)"]
+        return [f"        self.{item_prefix}__alts(node, pos, cur, acc)"]
 
     def _gen_subexpr_methods(
         self, item_prefix: str, rule_name: str, class_name: str, alternatives: Sequence[gsm.Items]
@@ -955,8 +1214,8 @@ class RustUnparserGenerator:
         """
         lines: list[str] = []
         lines.append(
-            f"    fn {alts_prefix}(&self, node: &cst::{class_name}, pos: usize, acc: DocAccumulator) "
-            f"-> Option<UnparseResult> {{"
+            f"    fn {alts_prefix}(&self, node: &cst::{class_name}, pos: usize, cur: Option<i64>, "
+            f"acc: DocAccumulator) -> Option<UnparseResult> {{"
         )
         lines.extend(self._gen_alt_dispatch_loop(alts_prefix, n_alts, "pos"))
         lines.append("    }")
@@ -1022,7 +1281,13 @@ class RustUnparserGenerator:
         lines.append("        let guard = shared.read();")
         lines.append(f"        let child_result = self.unparse_{ref_rule_name}(&guard)?;")
         lines.append("        let acc = acc.add_accumulator(&child_result.accumulator);")
-        lines.append("        Some(UnparseResult::new(acc, pos + 1))")
+        # The cursor moves to the end of the child node's span: whatever the child consumed
+        # inside itself, the parent resumes after it.
+        self._cursor_helpers.add("_cursor_after")
+        lines.append(
+            "        Some(UnparseResult::with_cursor(acc, pos + 1, "
+            "Self::_cursor_after(cur, node.span(), guard.span())))"
+        )
         return lines
 
     def _gen_literal_term_body(self, rule_name: str, class_name: str, item: gsm.Item) -> list[str]:
@@ -1047,10 +1312,22 @@ class RustUnparserGenerator:
         if item.disposition == gsm.Disposition.INCLUDE:
             lines.extend(self._gen_validate_span_child(rule_name, class_name, item))
             lines.append(f"        let acc = acc.add_non_trivia({text_expr});")
-            lines.append("        Some(UnparseResult::new(acc, pos + 1))")
+            self._cursor_helpers.add("_cursor_after")
+            lines.append(
+                "        Some(UnparseResult::with_cursor(acc, pos + 1, Self::_cursor_after(cur, node.span(), span)))"
+            )
         else:
+            # An INLINE literal occupies source but no child position: the cursor moves over the
+            # literal's own text -- and only when the source there really spells it, because an
+            # alternation of equivalent spellings renders its canonical one over a source of a
+            # different length.
             lines.append(f"        let acc = acc.add_non_trivia({text_expr});")
-            lines.append("        Some(UnparseResult::new(acc, pos))")
+            self._cursor_helpers.add("_cursor_expect")
+            literal = rust_str_lit(item.term.value)
+            lines.append(
+                "        Some(UnparseResult::with_cursor(acc, pos, "
+                f'Self::_cursor_expect(cur, node.span(), "{literal}")))'
+            )
         return lines
 
     def _gen_regex_term_body(self, rule_name: str, class_name: str, item: gsm.Item) -> list[str]:
@@ -1128,7 +1405,10 @@ class RustUnparserGenerator:
         )
         lines.append("        };")
         lines.append("        let acc = acc.add_non_trivia(fltk_unparser_core::text(text));")
-        lines.append("        Some(UnparseResult::new(acc, pos + 1))")
+        self._cursor_helpers.add("_cursor_after")
+        lines.append(
+            "        Some(UnparseResult::with_cursor(acc, pos + 1, Self::_cursor_after(cur, node.span(), span)))"
+        )
         return lines
 
     def _gen_child_prelude(self, class_name: str, item: gsm.Item, *, need_tuple: bool) -> list[str]:
@@ -1178,33 +1458,24 @@ class RustUnparserGenerator:
 
         A *labeled* literal item additionally accepts the child only when the span's text is
         one of the label's literal spellings (:func:`fltk.unparse.literal_labels.spellings_for`),
-        a sourceless span being accepted unconditionally.  The span is then bound (rather than
-        discarded by a ``Span(_)`` arm) so the text check has an operand.  Rendering is
+        a sourceless span being accepted unconditionally.  Rendering is
         unchanged -- the grammar's literal text is always emitted -- so this decides only which
         trial branch wins: a rival regex under the same label takes a child whose text no
         spelling of the literal matches, instead of having that text replaced by the literal.
+
+        The span is always bound as ``span``: the caller advances the source cursor past it.
         """
         num_variants = self._cst.num_child_variants(rule_name)
         spellings = spellings_for(self._grammar.identifiers[rule_name], item)
-        # _gen_child_prelude binds child_tuple on its own whenever the item is labeled, so we
-        # only need to request it here for the variant match (num_variants > 1). A text check
-        # implies a labeled item, so the tuple is bound for it either way.
-        need_tuple = num_variants > 1
 
-        lines = self._gen_child_prelude(class_name, item, need_tuple=need_tuple)
+        lines = self._gen_child_prelude(class_name, item, need_tuple=True)
         child_enum = self._cst.child_enum_name(class_name)
         if num_variants > 1:
-            if spellings:
-                lines.append("        let span = match &child_tuple.1 {")
-                lines.append(f"            cst::{child_enum}::Span(span) => span,")
-                lines.append("            _ => return None,")
-                lines.append("        };")
-            else:
-                lines.append("        match &child_tuple.1 {")
-                lines.append(f"            cst::{child_enum}::Span(_) => {{}}")
-                lines.append("            _ => return None,")
-                lines.append("        }")
-        elif spellings:
+            lines.append("        let span = match &child_tuple.1 {")
+            lines.append(f"            cst::{child_enum}::Span(span) => span,")
+            lines.append("            _ => return None,")
+            lines.append("        };")
+        else:
             # Single-variant child enum: irrefutable destructure via `let` (clippy
             # ::infallible_destructuring_match rejects a single-arm match here).
             lines.append(f"        let cst::{child_enum}::Span(span) = &child_tuple.1;")
@@ -1225,15 +1496,38 @@ class RustUnparserGenerator:
         - required literal: re-emit the literal text via ``add_non_trivia(text(...))``.
         - required regex / identifier / sub-expression: cannot be reconstructed from the
           CST -- raise at generation time with the same messages as the Python backend.
+
+        The source cursor still moves, because a suppressed item occupies source even though it
+        occupies no child position: a literal advances it over its own text, and only when the
+        source at the cursor really spells that text.  Required and
+        optional differ on the miss: an optional literal is simply absent, while a required one
+        means the source and the emitted text have parted company -- an alternation of
+        equivalent spellings renders its canonical one -- so the cursor goes unknown.  An
+        optional suppressed *non-literal* is unreconstructible, so the cursor goes unknown
+        there too, and trivia falls back to child order from there.
         """
         if item.quantifier.is_optional():
             # Optional suppressed items contribute the grammar minimum of zero occurrences.
-            return ["        Some(UnparseResult::new(acc, pos))"]
+            if isinstance(item.term, gsm.Literal):
+                self._cursor_helpers.add("_cursor_probe")
+                literal = rust_str_lit(item.term.value)
+                return [
+                    (
+                        "        Some(UnparseResult::with_cursor(acc, pos, "
+                        f'Self::_cursor_probe(cur, node.span(), "{literal}")))'
+                    )
+                ]
+            return ["        Some(UnparseResult::with_cursor(acc, pos, None))"]
         if isinstance(item.term, gsm.Literal):
-            text_expr = f'fltk_unparser_core::text("{rust_str_lit(item.term.value)}")'
+            literal = rust_str_lit(item.term.value)
+            text_expr = f'fltk_unparser_core::text("{literal}")'
+            self._cursor_helpers.add("_cursor_expect")
             return [
                 f"        let acc = acc.add_non_trivia({text_expr});",
-                "        Some(UnparseResult::new(acc, pos))",
+                (
+                    "        Some(UnparseResult::with_cursor(acc, pos, "
+                    f'Self::_cursor_expect(cur, node.span(), "{literal}")))'
+                ),
             ]
         if isinstance(item.term, gsm.Regex):
             msg = (
@@ -1335,6 +1629,8 @@ class RustUnparserGenerator:
                 f"{i2}let total_newlines = newline_count + Self::_prev_comment_newline_{rule_name}(node, pos);"
             )
         lines.append(f"{i2}pos += 1;")
+        self._cursor_helpers.add("_cursor_after")
+        lines.append(f"{i2}cur = Self::_cursor_after(cur, node.span(), span);")
         # Trivia-rule branch preserves comment line structure even at preserve_blanks == 0
         # (preserve_line_at_zero=True), matching gsm2unparser.py:1216-1242.
         lines.extend(
@@ -1404,9 +1700,23 @@ class RustUnparserGenerator:
         """Emit the non-trivia-rule branch of ``_gen_trivia_processing`` (``gsm2unparser.py:1265``).
 
         A regular (non-trivia) rule with a WS separator captures the inter-item whitespace and
-        comments as a single ``Trivia`` child node.  At each WS gap this — guarded by
-        ``!acc.last_was_trivia()`` so two consecutive trivia gaps do not double-emit — looks up the
-        child at ``pos``; when it is a ``Trivia`` child it read-locks the ``Shared<Trivia>`` and:
+        comments as a single ``Trivia`` child node.  At each WS gap this looks up the child at
+        ``pos`` and, when it is a ``Trivia`` child, read-locks the ``Shared<Trivia>`` and asks
+        whether *this* gap owns it: a child is owned when it was parsed at the source cursor.
+        A gap the source spells empty owns nothing and emits default spacing without consuming,
+        which is what leaves a following suppressed terminator ahead of the trivia written after
+        it.  An owned child is consumed even when the accumulator already ends in trivia — the
+        resolver merges the pair and keeps the one carrying the trivia — while a gap that owns
+        nothing stays behind the ``!acc.last_was_trivia()`` guard that stops two consecutive
+        gaps from double-emitting.  With the cursor unknown (a hand-built or mutated tree) the
+        child at ``pos`` is consumed in child order behind that same guard.
+
+        A child *behind* the cursor is neither: the walk has already passed the gap it was
+        written in, so every ownership answer after it is a guess.  That case ``panic!``s with
+        the rule, the child position, both offsets and a line/col, rather than leaving the child
+        for the next item to fail on and surfacing as ``unparser returned None``.
+
+        On the consuming path:
 
         - **preservable trivia** (``_has_preservable_trivia``): calls the generated
           ``unparse__trivia`` and, on success, wraps the trivia's own ``Doc`` in a
@@ -1427,11 +1737,12 @@ class RustUnparserGenerator:
           ``HardLine`` for comments. The shared :meth:`_gen_newline_separator_ladder` encodes the
           difference via ``preserve_line_at_zero``.
 
-        The ``pos`` advance past the ``Trivia`` child is emitted unconditionally (Python ``:1402``),
-        i.e. it runs on every path that is not the preservable-trivia failure ``panic!`` above.  When the child at
-        ``pos`` is not a ``Trivia`` node, or ``pos`` is out of bounds, the default separator
-        spacing is emitted — regardless of ``WS_REQUIRED`` vs ``WS_ALLOWED`` (the non-trivia branch
-        never ``return None``s, unlike the trivia-rule branch).
+        The ``pos`` advance past the ``Trivia`` child (and the matching cursor advance to the
+        child's span end) runs on every consuming path that is not the preservable-trivia
+        failure ``panic!`` above.  When the child at ``pos`` is not a ``Trivia`` node, or ``pos``
+        is out of bounds, the default separator spacing is emitted — regardless of
+        ``WS_REQUIRED`` vs ``WS_ALLOWED`` (the non-trivia branch never ``return None``s, unlike
+        the trivia-rule branch).
 
         The ``_ => { … }`` not-a-``Trivia`` arm is emitted only when the rule's child enum has
         more than one variant (matching the ``num_child_variants > 1`` guard used by the term
@@ -1448,6 +1759,7 @@ class RustUnparserGenerator:
         trivia_class = self._cst.class_name_for_rule(gsm.TRIVIA_RULE_NAME)
         num_variants = self._cst.num_child_variants(rule_name)
         preserve_blanks = self._formatter_config.get_preserve_blanks(rule_name)
+        rule_lit = rust_str_lit(rule_name)
 
         i0 = indent
         i1 = indent + "    "
@@ -1458,13 +1770,36 @@ class RustUnparserGenerator:
         i6 = indent + "                        "
 
         lines: list[str] = []
-        # Skip a fresh separator spec right after a trivia child was already consumed
-        # (Python `if not accumulator.last_was_trivia`, gsm2unparser.py:1266).
-        lines.append(f"{i0}if !acc.last_was_trivia() {{")
-        lines.append(f"{i1}if pos < node.children().len() {{")
-        lines.append(f"{i2}match &node.children()[pos].1 {{")
-        lines.append(f"{i3}cst::{child_enum}::{trivia_class}(trivia_shared) => {{")
-        lines.append(f"{i4}let trivia_node = trivia_shared.read();")
+        self._cursor_helpers.add("_cursor_owns")
+        self._cursor_helpers.add("_cursor_after")
+        self._cursor_helpers.add("_cursor_behind")
+        self._cursor_helpers.add("_cursor_where")
+        lines.append(f"{i0}if pos < node.children().len() {{")
+        lines.append(f"{i1}match &node.children()[pos].1 {{")
+        lines.append(f"{i2}cst::{child_enum}::{trivia_class}(trivia_shared) => {{")
+        lines.append(f"{i3}let trivia_node = trivia_shared.read();")
+        # Ownership: this gap takes the Trivia child only when the child was parsed at the
+        # cursor. A gap the source spells empty leaves the child for the gap it belongs to,
+        # which is what keeps a suppressed terminator ahead of the trivia that follows it.
+        # An owned child is taken even when the accumulator already ends in trivia: the
+        # resolver drops the default spec in favour of the one carrying the trivia.
+        # With the cursor unknown -- a hand-built or mutated tree -- the child is taken in
+        # child order behind the `last_was_trivia` gate.
+        # A Trivia child behind the cursor is not the "empty gap, later separator owns it" case
+        # the ownership test is for: it is trivia the walk already stepped over. Say where,
+        # rather than leaving the alternative to fail on the child and surface as an unlocatable
+        # "unparser returned None".
+        lines.append(f"{i3}if Self::_cursor_behind(cur, node.span(), trivia_node.span()) {{")
+        lines.append(
+            f'{i4}panic!("unparse_{rule_lit}: trivia at child position {{}} starts at {{}}, '
+            f"behind the source cursor {{}} ({{}}); the unparse walk passed the gap that owns it "
+            f'-- refusing to guess where it belongs", '
+            f"pos, trivia_node.span().start(), cur.unwrap_or(-1), "
+            f"Self::_cursor_where(trivia_node.span()));"
+        )
+        lines.append(f"{i3}}}")
+        lines.append(f"{i3}let owned = Self::_cursor_owns(cur, node.span(), trivia_node.span());")
+        lines.append(f"{i3}if owned || (cur.is_none() && !acc.last_was_trivia()) {{")
         lines.append(f"{i4}if self._has_preservable_trivia(&trivia_node) {{")
         # Preservable trivia: render it and wrap in a SeparatorSpec carrying the preserved Doc.
         # When `_has_preservable_trivia` confirmed comments exist but `unparse__trivia` returns
@@ -1483,7 +1818,6 @@ class RustUnparserGenerator:
             )
         )
         lines.append(f"{i5}}} else {{")
-        rule_lit = rust_str_lit(rule_name)
         lines.append(
             f'{i6}panic!("unparse_{rule_lit}: trivia at child position {{}} has preservable '
             f'comments but unparse__trivia returned None; refusing to silently drop comments", pos);'
@@ -1509,19 +1843,25 @@ class RustUnparserGenerator:
             )
         )
         lines.append(f"{i4}}}")
-        # Always advance past the consumed Trivia child (Python :1402).
+        lines.append(f"{i4}cur = Self::_cursor_after(cur, node.span(), trivia_node.span());")
         lines.append(f"{i4}pos += 1;")
+        # The child at pos is a Trivia node this gap does not own: emit default spacing and
+        # leave the child for the gap that does.
+        lines.append(f"{i3}}} else if !acc.last_was_trivia() {{")
+        lines.extend(self._add_default_separator_spec_lines(rule_name, separator, i4))
         lines.append(f"{i3}}}")
+        lines.append(f"{i2}}}")
         if num_variants > 1:
             # Child at pos is not a Trivia node: default separator spacing (Python if_trivia.orelse).
-            lines.append(f"{i3}_ => {{")
+            lines.append(f"{i2}_ => {{")
+            lines.append(f"{i3}if !acc.last_was_trivia() {{")
             lines.extend(self._add_default_separator_spec_lines(rule_name, separator, i4))
             lines.append(f"{i3}}}")
-        lines.append(f"{i2}}}")
-        lines.append(f"{i1}}} else {{")
-        # Out of bounds: default separator spacing (Python if_in_bounds.orelse).
-        lines.extend(self._add_default_separator_spec_lines(rule_name, separator, i2))
+            lines.append(f"{i2}}}")
         lines.append(f"{i1}}}")
+        # Out of bounds: default separator spacing (Python if_in_bounds.orelse).
+        lines.append(f"{i0}}} else if !acc.last_was_trivia() {{")
+        lines.extend(self._add_default_separator_spec_lines(rule_name, separator, i1))
         lines.append(f"{i0}}}")
         return lines
 

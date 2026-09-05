@@ -2745,6 +2745,259 @@ fn trivia_that_is_not_whitespace_counts_no_newlines_of_its_own() {
 }
 """
 
+# Which gap a Trivia child was written in, around a *suppressed* terminator. The parser pushes a
+# Trivia child only where whitespace or a comment matched, and a suppressed literal contributes no
+# child, so the children are not index-aligned with the alternative's separators: the gap before
+# `%";"` is empty in every one of these inputs, and taking the trivia that follows the `;` there
+# is what strands the terminator on a line of its own. `list` ends on a suppressed `]` and
+# `opt_tail` on an absent optional, the two shapes whose accumulators end differently at the
+# terminator's gap.
+TRIVIA_OWNERSHIP_GRAMMAR = (
+    "doc := stmt* ;\n"
+    'stmt := val:value , %";" , ;\n'
+    "value := list:list | opt:opt_tail ;\n"
+    'list := %"[" , word:word , %"]" ;\n'
+    "opt_tail := word:word , tail:list? ;\n"
+    "word := chars:/[a-z]+/ ;\n"
+    "_trivia := ( line_comment | line_comment? : )+ ;\n"
+    'line_comment := prefix:"//" . text:/[^\\n]*/ . nl:"\\n" ;\n'
+)
+
+TRIVIA_OWNERSHIP_FORMATTER = (
+    "preserve_blanks: 1;\ntrivia_preserve: LineComment;\nws_allowed: nil;\n"
+    "ws_required: bsp;\nrule _trivia { ws_required: nbsp; }\n"
+)
+
+TRIVIA_OWNERSHIP_RUNTIME = """//! Trivia binds to the gap it was written in, around a suppressed terminator.
+
+use super::cst;
+use super::parser::Parser;
+use super::unparser::Unparser;
+use ::fltk_unparser_core::{resolve_spacing_specs, Renderer, RendererConfig};
+
+fn parse(src: &str) -> ::fltk_cst_core::Shared<cst::Doc> {
+    parse_with_span(src, 0, 0).0
+}
+
+/// Parse, and mint a span over `[start, end)` of *the parse's own* source.
+///
+/// The span shares the parser's `SourceText`, which is what makes it a same-source mutation
+/// rather than a foreign-source one; a `SourceText` built separately from equal text is a
+/// different source and takes the other fallback path.
+fn parse_with_span(
+    src: &str,
+    start: i64,
+    end: i64,
+) -> (::fltk_cst_core::Shared<cst::Doc>, ::fltk_cst_core::Span) {
+    let mut parser = Parser::new(src, None, true);
+    let parsed = parser.apply__parse_doc(0).expect("the document must parse");
+    assert!(parsed.pos as usize == src.len(), "the parse must consume {src:?}");
+    let span = ::fltk_cst_core::Span::new_with_source(start, end, parser.terminals().source_text());
+    (parsed.result, span)
+}
+
+/// The `Shared` handle for statement `idx` of a document.
+fn stmt_of(doc: &::fltk_cst_core::Shared<cst::Doc>, idx: usize) -> ::fltk_cst_core::Shared<cst::Stmt> {
+    let guard = doc.read();
+    let (_, child) = &guard.children()[idx];
+    let cst::DocChild::Stmt(shared) = child;
+    shared.clone()
+}
+
+fn render(doc: &::fltk_cst_core::Shared<cst::Doc>) -> String {
+    let guard = doc.read();
+    let unparsed = Unparser::new()
+        .unparse_doc(&guard)
+        .expect("a parser-produced CST must unparse");
+    let resolved = resolve_spacing_specs(unparsed.doc());
+    Renderer::new(RendererConfig {
+        indent_width: 2,
+        max_width: 80,
+    })
+    .render(&resolved)
+}
+
+fn format(src: &str) -> String {
+    render(&parse(src))
+}
+
+/// The formatter's output is a fixed point: formatting it again changes nothing.
+fn format_twice(src: &str) -> String {
+    let once = format(src);
+    assert_eq!(format(&once), once, "the layout must be a fixed point");
+    once
+}
+
+/// The value child of a statement -- the item whose span the cursor advances over.
+fn value_of(stmt: &::fltk_cst_core::Shared<cst::Stmt>) -> ::fltk_cst_core::Shared<cst::Value> {
+    let guard = stmt.read();
+    let (_, child) = &guard.children()[0];
+    match child {
+        cst::StmtChild::Value(shared) => shared.clone(),
+        _ => panic!("the first child of a statement is its value"),
+    }
+}
+
+/// The trivia child of a statement.
+fn trivia_of(stmt: &::fltk_cst_core::Shared<cst::Stmt>) -> ::fltk_cst_core::Shared<cst::Trivia> {
+    let guard = stmt.read();
+    let (_, child) = &guard.children()[1];
+    match child {
+        cst::StmtChild::Trivia(shared) => shared.clone(),
+        _ => panic!("the second child of these statements is their trivia"),
+    }
+}
+
+#[test]
+fn a_blank_line_after_the_terminator_stays_after_it() {
+    assert_eq!(format_twice("a;\n\nb;\n"), "a;\n\nb;\n");
+}
+
+#[test]
+fn a_value_ending_on_a_suppressed_closer_keeps_its_terminator_too() {
+    assert_eq!(format_twice("[a];\n\nb;\n"), "[a];\n\nb;\n");
+}
+
+#[test]
+fn a_value_ending_on_an_absent_optional_keeps_its_terminator_too() {
+    assert_eq!(format_twice("a [b];\n\nc;\n"), "a[b];\n\nc;\n");
+}
+
+#[test]
+fn a_comment_after_the_terminator_stays_after_it() {
+    assert_eq!(format_twice("a; // c\nb;\n"), "a; // c\nb;\n");
+}
+
+#[test]
+fn a_comment_before_the_terminator_stays_before_it() {
+    assert_eq!(format_twice("a // c\n;\nb;\n"), "a // c\n;\nb;\n");
+}
+
+#[test]
+fn whitespace_before_the_terminator_collapses() {
+    assert_eq!(format_twice("a ;\nb;\n"), "a;\nb;\n");
+}
+
+#[test]
+fn a_sourceless_node_span_falls_back_to_child_order() {
+    // A hand-built or mutated tree: the cursor cannot decide ownership, so trivia is taken in
+    // child order -- and nothing panics.
+    let doc = parse("[a];\n\nb;\n");
+    let stmt = stmt_of(&doc, 0);
+    stmt.write().set_span(::fltk_cst_core::Span::new_sourceless(0, 4));
+    assert_eq!(render(&doc), "[a]\n\n;b;\n");
+}
+
+#[test]
+fn a_child_span_behind_the_cursor_falls_back_to_child_order() {
+    // A mutator repoints a child at earlier text in the same source: the cursor cannot be both
+    // past this statement's start and before its first child, so it goes unknown instead of
+    // answering ownership from a position it no longer trusts.
+    let (doc, earlier) = parse_with_span("[a];\n\n[b];\n", 0, 3);
+    value_of(&stmt_of(&doc, 1)).write().set_span(earlier);
+    assert_eq!(render(&doc), "[a];\n\n[b]\n;");
+}
+
+#[test]
+fn an_inverted_child_span_falls_back_to_child_order() {
+    // A span that ends before it starts describes no region of the source; the first statement,
+    // untouched, keeps its exact cursor.
+    let (doc, inverted) = parse_with_span("[a];\n\n[b];\n", 9, 6);
+    value_of(&stmt_of(&doc, 1)).write().set_span(inverted);
+    assert_eq!(render(&doc), "[a];\n\n[b]\n;");
+}
+
+#[test]
+#[should_panic(expected = "was claimed by no separator")]
+fn trivia_no_gap_claims_is_refused_not_dropped() {
+    // The drop guard: a comment-bearing trivia child moved past every gap of its statement is
+    // claimed by nobody, and the unparse halts rather than rendering the comment away.
+    let (doc, past_every_gap) = parse_with_span("a; // c\nb;\n", 9, 10);
+    trivia_of(&stmt_of(&doc, 0)).write().set_span(past_every_gap);
+    render(&doc);
+}
+
+#[test]
+#[should_panic(expected = "starts at 0, behind the source cursor 1 (line 1, col 1)")]
+fn trivia_behind_the_cursor_is_refused_with_its_position() {
+    // Trivia the walk already stepped over is an inconsistency, not an empty gap: say where it
+    // is rather than fail the alternative on the unconsumed child.
+    let (doc, behind) = parse_with_span("a; // c\nb;\n", 0, 8);
+    trivia_of(&stmt_of(&doc, 0)).write().set_span(behind);
+    render(&doc);
+}
+"""
+
+# A literal that occupies source but no child position advances the cursor only when the source
+# there really spells it. An unlabeled alternation of equivalent spellings renders its canonical
+# one, so unparsing `use` under `("import" | "use")` emits `import` over three fewer codepoints:
+# how much source the token occupies is then unknown, the cursor is, and trivia falls back to
+# child order for the rest of that rule node -- the behaviour with no cursor at all.
+LITERAL_CANONICALIZATION_GRAMMAR = (
+    "doc := kw:kw_stmt* ;\n"
+    'kw_stmt := ( "import" | "use" ) : name:word , %";" , ;\n'
+    "word := chars:/[a-z]+/ ;\n"
+    "_trivia := ( line_comment | line_comment? : )+ ;\n"
+    'line_comment := prefix:"//" . text:/[^\\n]*/ . nl:"\\n" ;\n'
+)
+
+LITERAL_CANONICALIZATION_FORMATTER = (
+    "preserve_blanks: 1;\ntrivia_preserve: LineComment;\nws_allowed: nil;\n"
+    "ws_required: nbsp;\nrule _trivia { ws_required: nbsp; }\n"
+)
+
+LITERAL_CANONICALIZATION_RUNTIME = """//! A canonicalized spelling costs the cursor, and costs nothing else.
+
+use super::parser::Parser;
+use super::unparser::Unparser;
+use ::fltk_unparser_core::{resolve_spacing_specs, Renderer, RendererConfig};
+
+fn format(src: &str) -> String {
+    let mut parser = Parser::new(src, None, true);
+    let parsed = parser.apply__parse_doc(0).expect("the document must parse");
+    assert!(parsed.pos as usize == src.len(), "the parse must consume {src:?}");
+    let guard = parsed.result.read();
+    let unparsed = Unparser::new()
+        .unparse_doc(&guard)
+        .expect("a parser-produced CST must unparse");
+    let resolved = resolve_spacing_specs(unparsed.doc());
+    Renderer::new(RendererConfig {
+        indent_width: 2,
+        max_width: 80,
+    })
+    .render(&resolved)
+}
+
+/// The formatter's output is a fixed point: formatting it again changes nothing.
+fn format_twice(src: &str) -> String {
+    let once = format(src);
+    assert_eq!(format(&once), once, "the layout must be a fixed point");
+    once
+}
+
+#[test]
+fn the_canonical_spelling_keeps_the_cursor_exact() {
+    let rendered = format_twice("import x;\n\nimport y;\n");
+    assert_eq!(rendered, "import x;\n\nimport y;\n");
+}
+
+#[test]
+fn a_rewritten_spelling_falls_back_to_child_order() {
+    // `use` renders as `import`, so the source and the emitted text part company and the cursor
+    // goes unknown for the rest of that statement: its trailing trivia is taken in child order,
+    // which is where the terminator lands behind it. Never worse than a cursorless unparser, and
+    // the following statement's cursor is exact again.
+    let rendered = format_twice("use x;\n\nimport y;\n");
+    assert_eq!(rendered, "import x\n\n;import y;\n");
+}
+
+#[test]
+fn a_rewritten_spelling_still_keeps_every_comment() {
+    let rendered = format_twice("use x; // c\nuse y;\n");
+    assert!(rendered.contains("// c"), "the comment must survive: {rendered}");
+}
+"""
+
 # The same path with comments actually preserved: a line comment's terminating newline lives in
 # the comment child's span, so the blank counting has to add it back.
 PRESERVED_COMMENT_BLANKS_GRAMMAR = (
@@ -3144,6 +3397,28 @@ CASES = [
         parser=True,
         unparser=True,
         formatter=RULE_LEVEL_BLANKS_FORMATTER,
+        goal="doc",
+    ),
+    # Which gap a Trivia child belongs to, around a suppressed terminator.
+    Case(
+        "trivia_ownership",
+        TRIVIA_OWNERSHIP_GRAMMAR,
+        runtime=TRIVIA_OWNERSHIP_RUNTIME,
+        ast=False,
+        parser=True,
+        unparser=True,
+        formatter=TRIVIA_OWNERSHIP_FORMATTER,
+        goal="doc",
+    ),
+    # A literal whose emitted text differs from the source it stands over.
+    Case(
+        "literal_canonicalization",
+        LITERAL_CANONICALIZATION_GRAMMAR,
+        runtime=LITERAL_CANONICALIZATION_RUNTIME,
+        ast=False,
+        parser=True,
+        unparser=True,
+        formatter=LITERAL_CANONICALIZATION_FORMATTER,
         goal="doc",
     ),
     # A repetition the validator refuses, generated anyway, so the loop guard is run.

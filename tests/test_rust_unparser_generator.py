@@ -273,18 +273,19 @@ def test_alternative_and_item_method_signatures() -> None:
     """Each alternative gets a __alt{N} body method and one __alt{N}__item{M} method per item."""
     src = RustUnparserGenerator(parse_grammar(_SIMPLE_GRAMMAR)).generate()
     assert (
-        "fn unparse_greeting__alt0(&self, node: &cst::Greeting, pos: usize, acc: DocAccumulator) "
+        "fn unparse_greeting__alt0(&self, node: &cst::Greeting, pos: usize, cur: Option<i64>, acc: DocAccumulator) "
         "-> Option<UnparseResult> {"
     ) in src
     # One item ("hello", a default-suppressed literal) => one per-item method with the same
-    # threaded signature.  The suppressed-literal body never reads the CST node, so its `node`
-    # parameter is named `_node` (unused-variable clean under -D warnings).
+    # threaded signature.  The body reads the node's span to check the source at the cursor
+    # against the literal, so the `node` parameter is used.
     assert (
-        "fn unparse_greeting__alt0__item0(&self, _node: &cst::Greeting, pos: usize, acc: DocAccumulator) "
+        "fn unparse_greeting__alt0__item0(&self, node: &cst::Greeting, pos: usize, cur: Option<i64>, "
+        "acc: DocAccumulator) "
         "-> Option<UnparseResult> {"
     ) in src
     # Both the alt body and the item method terminate by returning an UnparseResult.
-    assert "Some(UnparseResult::new(acc, pos))" in src
+    assert "Some(UnparseResult::with_cursor(acc, pos, cur))" in src
 
 
 def test_required_item_threads_accumulator_with_question_mark() -> None:
@@ -293,7 +294,7 @@ def test_required_item_threads_accumulator_with_question_mark() -> None:
     # The alt body threads pos/acc through the item method.
     assert "let mut pos = pos;" in src
     assert "let mut acc = acc;" in src
-    assert "let r = self.unparse_greeting__alt0__item0(node, pos, acc)?;" in src
+    assert "let r = self.unparse_greeting__alt0__item0(node, pos, cur, acc)?;" in src
     assert "pos = r.new_pos;" in src
     assert "acc = r.accumulator;" in src
 
@@ -303,9 +304,9 @@ def test_optional_item_keeps_prior_accumulator() -> None:
     # `.` is the NO_WS item separator; item0 is optional, item1 required.
     src = RustUnparserGenerator(parse_grammar('opt := "a"? . "b";')).generate()
     # Optional item0: clone acc, keep prior acc/pos if the item is absent.
-    assert "if let Some(r) = self.unparse_opt__alt0__item0(node, pos, acc.clone()) {" in src
+    assert "if let Some(r) = self.unparse_opt__alt0__item0(node, pos, cur, acc.clone()) {" in src
     # Required item1: moved-acc `?` dispatch.
-    assert "let r = self.unparse_opt__alt0__item1(node, pos, acc)?;" in src
+    assert "let r = self.unparse_opt__alt0__item1(node, pos, cur, acc)?;" in src
     # Both items get a per-item method.
     assert "fn unparse_opt__alt0__item0(" in src
     assert "fn unparse_opt__alt0__item1(" in src
@@ -314,7 +315,7 @@ def test_optional_item_keeps_prior_accumulator() -> None:
 def test_single_alternative_dispatch_moves_accumulator() -> None:
     """A one-alternative rule dispatches by moving acc (no clone) and returns the result as-is."""
     src = RustUnparserGenerator(parse_grammar(_SIMPLE_GRAMMAR)).generate()
-    assert "if let Some(r) = self.unparse_greeting__alt0(node, 0, acc) {" in src
+    assert "if let Some(r) = self.unparse_greeting__alt0(node, 0, cur, acc) {" in src
     assert "return Some(r);" in src
     # No anchors in the default config => no pop chain on the result accumulator.
     assert "r.accumulator.pop_" not in src
@@ -323,8 +324,8 @@ def test_single_alternative_dispatch_moves_accumulator() -> None:
 def test_multiple_alternatives_clone_then_move() -> None:
     """A multi-alternative rule clones acc for every attempt but the last, which moves it."""
     src = RustUnparserGenerator(parse_grammar('choice := "a" | "b";')).generate()
-    assert "if let Some(r) = self.unparse_choice__alt0(node, 0, acc.clone()) {" in src
-    assert "if let Some(r) = self.unparse_choice__alt1(node, 0, acc) {" in src
+    assert "if let Some(r) = self.unparse_choice__alt0(node, 0, cur, acc.clone()) {" in src
+    assert "if let Some(r) = self.unparse_choice__alt1(node, 0, cur, acc) {" in src
     assert "fn unparse_choice__alt0(" in src
     assert "fn unparse_choice__alt1(" in src
 
@@ -363,7 +364,7 @@ def test_rule_start_and_end_anchors_emit_push_pop() -> None:
     assert "let acc = acc.push_nest(2);" in src
     # RULE_END: the success path pops in config order and rebuilds the result.
     assert "let acc = r.accumulator.pop_nest().pop_group();" in src
-    assert "return Some(UnparseResult::new(acc, r.new_pos));" in src
+    assert "return Some(UnparseResult::with_cursor(acc, r.new_pos, r.cursor));" in src
 
 
 def test_nest_begin_without_indent_defaults_to_one() -> None:
@@ -491,8 +492,8 @@ def test_empty_alternative_body_is_passthrough() -> None:
     # The zero-item body never reads the CST node, so its parameter is named `_node`
     # (unused-variable clean under -D warnings); guards the `"node" if alt.items else "_node"`
     # branch against being dropped or inverted.
-    assert "fn unparse_r__alt0(&self, _node: &cst::R, pos: usize, acc: DocAccumulator)" in body
-    assert "Some(UnparseResult::new(acc, pos))" in body
+    assert "fn unparse_r__alt0(&self, _node: &cst::R, pos: usize, cur: Option<i64>, acc: DocAccumulator)" in body
+    assert "Some(UnparseResult::with_cursor(acc, pos, cur))" in body
     assert "let mut pos = pos;" not in body
     assert "let mut acc = acc;" not in body
 
@@ -508,39 +509,43 @@ def test_suppressed_required_literal_reemits_text() -> None:
     item = gsm.Item(label=None, disposition=gsm.Disposition.SUPPRESS, term=gsm.Literal("hi"), quantifier=gsm.REQUIRED)
     assert gen._gen_suppressed_item_body(item) == [
         '        let acc = acc.add_non_trivia(fltk_unparser_core::text("hi"));',
-        "        Some(UnparseResult::new(acc, pos))",
+        '        Some(UnparseResult::with_cursor(acc, pos, Self::_cursor_expect(cur, node.span(), "hi")))',
     ]
 
 
-def test_suppressed_node_literal_names_param_underscore() -> None:
-    """A required-suppressed literal whose text is `node` still names its unused param `_node`.
+def test_suppressed_node_literal_body_reads_the_node() -> None:
+    """A required-suppressed literal whose text is `node` names its param `node` because it is used.
 
-    Regression for the `_node_param` string-literal false-match: the item body emits
-    `text("node")` and reads the CST node nowhere, but a naive `\\bnode\\b` scan matches the
-    `node` *inside the string literal* and names an unused `node` parameter -- which fails clippy
-    `unused_variables` under `-D warnings`.  `kw := "node";` is a bare (default-suppressed)
-    required literal whose text is exactly `node`.
+    The body emits `text("node")` *and* reads `node.span()` for the cursor's source check, so
+    the parameter is genuinely used.  The `_node_param` string-literal blanking still matters:
+    it is what decides the question from the real uses rather than from the `node` inside the
+    string literal.  `kw := "node";` is a bare (default-suppressed) required literal whose text
+    is exactly `node`.
     """
     src = RustUnparserGenerator(parse_grammar('kw := "node";')).generate()
-    assert "fn unparse_kw__alt0__item0(&self, _node: &cst::Kw, pos: usize, acc: DocAccumulator)" in src
+    assert (
+        "fn unparse_kw__alt0__item0(&self, node: &cst::Kw, pos: usize, cur: Option<i64>, acc: DocAccumulator)"
+    ) in src
     # The suppressed text is still re-emitted.
     assert 'let acc = acc.add_non_trivia(fltk_unparser_core::text("node"));' in src
 
 
-def test_quantified_inline_literal_inner_uses_underscore_node() -> None:
-    """A multiple-quantified INLINE literal's __inner method names its unused node param `_node`.
+def test_quantified_inline_literal_inner_names_its_node_param_from_use() -> None:
+    """A multiple-quantified INLINE literal's __inner method names its node param from real uses.
 
-    The inner body re-emits fixed literal text and never reads the CST node, so
-    `_gen_inner_methods` must apply `_node_param` and emit `_node` -- hardcoding `node` would
-    fail clippy `unused_variables` under `-D warnings`.  An INLINE literal is not constructible
-    through the grammar path (the CST builder asserts INLINE => Identifier), so the item is built
-    directly, mirroring the other unit-level term-body tests.
+    `_gen_inner_methods` applies `_node_param`, which blanks Rust string-literal content before
+    deciding: a body that emits `text("node")` and nothing else would still get `_node`.  This
+    body reads `node.span()` for the cursor's source check, so the name is `node`.  An INLINE
+    literal is not constructible through the grammar path (the CST builder asserts INLINE =>
+    Identifier), so the item is built directly, mirroring the other unit-level term-body tests.
     """
     gen = _gen()
     item = gsm.Item(label=None, disposition=gsm.Disposition.INLINE, term=gsm.Literal("x"), quantifier=gsm.ONE_OR_MORE)
     blocks = gen._gen_inner_methods("unparse_r__alt0__item0", "r", "R", item)
     inner_sig = blocks[0].splitlines()[0]
-    assert "fn unparse_r__alt0__item0__inner(&self, _node: &cst::R, pos: usize, acc: DocAccumulator)" in inner_sig
+    assert (
+        "fn unparse_r__alt0__item0__inner(&self, node: &cst::R, pos: usize, cur: Option<i64>, acc: DocAccumulator)"
+    ) in inner_sig
 
 
 def test_suppressed_literal_text_is_escaped() -> None:
@@ -557,7 +562,7 @@ def test_suppressed_optional_item_emits_nothing() -> None:
         label=None, disposition=gsm.Disposition.SUPPRESS, term=gsm.Literal("x"), quantifier=gsm.NOT_REQUIRED
     )
     body = gen._gen_suppressed_item_body(item)
-    assert body == ["        Some(UnparseResult::new(acc, pos))"]
+    assert body == ['        Some(UnparseResult::with_cursor(acc, pos, Self::_cursor_probe(cur, node.span(), "x")))']
     assert "add_non_trivia" not in "\n".join(body)
 
 
@@ -640,7 +645,7 @@ def test_include_labeled_literal_single_variant_emits_extraction_and_advance() -
     assert "let cst::RChild::Span(span) = &child_tuple.1;" in src
     assert 'if span.text_str().is_some_and(|t| !matches!(t, "x")) {' in src
     assert 'let acc = acc.add_non_trivia(fltk_unparser_core::text("x"));' in src
-    assert "Some(UnparseResult::new(acc, pos + 1))" in src
+    assert ("Some(UnparseResult::with_cursor(acc, pos + 1, Self::_cursor_after(cur, node.span(), span)))") in src
     # Single-variant (Span-only) enum: no variant match / catch-all is emitted.
     assert "_ => return None," not in src
 
@@ -660,27 +665,27 @@ def test_include_labeled_literal_multi_variant_emits_span_match_with_catchall() 
     assert "_ => return None," in src
     assert 'if span.text_str().is_some_and(|t| !matches!(t, "x")) {' in src
     assert 'let acc = acc.add_non_trivia(fltk_unparser_core::text("x"));' in src
-    assert "Some(UnparseResult::new(acc, pos + 1))" in src
+    assert ("Some(UnparseResult::with_cursor(acc, pos + 1, Self::_cursor_after(cur, node.span(), span)))") in src
 
 
 def test_include_unlabeled_literal_single_variant_emits_bounds_only() -> None:
     """An unlabeled INCLUDE literal in a Span-only rule emits just the bounds check.
 
     Rule `r := $"x";` -> include disposition, no label, RChild = {Span}.  No label check
-    and no variant match are needed; the validation is the bounds check alone, then the
-    text re-emission with `pos + 1`.
+    and no variant match are needed; the validation is the bounds check plus the irrefutable
+    span binding the cursor advance reads, then the text re-emission with `pos + 1`.
     """
     src = RustUnparserGenerator(parse_grammar('r := $"x";')).generate()
     # Scope to the r item method: the synthetic _trivia rule binds child_tuple + matches.
     body = _method_body(src, "unparse_r__alt0__item0")
     assert "let children = node.children();" in body
     assert "if pos >= children.len() {" in body
-    # No label => no label check; single Span variant => no child_tuple binding / match.
-    assert "child_tuple" not in body
+    assert "let cst::RChild::Span(span) = &child_tuple.1;" in body
+    # No label => no label check; single Span variant => no variant match.
     assert "child_tuple.0 != Some" not in body
     assert "match &child_tuple.1 {" not in body
     assert 'let acc = acc.add_non_trivia(fltk_unparser_core::text("x"));' in body
-    assert "Some(UnparseResult::new(acc, pos + 1))" in body
+    assert ("Some(UnparseResult::with_cursor(acc, pos + 1, Self::_cursor_after(cur, node.span(), span)))") in body
 
 
 def test_include_literal_text_is_escaped() -> None:
@@ -702,7 +707,7 @@ def test_inline_literal_body_emits_text_without_advance() -> None:
     body = gen._gen_literal_term_body("r", "R", item)
     assert body == [
         '        let acc = acc.add_non_trivia(fltk_unparser_core::text("x"));',
-        "        Some(UnparseResult::new(acc, pos))",
+        '        Some(UnparseResult::with_cursor(acc, pos, Self::_cursor_expect(cur, node.span(), "x")))',
     ]
     joined = "\n".join(body)
     assert "pos + 1" not in joined
@@ -749,7 +754,7 @@ def test_identifier_single_variant_extracts_and_calls_ref_rule() -> None:
     assert "let guard = shared.read();" in src
     assert "let child_result = self.unparse_other(&guard)?;" in src
     assert "let acc = acc.add_accumulator(&child_result.accumulator);" in src
-    assert "Some(UnparseResult::new(acc, pos + 1))" in src
+    assert ("Some(UnparseResult::with_cursor(acc, pos + 1, Self::_cursor_after(cur, node.span(), span)))") in src
 
 
 def test_identifier_multi_variant_emits_catchall() -> None:
@@ -873,7 +878,7 @@ def test_regex_single_variant_reads_span_text_and_advances() -> None:
     assert "span.text()?;" not in _method_body(src, "unparse_r__alt0__item0")
     # Regex text comes from the span, re-emitted via the free-function text constructor.
     assert "let acc = acc.add_non_trivia(fltk_unparser_core::text(text));" in src
-    assert "Some(UnparseResult::new(acc, pos + 1))" in src
+    assert ("Some(UnparseResult::with_cursor(acc, pos + 1, Self::_cursor_after(cur, node.span(), span)))") in src
     # Single-variant (Span-only) enum: no catch-all arm. Scoped to the rule under test: the
     # synthetic _trivia rule is independent and must not confound this negative assertion.
     assert "_ => return None," not in _method_body(src, "unparse_r__alt0__item0")
@@ -917,7 +922,7 @@ def test_regex_unlabeled_single_variant_emits_bounds_and_bind() -> None:
     assert "_ => return None," not in body
     assert "let Some(text) = span.text() else {" in body
     assert _expected_span_text_panic("r", "(unlabeled)") in body
-    assert "Some(UnparseResult::new(acc, pos + 1))" in body
+    assert ("Some(UnparseResult::with_cursor(acc, pos + 1, Self::_cursor_after(cur, node.span(), span)))") in body
 
 
 def test_regex_term_body_unit_single_variant() -> None:
@@ -930,7 +935,7 @@ def test_regex_term_body_unit_single_variant() -> None:
     assert _expected_span_text_panic("r", "label `foo`") in body
     assert "span.text()?;" not in body
     assert "let acc = acc.add_non_trivia(fltk_unparser_core::text(text));" in body
-    assert "Some(UnparseResult::new(acc, pos + 1))" in body
+    assert ("Some(UnparseResult::with_cursor(acc, pos + 1, Self::_cursor_after(cur, node.span(), span)))") in body
     # Single variant => irrefutable `let` bind, no match and no catch-all.
     assert "match &child_tuple.1 {" not in body
     assert "_ => return None," not in body
@@ -1009,20 +1014,21 @@ def test_subexpr_item_delegates_to_alts_dispatch() -> None:
     src = RustUnparserGenerator(parse_grammar('r := ("x" . "y");')).generate()
     # The item method delegates straight to the __alts dispatch (no child extraction here).
     item_body = _method_body(src, "unparse_r__alt0__item0")
-    assert "self.unparse_r__alt0__item0__alts(node, pos, acc)" in item_body
+    assert "self.unparse_r__alt0__item0__alts(node, pos, cur, acc)" in item_body
     assert "node.children()" not in item_body  # sub-expr items do no child validation
     # The __alts dispatch method exists and tries its (single) alternative from passed pos.
     assert (
-        "fn unparse_r__alt0__item0__alts(&self, node: &cst::R, pos: usize, acc: DocAccumulator) "
+        "fn unparse_r__alt0__item0__alts(&self, node: &cst::R, pos: usize, cur: Option<i64>, acc: DocAccumulator) "
         "-> Option<UnparseResult> {"
     ) in src
-    assert "if let Some(r) = self.unparse_r__alt0__item0__alts__alt0(node, pos, acc) {" in src
+    assert "if let Some(r) = self.unparse_r__alt0__item0__alts__alt0(node, pos, cur, acc) {" in src
     # The __alts dispatch falls through to the `None` all-alternatives-failed terminator (a
     # missing terminator would emit Rust that fails to compile on the exhausted-alts path).
     assert "        None" in _method_body(src, "unparse_r__alt0__item0__alts")
     # The nested alternative body + its (two suppressed-literal) item methods are emitted.
     assert (
-        "fn unparse_r__alt0__item0__alts__alt0(&self, node: &cst::R, pos: usize, acc: DocAccumulator) "
+        "fn unparse_r__alt0__item0__alts__alt0(&self, node: &cst::R, pos: usize, cur: Option<i64>, "
+        "acc: DocAccumulator) "
         "-> Option<UnparseResult> {"
     ) in src
     assert "fn unparse_r__alt0__item0__alts__alt0__item0(" in src
@@ -1041,10 +1047,10 @@ def test_subexpr_multi_alt_dispatch_clones_acc_and_handles_inner_labels() -> Non
     the *enclosing* rule's label enum (sub-expression labels flatten into ``RLabel``).
     """
     src = RustUnparserGenerator(parse_grammar('r := (a:"x" | b:"y");')).generate()
-    assert "self.unparse_r__alt0__item0__alts(node, pos, acc)" in src
+    assert "self.unparse_r__alt0__item0__alts(node, pos, cur, acc)" in src
     # Two nested alternatives: clone acc for alt0, move it for the last alt1.
-    assert "if let Some(r) = self.unparse_r__alt0__item0__alts__alt0(node, pos, acc.clone()) {" in src
-    assert "if let Some(r) = self.unparse_r__alt0__item0__alts__alt1(node, pos, acc) {" in src
+    assert "if let Some(r) = self.unparse_r__alt0__item0__alts__alt0(node, pos, cur, acc.clone()) {" in src
+    assert "if let Some(r) = self.unparse_r__alt0__item0__alts__alt1(node, pos, cur, acc) {" in src
     # Inner labeled literals check labels against the enclosing rule's flattened label enum.
     assert "if child_tuple.0 != Some(cst::RLabel::A) {" in src
     assert "if child_tuple.0 != Some(cst::RLabel::B) {" in src
@@ -1063,11 +1069,11 @@ def test_subexpr_nested_recursion_emits_doubly_nested_alts() -> None:
     # Outer sub-expression's second alternative (item0) is itself a sub-expression.
     inner_item_fn = "unparse_r__alt0__item0__alts__alt1__item0"
     inner_body = _method_body(src, inner_item_fn)
-    assert f"self.{inner_item_fn}__alts(node, pos, acc)" in inner_body
+    assert f"self.{inner_item_fn}__alts(node, pos, cur, acc)" in inner_body
     # The deeper __alts dispatch and its two alternatives are emitted.
-    assert f"fn {inner_item_fn}__alts(&self, node: &cst::R, pos: usize, acc: DocAccumulator) " in src
-    assert f"if let Some(r) = self.{inner_item_fn}__alts__alt0(node, pos, acc.clone()) {{" in src
-    assert f"if let Some(r) = self.{inner_item_fn}__alts__alt1(node, pos, acc) {{" in src
+    assert f"fn {inner_item_fn}__alts(&self, node: &cst::R, pos: usize, cur: Option<i64>, acc: DocAccumulator) " in src
+    assert f"if let Some(r) = self.{inner_item_fn}__alts__alt0(node, pos, cur, acc.clone()) {{" in src
+    assert f"if let Some(r) = self.{inner_item_fn}__alts__alt1(node, pos, cur, acc) {{" in src
     # The deepest inner literals re-emit their text.
     assert 'let acc = acc.add_non_trivia(fltk_unparser_core::text("y"));' in src
     assert 'let acc = acc.add_non_trivia(fltk_unparser_core::text("z"));' in src
@@ -1077,7 +1083,7 @@ def test_subexpr_term_body_is_just_the_alts_call() -> None:
     """Unit: ``_gen_subexpr_term_body`` emits only the ``{item_prefix}__alts`` delegation line."""
     gen = _gen()
     assert gen._gen_subexpr_term_body("unparse_r__alt0__item0") == [
-        "        self.unparse_r__alt0__item0__alts(node, pos, acc)"
+        "        self.unparse_r__alt0__item0__alts(node, pos, cur, acc)"
     ]
 
 
@@ -1132,18 +1138,22 @@ def test_plus_quantifier_emits_loop_with_min_check() -> None:
     src = RustUnparserGenerator(parse_grammar('r := foo:"x"+;')).generate()
     body = _method_body(src, "unparse_r__alt0__item0")
     assert "let mut current_pos = pos;" in body
+    assert "let mut current_cur = cur;" in body
     assert "let mut acc = acc;" in body
     assert "let mut match_count = 0usize;" in body
     assert "while current_pos < node.children().len() {" in body
-    assert "let Some(r) = self.unparse_r__alt0__item0__inner(node, current_pos, acc.clone()) else {" in body
+    assert (
+        "let Some(r) = self.unparse_r__alt0__item0__inner(node, current_pos, current_cur, acc.clone()) else {"
+    ) in body
     assert "break;" in body
     assert "acc = r.accumulator;" in body
     assert "current_pos = r.new_pos;" in body
+    assert "current_cur = r.cursor;" in body
     assert "match_count += 1;" in body
     # + quantifier: fail the item when no occurrence matched.
     assert "if match_count == 0 {" in body
     assert "return None;" in body
-    assert "Some(UnparseResult::new(acc, current_pos))" in body
+    assert "Some(UnparseResult::with_cursor(acc, current_pos, current_cur))" in body
 
 
 def test_star_quantifier_omits_min_check() -> None:
@@ -1156,8 +1166,10 @@ def test_star_quantifier_omits_min_check() -> None:
     src = RustUnparserGenerator(parse_grammar('r := foo:"x"*;')).generate()
     body = _method_body(src, "unparse_r__alt0__item0")
     assert "while current_pos < node.children().len() {" in body
-    assert "let Some(r) = self.unparse_r__alt0__item0__inner(node, current_pos, acc.clone()) else {" in body
-    assert "Some(UnparseResult::new(acc, current_pos))" in body
+    assert (
+        "let Some(r) = self.unparse_r__alt0__item0__inner(node, current_pos, current_cur, acc.clone()) else {"
+    ) in body
+    assert "Some(UnparseResult::with_cursor(acc, current_pos, current_cur))" in body
     # * quantifier: no match counter and no minimum-occurrence check.
     assert "match_count" not in body
     assert "if match_count == 0 {" not in body
@@ -1172,13 +1184,13 @@ def test_quantified_loop_emits_inner_method_with_literal_term_body() -> None:
     """
     src = RustUnparserGenerator(parse_grammar('r := foo:"x"+;')).generate()
     assert (
-        "fn unparse_r__alt0__item0__inner(&self, node: &cst::R, pos: usize, acc: DocAccumulator) "
+        "fn unparse_r__alt0__item0__inner(&self, node: &cst::R, pos: usize, cur: Option<i64>, acc: DocAccumulator) "
         "-> Option<UnparseResult> {"
     ) in src
     inner = _method_body(src, "unparse_r__alt0__item0__inner")
     assert "if child_tuple.0 != Some(cst::RLabel::Foo) {" in inner
     assert 'let acc = acc.add_non_trivia(fltk_unparser_core::text("x"));' in inner
-    assert "Some(UnparseResult::new(acc, pos + 1))" in inner
+    assert ("Some(UnparseResult::with_cursor(acc, pos + 1, Self::_cursor_after(cur, node.span(), span)))") in inner
 
 
 def test_quantified_identifier_inner_recurses_into_ref_rule() -> None:
@@ -1194,7 +1206,9 @@ def test_quantified_identifier_inner_recurses_into_ref_rule() -> None:
     assert "let guard = shared.read();" in inner
     assert "let child_result = self.unparse_other(&guard)?;" in inner
     assert "let acc = acc.add_accumulator(&child_result.accumulator);" in inner
-    assert "Some(UnparseResult::new(acc, pos + 1))" in inner
+    assert (
+        "Some(UnparseResult::with_cursor(acc, pos + 1, Self::_cursor_after(cur, node.span(), guard.span())))"
+    ) in inner
 
 
 def test_quantified_subexpr_inner_delegates_to_nested_alts() -> None:
@@ -1207,14 +1221,15 @@ def test_quantified_subexpr_inner_delegates_to_nested_alts() -> None:
     """
     src = RustUnparserGenerator(parse_grammar('r := (a:"x" | b:"y")+;')).generate()
     inner = _method_body(src, "unparse_r__alt0__item0__inner")
-    assert "self.unparse_r__alt0__item0__inner__alts(node, pos, acc)" in inner
+    assert "self.unparse_r__alt0__item0__inner__alts(node, pos, cur, acc)" in inner
     # The nested __alts dispatch (clone-then-move over two alternatives) hangs off __inner.
     assert (
-        "fn unparse_r__alt0__item0__inner__alts(&self, node: &cst::R, pos: usize, acc: DocAccumulator) "
+        "fn unparse_r__alt0__item0__inner__alts(&self, node: &cst::R, pos: usize, cur: Option<i64>, "
+        "acc: DocAccumulator) "
         "-> Option<UnparseResult> {"
     ) in src
-    assert "if let Some(r) = self.unparse_r__alt0__item0__inner__alts__alt0(node, pos, acc.clone()) {" in src
-    assert "if let Some(r) = self.unparse_r__alt0__item0__inner__alts__alt1(node, pos, acc) {" in src
+    assert "if let Some(r) = self.unparse_r__alt0__item0__inner__alts__alt0(node, pos, cur, acc.clone()) {" in src
+    assert "if let Some(r) = self.unparse_r__alt0__item0__inner__alts__alt1(node, pos, cur, acc) {" in src
     # The inner alternatives validate their labels against the enclosing rule's flattened enum.
     assert "if child_tuple.0 != Some(cst::RLabel::A) {" in src
     assert "if child_tuple.0 != Some(cst::RLabel::B) {" in src
@@ -1238,7 +1253,7 @@ def test_quantified_regex_inner_reads_span_text() -> None:
     assert _expected_span_text_panic("r", "label `foo`") in inner
     assert "span.text()?;" not in inner
     assert "let acc = acc.add_non_trivia(fltk_unparser_core::text(text));" in inner
-    assert "Some(UnparseResult::new(acc, pos + 1))" in inner
+    assert ("Some(UnparseResult::with_cursor(acc, pos + 1, Self::_cursor_after(cur, node.span(), span)))") in inner
 
 
 def test_quantified_loop_body_unit_plus_vs_star() -> None:
@@ -1251,14 +1266,14 @@ def test_quantified_loop_body_unit_plus_vs_star() -> None:
     assert "let mut match_count = 0usize;" in plus
     assert "match_count += 1;" in plus
     assert "if match_count == 0 {" in plus
-    assert "self.unparse_r__alt0__item0__inner(node, current_pos, acc.clone())" in plus
+    assert "self.unparse_r__alt0__item0__inner(node, current_pos, current_cur, acc.clone())" in plus
 
     star_item = gsm.Item(
         label="foo", disposition=gsm.Disposition.INCLUDE, term=gsm.Literal("x"), quantifier=gsm.ZERO_OR_MORE
     )
     star = "\n".join(gen._gen_quantified_loop_body("unparse_r__alt0__item0", star_item))
     assert "match_count" not in star
-    assert "Some(UnparseResult::new(acc, current_pos))" in star
+    assert "Some(UnparseResult::with_cursor(acc, current_pos, current_cur))" in star
 
 
 @pytest.mark.parametrize(
@@ -1667,7 +1682,7 @@ def test_omit_required_item_discards_output() -> None:
     src = RustUnparserGenerator(parse_grammar('r := foo:"x";'), formatter_config=fmt_config).generate()
     body = _method_body(src, "unparse_r__alt0")
     # Cloned into the call (prior acc preserved), pos still advances.
-    assert "let r = self.unparse_r__alt0__item0(node, pos, acc.clone())?;" in body
+    assert "let r = self.unparse_r__alt0__item0(node, pos, cur, acc.clone())?;" in body
     assert "pos = r.new_pos;" in body
     # Output discarded: no merge, no substitution in the alt body.
     assert "acc = r.accumulator;" not in body
@@ -1684,7 +1699,7 @@ def test_render_as_required_item_substitutes_spacing() -> None:
     fmt_config = _disposition_config(selector_value="foo", disposition=RenderAs(spacing=comb.LINE))
     src = RustUnparserGenerator(parse_grammar('r := foo:"x";'), formatter_config=fmt_config).generate()
     body = _method_body(src, "unparse_r__alt0")
-    assert "let r = self.unparse_r__alt0__item0(node, pos, acc.clone())?;" in body
+    assert "let r = self.unparse_r__alt0__item0(node, pos, cur, acc.clone())?;" in body
     assert "pos = r.new_pos;" in body
     assert "acc = acc.add_non_trivia(Doc::Line);" in body
     assert "acc = r.accumulator;" not in body
@@ -1695,7 +1710,7 @@ def test_omit_optional_item_discards_output() -> None:
     fmt_config = _disposition_config(selector_value="foo", disposition=OMIT)
     src = RustUnparserGenerator(parse_grammar('opt := foo:"a"?;'), formatter_config=fmt_config).generate()
     body = _method_body(src, "unparse_opt__alt0")
-    assert "if let Some(r) = self.unparse_opt__alt0__item0(node, pos, acc.clone()) {" in body
+    assert "if let Some(r) = self.unparse_opt__alt0__item0(node, pos, cur, acc.clone()) {" in body
     assert "pos = r.new_pos;" in body
     # Output discarded inside the matched block: no merge, no substitution.
     assert "acc = r.accumulator;" not in body
@@ -1707,7 +1722,7 @@ def test_render_as_optional_item_substitutes_spacing_inside_block() -> None:
     fmt_config = _disposition_config(selector_value="foo", disposition=RenderAs(spacing=comb.SOFTLINE))
     src = RustUnparserGenerator(parse_grammar('opt := foo:"a"?;'), formatter_config=fmt_config).generate()
     body = _method_body(src, "unparse_opt__alt0")
-    assert "if let Some(r) = self.unparse_opt__alt0__item0(node, pos, acc.clone()) {" in body
+    assert "if let Some(r) = self.unparse_opt__alt0__item0(node, pos, cur, acc.clone()) {" in body
     # Substitution is at the inner (12-space) indent, on the matched path only.
     assert "            acc = acc.add_non_trivia(Doc::SoftLine);" in body
     assert "acc = r.accumulator;" not in body
@@ -1729,7 +1744,7 @@ def test_omit_skips_before_spacing() -> None:
     body = _method_body(src, "unparse_r__alt0")
     assert "before_spec" not in body
     # The Omit item is still called (cloned in), just with its output discarded.
-    assert "let r = self.unparse_r__alt0__item0(node, pos, acc.clone())?;" in body
+    assert "let r = self.unparse_r__alt0__item0(node, pos, cur, acc.clone())?;" in body
 
 
 def test_render_as_skips_before_spacing() -> None:
@@ -1782,7 +1797,7 @@ def test_omit_applies_to_suppressed_literal() -> None:
     body = _method_body(src, "unparse_r__alt0")
     # Only item0 (Normal) merges; item1 (Omit) is cloned in and discarded.
     assert body.count("acc = r.accumulator;") == 1
-    assert "self.unparse_r__alt0__item1(node, pos, acc.clone())" in body
+    assert "self.unparse_r__alt0__item1(node, pos, cur, acc.clone())" in body
 
 
 def test_item_disposition_success_lines_unit() -> None:
@@ -1998,6 +2013,25 @@ def test_non_trivia_rule_preservable_trivia_none_panics() -> None:
         'panic!("unparse_r: trivia at child position {} has preservable comments but '
         'unparse__trivia returned None; refusing to silently drop comments", pos);'
     ) in body
+
+
+def test_non_trivia_rule_trivia_behind_the_cursor_panics_with_its_position() -> None:
+    """A Trivia child behind the cursor is an inconsistency the walk cannot resolve, so the gap
+    halts naming the rule, the child position, both offsets and a line/col -- rather than
+    leaving the child in place for the next item to fail on, which surfaces as an unlocatable
+    "unparser returned None"."""
+    src = RustUnparserGenerator(parse_grammar('r := a:"x" : b:"y" ;')).generate()
+    body = _method_body(src, "unparse_r__alt0")
+    assert "if Self::_cursor_behind(cur, node.span(), trivia_node.span()) {" in body
+    assert (
+        'panic!("unparse_r: trivia at child position {} starts at {}, behind the source '
+        "cursor {} ({}); the unparse walk passed the gap that owns it -- refusing to guess "
+        'where it belongs", pos, trivia_node.span().start(), cur.unwrap_or(-1), '
+        "Self::_cursor_where(trivia_node.span()));"
+    ) in body
+    # The helpers the gap calls are emitted alongside it.
+    assert "fn _cursor_behind(cursor: Option<i64>, anchor: &Span, child: &Span) -> bool {" in src
+    assert "fn _cursor_where(span: &Span) -> String {" in src
 
 
 def test_non_trivia_rule_ws_allowed_uses_required_false_and_nil_default() -> None:

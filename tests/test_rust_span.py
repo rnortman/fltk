@@ -1447,3 +1447,73 @@ class TestFilename:
         """SourceText(text, filename=...) constructor works."""
         src = SourceText("hello", filename="foo.fltkg")  # type: ignore[call-arg]
         assert isinstance(src, SourceText)
+
+
+class TestSpellsAt:
+    def test_matches_literal(self):
+        src = SourceText("hello world")
+        assert Span.with_source(0, 11, src).spells_at(6, "world") is True
+
+    def test_mismatched_literal(self):
+        src = SourceText("hello world")
+        assert Span.with_source(0, 11, src).spells_at(6, "there") is False
+
+    def test_confined_to_span_end(self):
+        """A literal that would run past the span's end is not spelled *by this span*."""
+        src = SourceText("hello world")
+        span = Span.with_source(0, 5, src)
+        assert span.spells_at(3, "lo world") is False
+        assert span.spells_at(3, "lo") is True
+
+    def test_trailing_edge_refuses(self):
+        """A probe at the span's own end reads nothing, whatever follows in the source."""
+        src = SourceText("hello, world")
+        assert Span.with_source(0, 5, src).spells_at(5, ",") is False
+
+    def test_before_span_start_refuses(self):
+        src = SourceText("hello world")
+        assert Span.with_source(6, 11, src).spells_at(0, "hello") is False
+
+    def test_multibyte_indices_are_codepoints(self):
+        src = SourceText("héllo")
+        assert Span.with_source(0, 5, src).spells_at(1, "éllo") is True
+
+    def test_sourceless(self):
+        assert Span(0, 5).spells_at(0, "x") is False
+
+    def test_after_a_multibyte_character(self):
+        """A cursor past a multibyte character still indexes by codepoint, not by byte.
+
+        Exercises the non-ASCII codepoint→byte table rather than the ASCII identity.
+        """
+        text = "héllo — wörld"
+        src = SourceText(text)
+        span = Span.with_source(0, len(text), src)
+        assert span.spells_at(6, "—") is True
+        assert span.spells_at(8, "wörld") is True
+        assert span.spells_at(8, "hello") is False
+
+    def test_non_ascii_cursor_past_the_source_end(self):
+        """The table's end sentinel resolves; a cursor beyond it answers False, not a panic."""
+        text = "ä"
+        src = SourceText(text)
+        span = Span.with_source(0, 4, src)
+        assert span.spells_at(1, "x") is False
+        assert span.spells_at(3, "x") is False
+
+
+class TestSharesSource:
+    def test_same_source(self):
+        src = SourceText("hello world")
+        assert Span.with_source(0, 5, src).shares_source(Span.with_source(6, 11, src)) is True
+
+    def test_sourceless_operand(self):
+        src = SourceText("hello world")
+        assert Span.with_source(0, 5, src).shares_source(Span(6, 11)) is False
+        assert Span(0, 5).shares_source(Span.with_source(6, 11, src)) is False
+
+    def test_distinct_sources_with_equal_text(self):
+        assert (
+            Span.with_source(0, 5, SourceText("hello")).shares_source(Span.with_source(0, 5, SourceText("hello")))
+            is False
+        )

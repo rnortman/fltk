@@ -1,5 +1,5 @@
 #[cfg(feature = "python")]
-use crate::cross_cdylib::{extract_source_text, FLTK_CST_CORE_ABI};
+use crate::cross_cdylib::{FLTK_CST_CORE_ABI, extract_source_text};
 #[cfg(feature = "python")]
 use pyo3::exceptions::PyValueError;
 #[cfg(feature = "python")]
@@ -51,6 +51,14 @@ pub struct SourceInner {
     /// Lazy codepoint count of `text`.  Populated on first `line_col()` call
     /// (together with `line_ends`) so that warm-cache domain checks are O(1).
     pub(crate) char_count: OnceLock<i64>,
+    /// Lazy "the text is all ASCII" flag.  Populated on first `spells_at()` call, where it
+    /// turns the codepoint-index → byte-offset resolution into an identity.
+    pub(crate) is_ascii: OnceLock<bool>,
+    /// Lazy codepoint-index → byte-offset table, built on first `spells_at()` call over a
+    /// non-ASCII source.  All-ASCII sources never populate it (the identity serves), so the
+    /// `usize`-per-codepoint cost is paid only by text that needs it.  Holds `char_count + 1`
+    /// entries: the last is `text.len()`, so a cursor at end-of-input resolves.
+    pub(crate) char_bytes: OnceLock<Vec<usize>>,
     /// Lazy codepoint indices of `\n` chars plus a final sentinel.
     /// Built on first `line_col()` call; shared across all spans over this `Arc`.
     /// Note: `TerminalSource` maintains its own independent `line_ends` cache over the
@@ -79,6 +87,8 @@ impl SourceText {
                 text: text.to_owned(),
                 filename: filename.map(|s| s.to_owned()),
                 char_count: OnceLock::new(),
+                is_ascii: OnceLock::new(),
+                char_bytes: OnceLock::new(),
                 line_ends: OnceLock::new(),
             }),
         }
@@ -194,8 +204,10 @@ impl LineColPos {
     }
 
     fn __repr__(&self) -> String {
-        format!("LineColPos(line={}, col={}, line_span=Span(start={}, end={}))",
-            self.line, self.col, self.line_span.start, self.line_span.end)
+        format!(
+            "LineColPos(line={}, col={}, line_span=Span(start={}, end={}))",
+            self.line, self.col, self.line_span.start, self.line_span.end
+        )
     }
 }
 
@@ -218,7 +230,11 @@ impl LineColPos {
 ///
 /// Returns a `LineColPos` with a **sourceless** `line_span`; callers that need a source-bearing
 /// `line_span` (e.g. `Span::line_col_inner`) must attach the source themselves after calling.
-pub fn resolve_line_col(text: &str, pos: i64, line_ends: &OnceLock<Vec<i64>>) -> Option<LineColPos> {
+pub fn resolve_line_col(
+    text: &str,
+    pos: i64,
+    line_ends: &OnceLock<Vec<i64>>,
+) -> Option<LineColPos> {
     let ends = line_ends.get_or_init(|| {
         // Compute len only inside get_or_init so warm-cache calls skip this O(N) scan.
         let len = text.chars().count() as i64;
@@ -355,6 +371,58 @@ impl Span {
         }
     }
 
+    /// Whether the source at codepoint index ``cursor`` spells ``literal``.
+    ///
+    /// ``cursor`` is an absolute codepoint index into this span's source, not an offset from
+    /// this span's own start. The read is confined to this span: a literal that would run past
+    /// ``end`` (or a cursor before ``start``) answers ``false`` rather than reading the
+    /// surrounding text. A sourceless span answers ``false``.
+    pub fn spells_at(&self, cursor: i64, literal: &str) -> bool {
+        let Some(inner) = self.source.as_ref() else {
+            return false;
+        };
+        let lit_len = literal.chars().count() as i64;
+        if cursor < self.start || cursor + lit_len > self.end {
+            return false;
+        }
+        let src = &inner.text;
+        // Codepoint index → byte offset, O(1) either way. All-ASCII sources index directly.
+        // Anything else resolves through a table built once per source and shared by every span
+        // over it, so a single non-ASCII character in a file does not make every probe a scan.
+        let byte = if *inner.is_ascii.get_or_init(|| src.is_ascii()) {
+            let byte = cursor as usize;
+            if byte > src.len() {
+                return false;
+            }
+            byte
+        } else {
+            let table = inner.char_bytes.get_or_init(|| {
+                let mut table: Vec<usize> =
+                    src.char_indices().map(|(byte_idx, _)| byte_idx).collect();
+                table.push(src.len());
+                table
+            });
+            match table.get(cursor as usize) {
+                Some(byte_idx) => *byte_idx,
+                None => return false,
+            }
+        };
+        src[byte..].starts_with(literal)
+    }
+
+    /// Whether ``other``'s positions are positions in *this* span's source.
+    ///
+    /// True only when both spans carry the same source reference. A sourceless operand on
+    /// either side answers ``false``: an index into no source is not an index into this one.
+    /// This is the identity question [`merge`](Self::merge) answers as a side effect of
+    /// combining two spans; ask it directly rather than reading a merge's failure mode.
+    pub fn shares_source(&self, other: &Span) -> bool {
+        match (&self.source, &other.source) {
+            (Some(a), Some(b)) => Arc::ptr_eq(a, b),
+            _ => false,
+        }
+    }
+
     /// Return the start codepoint index (Rust accessor — not a Python getter).
     pub fn start(&self) -> i64 {
         self.start
@@ -371,12 +439,7 @@ impl Span {
     #[cfg(feature = "python")]
     pub fn source_as_py(&self, py: Python<'_>) -> PyResult<Option<Py<SourceText>>> {
         match &self.source {
-            Some(arc) => Ok(Some(Py::new(
-                py,
-                SourceText {
-                    inner: arc.clone(),
-                },
-            )?)),
+            Some(arc) => Ok(Some(Py::new(py, SourceText { inner: arc.clone() })?)),
             None => Ok(None),
         }
     }
@@ -437,11 +500,10 @@ impl Span {
             return None;
         }
         let src = &inner.text;
+        // TODO(unparse-quadratic-scaling): scans from byte 0 on every call with no
+        // cached index table. Suspect in the measured quadratic formatting curve;
+        // profile before changing anything here.
         // Single forward pass: scan char_indices once to collect both byte offsets.
-        // We need the byte offset of codepoint `start` (byte_start) and of codepoint
-        // `end` (byte_end, where end == char_count means byte_end = src.len()).
-        // The previous two-restart implementation rescanned from byte 0 for each index
-        // and did a third O(src.len()) scan for the end-of-source case.
         let mut byte_start: Option<usize> = None;
         let mut byte_end: Option<usize> = None;
         let mut char_count = 0usize;
@@ -589,12 +651,18 @@ impl Span {
         // warm-cache calls (after the first `line_col()`) are O(1) rather than O(N).
         // `char_count` is populated together with `line_ends` on the first call to
         // `line_col_inner` or `line_col_or_raise`.
-        let len = *source.char_count.get_or_init(|| source.text.chars().count() as i64);
+        let len = *source
+            .char_count
+            .get_or_init(|| source.text.chars().count() as i64);
         if self.start > len {
             return None;
         }
         // EOF clamp: pos == len is valid; decrement to len-1.
-        let pos = if self.start == len { self.start - 1 } else { self.start };
+        let pos = if self.start == len {
+            self.start - 1
+        } else {
+            self.start
+        };
         let mut lc = resolve_line_col(&source.text, pos, &source.line_ends)?;
         // Attach source to the line_span (resolve_line_col returns a sourceless line_span).
         lc.line_span = Span {
@@ -699,7 +767,11 @@ impl Span {
         end: i64,
         source: &Bound<'_, PyAny>,
     ) -> PyResult<Span> {
-        Ok(Span::new_with_source(start, end, &extract_source_text(source)?))
+        Ok(Span::new_with_source(
+            start,
+            end,
+            &extract_source_text(source)?,
+        ))
     }
 
     /// Return the source text slice ``[start, end)``, or ``None`` — delegates to ``Span::text``.
@@ -738,6 +810,24 @@ impl Span {
     #[pyo3(name = "is_empty")]
     fn py_is_empty(&self) -> bool {
         self.is_empty()
+    }
+
+    /// Return ``True`` if the source at codepoint index ``cursor`` spells ``literal``.
+    ///
+    /// ``cursor`` is absolute in this span's source. The read is confined to this span:
+    /// a literal running past ``end``, a cursor before ``start``, or a sourceless span
+    /// all answer ``False``.
+    #[pyo3(name = "spells_at", signature = (cursor, literal))]
+    fn py_spells_at(&self, cursor: i64, literal: &str) -> bool {
+        self.spells_at(cursor, literal)
+    }
+
+    /// Return ``True`` if ``other``'s positions are positions in this span's source.
+    ///
+    /// A sourceless operand on either side answers ``False``.
+    #[pyo3(name = "shares_source", signature = (other,))]
+    fn py_shares_source(&self, other: &Span) -> bool {
+        self.shares_source(other)
     }
 
     /// Return the smallest span that covers both ``self`` and ``other``.
@@ -833,10 +923,14 @@ impl Span {
                 self.start, self.end
             )));
         }
-        let source = self.source.as_ref()
+        let source = self
+            .source
+            .as_ref()
             .expect("invariant: source is Some — is_none() guard above returned Err already");
         // Use the char_count cache for O(1) warm-call domain checks.
-        let len = *source.char_count.get_or_init(|| source.text.chars().count() as i64);
+        let len = *source
+            .char_count
+            .get_or_init(|| source.text.chars().count() as i64);
         if self.start > len {
             return Err(PyValueError::new_err(format!(
                 "Span({}, {}) is out of bounds for source of length {}",
@@ -915,7 +1009,10 @@ mod text_str_tests {
     fn text_str_counts_newlines_without_allocating() {
         let src = SourceText::from_str(" \n\n ", None);
         let span = Span::new_with_source(0, 4, &src);
-        let count = span.text_str().map(|t| t.matches('\n').count()).unwrap_or(0);
+        let count = span
+            .text_str()
+            .map(|t| t.matches('\n').count())
+            .unwrap_or(0);
         assert_eq!(count, 2);
     }
 

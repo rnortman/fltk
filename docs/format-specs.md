@@ -51,6 +51,12 @@ trivia_preserve: LineComment, BlockComment;
 
 This preserves line comments and block comments in the formatted output. Without this, all trivia is discarded.
 
+Preserved trivia binds to the gap it was written in, including around suppressed literals. A grammar whose statement rule ends `, %";" ,` has an empty gap between the value and the terminator and a real one after it, so a blank line or a comment written after the `;` renders after the `;`, and one written before it stays before it. The unparser decides this from source positions, not from child order: the parser contributes a child only where whitespace or a comment actually matched, and a suppressed literal contributes none at all, so the two sequences do not line up.
+
+The binding falls back to child order wherever the tree's positions stop being positions in one source — a child or rule node whose span is sourceless or carries a different source, which is what hand-built and mutated CSTs produce, or anything past an optional suppressed non-literal (`%rule?`, `%/re/?`), which the unparser cannot reconstruct. In that fallback the unparser also does not refuse a trivia child no gap claimed, because ownership was never decided; elsewhere an unclaimed comment-bearing trivia child is an error rather than silently dropped output. The binding resumes at the next rule or terminal child carrying the rule node's own source.
+
+One shape is neither owned nor an empty gap: a trivia child that starts *behind* the position the walk has reached, in the walk's own source. A parsed tree never produces one, so it means the walk passed the gap the trivia was written in, and every ownership answer after it would be a guess. The unparser halts there, naming the rule, the child position, both offsets and a line/col. A mutated CST can reach this by moving a trivia child's span backwards specifically; moving any other child's span out of order puts the cursor in the fallback above instead.
+
 ### Blank Line Preservation
 
 Control whether blank lines from the source are preserved:

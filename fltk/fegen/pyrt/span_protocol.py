@@ -105,6 +105,24 @@ class SpanProtocol(Protocol):
         """Return ``True`` if the span covers no elements (``start >= end``), including sentinel spans."""
         ...
 
+    def spells_at(self, cursor: int, literal: str) -> bool:
+        """Return ``True`` if the source at codepoint index ``cursor`` spells ``literal``.
+
+        ``cursor`` is absolute in this span's source, not an offset from this span's own start.
+        The read is confined to this span: a literal that would run past ``end``, a cursor before
+        ``start``, or a sourceless span all return ``False``.
+        """
+        ...
+
+    def shares_source(self, other: "Self") -> bool:
+        """Return ``True`` if ``other``'s positions are positions in this span's source.
+
+        Identity of the source, not equality of its text: two distinct sources holding the same
+        characters answer ``False`` on both backends. A sourceless operand on either side also
+        returns ``False``.
+        """
+        ...
+
     def merge(self, other: "Self") -> "Self":
         """Return the smallest span that covers both ``self`` and ``other``.
 

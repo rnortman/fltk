@@ -103,6 +103,33 @@ class Span:
         """Return ``True`` if the span covers no elements (``start >= end``), including sentinel spans."""
         return self.start >= self.end
 
+    def spells_at(self, cursor: int, literal: str) -> bool:
+        """Return ``True`` if the source at codepoint index ``cursor`` spells ``literal``.
+
+        ``cursor`` is absolute in this span's source, not an offset from this span's own start.
+        The read is confined to this span: a literal that would run past ``end``, a cursor before
+        ``start``, or a sourceless span all return ``False``.
+        """
+        if self._source is None:
+            return False
+        if cursor < self.start or cursor + len(literal) > self.end:
+            return False
+        return self._source.startswith(literal, cursor)
+
+    def shares_source(self, other: "Span") -> bool:
+        """Return ``True`` if ``other``'s positions are positions in this span's source.
+
+        Identity of the source object, not equality of its text: two distinct sources holding
+        the same characters answer ``False``. A sourceless operand on either side also returns
+        ``False`` — an index into no source is not an index into this one.
+
+        ``merge`` asks a looser question (text equality), which is why this is its own method
+        rather than a read of a merge's failure mode.
+        """
+        if self._source is None or other._source is None:
+            return False
+        return self._source is other._source
+
     def filename(self) -> str | None:
         """Return the optional filename associated with this span's source, or ``None``.
 

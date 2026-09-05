@@ -14,8 +14,11 @@ from fltk.fegen.pyrt import terminalsrc
 from fltk.unparse.pyrt import (
     capped_blank_lines,
     count_whitespace_newlines,
+    cursor_behind,
+    cursor_check_not_behind,
     literal_span_matches,
     preceding_comment_trailing_newline,
+    raise_dropped_trivia,
     raise_preserved_trivia_failure,
 )
 
@@ -91,6 +94,59 @@ def test_raise_preserved_trivia_failure_names_rule_and_pos() -> None:
     assert "my_rule" in msg
     assert "child position 3" in msg
     assert "unparse__trivia returned None" in msg
+
+
+def test_raise_dropped_trivia_names_rule_and_pos() -> None:
+    """The drop guard's helper raises ValueError naming the rule and the unclaimed position."""
+    with pytest.raises(ValueError, match="refusing to silently drop comments") as exc_info:
+        raise_dropped_trivia("my_rule", 2)
+    msg = str(exc_info.value)
+    assert "my_rule" in msg
+    assert "child position 2" in msg
+    assert "claimed by no separator" in msg
+
+
+class TestCursorBehind:
+    """A child is *behind* the cursor only when it is in the cursor's own source and starts
+    before it; every other shape is an ordinary unowned gap."""
+
+    def test_a_child_before_the_cursor_is_behind_it(self):
+        src = "hello world"
+        anchor = terminalsrc.Span.with_source(0, 11, src)
+        assert cursor_behind(6, anchor, terminalsrc.Span.with_source(2, 4, src)) is True
+
+    def test_a_child_at_or_after_the_cursor_is_not(self):
+        src = "hello world"
+        anchor = terminalsrc.Span.with_source(0, 11, src)
+        assert cursor_behind(6, anchor, terminalsrc.Span.with_source(6, 8, src)) is False
+        assert cursor_behind(6, anchor, terminalsrc.Span.with_source(9, 11, src)) is False
+
+    def test_an_unknown_cursor_is_never_behind(self):
+        src = "hello world"
+        anchor = terminalsrc.Span.with_source(0, 11, src)
+        assert cursor_behind(None, anchor, terminalsrc.Span.with_source(2, 4, src)) is False
+
+    def test_a_foreign_source_child_is_not_behind(self):
+        # Its positions are not positions in the anchor's source, so "before" means nothing.
+        anchor = terminalsrc.Span.with_source(0, 11, "hello world")
+        other = terminalsrc.Span.with_source(2, 4, "".join(["hello", " world"]))
+        assert cursor_behind(6, anchor, other) is False
+
+
+def test_cursor_check_not_behind_reports_where() -> None:
+    """The diagnostic carries the rule, the child position, both offsets and a line/col."""
+    src = "one\ntwo\n"
+    anchor = terminalsrc.Span.with_source(0, len(src), src)
+    child = terminalsrc.Span.with_source(4, 7, src)
+    # A child at or after the cursor is the ordinary unowned gap: no diagnostic.
+    cursor_check_not_behind("my_rule", 1, 4, anchor, child)
+    with pytest.raises(ValueError, match="refusing to guess where it belongs") as exc_info:
+        cursor_check_not_behind("my_rule", 1, 6, anchor, child)
+    msg = str(exc_info.value)
+    assert "my_rule" in msg
+    assert "child position 1" in msg
+    assert "starts at 4, behind the source cursor 6" in msg
+    assert "line 2, col 1" in msg
 
 
 def _children(*texts: str) -> list[tuple[object, object]]:

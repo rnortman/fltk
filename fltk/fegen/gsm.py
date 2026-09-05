@@ -302,6 +302,33 @@ def for_each_item(items: "Items", visitor: "Callable[[int, Item], None]") -> Non
                 for_each_item(alt, visitor)
 
 
+def _items_have_ws_separator(items: "Items") -> bool:
+    """Whether an alternative (or any sub-expression under it) has a whitespace separator."""
+    ws = (Separator.WS_REQUIRED, Separator.WS_ALLOWED)
+    if items.initial_sep in ws or any(sep in ws for sep in items.sep_after):
+        return True
+    return any(
+        isinstance(item.term, Sequence) and any(_items_have_ws_separator(alt) for alt in item.term)
+        for item in items.items
+    )
+
+
+def rule_reads_trivia_at_gap(rule: "Rule") -> bool:
+    """Whether unparsing this rule reads a trivia child at a whitespace gap.
+
+    A rule with a ``,`` or ``:`` separator anywhere in its alternatives — including inside a
+    sub-expression, whose children land on the enclosing rule's node — has gaps where the parser
+    may have pushed a trivia child, so its unparse can leave one unclaimed. The trivia rule
+    itself is excluded: its whitespace children are consumed as spans, not as trivia gaps.
+
+    Both unparser backends gate the dropped-comment check on this one predicate, so a rule
+    either gets the check on both or on neither.
+    """
+    if rule.is_trivia_rule:
+        return False
+    return any(_items_have_ws_separator(alt) for alt in rule.alternatives)
+
+
 def _collect_underscore_only_label_errors(
     items: "Items",
     rule_name: str,

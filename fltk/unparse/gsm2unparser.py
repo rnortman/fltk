@@ -69,6 +69,9 @@ class UnparserGenerator:
             rule_name = rule.name
             self._make_unparser_info(path=(rule_name,), result_type=self.maybe_unparse_result_type)
 
+        # Rules with at least one whitespace gap that reads a trivia child; only those can leave
+        # a trivia child unclaimed, so only those get the dropped-comment check.
+
         self._gen_has_preservable_trivia_method()
         self._gen_count_newlines_method()
         self._gen_count_newlines_in_trivia_method()
@@ -99,6 +102,10 @@ class UnparserGenerator:
         )
         self.context.python_type_registry.register_type(unparse_result_type_info)
         self.maybe_unparse_result_type = iir.Maybe.instantiate(value_type=self.unparse_result_type)
+
+        # The source cursor's type: a codepoint offset, or None where the tree's positions stop
+        # being positions in one source.
+        self.maybe_index_type = iir.Maybe.instantiate(value_type=iir.IndexInt)
 
         self.doc_list_type = iir.GenericMutableSequence.instantiate(value_type=self.doc_type)
         doc_list_type_info = pyreg.TypeInfo(
@@ -224,6 +231,16 @@ class UnparserGenerator:
             init=accumulator_module.method.DocAccumulator.call(),
         )
 
+        # The cursor decides which gap a trivia child was written in.
+        node_var = method.get_param("node")
+        cursor_var = method.block.var(
+            name="cursor",
+            typ=self.maybe_index_type,
+            ref_type=iir.RefType.VALUE,
+            mutable=False,
+            init=self._pyrt_cursor_call("cursor_start", node_var.load().fld.span.load()),
+        )
+
         start_anchor = self.formatter_config.get_anchor_config(rule_name, "before", ItemSelector.RULE_START, "")
         if start_anchor:
             for op in start_anchor.operations:
@@ -254,6 +271,7 @@ class UnparserGenerator:
             method=method,
             unparser_info=unparser_info,
             accumulator_var=initial_accumulator,
+            cursor_var=cursor_var,
         )
 
     def _extract_and_validate_nonsequence_child(
@@ -370,12 +388,30 @@ class UnparserGenerator:
         """Extract the new_pos from an UnparseResult (assumes it's not None)."""
         return result_var.load().fld.new_pos.load()
 
-    def _make_unparse_result(self, accumulator: iir.Expr, new_pos: iir.Expr) -> iir.Construct:
+    def _extract_result_cursor(self, result_var: iir.Var) -> iir.Expr:
+        """Extract the source cursor from an UnparseResult (assumes it's not None)."""
+        return result_var.load().fld.cursor.load()
+
+    def _make_unparse_result(self, accumulator: iir.Expr, new_pos: iir.Expr, cursor: iir.Expr) -> iir.Construct:
         """Create an UnparseResult construct."""
         return iir.Construct.make(
             self.unparse_result_type,
             accumulator=accumulator,
             new_pos=new_pos,
+            cursor=cursor,
+        )
+
+    def _pyrt_cursor_call(self, name: str, *args: iir.Expr) -> iir.Expr:
+        """Call one of ``fltk.unparse.pyrt``'s source-cursor helpers."""
+        return self._get_pyrt_module().method[name].call(*args)
+
+    def _cursor_after_child(self, method: iir.Method, node_var: iir.Var, child_span: iir.Expr) -> iir.Expr:
+        """The cursor after consuming a CST child, anchored on the rule node's own span."""
+        return self._pyrt_cursor_call(
+            "cursor_after",
+            method.get_param("cursor").load(),
+            node_var.load().fld.span.load(),
+            child_span,
         )
 
     def _get_combinators_module(self) -> iir.VarByName:
@@ -542,14 +578,32 @@ class UnparserGenerator:
         - ? (optional): 0 occurrences
         - * (zero or more): 0 occurrences
         - + (one or more): 1 occurrence
+
+        The source cursor still moves, because a suppressed item occupies source even though it
+        occupies no child position.  Both the required and the optional literal advance it only
+        when the source at the cursor spells the literal; they differ on the miss, where an
+        optional literal is simply absent and a required one means the source and the emitted
+        text have parted company, so the cursor goes unknown.  An optional suppressed
+        *non-literal* is unreconstructible, so the cursor goes unknown there too.
         """
+        node_var = method.get_param("node")
         pos_var = method.get_param("pos")
+        cursor_var = method.get_param("cursor")
         accumulator_param = method.get_param("accumulator")
         combinators = self._get_combinators_module()
 
         if item.quantifier.is_optional():
             # Optional suppressed items: generate nothing - just return the passed accumulator
-            empty_result = self._make_unparse_result(accumulator_param.load(), pos_var.load())
+            if isinstance(item.term, gsm.Literal):
+                cursor_expr: iir.Expr = self._pyrt_cursor_call(
+                    "cursor_probe",
+                    cursor_var.load(),
+                    node_var.load().fld.span.load(),
+                    iir.LiteralString(item.term.value),
+                )
+            else:
+                cursor_expr = iir.LiteralNull()
+            empty_result = self._make_unparse_result(accumulator_param.load(), pos_var.load(), cursor_expr)
             method.block.return_(empty_result)
         # Required suppressed items: validate that we can actually generate them
         elif isinstance(item.term, gsm.Literal):
@@ -558,7 +612,16 @@ class UnparserGenerator:
             text_call = combinators.method.text.call(iir.LiteralString(literal_text))
 
             result_accumulator = accumulator_param.load().method.add_non_trivia.call(text_call)
-            result = self._make_unparse_result(result_accumulator, pos_var.load())
+            result = self._make_unparse_result(
+                result_accumulator,
+                pos_var.load(),
+                self._pyrt_cursor_call(
+                    "cursor_expect",
+                    cursor_var.load(),
+                    node_var.load().fld.span.load(),
+                    iir.LiteralString(literal_text),
+                ),
+            )
             method.block.return_(result)
         elif isinstance(item.term, gsm.Regex):
             msg = (
@@ -602,6 +665,13 @@ class UnparserGenerator:
             mutable=True,
             init=pos_var.load(),
         )
+        current_cursor_var = method.block.var(
+            name="current_cursor",
+            typ=self.maybe_index_type,
+            ref_type=iir.RefType.VALUE,
+            mutable=True,
+            init=method.get_param("cursor").load(),
+        )
 
         # Loop to process multiple occurrences
         children_count = self._get_children_count(node_var)
@@ -628,7 +698,7 @@ class UnparserGenerator:
         inner_call = (
             iir.SelfExpr()
             .method[inner_unparser_info.name]
-            .call(node_var.load(), current_pos_var.load(), accumulator_param.load())
+            .call(node_var.load(), current_pos_var.load(), current_cursor_var.load(), accumulator_param.load())
         )
         result_var = while_loop.block.var(
             name="inner_result",
@@ -642,6 +712,7 @@ class UnparserGenerator:
         if_success = while_loop.block.if_(result_var.load())
         if_success.block.assign(accumulator_param.store(), self._extract_result_accumulator(result_var))
         if_success.block.assign(current_pos_var.store(), self._extract_result_pos(result_var))
+        if_success.block.assign(current_cursor_var.store(), self._extract_result_cursor(result_var))
 
         if item.quantifier.min() == gsm.Arity.ONE and match_count_var is not None:
             if_success.block.assign(
@@ -668,7 +739,7 @@ class UnparserGenerator:
             if_no_matches.block.return_(iir.LiteralNull())
 
         # Return the accumulated result
-        result = self._make_unparse_result(accumulator_param.load(), current_pos_var.load())
+        result = self._make_unparse_result(accumulator_param.load(), current_pos_var.load(), current_cursor_var.load())
         method.block.return_(result)
 
     def _get_children_count(self, node_var: iir.Var) -> iir.Expr:
@@ -757,6 +828,14 @@ class UnparserGenerator:
                     ref_type=iir.RefType.BORROW,
                     mutable=False,
                 ),
+                # The source cursor travels with `pos`: the caller's cursor in, the cursor the
+                # consumed items reach out (on the result).
+                iir.Param(
+                    name="cursor",
+                    typ=self.maybe_index_type,
+                    ref_type=iir.RefType.BORROW,
+                    mutable=False,
+                ),
                 iir.Param(
                     name="accumulator",
                     typ=self.doc_accumulator_type,
@@ -777,6 +856,7 @@ class UnparserGenerator:
         method: iir.Method,
         unparser_info: UnparserFn,
         accumulator_var: iir.Var,
+        cursor_var: iir.Var | None = None,
         is_rule_unparser: bool = True,
     ) -> UnparserFn:
         # Generate methods for each alternative first
@@ -789,16 +869,30 @@ class UnparserGenerator:
         node_var = method.get_param("node")
 
         if is_rule_unparser:
-            # Rule unparsers start at position 0
             pos_expr = iir.LiteralInt(typ=iir.IndexInt, value=0)
+            assert cursor_var is not None
+            cursor_expr = cursor_var.load()
         else:
-            # Nested alternatives use the passed position
             pos_var = method.get_param("pos")
             pos_expr = pos_var.load()
+            cursor_expr = method.get_param("cursor").load()
+
+        # A rule that reads trivia at a whitespace gap gets the dropped-comment check on the
+        # success path: with the cursor known, a trivia child no separator claimed is content
+        # the formatter would silently delete. The predicate is shared with the Rust backend
+        # so the two cannot disagree about which rules carry the check.
+        check_fn = None
+        rule = self.grammar.identifiers.get(rule_name)
+        if is_rule_unparser and rule is not None and gsm.rule_reads_trivia_at_gap(rule):
+            check_fn = self._gen_dropped_trivia_check_method(rule_name)
 
         # Try each alternative in order
         for alt_info in alt_methods:
-            alt_call = iir.SelfExpr().method[alt_info.name].call(node_var.load(), pos_expr, accumulator_var.load())
+            alt_call = (
+                iir.SelfExpr()
+                .method[alt_info.name]
+                .call(node_var.load(), pos_expr, cursor_expr, accumulator_var.load())
+            )
 
             result_var = method.block.var(
                 name=f"result_{alt_info.name.split('__')[-1]}",
@@ -809,6 +903,17 @@ class UnparserGenerator:
             )
 
             if_stmt = method.block.if_(result_var.load())
+
+            if check_fn is not None:
+                if_stmt.block.expr_stmt(
+                    iir.SelfExpr()
+                    .method[check_fn]
+                    .call(
+                        node_var.load(),
+                        self._extract_result_pos(result_var),
+                        self._extract_result_cursor(result_var),
+                    )
+                )
 
             if is_rule_unparser:
                 final_accumulator = self._extract_result_accumulator(result_var)
@@ -829,7 +934,11 @@ class UnparserGenerator:
                             needs_modification = True
 
                 if needs_modification:
-                    final_result = self._make_unparse_result(final_accumulator, self._extract_result_pos(result_var))
+                    final_result = self._make_unparse_result(
+                        final_accumulator,
+                        self._extract_result_pos(result_var),
+                        self._extract_result_cursor(result_var),
+                    )
                     if_stmt.block.return_(final_result)
                 else:
                     if_stmt.block.return_(result_var.load())
@@ -892,6 +1001,67 @@ class UnparserGenerator:
             before_spec_expr = self._create_before_spec(before_spacing)
             new_accumulator = accumulator_var.load().method.add_non_trivia.call(before_spec_expr)
             target_block.assign(accumulator_var.store(), new_accumulator)
+
+    def _gen_dropped_trivia_check_method(self, rule_name: str) -> str:
+        """Generate ``_check_dropped_trivia_{rule}`` and return its name.
+
+        The method runs on the rule entry's success path.  With the cursor known, every gap's
+        ownership was decided from source positions, so a trivia child the winning alternative
+        left behind is content the formatter would delete without a trace; halt instead.  With
+        the cursor unknown the ownership question was never asked, so the loop does not run and
+        the tree behaves as it did before the cursor existed.
+        """
+        method_name = f"_check_dropped_trivia_{rule_name}"
+        trivia_type = self._get_trivia_type()
+        method = self.unparser_class.def_method(
+            name=method_name,
+            return_type=iir.Void,
+            params=[
+                iir.Param(
+                    name="node",
+                    typ=self.get_node_type_for_rule(rule_name),
+                    ref_type=iir.RefType.BORROW,
+                    mutable=False,
+                ),
+                iir.Param(name="pos", typ=iir.IndexInt, ref_type=iir.RefType.BORROW, mutable=False),
+                iir.Param(name="cursor", typ=self.maybe_index_type, ref_type=iir.RefType.BORROW, mutable=False),
+            ],
+            mutable_self=False,
+        )
+
+        node_var = method.get_param("node")
+        cursor_var = method.get_param("cursor")
+
+        cursor_known = iir.BinOp(lhs=cursor_var.load(), op="is not", rhs=iir.LiteralNull())
+        if_known = method.block.if_(cursor_known)
+
+        idx_var = if_known.block.var(
+            name="idx",
+            typ=iir.IndexInt,
+            ref_type=iir.RefType.VALUE,
+            mutable=True,
+            init=method.get_param("pos").load(),
+        )
+        while_loop = if_known.block.while_(
+            iir.BinOp(lhs=idx_var.load(), op="<", rhs=self._get_children_count(node_var))
+        )
+        child_value = iir.Subscript(
+            target=iir.Subscript(target=node_var.load().fld.children.load(), index=idx_var.load()),
+            index=iir.LiteralInt(typ=iir.IndexInt, value=1),
+        )
+        if_trivia = while_loop.block.if_(iir.IsInstance(expr=child_value, typ=trivia_type))
+        if_preservable = if_trivia.block.if_(iir.SelfExpr().method._has_preservable_trivia.call(child_value))
+        if_preservable.block.expr_stmt(
+            self._get_pyrt_module().method.raise_dropped_trivia.call(
+                iir.LiteralString(value=rule_name),
+                idx_var.load(),
+            )
+        )
+        while_loop.block.assign(
+            idx_var.store(),
+            iir.BinOp(lhs=idx_var.load(), op="+", rhs=iir.LiteralInt(typ=iir.IndexInt, value=1)),
+        )
+        return method_name
 
     def _gen_has_preservable_trivia_method(self) -> iir.Method:
         """Generate a method that checks if a trivia node has any preservable content."""
@@ -1136,10 +1306,29 @@ class UnparserGenerator:
         *,
         node_var: iir.Var,
         accumulator_var: iir.Var,
+        cursor_var: iir.Var,
         separator: gsm.Separator,
         rule_name: str,
     ) -> None:
         """Generate code to process a Trivia node using the generated unparse__trivia method.
+
+        A regular (non-trivia) rule with a whitespace separator captures the inter-item
+        whitespace and comments as a single ``Trivia`` child.  At each gap this looks up the
+        child at the current position and, when it is a ``Trivia`` child, asks whether *this*
+        gap owns it: a child is owned when it was parsed at the source cursor.  A gap the
+        source spells empty owns nothing and emits default spacing without consuming, which is
+        what keeps a following suppressed terminator ahead of the trivia written after it.  An
+        owned child is consumed even when the accumulator already ends in trivia — the resolver
+        merges the pair and keeps the one carrying the trivia — while a gap that owns nothing
+        stays behind the ``last_was_trivia`` guard that stops two consecutive gaps from
+        double-emitting.  With the cursor unknown (a hand-built or mutated tree) the child is
+        consumed in child order behind that same guard, which is the behaviour with no
+        ownership tracking at all.
+
+        A child *behind* the cursor is neither: the walk has already passed the gap it was
+        written in, so every ownership answer after it is a guess.  ``cursor_check_not_behind``
+        raises there, naming the rule, the child position, both offsets and a line/col, rather
+        than leaving the child for the next item to fail on.
 
         Args:
             separator: The separator type that determines whitespace handling
@@ -1239,13 +1428,21 @@ class UnparserGenerator:
                 )
                 newline_count = total_newlines_var.load()
 
-            # Consume the whitespace span
             if_whitespace.block.assign(
                 current_pos_var.store(),
                 iir.BinOp(
                     lhs=current_pos_var.load(),
                     op="+",
                     rhs=iir.LiteralInt(typ=iir.IndexInt, value=1),
+                ),
+            )
+            if_whitespace.block.assign(
+                cursor_var.store(),
+                self._pyrt_cursor_call(
+                    "cursor_after",
+                    cursor_var.load(),
+                    node_var.load().fld.span.load(),
+                    span_var.load(),
                 ),
             )
 
@@ -1341,12 +1538,9 @@ class UnparserGenerator:
 
             return
 
-        # First check if last item was trivia - if so, skip processing
-        if_not_last_trivia = method.block.if_(
-            iir.LogicalNegation(operand=accumulator_var.load().fld.last_was_trivia.load())
-        )
+        not_last_trivia = iir.LogicalNegation(operand=accumulator_var.load().fld.last_was_trivia.load())
 
-        # Check if current child is Trivia (only if last wasn't trivia)
+        # Check if current child is Trivia
         children_count = self._get_children_count(node_var)
         bounds_check = iir.BinOp(
             lhs=current_pos_var.load(),
@@ -1354,7 +1548,7 @@ class UnparserGenerator:
             rhs=children_count,
         )
 
-        if_in_bounds = if_not_last_trivia.block.if_(bounds_check, orelse=True)
+        if_in_bounds = method.block.if_(bounds_check, orelse=True)
 
         # Get current child
         child_tuple = iir.Subscript(
@@ -1381,9 +1575,37 @@ class UnparserGenerator:
             init=child_value,
         )
 
+        # A Trivia child behind the cursor is not the "empty gap, a later separator owns it"
+        # case: it is trivia the walk already stepped over, so halt with its position rather
+        # than fail the alternative on the unconsumed child.
+        if_trivia.block.expr_stmt(
+            self._pyrt_cursor_call(
+                "cursor_check_not_behind",
+                iir.LiteralString(value=rule_name),
+                current_pos_var.load(),
+                cursor_var.load(),
+                node_var.load().fld.span.load(),
+                trivia_var.load().fld.span.load(),
+            )
+        )
+
+        # Ownership decision; see the method docstring for the full semantics.
+        owns_call = self._pyrt_cursor_call(
+            "cursor_owns",
+            cursor_var.load(),
+            node_var.load().fld.span.load(),
+            trivia_var.load().fld.span.load(),
+        )
+        cursor_unknown = iir.BinOp(lhs=cursor_var.load(), op="is", rhs=iir.LiteralNull())
+        takes_trivia = iir.LogicalOr(
+            lhs=owns_call,
+            rhs=iir.LogicalAnd(lhs=cursor_unknown, rhs=not_last_trivia),
+        )
+        if_takes_trivia = if_trivia.block.if_(takes_trivia, orelse=True)
+
         # Check if this trivia has preservable content
         has_preservable_call = iir.SelfExpr().method._has_preservable_trivia.call(trivia_var.load())
-        if_has_preservable = if_trivia.block.if_(has_preservable_call, orelse=True)
+        if_has_preservable = if_takes_trivia.block.if_(has_preservable_call, orelse=True)
 
         # Call the generated unparse__trivia method
         trivia_unparser_call = iir.SelfExpr().method.unparse__trivia.call(trivia_var.load())
@@ -1488,8 +1710,16 @@ class UnparserGenerator:
                 separator,
             )
 
-        # Always advance position past the trivia node
-        if_trivia.block.assign(
+        if_takes_trivia.block.assign(
+            cursor_var.store(),
+            self._pyrt_cursor_call(
+                "cursor_after",
+                cursor_var.load(),
+                node_var.load().fld.span.load(),
+                trivia_var.load().fld.span.load(),
+            ),
+        )
+        if_takes_trivia.block.assign(
             current_pos_var.store(),
             iir.BinOp(
                 lhs=current_pos_var.load(),
@@ -1498,23 +1728,19 @@ class UnparserGenerator:
             ),
         )
 
-        # Else: child is not trivia, add default spacing
+        # The three non-consuming paths all emit default spacing, and all stay behind the
+        # `last_was_trivia` gate: the child at this position is a Trivia node this gap does not
+        # own, is not a Trivia node at all, or the position is past the end.
+        assert isinstance(if_takes_trivia.orelse, iir.Block)
         assert isinstance(if_trivia.orelse, iir.Block)
-        self._add_default_separator_spec(
-            if_trivia.orelse,
-            accumulator_var,
-            rule_name,
-            separator,
-        )
-
-        # Also handle out of bounds case - add default spacing
         assert isinstance(if_in_bounds.orelse, iir.Block)
-        self._add_default_separator_spec(
-            if_in_bounds.orelse,
-            accumulator_var,
-            rule_name,
-            separator,
-        )
+        for block in (if_takes_trivia.orelse, if_trivia.orelse, if_in_bounds.orelse):
+            self._add_default_separator_spec(
+                block.if_(not_last_trivia).block,
+                accumulator_var,
+                rule_name,
+                separator,
+            )
 
     def _add_separator_spec(
         self,
@@ -1673,6 +1899,13 @@ class UnparserGenerator:
             mutable=True,
             init=pos_var.load(),
         )
+        current_cursor_var = method.block.var(
+            name="current_cursor",
+            typ=self.maybe_index_type,
+            ref_type=iir.RefType.VALUE,
+            mutable=True,
+            init=method.get_param("cursor").load(),
+        )
 
         # Handle initial separator before processing items
         self._gen_trivia_processing(
@@ -1680,6 +1913,7 @@ class UnparserGenerator:
             current_pos_var,
             node_var=node_var,
             accumulator_var=accumulator_var,
+            cursor_var=current_cursor_var,
             separator=items.initial_sep,
             rule_name=rule_name,
         )
@@ -1697,7 +1931,12 @@ class UnparserGenerator:
             item_call = (
                 iir.SelfExpr()
                 .method[item_info.name]
-                .call(node_var.load(), current_pos_var.load(), accumulator_var.load())
+                .call(
+                    node_var.load(),
+                    current_pos_var.load(),
+                    current_cursor_var.load(),
+                    accumulator_var.load(),
+                )
             )
 
             unparse_result_var = method.block.var(
@@ -1714,6 +1953,7 @@ class UnparserGenerator:
                 self._check_unparse_result(method, unparse_result_var)
 
                 method.block.assign(current_pos_var.store(), self._extract_result_pos(unparse_result_var))
+                method.block.assign(current_cursor_var.store(), self._extract_result_cursor(unparse_result_var))
 
                 if isinstance(item_disposition, RenderAs):
                     # For Render, we discard the item's output and use the specified spacing
@@ -1730,6 +1970,7 @@ class UnparserGenerator:
                 if_not_none = method.block.if_(unparse_result_var.load())
 
                 if_not_none.block.assign(current_pos_var.store(), self._extract_result_pos(unparse_result_var))
+                if_not_none.block.assign(current_cursor_var.store(), self._extract_result_cursor(unparse_result_var))
 
                 if isinstance(item_disposition, RenderAs):
                     # For Render, we discard the item's output and use the specified spacing
@@ -1754,11 +1995,12 @@ class UnparserGenerator:
                     current_pos_var,
                     node_var=node_var,
                     accumulator_var=accumulator_var,
+                    cursor_var=current_cursor_var,
                     separator=separator,
                     rule_name=rule_name,
                 )
 
-        result = self._make_unparse_result(accumulator_var.load(), current_pos_var.load())
+        result = self._make_unparse_result(accumulator_var.load(), current_pos_var.load(), current_cursor_var.load())
         method.block.return_(result)
 
         return unparser_info
@@ -1812,7 +2054,11 @@ class UnparserGenerator:
                 rhs=iir.LiteralInt(typ=iir.IndexInt, value=1),
             )
 
-            result = self._make_unparse_result(new_accumulator, new_pos)
+            result = self._make_unparse_result(
+                new_accumulator,
+                new_pos,
+                self._cursor_after_child(method, node_var, child_var.load().fld.span.load()),
+            )
             method.block.return_(result)
 
         elif isinstance(term, gsm.Literal):
@@ -1821,8 +2067,9 @@ class UnparserGenerator:
             pos_var = method.get_param("pos")
             accumulator_param = method.get_param("accumulator")
 
+            literal_child_var = None
             if disposition == gsm.Disposition.INCLUDE:
-                self._extract_and_validate_nonsequence_child(
+                literal_child_var = self._extract_and_validate_nonsequence_child(
                     method, node_var, pos_var=pos_var, item=item, rule_name=rule_name
                 )
 
@@ -1838,14 +2085,26 @@ class UnparserGenerator:
             )
 
             new_pos = pos_var.load()
+            # An INCLUDE literal has a child span to advance past; an INLINE one occupies source
+            # but no child position, so the cursor moves over the literal's own text -- and only
+            # when the source there really spells it, because an alternation of equivalent
+            # spellings renders its canonical one over a source of a different length.
+            new_cursor = self._pyrt_cursor_call(
+                "cursor_expect",
+                method.get_param("cursor").load(),
+                node_var.load().fld.span.load(),
+                iir.LiteralString(literal_text),
+            )
             if disposition == gsm.Disposition.INCLUDE:
                 new_pos = iir.BinOp(
                     lhs=pos_var.load(),
                     op="+",
                     rhs=iir.LiteralInt(typ=iir.IndexInt, value=1),
                 )
+                assert literal_child_var is not None
+                new_cursor = self._cursor_after_child(method, node_var, literal_child_var.load())
 
-            result = self._make_unparse_result(result_accumulator.load(), new_pos)
+            result = self._make_unparse_result(result_accumulator.load(), new_pos, new_cursor)
             method.block.return_(result)
 
         elif isinstance(term, gsm.Regex):
@@ -1876,14 +2135,16 @@ class UnparserGenerator:
             )
 
             new_pos = pos_var.load()
+            new_cursor: iir.Expr = method.get_param("cursor").load()
             if disposition == gsm.Disposition.INCLUDE:
                 new_pos = iir.BinOp(
                     lhs=pos_var.load(),
                     op="+",
                     rhs=iir.LiteralInt(typ=iir.IndexInt, value=1),
                 )
+                new_cursor = self._cursor_after_child(method, node_var, child_var.load())
 
-            result = self._make_unparse_result(result_accumulator.load(), new_pos)
+            result = self._make_unparse_result(result_accumulator.load(), new_pos, new_cursor)
             method.block.return_(result)
 
         elif isinstance(term, list):
@@ -1912,7 +2173,12 @@ class UnparserGenerator:
             nested_call = (
                 iir.SelfExpr()
                 .method[nested_unparser_info.name]
-                .call(node_var.load(), pos_var.load(), accumulator_param.load())
+                .call(
+                    node_var.load(),
+                    pos_var.load(),
+                    method.get_param("cursor").load(),
+                    accumulator_param.load(),
+                )
             )
             method.block.return_(nested_call)
         else:

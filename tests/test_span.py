@@ -440,3 +440,81 @@ def test_line_col_negative_diverges_from_pos_to_line_col():
     src = SourceText("abc")
     span = Span.with_source(-1, 0, src)
     assert span.line_col() is None, "span.line_col() should return None for negative start"
+
+
+# ── spells_at / shares_source tests ─────────────────────────────────────────
+
+
+def test_spells_at_matches_literal():
+    span = Span.with_source(0, 11, "hello world")
+    assert span.spells_at(6, "world") is True
+
+
+def test_spells_at_mismatched_literal():
+    span = Span.with_source(0, 11, "hello world")
+    assert span.spells_at(6, "there") is False
+
+
+def test_spells_at_confined_to_span_end():
+    """A literal that would run past the span's end is not spelled *by this span*."""
+    span = Span.with_source(0, 5, "hello world")
+    assert span.spells_at(3, "lo world") is False
+    assert span.spells_at(3, "lo") is True
+
+
+def test_spells_at_trailing_edge_refuses():
+    """A probe at the span's own end reads nothing, whatever follows in the source."""
+    span = Span.with_source(0, 5, "hello, world")
+    assert span.spells_at(5, ",") is False
+
+
+def test_spells_at_before_span_start_refuses():
+    span = Span.with_source(6, 11, "hello world")
+    assert span.spells_at(0, "hello") is False
+
+
+def test_spells_at_multibyte_indices_are_codepoints():
+    span = Span.with_source(0, 5, "héllo")
+    assert span.spells_at(1, "éllo") is True
+
+
+def test_spells_at_sourceless():
+    assert Span(0, 5).spells_at(0, "x") is False
+
+
+def test_shares_source_same_source():
+    st = SourceText("hello world")
+    assert Span.with_source(0, 5, st).shares_source(Span.with_source(6, 11, st)) is True
+
+
+def test_shares_source_sourceless_operand():
+    st = SourceText("hello world")
+    assert Span.with_source(0, 5, st).shares_source(Span(6, 11)) is False
+    assert Span(0, 5).shares_source(Span.with_source(6, 11, st)) is False
+
+
+def test_shares_source_different_text():
+    assert Span.with_source(0, 5, "hello").shares_source(Span.with_source(0, 5, "world")) is False
+
+
+def test_shares_source_distinct_sources_with_equal_text():
+    """The twin of the Rust ``TestSharesSource::test_distinct_sources_with_equal_text``.
+
+    Identity, not text equality: the cursor's validity question is "are these positions indices
+    into the same source object", and two sources that happen to spell the same characters are
+    still two sources. ``"".join`` defeats CPython's interning of equal literals.
+    """
+    left = "".join(["hel", "lo"])
+    right = "".join(["hell", "o"])
+    assert left == right
+    assert left is not right
+    assert Span.with_source(0, 5, left).shares_source(Span.with_source(0, 5, right)) is False
+
+
+def test_spells_at_after_a_multibyte_character():
+    """A cursor past a multibyte character still indexes by codepoint, not by byte."""
+    text = "héllo — wörld"
+    span = Span.with_source(0, len(text), text)
+    assert span.spells_at(6, "—") is True
+    assert span.spells_at(8, "wörld") is True
+    assert span.spells_at(8, "hello") is False

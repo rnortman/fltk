@@ -1426,5 +1426,256 @@ def test_preserve_blanks_same_arm_comment_and_whitespace():
             del sys.modules[parser_result.cst_module_name]
 
 
+# Which gap a Trivia child was written in, around a *suppressed* terminator. The parser pushes a
+# Trivia child only where whitespace or a comment matched, and a suppressed literal contributes no
+# child, so the children are not index-aligned with the alternative's separators: the gap before
+# `%";"` is empty in every one of these inputs, and taking the trivia that follows the `;` there
+# is what strands the terminator on a line of its own. `list` ends on a suppressed `]` and
+# `opt_tail` on an absent optional, the two shapes whose accumulators end differently at the
+# terminator's gap. Twin of the Rust backend's `trivia_ownership` gate case.
+
+_TRIVIA_OWNERSHIP_GRAMMAR = (
+    "doc := stmt* ;\n"
+    'stmt := val:value , %";" , ;\n'
+    "value := list:list | opt:opt_tail ;\n"
+    'list := %"[" , word:word , %"]" ;\n'
+    "opt_tail := word:word , tail:list? ;\n"
+    "word := chars:/[a-z]+/ ;\n"
+    "_trivia := ( line_comment | line_comment? : )+ ;\n"
+    'line_comment := prefix:"//" . text:/[^\\n]*/ . nl:"\\n" ;\n'
+)
+
+_TRIVIA_OWNERSHIP_CONFIG = (
+    "preserve_blanks: 1;\ntrivia_preserve: LineComment;\nws_allowed: nil;\n"
+    "ws_required: bsp;\nrule _trivia { ws_required: nbsp; }\n"
+)
+
+
+@pytest.fixture
+def trivia_ownership_unparser():
+    """Parser and unparser over the suppressed-terminator grammar."""
+    grammar = parse_grammar(_TRIVIA_OWNERSHIP_GRAMMAR)
+    parser_result = generate_parser(grammar, capture_trivia=True)
+    try:
+        unparser_result = generate_unparser(
+            parser_result.grammar,
+            parser_result.cst_module_name,
+            formatter_config=parse_format_config(_TRIVIA_OWNERSHIP_CONFIG),
+        )
+        yield parser_result, unparser_result
+    finally:
+        if parser_result.cst_module_name in sys.modules:
+            del sys.modules[parser_result.cst_module_name]
+
+
+def _render_ownership(unparser_result, cst, source: str) -> str:
+    doc = unparse_cst(unparser_result, cst, source, "doc")
+    return render_doc(doc, RendererConfig(max_width=80))
+
+
+def _format_ownership(parser_result, unparser_result, source: str) -> str:
+    """Format once and assert the output is a fixed point."""
+    parse_result = parse_text(parser_result, source, "doc")
+    assert parse_result.success, f"Failed to parse {source!r}: {parse_result.error_message}"
+    once = _render_ownership(unparser_result, parse_result.cst, source)
+
+    again = parse_text(parser_result, once, "doc")
+    assert again.success, f"Failed to reparse {once!r}: {again.error_message}"
+    twice = _render_ownership(unparser_result, again.cst, once)
+    assert twice == once, f"the layout must be a fixed point: {once!r} -> {twice!r}"
+    return once
+
+
+def test_blank_line_after_the_terminator_stays_after_it(trivia_ownership_unparser):
+    """A blank line written after `;` renders after it, not ahead of it."""
+    parser_result, unparser_result = trivia_ownership_unparser
+    rendered = _format_ownership(parser_result, unparser_result, "a;\n\nb;\n")
+    assert rendered == "a;\n\nb;\n", repr(rendered)
+
+
+def test_value_ending_on_a_suppressed_closer_keeps_its_terminator(trivia_ownership_unparser):
+    """The `]` case: the closer's own gap owns no trivia, so the terminator stays put."""
+    parser_result, unparser_result = trivia_ownership_unparser
+    rendered = _format_ownership(parser_result, unparser_result, "[a];\n\nb;\n")
+    assert rendered == "[a];\n\nb;\n", repr(rendered)
+
+
+def test_value_ending_on_an_absent_optional_keeps_its_terminator(trivia_ownership_unparser):
+    """The nested-rule case: the child's accumulator ends in a default spec, and the parent's
+    gap still takes the trivia it owns."""
+    parser_result, unparser_result = trivia_ownership_unparser
+    rendered = _format_ownership(parser_result, unparser_result, "a [b];\n\nc;\n")
+    assert rendered == "a[b];\n\nc;\n", repr(rendered)
+
+
+def test_comment_after_the_terminator_stays_after_it(trivia_ownership_unparser):
+    """A trailing comment is written after `;` and renders there."""
+    parser_result, unparser_result = trivia_ownership_unparser
+    rendered = _format_ownership(parser_result, unparser_result, "a; // c\nb;\n")
+    assert rendered == "a; // c\nb;\n", repr(rendered)
+
+
+def test_comment_before_the_terminator_stays_before_it(trivia_ownership_unparser):
+    """A comment written before `;` keeps its place ahead of the terminator."""
+    parser_result, unparser_result = trivia_ownership_unparser
+    rendered = _format_ownership(parser_result, unparser_result, "a // c\n;\nb;\n")
+    assert rendered == "a // c\n;\nb;\n", repr(rendered)
+
+
+def test_whitespace_before_the_terminator_collapses(trivia_ownership_unparser):
+    """Whitespace-only trivia before `;` is owned by that gap and renders as the gap's
+    configured spacing, which is nothing."""
+    parser_result, unparser_result = trivia_ownership_unparser
+    rendered = _format_ownership(parser_result, unparser_result, "a ;\nb;\n")
+    assert rendered == "a;\nb;\n", repr(rendered)
+
+
+def test_sourceless_node_span_falls_back_to_child_order(trivia_ownership_unparser):
+    """A hand-built or mutated tree: the cursor cannot decide ownership, so trivia is taken in
+    child order -- and nothing is refused."""
+    parser_result, unparser_result = trivia_ownership_unparser
+    source = "[a];\n\nb;\n"
+    parse_result = parse_text(parser_result, source, "doc")
+    assert parse_result.success, parse_result.error_message
+    assert parse_result.cst is not None
+
+    stmt = parse_result.cst.children[0][1]
+    stmt.span = terminalsrc.Span(0, 4)
+
+    rendered = _render_ownership(unparser_result, parse_result.cst, source)
+    assert rendered == "[a]\n\n;b;\n", f"child order strands the terminator: {rendered!r}"
+
+
+_SECOND_STATEMENT_SOURCE = "[a];\n\n[b];\n"
+
+
+def _second_statement_value_span(parser_result, source: str, span):
+    """Parse ``source`` and give the second statement's value child ``span``."""
+    parse_result = parse_text(parser_result, source, "doc")
+    assert parse_result.success, parse_result.error_message
+    assert parse_result.cst is not None
+    stmt = parse_result.cst.children[1][1]
+    stmt.children[0][1].span = span
+    return parse_result.cst
+
+
+def test_a_child_span_behind_the_cursor_falls_back_to_child_order(trivia_ownership_unparser):
+    """A mutator that repoints a child at *earlier* text in the same source: the cursor cannot
+    be both past this statement's start and before its first child, so it goes unknown rather
+    than answering ownership from a position it no longer trusts."""
+    parser_result, unparser_result = trivia_ownership_unparser
+    source = _SECOND_STATEMENT_SOURCE
+    cst = _second_statement_value_span(parser_result, source, terminalsrc.Span.with_source(0, 3, source))
+    rendered = _render_ownership(unparser_result, cst, source)
+    assert rendered == "[a];\n\n[b]\n;", f"child order strands the terminator: {rendered!r}"
+
+
+def test_an_inverted_child_span_falls_back_to_child_order(trivia_ownership_unparser):
+    """A child whose span ends before it starts describes no region of the source, so the
+    cursor after it is unknown -- and the first statement, untouched, keeps its exact one."""
+    parser_result, unparser_result = trivia_ownership_unparser
+    source = _SECOND_STATEMENT_SOURCE
+    cst = _second_statement_value_span(parser_result, source, terminalsrc.Span.with_source(9, 6, source))
+    rendered = _render_ownership(unparser_result, cst, source)
+    assert rendered == "[a];\n\n[b]\n;", f"child order strands the terminator: {rendered!r}"
+
+
+def test_trivia_no_gap_claims_is_refused_not_dropped(trivia_ownership_unparser):
+    """The drop guard fires: a comment-bearing trivia child moved past every gap of its
+    statement is claimed by nobody, and the unparse halts naming the rule and the position
+    rather than rendering the statement with the comment gone."""
+    parser_result, unparser_result = trivia_ownership_unparser
+    source = "a; // c\nb;\n"
+    parse_result = parse_text(parser_result, source, "doc")
+    assert parse_result.success, parse_result.error_message
+    assert parse_result.cst is not None
+
+    stmt = parse_result.cst.children[0][1]
+    trivia = stmt.children[1][1]
+    trivia.span = terminalsrc.Span.with_source(9, 10, source)
+
+    with pytest.raises(ValueError, match="claimed by no separator"):
+        _render_ownership(unparser_result, parse_result.cst, source)
+
+
+def test_trivia_behind_the_cursor_is_refused_with_its_position(trivia_ownership_unparser):
+    """A trivia child the walk already stepped over is an inconsistency, not an empty gap: the
+    diagnostic names the rule, the child position and where in the source it sits."""
+    parser_result, unparser_result = trivia_ownership_unparser
+    source = "a; // c\nb;\n"
+    parse_result = parse_text(parser_result, source, "doc")
+    assert parse_result.success, parse_result.error_message
+    assert parse_result.cst is not None
+
+    stmt = parse_result.cst.children[0][1]
+    trivia = stmt.children[1][1]
+    trivia.span = terminalsrc.Span.with_source(0, 8, source)
+
+    expected = r"'stmt': trivia at child position 1 starts at 0, behind the source cursor 1 \(line 1, col 1\)"
+    with pytest.raises(ValueError, match=expected):
+        _render_ownership(unparser_result, parse_result.cst, source)
+
+
+# A literal that occupies source but no child position advances the cursor only when the source
+# there really spells it. An unlabeled alternation of equivalent spellings renders its canonical
+# one, so unparsing `use` under `("import" | "use")` emits `import` over three fewer codepoints:
+# how much source the token occupies is then unknown, the cursor is, and trivia falls back to
+# child order for the rest of that rule node. Twin of the Rust backend's
+# `literal_canonicalization` gate case; the expected strings are shared between them.
+
+_LITERAL_CANONICALIZATION_GRAMMAR = (
+    "doc := kw:kw_stmt* ;\n"
+    'kw_stmt := ( "import" | "use" ) : name:word , %";" , ;\n'
+    "word := chars:/[a-z]+/ ;\n"
+    "_trivia := ( line_comment | line_comment? : )+ ;\n"
+    'line_comment := prefix:"//" . text:/[^\\n]*/ . nl:"\\n" ;\n'
+)
+
+_LITERAL_CANONICALIZATION_CONFIG = (
+    "preserve_blanks: 1;\ntrivia_preserve: LineComment;\nws_allowed: nil;\n"
+    "ws_required: nbsp;\nrule _trivia { ws_required: nbsp; }\n"
+)
+
+
+@pytest.fixture
+def literal_canonicalization_unparser():
+    """Parser and unparser over the equivalent-spellings grammar."""
+    grammar = parse_grammar(_LITERAL_CANONICALIZATION_GRAMMAR)
+    parser_result = generate_parser(grammar, capture_trivia=True)
+    try:
+        unparser_result = generate_unparser(
+            parser_result.grammar,
+            parser_result.cst_module_name,
+            formatter_config=parse_format_config(_LITERAL_CANONICALIZATION_CONFIG),
+        )
+        yield parser_result, unparser_result
+    finally:
+        if parser_result.cst_module_name in sys.modules:
+            del sys.modules[parser_result.cst_module_name]
+
+
+def test_the_canonical_spelling_keeps_the_cursor_exact(literal_canonicalization_unparser):
+    """Source and emitted text agree, so the terminator keeps its place."""
+    parser_result, unparser_result = literal_canonicalization_unparser
+    rendered = _format_ownership(parser_result, unparser_result, "import x;\n\nimport y;\n")
+    assert rendered == "import x;\n\nimport y;\n"
+
+
+def test_a_rewritten_spelling_falls_back_to_child_order(literal_canonicalization_unparser):
+    """`use` renders as `import`, so the cursor goes unknown for the rest of that statement: its
+    trailing trivia is taken in child order, which is where the terminator lands behind it. Never
+    worse than a cursorless unparser, and the following statement's cursor is exact again."""
+    parser_result, unparser_result = literal_canonicalization_unparser
+    rendered = _format_ownership(parser_result, unparser_result, "use x;\n\nimport y;\n")
+    assert rendered == "import x\n\n;import y;\n"
+
+
+def test_a_rewritten_spelling_still_keeps_every_comment(literal_canonicalization_unparser):
+    """The fallback loses placement precision, never content."""
+    parser_result, unparser_result = literal_canonicalization_unparser
+    rendered = _format_ownership(parser_result, unparser_result, "use x; // c\nuse y;\n")
+    assert "// c" in rendered, rendered
+
+
 if __name__ == "__main__":
     pytest.main([__file__, "-v"])

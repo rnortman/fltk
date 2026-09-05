@@ -20,6 +20,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   targets for the first time. The existing default target labels, features, and deps are
   unchanged. Never link both flavors of a runtime crate into one binary — rustc refuses two
   crates with the same name.
+- `Span.spells_at(cursor, literal)` and `Span.shares_source(other)` on both backends and on
+  `SpanProtocol`. `spells_at` answers whether the source at an absolute codepoint index spells a
+  literal, reading only within the span; `shares_source` answers span-source identity — not text
+  equality, which is the looser question `merge` asks — directly rather than through a `merge`
+  that is discarded for its failure mode.
 - `docs/bazel-consumer-guide.md`: per-configuration recipes (pure Python, PyO3 extension, pure
   Rust, unparser/formatter, serde), the one-serde rule for serde-mode pure-Rust consumers, the
   pin-lockstep rule, and no-pyo3 verification queries for both build systems.
@@ -59,6 +64,32 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Multi-valued accessors on the generated protocol module are declared `typing.Sequence`, not
   `list`. Protocol-typed code that mutated an accessor result in place must copy it into a
   `list` first.
+
+### Fixed
+
+- `preserve_blanks` now actually preserves blank lines. The generated unparsers counted a gap's
+  blank lines but emitted the configured spacing for the gap instead of the counted line break,
+  so `preserve_blanks: N` was a no-op in every gap holding only whitespace, and a blank line
+  following a preserved comment was dropped along with the comment's own line terminator.
+- Trivia now binds to the gap it was written in, around a suppressed literal. The generated
+  unparsers walked separators and items in grammar order while taking trivia children in child
+  order, and a rule node's children are not index-aligned with its alternative's separators — a
+  suppressed literal contributes no child, and the parser pushes a trivia child only where
+  whitespace or a comment matched. A separator standing for an empty gap therefore took the
+  trivia belonging to a later one and re-emitted it ahead of the suppressed text between them.
+  The visible symptom was a suppressed terminator stranded on a line of its own after a blank
+  line or a comment: a rule ending `, %";" ,` formatted `a;` followed by a blank line as `a`,
+  blank, `;`. Both backends now decide ownership from source positions; where the tree's
+  positions stop being positions in one source — a hand-built or mutated CST — trivia is
+  consumed in child order as before. A trivia child the walk has already passed — a position
+  inconsistency no ownership rule can resolve — halts the unparse naming the rule, the child
+  position and a line/col, instead of failing the alternative and surfacing as an unlocatable
+  "unparser returned None". See `docs/format-specs.md` §Trivia Preservation.
+- `Span.shares_source` on the Python backend answered `True` for two distinct sources holding
+  equal text, where the Rust backend answers source identity. Both are identity now.
+- `Span.spells_at` on a non-ASCII source no longer scans the text from the start on every call:
+  the codepoint→byte resolution goes through a table built once per source, as the all-ASCII
+  path's identity always did.
 
 ## [0.5.0] - 2026-08-06
 

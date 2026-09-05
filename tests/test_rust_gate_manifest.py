@@ -92,6 +92,7 @@ _RUNTIME_TEST_COUNTS = {
     "merged": 7,
     "multi_tree": 5,
     "no_ast": 2,
+    "literal_canonicalization": 3,
     "nullable_loop": 2,
     "prelude": 1,
     "preserve_blanks": 3,
@@ -102,10 +103,13 @@ _RUNTIME_TEST_COUNTS = {
     "shapes": 5,
     "span_only": 7,
     "task": 5,
+    "trivia_ownership": 11,
     "union_label": 5,
 }
 
-_RUST_TEST_FN = re.compile(r"#\[test\]\s*(?:async\s+)?fn\s+(\w+)")
+# `#[test]` may be followed by further attributes (`#[should_panic(...)]`, `#[ignore]`) before
+# the function itself; count those too, or a case that adds one reads as a shrinking module.
+_RUST_TEST_FN = re.compile(r"#\[test\]\s*(?:#\[[^\]]*\]\s*)*(?:async\s+)?fn\s+(\w+)")
 
 
 def test_every_runtime_module_still_runs_the_tests_it_declared() -> None:

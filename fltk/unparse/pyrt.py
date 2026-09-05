@@ -11,6 +11,7 @@ from fltk.fegen.pyrt.terminalsrc import Span
 
 if TYPE_CHECKING:
     import fltk.unparse.combinators
+    from fltk.fegen.pyrt.span_protocol import SpanProtocol
     from fltk.unparse.accumulator import DocAccumulator
 
 
@@ -21,10 +22,14 @@ class UnparseResult:
     Attributes:
         accumulator: The DocAccumulator containing the Doc result and trivia state
         new_pos: The new position after consuming children from the CST
+        cursor: The source counterpart of ``new_pos`` — the codepoint offset in the enclosing
+            rule node's source that the consumed items reach, or ``None`` when the tree's
+            positions stop being positions in one source and ownership cannot be decided.
     """
 
     accumulator: DocAccumulator
     new_pos: int
+    cursor: int | None = None
 
     @property
     def doc(self) -> fltk.unparse.combinators.Doc:
@@ -88,6 +93,134 @@ def raise_preserved_trivia_failure(rule_name: str, pos: int) -> NoReturn:
         f"refusing to silently drop comments"
     )
     raise ValueError(msg)
+
+
+def raise_dropped_trivia(rule_name: str, pos: int) -> NoReturn:
+    """Halt when the winning alternative left a comment-bearing trivia child unclaimed.
+
+    With the source cursor known, every gap's ownership was decided from source positions, so
+    a trivia child no separator took is content the formatter would delete without a trace.
+    With the cursor unknown the ownership question was never asked, and the generated check
+    does not run at all.
+    """
+    msg = (
+        f"unparse rule {rule_name!r}: trivia at child position {pos} was claimed by no "
+        f"separator; refusing to silently drop comments"
+    )
+    raise ValueError(msg)
+
+
+# ── Source cursor ─────────────────────────────────────────────────────────────
+# The cursor is the source counterpart of the generated unparser's child index: a codepoint
+# offset into the rule node's source that the alternative walk advances alongside ``pos``. It
+# exists because a rule node's children are *not* index-aligned with its alternative's
+# item/separator sequence — a suppressed literal contributes no child, and the parser pushes a
+# trivia child only where whitespace or a comment actually matched — so a separator standing
+# for an empty gap would otherwise take the trivia belonging to a later one and re-emit it
+# ahead of the suppressed text between them.
+#
+# ``None`` means unknown: the tree's positions are not positions in one source. Then the
+# generated code falls back to consuming trivia in child order, which is the behaviour with no
+# ownership tracking at all, and the dropped-comment guard does not run.
+#
+# TODO(unparse-cursor-fallback-signal)
+
+
+def cursor_start(node_span: SpanProtocol) -> int | None:
+    """The source cursor at a rule node's start."""
+    if node_span.has_source() and node_span.start >= 0:
+        return node_span.start
+    return None
+
+
+def cursor_after(cursor: int | None, anchor: SpanProtocol, child: SpanProtocol) -> int | None:
+    """The cursor after consuming a CST child: the child's span end.
+
+    ``None`` when the child's positions are not positions in ``anchor``'s source — a sourceless
+    or foreign-source span, or one starting behind the cursor. That is the hand-built or mutated
+    tree, where the cursor resyncs at the next child carrying the anchor's source.
+    """
+    if cursor is None:
+        return None
+    if not anchor.shares_source(child):  # type: ignore[arg-type]
+        return None
+    if child.start < cursor or child.end < child.start:
+        return None
+    return child.end
+
+
+def cursor_owns(cursor: int | None, anchor: SpanProtocol, child: SpanProtocol) -> bool:
+    """Whether a child was written in the gap the cursor stands at."""
+    if cursor is None:
+        return False
+    return anchor.shares_source(child) and child.start == cursor  # type: ignore[arg-type]
+
+
+def cursor_behind(cursor: int | None, anchor: SpanProtocol, child: SpanProtocol) -> bool:
+    """Whether a child sits *behind* the cursor in the cursor's own source.
+
+    A parser-produced tree never does: the walk advances the cursor only to the end of what it
+    consumed, so an unconsumed child starts at or after it. Behind means the walk ran past a gap
+    without claiming the trivia written in it, and the ownership answers from here on are guesses.
+    """
+    if cursor is None:
+        return False
+    return anchor.shares_source(child) and child.start < cursor  # type: ignore[arg-type]
+
+
+def cursor_check_not_behind(
+    rule_name: str,
+    pos: int,
+    cursor: int | None,
+    anchor: SpanProtocol,
+    child: SpanProtocol,
+) -> None:
+    """Halt when the trivia child at ``pos`` was written behind the cursor.
+
+    Not the "empty gap, a later separator owns it" case the ownership test is for: this is
+    trivia the walk already stepped over. Left alone it makes the alternative fail on the child
+    and surfaces as an unlocatable "unparser returned None"; say where instead.
+    """
+    if not cursor_behind(cursor, anchor, child):
+        return
+    line_col = child.line_col()
+    where = f"line {line_col.line + 1}, col {line_col.col + 1}" if line_col else "an unresolvable position"
+    msg = (
+        f"unparse rule {rule_name!r}: trivia at child position {pos} starts at {child.start}, "
+        f"behind the source cursor {cursor} ({where}); the unparse walk passed the gap that "
+        f"owns it — refusing to guess where it belongs"
+    )
+    raise ValueError(msg)
+
+
+def cursor_probe(cursor: int | None, anchor: SpanProtocol, literal: str) -> int | None:
+    """The cursor past an *optional* literal that occupies no child position.
+
+    The literal was matched iff the source at the cursor spells it: the parser is greedy at an
+    optional and does not backtrack out of a successful match. A miss means the literal is
+    absent and occupies nothing, so the cursor stays put and stays known.
+    """
+    if cursor is None:
+        return None
+    if anchor.spells_at(cursor, literal):
+        return cursor + len(literal)
+    return cursor
+
+
+def cursor_expect(cursor: int | None, anchor: SpanProtocol, literal: str) -> int | None:
+    """The cursor past a *required* literal that occupies no child position.
+
+    A miss means the source does not spell what is being emitted — an alternation of equivalent
+    spellings renders its canonical one, so an unparse of ``use x`` under
+    ``("import" | "use")`` emits ``import`` over a source three codepoints shorter. How much
+    source the token really occupies is then unknown, so the cursor is, and trivia falls back
+    to child order from there.
+    """
+    if cursor is None:
+        return None
+    if anchor.spells_at(cursor, literal):
+        return cursor + len(literal)
+    return None
 
 
 def count_span_newlines(span: Span, terminals: str) -> int:
