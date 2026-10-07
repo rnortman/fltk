@@ -71,6 +71,10 @@ impl std::error::Error for DeserializeError {}
 
 impl serde::de::Error for DeserializeError {
     /// serde's own errors arrive unpositioned; the generated Deserializer positions them.
+    ///
+    /// TODO(serde-user-positioned-error): this is the only constructor a generic
+    /// `impl Deserialize` can reach through `D::Error`, so user code holding an exact span
+    /// has no way to return it; the enclosing frame positions the error coarsely instead.
     fn custom<T: fmt::Display>(message: T) -> Self {
         DeserializeError::new(message.to_string(), Span::unknown())
     }

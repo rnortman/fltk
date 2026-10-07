@@ -1967,6 +1967,9 @@ class UnparserGenerator:
                     self._gen_after_item_spacing(method.block, accumulator_var, grammar_item, rule_name)
             else:
                 # Optional item - handle None case
+                # TODO(optional-item-phantom-before-spec): the BeforeSpec for this item was
+                # already added to the accumulator ahead of the call, so an absent optional
+                # leaves a phantom spec in the doc. It must be committed only on this branch.
                 if_not_none = method.block.if_(unparse_result_var.load())
 
                 if_not_none.block.assign(current_pos_var.store(), self._extract_result_pos(unparse_result_var))

@@ -81,6 +81,9 @@ class Renderer:
 
             elif isinstance(doc, Text):
                 # Text nodes: render content as-is, but track newlines for column position
+                # TODO(render-text-verbatim): re-indenting on an embedded newline writes the
+                # nest indent into a newline-spanning token's value; a regex-term span must
+                # render byte-for-byte.
                 lines = doc.content.split("\n")
                 for i, line in enumerate(lines):
                     if i > 0:

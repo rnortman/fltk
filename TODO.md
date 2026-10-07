@@ -514,3 +514,111 @@ second — but the ceiling is real for any consumer formatting a large generated
 profiling before a fix is designed; do not guess at the site. Location: `crates/fltk-cst-core/src/span.rs`
 (`text_str`, `line_col`), `crates/fltk-unparser-core` (accumulator/renderer), and the generated
 unparser's per-gap trivia processing.
+
+## `serde-user-positioned-error`
+
+A generic `impl Deserialize` running under a fltk Deserializer cannot return a positioned error.
+`D::Error: serde::de::Error` exposes exactly one constructor, `custom`, and `DeserializeError`'s
+`custom` is `Span::unknown()` (`crates/fltk-serde-core/src/error.rs`); `DeserializeError::new` /
+`with_related` take a span but are unreachable from a generic impl, which cannot construct or
+downcast to the concrete type. The channel (`crates/fltk-serde-core/src/channel.rs`) flows
+payloads inward to the visitor only — nothing carries a span or `related` outward on the error
+path. So user code that already holds the exact span (e.g. an element read through `Spanned<T>`)
+can only report it inside the message text; the generated Deserializer then positions the error at
+the enclosing frame, which for a list element is the list's `[`. Consumer: brenn's `brenn-dsl`
+`projection_deserialize!` macro, which today does `custom(error.message)` and drops the span and
+`related` it already has — tracked there as `TODO(dsl-list-element-span)` in `brenn/TODO.md`, ruled
+blocked on this. Fix = give user `Deserialize` code a way to hand back a `DeserializeError` with a
+non-unknown span (and `related`) through `D::Error`. Design points: the outward slot must be tied to
+the error it belongs to and cleared on every exit (scoped, unwind-safe, as the inward channel's
+stack already is), and it must decide whether it carries a span or a whole diagnostic. Done = the
+hook exists, `docs/rust-serde-guide.md` documents it, and its scope/unwind lifecycle is tested.
+Location: `crates/fltk-serde-core/src/error.rs` (`impl serde::de::Error for DeserializeError`,
+`custom`), `crates/fltk-serde-core/src/channel.rs`.
+
+## `nest-boundary-trivia-indent`
+
+A standalone comment in the first or last gap of a `Nest` — the gap after an opening `{` or
+before a closing `}` — renders at the *enclosing* indent, flush with the brace, while comments
+between the nest's interior elements render at the nest's indent. Cause: the resolver's boundary
+extraction lifts any leading/trailing `SeparatorSpec` out of the nest regardless of whether it
+carries `preserved_trivia`, and `_extract_all_boundary_specs` / `extract_all_boundary_specs`
+returns a `Nest`'s boundary specs to the parent *outside* the rebuilt nest, so the renderer indents
+the comment from the enclosing item. Both backends. Consumer: brenn's `brennfmt`, whose canonical
+goldens pin the defective form and whose `--check` gate therefore refuses the correct layout —
+tracked there as `TODO(dsl-fmt-trivia-placement)` in `brenn/TODO.md`, blocked on this. Fix = a
+trivia-bearing boundary `SeparatorSpec` inside a `Nest` stays inside the nest; spacing-only
+boundary specs are extracted exactly as today. Constraints: (1) existing resolver boundary tests do
+not move; (2) the predicate is "carries preserved *comment* trivia inside a `Nest`", not "field is
+set" — Join expansion also parks its synthetic separator in `preserved_trivia`, and extraction also
+serves `Group`; both pinned before the change and unchanged after; (3) the line break after `{` and
+before `}` is produced exactly once — a standalone `AfterSpec`/`BeforeSpec` is discarded and the
+collapse pass does not merge two `HardLine`s, so test both the lost-break and doubled-break
+failure modes; (4) both backends, cross-backend parity, seed fixed-point, and a comment-only body
+as its own case (the accumulator pops an all-trivia nest differently); (5) one sentence in
+`docs/format-specs.md` §Nest. Location: `crates/fltk-unparser-core/src/resolve.rs`
+(`extract_all_boundary_specs`, `extract_boundary_specs`), `fltk/unparse/resolve_specs.py`
+(`_extract_all_boundary_specs`, `_extract_boundary_specs`).
+
+## `optional-item-phantom-before-spec`
+
+Both generated unparsers emit a `BeforeSpec` for an *optional* grammar item whether or not the item
+is present: the before-spacing is added to the accumulator ahead of the item call, and only the
+after-spacing is gated on the success path (`gsm2unparser.py`, the optional-item branch of
+`gen_alternative_unparser`; `gsm2unparser_rs.py`, `_item_spacing_lines(..., "before", ...)` ahead of
+the `if let Some` in the alternative emitter). An absent item therefore leaves a phantom spec in
+the doc. That phantom blocks boundary extraction in the resolver, so an inner `after "}"` resolves
+inside its own Group — a doubled hard line, rendered as a blank — and where a separator carrying
+`blank_lines` sits at the same gap it forces the triple mutator that discards the authored blank.
+Reproduced with any `before X` on an optional `X`: brenn's global `before ";" { nil; }` on its
+optional statement terminator yields a spurious blank before an enclosing `}` after a `}`-ended
+statement and deletes an authored blank after one; `before tail { nbsp; }` on an optional `tail`
+puts a space before `,` and `]`. Consumer: brenn's `brennfmt`, whose goldens pin both symptoms and
+whose `--check` gate enforces them — tracked there as `TODO(dsl-fmt-block-blank-line)` and
+`TODO(dsl-fmt-tail-block-blank-line)` in `brenn/TODO.md`, both blocked on this. Fix = a `before X`
+spec for an optional `X` is part of the attempted item's input and is committed only on success:
+present → `BeforeSpec` ahead of the item's content exactly as today; absent → accumulator
+unchanged. In the Python generator the item call consumes the accumulator before the `if_not_none`
+branch exists, so "move the call inside the branch" is not the fix — thread the spec through the
+attempt. `test_optional_item_before_after_spacing_placement` and its docstring flip to the new
+contract; present/absent tested in both backends and the parity suite. This is a behaviour change
+for every consumer grammar that sets `before X` on an optional `X` — fltk's own `unparsefmt.fltkg`
+has an optional `;` under `before ";" { nil; }`, so its goldens may move; any movement must be
+explainable as phantom removal or it is a regression. State the rule in `docs/format-specs.md` and
+the changelog. Location: `fltk/unparse/gsm2unparser.py` (optional-item branch of
+`gen_alternative_unparser`), `fltk/unparse/gsm2unparser_rs.py` (alternative emitter, before-spacing
+ahead of the optional `if let Some`).
+
+## `render-text-verbatim`
+
+The renderer re-indents a `Text` node at every embedded newline: the `Text`/`Comment` arm splits
+`content` on `\n` and calls `append_content(line, indent)` for each piece
+(`crates/fltk-unparser-core/src/render.rs`, `fltk/unparse/renderer.py`). A regex-term span that
+spans lines — a multi-line raw string, a heredoc, any newline-bearing token — therefore has the
+nest indent written *into its value* whenever it sits at nesting depth > 0, so a format pass is
+neither value-stable nor format-stable (each pass indents further; there is no fixed point). This
+contradicts the contract `doc.rs` states for `text()` (verbatim) and the two
+`text_preserves_exact_formatting` tests, which do not exercise an indented nest. Consumer: brenn's
+`brennfmt`, where an indented `"""…"""` has its continuation lines rewritten — tracked there as
+`TODO(dsl-fmt-rawstring-indent)` in `brenn/TODO.md`, blocked on this. Fix = the span text of a
+regex term renders byte-for-byte in both backends. Acceptance: (1) the token boundary, not the
+embedded newline, is the hard case — an interior ending in `\n` leaves the renderer at
+beginning-of-line and the *closing delimiter* (a separate `text()` emission) then receives the nest
+indent inside the value; define what a token-internal newline does to the renderer's line state
+versus a layout newline, and test: interior ending in `\n`, starting with `\n`, blank interior
+lines, interior lines with their own leading whitespace, empty interior; (2) preserved line-comment
+layout must not move — a comment's `\n` reaches the renderer as `text("\n")` (inferred; verify) and
+the following statement must still indent; parity suite is the witness; (3) block-comment policy is
+decided explicitly: nothing generated emits `Doc::Comment` today, so "Text verbatim" makes fegen
+block comments verbatim unless the generators route trivia through `comment()` — either answer is
+fine, arriving at one by accident is not; whether to change `Text`'s semantics or add a verbatim
+variant the generators emit for regex spans is this design round's call, weighed against every
+consumer; (4) the two `text_preserves_exact_formatting` tests are rewritten to assert the contract
+their names claim; (5) `fits` measures continuation segments against the remaining width from the
+group's start column — conservative, never overflows; note it, do not fix it here. Record the
+behaviour change in `CHANGELOG.md` for consumers whose grammars have newline-spanning regex terms.
+Separately worth opening (not this entry): `fltk-fmt-cli --in-place` writes through `write_atomic`
+with no re-parse-and-compare of the non-trivia token stream; such a gate would have made this a
+loud refusal on day one. Location: `crates/fltk-unparser-core/src/render.rs` (the
+`Doc::Text | Doc::Comment` arms in render and in `fits`), `fltk/unparse/renderer.py` (the `Text`
+branch and the `Text | Comment` width branch).

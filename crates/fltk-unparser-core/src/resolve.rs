@@ -180,6 +180,9 @@ fn extract_all_boundary_specs(doc: &Rc<Doc>) -> ExtractResult {
             )
         }
         Doc::Nest { indent, content } => {
+            // TODO(nest-boundary-trivia-indent): a trivia-bearing boundary SeparatorSpec is
+            // returned to the parent here, outside the rebuilt nest, so a comment in the gap
+            // after `{` or before `}` is indented from the enclosing item.
             let (processed_content, inner_leading, inner_trailing) =
                 extract_all_boundary_specs(content);
             (

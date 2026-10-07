@@ -120,6 +120,9 @@ impl Renderer {
                 // Text and Comment render identically here (both newline-aware,
                 // re-indenting on each embedded newline); they diverge only in how
                 // resolution/accumulation treats them, not in rendering.
+                // TODO(render-text-verbatim): re-indenting on an embedded newline writes the
+                // nest indent into a newline-spanning token's value; a regex-term span must
+                // render byte-for-byte.
                 Doc::Text(content) | Doc::Comment(content) => {
                     for (i, line) in content.split('\n').enumerate() {
                         if i > 0 {

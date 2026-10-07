@@ -143,6 +143,9 @@ def _extract_all_boundary_specs(doc: Doc) -> tuple[Doc, list[Doc], list[Doc]]:
         if isinstance(doc, Group):
             return Group(processed_content), inner_leading, inner_trailing
         else:
+            # TODO(nest-boundary-trivia-indent): a trivia-bearing boundary SeparatorSpec is
+            # returned to the parent here, outside the rebuilt nest, so a comment in the gap
+            # after `{` or before `}` is indented from the enclosing item.
             return Nest(content=processed_content, indent=doc.indent), inner_leading, inner_trailing
     else:
         # Leaf nodes pass through unchanged

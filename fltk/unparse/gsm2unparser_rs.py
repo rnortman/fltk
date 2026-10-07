@@ -752,6 +752,9 @@ class RustUnparserGenerator:
             # `gsm2unparser.py:1604`). Anchors precede spacing, matching the Python order.
             lines.extend(self._item_anchor_lines(rule_name, item, "before", "        "))
             if is_normal:
+                # TODO(optional-item-phantom-before-spec): for an optional item this emits the
+                # BeforeSpec ahead of the `if let Some`, so an absent optional leaves a phantom
+                # spec in the doc. It must be committed only on the matched path.
                 lines.extend(self._item_spacing_lines(rule_name, item, "before", "        "))
             if item.quantifier.is_optional():
                 # Optional: always clone acc for the call so an absent optional leaves the prior
