@@ -266,6 +266,16 @@ _RUST_GATE_FILES = [
     "nest_boundary_trivia/unparser.rs",
     "nest_boundary_trivia/runtime.rs",
     "nest_boundary_trivia/mod.rs",
+    "anchored_blanks/cst.rs",
+    "anchored_blanks/parser.rs",
+    "anchored_blanks/unparser.rs",
+    "anchored_blanks/runtime.rs",
+    "anchored_blanks/mod.rs",
+    "anchored_blanks_rule_level/cst.rs",
+    "anchored_blanks_rule_level/parser.rs",
+    "anchored_blanks_rule_level/unparser.rs",
+    "anchored_blanks_rule_level/runtime.rs",
+    "anchored_blanks_rule_level/mod.rs",
 ]
 
 py_binary(

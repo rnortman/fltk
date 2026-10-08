@@ -55,11 +55,18 @@ pub enum Doc {
     /// `preserved_trivia` holds source trivia the generated unparser preserved or, when
     /// `join_separator` is true, the separator of a `Join` the resolver expanded. The
     /// second is not source text and has no indentation of its own.
+    ///
+    /// `preserved_blank_lines` is the number of blank lines the source held at this gap,
+    /// already capped by `preserve_blanks`; `0` means the separator carries no
+    /// source-preserved count. A positive count beats a smaller or non-`HardLine` anchor
+    /// spacing however many anchors flank the gap, while a configured `spacing` alone never
+    /// beats two anchors.
     SeparatorSpec {
         spacing: Option<Rc<Doc>>,
         preserved_trivia: Option<Rc<Doc>>,
         required: bool,
         join_separator: bool,
+        preserved_blank_lines: u32,
     },
 }
 
@@ -265,13 +272,29 @@ pub fn after_spec(spacing: Doc) -> Doc {
 /// be absent (`None`), and `required` marks a WS-required separator (one that must
 /// not collapse away entirely). Both optional fields are `Rc`-wrapped on the way in,
 /// matching `group`/`nest`/`before_spec`/`after_spec`. The separator is never a `Join`'s:
-/// `join_separator` is `false`.
+/// `join_separator` is `false`, and it carries no source-preserved blank count:
+/// `preserved_blank_lines` is `0`.
 pub fn separator_spec(spacing: Option<Doc>, preserved_trivia: Option<Doc>, required: bool) -> Doc {
     Doc::SeparatorSpec {
         spacing: spacing.map(Rc::new),
         preserved_trivia: preserved_trivia.map(Rc::new),
         required,
         join_separator: false,
+        preserved_blank_lines: 0,
+    }
+}
+
+/// A spacing-only separator for a gap whose source held `blank_lines` blank lines (already
+/// capped by `preserve_blanks`). Its spacing is `HardLine { blank_lines }` and it carries the
+/// same count as `preserved_blank_lines`, which is what lets the resolver keep the blank at a
+/// gap flanked by two anchor spacings. `blank_lines` is never 0 from the generator.
+pub fn preserved_blank_separator_spec(blank_lines: u32, required: bool) -> Doc {
+    Doc::SeparatorSpec {
+        spacing: Some(Rc::new(Doc::HardLine { blank_lines })),
+        preserved_trivia: None,
+        required,
+        join_separator: false,
+        preserved_blank_lines: blank_lines,
     }
 }
 
@@ -442,6 +465,7 @@ mod tests {
                 preserved_trivia: None,
                 required: true,
                 join_separator: false,
+                preserved_blank_lines: 0,
             }
         );
         // Preserved trivia present, no spacing, not required (the non-trivia-rule shape).
@@ -452,6 +476,21 @@ mod tests {
                 preserved_trivia: Some(Rc::new(text("x"))),
                 required: false,
                 join_separator: false,
+                preserved_blank_lines: 0,
+            }
+        );
+    }
+
+    #[test]
+    fn preserved_blank_separator_spec_carries_its_count() {
+        assert_eq!(
+            preserved_blank_separator_spec(2, true),
+            Doc::SeparatorSpec {
+                spacing: Some(Rc::new(Doc::HardLine { blank_lines: 2 })),
+                preserved_trivia: None,
+                required: true,
+                join_separator: false,
+                preserved_blank_lines: 2,
             }
         );
     }

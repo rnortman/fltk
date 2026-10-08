@@ -396,16 +396,10 @@ def _mutate_after_sep(working_set: deque[Doc]) -> list[Doc] | None:
             resolved_trivia = resolve_spacing_specs(sep_spec.preserved_trivia)
             return [resolved_trivia]
         elif sep_spec.spacing is not None or sep_spec.required:
-            # Use after spacing, but preserve blank_lines from separator if it has more
             result_spacing = after_spec.spacing
-            # Preserve blank_lines from separator if it's a HardLine with more blanks
-            if isinstance(sep_spec.spacing, HardLine) and sep_spec.spacing.blank_lines > 0:
-                after_has_fewer = (
-                    not isinstance(after_spec.spacing, HardLine)
-                    or after_spec.spacing.blank_lines < sep_spec.spacing.blank_lines
-                )
-                if after_has_fewer:
-                    result_spacing = sep_spec.spacing
+            sep_spacing = sep_spec.spacing
+            if isinstance(sep_spacing, HardLine) and _blank_lines_win(result_spacing, sep_spacing.blank_lines):
+                result_spacing = sep_spacing
             return [result_spacing] if result_spacing is not None else []
         else:
             # No separator, ignore after spec
@@ -429,22 +423,25 @@ def _mutate_sep_before(working_set: deque[Doc]) -> list[Doc] | None:
             resolved_trivia = resolve_spacing_specs(sep_spec.preserved_trivia)
             return [resolved_trivia]
         elif sep_spec.spacing is not None or sep_spec.required:
-            # Use before spacing, but preserve blank_lines from separator if it has more
             result_spacing = before_spec.spacing
-            # Preserve blank_lines from separator if it's a HardLine with more blanks
-            if isinstance(sep_spec.spacing, HardLine) and sep_spec.spacing.blank_lines > 0:
-                before_has_fewer = (
-                    not isinstance(before_spec.spacing, HardLine)
-                    or before_spec.spacing.blank_lines < sep_spec.spacing.blank_lines
-                )
-                if before_has_fewer:
-                    result_spacing = sep_spec.spacing
+            sep_spacing = sep_spec.spacing
+            if isinstance(sep_spacing, HardLine) and _blank_lines_win(result_spacing, sep_spacing.blank_lines):
+                result_spacing = sep_spacing
             return [result_spacing] if result_spacing is not None else []
         else:
             # No separator, ignore before spec
             return []
 
     return None
+
+
+def _blank_lines_win(spacing: Doc | None, blank_lines: int) -> bool:
+    """Whether a positive blank-line count beats an anchor spacing.
+
+    True when `blank_lines > 0` and `spacing` is not a HardLine with at least that many blank
+    lines.
+    """
+    return blank_lines > 0 and not (isinstance(spacing, HardLine) and spacing.blank_lines >= blank_lines)
 
 
 def _mutate_standalone_sep(working_set: deque[Doc]) -> list[Doc] | None:
@@ -562,13 +559,20 @@ def _mutate_consecutive_specs(working_set: deque[Doc]) -> list[Doc] | None:
                         merged = True
                         i = j
                     else:
-                        # Neither has trivia - merge them
+                        # Neither has trivia - merge them, keeping the larger preserved blank count
                         merged = True
                         merged_spacing = _merge_spacing(curr.spacing, next_item.spacing)
                         merged_required = curr.required or next_item.required
                         if merged_spacing is not None or merged_required:
                             result.append(
-                                SeparatorSpec(spacing=merged_spacing, preserved_trivia=None, required=merged_required)
+                                SeparatorSpec(
+                                    spacing=merged_spacing,
+                                    preserved_trivia=None,
+                                    required=merged_required,
+                                    preserved_blank_lines=max(
+                                        curr.preserved_blank_lines, next_item.preserved_blank_lines
+                                    ),
+                                )
                             )
                         i = j + 1
                 else:
@@ -586,6 +590,11 @@ def _mutate_consecutive_specs(working_set: deque[Doc]) -> list[Doc] | None:
 def _resolve_spacing(after_spec: AfterSpec, before_spec: BeforeSpec, sep_spec: SeparatorSpec) -> Doc | None:
     """Resolve spacing when both after and before specs are present.
 
+    The anchors' merged spacing is the result unless the separator carries a positive
+    source-preserved blank count `k` and that merge is not a HardLine with at least `k` blank
+    lines; then the result is HardLine(k). The separator's `spacing` is not consulted, so a
+    configured spacing never beats two anchors.
+
     Returns the resolved spacing or None if no spacing should be added.
     """
     # If there's preserved trivia, use it (recursively resolved)
@@ -597,10 +606,11 @@ def _resolve_spacing(after_spec: AfterSpec, before_spec: BeforeSpec, sep_spec: S
         msg = f"Separator has neither preserved trivia nor spacing: {sep_spec}"
         raise RuntimeError(msg)
 
-    # TODO(anchored-gap-blank-loss): the separator's spacing (and the source-preserved blank
-    # count it carries) is never consulted here, so preserve_blanks is lost at both-anchored gaps.
-    # Smart merge of after and before specs
-    return _merge_spacing(after_spec.spacing, before_spec.spacing)
+    merged = _merge_spacing(after_spec.spacing, before_spec.spacing)
+    k = sep_spec.preserved_blank_lines
+    if _blank_lines_win(merged, k):
+        return HardLine(k)
+    return merged
 
 
 def _merge_spacing(spacing1: Doc | None, spacing2: Doc | None) -> Doc | None:

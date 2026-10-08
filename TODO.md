@@ -523,30 +523,6 @@ hook exists, `docs/rust-serde-guide.md` documents it, and its scope/unwind lifec
 Location: `crates/fltk-serde-core/src/error.rs` (`impl serde::de::Error for DeserializeError`,
 `custom`), `crates/fltk-serde-core/src/channel.rs`.
 
-## `anchored-gap-blank-loss`
-
-The existing blank-line cap (`preserve_blanks`, global or rule-level) is silently discarded at a
-gap flanked by two anchor spacings. The resolver's After+Separator+Before mutator
-(`_resolve_spacing` / `resolve_spacing`) returns `_merge_spacing(after, before)` and never reads
-the separator's spacing, so the separator's `HardLine(blank_lines=k)` carrying the source-preserved
-blank count is dropped; the two-spec mutators (`_mutate_after_sep`, `_mutate_sep_before`) keep it.
-Reproduced on the Python pipeline at `1eeeea0c`: with `preserve_blanks: 1` and `after ";" { hard; }`
-one of two source blanks between statements survives; adding `before "let" { hard; }` drops it;
-`after "{"` + `before "}"` under a `nest` drops an authored blank before `}` (cases B and B2 in
-`fltk-adr/todo-triage/entries/position-preserve-blanks/exploration-t2-1.md`). This is not
-`optional-item-phantom-before-spec`: that fix removes only the phantom-`BeforeSpec` route into this
-mutator, and two real anchors still hit it. Consumers: clockwork post-processes blank lines and has
-both-sided brace anchors; brenn's lost blank (`dsl-fmt-tail-block-blank-line`) reaches this mutator
-by one route or the other. Design constraint: the resolver cannot tell a source-preserved blank from
-configured spacing — `ws_allowed: blank(2)` under cap 0 yields the same `HardLine(2)` — so copying the
-pair rule into the triple would let a configured default beat two `hard` anchors; the separator must
-carry whether its blank count is source-preserved. Done = a gap flanked by two anchor spacings keeps
-`min(source blanks, cap)` blanks in both backends; a configured `blank(N)` default under cap 0 is not
-promoted over two `hard` anchors; existing resolver and gate tests move only where the movement is
-explained by this fix; cross-backend parity holds; `CHANGELOG.md` records the output change.
-`position-preserve-blanks` is blocked on this. Location: `fltk/unparse/resolve_specs.py`
-(`_resolve_spacing`), `crates/fltk-unparser-core/src/resolve.rs` (`resolve_spacing`).
-
 ## `preserved-trivia-ws-bytes`
 
 A preserved trivia node renders its non-preserved whitespace-token children as `Text` bytes

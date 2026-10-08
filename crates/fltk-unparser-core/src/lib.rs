@@ -21,7 +21,7 @@ mod result;
 pub use accumulator::DocAccumulator;
 pub use doc::{
     after_spec, before_spec, comment, concat, group, hardline, indent, join, line, nbsp, nest, nil,
-    separator_spec, softline, text, Doc,
+    preserved_blank_separator_spec, separator_spec, softline, text, Doc,
 };
 pub use render::{Renderer, RendererConfig};
 pub use resolve::resolve_spacing_specs;

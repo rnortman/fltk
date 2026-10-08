@@ -84,6 +84,8 @@ def test_every_runtime_module_carries_at_least_one_test() -> None:
 #: `//tests:rust_gate_runtime_test` is one target over one crate: deleting a test inside a
 #: runtime module leaves it green with less coverage and nothing else in the tree notices.
 _RUNTIME_TEST_COUNTS = {
+    "anchored_blanks": 9,
+    "anchored_blanks_rule_level": 2,
     "ast_guide": 3,
     "boxed_link_fold": 1,
     "config": 30,

@@ -3657,6 +3657,140 @@ fn the_trivia_interior_follows_the_global_setting_not_the_rule_override() {
 }
 """
 
+# A source blank at a gap flanked by an anchor on each side: `after ";"` + `before "let"` between
+# statements, and `after ";"` + `before "}"` after a block's last statement. The cap must hold
+# there exactly as it does at a gap with one anchor. `rule let` puts a `group` and `nbsp` anchors
+# around a `:` gap, so a preserved blank there breaks the group.
+ANCHORED_BLANKS_GRAMMAR = (
+    "doc := ( stmt , )* ;\n"
+    "stmt := block | let ;\n"
+    'let := "let" : name:word , ";" ;\n'
+    'block := "{" , ( stmt , )* , "}" ;\n'
+    "word := chars:/[a-z]+/ ;\n"
+    "_trivia := ( line_comment | line_comment? : )+ ;\n"
+    'line_comment := prefix:"//" . text:/[^\\n]*/ . nl:"\\n" ;\n'
+)
+
+_ANCHORED_BLANKS_BASE = (
+    'trivia_preserve: LineComment;\nws_allowed: nil;\nws_required: nbsp;\nafter ";" { hard; }\nbefore "let" { hard; }\n'
+)
+
+ANCHORED_BLANKS_FORMATTER = (
+    "preserve_blanks: 1;\n"
+    + _ANCHORED_BLANKS_BASE
+    + 'rule block { after "{" { hard; } before "}" { hard; } nest from after "{" to before "}"; }\n'
+    + 'rule let { group; ws_allowed: soft; after "let" { nbsp; } before name { nbsp; } }\n'
+)
+
+# The inter-statement gap belongs to `doc`, so the rule-level cap goes there.
+ANCHORED_BLANKS_RULE_LEVEL_FORMATTER = (
+    "preserve_blanks: 0;\n" + _ANCHORED_BLANKS_BASE + "rule doc { preserve_blanks: 1; }\n"
+)
+
+# A configured `blank(2)` default under cap 0 is not a source blank and never beats two anchors.
+ANCHORED_BLANKS_CONFIGURED_FORMATTER = (
+    "preserve_blanks: 0;\n" + _ANCHORED_BLANKS_BASE + "rule doc { ws_allowed: blank(2); }\n"
+)
+
+_ANCHORED_BLANKS_FORMAT = """use super::parser::Parser;
+use super::unparser::Unparser;
+use ::fltk_unparser_core::{resolve_spacing_specs, Renderer, RendererConfig};
+
+fn format(src: &str, max_width: usize) -> String {
+    let mut parser = Parser::new(src, None, true);
+    let parsed = parser.apply__parse_doc(0).expect("the document must parse");
+    assert!(parsed.pos as usize == src.len(), "the parse must consume {src:?}");
+    let guard = parsed.result.read();
+    let unparsed = Unparser::new()
+        .unparse_doc(&guard)
+        .expect("a parser-produced CST must unparse");
+    let resolved = resolve_spacing_specs(unparsed.doc());
+    Renderer::new(RendererConfig {
+        indent_width: 2,
+        max_width,
+    })
+    .render(&resolved)
+}
+"""
+
+ANCHORED_BLANKS_RUNTIME = (
+    """//! A source blank at a gap flanked by two anchor spacings, at `preserve_blanks: 1`.
+
+"""
+    + _ANCHORED_BLANKS_FORMAT
+    + """
+#[test]
+fn a_blank_between_two_hard_anchors_is_kept() {
+    assert_eq!(format("let a;\\n\\n\\nlet b;\\n", 80), "let a;\\n\\nlet b;\\n");
+}
+
+#[test]
+fn a_blank_before_a_closing_brace_after_a_statement_is_kept() {
+    assert_eq!(format("{\\nlet a;\\n\\n}\\n", 80), "{\\n  let a;\\n\\n}\\n");
+}
+
+#[test]
+fn no_source_blank_invents_none() {
+    assert_eq!(format("let a;\\nlet b;\\n", 80), "let a;\\nlet b;\\n");
+}
+
+#[test]
+fn one_source_blank_is_kept() {
+    assert_eq!(format("let a;\\n\\nlet b;\\n", 80), "let a;\\n\\nlet b;\\n");
+}
+
+#[test]
+fn more_source_blanks_than_the_cap_are_capped() {
+    assert_eq!(format("let a;\\n\\n\\n\\nlet b;\\n", 80), "let a;\\n\\nlet b;\\n");
+}
+
+#[test]
+fn a_boundary_comment_blank_and_a_trailing_blank_are_each_kept_once() {
+    assert_eq!(
+        format("{\\n\\n// c\\nlet a;\\n\\n}\\n", 80),
+        "{\\n\\n  // c\\n  let a;\\n\\n}\\n"
+    );
+}
+
+#[test]
+fn a_boundary_comment_without_blanks_gets_none() {
+    assert_eq!(
+        format("{\\n// c\\nlet a;\\n}\\n", 80),
+        "{\\n  // c\\n  let a;\\n}\\n"
+    );
+}
+
+#[test]
+fn a_blank_between_nbsp_anchors_breaks_the_group() {
+    assert_eq!(format("let\\n\\na;\\n", 8), "let\\n\\na\\n;\\n");
+}
+
+#[test]
+fn a_blank_that_breaks_the_group_is_a_fixed_point() {
+    let once = format("let\\n\\na;\\n", 8);
+    assert_eq!(format(&once, 8), once);
+}
+"""
+)
+
+ANCHORED_BLANKS_RULE_LEVEL_RUNTIME = (
+    """//! A rule-level `preserve_blanks: 1` under a global 0, at a gap flanked by two anchor spacings.
+
+"""
+    + _ANCHORED_BLANKS_FORMAT
+    + """
+#[test]
+fn the_rule_level_cap_keeps_a_blank_between_two_anchors() {
+    assert_eq!(format("let a;\\n\\n\\nlet b;\\n", 80), "let a;\\n\\nlet b;\\n");
+}
+
+#[test]
+fn the_rule_level_cap_invents_no_blank() {
+    assert_eq!(format("let a;\\nlet b;\\n", 80), "let a;\\nlet b;\\n");
+}
+"""
+)
+
 CASES = [
     # A sum, a keyed collection, every scalar erasure, a coercion, a renamed field, and a
     # label spelled `type` (so `r#type` is exercised). Carries the entry-point tests too, which
@@ -3972,6 +4106,28 @@ CASES = [
         parser=True,
         unparser=True,
         formatter=NEST_BOUNDARY_TRIVIA_FORMATTER,
+        goal="doc",
+    ),
+    # A source blank at a gap flanked by two anchor spacings, at the global cap.
+    Case(
+        "anchored_blanks",
+        ANCHORED_BLANKS_GRAMMAR,
+        runtime=ANCHORED_BLANKS_RUNTIME,
+        ast=False,
+        parser=True,
+        unparser=True,
+        formatter=ANCHORED_BLANKS_FORMATTER,
+        goal="doc",
+    ),
+    # The same gap under a rule-level cap with the global cap at 0.
+    Case(
+        "anchored_blanks_rule_level",
+        ANCHORED_BLANKS_GRAMMAR,
+        runtime=ANCHORED_BLANKS_RULE_LEVEL_RUNTIME,
+        ast=False,
+        parser=True,
+        unparser=True,
+        formatter=ANCHORED_BLANKS_RULE_LEVEL_FORMATTER,
         goal="doc",
     ),
 ]

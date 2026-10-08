@@ -71,6 +71,8 @@ preserve_blanks: 2;   // Keep at most 2 blank lines
 
 Blank preservation is the one deliberate exception to that canonical form, and it exists so source can carry logical grouping: groups of rules in a `.fltkg` file, groups of struct fields, runs of related functions — with or without a group-header comment above each group.
 
+The cap applies at a gap flanked by anchor spacings on both sides too (an `after` on the token before it and a `before` on the token after it), whatever those anchors are — `hard`, `nbsp`, `soft` or `nil`; inside a `group`, the kept blank line breaks the group, exactly as it does at a gap with one anchor. An anchor that already requests at least as many blank lines as the source contributed keeps winning, so `min(B, N)` is the source's contribution, not a ceiling next to a larger explicit `blank(N)` anchor. A configured `ws_allowed`/`ws_required` spacing is not a source blank and does not override two anchors, and a `join` separator replaces the gap's spacing as before.
+
 Blank lines are counted around preserved comments, not just around code. A blank line separated from the code by a preserved comment is still a blank line: in
 
 ```

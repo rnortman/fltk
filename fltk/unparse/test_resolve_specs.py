@@ -1,5 +1,7 @@
 """Tests for resolve_spacing_specs function."""
 
+from collections import deque
+
 import pytest
 
 from fltk.unparse.combinators import (
@@ -20,7 +22,13 @@ from fltk.unparse.combinators import (
     Text,
 )
 from fltk.unparse.renderer import Renderer, RendererConfig
-from fltk.unparse.resolve_specs import _expand_joins, _extract_boundary_specs, _has_source_trivia, resolve_spacing_specs
+from fltk.unparse.resolve_specs import (
+    _expand_joins,
+    _extract_boundary_specs,
+    _has_source_trivia,
+    _mutate_consecutive_specs,
+    resolve_spacing_specs,
+)
 
 
 def test_problematic_sequence():
@@ -1235,3 +1243,138 @@ def test_nest_trailing_comment_in_broken_group(
     assert resolved == Group(Concat((Text("("), LINE, Nest(content=expected_content, indent=1), Text(")"))))
     assert Renderer(RendererConfig(indent_width=4, max_width=80)).render(resolved) == flat
     assert Renderer(RendererConfig(indent_width=4, max_width=8)).render(resolved) == broken
+
+
+# ---- A source-preserved blank count at a gap flanked by two anchor spacings ----
+
+
+def _blank_sep(blank_lines: int, *, required: bool = False) -> SeparatorSpec:
+    """The separator a generator emits at a gap whose source held `blank_lines` blanks (after the cap)."""
+    return SeparatorSpec(
+        spacing=HardLine(blank_lines), preserved_trivia=None, required=required, preserved_blank_lines=blank_lines
+    )
+
+
+def _anchored(after: Doc, seps: list[Doc], before: Doc | None) -> Doc:
+    """`x`, AfterSpec(after), *seps, [BeforeSpec(before)], `y`."""
+    docs: list[Doc] = [Text("x"), AfterSpec(after), *seps]
+    if before is not None:
+        docs.append(BeforeSpec(before))
+    docs.append(Text("y"))
+    return Concat(docs)
+
+
+def test_triple_keeps_preserved_blank_count():
+    """Two hard anchors around a separator carrying a preserved count resolve to that count."""
+    resolved = resolve_spacing_specs(_anchored(HARDLINE, [_blank_sep(2)], HARDLINE))
+
+    assert resolved == Concat((Text("x"), HardLine(2), Text("y")))
+    assert _render(resolved) == "x\n\n\ny"
+
+
+def test_triple_ignores_configured_blank_spacing():
+    """The same spacing without a preserved count is configured, and the anchors' merge wins."""
+    sep = SeparatorSpec(spacing=HardLine(2), preserved_trivia=None, required=False)
+
+    resolved = resolve_spacing_specs(_anchored(HARDLINE, [sep], HARDLINE))
+
+    assert resolved == Concat((Text("x"), HARDLINE, Text("y")))
+
+
+@pytest.mark.parametrize("anchor", [NBSP, SOFTLINE, NIL, LINE], ids=["nbsp", "soft", "nil", "line"])
+def test_triple_promotes_preserved_count_over_non_hardline_anchors(anchor: Doc):
+    resolved = resolve_spacing_specs(_anchored(anchor, [_blank_sep(1)], anchor))
+
+    assert resolved == Concat((Text("x"), HardLine(1), Text("y")))
+
+
+def test_triple_with_zero_count_keeps_anchor_merge():
+    """A single-newline gap carries no count: `nbsp` anchors still render a space."""
+    sep = SeparatorSpec(spacing=HARDLINE, preserved_trivia=None, required=False)
+
+    resolved = resolve_spacing_specs(_anchored(NBSP, [sep], NBSP))
+
+    assert resolved == Concat((Text("x"), NBSP, Text("y")))
+    assert _render(resolved) == "x y"
+
+
+def test_triple_keeps_larger_anchor_blank_count():
+    resolved = resolve_spacing_specs(_anchored(HardLine(2), [_blank_sep(1)], HARDLINE))
+
+    assert resolved == Concat((Text("x"), HardLine(2), Text("y")))
+
+
+_CONFIGURED_BLANK_2 = SeparatorSpec(spacing=HardLine(2), preserved_trivia=None, required=False)
+
+
+@pytest.mark.parametrize(
+    "seps",
+    [[_CONFIGURED_BLANK_2, _blank_sep(1)], [_blank_sep(1), _CONFIGURED_BLANK_2]],
+    ids=["configured_first", "preserved_first"],
+)
+def test_consecutive_merge_carries_preserved_count(seps: list[Doc]):
+    """A configured blank(2) fused with a preserved 1 keeps the count 1 whichever comes first."""
+    merged = _mutate_consecutive_specs(deque(seps))
+
+    assert merged == [
+        SeparatorSpec(spacing=HardLine(2), preserved_trivia=None, required=False, preserved_blank_lines=1)
+    ]
+    assert resolve_spacing_specs(_anchored(HARDLINE, seps, HARDLINE)) == Concat((Text("x"), HardLine(1), Text("y")))
+    assert resolve_spacing_specs(_anchored(HARDLINE, seps, None)) == Concat((Text("x"), HardLine(2), Text("y")))
+
+
+def test_consecutive_merge_takes_larger_preserved_count():
+    merged = _mutate_consecutive_specs(deque([_blank_sep(1), _blank_sep(2)]))
+
+    assert merged == [_blank_sep(2)]
+
+
+@pytest.mark.parametrize(
+    "seps",
+    [[_comment_sep(), _blank_sep(1)], [_blank_sep(1), _comment_sep()]],
+    ids=["trivia_first", "trivia_second"],
+)
+def test_consecutive_merge_trivia_operand_drops_count(seps: list[Doc]):
+
+    merged = _mutate_consecutive_specs(deque(seps))
+
+    assert merged == [_comment_sep()]
+
+
+def test_pair_mutators_unchanged_by_preserved_count():
+    assert resolve_spacing_specs(_anchored(NBSP, [_blank_sep(1)], None)) == Concat((Text("x"), HardLine(1), Text("y")))
+    zero = SeparatorSpec(spacing=HARDLINE, preserved_trivia=None, required=False)
+    assert resolve_spacing_specs(_anchored(NBSP, [zero], None)) == Concat((Text("x"), NBSP, Text("y")))
+
+
+def test_join_drops_preserved_count_at_anchored_gap():
+    doc = Join((Text("x"), AfterSpec(HARDLINE), _blank_sep(1), BeforeSpec(HARDLINE), Text("y")), NBSP)
+
+    resolved = resolve_spacing_specs(doc)
+
+    assert _render(resolved) == "x y"
+
+
+def test_nest_boundary_comment_and_anchored_trailing_blank():
+    """A boundary comment's blank and a trailing anchored blank are each kept once."""
+    trivia = Concat([HardLine(blank_lines=1), Text("// c"), HARDLINE])
+    doc = _braced(Concat([_comment_sep(trivia=trivia), Text("x"), AfterSpec(HARDLINE), _blank_sep(1)]))
+
+    resolved = resolve_spacing_specs(doc)
+
+    assert resolved == Concat(
+        (
+            Text("{"),
+            Nest(content=Concat((HardLine(blank_lines=1), Text("// c"), HARDLINE, Text("x"))), indent=1),
+            HardLine(1),
+            Text("}"),
+        )
+    )
+    assert _render(resolved) == "{\n\n    // c\n    x\n\n}"
+
+
+def test_preserved_count_repr():
+    assert repr(_blank_sep(1)) == (
+        "SeparatorSpec(spacing=HardLine(blank_lines=1), preserved_trivia=None, required=False, preserved_blank_lines=1)"
+    )
+    assert "preserved_blank_lines" not in repr(_CONFIGURED_BLANK_2)

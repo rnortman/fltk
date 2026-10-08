@@ -31,6 +31,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- `fltk_unparser_core::Doc::SeparatorSpec` gains a `preserved_blank_lines: u32` field (the capped
+  source blank count a spacing-only separator carries; `0` when none), and
+  `preserved_blank_separator_spec(blank_lines, required)` is a new re-exported constructor.
+  `separator_spec()` is unchanged and, with the new one, is the supported way to build the variant;
+  code constructing or exhaustively matching the variant literally must add the field. The Python
+  `SeparatorSpec` gains the same field, defaulted to `0`.
 - Formatter: a comment just inside a `nest` region — right after the opening delimiter (`{`,
   `(`) or right before the closing one — is now indented with the nest's content instead of
   sitting flush with the delimiter, matching comments between the nest's items. Expect golden
@@ -116,6 +122,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- Formatter: blank lines kept by `preserve_blanks` are no longer lost at a gap that has an anchor
+  spacing on each side — an `after "x" { ... }` rule on the item before the gap and a
+  `before "y" { ... }` rule on the item after it (e.g. `after ";"` plus `before "}"`), in both
+  backends. Before this a gap with one anchor kept `min(B, N)` blank lines and the same gap with an
+  anchor on each side kept none. An explicit anchor asking for more blank lines than the source
+  held still wins. Expect golden diffs at gaps with an anchor on
+  each side that held a blank line in the source; where such a gap sits inside a `group`, the
+  restored line break also breaks the group, so its other soft breaks render as newlines, as the
+  one-anchor path already does for the same source. Configured `blank(N)` defaults, `join`
+  separators and comment-bearing gaps resolve as before.
 - `preserve_blanks` now actually preserves blank lines. The generated unparsers counted a gap's
   blank lines but emitted the configured spacing for the gap instead of the counted line break,
   so `preserve_blanks: N` was a no-op in every gap holding only whitespace, and a blank line

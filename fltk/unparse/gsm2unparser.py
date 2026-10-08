@@ -501,18 +501,42 @@ class UnparserGenerator:
             msg = f"Unknown Doc type: {doc}"
             raise ValueError(msg)
 
-    def _capped_hardline_expr(self, newline_count: iir.Expr, cap: int) -> iir.Expr:
-        """Build ``hardline(capped_blank_lines(<newline_count>, <cap>))``.
+    def _add_preserved_blank_separator_spec(
+        self,
+        block: iir.Block,
+        accumulator_var: iir.Var,
+        newline_count: iir.Expr,
+        cap: int,
+        *,
+        required: bool,
+    ) -> None:
+        """Add the SeparatorSpec for a gap whose source held blank lines.
 
-        The newline count is a runtime value; the cap is baked in at generation time.
+        Binds ``blank_lines = capped_blank_lines(<newline_count>, <cap>)`` once and emits a
+        separator whose spacing is ``hardline(blank_lines)`` and whose ``preserved_blank_lines``
+        is the same count. The newline count is a runtime value; the cap is baked in at
+        generation time.
         """
         combinators = self._get_combinators_module()
         pyrt_module = self._get_pyrt_module()
-        blanks = pyrt_module.method.capped_blank_lines.call(
-            newline_count,
-            iir.LiteralInt(typ=iir.IndexInt, value=cap),
+        blank_lines = block.var(
+            name="blank_lines",
+            typ=iir.IndexInt,
+            ref_type=iir.RefType.VALUE,
+            mutable=False,
+            init=pyrt_module.method.capped_blank_lines.call(
+                newline_count,
+                iir.LiteralInt(typ=iir.IndexInt, value=cap),
+            ),
         )
-        return combinators.method.hardline.call(blanks)
+        self._add_separator_spec(
+            block,
+            accumulator_var,
+            spacing=combinators.method.hardline.call(blank_lines.load()),
+            preserved_trivia=None,
+            required=required,
+            preserved_blank_lines=blank_lines.load(),
+        )
 
     def _create_after_spec(self, spacing: Doc) -> iir.Expr:
         """Create an AfterSpec control node."""
@@ -538,11 +562,14 @@ class UnparserGenerator:
         spacing: Doc | iir.Expr | None,
         preserved_trivia: iir.Expr | None,
         required: bool,
+        preserved_blank_lines: iir.Expr | None = None,
     ) -> iir.Expr:
         """Create a SeparatorSpec control node.
 
         ``spacing`` is either a generation-time ``Doc``, an already-built expression for a
-        runtime-computed spacing, or ``None`` for no spacing.
+        runtime-computed spacing, or ``None`` for no spacing. ``preserved_blank_lines``, when
+        given, is the capped source blank count the separator carries; otherwise the field is
+        left at its default of 0.
         """
         if spacing is None:
             spacing_expr: iir.Expr = iir.LiteralNull()
@@ -552,12 +579,14 @@ class UnparserGenerator:
             spacing_expr = self._doc_to_combinator_expr(spacing)
         trivia_expr = preserved_trivia if preserved_trivia is not None else iir.LiteralNull()
 
-        return iir.Construct.make(
-            self.separator_spec_type,
-            spacing=spacing_expr,
-            preserved_trivia=trivia_expr,
-            required=iir.TrueBool if required else iir.FalseBool,
-        )
+        fields: dict[str, iir.Expr] = {
+            "spacing": spacing_expr,
+            "preserved_trivia": trivia_expr,
+            "required": iir.TrueBool if required else iir.FalseBool,
+        }
+        if preserved_blank_lines is not None:
+            fields["preserved_blank_lines"] = preserved_blank_lines
+        return iir.Construct.make(self.separator_spec_type, **fields)
 
     def gen_item_unparser(self, path: tuple[str, ...], item: gsm.Item, rule_name: str) -> UnparserFn:
         """Generate unparser for an Item."""
@@ -1477,11 +1506,11 @@ class UnparserGenerator:
                 )
                 if_has_blank_lines = if_whitespace.block.if_(has_blank_lines, orelse=True)
 
-                self._add_separator_spec(
+                self._add_preserved_blank_separator_spec(
                     if_has_blank_lines.block,
                     accumulator_var,
-                    spacing=self._capped_hardline_expr(newline_count, preserve_blanks),
-                    preserved_trivia=None,
+                    newline_count,
+                    preserve_blanks,
                     required=(separator == gsm.Separator.WS_REQUIRED),
                 )
 
@@ -1689,11 +1718,11 @@ class UnparserGenerator:
             if_has_blank_lines = no_preserve_block.if_(has_blank_lines, orelse=True)
 
             # No comment text is emitted on this path, so no terminator adjustment applies.
-            self._add_separator_spec(
+            self._add_preserved_blank_separator_spec(
                 if_has_blank_lines.block,
                 accumulator_var,
-                spacing=self._capped_hardline_expr(newline_count, preserve_blanks),
-                preserved_trivia=None,
+                newline_count,
+                preserve_blanks,
                 required=(separator == gsm.Separator.WS_REQUIRED),
             )
 
@@ -1772,12 +1801,14 @@ class UnparserGenerator:
         preserved_trivia: iir.Expr | None,
         *,
         required: bool,
+        preserved_blank_lines: iir.Expr | None = None,
     ) -> None:
         """Add a SeparatorSpec to the accumulator."""
         separator_spec_expr = self._create_separator_spec(
             spacing=spacing,
             preserved_trivia=preserved_trivia or iir.LiteralNull(),
             required=required,
+            preserved_blank_lines=preserved_blank_lines,
         )
         new_accumulator = accumulator_var.load().method.add_trivia.call(separator_spec_expr)
         block.assign(accumulator_var.store(), new_accumulator)

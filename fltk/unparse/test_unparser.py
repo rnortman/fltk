@@ -22,6 +22,10 @@ from fltk.unparse.combinators import LINE, Concat, HardLine, Line, Text, concat
 from fltk.unparse.fmt_config import FormatterConfig, TriviaConfig
 from fltk.unparse.renderer import RendererConfig
 from tests.rust_gate_cases import (
+    ANCHORED_BLANKS_CONFIGURED_FORMATTER,
+    ANCHORED_BLANKS_FORMATTER,
+    ANCHORED_BLANKS_GRAMMAR,
+    ANCHORED_BLANKS_RULE_LEVEL_FORMATTER,
     NEST_BOUNDARY_TRIVIA_FORMATTER,
     NEST_BOUNDARY_TRIVIA_GRAMMAR,
     OPTIONAL_BEFORE_SPEC_FORMATTER,
@@ -1800,9 +1804,10 @@ def test_newline_spanning_token_renders_verbatim(verbatim_text_unparser, source:
 class _Formatter:
     """A generated parser and unparser pair over one grammar and one format config."""
 
-    def __init__(self, parser_result, unparser_result):
+    def __init__(self, parser_result, unparser_result, *, indent_width: int = 4):
         self.parser_result = parser_result
         self.unparser_result = unparser_result
+        self.indent_width = indent_width
 
     def parse(self, rule: str, text: str):
         parse_result = parse_text(self.parser_result, text, rule)
@@ -1810,19 +1815,19 @@ class _Formatter:
         assert parse_result.cst is not None
         return parse_result.cst
 
-    def render(self, rule: str, cst, text: str) -> str:
+    def render(self, rule: str, cst, text: str, *, max_width: int = 80) -> str:
         doc = unparse_cst(self.unparser_result, cst, text, rule)
-        return render_doc(doc, RendererConfig(max_width=80))
+        return render_doc(doc, RendererConfig(indent_width=self.indent_width, max_width=max_width))
 
-    def format(self, rule: str, text: str) -> str:
+    def format(self, rule: str, text: str, *, max_width: int = 80) -> str:
         """Format ``text`` as ``rule`` and assert the output is a fixed point."""
-        once = self.render(rule, self.parse(rule, text), text)
-        twice = self.render(rule, self.parse(rule, once), once)
+        once = self.render(rule, self.parse(rule, text), text, max_width=max_width)
+        twice = self.render(rule, self.parse(rule, once), once, max_width=max_width)
         assert twice == once, f"the layout must be a fixed point: {text!r} -> {once!r} -> {twice!r}"
         return once
 
 
-def _formatter(grammar_text: str, config_text: str):
+def _formatter(grammar_text: str, config_text: str, *, indent_width: int = 4):
     grammar = parse_grammar(grammar_text)
     parser_result = generate_parser(grammar, capture_trivia=True)
     try:
@@ -1831,7 +1836,7 @@ def _formatter(grammar_text: str, config_text: str):
             parser_result.cst_module_name,
             formatter_config=parse_format_config(config_text),
         )
-        yield _Formatter(parser_result, unparser_result)
+        yield _Formatter(parser_result, unparser_result, indent_width=indent_width)
     finally:
         if parser_result.cst_module_name in sys.modules:
             del sys.modules[parser_result.cst_module_name]
@@ -2014,6 +2019,78 @@ def nest_boundary():
 def test_nest_boundary_comment_takes_the_nest_indent(nest_boundary, rule, text, expected):
     """A comment in a nest's first or last gap renders at the nest's indent, once."""
     assert nest_boundary.format(rule, text) == expected
+
+
+# A source blank at a gap flanked by an anchor on each side keeps its capped count.
+
+
+@pytest.fixture
+def anchored_blanks():
+    """`preserve_blanks: 1` with `after ";"` + `before "let"`, a braced nest and a `let` group."""
+    yield from _formatter(ANCHORED_BLANKS_GRAMMAR, ANCHORED_BLANKS_FORMATTER, indent_width=2)
+
+
+@pytest.fixture
+def anchored_blanks_rule_level():
+    """The anchored-blanks grammar under global `preserve_blanks: 0` and a rule-level cap of 1 on `doc`."""
+    yield from _formatter(ANCHORED_BLANKS_GRAMMAR, ANCHORED_BLANKS_RULE_LEVEL_FORMATTER, indent_width=2)
+
+
+@pytest.fixture
+def anchored_blanks_configured():
+    """The anchored-blanks grammar under `preserve_blanks: 0` with `ws_allowed: blank(2)` on `doc`."""
+    yield from _formatter(ANCHORED_BLANKS_GRAMMAR, ANCHORED_BLANKS_CONFIGURED_FORMATTER, indent_width=2)
+
+
+@pytest.mark.parametrize(
+    ("text", "expected"),
+    [
+        pytest.param("let a;\n\n\nlet b;\n", "let a;\n\nlet b;\n", id="between_statements"),
+        pytest.param("{\nlet a;\n\n}\n", "{\n  let a;\n\n}\n", id="before_closing_brace"),
+        pytest.param("let a;\nlet b;\n", "let a;\nlet b;\n", id="zero_blanks"),
+        pytest.param("let a;\n\nlet b;\n", "let a;\n\nlet b;\n", id="one_blank"),
+        pytest.param("let a;\n\n\n\nlet b;\n", "let a;\n\nlet b;\n", id="three_blanks_capped"),
+        pytest.param("{\n\n// c\nlet a;\n\n}\n", "{\n\n  // c\n  let a;\n\n}\n", id="boundary_comment_and_blank"),
+        pytest.param("{\n// c\nlet a;\n}\n", "{\n  // c\n  let a;\n}\n", id="boundary_comment_no_blank"),
+    ],
+)
+def test_anchored_gap_keeps_capped_source_blanks(anchored_blanks, text, expected):
+    assert anchored_blanks.format("doc", text) == expected
+
+
+@pytest.mark.parametrize(
+    ("text", "expected"),
+    [
+        pytest.param("let\n\na;\n", "let\n\na\n;\n", id="one_blank"),
+        pytest.param("let\n\na\n;\n", "let\n\na\n;\n", id="second_pass"),
+        pytest.param("let\n\n\n\na;\n", "let\n\na\n;\n", id="three_blanks"),
+        pytest.param("let a;\nlet b;\n", "let a;\nlet b;\n", id="no_blank_group_fits"),
+    ],
+)
+def test_anchored_blank_between_nbsp_anchors_breaks_the_group(anchored_blanks, text, expected):
+    """A blank between `nbsp` anchors breaks the `let` group at width 8, and the layout is a fixed point."""
+    assert anchored_blanks.format("doc", text, max_width=8) == expected
+
+
+@pytest.mark.parametrize(
+    ("text", "expected"),
+    [
+        pytest.param("let a;\n\n\nlet b;\n", "let a;\n\nlet b;\n", id="blank"),
+        pytest.param("let a;\nlet b;\n", "let a;\nlet b;\n", id="zero_blanks"),
+    ],
+)
+def test_anchored_gap_follows_rule_level_cap(anchored_blanks_rule_level, text, expected):
+    """A rule-level cap of 1 under a global 0 keeps a blank between two anchors."""
+    assert anchored_blanks_rule_level.format("doc", text) == expected
+
+
+@pytest.mark.parametrize("text", ["let a;let b;", "let a;\n\n\nlet b;\n"], ids=["no_trivia", "two_blanks"])
+def test_configured_blank_default_does_not_beat_two_anchors(anchored_blanks_configured, text):
+    """A configured `blank(2)` under cap 0 is not a source blank: the two-anchor gap gets none.
+
+    The trailing gap has one anchor (`after ";"`), where the configured spacing still wins.
+    """
+    assert anchored_blanks_configured.format("doc", text) == "let a;\nlet b;\n\n\n"
 
 
 if __name__ == "__main__":

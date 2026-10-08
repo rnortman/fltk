@@ -133,6 +133,7 @@ fn expand_joins(doc: &Rc<Doc>) -> Rc<Doc> {
                         preserved_trivia: Some(separator.clone()),
                         required: false,
                         join_separator: true,
+                        preserved_blank_lines: 0,
                     }));
                 }
                 expanded.push(expanded_child);
@@ -423,12 +424,19 @@ fn mutate_after_sep_before(ws: &VecDeque<Rc<Doc>>) -> Option<Vec<Rc<Doc>>> {
         Doc::SeparatorSpec {
             spacing: sep_spacing,
             preserved_trivia,
+            preserved_blank_lines,
             ..
         },
         Doc::BeforeSpec { spacing: before },
     ) = (&*ws[0], &*ws[1], &*ws[2])
     {
-        let spacing = resolve_spacing(after, before, sep_spacing, preserved_trivia);
+        let spacing = resolve_spacing(
+            after,
+            before,
+            sep_spacing,
+            preserved_trivia,
+            *preserved_blank_lines,
+        );
         return Some(spacing.map(|s| vec![s]).unwrap_or_default());
     }
     None
@@ -491,28 +499,33 @@ fn mutate_sep_before(ws: &VecDeque<Rc<Doc>>) -> Option<Vec<Rc<Doc>>> {
 }
 
 /// Choose between an `AfterSpec`/`BeforeSpec` spacing and a separator's spacing,
-/// preferring the separator only when it is a `HardLine` with more blank lines.
+/// preferring the separator only when it is a `HardLine` whose blank lines win under
+/// `blank_lines_win`.
 ///
-/// Factors the shared blank-line-preservation logic from `_mutate_after_sep` and
-/// `_mutate_sep_before` (`resolve_specs.py:368`, `:401`).
+/// Factors the shared logic of `_mutate_after_sep` and `_mutate_sep_before`.
 fn pick_spacing_with_blank_lines(primary: &Rc<Doc>, sep_spacing: &Option<Rc<Doc>>) -> Rc<Doc> {
     if let Some(sep_sp) = sep_spacing {
         if let Doc::HardLine {
             blank_lines: sep_bl,
         } = &**sep_sp
         {
-            if *sep_bl > 0 {
-                let primary_has_fewer = match &**primary {
-                    Doc::HardLine { blank_lines } => *blank_lines < *sep_bl,
-                    _ => true,
-                };
-                if primary_has_fewer {
-                    return sep_sp.clone();
-                }
+            if blank_lines_win(Some(primary), *sep_bl) {
+                return sep_sp.clone();
             }
         }
     }
     primary.clone()
+}
+
+/// Whether a positive blank-line count beats an anchor spacing: true when `blank_lines > 0`
+/// and `spacing` is not a `HardLine` with at least that many blank lines. Port of
+/// `_blank_lines_win`.
+fn blank_lines_win(spacing: Option<&Rc<Doc>>, blank_lines: u32) -> bool {
+    blank_lines > 0
+        && !matches!(
+            spacing.map(|s| &**s),
+            Some(Doc::HardLine { blank_lines: have }) if *have >= blank_lines
+        )
 }
 
 /// Pattern: `HardLine(j), SeparatorSpec(spacing=Some(_))` -> a single `HardLine`.
@@ -629,6 +642,7 @@ fn mutate_consecutive_specs(ws: &VecDeque<Rc<Doc>>) -> Option<Vec<Rc<Doc>>> {
                 spacing,
                 preserved_trivia,
                 required,
+                preserved_blank_lines,
                 ..
             } => {
                 let j = i + 1;
@@ -636,6 +650,7 @@ fn mutate_consecutive_specs(ws: &VecDeque<Rc<Doc>>) -> Option<Vec<Rc<Doc>>> {
                     spacing: next_spacing,
                     preserved_trivia: next_trivia,
                     required: next_required,
+                    preserved_blank_lines: next_blank_lines,
                     ..
                 }) = ws.get(j).map(|d| &**d)
                 {
@@ -655,7 +670,8 @@ fn mutate_consecutive_specs(ws: &VecDeque<Rc<Doc>>) -> Option<Vec<Rc<Doc>>> {
                         merged = true;
                         i = j;
                     } else {
-                        // Neither has trivia - merge them.
+                        // Neither has trivia - merge them, keeping the larger preserved
+                        // blank count.
                         merged = true;
                         let merged_spacing = merge_spacing(spacing.as_ref(), next_spacing.as_ref());
                         let merged_required = *required || *next_required;
@@ -665,6 +681,8 @@ fn mutate_consecutive_specs(ws: &VecDeque<Rc<Doc>>) -> Option<Vec<Rc<Doc>>> {
                                 preserved_trivia: None,
                                 required: merged_required,
                                 join_separator: false,
+                                preserved_blank_lines: (*preserved_blank_lines)
+                                    .max(*next_blank_lines),
                             }));
                         }
                         i = j + 1;
@@ -691,12 +709,18 @@ fn mutate_consecutive_specs(ws: &VecDeque<Rc<Doc>>) -> Option<Vec<Rc<Doc>>> {
 
 /// Resolve spacing when both after and before specs flank a separator.
 ///
-/// Port of `_resolve_spacing` (`resolve_specs.py:545`).
+/// The anchors' merged spacing is the result unless the separator carries a positive
+/// source-preserved blank count `k` and that merge is not a `HardLine` with at least `k`
+/// blank lines; then the result is `HardLine { blank_lines: k }`. The separator's spacing is
+/// not consulted, so a configured spacing never beats two anchors.
+///
+/// Port of `_resolve_spacing`.
 fn resolve_spacing(
     after: &Rc<Doc>,
     before: &Rc<Doc>,
     sep_spacing: &Option<Rc<Doc>>,
     sep_preserved_trivia: &Option<Rc<Doc>>,
+    sep_preserved_blank_lines: u32,
 ) -> Option<Rc<Doc>> {
     if let Some(trivia) = sep_preserved_trivia {
         return Some(resolve_rc(trivia));
@@ -712,9 +736,12 @@ fn resolve_spacing(
         sep_spacing.is_some(),
         "Separator has neither preserved trivia nor spacing"
     );
-    // TODO(anchored-gap-blank-loss): `sep_spacing` (and the source-preserved blank count it
-    // carries) is never consulted here, so preserve_blanks is lost at both-anchored gaps.
-    merge_spacing(Some(after), Some(before))
+    let merged = merge_spacing(Some(after), Some(before));
+    let k = sep_preserved_blank_lines;
+    if blank_lines_win(merged.as_ref(), k) {
+        return Some(Rc::new(Doc::HardLine { blank_lines: k }));
+    }
+    merged
 }
 
 /// Merge two optional spacing docs by the precedence rules.
@@ -800,7 +827,13 @@ mod tests {
             preserved_trivia: trivia.map(rc),
             required,
             join_separator: false,
+            preserved_blank_lines: 0,
         }
+    }
+
+    /// The separator a generator emits at a gap whose source held `k` blanks (after the cap).
+    fn sep_blanks(k: u32, required: bool) -> Doc {
+        crate::doc::preserved_blank_separator_spec(k, required)
     }
 
     #[test]
@@ -1692,6 +1725,7 @@ mod tests {
             preserved_trivia: Some(rc(text("|"))),
             required: false,
             join_separator: true,
+            preserved_blank_lines: 0,
         };
         assert_eq!(*expanded, cat(vec![text("x"), join_sep.clone(), text("y")]));
         assert!(!has_source_trivia(&[rc(join_sep)]));
@@ -2058,5 +2092,198 @@ mod tests {
             assert_eq!(render(&resolved, 80), flat);
             assert_eq!(render(&resolved, 8), broken);
         }
+    }
+
+    // ---- A source-preserved blank count at a gap flanked by two anchor spacings ----
+
+    /// `x`, AfterSpec(after), *seps, [BeforeSpec(before)], `y`.
+    fn anchored(after_spacing: Doc, seps: Vec<Doc>, before_spacing: Option<Doc>) -> Doc {
+        let mut docs = vec![text("x"), after(after_spacing)];
+        docs.extend(seps);
+        if let Some(b) = before_spacing {
+            docs.push(before(b));
+        }
+        docs.push(text("y"));
+        cat(docs)
+    }
+
+    #[test]
+    fn triple_keeps_preserved_blank_count() {
+        // Port of test_triple_keeps_preserved_blank_count.
+        let resolved = resolve_spacing_specs(anchored(
+            hardline(0),
+            vec![sep_blanks(2, false)],
+            Some(hardline(0)),
+        ));
+        assert_eq!(resolved, cat(vec![text("x"), hardline(2), text("y")]));
+        assert_eq!(render4(&resolved), "x\n\n\ny");
+    }
+
+    #[test]
+    fn triple_ignores_configured_blank_spacing() {
+        // Port of test_triple_ignores_configured_blank_spacing.
+        let resolved = resolve_spacing_specs(anchored(
+            hardline(0),
+            vec![sep(Some(hardline(2)), None, false)],
+            Some(hardline(0)),
+        ));
+        assert_eq!(resolved, cat(vec![text("x"), hardline(0), text("y")]));
+    }
+
+    #[test]
+    fn triple_promotes_preserved_count_over_non_hardline_anchors() {
+        // Port of test_triple_promotes_preserved_count_over_non_hardline_anchors.
+        for anchor in [nbsp(), softline(), nil(), line()] {
+            let resolved = resolve_spacing_specs(anchored(
+                anchor.clone(),
+                vec![sep_blanks(1, false)],
+                Some(anchor.clone()),
+            ));
+            assert_eq!(
+                resolved,
+                cat(vec![text("x"), hardline(1), text("y")]),
+                "anchor {anchor:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn triple_with_zero_count_keeps_anchor_merge() {
+        // Port of test_triple_with_zero_count_keeps_anchor_merge.
+        let resolved = resolve_spacing_specs(anchored(
+            nbsp(),
+            vec![sep(Some(hardline(0)), None, false)],
+            Some(nbsp()),
+        ));
+        assert_eq!(resolved, cat(vec![text("x"), nbsp(), text("y")]));
+        assert_eq!(render4(&resolved), "x y");
+    }
+
+    #[test]
+    fn triple_keeps_larger_anchor_blank_count() {
+        // Port of test_triple_keeps_larger_anchor_blank_count.
+        let resolved = resolve_spacing_specs(anchored(
+            hardline(2),
+            vec![sep_blanks(1, false)],
+            Some(hardline(0)),
+        ));
+        assert_eq!(resolved, cat(vec![text("x"), hardline(2), text("y")]));
+    }
+
+    #[test]
+    fn consecutive_merge_carries_preserved_count() {
+        // Port of test_consecutive_merge_carries_preserved_count (both parametrizations).
+        let configured = || sep(Some(hardline(2)), None, false);
+        for seps in [
+            vec![configured(), sep_blanks(1, false)],
+            vec![sep_blanks(1, false), configured()],
+        ] {
+            let merged = mutate_consecutive_specs(&seps.iter().cloned().map(rc).collect());
+            assert_eq!(
+                merged,
+                Some(vec![rc(Doc::SeparatorSpec {
+                    spacing: Some(rc(hardline(2))),
+                    preserved_trivia: None,
+                    required: false,
+                    join_separator: false,
+                    preserved_blank_lines: 1,
+                })])
+            );
+            assert_eq!(
+                resolve_spacing_specs(anchored(hardline(0), seps.clone(), Some(hardline(0)))),
+                cat(vec![text("x"), hardline(1), text("y")])
+            );
+            assert_eq!(
+                resolve_spacing_specs(anchored(hardline(0), seps, None)),
+                cat(vec![text("x"), hardline(2), text("y")])
+            );
+        }
+    }
+
+    #[test]
+    fn consecutive_merge_takes_larger_preserved_count() {
+        // Port of test_consecutive_merge_takes_larger_preserved_count.
+        let ws = [sep_blanks(1, false), sep_blanks(2, false)]
+            .into_iter()
+            .map(rc)
+            .collect();
+        assert_eq!(
+            mutate_consecutive_specs(&ws),
+            Some(vec![rc(sep_blanks(2, false))])
+        );
+    }
+
+    #[test]
+    fn consecutive_merge_trivia_operand_drops_count() {
+        // Port of test_consecutive_merge_trivia_operand_drops_count (both parametrizations).
+        for seps in [
+            vec![comment_sep("// c"), sep_blanks(1, false)],
+            vec![sep_blanks(1, false), comment_sep("// c")],
+        ] {
+            let ws = seps.into_iter().map(rc).collect();
+            assert_eq!(
+                mutate_consecutive_specs(&ws),
+                Some(vec![rc(comment_sep("// c"))])
+            );
+        }
+    }
+
+    #[test]
+    fn pair_mutators_unchanged_by_preserved_count() {
+        // Port of test_pair_mutators_unchanged_by_preserved_count.
+        assert_eq!(
+            resolve_spacing_specs(anchored(nbsp(), vec![sep_blanks(1, false)], None)),
+            cat(vec![text("x"), hardline(1), text("y")])
+        );
+        assert_eq!(
+            resolve_spacing_specs(anchored(
+                nbsp(),
+                vec![sep(Some(hardline(0)), None, false)],
+                None
+            )),
+            cat(vec![text("x"), nbsp(), text("y")])
+        );
+    }
+
+    #[test]
+    fn join_drops_preserved_count_at_anchored_gap() {
+        // Port of test_join_drops_preserved_count_at_anchored_gap.
+        let doc = Doc::Join {
+            docs: vec![
+                rc(text("x")),
+                rc(after(hardline(0))),
+                rc(sep_blanks(1, false)),
+                rc(before(hardline(0))),
+                rc(text("y")),
+            ],
+            separator: rc(nbsp()),
+        };
+        assert_eq!(render4(&resolve_spacing_specs(doc)), "x y");
+    }
+
+    #[test]
+    fn nest_boundary_comment_and_anchored_trailing_blank() {
+        // Port of test_nest_boundary_comment_and_anchored_trailing_blank.
+        let trivia = cat(vec![hardline(1), text("// c"), hardline(0)]);
+        let doc = braced(
+            cat(vec![
+                sep(None, Some(trivia), false),
+                text("x"),
+                after(hardline(0)),
+                sep_blanks(1, false),
+            ]),
+            Some(hardline(0)),
+        );
+        let resolved = resolve_spacing_specs(doc);
+        assert_eq!(
+            resolved,
+            cat(vec![
+                text("{"),
+                nest1(cat(vec![hardline(1), text("// c"), hardline(0), text("x")])),
+                hardline(1),
+                text("}"),
+            ])
+        );
+        assert_eq!(render4(&resolved), "{\n\n    // c\n    x\n\n}");
     }
 }

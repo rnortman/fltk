@@ -2025,9 +2025,7 @@ def test_trivia_rule_preserve_blanks_emits_blank_line_branch() -> None:
     assert "if total_newlines >= 2 {" in body
     assert "} else if total_newlines >= 1 {" in body
     # The blank-line branch caps the runtime count; the single-newline branch is plain.
-    assert (
-        "separator_spec(Some(Doc::HardLine { blank_lines: ((total_newlines - 1).min(2) as u32) }), None, false)" in body
-    )
+    assert "preserved_blank_separator_spec((total_newlines - 1).min(2) as u32, false)" in body
     assert "separator_spec(Some(Doc::HardLine { blank_lines: 0 }), None, false)" in body
 
 
@@ -2190,9 +2188,7 @@ def test_non_trivia_rule_preserve_blanks_emits_blank_line_branch() -> None:
     body = _method_body(src, "unparse_r__alt0")
     assert "if newline_count >= 2 {" in body
     assert "} else if newline_count >= 1 {" in body
-    assert (
-        "separator_spec(Some(Doc::HardLine { blank_lines: ((newline_count - 1).min(2) as u32) }), None, true)" in body
-    )
+    assert "preserved_blank_separator_spec((newline_count - 1).min(2) as u32, true)" in body
     assert "separator_spec(Some(Doc::HardLine { blank_lines: 0 }), None, true)" in body
 
 
@@ -2208,7 +2204,7 @@ def test_non_trivia_rule_preserve_blanks_is_per_rule() -> None:
     src = RustUnparserGenerator(grammar, formatter_config=cfg).generate()
 
     r_body = _method_body(src, "unparse_r__alt0")
-    assert "((newline_count - 1).min(1) as u32)" in r_body
+    assert "preserved_blank_separator_spec((newline_count - 1).min(1) as u32, " in r_body
 
     # Rule-level 0 collapses: the non-trivia branch emits the default spacing unconditionally.
     s_body = _method_body(src, "unparse_s__alt0")
@@ -2216,7 +2212,23 @@ def test_non_trivia_rule_preserve_blanks_is_per_rule() -> None:
 
     # A rule with no override keeps the global value.
     t_body = _method_body(src, "unparse_t__alt0")
-    assert "((newline_count - 1).min(3) as u32)" in t_body
+    assert "preserved_blank_separator_spec((newline_count - 1).min(3) as u32, " in t_body
+
+
+@pytest.mark.parametrize("preserve_blanks", [0, 1])
+def test_configured_blank_default_is_not_a_preserved_count(preserve_blanks: int) -> None:
+    """A configured ``blank(N)`` default goes through ``separator_spec``, carrying no preserved count.
+
+    Only the ``>= 2`` newline arm builds ``preserved_blank_separator_spec``; the configured
+    default -- the same ``HardLine { blank_lines: 2 }`` a preserved two-blank gap would carry --
+    must stay a plain spacing, or the resolver would promote it over two anchors.
+    """
+    cfg = parse_format_config(f"preserve_blanks: {preserve_blanks};\nrule r {{ ws_allowed: blank(2); }}\n")
+    src = RustUnparserGenerator(parse_grammar('r := a:"x" , b:"y" ;'), formatter_config=cfg).generate()
+    body = _method_body(src, "unparse_r__alt0")
+    assert "separator_spec(Some(Doc::HardLine { blank_lines: 2 }), None, false)" in body
+    preserved = f"preserved_blank_separator_spec((newline_count - 1).min({preserve_blanks}) as u32, false)"
+    assert body.count("preserved_blank_separator_spec(") == body.count(preserved) == (1 if preserve_blanks else 0)
 
 
 def test_non_trivia_rule_single_variant_omits_catchall() -> None:
@@ -2322,9 +2334,7 @@ def test_non_trivia_rule_preserve_blanks_from_parsed_clobbering_config() -> None
     src = RustUnparserGenerator(parse_grammar('r := a:"x" : b:"y" ;'), formatter_config=cfg).generate()
     body = _method_body(src, "unparse_r__alt0")
     assert "if newline_count >= 2 {" in body
-    assert (
-        "separator_spec(Some(Doc::HardLine { blank_lines: ((newline_count - 1).min(2) as u32) }), None, true)" in body
-    )
+    assert "preserved_blank_separator_spec((newline_count - 1).min(2) as u32, true)" in body
 
 
 def test_default_separator_uses_per_rule_spacing_override() -> None:

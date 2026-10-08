@@ -2153,9 +2153,11 @@ class RustUnparserGenerator:
         ``_gen_trivia_processing`` (``gsm2unparser.py:1172``/``:1216`` for the trivia-rule branch,
         ``:1348``/``:1392`` for the non-trivia branch):
 
-        - ``preserve_blanks > 0``: a blank line (``>= 2`` newlines) emits a ``HardLine`` carrying
-          the source blank count capped at the configured maximum; a single newline (``>= 1``)
-          emits a plain ``HardLine``; otherwise the default separator spacing.
+        - ``preserve_blanks > 0``: a blank line (``>= 2`` newlines) emits
+          ``preserved_blank_separator_spec`` with the source blank count capped at the configured
+          maximum, which is both its ``HardLine`` spacing and its ``preserved_blank_lines``; a
+          single newline (``>= 1``) emits a plain ``HardLine``; otherwise the default separator
+          spacing.
         - ``preserve_blanks == 0`` with ``preserve_line_at_zero`` (the trivia-rule branch): a
           newline (``>= 1``) emits a plain ``HardLine`` to keep comment line structure; otherwise
           the default spacing.
@@ -2170,15 +2172,16 @@ class RustUnparserGenerator:
         if preserve_blanks > 0:
             lines.append(f"{o}if {count_expr} >= 2 {{")
             # `>= 2` guarantees the subtraction cannot underflow.
-            blank_expr = f"(({count_expr} - 1).min({preserve_blanks}) as u32)"
+            blank_expr = f"({count_expr} - 1).min({preserve_blanks}) as u32"
             lines.extend(
                 self._add_separator_spec_lines(
                     rule_name=rule_name,
-                    spacing=f"Doc::HardLine {{ blank_lines: {blank_expr} }}",
+                    spacing=None,
                     preserved_trivia_expr=None,
                     required=is_required,
                     indent=i,
                     context="trivia blank-line spacing",
+                    preserved_blank_lines_expr=blank_expr,
                 )
             )
             lines.append(f"{o}}} else if {count_expr} >= 1 {{")
@@ -2218,11 +2221,12 @@ class RustUnparserGenerator:
         self,
         *,
         rule_name: str,
-        spacing: Doc | str | None,
+        spacing: Doc | None,
         preserved_trivia_expr: str | None,
         required: bool,
         indent: str,
         context: str,
+        preserved_blank_lines_expr: str | None = None,
     ) -> list[str]:
         """Emit ``acc = acc.add_trivia(separator_spec(...));`` for one ``SeparatorSpec``.
 
@@ -2233,14 +2237,19 @@ class RustUnparserGenerator:
         in the ``fltk_unparser_core::separator_spec(spacing, preserved_trivia, required)``
         constructor.  ``preserved_trivia_expr`` is a pre-built Rust expression string (or ``None``);
         the trivia-rule branch always passes ``None`` (the non-trivia branch will supply it).
-        ``spacing`` may also be a pre-built Rust expression string for a runtime-computed
-        spacing; a ``Doc::`` reference in it records the ``Doc`` import the header gates.
+
+        ``preserved_blank_lines_expr``, when given, is a Rust ``u32`` expression for the capped
+        source blank count of the gap; ``spacing`` and ``preserved_trivia_expr`` must then be
+        ``None``, and the emitted constructor is
+        ``fltk_unparser_core::preserved_blank_separator_spec(blank_lines, required)``.
         """
-        if isinstance(spacing, str):
-            if "Doc::" in spacing:
-                self._uses_doc_type = True
-            spacing_arg = f"Some({spacing})"
-        elif spacing is None:
+        required_arg = "true" if required else "false"
+        if preserved_blank_lines_expr is not None:
+            assert spacing is None, "a preserved blank count carries its own spacing"
+            assert preserved_trivia_expr is None, "a preserved blank count has no trivia"
+            spec = f"fltk_unparser_core::preserved_blank_separator_spec({preserved_blank_lines_expr}, {required_arg})"
+            return [f"{indent}acc = acc.add_trivia({spec});"]
+        if spacing is None:
             spacing_arg = "None"
         else:
             try:
@@ -2250,7 +2259,6 @@ class RustUnparserGenerator:
                 raise ValueError(msg) from exc
             spacing_arg = f"Some({doc_expr})"
         trivia_arg = "None" if preserved_trivia_expr is None else f"Some({preserved_trivia_expr})"
-        required_arg = "true" if required else "false"
         spec = f"fltk_unparser_core::separator_spec({spacing_arg}, {trivia_arg}, {required_arg})"
         return [f"{indent}acc = acc.add_trivia({spec});"]
 

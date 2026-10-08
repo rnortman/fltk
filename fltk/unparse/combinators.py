@@ -258,16 +258,23 @@ class SeparatorSpec(Doc):
     `preserved_trivia` holds source trivia the generated unparser preserved or, when
     `join_separator` is true, the separator of a `Join` the resolver expanded. The second is
     not source text and has no indentation of its own.
+
+    `preserved_blank_lines` is the number of blank lines the source held at this gap, already
+    capped by `preserve_blanks`; 0 means the separator carries no source-preserved count. A
+    positive count beats a smaller or non-HardLine anchor spacing however many anchors flank
+    the gap, while a configured `spacing` alone never beats two anchors.
     """
 
     spacing: Doc | None
     preserved_trivia: Doc | None
     required: bool
     join_separator: bool = False
+    preserved_blank_lines: int = 0
 
     def __repr__(self) -> str:
         join = ", join_separator=True" if self.join_separator else ""
+        blanks = f", preserved_blank_lines={self.preserved_blank_lines}" if self.preserved_blank_lines else ""
         return (
             f"SeparatorSpec(spacing={self.spacing!r}, "
-            f"preserved_trivia={self.preserved_trivia!r}, required={self.required}{join})"
+            f"preserved_trivia={self.preserved_trivia!r}, required={self.required}{join}{blanks})"
         )
