@@ -648,6 +648,8 @@ fn resolve_spacing(
         sep_spacing.is_some(),
         "Separator has neither preserved trivia nor spacing"
     );
+    // TODO(anchored-gap-blank-loss): `sep_spacing` (and the source-preserved blank count it
+    // carries) is never consulted here, so preserve_blanks is lost at both-anchored gaps.
     merge_spacing(Some(after), Some(before))
 }
 

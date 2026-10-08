@@ -565,6 +565,8 @@ def _resolve_spacing(after_spec: AfterSpec, before_spec: BeforeSpec, sep_spec: S
         msg = f"Separator has neither preserved trivia nor spacing: {sep_spec}"
         raise RuntimeError(msg)
 
+    # TODO(anchored-gap-blank-loss): the separator's spacing (and the source-preserved blank
+    # count it carries) is never consulted here, so preserve_blanks is lost at both-anchored gaps.
     # Smart merge of after and before specs
     return _merge_spacing(after_spec.spacing, before_spec.spacing)
 
