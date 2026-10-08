@@ -21,7 +21,15 @@ from fltk.unparse.combinators import (
     HardLine,
     Text,
 )
-from fltk.unparse.fmt_config import FormatterConfig, ItemSelector, Normal, Omit, OperationType, RenderAs
+from fltk.unparse.fmt_config import (
+    FormatterConfig,
+    ItemSelector,
+    Normal,
+    Omit,
+    OperationType,
+    RenderAs,
+    before_spacing_is_tentative,
+)
 from fltk.unparse.literal_labels import check_labeled_literal_texts, spellings_for
 
 if TYPE_CHECKING:
@@ -1004,11 +1012,17 @@ class UnparserGenerator:
             item: The grammar item to check for before configuration
             rule_name: The name of the rule containing the item
         """
-        before_spacing = self.formatter_config.get_before_spacing(rule_name, item)
-        if before_spacing:
-            before_spec_expr = self._create_before_spec(before_spacing)
+        before_spec_expr = self._before_spec_expr(rule_name, item)
+        if before_spec_expr is not None:
             new_accumulator = accumulator_var.load().method.add_non_trivia.call(before_spec_expr)
             target_block.assign(accumulator_var.store(), new_accumulator)
+
+    def _before_spec_expr(self, rule_name: str, item: gsm.Item) -> iir.Expr | None:
+        """Return the ``BeforeSpec`` construction for ``item``, or None when none is configured."""
+        before_spacing = self.formatter_config.get_before_spacing(rule_name, item)
+        if not before_spacing:
+            return None
+        return self._create_before_spec(before_spacing)
 
     def _gen_dropped_trivia_check_method(self, rule_name: str) -> str:
         """Generate ``_check_dropped_trivia_{rule}`` and return its name.
@@ -1933,8 +1947,24 @@ class UnparserGenerator:
 
             self._gen_anchor_operations_before_item(method.block, accumulator_var, grammar_item, rule_name)
 
-            if not isinstance(item_disposition, Omit | RenderAs):
-                self._gen_before_item_spacing(method.block, accumulator_var, grammar_item, rule_name)
+            # A tentative item is attempted on the accumulator plus its BeforeSpec; the spec
+            # reaches `accumulator` only when the attempt emits the item, so an absent item
+            # leaves the accumulator (and its trivia state) exactly as it was.
+            tentative = before_spacing_is_tentative(grammar_item, item_disposition)
+            tentative_before = self._before_spec_expr(rule_name, grammar_item) if tentative else None
+            if tentative_before is not None:
+                attempt_var = method.block.var(
+                    name=f"attempt_accumulator_{item_idx}",
+                    typ=self.doc_accumulator_type,
+                    ref_type=iir.RefType.VALUE,
+                    mutable=False,
+                    init=accumulator_var.load().method.add_non_trivia.call(tentative_before),
+                )
+                call_accumulator = attempt_var.load()
+            else:
+                if not tentative and not isinstance(item_disposition, Omit | RenderAs):
+                    self._gen_before_item_spacing(method.block, accumulator_var, grammar_item, rule_name)
+                call_accumulator = accumulator_var.load()
 
             item_call = (
                 iir.SelfExpr()
@@ -1943,7 +1973,7 @@ class UnparserGenerator:
                     node_var.load(),
                     current_pos_var.load(),
                     current_cursor_var.load(),
-                    accumulator_var.load(),
+                    call_accumulator,
                 )
             )
 
@@ -1975,10 +2005,18 @@ class UnparserGenerator:
                     self._gen_after_item_spacing(method.block, accumulator_var, grammar_item, rule_name)
             else:
                 # Optional item - handle None case
-                # TODO(optional-item-phantom-before-spec): the BeforeSpec for this item was
-                # already added to the accumulator ahead of the call, so an absent optional
-                # leaves a phantom spec in the doc. It must be committed only on this branch.
                 if_not_none = method.block.if_(unparse_result_var.load())
+
+                # A repetition always succeeds; with a tentative BeforeSpec its result is
+                # committed only when at least one occurrence advanced the child position.
+                guard_commit = tentative_before is not None and grammar_item.quantifier.is_multiple()
+                if guard_commit:
+                    if_advanced = if_not_none.block.if_(
+                        iir.GreaterThan(lhs=self._extract_result_pos(unparse_result_var), rhs=current_pos_var.load())
+                    )
+                    if_advanced.block.assign(
+                        accumulator_var.store(), self._extract_result_accumulator(unparse_result_var)
+                    )
 
                 if_not_none.block.assign(current_pos_var.store(), self._extract_result_pos(unparse_result_var))
                 if_not_none.block.assign(current_cursor_var.store(), self._extract_result_cursor(unparse_result_var))
@@ -1990,9 +2028,12 @@ class UnparserGenerator:
                     if_not_none.block.assign(accumulator_var.store(), new_accumulator)
                 elif not isinstance(item_disposition, Omit):
                     assert isinstance(item_disposition, Normal)
-                    result_accumulator = self._extract_result_accumulator(unparse_result_var)
-                    if_not_none.block.assign(accumulator_var.store(), result_accumulator)
+                    if not guard_commit:
+                        result_accumulator = self._extract_result_accumulator(unparse_result_var)
+                        if_not_none.block.assign(accumulator_var.store(), result_accumulator)
 
+                    # TODO(test-missing-zero-run-after-spacing-on-repetition): a repetition always
+                    # succeeds, so a zero-occurrence `*` run still gets its after-spacing.
                     self._gen_after_item_spacing(if_not_none.block, accumulator_var, grammar_item, rule_name)
 
             self._gen_anchor_operations_after_item(method.block, accumulator_var, grammar_item, rule_name)

@@ -154,6 +154,13 @@ quoted := %"'" . value:/[a-z]+/ . tail:/[0-9]/? . %"'" ;
 mixed_opt := key:/[a-z]+/? . node:num ;
 
 // ---------------------------------------------------------------------------
+// An optional item between two WS_ALLOWED gaps, so a `before` spacing on it is
+// visible in the rendered output, present and absent.  The node children make
+// the rule a product; the closing `;` gives the absent item a following gap.
+// ---------------------------------------------------------------------------
+opt_gap := head:name , tail:num? , %";" ;
+
+// ---------------------------------------------------------------------------
 // Rules the AST sidecar shapes into forms nothing else in this grammar reaches:
 // the two wide scalar builtins, a label written with two equivalent spellings,
 // and a fold.

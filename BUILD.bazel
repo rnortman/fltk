@@ -865,10 +865,14 @@ _FLTK_TESTS = {
     "fltk/unparse/test_pyrt.py": {},
     "fltk/unparse/test_renderer.py": {},
     "fltk/unparse/test_resolve_specs.py": {},
-    "fltk/unparse/test_unparser.py": {"data": [
-        "fltk/unparse/example.toy",
-        "fltk/unparse/example_expected_combinators.txt",
-    ]},
+    "fltk/unparse/test_unparser.py": {
+        "data": [
+            "fltk/unparse/example.toy",
+            "fltk/unparse/example_expected_combinators.txt",
+        ],
+        # The optional-before witnesses run over the Rust gate case's grammar and config.
+        "deps": ["//tests:rust_gate_cases"],
+    },
     "fltk/unparse/test_unparser_edge_cases.py": {},
 }
 

@@ -3,7 +3,7 @@
 import pytest
 
 from fltk.fegen import gsm
-from fltk.plumbing import parse_format_config
+from fltk.plumbing import parse_format_config, parse_grammar
 from fltk.unparse.combinators import (
     HARDLINE,
     LINE,
@@ -28,6 +28,7 @@ from fltk.unparse.fmt_config import (
     RenderAs,
     RuleConfig,
     TriviaConfig,
+    before_spacing_is_tentative,
 )
 
 
@@ -1688,3 +1689,40 @@ class TestPositionLevelPreserveBlanks:
     def test_anchor_block_with_spacing_still_parses(self):
         config = parse_format_config('after ";" { hard; };\n')
         assert config.anchor_configs["after:literal:;"].operations[0].spacing == HARDLINE
+
+
+def _item(grammar_text: str) -> gsm.Item:
+    """The second item of the first alternative of the grammar's first rule."""
+    return parse_grammar(grammar_text).rules[0].alternatives[0].items[1]
+
+
+@pytest.mark.parametrize(
+    ("grammar_text", "disposition", "expected"),
+    [
+        ('r := "x" , a:"a"? ;', Normal(), True),
+        ('r := "x" , a:"a"* ;', Normal(), True),
+        ('r := "x" , a:"a" ;', Normal(), False),
+        ('r := "x" , a:"a"+ ;', Normal(), False),
+        ('r := "x" , ";"? ;', Normal(), False),
+        ('r := "x" , ","* ;', Normal(), False),
+        ('r := "x" , a:"a"? ;', OMIT, False),
+        ('r := "x" , a:"a"? ;', RenderAs(spacing=NBSP), False),
+        ('r := "x" , a:"a"* ;', OMIT, False),
+        ('r := "x" , a:"a"* ;', RenderAs(spacing=NBSP), False),
+    ],
+    ids=[
+        "optional",
+        "repetition",
+        "required",
+        "one-or-more",
+        "suppressed-optional",
+        "suppressed-repetition",
+        "omit-optional",
+        "render-as-optional",
+        "omit-repetition",
+        "render-as-repetition",
+    ],
+)
+def test_before_spacing_is_tentative(grammar_text, disposition, expected):
+    """Only an included optional item rendered `Normal` takes its before-spacing into its attempt."""
+    assert before_spacing_is_tentative(_item(grammar_text), disposition) is expected

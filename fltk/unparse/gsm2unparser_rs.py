@@ -28,7 +28,16 @@ from fltk.fegen.gsm2parser_rs import cst_module_import
 from fltk.fegen.gsm2tree_rs import RustCstGenerator
 from fltk.fegen.rust_emit import rust_str_lit
 from fltk.unparse.combinators import HARDLINE, Concat, Doc, HardLine, Line, Nbsp, Nil, SoftLine, Text
-from fltk.unparse.fmt_config import AnchorConfig, FormatterConfig, ItemSelector, Normal, Omit, OperationType, RenderAs
+from fltk.unparse.fmt_config import (
+    AnchorConfig,
+    FormatterConfig,
+    ItemSelector,
+    Normal,
+    Omit,
+    OperationType,
+    RenderAs,
+    before_spacing_is_tentative,
+)
 from fltk.unparse.literal_labels import check_labeled_literal_texts, spellings_for
 
 
@@ -685,32 +694,36 @@ class RustUnparserGenerator:
         merged in (the default ``Normal`` disposition).
 
         Each item is wrapped with its configured before/after-item spacing
-        (:meth:`_item_spacing_lines`), mirroring the Python
-        ``gen_alternative_unparser`` (``gsm2unparser.py:1602`` ff.): the ``BeforeSpec`` is
-        added unconditionally before the item method call (so it persists in ``acc`` even
-        when an optional item is absent, matching the Python ``accumulator_var`` threading),
-        and the ``AfterSpec`` is added only on the success path — for an optional item that
-        means *inside* the ``if let Some`` block.  Each item is also bracketed by its
-        configured item-level anchor push/pop operations
-        (:meth:`_item_anchor_lines`): before-anchors are emitted *ahead* of the
-        before-spacing (matching the Python ``_gen_anchor_operations_before_item`` →
-        ``_gen_before_item_spacing`` order, ``gsm2unparser.py:1602``/``:1605``), and
-        after-anchors *after* the item block — both unconditional at the 8-space indent
-        (the Python after-anchor runs at ``method.block`` scope, ``:1656``, not inside the
-        optional ``if_not_none`` block).  ``rule_name`` always names the enclosing rule (a
-        sub-expression's items query the parent rule's config, as in the Python backend).
+        (:meth:`_item_spacing_expr`), mirroring the Python ``gen_alternative_unparser``.  For a
+        required item, or a grammar-suppressed optional item, the ``BeforeSpec`` is added to
+        ``acc`` ahead of the item method call.  For an included (non-suppressed) optional item
+        with a ``Normal`` disposition the ``BeforeSpec`` is part of the attempt: the call receives
+        ``acc.add_non_trivia(<spec>)`` and ``acc`` takes the result only when the item is emitted,
+        so an absent item leaves ``acc`` -- including its trivia state -- untouched.  A ``*`` item
+        always returns ``Some``; with a before spec configured its result is committed only when
+        ``r.new_pos > pos`` (at least one occurrence).  Spacing on a suppressed optional item stays
+        unconditional, because formatted output may not depend on a token the formatter does not
+        print.  The ``AfterSpec`` is added only on the success path -- for an optional item that
+        means *inside* the ``if let Some`` block.  Each item is also bracketed by its configured
+        item-level anchor push/pop operations (:meth:`_item_anchor_lines`): before-anchors are
+        emitted *ahead* of the before-spacing (the Python ``_gen_anchor_operations_before_item`` →
+        before-spacing order), and after-anchors *after* the item block -- both unconditional at
+        the 8-space indent (the Python after-anchor runs at method scope, not inside the optional
+        ``if_not_none`` block).  ``rule_name`` always names the enclosing rule (a sub-expression's
+        items query the parent rule's config, as in the Python backend).
 
         Each item's formatter disposition
         (:meth:`fltk.unparse.fmt_config.FormatterConfig.get_item_disposition`) is honored, porting
-        the Python ``gen_alternative_unparser`` disposition branch (``gsm2unparser.py:1600`` ff.):
+        the Python ``gen_alternative_unparser`` disposition branch:
         a ``Normal`` item merges its own accumulator and gets before/after-item spacing; an
         ``Omit`` item is still called (to advance ``pos`` and validate the CST) but its produced
         ``Doc`` is discarded; a ``RenderAs`` item's output is likewise discarded and replaced by
         the configured spacing ``Doc``.  Before-spacing is emitted only for ``Normal`` items (the
-        Python ``not isinstance(item_disposition, Omit | RenderAs)`` gate, ``:1604``).  Because the
+        Python ``not isinstance(item_disposition, Omit | RenderAs)`` gate).  Because the
         accumulator is threaded by value, a ``Normal`` required item moves ``acc`` into the call
         and reassigns it from the result, whereas an ``Omit``/``RenderAs`` required item needs the
-        prior ``acc`` afterward and so clones it into the call (the optional path always clones).
+        prior ``acc`` afterward and so clones it into the call (the optional path passes a clone,
+        or the clone-free ``acc.add_non_trivia(<spec>)`` attempt accumulator).
 
         The alternative's initial separator (before the first item) and each item's trailing
         separator are processed by :meth:`_gen_trivia_processing` (porting the Python
@@ -737,7 +750,6 @@ class RustUnparserGenerator:
         lines.append("        let mut pos = pos;")
         lines.append("        let mut cur = cur;")
         lines.append("        let mut acc = acc;")
-        # Initial separator before the first item (Python gen_alternative_unparser :1588).
         lines.extend(self._gen_trivia_processing(rule_name, class_name, alt.initial_sep, "        "))
         for item_idx, item in enumerate(alt.items):
             item_fn = f"{prefix}__alt{alt_idx}__item{item_idx}"
@@ -746,23 +758,37 @@ class RustUnparserGenerator:
             # CST) but discard its produced Doc.
             item_disposition = self._formatter_config.get_item_disposition(rule_name, item)
             is_normal = isinstance(item_disposition, Normal)
-            # Item-level before-anchor push/pop, then before-spacing. Anchors are unconditional
-            # (8-space indent), ahead of the call; before-spacing is emitted only for Normal
-            # items (the Python `not isinstance(item_disposition, Omit | RenderAs)` gate,
-            # `gsm2unparser.py:1604`). Anchors precede spacing, matching the Python order.
+            # Anchors are unconditional and precede before-spacing, which is emitted only for
+            # Normal items; both must match the Python backend's ordering and gating.
             lines.extend(self._item_anchor_lines(rule_name, item, "before", "        "))
-            if is_normal:
-                # TODO(optional-item-phantom-before-spec): for an optional item this emits the
-                # BeforeSpec ahead of the `if let Some`, so an absent optional leaves a phantom
-                # spec in the doc. It must be committed only on the matched path.
+            # A tentative item is attempted on `acc` plus its BeforeSpec, so the spec reaches
+            # `acc` only when the item is emitted; any other Normal item gets its spacing ahead
+            # of the call.
+            tentative = before_spacing_is_tentative(item, item_disposition)
+            tentative_before = self._item_spacing_expr(rule_name, item, "before") if tentative else None
+            if is_normal and not tentative:
                 lines.extend(self._item_spacing_lines(rule_name, item, "before", "        "))
             if item.quantifier.is_optional():
-                # Optional: always clone acc for the call so an absent optional leaves the prior
-                # accumulator intact; the disposition-dependent merge runs only on the matched path.
-                lines.append(f"        if let Some(r) = self.{item_fn}(node, pos, cur, acc.clone()) {{")
+                # Optional: the call gets a copy of acc (plus any tentative BeforeSpec) so an
+                # absent optional leaves the prior accumulator intact; the disposition-dependent
+                # merge runs only on the matched path.
+                acc_arg = "acc.clone()" if tentative_before is None else f"acc.add_non_trivia({tentative_before})"
+                guard_commit = tentative_before is not None and item.quantifier.is_multiple()
+                lines.append(f"        if let Some(r) = self.{item_fn}(node, pos, cur, {acc_arg}) {{")
+                if guard_commit:
+                    # A repetition always returns Some; commit only when an occurrence was emitted.
+                    lines.append("            if r.new_pos > pos {")
+                    lines.append("                acc = r.accumulator;")
+                    lines.append("            }")
                 lines.append("            pos = r.new_pos;")
                 lines.append("            cur = r.cursor;")
-                lines.extend(self._item_disposition_success_lines(rule_name, item, item_disposition, "            "))
+                # TODO(test-missing-zero-run-after-spacing-on-repetition): a repetition always
+                # returns Some, so a zero-occurrence `*` run still gets its after-spacing.
+                lines.extend(
+                    self._item_disposition_success_lines(
+                        rule_name, item, item_disposition, "            ", merge=not guard_commit
+                    )
+                )
                 lines.append("        }")
             else:
                 # Required: a Normal item moves acc into the call and reassigns it from the
@@ -791,6 +817,8 @@ class RustUnparserGenerator:
         item: gsm.Item,
         item_disposition: Normal | Omit | RenderAs,
         indent: str,
+        *,
+        merge: bool = True,
     ) -> list[str]:
         """Return the success-path accumulator lines for an item, honoring its formatter disposition.
 
@@ -799,7 +827,8 @@ class RustUnparserGenerator:
         disposition; this method decides only what becomes of the *accumulator* on the success
         path:
 
-        - ``Normal``: merge the item's own accumulator (``acc = r.accumulator;``) and add any
+        - ``Normal``: merge the item's own accumulator (``acc = r.accumulator;``, omitted when
+          ``merge`` is false because the caller already emitted a guarded merge) and add any
           configured after-item spacing.
         - ``RenderAs``: discard the item's output and add the configured replacement spacing
           ``Doc`` via ``add_non_trivia`` (the prior ``acc`` is kept — the caller cloned it into the
@@ -832,20 +861,30 @@ class RustUnparserGenerator:
                 f"for rule {rule_name!r} item {item_id}"
             )
             raise RuntimeError(msg)
-        return [f"{indent}acc = r.accumulator;", *self._item_spacing_lines(rule_name, item, "after", indent)]
+        merge_lines = [f"{indent}acc = r.accumulator;"] if merge else []
+        return [*merge_lines, *self._item_spacing_lines(rule_name, item, "after", indent)]
 
     def _item_spacing_lines(
         self, rule_name: str, item: gsm.Item, position: Literal["before", "after"], indent: str
     ) -> list[str]:
         """Return the ``acc = acc.add_non_trivia(<spec>);`` line for an item's before/after spacing.
 
-        Ports the Python ``_gen_before_item_spacing`` / ``_gen_after_item_spacing``
-        (``gsm2unparser.py:825``/``:804``): query the generation-time ``FormatterConfig`` for
-        the item's spacing at ``position`` (``"before"`` or ``"after"``), wrap the resulting
-        spacing ``Doc`` in a ``BeforeSpec`` / ``AfterSpec`` control node via the
-        ``fltk_unparser_core`` ``before_spec`` / ``after_spec`` constructors, and add it as
-        non-trivia.  Returns ``[]`` when no spacing is configured (the common default-config
-        case), so unconfigured items emit nothing.
+        Returns ``[]`` when :meth:`_item_spacing_expr` finds no spacing configured.
+        """
+        spec_expr = self._item_spacing_expr(rule_name, item, position)
+        if spec_expr is None:
+            return []
+        return [f"{indent}acc = acc.add_non_trivia({spec_expr});"]
+
+    def _item_spacing_expr(self, rule_name: str, item: gsm.Item, position: Literal["before", "after"]) -> str | None:
+        """Return the ``fltk_unparser_core::<ctor>(<doc>)`` expression for an item's spacing.
+
+        Ports the Python ``_before_spec_expr`` / ``_gen_after_item_spacing``: query the
+        generation-time ``FormatterConfig`` for the item's spacing at ``position`` (``"before"``
+        or ``"after"``), wrap the resulting spacing ``Doc`` in a ``BeforeSpec`` / ``AfterSpec``
+        control node via the
+        ``fltk_unparser_core`` ``before_spec`` / ``after_spec`` constructors.  Returns ``None``
+        when no spacing is configured (the common default-config case).
 
         The spacing ``Doc`` is always a primitive (``_spacing_cst_to_doc`` only yields
         Nil/Nbsp/Line/SoftLine/HardLine), but it is routed through :meth:`_doc_to_rust_expr`
@@ -871,7 +910,7 @@ class RustUnparserGenerator:
             msg = f"Internal error: unexpected position {position!r} for rule {rule_name!r} item {item_id}"
             raise ValueError(msg)
         if spacing is None:
-            return []
+            return None
         # `_doc_to_rust_expr` rejects Group/Nest/Join/Comment spacing (parity with the Python
         # backend's `_doc_to_combinator_expr`); re-raise with rule/item/position context so the
         # offending config entry is identifiable, mirroring `_gen_rule_entry`'s JOIN_BEGIN wrap.
@@ -881,8 +920,7 @@ class RustUnparserGenerator:
             item_id = f"label={item.label!r}" if item.label else f"term={type(item.term).__name__}"
             msg = f"Rule {rule_name!r} {position}-spacing for {item_id} uses unsupported Doc type: {exc}"
             raise ValueError(msg) from exc
-        spec_expr = f"fltk_unparser_core::{ctor}({doc_expr})"
-        return [f"{indent}acc = acc.add_non_trivia({spec_expr});"]
+        return f"fltk_unparser_core::{ctor}({doc_expr})"
 
     def _item_anchor_config(
         self, rule_name: str, item: gsm.Item, position: Literal["before", "after"]

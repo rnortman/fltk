@@ -94,6 +94,7 @@ _RUNTIME_TEST_COUNTS = {
     "no_ast": 2,
     "literal_canonicalization": 3,
     "nullable_loop": 2,
+    "optional_before_spec": 10,
     "prelude": 1,
     "preserve_blanks": 3,
     "preserved_comment_blanks": 5,

@@ -23,6 +23,7 @@ from fltk.unparse.fmt_config import (
     FormatOperation,
     FormatterConfig,
     ItemSelector,
+    Omit,
     OperationType,
     RenderAs,
     RuleConfig,
@@ -1389,13 +1390,12 @@ def test_after_spacing_emitted_after_required_item_merge() -> None:
 
 
 def test_optional_item_before_after_spacing_placement() -> None:
-    """For an optional item, before-spacing is unconditional; after-spacing is inside the match.
+    """For an included optional item, before-spacing is the attempt's input; after-spacing is inside the match.
 
-    Python adds the optional item's ``BeforeSpec`` unconditionally (so it persists even when
-    the optional item is absent — ``gsm2unparser.py:1605`` runs before the ``if_not_none``
-    block) and the ``AfterSpec`` only on the matched path (``:1654``, inside ``if_not_none``).
-    The Rust port emits the before-spec at the outer (8-space) indent ahead of ``if let Some``
-    and the after-spec at the inner (12-space) indent inside the block.
+    The ``BeforeSpec`` is folded into the call argument (``acc.add_non_trivia(<spec>)``), so it
+    reaches ``acc`` only through ``r.accumulator`` on the matched path and an absent item leaves
+    ``acc`` untouched.  The ``AfterSpec`` is added at the inner indent inside the ``if let Some``
+    block.  This pins generated source text only; it is not a rendered-output oracle.
     """
     fmt_config = FormatterConfig()
     fmt_config.anchor_configs["before:label:foo"] = AnchorConfig(
@@ -1410,11 +1410,79 @@ def test_optional_item_before_after_spacing_placement() -> None:
     )
     src = RustUnparserGenerator(parse_grammar('opt := foo:"a"? . "b";'), formatter_config=fmt_config).generate()
     body = _method_body(src, "unparse_opt__alt0")
-    # Before-spec at outer indent, ahead of the optional `if let Some` dispatch.
-    assert "        acc = acc.add_non_trivia(fltk_unparser_core::before_spec(Doc::Line));" in body
-    assert body.index("before_spec(Doc::Line)") < body.index("if let Some(r) = self.unparse_opt__alt0__item0(")
+    assert (
+        "        if let Some(r) = self.unparse_opt__alt0__item0(node, pos, cur, "
+        "acc.add_non_trivia(fltk_unparser_core::before_spec(Doc::Line))) {"
+    ) in body
+    assert "acc = acc.add_non_trivia(fltk_unparser_core::before_spec(" not in body
+    assert "            acc = r.accumulator;" in body
+    assert "if r.new_pos > pos" not in body
     # After-spec at the inner indent, inside the matched block.
     assert "            acc = acc.add_non_trivia(fltk_unparser_core::after_spec(Doc::SoftLine));" in body
+
+
+def test_repetition_item_before_spacing_commits_only_when_advanced() -> None:
+    """A ``*`` item with before-spacing merges its result only when the loop advanced ``pos``.
+
+    The repetition method always returns ``Some``; the guarded merge precedes ``pos = r.new_pos;``
+    so it compares against the pre-call position, and the unguarded merge line is not emitted.
+    """
+    fmt_config = _spacing_config(position="before", selector_value="foo", spacing=comb.NBSP)
+    src = RustUnparserGenerator(parse_grammar('rep := foo:"a"* , "b";'), formatter_config=fmt_config).generate()
+    body = _method_body(src, "unparse_rep__alt0")
+    call = (
+        "        if let Some(r) = self.unparse_rep__alt0__item0(node, pos, cur, "
+        "acc.add_non_trivia(fltk_unparser_core::before_spec(Doc::Nbsp))) {\n"
+        "            if r.new_pos > pos {\n"
+        "                acc = r.accumulator;\n"
+        "            }\n"
+        "            pos = r.new_pos;\n"
+        "            cur = r.cursor;\n"
+        "        }"
+    )
+    assert call in body
+    assert "\n            acc = r.accumulator;" not in body
+
+
+def test_repetition_item_without_before_spacing_keeps_unguarded_merge() -> None:
+    """A ``*`` item with no before-spacing keeps the clone-in call and the unconditional merge."""
+    src = RustUnparserGenerator(parse_grammar('rep := foo:"a"* , "b";')).generate()
+    body = _method_body(src, "unparse_rep__alt0")
+    call = (
+        "        if let Some(r) = self.unparse_rep__alt0__item0(node, pos, cur, acc.clone()) {\n"
+        "            pos = r.new_pos;\n"
+        "            cur = r.cursor;\n"
+        "            acc = r.accumulator;\n"
+        "        }"
+    )
+    assert call in body
+    assert "if r.new_pos > pos" not in body
+
+
+@pytest.mark.parametrize("quantifier", ["?", "*"])
+def test_suppressed_optional_item_before_spacing_stays_unconditional(quantifier: str) -> None:
+    """A suppressed optional item (unlabelled literal) keeps its before-spacing ahead of the call.
+
+    Spacing anchored to a token the formatter never prints may not depend on the token's
+    presence, so the ``BeforeSpec`` is added to ``acc`` at the outer indent, the call gets
+    ``acc.clone()``, and no position guard is emitted.
+    """
+    fmt_config = FormatterConfig()
+    fmt_config.anchor_configs["before:literal:;"] = AnchorConfig(
+        selector_type=ItemSelector.LITERAL,
+        selector_value=";",
+        operations=[FormatOperation(OperationType.SPACING, spacing=comb.NBSP)],
+    )
+    grammar = f'sup := a:"a" , ";"{quantifier} , b:"b";'
+    src = RustUnparserGenerator(parse_grammar(grammar), formatter_config=fmt_config).generate()
+    body = _method_body(src, "unparse_sup__alt0")
+    spec_line = "        acc = acc.add_non_trivia(fltk_unparser_core::before_spec(Doc::Nbsp));"
+    call_line = "        if let Some(r) = self.unparse_sup__alt0__item1(node, pos, cur, acc.clone()) {"
+    assert spec_line in body
+    assert call_line in body
+    assert body.index(spec_line) < body.index(call_line)
+    assert "acc.add_non_trivia(fltk_unparser_core::before_spec(Doc::Nbsp))) {" not in body
+    assert "if r.new_pos > pos" not in body
 
 
 def test_literal_selector_before_spacing_emitted() -> None:
@@ -1805,6 +1873,25 @@ def test_render_as_skips_before_spacing() -> None:
     assert "before_spec" not in body
     # The RenderAs substitution is still emitted (the prior acc gets the configured Doc).
     assert "acc = acc.add_non_trivia(Doc::Nbsp);" in body
+
+
+@pytest.mark.parametrize("disposition", [OMIT, RenderAs(spacing=comb.NBSP)], ids=["omit", "render_as"])
+def test_omit_render_as_optional_item_skips_before_spacing(disposition: Omit | RenderAs) -> None:
+    """An optional ``Omit``/``RenderAs`` item emits no before-spacing, neither ahead of nor inside the call.
+
+    Its result accumulator is discarded or replaced, so the item is not tentative: the call gets
+    ``acc.clone()`` and no ``before_spec`` appears anywhere in the body.
+    """
+    fmt_config = _disposition_config(
+        selector_value="foo",
+        disposition=disposition,
+        operations=[FormatOperation(OperationType.SPACING, spacing=comb.LINE)],
+    )
+    src = RustUnparserGenerator(parse_grammar('opt := foo:"a"? , "b";'), formatter_config=fmt_config).generate()
+    body = _method_body(src, "unparse_opt__alt0")
+    assert "before_spec" not in body
+    assert "        if let Some(r) = self.unparse_opt__alt0__item0(node, pos, cur, acc.clone()) {" in body
+    assert "if r.new_pos > pos" not in body
 
 
 def test_render_as_unsupported_spacing_reports_context() -> None:

@@ -21,6 +21,7 @@ from fltk.plumbing import (
 from fltk.unparse.combinators import LINE, Concat, HardLine, Line, Text, concat
 from fltk.unparse.fmt_config import FormatterConfig, TriviaConfig
 from fltk.unparse.renderer import RendererConfig
+from tests.rust_gate_cases import OPTIONAL_BEFORE_SPEC_FORMATTER, OPTIONAL_BEFORE_SPEC_GRAMMAR
 
 
 @pytest.fixture
@@ -1781,6 +1782,173 @@ def test_newline_spanning_token_renders_verbatim(verbatim_text_unparser, source:
     once = render(source)
     assert once == expected
     assert render(once) == once
+
+
+# `before X` on an optional item. An included optional item's before-spacing is part of its
+# attempt: it is emitted only when `X` is, and an absent `?` or zero-occurrence `*` leaves the
+# accumulator -- trivia state included -- as if no `before X` were configured. Spacing anchored to
+# a suppressed optional item fires whether or not the source carried the token. The grammar and
+# config are the Rust backend's `optional_before_spec` gate case's, so both backends witness the
+# same inputs; each backend states its expected text independently.
+
+
+class _Formatter:
+    """A generated parser and unparser pair over one grammar and one format config."""
+
+    def __init__(self, parser_result, unparser_result):
+        self.parser_result = parser_result
+        self.unparser_result = unparser_result
+
+    def parse(self, rule: str, text: str):
+        parse_result = parse_text(self.parser_result, text, rule)
+        assert parse_result.success, f"Failed to parse {text!r} as {rule}: {parse_result.error_message}"
+        assert parse_result.cst is not None
+        return parse_result.cst
+
+    def render(self, rule: str, cst, text: str) -> str:
+        doc = unparse_cst(self.unparser_result, cst, text, rule)
+        return render_doc(doc, RendererConfig(max_width=80))
+
+    def format(self, rule: str, text: str) -> str:
+        """Format ``text`` as ``rule`` and assert the output is a fixed point."""
+        once = self.render(rule, self.parse(rule, text), text)
+        twice = self.render(rule, self.parse(rule, once), once)
+        assert twice == once, f"the layout must be a fixed point: {text!r} -> {once!r} -> {twice!r}"
+        return once
+
+
+def _formatter(grammar_text: str, config_text: str):
+    grammar = parse_grammar(grammar_text)
+    parser_result = generate_parser(grammar, capture_trivia=True)
+    try:
+        unparser_result = generate_unparser(
+            parser_result.grammar,
+            parser_result.cst_module_name,
+            formatter_config=parse_format_config(config_text),
+        )
+        yield _Formatter(parser_result, unparser_result)
+    finally:
+        if parser_result.cst_module_name in sys.modules:
+            del sys.modules[parser_result.cst_module_name]
+
+
+@pytest.fixture
+def optional_before():
+    """Formatter over the optional-item before-spacing grammar."""
+    yield from _formatter(OPTIONAL_BEFORE_SPEC_GRAMMAR, OPTIONAL_BEFORE_SPEC_FORMATTER)
+
+
+@pytest.mark.parametrize(("text", "expected"), [("xz", "xz"), ("xaz", "x az")])
+def test_optional_item_before_spacing_only_when_present(optional_before, text, expected):
+    """`before a` on `a:"a"?` spaces a present `a` and contributes nothing when `a` is absent."""
+    assert optional_before.format("opt", text) == expected
+
+
+@pytest.mark.parametrize(("text", "expected"), [("xz", "xz"), ("xaz", "x az"), ("xaaz", "x aaz")])
+def test_repetition_item_before_spacing_only_ahead_of_a_nonempty_run(optional_before, text, expected):
+    """`before a` on `a:"a"*`: nothing for zero occurrences, one spacing ahead of a run."""
+    assert optional_before.format("rep", text) == expected
+
+
+@pytest.mark.parametrize("text", ["xz", "x z", "x // c\nz", "x // c\n// d\nz"])
+def test_absent_optional_after_trivia_matches_unconfigured_twin(optional_before, text):
+    """An absent item after a trivia-bearing gap leaves the gap's trivia state as it was."""
+    assert optional_before.format("opt", text) == optional_before.format("opt_twin", text)
+
+
+@pytest.mark.parametrize("text", ["xz", "x z", "x // c\nz"])
+def test_consecutive_absent_optionals_match_unconfigured_twin(optional_before, text):
+    """Two configured optionals, both absent, render exactly as two unconfigured ones do."""
+    assert optional_before.format("two", text) == optional_before.format("two_twin", text)
+
+
+@pytest.mark.parametrize(("text", "expected"), [("xaz", "x az"), ("xbz", "x bz"), ("xabz", "x a bz")])
+def test_consecutive_optionals_space_each_present_item(optional_before, text, expected):
+    """Each present configured optional gets its own before-spacing; an absent neighbour adds none."""
+    assert optional_before.format("two", text) == expected
+
+
+def _drop_absent_item(fmt: _Formatter, rule: str, text: str, label: str):
+    """Parse ``text`` as ``rule``, then remove the ``label`` child and the node's source.
+
+    The result is a tree whose ``label`` item is absent and whose source cursor is unknown, so
+    trivia children are consumed in child order rather than by source position.
+    """
+    cst = fmt.parse(rule, text)
+    cst.children[:] = [(lbl, child) for lbl, child in cst.children if lbl is None or lbl.name != label.upper()]
+    cst.span = terminalsrc.Span(0, len(text))
+    return cst
+
+
+def test_absent_optional_with_unknown_cursor_matches_unconfigured_twin(optional_before):
+    """With the cursor unknown, the gap after an absent item takes trivia exactly as if no
+    `before` were configured: the attempt leaves the accumulator's trivia state untouched.
+
+    Both rules drop `// d`: the gap before the absent item takes `// c` and sets the trivia flag,
+    so the gap after it takes nothing, and the dropped-trivia guard does not run without a cursor.
+    TODO(unparse-cursor-fallback-signal): the expected text loses a comment.
+    """
+    text = "x // c\na // d\nz"
+    configured = optional_before.render("opt", _drop_absent_item(optional_before, "opt", text, "a"), text)
+    twin = optional_before.render("opt_twin", _drop_absent_item(optional_before, "opt_twin", text, "a"), text)
+    assert configured == twin
+    assert configured == "x\n// c\nz", repr(configured)
+
+
+@pytest.mark.parametrize(("rule", "present", "absent"), [("sup", "a;b", "ab"), ("sup_rep", "a,,b", "ab")])
+def test_suppressed_optional_spacing_is_unconditional(optional_before, rule, present, absent):
+    """Spacing anchored to a suppressed optional token fires whether or not the source carried it."""
+    with_token = optional_before.format(rule, present)
+    without_token = optional_before.format(rule, absent)
+    assert with_token == without_token
+    assert with_token != optional_before.format(f"{rule}_twin", absent)
+
+
+_DISPOSED_OPTIONAL_GRAMMAR = (
+    'om := "x" , a:"a"? , "z" ;\n'
+    'om_twin := "x" , a:"a"? , "z" ;\n'
+    'ra := "x" , a:"a"? , "z" ;\n'
+    'ra_twin := "x" , a:"a"? , "z" ;\n'
+)
+
+_DISPOSED_OPTIONAL_FORMATTER = (
+    "ws_allowed: nil;\n"
+    "rule om { before a { hard; } omit a; }\n"
+    "rule om_twin { omit a; }\n"
+    "rule ra { before a { hard; } render a as bsp; }\n"
+    "rule ra_twin { render a as bsp; }\n"
+)
+
+
+@pytest.fixture
+def disposed_optional():
+    """Formatter over optional items carrying both a `before` spacing and an omit/render disposition."""
+    yield from _formatter(_DISPOSED_OPTIONAL_GRAMMAR, _DISPOSED_OPTIONAL_FORMATTER)
+
+
+@pytest.mark.parametrize("rule", ["om", "ra"])
+@pytest.mark.parametrize("text", ["xz", "xaz"])
+def test_omit_render_as_optional_ignores_before_spacing(disposed_optional, rule, text):
+    """An omitted or rendered-as optional item emits no `before` spacing, present or absent.
+
+    Rendered once rather than formatted: dropping or replacing a present item is not a fixed point.
+    """
+    twin = f"{rule}_twin"
+    configured = disposed_optional.render(rule, disposed_optional.parse(rule, text), text)
+    assert configured == disposed_optional.render(twin, disposed_optional.parse(twin, text), text)
+
+
+def test_block_ended_statement_closes_without_a_blank(optional_before):
+    """A `}`-ended statement without `;` leaves no spec behind, so the enclosing `}` follows on
+    the next line."""
+    rendered = optional_before.format("doc", "x{x;x{x;}}")
+    assert rendered == "x{\n    x;\n    x{\n        x;\n    }\n}\n", repr(rendered)
+
+
+def test_authored_blank_after_block_ended_statement_survives(optional_before):
+    """An authored blank after a `}`-ended statement is kept under `preserve_blanks: 1`."""
+    rendered = optional_before.format("doc", "x{x{x;}\n\nx;}")
+    assert rendered == "x{\n    x{\n        x;\n    }\n\n    x;\n}\n", repr(rendered)
 
 
 if __name__ == "__main__":

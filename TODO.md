@@ -461,8 +461,30 @@ on `fltk-unparser-core` and on every consumer binary, so it wants a design pass 
 The same signal question covers a second bypass: the guard runs on the rule entry's success path,
 so a rule that returns `None` for any reason — including an alternative that fails on a child a gap
 left unconsumed — never reaches it, and the caller sees only "unparser returned None".
+A known instance: with the cursor unknown, an absent optional item between two trivia children —
+the shape a mutation that deletes the optional child leaves — loses the second child. The gap
+before the item takes the first and sets the accumulator's trivia flag, the gap after it then takes
+nothing, and no later gap does either; `x // c\na // d\nz` with `a` removed renders `x\n// c\nz`.
+A `before a` spacing used to clear that flag and so masked the loss for configured rules; it no
+longer does, and the `optional_before_spec` gate case and its Python twin in
+`fltk/unparse/test_unparser.py` pin the lossy text.
 Location: `fltk/unparse/pyrt.py` (the `TODO(unparse-cursor-fallback-signal)` comment in the source
 cursor section), with the generated counterparts in `fltk/unparse/gsm2unparser.py` and
+`fltk/unparse/gsm2unparser_rs.py`.
+
+## `test-missing-zero-run-after-spacing-on-repetition`
+
+An `after X` spacing on an included repetition `X*` fires on a zero-occurrence run, where no `X`
+was printed: the repetition method always succeeds, and both generators emit the after-spacing on
+the success path. It is the after-side twin of the phantom `before X` that an optional item no
+longer emits, and it reaches the resolver the same way — an `AfterSpec` is what boundary extraction
+peels. `before X` on the same item is committed only when the run advanced the child position; the
+after side was left unchanged deliberately, so the two sides are now asymmetric on an empty run and
+no test states what an empty run's after-spacing should be. Deciding it is a formatter-semantics
+change for every downstream spec with `after X` on `X*`; once decided, the guard (if any) goes in
+both generators beside the before-side one and a rendered witness over `xz` / `xaz` with
+`after a { … }` on `a:"a"*` pins it in both backends. Location: the optional-item success branch of
+`gen_alternative_unparser` in `fltk/unparse/gsm2unparser.py` and of `_gen_alternative_body` in
 `fltk/unparse/gsm2unparser_rs.py`.
 
 ## `unparse-quadratic-scaling`
@@ -524,35 +546,6 @@ as its own case (the accumulator pops an all-trivia nest differently); (5) one s
 `docs/format-specs.md` §Nest. Location: `crates/fltk-unparser-core/src/resolve.rs`
 (`extract_all_boundary_specs`, `extract_boundary_specs`), `fltk/unparse/resolve_specs.py`
 (`_extract_all_boundary_specs`, `_extract_boundary_specs`).
-
-## `optional-item-phantom-before-spec`
-
-Both generated unparsers emit a `BeforeSpec` for an *optional* grammar item whether or not the item
-is present: the before-spacing is added to the accumulator ahead of the item call, and only the
-after-spacing is gated on the success path (`gsm2unparser.py`, the optional-item branch of
-`gen_alternative_unparser`; `gsm2unparser_rs.py`, `_item_spacing_lines(..., "before", ...)` ahead of
-the `if let Some` in the alternative emitter). An absent item therefore leaves a phantom spec in
-the doc. That phantom blocks boundary extraction in the resolver, so an inner `after "}"` resolves
-inside its own Group — a doubled hard line, rendered as a blank — and where a separator carrying
-`blank_lines` sits at the same gap it forces the triple mutator that discards the authored blank.
-Reproduced with any `before X` on an optional `X`: brenn's global `before ";" { nil; }` on its
-optional statement terminator yields a spurious blank before an enclosing `}` after a `}`-ended
-statement and deletes an authored blank after one; `before tail { nbsp; }` on an optional `tail`
-puts a space before `,` and `]`. Consumer: brenn's `brennfmt`, whose goldens pin both symptoms and
-whose `--check` gate enforces them — tracked there as `TODO(dsl-fmt-block-blank-line)` and
-`TODO(dsl-fmt-tail-block-blank-line)` in `brenn/TODO.md`, both blocked on this. Fix = a `before X`
-spec for an optional `X` is part of the attempted item's input and is committed only on success:
-present → `BeforeSpec` ahead of the item's content exactly as today; absent → accumulator
-unchanged. In the Python generator the item call consumes the accumulator before the `if_not_none`
-branch exists, so "move the call inside the branch" is not the fix — thread the spec through the
-attempt. `test_optional_item_before_after_spacing_placement` and its docstring flip to the new
-contract; present/absent tested in both backends and the parity suite. This is a behaviour change
-for every consumer grammar that sets `before X` on an optional `X` — fltk's own `unparsefmt.fltkg`
-has an optional `;` under `before ";" { nil; }`, so its goldens may move; any movement must be
-explainable as phantom removal or it is a regression. State the rule in `docs/format-specs.md` and
-the changelog. Location: `fltk/unparse/gsm2unparser.py` (optional-item branch of
-`gen_alternative_unparser`), `fltk/unparse/gsm2unparser_rs.py` (alternative emitter, before-spacing
-ahead of the optional `if let Some`).
 
 ## `anchored-gap-blank-loss`
 

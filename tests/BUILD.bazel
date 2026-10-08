@@ -256,6 +256,11 @@ _RUST_GATE_FILES = [
     "nullable_loop/parser.rs",
     "nullable_loop/runtime.rs",
     "nullable_loop/mod.rs",
+    "optional_before_spec/cst.rs",
+    "optional_before_spec/parser.rs",
+    "optional_before_spec/unparser.rs",
+    "optional_before_spec/runtime.rs",
+    "optional_before_spec/mod.rs",
 ]
 
 py_binary(

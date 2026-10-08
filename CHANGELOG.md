@@ -31,6 +31,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- Formatter: `before X` spacing on an optional item (`X?` or `X*`) now appears only when `X` is
+  actually printed. Previously an absent `X` (or a `*` with zero matches) still left its spacing
+  behind. With a common spec such as `before ";" { nil; }` on an optional statement terminator,
+  that stray spacing produced an extra blank line before a closing `}` that follows a
+  `}`-ended statement, and could delete an authored blank line under `preserve_blanks`. A
+  non-empty `*` run still gets one spacing ahead of the run. Unchanged: spacing on a suppressed
+  item (`%X?`, or an unlabelled literal) still always applies, so formatting stays idempotent,
+  and `after` spacing is unchanged everywhere. Formatted output changes only for specs that set
+  `before X` on an included optional `X`; expect golden diffs there, each one removing spacing
+  where no `X` was printed. For hand-built or edited trees without source positions, an absent `X`
+  between two comments now drops the second comment, the same as when no `before X` is set. Blank
+  lines between two items that are both present can still be lost (tracked separately).
 - Formatter: newline-spanning tokens (multi-line strings, heredocs), multi-line block comments
   inside a nest, and `.fltkfmt` `text("…")` doc literals containing `\n` now render
   byte-for-byte on both backends. Previously the nest indent was written into the token's value

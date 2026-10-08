@@ -96,6 +96,22 @@ class RenderAs:
     spacing: Doc
 
 
+def before_spacing_is_tentative(item: gsm.Item, disposition: Normal | Omit | RenderAs) -> bool:
+    """Whether ``item``'s before-spacing belongs to its attempt rather than preceding it.
+
+    True for an included optional item (``X?``, ``X*``) rendered ``Normal``: its ``before X``
+    spacing reaches the output only when the attempt emits ``X`` -- for a repetition, only when
+    the run advanced the child position.  Suppressed items keep unconditional spacing, since output
+    may not depend on a token the formatter never prints; required and ``Omit``/``RenderAs`` items
+    are unaffected.
+    """
+    return (
+        item.quantifier.is_optional()
+        and item.disposition != gsm.Disposition.SUPPRESS
+        and isinstance(disposition, Normal)
+    )
+
+
 class OperationType(Enum):
     """Types of formatting operations that can occur at an anchor point."""
 

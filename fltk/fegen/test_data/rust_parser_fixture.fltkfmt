@@ -6,6 +6,8 @@
 //   - rule-level group / nest / join (RULE_START/RULE_END push/pop)
 //   - item-level group / nest / join ranges (per-item push/pop), both
 //     label-anchored and literal-anchored (with from-after / to-before modifiers)
+//   - before-spacing on an included optional item (`?`) and a repetition (`*`),
+//     emitted only when the item is
 //
 // Separators stay primitive (nbsp/bsp/soft): a group/nest/join Doc separator is
 // rejected by both the Python and Rust backends, so join here uses a plain `bsp`.
@@ -42,4 +44,14 @@ rule paren_expr {
   group from after "(" to before ")";
   after "(" { soft; }
   before ")" { soft; }
+}
+
+// before-spacing on an included optional item (`?`): present / absent
+rule opt_gap {
+  before tail { nbsp; }
+}
+
+// before-spacing on an included repetition (`*`): two / zero occurrences
+rule entries {
+  before entry { nbsp; }
 }

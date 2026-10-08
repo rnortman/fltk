@@ -2928,6 +2928,214 @@ fn trivia_behind_the_cursor_is_refused_with_its_position() {
 }
 """
 
+# `before X` on an optional item. An included optional item's before-spacing is part of its
+# attempt: emitted only when `X` is, so an absent `?` or zero-occurrence `*` leaves the accumulator --
+# trivia state included -- as if no `before X` were configured. Spacing anchored to a suppressed
+# optional item fires whether or not the source carried the token. Each `*_twin` rule repeats its
+# configured rule's body with no spec, so one baked config gives both sides of a comparison.
+# `fltk/unparse/test_unparser.py` runs its Python-backend witnesses over this grammar and config;
+# each backend states its expected text independently.
+OPTIONAL_BEFORE_SPEC_GRAMMAR = (
+    'opt := "x" , a:"a"? , "z" ;\n'
+    'opt_twin := "x" , a:"a"? , "z" ;\n'
+    'rep := "x" , a:"a"* , "z" ;\n'
+    'two := "x" , a:"a"? , b:"b"? , "z" ;\n'
+    'two_twin := "x" , a:"a"? , b:"b"? , "z" ;\n'
+    'sup := a:"a" , ";"? , b:"b" ;\n'
+    'sup_twin := a:"a" , ";"? , b:"b" ;\n'
+    'sup_rep := a:"a" , ","* , b:"b" ;\n'
+    'sup_rep_twin := a:"a" , ","* , b:"b" ;\n'
+    "doc := , stmt* , ;\n"
+    'stmt := kw:"x" , block:block? , semi:";"? , ;\n'
+    'block := "{" , stmt* , "}" ;\n'
+    "_trivia := ( line_comment | line_comment? : )+ ;\n"
+    'line_comment := prefix:"//" . text:/[^\\n]*/ . nl:"\\n" ;\n'
+)
+
+OPTIONAL_BEFORE_SPEC_FORMATTER = (
+    "preserve_blanks: 1;\ntrivia_preserve: LineComment;\nws_allowed: nil;\nws_required: bsp;\n"
+    "rule opt { before a { nbsp; } }\n"
+    "rule rep { before a { nbsp; } }\n"
+    "rule two { before a { nbsp; } before b { nbsp; } }\n"
+    'rule sup { before ";" { nbsp; } after ";" { nbsp; } }\n'
+    'rule sup_rep { before "," { nbsp; } }\n'
+    'rule stmt { before ";" { nil; } after ";" { hard; } }\n'
+    'rule block { after "{" { hard; } before "}" { hard; } after "}" { hard; } '
+    'nest from after "{" to before "}"; }\n'
+)
+
+OPTIONAL_BEFORE_SPEC_RUNTIME = """//! `before X` on an optional item is emitted only when `X` is.
+
+use super::cst;
+use super::parser::Parser;
+use super::unparser::Unparser;
+use ::fltk_unparser_core::{resolve_spacing_specs, Doc, Renderer, RendererConfig};
+
+fn render(doc: Doc) -> String {
+    let resolved = resolve_spacing_specs(doc);
+    Renderer::new(RendererConfig {
+        indent_width: 4,
+        max_width: 80,
+    })
+    .render(&resolved)
+}
+
+/// Format `src` as one rule and assert the output is a fixed point.
+macro_rules! format_rule {
+    ($src:expr, $parse:ident, $unparse:ident) => {{
+        let format_once = |src: &str| -> String {
+            let mut parser = Parser::new(src, None, true);
+            let parsed = parser.$parse(0).expect("the input must parse");
+            assert!(parsed.pos as usize == src.len(), "the parse must consume {src:?}");
+            let guard = parsed.result.read();
+            let unparsed = Unparser::new()
+                .$unparse(&*guard)
+                .expect("a parser-produced CST must unparse");
+            render(unparsed.doc())
+        };
+        let once = format_once($src);
+        assert_eq!(format_once(&once), once, "the layout must be a fixed point");
+        once
+    }};
+}
+
+fn opt(src: &str) -> String {
+    format_rule!(src, apply__parse_opt, unparse_opt)
+}
+
+fn opt_twin(src: &str) -> String {
+    format_rule!(src, apply__parse_opt_twin, unparse_opt_twin)
+}
+
+fn rep(src: &str) -> String {
+    format_rule!(src, apply__parse_rep, unparse_rep)
+}
+
+fn two(src: &str) -> String {
+    format_rule!(src, apply__parse_two, unparse_two)
+}
+
+fn two_twin(src: &str) -> String {
+    format_rule!(src, apply__parse_two_twin, unparse_two_twin)
+}
+
+fn sup(src: &str) -> String {
+    format_rule!(src, apply__parse_sup, unparse_sup)
+}
+
+fn sup_twin(src: &str) -> String {
+    format_rule!(src, apply__parse_sup_twin, unparse_sup_twin)
+}
+
+fn sup_rep(src: &str) -> String {
+    format_rule!(src, apply__parse_sup_rep, unparse_sup_rep)
+}
+
+fn sup_rep_twin(src: &str) -> String {
+    format_rule!(src, apply__parse_sup_rep_twin, unparse_sup_rep_twin)
+}
+
+fn doc(src: &str) -> String {
+    format_rule!(src, apply__parse_doc, unparse_doc)
+}
+
+#[test]
+fn an_optional_item_is_spaced_only_when_present() {
+    assert_eq!(opt("xz"), "xz");
+    assert_eq!(opt("xaz"), "x az");
+}
+
+#[test]
+fn a_repetition_is_spaced_only_ahead_of_a_nonempty_run() {
+    assert_eq!(rep("xz"), "xz");
+    assert_eq!(rep("xaz"), "x az");
+    assert_eq!(rep("xaaz"), "x aaz");
+}
+
+#[test]
+fn an_absent_optional_after_trivia_matches_its_unconfigured_twin() {
+    for src in ["xz", "x z", "x // c\nz", "x // c\n// d\nz"] {
+        assert_eq!(opt(src), opt_twin(src), "{src:?}");
+    }
+}
+
+#[test]
+fn consecutive_absent_optionals_match_their_unconfigured_twin() {
+    for src in ["xz", "x z", "x // c\nz"] {
+        assert_eq!(two(src), two_twin(src), "{src:?}");
+    }
+}
+
+#[test]
+fn consecutive_optionals_space_each_present_item() {
+    assert_eq!(two("xaz"), "x az");
+    assert_eq!(two("xbz"), "x bz");
+    assert_eq!(two("xabz"), "x a bz");
+}
+
+/// Parse `src` with `$parse`, drop its `$label` child and its source, and render it with `$unparse`.
+///
+/// The labelled item is then absent and the source cursor unknown, so trivia children are taken in
+/// child order rather than by source position.
+macro_rules! render_without {
+    ($src:expr, $parse:ident, $label:path, $unparse:ident) => {{
+        let src: &str = $src;
+        let mut parser = Parser::new(src, None, true);
+        let len = src.chars().count() as i64;
+        let parsed = parser.$parse(0).expect("the input must parse");
+        {
+            let mut node = parsed.result.write();
+            let idx = node
+                .children()
+                .iter()
+                .position(|(label, _)| matches!(label, Some($label)))
+                .expect("the source carries the labelled item");
+            node.remove_child(idx);
+            node.set_span(::fltk_cst_core::Span::new_sourceless(0, len));
+        }
+        let guard = parsed.result.read();
+        let unparsed = Unparser::new().$unparse(&guard).expect("the tree must unparse");
+        render(unparsed.doc())
+    }};
+}
+
+/// Both rules drop `// d`: the gap before the absent item takes `// c` and sets the trivia flag, so
+/// the gap after it takes nothing, and the dropped-trivia guard does not run without a cursor.
+/// TODO(unparse-cursor-fallback-signal): the expected text loses a comment.
+#[test]
+fn an_absent_optional_with_an_unknown_cursor_matches_its_unconfigured_twin() {
+    let src = "x // c\na // d\nz";
+    let configured = render_without!(src, apply__parse_opt, cst::OptLabel::A, unparse_opt);
+    assert_eq!(
+        configured,
+        render_without!(src, apply__parse_opt_twin, cst::OptTwinLabel::A, unparse_opt_twin),
+    );
+    assert_eq!(configured, "x\n// c\nz");
+}
+
+#[test]
+fn a_suppressed_optional_is_spaced_whether_or_not_the_source_carried_it() {
+    assert_eq!(sup("a;b"), sup("ab"));
+    assert_ne!(sup("ab"), sup_twin("ab"));
+}
+
+#[test]
+fn a_suppressed_repetition_is_spaced_whether_or_not_the_source_carried_it() {
+    assert_eq!(sup_rep("a,,b"), sup_rep("ab"));
+    assert_ne!(sup_rep("ab"), sup_rep_twin("ab"));
+}
+
+#[test]
+fn a_block_ended_statement_closes_without_a_blank() {
+    assert_eq!(doc("x{x;x{x;}}"), "x{\n    x;\n    x{\n        x;\n    }\n}\n");
+}
+
+#[test]
+fn an_authored_blank_after_a_block_ended_statement_survives() {
+    assert_eq!(doc("x{x{x;}\n\nx;}"), "x{\n    x{\n        x;\n    }\n\n    x;\n}\n");
+}
+"""
+
 # A literal that occupies source but no child position advances the cursor only when the source
 # there really spells it. An unlabeled alternation of equivalent spellings renders its canonical
 # one, so unparsing `use` under `("import" | "use")` emits `import` over three fewer codepoints:
@@ -3540,6 +3748,17 @@ CASES = [
         ast=False,
         parser=True,
         bypass_nil_validation=True,
+    ),
+    # Before-spacing on an optional item is committed only when the item is emitted.
+    Case(
+        "optional_before_spec",
+        OPTIONAL_BEFORE_SPEC_GRAMMAR,
+        runtime=OPTIONAL_BEFORE_SPEC_RUNTIME,
+        ast=False,
+        parser=True,
+        unparser=True,
+        formatter=OPTIONAL_BEFORE_SPEC_FORMATTER,
+        goal="doc",
     ),
 ]
 

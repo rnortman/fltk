@@ -124,6 +124,12 @@ Items can be referenced by:
 - **Literal value**: `";"`, `"|"`, `"("`
 - **Label name**: `name`, `value`, `item`
 
+A `before X` on an included optional item (`X?`, `X*`) applies only when `X` is emitted: an
+absent `?` item or a zero-occurrence `*` item contributes no spacing, and a non-empty `*` run
+gets one spacing ahead of the run. Spacing anchored to a suppressed item (`%X?`, or an unlabelled
+literal) fires whether or not the source carried the token, because formatted output may not
+depend on a token the formatter does not print.
+
 ## Rule-Specific Configuration
 
 Override formatting for specific grammar rules:

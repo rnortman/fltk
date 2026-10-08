@@ -38,7 +38,12 @@ from fltk.plumbing import (  # noqa: E402
     parse_grammar_file,
     parse_text,
 )
-from tests.unparser_parity import assert_unparse_parity, render_config_ids  # noqa: E402
+from tests.unparser_parity import (  # noqa: E402
+    assert_unparse_parity,
+    render_config_ids,
+    unparse_python,
+    unparse_rust,
+)
 
 _FIXTURE_DIR = Path(__file__).parent.parent / "fltk" / "fegen" / "test_data"
 _FIXTURE_FLTKG = _FIXTURE_DIR / "rust_parser_fixture.fltkg"
@@ -191,6 +196,9 @@ _CORPUS = [
     ("entries", "{ a = 1; b = x; }"),
     ("entries", "{ }"),
     ("multi_entries", "{ a = 1; a = 3; }"),
+    # before-spacing on an included optional item, present and absent
+    ("opt_gap", "ab;"),
+    ("opt_gap", "ab5;"),
 ]
 
 _CORPUS_IDS = [f"{rule}-{n}" for n, (rule, _) in enumerate(_CORPUS)]
@@ -233,3 +241,25 @@ def test_unparse_parity(*, rule, text, max_width, indent_width, _cfg, py_result_
         indent_width=indent_width,
         max_width=max_width,
     )
+
+
+# What the `.fltkfmt` config must render, not only that both backends agree: `before tail` on
+# `opt_gap`'s optional `tail` and `before entry` on `entries`' repetition apply only when the item
+# is emitted. Rendered at (80, 4) through each backend's own unparse -> resolve -> render.
+_EXPECTED_FLTKFMT: dict[tuple[str, str], str] = {
+    ("opt_gap", "ab;"): "ab ;",
+    ("opt_gap", "ab5;"): "ab 5 ;",
+    ("entries", "{ }"): "{ }",
+    ("entries", "{ a = 1; b = x; }"): "{ a = 1 ; b = x ; }",
+}
+
+
+@pytest.mark.parametrize(("rule", "text"), list(_EXPECTED_FLTKFMT), ids=[f"{r}-{t}" for r, t in _EXPECTED_FLTKFMT])
+def test_fltkfmt_expected_text(rule, text):
+    expected = _EXPECTED_FLTKFMT[(rule, text)]
+    py_rendered = unparse_python(_py_unparser_result(), _py_cst(text, rule), text, rule, indent_width=4, max_width=80)
+    rust_rendered = unparse_rust(
+        rust_parser_fixture.unparser.Unparser(), _rust_node(text, rule), rule, indent_width=4, max_width=80
+    )
+    assert py_rendered == expected
+    assert rust_rendered == expected
