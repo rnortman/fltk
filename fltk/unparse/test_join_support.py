@@ -2,6 +2,7 @@
 
 from fltk import plumbing
 from fltk.unparse.combinators import HARDLINE, LINE, NBSP, SOFTLINE, Concat, Text
+from fltk.unparse.renderer import RendererConfig
 
 
 def test_join_entire_rule():
@@ -422,3 +423,46 @@ def test_empty_join():
     # Join with no elements should just have the brackets
     # Since join is expanded and there's nothing between [ and ], only the ws_allowed-created separator appears.
     assert doc == Concat((Text("["), SOFTLINE, Text("]")))
+
+
+def test_join_hard_separator_inside_nest_takes_the_indent():
+    """A join separator spelled ``concat([text(","), hard])`` breaks the line at the nest indent.
+
+    The separator is the only comma: elements are whitespace-separated in the source, so the
+    output's commas are exactly the ones the join inserts. The grammar does not accept those
+    commas, so the output is not re-parsed.
+    """
+    grammar_src = """
+    doc := "{" , arr:array , "}" ;
+    array := "[" , elem+ , "]" ;
+    elem := val:/[0-9]+/ , ;
+    """
+
+    fmt_src = """
+    ws_allowed: bsp;
+    ws_required: bsp;
+
+    rule doc {
+        nest from after "{" to before "}";
+    }
+
+    rule array {
+        join from after "[" to before "]" concat([text(","), hard]);
+    }
+    """
+
+    gsm_grammar = plumbing.parse_grammar(grammar_src)
+    config = plumbing.parse_format_config(fmt_src)
+    parser_result = plumbing.generate_parser(gsm_grammar, capture_trivia=True)
+    unparser_result = plumbing.generate_unparser(
+        parser_result.grammar, parser_result.cst_module_name, formatter_config=config
+    )
+
+    test_input = "{[1 2 3]}"
+    parse_result = plumbing.parse_text(parser_result, test_input, "doc")
+    assert parse_result.success
+
+    doc = plumbing.unparse_cst(unparser_result, parse_result.cst, test_input, "doc")
+    rendered = plumbing.render_doc(doc, RendererConfig(max_width=80, indent_width=4))
+
+    assert rendered == "{\n    [\n    1,\n    2,\n    3\n    ]\n}"

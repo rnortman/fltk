@@ -18,7 +18,7 @@ from fltk.plumbing import (
     render_doc,
     unparse_cst,
 )
-from fltk.unparse.combinators import LINE, Concat, Line, Text, concat
+from fltk.unparse.combinators import LINE, Concat, HardLine, Line, Text, concat
 from fltk.unparse.fmt_config import FormatterConfig, TriviaConfig
 from fltk.unparse.renderer import RendererConfig
 
@@ -585,7 +585,7 @@ def test_line_comment_preservation(comment_unparser):
     # We expect the comment to be preserved in the output
     # The comment is now structured as separate parts from unparse__trivia
     expected_with_comment = Concat(
-        (Text("1"), Text("+"), Text("2"), Text(" "), Text("//"), Text(" This is a comment"), Text("\n"))
+        (Text("1"), Text("+"), Text("2"), Text(" "), Text("//"), Text(" This is a comment"), HardLine())
     )
 
     assert doc == expected_with_comment, f"Comment was not preserved. Expected {expected_with_comment}, got {doc}"
@@ -1675,6 +1675,112 @@ def test_a_rewritten_spelling_still_keeps_every_comment(literal_canonicalization
     parser_result, unparser_result = literal_canonicalization_unparser
     rendered = _format_ownership(parser_result, unparser_result, "use x; // c\nuse y;\n")
     assert "// c" in rendered, rendered
+
+
+# A grammar literal that is exactly a newline is a layout break; any other literal, and every regex
+# span, is token bytes.
+
+
+@pytest.mark.parametrize(
+    ("grammar_text", "source", "expected"),
+    [
+        pytest.param('line := text:/[a-z]+/ . "\\n" ;\n', "ab\n", Concat((Text("ab"), HardLine())), id="inline"),
+        pytest.param('line := text:/[a-z]+/ . nl:"\\n" ;\n', "ab\n", Concat((Text("ab"), HardLine())), id="labeled"),
+        pytest.param('line := text:/[a-z]+/ . %"\\n" ;\n', "ab\n", Concat((Text("ab"), HardLine())), id="suppressed"),
+        pytest.param(
+            'line := text:/[a-z]+/ . ";\\n" ;\n', "ab;\n", Concat((Text("ab"), Text(";\n"))), id="mixed_bytes"
+        ),
+    ],
+)
+def test_newline_literal_is_a_hardline(grammar_text: str, source: str, expected: Concat):
+    parser_result = generate_parser(parse_grammar(grammar_text), capture_trivia=True)
+    try:
+        unparser_result = generate_unparser(parser_result.grammar, parser_result.cst_module_name)
+        parse_result = parse_text(parser_result, source, "line")
+        assert parse_result.success, parse_result.error_message
+        assert unparse_cst(unparser_result, parse_result.cst, source, "line") == expected
+    finally:
+        if parser_result.cst_module_name in sys.modules:
+            del sys.modules[parser_result.cst_module_name]
+
+
+# A raw-string token (an opening literal, a regex payload that may span lines, a closing literal)
+# inside a nest: the payload is token content, so the formatter never writes the nest indent into
+# it. The Rust backend's `verbatim_text` gate case asserts the same bytes.
+
+_VERBATIM_TEXT_GRAMMAR = (
+    "doc := item* ;\n"
+    'item := name:word : "{" , entry* , "}" , ;\n'
+    'entry := value:raw , ";" , ;\n'
+    'raw := %"\\"\\"\\"" . text:/([^"]|"[^"]|""[^"])*/ . %"\\"\\"\\"" ;\n'
+    "word := chars:/[a-z]+/ ;\n"
+    "_trivia := ( line_comment | line_comment? : | block_comment )+ ;\n"
+    'line_comment := prefix:"//" . text:/[^\\n]*/ . "\\n" ;\n'
+    'block_comment := start:"/*" . text:/(?:[^*]|\\*+[^\\/\\*])*/ . end:/\\*+\\// ;\n'
+)
+
+_VERBATIM_TEXT_CONFIG = (
+    "ws_allowed: nil;\nws_required: nbsp;\npreserve_blanks: 1;\n"
+    "trivia_preserve: LineComment, BlockComment;\n"
+    'after ";" { hard; }\n'
+    'rule item { after "{" { hard; } before "}" { hard; } after "}" { hard; } nest from after "{" to before "}"; }\n'
+    "rule _trivia { ws_required: nbsp; }\n"
+)
+
+_VERBATIM_TEXT_CASES = [
+    pytest.param(
+        'box {\n"""\nfirst\n  second\n""";\n}\n',
+        'box {\n    """\nfirst\n  second\n""";\n}\n',
+        id="multi_line",
+    ),
+    pytest.param('box {\n"""\n""";\n}\n', 'box {\n    """\n""";\n}\n', id="newline_only"),
+    pytest.param('box {\n"""""";\n}\n', 'box {\n    """""";\n}\n', id="empty"),
+    pytest.param('box {\n"""\nabc""";\n}\n', 'box {\n    """\nabc""";\n}\n', id="newline_leading"),
+    pytest.param('box {\n"""\n\n""";\n}\n', 'box {\n    """\n\n""";\n}\n', id="two_newlines"),
+    pytest.param(
+        'box {\n"""a""";\n/* l1\n   l2 */\n"""b""";\n}\n',
+        'box {\n    """a""";\n    /* l1\n   l2 */\n    """b""";\n}\n',
+        id="block_comment",
+    ),
+    pytest.param(
+        'box {\n"""a""";\n// c1\n// c2\n"""b""";\n}\n',
+        'box {\n    """a""";\n    // c1\n    // c2\n    """b""";\n}\n',
+        id="two_line_comments",
+    ),
+]
+
+
+@pytest.fixture
+def verbatim_text_unparser():
+    """Parser and unparser over the raw-string grammar."""
+    grammar = parse_grammar(_VERBATIM_TEXT_GRAMMAR)
+    parser_result = generate_parser(grammar, capture_trivia=True)
+    try:
+        unparser_result = generate_unparser(
+            parser_result.grammar,
+            parser_result.cst_module_name,
+            formatter_config=parse_format_config(_VERBATIM_TEXT_CONFIG),
+        )
+        yield parser_result, unparser_result
+    finally:
+        if parser_result.cst_module_name in sys.modules:
+            del sys.modules[parser_result.cst_module_name]
+
+
+@pytest.mark.parametrize(("source", "expected"), _VERBATIM_TEXT_CASES)
+def test_newline_spanning_token_renders_verbatim(verbatim_text_unparser, source: str, expected: str):
+    """The token's bytes survive inside the nest, and the output is a fixed point."""
+    parser_result, unparser_result = verbatim_text_unparser
+
+    def render(text: str) -> str:
+        parse_result = parse_text(parser_result, text, "doc")
+        assert parse_result.success, f"Failed to parse {text!r}: {parse_result.error_message}"
+        doc = unparse_cst(unparser_result, parse_result.cst, text, "doc")
+        return render_doc(doc, RendererConfig(max_width=80, indent_width=4))
+
+    once = render(source)
+    assert once == expected
+    assert render(once) == once
 
 
 if __name__ == "__main__":

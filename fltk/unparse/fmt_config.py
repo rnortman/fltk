@@ -642,6 +642,9 @@ def _process_range_operation(
         config: Configuration to update
         terminal_src: Terminal source for extracting text
     """
+    # TODO(join-nest-same-anchor): ranges sharing both anchors nest in statement order, so a
+    # `join` declared before a `nest` over the same anchors joins the single Nest child and
+    # inserts no separator.
     if from_spec:
         from_anchor = from_spec.child_from_anchor()
         label = from_anchor.maybe_label()

@@ -88,6 +88,19 @@ impl Output {
         // Code-point count, matching Python's `len(str)`.
         self.current_column += text.chars().count();
     }
+
+    /// Append token content verbatim.
+    ///
+    /// Embedded newlines are bytes, not layout breaks: a non-empty `content` at a layout
+    /// line start takes the pending indent once, before its first byte, and afterwards
+    /// the output is never at a layout line start, even when `content` ends in `\n`.
+    /// The column becomes the code-point width of the last physical line.
+    fn append_text(&mut self, content: &str, indent: usize) {
+        self.append_content(content, indent);
+        if let Some(pos) = content.rfind('\n') {
+            self.current_column = content[pos + 1..].chars().count();
+        }
+    }
 }
 
 /// Wadler-Lindig pretty-printer for combinator documents. Port of `Renderer`.
@@ -117,13 +130,9 @@ impl Renderer {
         while let Some((indent, mode, doc)) = queue.pop_front() {
             match &*doc {
                 Doc::Nil => {}
-                // Text and Comment render identically here (both newline-aware,
-                // re-indenting on each embedded newline); they diverge only in how
-                // resolution/accumulation treats them, not in rendering.
-                // TODO(render-text-verbatim): re-indenting on an embedded newline writes the
-                // nest indent into a newline-spanning token's value; a regex-term span must
-                // render byte-for-byte.
-                Doc::Text(content) | Doc::Comment(content) => {
+                Doc::Text(content) => out.append_text(content, indent),
+                // Comment content is re-indented at each embedded newline.
+                Doc::Comment(content) => {
                     for (i, line) in content.split('\n').enumerate() {
                         if i > 0 {
                             out.break_line();
@@ -821,7 +830,137 @@ mod tests {
                 },
                 doc
             ),
-            "        ```\n        def foo():\n            pass\n        ```"
+            "        ```\ndef foo():\n    pass\n```"
+        );
+    }
+
+    fn render_4_80(doc: Doc) -> String {
+        render_with(
+            RendererConfig {
+                indent_width: 4,
+                max_width: 80,
+            },
+            doc,
+        )
+    }
+
+    #[test]
+    fn text_interior_ends_in_newline_then_delimiter() {
+        let doc = nest(
+            1,
+            concat(vec![hardline(0), text("\"\"\""), text("abc\n"), text("\"\"\"")]),
+        );
+        assert_eq!(render_4_80(doc), "\n    \"\"\"abc\n\"\"\"");
+    }
+
+    #[test]
+    fn text_interior_starts_with_newline() {
+        let doc = nest(
+            1,
+            concat(vec![hardline(0), text("\"\"\""), text("\nabc"), text("\"\"\"")]),
+        );
+        assert_eq!(render_4_80(doc), "\n    \"\"\"\nabc\"\"\"");
+    }
+
+    #[test]
+    fn text_blank_interior_line() {
+        let doc = nest(1, concat(vec![hardline(0), text("a\n\nb")]));
+        assert_eq!(render_4_80(doc), "\n    a\n\nb");
+    }
+
+    #[test]
+    fn text_interior_line_own_leading_whitespace() {
+        let doc = nest(1, concat(vec![hardline(0), text("a\n   b")]));
+        assert_eq!(render_4_80(doc), "\n    a\n   b");
+    }
+
+    #[test]
+    fn text_empty_interior() {
+        let doc = nest(
+            1,
+            concat(vec![hardline(0), text("\"\"\""), text(""), text("\"\"\"")]),
+        );
+        assert_eq!(render_4_80(doc), "\n    \"\"\"\"\"\"");
+    }
+
+    #[test]
+    fn text_empty_at_line_start() {
+        let doc = nest(1, concat(vec![hardline(0), text(""), text("x")]));
+        assert_eq!(render_4_80(doc), "\n    x");
+    }
+
+    #[test]
+    fn text_starting_line_takes_indent_once() {
+        let doc = nest(1, concat(vec![hardline(0), text("a\nb")]));
+        assert_eq!(render_4_80(doc), "\n    a\nb");
+    }
+
+    #[test]
+    fn text_layout_break_after_newline_ended_token() {
+        let doc = nest(
+            1,
+            concat(vec![hardline(0), text("a\n"), hardline(0), text("b")]),
+        );
+        assert_eq!(render_4_80(doc), "\n    a\n\n    b");
+    }
+
+    #[test]
+    fn text_two_nest_levels() {
+        let doc = nest(
+            1,
+            concat(vec![
+                hardline(0),
+                text("x"),
+                nest(1, concat(vec![hardline(0), text("l1\nl2")])),
+                hardline(0),
+                text("y"),
+            ]),
+        );
+        assert_eq!(render_4_80(doc), "\n    x\n        l1\nl2\n    y");
+    }
+
+    #[test]
+    fn text_column_after_multiline_is_last_line_width() {
+        let doc = nest(
+            1,
+            concat(vec![
+                hardline(0),
+                text("abc\nde"),
+                group(concat(vec![line(), text("fghij")])),
+            ]),
+        );
+        assert_eq!(
+            render_with(
+                RendererConfig {
+                    indent_width: 4,
+                    max_width: 8
+                },
+                doc
+            ),
+            "\n    abc\nde fghij"
+        );
+    }
+
+    #[test]
+    fn text_column_after_multiline_counts_code_points() {
+        // "éé" is 2 code points but 4 bytes: the group fits flat only when counted in code points.
+        let doc = nest(
+            1,
+            concat(vec![
+                hardline(0),
+                text("abc\n\u{e9}\u{e9}"),
+                group(concat(vec![line(), text("fghij")])),
+            ]),
+        );
+        assert_eq!(
+            render_with(
+                RendererConfig {
+                    indent_width: 4,
+                    max_width: 8
+                },
+                doc
+            ),
+            "\n    abc\n\u{e9}\u{e9} fghij"
         );
     }
 
@@ -863,9 +1002,10 @@ mod tests {
     #[test]
     fn nested_comment_indentation() {
         let doc = concat(vec![
-            text("{\n"),
-            nest(1, comment("// First\n// Second")),
-            text("\n}"),
+            text("{"),
+            nest(1, concat(vec![hardline(0), comment("// First\n// Second")])),
+            hardline(0),
+            text("}"),
         ]);
         assert_eq!(
             render_with(

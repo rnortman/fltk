@@ -44,18 +44,18 @@ def _engine() -> AnalysisEngine:
     return AnalysisEngine.from_paths(_GRAMMAR, _LSP)
 
 
-def _gear_formatter() -> Callable[[str], str]:
+def _gear_formatter(indent_width: int = 4) -> Callable[[str], str]:
     """Build the gear format pipeline once and return a ``text -> formatted text`` callable.
 
-    The callable parses its input (asserting success), unparses, and renders at the gear demo's
-    width/indent -- the parse->unparse->render sequence every formatting test needs.
+    The callable parses its input (asserting success), unparses, and renders at width 80 and
+    ``indent_width`` -- the parse->unparse->render sequence every formatting test needs.
     """
     engine = _engine()
     config = plumbing.parse_format_config_file(_FMT)
     grammar = engine.source_grammar
     parser = plumbing.generate_parser(grammar)
     unparser = plumbing.generate_unparser(grammar, parser.cst_module_name, config)
-    renderer = RendererConfig(max_width=80, indent_width=4)
+    renderer = RendererConfig(max_width=80, indent_width=indent_width)
 
     def render(text: str) -> str:
         parsed = plumbing.parse_text(parser, text, engine.start_rule)
@@ -118,6 +118,47 @@ def test_formatting_preserves_blank_lines_between_items() -> None:
         assert f"\n\n{marker}" in output, f"blank line before {marker!r} was collapsed:\n{output}"
     # The leading comment is preserved (trivia_preserve: LineComment).
     assert output.lstrip().startswith("// gear"), f"leading comment lost:\n{output}"
+
+
+def test_comment_at_block_start_is_a_fixed_point() -> None:
+    """A comment opening a block body sits outside the nest and formats to itself."""
+    source = _MAIN.read_text().replace(
+        "fn rim_area(w: Wheel) -> Float {\n", "fn rim_area(w: Wheel) -> Float {\n  // the hub radius\n"
+    )
+    assert "// the hub radius" in source
+    assert _gear_formatter(indent_width=2)(source) == source
+
+
+@pytest.mark.parametrize(
+    ("source", "once_expected", "twice_expected"),
+    [
+        pytest.param(
+            "// g\nfn f(w: W) -> F {\n  let r = w.hub;\n  // c\n  return r;\n}\n",
+            "// g\nfn f(w: W) -> F {\n    let r = w.hub;\n  // c\n      return r;\n}\n",
+            "// g\nfn f(w: W) -> F {\n    let r = w.hub;\n  // c\n          return r;\n}\n",
+            id="next_line_drifts",
+        ),
+        pytest.param(
+            "// g\nfn f(w: W) -> F {\n  let r = w.hub;\n  // c\n\n  return r;\n}\n",
+            "// g\nfn f(w: W) -> F {\n    let r = w.hub;\n  // c\n    \n  return r;\n}\n",
+            "// g\nfn f(w: W) -> F {\n    let r = w.hub;\n  // c\n        \n  return r;\n}\n",
+            id="blank_line_gains_trailing_whitespace",
+        ),
+    ],
+)
+def test_mid_block_comment_drifts(source: str, once_expected: str, twice_expected: str) -> None:
+    """A comment on its own line mid-block keeps its source column; what follows it drifts.
+
+    gear's whitespace trivia is a token (``ws := chars:/\\s+/``), so the whitespace before the
+    comment renders as its own bytes and the whitespace token after the comment's terminator takes
+    the nest indent before its own bytes, one indent more per pass: on the next line's text, or,
+    when a blank line follows the comment, as trailing whitespace on that blank line.
+    """
+    # TODO(preserved-trivia-ws-bytes): a fix to preserved whitespace-token rendering trips this pin.
+    render = _gear_formatter()
+    once = render(source)
+    assert once == once_expected
+    assert render(once) == twice_expected
 
 
 def test_gear_resolver_loads_as_valid_resolver() -> None:

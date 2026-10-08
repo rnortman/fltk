@@ -31,6 +31,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- Formatter: newline-spanning tokens (multi-line strings, heredocs), multi-line block comments
+  inside a nest, and `.fltkfmt` `text("…")` doc literals containing `\n` now render
+  byte-for-byte on both backends. Previously the nest indent was written into the token's value
+  after every embedded newline, again on every pass, so the output was never a fixed point. A
+  `join` separator that spelled its line break as `text("\n")` (or `text(",\n")`) now leaves the
+  next element at column 0 inside a nest — spell the break `hard`, e.g.
+  `concat([text(","), hard])`.
+- Formatter: a grammar literal that is exactly `"\n"` is a hard line break. A line comment's
+  terminator now forces an otherwise-flat enclosing group to break (a trailing comment no longer
+  leaves the next token flat after a physical newline), and a column-0 comment inside a nest no
+  longer renders a spurious blank line before the next token.
+- Formatter: a hard line break directly followed by `hard`/`blank` spacing from the `.fltkfmt`
+  spec now produces one break (keeping the requested blank lines) instead of two. This covers
+  `render X as hard|blank` and `hard`/`blank` join separators.
+- Formatter: the column after a multi-line token is the width of its last line, so a following
+  group may now fit flat where it previously broke. This is correct column accounting, not a
+  regression.
 - **Breaking (cargo):** `fltk-cst-core`'s `python` feature is no longer a default feature
   (`default = ["python"]` → `default = []`), so a cargo consumer that took the crate without
   `default-features = false` and relied on the default now builds without pyo3 and without the

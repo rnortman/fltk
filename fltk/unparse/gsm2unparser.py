@@ -452,6 +452,15 @@ class UnparserGenerator:
         pyrt_module = self._get_pyrt_module()
         return pyrt_module.method.is_span.call(child_expr)
 
+    def _literal_doc_expr(self, value: str) -> iir.Expr:
+        """The Doc a grammar literal renders as.
+
+        A literal that is exactly a newline is a layout break; any other literal is token text.
+        """
+        if value == "\n":
+            return self._doc_to_combinator_expr(HARDLINE)
+        return self._get_combinators_module().method.text.call(iir.LiteralString(value))
+
     def _doc_to_combinator_expr(self, doc: Doc) -> iir.Expr:
         """Convert a Doc combinator to an IIR expression."""
         combinators = self._get_combinators_module()
@@ -590,7 +599,6 @@ class UnparserGenerator:
         pos_var = method.get_param("pos")
         cursor_var = method.get_param("cursor")
         accumulator_param = method.get_param("accumulator")
-        combinators = self._get_combinators_module()
 
         if item.quantifier.is_optional():
             # Optional suppressed items: generate nothing - just return the passed accumulator
@@ -609,7 +617,7 @@ class UnparserGenerator:
         elif isinstance(item.term, gsm.Literal):
             # Literals can be regenerated exactly
             literal_text = item.term.value
-            text_call = combinators.method.text.call(iir.LiteralString(literal_text))
+            text_call = self._literal_doc_expr(literal_text)
 
             result_accumulator = accumulator_param.load().method.add_non_trivia.call(text_call)
             result = self._make_unparse_result(
@@ -2076,8 +2084,7 @@ class UnparserGenerator:
                     method, node_var, pos_var=pos_var, item=item, rule_name=rule_name
                 )
 
-            combinators = self._get_combinators_module()
-            text_call = combinators.method.text.call(iir.LiteralString(literal_text))
+            text_call = self._literal_doc_expr(literal_text)
 
             result_accumulator = method.block.var(
                 name="result_accumulator",

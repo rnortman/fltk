@@ -579,12 +579,92 @@ def test_text_preserves_exact_formatting():
     """Test that Text nodes preserve exact formatting without re-indentation."""
     renderer = Renderer(RendererConfig(indent_width=4))
 
-    # Text inside nest should be indented starting from first line
+    # The first line takes the nest indent; every later line is the token's own bytes
     doc = nest(2, text("```\ndef foo():\n    pass\n```"))
     result = renderer.render(doc)
-    # First line gets indented, subsequent lines preserve their content exactly
-    expected = "        ```\n        def foo():\n            pass\n        ```"
+    expected = "        ```\ndef foo():\n    pass\n```"
     assert result == expected
+
+
+@pytest.mark.parametrize(
+    ("doc", "expected"),
+    [
+        pytest.param(
+            nest(1, concat([hardline(), text('"""'), text("abc\n"), text('"""')])),
+            '\n    """abc\n"""',
+            id="interior_ends_in_newline_then_delimiter",
+        ),
+        pytest.param(
+            nest(1, concat([hardline(), text('"""'), text("\nabc"), text('"""')])),
+            '\n    """\nabc"""',
+            id="interior_starts_with_newline",
+        ),
+        pytest.param(
+            nest(1, concat([hardline(), text("a\n\nb")])),
+            "\n    a\n\nb",
+            id="blank_interior_line",
+        ),
+        pytest.param(
+            nest(1, concat([hardline(), text("a\n   b")])),
+            "\n    a\n   b",
+            id="interior_line_own_leading_whitespace",
+        ),
+        pytest.param(
+            nest(1, concat([hardline(), text('"""'), text(""), text('"""')])),
+            '\n    """"""',
+            id="empty_interior",
+        ),
+        pytest.param(
+            nest(1, concat([hardline(), text(""), text("x")])),
+            "\n    x",
+            id="empty_text_at_line_start",
+        ),
+        pytest.param(
+            nest(1, concat([hardline(), text("a\nb")])),
+            "\n    a\nb",
+            id="text_starting_line_takes_indent_once",
+        ),
+        pytest.param(
+            nest(1, concat([hardline(), text("a\n"), hardline(), text("b")])),
+            "\n    a\n\n    b",
+            id="layout_break_after_newline_ended_token",
+        ),
+        pytest.param(
+            nest(
+                1,
+                concat(
+                    [
+                        hardline(),
+                        text("x"),
+                        nest(1, concat([hardline(), text("l1\nl2")])),
+                        hardline(),
+                        text("y"),
+                    ]
+                ),
+            ),
+            "\n    x\n        l1\nl2\n    y",
+            id="two_nest_levels",
+        ),
+    ],
+)
+def test_text_is_verbatim(doc: Doc, expected: str):
+    """Embedded newlines in Text are bytes: only a Text starting a layout line takes the indent."""
+    renderer = Renderer(RendererConfig(indent_width=4, max_width=80))
+    assert renderer.render(doc) == expected
+
+
+def test_column_after_multiline_text_is_last_line_width():
+    """The column after a multi-line Text is its last line's width, so a following group fits."""
+    renderer = Renderer(RendererConfig(indent_width=4, max_width=8))
+    doc = nest(1, concat([hardline(), text("abc\nde"), group(concat([line(), text("fghij")]))]))
+    assert renderer.render(doc) == "\n    abc\nde fghij"
+
+
+def test_column_after_multiline_text_counts_code_points():
+    """The last line's width is in code points: "éé" is 2 wide (4 bytes), so the group fits."""
+    renderer = Renderer(RendererConfig(indent_width=4, max_width=8))
+    doc = nest(1, concat([hardline(), text("abc\n\u00e9\u00e9"), group(concat([line(), text("fghij")]))]))
+    assert renderer.render(doc) == "\n    abc\n\u00e9\u00e9 fghij"
 
 
 def test_comment_empty_lines_no_indent():
@@ -618,7 +698,7 @@ def test_nested_comment_indentation():
     """Test nested comment indentation."""
     renderer = Renderer(RendererConfig(indent_width=2))
 
-    doc = concat([text("{\n"), nest(1, comment("// First\n// Second")), text("\n}")])
+    doc = concat([text("{"), nest(1, concat([hardline(), comment("// First\n// Second")])), hardline(), text("}")])
     result = renderer.render(doc)
     expected = "{\n  // First\n  // Second\n}"
     assert result == expected

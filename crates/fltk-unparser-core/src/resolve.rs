@@ -251,7 +251,7 @@ fn resolve_concat_patterns(docs: &[Rc<Doc>]) -> Vec<Rc<Doc>> {
         (3, mutate_after_sep_before),
         (2, mutate_after_sep),
         (2, mutate_sep_before),
-        (2, mutate_text_newline),
+        (2, mutate_hardline_sep),
         (1, mutate_standalone_sep),
         (1, mutate_standalone_after_before),
     ];
@@ -457,26 +457,29 @@ fn pick_spacing_with_blank_lines(primary: &Rc<Doc>, sep_spacing: &Option<Rc<Doc>
     primary.clone()
 }
 
-/// Pattern: `Text("\n"), SeparatorSpec(spacing=Some(_))` -> a single `HardLine`.
+/// Pattern: `HardLine(j), SeparatorSpec(spacing=Some(_))` -> a single `HardLine`.
 ///
-/// A separator carrying `HardLine { blank_lines: k }` yields `HardLine(k)`; any other
-/// spacing yields a plain `HardLine`. Port of `_mutate_text_newline`.
-fn mutate_text_newline(ws: &VecDeque<Rc<Doc>>) -> Option<Vec<Rc<Doc>>> {
+/// A separator carrying `HardLine { blank_lines: k }` yields `HardLine(max(j, k))`; any
+/// other spacing yields the `HardLine` unchanged. A separator carrying preserved trivia is
+/// not matched: the trivia overrides its spacing and resolves through
+/// `mutate_standalone_sep`. Port of `_mutate_hardline_sep`.
+fn mutate_hardline_sep(ws: &VecDeque<Rc<Doc>>) -> Option<Vec<Rc<Doc>>> {
     if ws.len() < 2 {
         return None;
     }
-    if let Doc::Text(content) = &*ws[0] {
-        if content == "\n" {
-            if let Doc::SeparatorSpec {
-                spacing: Some(spacing),
-                ..
-            } = &*ws[1]
-            {
-                if matches!(&**spacing, Doc::HardLine { .. }) {
-                    return Some(vec![spacing.clone()]);
-                }
-                return Some(vec![Rc::new(Doc::HardLine { blank_lines: 0 })]);
+    if let Doc::HardLine { blank_lines: j } = &*ws[0] {
+        if let Doc::SeparatorSpec {
+            spacing: Some(spacing),
+            preserved_trivia: None,
+            ..
+        } = &*ws[1]
+        {
+            if let Doc::HardLine { blank_lines: k } = &**spacing {
+                return Some(vec![Rc::new(Doc::HardLine {
+                    blank_lines: (*j).max(*k),
+                })]);
             }
+            return Some(vec![ws[0].clone()]);
         }
     }
     None
@@ -705,7 +708,7 @@ fn merge_spacing(spacing1: Option<&Rc<Doc>>, spacing2: Option<&Rc<Doc>>) -> Opti
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::doc::{hardline, line, nil, softline, text};
+    use crate::doc::{hardline, line, nbsp, nil, softline, text};
 
     // ---- Test builders (raw, unflattened, mirroring the Python `Concat([...])`) ----
 
@@ -1058,23 +1061,54 @@ mod tests {
     }
 
     #[test]
-    fn text_newline_before_separator_becomes_hardline() {
-        // mutate_text_newline: Text("\n") + SeparatorSpec(spacing=Some) -> HardLine{0}.
-        let doc = cat(vec![text("\n"), sep(Some(line()), None, false), text("x")]);
+    fn hardline_before_plain_separator_keeps_hardline() {
+        let doc = cat(vec![hardline(0), sep(Some(line()), None, true), text("x")]);
         let resolved = resolve_spacing_specs(doc);
         assert_eq!(resolved, cat(vec![hardline(0), text("x")]));
     }
 
     #[test]
-    fn text_newline_before_separator_keeps_separator_blank_lines() {
-        // The Text supplies the break, the separator's HardLine supplies the blank count.
+    fn hardline_before_separator_takes_separator_blank_count() {
+        let doc = cat(vec![hardline(0), sep(Some(hardline(2)), None, true), text("x")]);
+        let resolved = resolve_spacing_specs(doc);
+        assert_eq!(resolved, cat(vec![hardline(2), text("x")]));
+    }
+
+    #[test]
+    fn hardline_before_separator_keeps_larger_blank_count() {
+        let doc = cat(vec![hardline(1), sep(Some(hardline(0)), None, true), text("x")]);
+        let resolved = resolve_spacing_specs(doc);
+        assert_eq!(resolved, cat(vec![hardline(1), text("x")]));
+    }
+
+    #[test]
+    fn hardline_before_nbsp_separator_drops_nbsp() {
+        let doc = cat(vec![hardline(0), sep(Some(nbsp()), None, true), text("x")]);
+        let resolved = resolve_spacing_specs(doc);
+        assert_eq!(resolved, cat(vec![hardline(0), text("x")]));
+    }
+
+    #[test]
+    fn hardline_before_trivia_separator_keeps_trivia() {
+        let trivia = cat(vec![text("// c"), hardline(0)]);
         let doc = cat(vec![
-            text("\n"),
-            sep(Some(hardline(2)), None, true),
+            hardline(0),
+            sep(Some(line()), Some(trivia), true),
             text("x"),
         ]);
         let resolved = resolve_spacing_specs(doc);
-        assert_eq!(resolved, cat(vec![hardline(2), text("x")]));
+        assert_eq!(
+            resolved,
+            cat(vec![hardline(0), text("// c"), hardline(0), text("x")])
+        );
+    }
+
+    #[test]
+    fn text_newline_before_separator_is_not_inspected() {
+        // A Text whose value is a newline is token content: the separator resolves alone.
+        let doc = cat(vec![text("\n"), sep(Some(line()), None, true)]);
+        let resolved = resolve_spacing_specs(doc);
+        assert_eq!(resolved, cat(vec![text("\n"), line()]));
     }
 
     #[test]

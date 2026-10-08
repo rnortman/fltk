@@ -1,7 +1,10 @@
 """Tests for resolve_spacing_specs function."""
 
+import pytest
+
 from fltk.unparse.combinators import (
     LINE,
+    NBSP,
     NIL,
     SOFTLINE,
     AfterSpec,
@@ -718,25 +721,38 @@ def test_consecutive_leading_specs_in_group():
     )
 
 
-def test_text_newline_before_separator_becomes_hardline():
-    """Text('\\n') + a non-blank separator collapses to a single plain HardLine."""
-    doc = Concat([Text("\n"), SeparatorSpec(spacing=LINE, preserved_trivia=None, required=True), Text("x")])
+@pytest.mark.parametrize(
+    ("first", "spacing", "expected"),
+    [
+        pytest.param(HardLine(), LINE, HardLine(), id="plain_spacing_keeps_hardline"),
+        pytest.param(HardLine(), HardLine(blank_lines=2), HardLine(blank_lines=2), id="separator_blank_count"),
+        pytest.param(HardLine(blank_lines=1), HardLine(), HardLine(blank_lines=1), id="max_keeps_own_blank"),
+        pytest.param(HardLine(), NBSP, HardLine(), id="nbsp_spacing_dropped"),
+    ],
+)
+def test_hardline_before_separator_merges(first: HardLine, spacing: Doc, expected: HardLine):
+    """A HardLine followed by a spacing separator is one break with the larger blank count."""
+    doc = Concat([first, SeparatorSpec(spacing=spacing, preserved_trivia=None, required=True), Text("x")])
 
     resolved = resolve_spacing_specs(doc)
 
-    assert resolved == Concat((HardLine(), Text("x")))
+    assert resolved == Concat((expected, Text("x")))
 
 
-def test_text_newline_before_separator_keeps_separator_blank_lines():
-    """The Text supplies the break; the separator's HardLine supplies the blank count."""
-    doc = Concat(
-        [
-            Text("\n"),
-            SeparatorSpec(spacing=HardLine(blank_lines=2), preserved_trivia=None, required=True),
-            Text("x"),
-        ]
-    )
+def test_hardline_before_trivia_separator_keeps_trivia():
+    """A separator carrying preserved trivia is not merged into a preceding HardLine."""
+    trivia = Concat([Text("// c"), HardLine()])
+    doc = Concat([HardLine(), SeparatorSpec(spacing=LINE, preserved_trivia=trivia, required=True), Text("x")])
 
     resolved = resolve_spacing_specs(doc)
 
-    assert resolved == Concat((HardLine(blank_lines=2), Text("x")))
+    assert resolved == Concat((HardLine(), Text("// c"), HardLine(), Text("x")))
+
+
+def test_text_newline_before_separator_is_not_inspected():
+    """A Text whose value is a newline is token content: the separator resolves on its own."""
+    doc = Concat([Text("\n"), SeparatorSpec(spacing=LINE, preserved_trivia=None, required=True)])
+
+    resolved = resolve_spacing_specs(doc)
+
+    assert resolved == Concat((Text("\n"), LINE))

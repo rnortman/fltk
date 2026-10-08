@@ -714,6 +714,46 @@ def test_inline_literal_body_emits_text_without_advance() -> None:
     assert "node.children()" not in joined
 
 
+_HARDLINE_EXPR = "Doc::HardLine { blank_lines: 0 }"
+
+
+@pytest.mark.parametrize("disposition", [gsm.Disposition.INLINE, gsm.Disposition.SUPPRESS])
+def test_newline_literal_emits_hardline(disposition: gsm.Disposition) -> None:
+    """A literal that is exactly a newline renders as a hard line; the cursor still checks its text."""
+    gen = _gen()
+    item = gsm.Item(label=None, disposition=disposition, term=gsm.Literal("\n"), quantifier=gsm.REQUIRED)
+    if disposition == gsm.Disposition.SUPPRESS:
+        body = gen._gen_suppressed_item_body(item)
+    else:
+        body = gen._gen_literal_term_body("r", "R", item)
+    assert body == [
+        f"        let acc = acc.add_non_trivia({_HARDLINE_EXPR});",
+        '        Some(UnparseResult::with_cursor(acc, pos, Self::_cursor_expect(cur, node.span(), "\\u{0a}")))',
+    ]
+
+
+def test_newline_literal_hardline_at_both_sites_in_source() -> None:
+    """Included and suppressed newline literals both emit the hard line, never ``text("\\u{0a}")``."""
+    src = RustUnparserGenerator(parse_grammar('line := w:/[a-z]+/ . nl:"\\n" . w2:/[a-z]+/ . %"\\n" ;')).generate()
+    assert src.count(f"acc.add_non_trivia({_HARDLINE_EXPR})") == 2
+    assert 'text("\\u{0a}")' not in src
+
+
+def test_newline_among_other_bytes_stays_text() -> None:
+    """Only the exact newline literal is a break: ``";\\n"`` is token text."""
+    gen = _gen()
+    item = gsm.Item(label=None, disposition=gsm.Disposition.INLINE, term=gsm.Literal(";\n"), quantifier=gsm.REQUIRED)
+    body = gen._gen_literal_term_body("r", "R", item)
+    assert body[0] == '        let acc = acc.add_non_trivia(fltk_unparser_core::text(";\\u{0a}"));'
+
+
+def test_newline_literal_alone_imports_doc() -> None:
+    """With no formatter, the newline literal is the only bare ``Doc::`` and still gets the import."""
+    src = RustUnparserGenerator(parse_grammar('line := text:/[a-z]+/ . "\\n" ;')).generate()
+    assert "use fltk_unparser_core::Doc;" in src
+    assert _HARDLINE_EXPR in src
+
+
 def test_literal_term_body_rejects_non_literal_term() -> None:
     """``_gen_literal_term_body`` raises (not asserts) when reached with a non-Literal term.
 

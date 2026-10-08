@@ -7,7 +7,6 @@ from collections.abc import Callable, Sequence
 from typing import Final
 
 from fltk.unparse.combinators import (
-    HARDLINE,
     LINE,
     SOFTLINE,
     AfterSpec,
@@ -22,7 +21,6 @@ from fltk.unparse.combinators import (
     Nest,
     SeparatorSpec,
     SoftLine,
-    Text,
     concat,
 )
 
@@ -218,8 +216,8 @@ def _resolve_concat_patterns(docs: Sequence[Doc]) -> list[Doc]:
         (2, _mutate_after_sep),
         # Pattern: SeparatorSpec, BeforeSpec
         (2, _mutate_sep_before),
-        # Pattern: Text('\n') + space combinator -> HARDLINE
-        (2, _mutate_text_newline),
+        # Pattern: HardLine + spacing separator -> one HardLine
+        (2, _mutate_hardline_sep),
         # Pattern: standalone SeparatorSpec
         (1, _mutate_standalone_sep),
         # Pattern: standalone AfterSpec or BeforeSpec
@@ -450,24 +448,25 @@ def _mutate_standalone_after_before(working_set: deque[Doc]) -> list[Doc] | None
     return None
 
 
-def _mutate_text_newline(working_set: deque[Doc]) -> list[Doc] | None:
-    """Pattern: Text('\n') followed by SeparatorSpec with spacing -> a single HardLine.
+def _mutate_hardline_sep(working_set: deque[Doc]) -> list[Doc] | None:
+    """Pattern: HardLine followed by SeparatorSpec with spacing -> a single HardLine.
 
-    The Text supplies the line break and the separator supplies the blank count, so a
-    separator carrying HardLine(blank_lines=k) resolves to HardLine(k); any other spacing
-    resolves to a plain HardLine.
+    The HardLine supplies the line break; a separator carrying HardLine(blank_lines=k)
+    contributes its blank count, and the merged break keeps the larger of the two counts.
+    Any other spacing is dropped. A separator carrying preserved trivia is not matched: the
+    trivia overrides its spacing and resolves through the standalone-separator rule.
     """
     min_consecutive_size = 2
     if len(working_set) < min_consecutive_size:
         return None
 
-    if isinstance(working_set[0], Text) and working_set[0].content == "\n":
-        # Check if next element is a SeparatorSpec with spacing
+    first = working_set[0]
+    if isinstance(first, HardLine):
         next_doc = working_set[1]
-        if isinstance(next_doc, SeparatorSpec) and next_doc.spacing is not None:
+        if isinstance(next_doc, SeparatorSpec) and next_doc.spacing is not None and next_doc.preserved_trivia is None:
             if isinstance(next_doc.spacing, HardLine):
-                return [next_doc.spacing]
-            return [HARDLINE]
+                return [HardLine(max(first.blank_lines, next_doc.spacing.blank_lines))]
+            return [first]
 
     return None
 

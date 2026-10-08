@@ -27,7 +27,7 @@ from fltk.fegen import gsm, naming
 from fltk.fegen.gsm2parser_rs import cst_module_import
 from fltk.fegen.gsm2tree_rs import RustCstGenerator
 from fltk.fegen.rust_emit import rust_str_lit
-from fltk.unparse.combinators import Concat, Doc, HardLine, Line, Nbsp, Nil, SoftLine, Text
+from fltk.unparse.combinators import HARDLINE, Concat, Doc, HardLine, Line, Nbsp, Nil, SoftLine, Text
 from fltk.unparse.fmt_config import AnchorConfig, FormatterConfig, ItemSelector, Normal, Omit, OperationType, RenderAs
 from fltk.unparse.literal_labels import check_labeled_literal_texts, spellings_for
 
@@ -1293,6 +1293,17 @@ class RustUnparserGenerator:
         )
         return lines
 
+    def _literal_doc_expr(self, value: str) -> str:
+        """The Rust expression for the Doc a grammar literal renders as.
+
+        A literal that is exactly a newline is a layout break; any other literal is token text.
+        The break goes through :meth:`_doc_to_rust_expr` so the ``Doc`` import it needs is
+        recorded for the header.
+        """
+        if value == "\n":
+            return self._doc_to_rust_expr(HARDLINE)
+        return f'fltk_unparser_core::text("{rust_str_lit(value)}")'
+
     def _gen_literal_term_body(self, rule_name: str, class_name: str, item: gsm.Item) -> list[str]:
         """Emit the body of an INCLUDE/INLINE literal term.
 
@@ -1310,7 +1321,7 @@ class RustUnparserGenerator:
                 f"{type(item.term).__name__} term in rule {rule_name!r}"
             )
             raise RuntimeError(msg)
-        text_expr = f'fltk_unparser_core::text("{rust_str_lit(item.term.value)}")'
+        text_expr = self._literal_doc_expr(item.term.value)
         lines: list[str] = []
         if item.disposition == gsm.Disposition.INCLUDE:
             lines.extend(self._gen_validate_span_child(rule_name, class_name, item))
@@ -1523,7 +1534,7 @@ class RustUnparserGenerator:
             return ["        Some(UnparseResult::with_cursor(acc, pos, None))"]
         if isinstance(item.term, gsm.Literal):
             literal = rust_str_lit(item.term.value)
-            text_expr = f'fltk_unparser_core::text("{literal}")'
+            text_expr = self._literal_doc_expr(item.term.value)
             self._cursor_helpers.add("_cursor_expect")
             return [
                 f"        let acc = acc.add_non_trivia({text_expr});",

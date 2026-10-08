@@ -10,7 +10,7 @@ from typing import Final
 
 from fltk import plumbing
 from fltk.fegen import gsm
-from fltk.unparse.combinators import Concat, Line, Text
+from fltk.unparse.combinators import Concat, HardLine, Line, Text
 from fltk.unparse.fmt_config import FormatterConfig, TriviaConfig
 
 LOG: Final = logging.getLogger(__name__)
@@ -398,7 +398,7 @@ def test_leading_separators_with_actual_comments():
     # Test cases for WS_ALLOWED initial separator with comments and whitespace
     test_cases = [
         # Line comment before content - should preserve comment (now structured)
-        ("// A comment\ncontent", Concat((Text("//"), Text(" A comment"), Text("\n"), Text("content")))),
+        ("// A comment\ncontent", Concat((Text("//"), Text(" A comment"), HardLine(), Text("content")))),
         # Block comment before content - should preserve comment (now structured)
         ("/* A comment */content", Concat((Text("/*"), Text("A comment "), Text("*/"), Text("content")))),
         # Whitespace before content - WS_ALLOWED normalizes to no leading trivia
@@ -453,7 +453,7 @@ def test_leading_separators_ws_required_with_comments():
     test_cases = [
         # Line comment before content - comment fulfills WS_REQUIRED, no Line combinator needed
         # Now expecting structured output from unparse__trivia
-        ("// A comment\ncontent", Concat((Text("//"), Text(" A comment"), Text("\n"), Text("content")))),
+        ("// A comment\ncontent", Concat((Text("//"), Text(" A comment"), HardLine(), Text("content")))),
         # Block comment before content - comment fulfills WS_REQUIRED, no Line combinator needed
         # Now expecting structured output from unparse__trivia
         ("/* A comment */content", Concat((Text("/*"), Text("A comment "), Text("*/"), Text("content")))),

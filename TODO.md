@@ -578,36 +578,39 @@ explained by this fix; cross-backend parity holds; `CHANGELOG.md` records the ou
 `position-preserve-blanks` is blocked on this. Location: `fltk/unparse/resolve_specs.py`
 (`_resolve_spacing`), `crates/fltk-unparser-core/src/resolve.rs` (`resolve_spacing`).
 
-## `render-text-verbatim`
+## `preserved-trivia-ws-bytes`
 
-The renderer re-indents a `Text` node at every embedded newline: the `Text`/`Comment` arm splits
-`content` on `\n` and calls `append_content(line, indent)` for each piece
-(`crates/fltk-unparser-core/src/render.rs`, `fltk/unparse/renderer.py`). A regex-term span that
-spans lines — a multi-line raw string, a heredoc, any newline-bearing token — therefore has the
-nest indent written *into its value* whenever it sits at nesting depth > 0, so a format pass is
-neither value-stable nor format-stable (each pass indents further; there is no fixed point). This
-contradicts the contract `doc.rs` states for `text()` (verbatim) and the two
-`text_preserves_exact_formatting` tests, which do not exercise an indented nest. Consumer: brenn's
-`brennfmt`, where an indented `"""…"""` has its continuation lines rewritten — tracked there as
-`TODO(dsl-fmt-rawstring-indent)` in `brenn/TODO.md`, blocked on this. Fix = the span text of a
-regex term renders byte-for-byte in both backends. Acceptance: (1) the token boundary, not the
-embedded newline, is the hard case — an interior ending in `\n` leaves the renderer at
-beginning-of-line and the *closing delimiter* (a separate `text()` emission) then receives the nest
-indent inside the value; define what a token-internal newline does to the renderer's line state
-versus a layout newline, and test: interior ending in `\n`, starting with `\n`, blank interior
-lines, interior lines with their own leading whitespace, empty interior; (2) preserved line-comment
-layout must not move — a comment's `\n` reaches the renderer as `text("\n")` (inferred; verify) and
-the following statement must still indent; parity suite is the witness; (3) block-comment policy is
-decided explicitly: nothing generated emits `Doc::Comment` today, so "Text verbatim" makes fegen
-block comments verbatim unless the generators route trivia through `comment()` — either answer is
-fine, arriving at one by accident is not; whether to change `Text`'s semantics or add a verbatim
-variant the generators emit for regex spans is this design round's call, weighed against every
-consumer; (4) the two `text_preserves_exact_formatting` tests are rewritten to assert the contract
-their names claim; (5) `fits` measures continuation segments against the remaining width from the
-group's start column — conservative, never overflows; note it, do not fix it here. Record the
-behaviour change in `CHANGELOG.md` for consumers whose grammars have newline-spanning regex terms.
-Separately worth opening (not this entry): `fltk-fmt-cli --in-place` writes through `write_atomic`
-with no re-parse-and-compare of the non-trivia token stream; such a gate would have made this a
-loud refusal on day one. Location: `crates/fltk-unparser-core/src/render.rs` (the
-`Doc::Text | Doc::Comment` arms in render and in `fits`), `fltk/unparse/renderer.py` (the `Text`
-branch and the `Text | Comment` width branch).
+A preserved trivia node renders its non-preserved whitespace-token children as `Text` bytes
+(gear's `ws := chars:/\s+/`), on both sides of a comment. The whitespace token *before* an
+own-line comment carries the newline and the source indent as bytes, so the comment line keeps its
+source column instead of taking the nest indent; the whitespace token *after* the comment
+terminator starts a layout line and takes the nest indent before its own bytes, one indent more per
+pass: when the next line follows directly, that line's text drifts (a trailing comment,
+`let r = w.hub; // t`, drifts the same way); when a blank line follows the comment, the token
+begins with its newline, so the indent lands on the blank line as trailing whitespace that grows
+every pass while the next line sits stably at its source column.
+Deciding whether such children are dropped, normalised, or left to the grammar is a
+formatting-policy design. Done = a gear block with a mid-block comment, own-line or trailing,
+with or without a blank line after it, formats to a fixed point in both backends. Location: `fltk/lsp/test_gear_demo.py`
+(`test_mid_block_comment_drifts`), the pin that a fix trips. The whitespace token is a rule child
+of the trivia node, rendered through ordinary rule-child emission, so no code site is the fix's
+until the policy is chosen: dropping or normalising lands in both generators' trivia-node child
+emission (`fltk/unparse/gsm2unparser.py`, `fltk/unparse/gsm2unparser_rs.py`); leaving it to the
+grammar lands in `docs/format-specs.md` and gear's grammar.
+
+
+## `join-nest-same-anchor`
+
+Range statements (`group`, `nest`, `join`) that share both anchors in one rule nest in statement
+order: the first declared wraps the rest. A `join` declared before a `nest` over the same anchors
+therefore wraps a single `Nest` child and inserts no separator, with no diagnostic. Repro: grammar
+`array := "[" , elem , ("," , elem)* , "]" ; elem := val:/[0-9]+/ ;`, rule spec
+`join from after "[" to before "]" concat([text(","), hard]); nest from after "[" to before "]";`,
+input `[1,2,3]` renders `[ 1 , 2, 3 ]`. With the two statements swapped, the join applies inside
+the nest. This was observed while adding a join guard test and reproduces with the pre-change
+`fltk/unparse/` sources, so this change did not introduce it. Choosing between a canonical nesting
+order for coincident ranges, a diagnostic, and documented statement-order semantics is a design
+question for the `.fltkfmt` language. Done = that rule is chosen, documented in
+`docs/format-specs.md`, and the repro either formats with the join applied or is rejected with an
+error. Location: `_process_range_operation` in `fltk/unparse/fmt_config.py`, which builds the
+anchor operation lists both backends' generators consume.

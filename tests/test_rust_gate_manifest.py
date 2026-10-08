@@ -105,6 +105,7 @@ _RUNTIME_TEST_COUNTS = {
     "task": 5,
     "trivia_ownership": 11,
     "union_label": 5,
+    "verbatim_text": 7,
 }
 
 # `#[test]` may be followed by further attributes (`#[should_panic(...)]`, `#[ignore]`) before

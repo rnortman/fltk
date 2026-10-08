@@ -178,6 +178,15 @@ nest from after ":=" to ";";              // Nest body of rule definition
 nest from after "(" to before ")";        // Nest content in parens
 ```
 
+Token content is never re-indented. A token that starts a line takes the nest indent once,
+before its first character; a token that spans lines — a multi-line string, a block comment —
+keeps every later line exactly as written. Only layout breaks (`hard`, `blank`, a broken `bsp` or
+`soft`) start an indented line, and the one grammar token that is a layout break is the exact
+literal `"\n"`. So a line-comment rule whose terminator sits inside the comment regex
+(`/\/\/[^\n]*\n/`) gets no layout break from it, and the token after the comment lands at column
+0: end the rule in a literal `"\n"` instead, as `fegen.fltkg` does. A `"\r\n"` terminator is
+token bytes, not a layout break.
+
 ### Join
 
 Join items with a separator:
@@ -185,6 +194,10 @@ Join items with a separator:
 ```
 join from items to end bsp;               // Join with breaking space
 ```
+
+A `text("…")` doc literal is verbatim bytes, including any `\n` inside it, and the line after its
+own newline never takes the nest indent; a separator that breaks the line is `hard` or
+`concat([text(","), hard])`.
 
 ## Item Disposition
 

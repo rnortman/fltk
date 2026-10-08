@@ -2998,6 +2998,104 @@ fn a_rewritten_spelling_still_keeps_every_comment() {
 }
 """
 
+# A raw-string token (an opening literal, a regex payload that may span lines, a closing literal)
+# inside a nest: the payload is token content, so the formatter never writes the nest indent into
+# it. `fltk/unparse/test_unparser.py` asserts the same bytes through the Python backend.
+VERBATIM_TEXT_GRAMMAR = (
+    "doc := item* ;\n"
+    'item := name:word : "{" , entry* , "}" , ;\n'
+    'entry := value:raw , ";" , ;\n'
+    'raw := %"\\"\\"\\"" . text:/([^"]|"[^"]|""[^"])*/ . %"\\"\\"\\"" ;\n'
+    "word := chars:/[a-z]+/ ;\n"
+    "_trivia := ( line_comment | line_comment? : | block_comment )+ ;\n"
+    'line_comment := prefix:"//" . text:/[^\\n]*/ . "\\n" ;\n'
+    'block_comment := start:"/*" . text:/(?:[^*]|\\*+[^\\/\\*])*/ . end:/\\*+\\// ;\n'
+)
+
+VERBATIM_TEXT_FORMATTER = (
+    "ws_allowed: nil;\nws_required: nbsp;\npreserve_blanks: 1;\n"
+    "trivia_preserve: LineComment, BlockComment;\n"
+    'after ";" { hard; }\n'
+    'rule item { after "{" { hard; } before "}" { hard; } after "}" { hard; } nest from after "{" to before "}"; }\n'
+    "rule _trivia { ws_required: nbsp; }\n"
+)
+
+VERBATIM_TEXT_RUNTIME = """//! A newline-spanning token renders byte-for-byte inside a nest.
+
+use super::parser::Parser;
+use super::unparser::Unparser;
+use ::fltk_unparser_core::{resolve_spacing_specs, Renderer, RendererConfig};
+
+fn format(src: &str) -> String {
+    let mut parser = Parser::new(src, None, true);
+    let parsed = parser.apply__parse_doc(0).expect("the document must parse");
+    assert!(parsed.pos as usize == src.len(), "the parse must consume {src:?}");
+    let guard = parsed.result.read();
+    let unparsed = Unparser::new()
+        .unparse_doc(&guard)
+        .expect("a parser-produced CST must unparse");
+    let resolved = resolve_spacing_specs(unparsed.doc());
+    Renderer::new(RendererConfig {
+        indent_width: 4,
+        max_width: 80,
+    })
+    .render(&resolved)
+}
+
+/// The formatter's output is a fixed point: formatting it again changes nothing.
+fn format_twice(src: &str) -> String {
+    let once = format(src);
+    assert_eq!(format(&once), once, "the layout must be a fixed point");
+    once
+}
+
+#[test]
+fn multi_line() {
+    let rendered = format_twice("box {\\n\\"\\"\\"\\nfirst\\n  second\\n\\"\\"\\";\\n}\\n");
+    assert_eq!(rendered, "box {\\n    \\"\\"\\"\\nfirst\\n  second\\n\\"\\"\\";\\n}\\n");
+}
+
+#[test]
+fn newline_only() {
+    let rendered = format_twice("box {\\n\\"\\"\\"\\n\\"\\"\\";\\n}\\n");
+    assert_eq!(rendered, "box {\\n    \\"\\"\\"\\n\\"\\"\\";\\n}\\n");
+}
+
+#[test]
+fn empty() {
+    let rendered = format_twice("box {\\n\\"\\"\\"\\"\\"\\";\\n}\\n");
+    assert_eq!(rendered, "box {\\n    \\"\\"\\"\\"\\"\\";\\n}\\n");
+}
+
+#[test]
+fn newline_leading() {
+    let rendered = format_twice("box {\\n\\"\\"\\"\\nabc\\"\\"\\";\\n}\\n");
+    assert_eq!(rendered, "box {\\n    \\"\\"\\"\\nabc\\"\\"\\";\\n}\\n");
+}
+
+#[test]
+fn two_newlines() {
+    let rendered = format_twice("box {\\n\\"\\"\\"\\n\\n\\"\\"\\";\\n}\\n");
+    assert_eq!(rendered, "box {\\n    \\"\\"\\"\\n\\n\\"\\"\\";\\n}\\n");
+}
+
+#[test]
+fn block_comment() {
+    let rendered = format_twice("box {\\n\\"\\"\\"a\\"\\"\\";\\n/* l1\\n   l2 */\\n\\"\\"\\"b\\"\\"\\";\\n}\\n");
+    assert_eq!(rendered, "box {\\n    \\"\\"\\"a\\"\\"\\";\\n    /* l1\\n   l2 */\\n    \\"\\"\\"b\\"\\"\\";\\n}\\n");
+}
+
+#[test]
+fn two_line_comments() {
+    let rendered = format_twice("box {\\n\\"\\"\\"a\\"\\"\\";\\n// c1\\n// c2\\n\\"\\"\\"b\\"\\"\\";\\n}\\n");
+    assert_eq!(rendered, "box {\\n    \\"\\"\\"a\\"\\"\\";\\n    // c1\\n    // c2\\n    \\"\\"\\"b\\"\\"\\";\\n}\\n");
+}
+"""
+
+# A grammar whose only bare `Doc::` emission is the newline literal's hard line: the unparser has
+# to import `Doc` for it with no formatter config in play.
+LITERAL_NEWLINE_GRAMMAR = 'line := text:/[a-z]+/ . "\\n" ;'
+
 # The same path with comments actually preserved: a line comment's terminating newline lives in
 # the comment child's span, so the blank counting has to add it back.
 PRESERVED_COMMENT_BLANKS_GRAMMAR = (
@@ -3421,6 +3519,19 @@ CASES = [
         formatter=LITERAL_CANONICALIZATION_FORMATTER,
         goal="doc",
     ),
+    # A newline-spanning token inside a nest is not re-indented.
+    Case(
+        "verbatim_text",
+        VERBATIM_TEXT_GRAMMAR,
+        runtime=VERBATIM_TEXT_RUNTIME,
+        ast=False,
+        parser=True,
+        unparser=True,
+        formatter=VERBATIM_TEXT_FORMATTER,
+        goal="doc",
+    ),
+    # The newline literal's hard line compiles with no other bare `Doc::` in the module.
+    Case("literal_newline", LITERAL_NEWLINE_GRAMMAR, ast=False, unparser=True),
     # A repetition the validator refuses, generated anyway, so the loop guard is run.
     Case(
         "nullable_loop",

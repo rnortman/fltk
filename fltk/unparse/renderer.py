@@ -80,15 +80,14 @@ class Renderer:
                 continue
 
             elif isinstance(doc, Text):
-                # Text nodes: render content as-is, but track newlines for column position
-                # TODO(render-text-verbatim): re-indenting on an embedded newline writes the
-                # nest indent into a newline-spanning token's value; a regex-term span must
-                # render byte-for-byte.
-                lines = doc.content.split("\n")
-                for i, line in enumerate(lines):
-                    if i > 0:
-                        break_line()
-                    append_content(line, indent)
+                # Token content: embedded newlines are bytes, never layout breaks. A non-empty
+                # Text at a layout line start takes the pending indent once (append_content);
+                # an empty one is a no-op. Afterwards the renderer is never at a layout line
+                # start, and the column is the width of the content's last physical line.
+                append_content(doc.content, indent)
+                _, newline, last = doc.content.rpartition("\n")
+                if newline:
+                    current_column = len(last)
 
             elif isinstance(doc, Comment):
                 # Comment nodes: re-indent multi-line content

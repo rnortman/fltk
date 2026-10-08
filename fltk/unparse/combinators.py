@@ -18,7 +18,20 @@ class Doc(ABC):
 
 @dataclass(slots=True, frozen=True)
 class Text(Doc):
-    """Literal text content."""
+    """Token content, rendered verbatim.
+
+    Embedded newlines are bytes, not layout breaks: the content is never broken across
+    lines or re-indented.
+
+    A non-empty Text that starts a layout line takes the pending nest indent once, before
+    its first byte. An empty Text renders nothing and does not consume the pending indent.
+
+    After a Text the renderer is never at a layout line start, even if the content ended
+    in a newline: physical column 0 is not a pending layout break. Only HardLine and a
+    broken Line/SoftLine start a layout line.
+
+    The column after a Text is the width of its last physical line.
+    """
 
     content: str
 

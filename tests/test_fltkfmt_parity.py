@@ -99,6 +99,20 @@ def _py_format(text: str, max_width: int, indent_width: int) -> str:
     return plumbing.render_doc(_py_doc(text), RendererConfig(max_width=max_width, indent_width=indent_width))
 
 
+def _rust_format(binary: Path, source: Path, max_width: int, indent_width: int) -> str:
+    """`fltkfmt`'s output for the file `source` at the given width and indent."""
+    proc = subprocess.run(  # noqa: S603
+        [str(binary), str(source), "-w", str(max_width), "-i", str(indent_width)],
+        capture_output=True,
+        check=False,
+    )
+    assert proc.returncode == 0, (
+        f"[{source.name} w={max_width} i={indent_width}] fltkfmt exited {proc.returncode}: "
+        f"{proc.stderr.decode('utf-8', 'replace')}"
+    )
+    return proc.stdout.decode("utf-8", "replace")
+
+
 @pytest.fixture(scope="session")
 def fltkfmt_binary() -> Path:
     """The standalone `fltkfmt` binary the test target named in `FLTKFMT_BIN`.
@@ -117,19 +131,34 @@ def fltkfmt_binary() -> Path:
 @pytest.mark.parametrize("max_width,indent_width", _CONFIGS, ids=_CONFIG_IDS)
 @pytest.mark.parametrize("fltkg", _CORPUS, ids=_CORPUS_IDS)
 def test_fltkfmt_matches_python(fltkfmt_binary: Path, fltkg: Path, max_width: int, indent_width: int):
-    text = fltkg.read_text()
-    py_out = _py_format(text, max_width, indent_width)
-    proc = subprocess.run(  # noqa: S603
-        [str(fltkfmt_binary), str(fltkg), "-w", str(max_width), "-i", str(indent_width)],
-        capture_output=True,
-        check=False,
-    )
-    assert proc.returncode == 0, (
-        f"[{fltkg.name} w={max_width} i={indent_width}] fltkfmt exited {proc.returncode}: "
-        f"{proc.stderr.decode('utf-8', 'replace')}"
-    )
-    rust_out = proc.stdout.decode("utf-8", "replace")
+    py_out = _py_format(fltkg.read_text(), max_width, indent_width)
+    rust_out = _rust_format(fltkfmt_binary, fltkg, max_width, indent_width)
     assert py_out == rust_out, (
         f"[{fltkg.name} w={max_width} i={indent_width}] formatter output mismatch:\n"
         f"Python: {py_out!r}\nRust:   {rust_out!r}"
     )
+
+
+# Preserved comments inside a rule's nest, and a multi-line block comment there: every line after
+# the comment keeps the nest indent, the comment's own bytes are never re-indented, and the output
+# is a fixed point on both backends.
+_INLINE_CASES = [
+    pytest.param("a := x\n// c\n| y ;\n", "a :=\n  x\n  // c\n  | y ;\n", id="column0_comment"),
+    pytest.param("a := x\n// c1\n// c2\n| y ;\n", "a :=\n  x\n  // c1\n  // c2\n  | y ;\n", id="two_column0_comments"),
+    pytest.param("a := x\n  // c\n  | y ;\n", "a :=\n  x\n  // c\n  | y ;\n", id="indented_comment"),
+    pytest.param("a := x // t\n| y ;\n", "a :=\n  x // t\n  | y ;\n", id="trailing_comment"),
+    pytest.param("a := x\n/* l1\n   l2 */\n| y ;\n", "a :=\n  x\n  /* l1\n   l2 */\n  | y ;\n", id="block_comment"),
+]
+
+
+@pytest.mark.parametrize(("text", "expected"), _INLINE_CASES)
+def test_preserved_comment_layout(fltkfmt_binary: Path, tmp_path: Path, text: str, expected: str):
+    source = tmp_path / "input.fltkg"
+    formatted = tmp_path / "formatted.fltkg"
+    source.write_text(text)
+    formatted.write_text(expected)
+    for out in (_py_format(text, 80, 2), _rust_format(fltkfmt_binary, source, 80, 2)):
+        assert out == expected
+    assert _py_format(expected, 80, 2) == expected
+    assert _rust_format(fltkfmt_binary, formatted, 80, 2) == expected
+    assert _py_format(text, 40, 4) == _rust_format(fltkfmt_binary, source, 40, 4)
