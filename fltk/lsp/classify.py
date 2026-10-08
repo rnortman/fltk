@@ -71,8 +71,6 @@ class GrammarTables:
 
 
 def _build_terminal_table(rule: gsm.Rule) -> _TerminalTable:
-    # TODO(lsp-rule-surface-index): this per-rule item walk parallels lsp_config._index_rule;
-    # unify into one rule-surface index consumed by validation, resolution, and classification.
     label_literals: dict[str, set[str]] = {}
     label_regexes: dict[str, list[re.Pattern[str]]] = {}
     literals: set[str] = set()

@@ -277,8 +277,6 @@ class GrammarIndex:
 
 
 def _index_rule(rule: gsm.Rule) -> RuleIndex:
-    # TODO(lsp-rule-surface-index): this per-rule item walk parallels classify._build_terminal_table;
-    # unify into one rule-surface index consumed by validation, resolution, and classification.
     labels: set[str] = set()
     literals: set[str] = set()
     invoked_rules: set[str] = set()

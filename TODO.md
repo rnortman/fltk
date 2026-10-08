@@ -106,26 +106,6 @@ server ships (it drives `classify` per keystroke), or when profiling on a real g
 `classify` latency dominates. Location: `fltk/lsp/classify.py` (`_winner_segments`, the second
 `_default_intervals` loop in `classify`).
 
-## `lsp-rule-surface-index`
-
-`fltk/lsp/lsp_config.py`'s `_index_rule` (`RuleIndex`: labels / literals / invoked rules) and
-`fltk/lsp/classify.py`'s `_build_terminal_table` (`_TerminalTable`: literals / regexes,
-label-keyed) are two parallel per-rule walks over `rule.alternatives` × `gsm.for_each_item`, each
-collecting an overlapping slice of a rule's item surface (literals appear in both). The definition
-of "what a rule's items expose to anchors/classification" thus lives in two mirrored walkers in
-two modules, and any drift shows up as validation accepting an anchor the classifier can't match.
-Unify into one per-rule surface index (labels, literals, regexes, invoked rules; label-keyed views
-derived from it) consumed by validation, resolution, and the classifier tables. Deferred rather
-than done in respond-mode because it restructures private surfaces across two modules.
-Location: `fltk/lsp/lsp_config.py` (`_index_rule`), `fltk/lsp/classify.py`
-(`_build_terminal_table`).
-
-The INLINE half of this is already handled and is no longer a reason to do the unification: `!`
-dispositions are expanded into sub-expressions at the text→GSM parse boundary, so both walkers
-receive a grammar in which an inlined rule's terminals already live in the parent rule's items.
-Neither walker needs its own splice, and neither is forced to change by INLINE support. What
-remains is the duplication itself.
-
 ## `rust-codegen-self-keyword`
 
 The Rust CST backend emits uncompilable Rust for any grammar label or rule name whose
@@ -196,21 +176,6 @@ for several values, so the emitter must construct the cursor explicitly at such 
 halves have to land in the Rust emitter the same way, or the two ASTs stop being shape-equivalent.
 Location: `fltk/fegen/ast_model.py` (`_ModelBuilder.erased_product_payload`'s arity check),
 `fltk/fegen/gsm2ast.py` (`field_annotation`, `cursor_expression`).
-
-## `rust-cst-memberless-nodes`
-
-The Rust CST generator refuses any rule whose model has no members (`gsm2tree_rs.py`,
-`_rule_info`: "Model class ... would have no members"), while the Python CST generator accepts one.
-Two AST-modelable shapes are therefore unreachable on the Rust backend: a marker product spelled
-with `.` separators (`marker := $"!" . $"?" ;` — a rule whose included items are all unlabeled
-literals, which the AST models as a span-only node) and an unlabeled-unincluded terminal rule. This
-is pre-existing CST-generator behavior, not AST-layer debt, and the workaround is to `$`-include a
-terminal so the node has one member. Closing it means teaching the Rust CST generator to emit a
-memberless node — the node struct, its child and label enums (which have no variants), and the
-parser plumbing that appends nothing — which is its own bounded design. Until it is closed, the
-Python/Rust AST parity suite must carve these two shapes out as a known divergence rather than
-reporting them as a backend bug. Location: `fltk/fegen/gsm2tree_rs.py` (the `if not model.types:`
-guard in `_rule_info`).
 
 ## `ast-deep-clone-debug`
 
