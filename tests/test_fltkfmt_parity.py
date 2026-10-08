@@ -43,6 +43,7 @@ _CORPUS = [
     _REPO_ROOT / "fltk" / "fegen" / "fltk.fltkg",
     _REPO_ROOT / "fltk" / "fegen" / "regex.fltkg",
     _REPO_ROOT / "fltk" / "fegen" / "test_data" / "collision_fixture.fltkg",
+    _REPO_ROOT / "fltk" / "fegen" / "test_data" / "nest_boundary_comments.fltkg",
     _REPO_ROOT / "fltk" / "fegen" / "test_data" / "phase4_roundtrip.fltkg",
     _REPO_ROOT / "fltk" / "fegen" / "test_data" / "poc_grammar.fltkg",
     _REPO_ROOT / "fltk" / "fegen" / "test_data" / "rust_parser_fixture.fltkg",
@@ -151,14 +152,68 @@ _INLINE_CASES = [
 ]
 
 
+def _assert_layout(binary: Path, tmp_path: Path, source: Path, expected: str) -> None:
+    """Both backends format `source` to `expected` at 80/2, and `expected` is a fixed point on both."""
+    text = source.read_text()
+    formatted = tmp_path / "formatted.fltkg"
+    formatted.write_text(expected)
+    for out in (_py_format(text, 80, 2), _rust_format(binary, source, 80, 2)):
+        assert out == expected
+    assert _py_format(expected, 80, 2) == expected
+    assert _rust_format(binary, formatted, 80, 2) == expected
+
+
 @pytest.mark.parametrize(("text", "expected"), _INLINE_CASES)
 def test_preserved_comment_layout(fltkfmt_binary: Path, tmp_path: Path, text: str, expected: str):
     source = tmp_path / "input.fltkg"
-    formatted = tmp_path / "formatted.fltkg"
     source.write_text(text)
-    formatted.write_text(expected)
-    for out in (_py_format(text, 80, 2), _rust_format(fltkfmt_binary, source, 80, 2)):
-        assert out == expected
-    assert _py_format(expected, 80, 2) == expected
-    assert _rust_format(fltkfmt_binary, formatted, 80, 2) == expected
+    _assert_layout(fltkfmt_binary, tmp_path, source, expected)
     assert _py_format(text, 40, 4) == _rust_format(fltkfmt_binary, source, 40, 4)
+
+
+_NEST_BOUNDARY_COMMENTS = _REPO_ROOT / "fltk" / "fegen" / "test_data" / "nest_boundary_comments.fltkg"
+
+# A preserved comment in the first or last gap of a nest takes the nest's indent and the gap
+# renders the source's whitespace around it and nothing else: a delimiter after an own-line
+# comment starts its own line at the enclosing indent, a delimiter the source left on a same-line
+# comment's line stays there even when the group breaks (`g`), and a blank line survives.
+_NEST_BOUNDARY_EXPECTED = """\
+// Comments in the boundary gaps of fegen's two nest regions.
+a :=
+  (
+    // lead
+    "x" | "y"
+    // trail
+  ) ;
+b :=
+  (
+    // one
+    // two
+    "x"
+
+    // after blank
+  ) ;
+c :=
+  ( // same line
+    "x"
+  ) ;
+d :=
+  (
+    /* block
+     continued */
+    "x"
+  ) ;
+e :=
+  // lead after :=
+  "x" ;
+f := ( "x" /* trail */ ) ;
+g :=
+  (
+    // lead
+    "x" | "y" /* trail */ ) ;
+"""
+
+
+def test_nest_boundary_comment_layout(fltkfmt_binary: Path, tmp_path: Path):
+    # Parity at 40/4 is `test_fltkfmt_matches_python`'s: the file is in `_CORPUS`.
+    _assert_layout(fltkfmt_binary, tmp_path, _NEST_BOUNDARY_COMMENTS, _NEST_BOUNDARY_EXPECTED)

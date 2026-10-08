@@ -120,15 +120,6 @@ def test_formatting_preserves_blank_lines_between_items() -> None:
     assert output.lstrip().startswith("// gear"), f"leading comment lost:\n{output}"
 
 
-def test_comment_at_block_start_is_a_fixed_point() -> None:
-    """A comment opening a block body sits outside the nest and formats to itself."""
-    source = _MAIN.read_text().replace(
-        "fn rim_area(w: Wheel) -> Float {\n", "fn rim_area(w: Wheel) -> Float {\n  // the hub radius\n"
-    )
-    assert "// the hub radius" in source
-    assert _gear_formatter(indent_width=2)(source) == source
-
-
 @pytest.mark.parametrize(
     ("source", "once_expected", "twice_expected"),
     [
@@ -144,15 +135,28 @@ def test_comment_at_block_start_is_a_fixed_point() -> None:
             "// g\nfn f(w: W) -> F {\n    let r = w.hub;\n  // c\n        \n  return r;\n}\n",
             id="blank_line_gains_trailing_whitespace",
         ),
+        pytest.param(
+            "// g\nfn f(w: W) -> F {\n  // c\n  let r = w.hub;\n  return r;\n}\n",
+            "// g\nfn f(w: W) -> F {\n  // c\n      let r = w.hub;\n    return r;\n}\n",
+            "// g\nfn f(w: W) -> F {\n  // c\n          let r = w.hub;\n    return r;\n}\n",
+            id="block_start_next_line_drifts",
+        ),
     ],
 )
 def test_mid_block_comment_drifts(source: str, once_expected: str, twice_expected: str) -> None:
-    """A comment on its own line mid-block keeps its source column; what follows it drifts.
+    """A comment on its own line in a block — mid-block or opening it — keeps its source column; what follows it drifts.
 
     gear's whitespace trivia is a token (``ws := chars:/\\s+/``), so the whitespace before the
     comment renders as its own bytes and the whitespace token after the comment's terminator takes
     the nest indent before its own bytes, one indent more per pass: on the next line's text, or,
     when a blank line follows the comment, as trailing whitespace on that blank line.
+
+    A block-opening comment drifts the same way: ``nest-boundary-trivia-indent`` keeps it inside
+    the nest, so the token after it takes the nest indent exactly as in the interior gap. Before
+    that change the comment was extracted to the enclosing level and the next line rendered at its
+    source column at any width — stable every pass, but at the nest indent only when the source
+    indent equalled ``indent_width``; this change turned that stable-but-misindented gap into a
+    drifting one.
     """
     # TODO(preserved-trivia-ws-bytes): a fix to preserved whitespace-token rendering trips this pin.
     render = _gear_formatter()

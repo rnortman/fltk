@@ -22,7 +22,11 @@ def test_control_node_types():
     assert sep.spacing == LINE
     assert sep.preserved_trivia is None
     assert sep.required is True
+    assert sep.join_separator is False
     assert "SeparatorSpec" in repr(sep)
+    assert "join_separator" not in repr(sep)
+    join_sep = SeparatorSpec(spacing=None, preserved_trivia=Text("|"), required=False, join_separator=True)
+    assert "join_separator=True" in repr(join_sep)
 
 
 def test_resolve_spacing_specs_simple():

@@ -3134,6 +3134,210 @@ fn a_block_ended_statement_closes_without_a_blank() {
 fn an_authored_blank_after_a_block_ended_statement_survives() {
     assert_eq!(doc("x{x{x;}\n\nx;}"), "x{\n    x{\n        x;\n    }\n\n    x;\n}\n");
 }
+
+#[test]
+fn a_comment_after_a_block_ended_statement_takes_the_nest_indent() {
+    assert_eq!(doc("x{x{x;}\n// c\n}"), "x{\n    x{\n        x;\n    }\n    // c\n}\n");
+}
+
+#[test]
+fn a_blank_before_a_comment_after_a_block_ended_statement_survives() {
+    assert_eq!(doc("x{x{x;}\n\n// c\n}"), "x{\n    x{\n        x;\n    }\n\n    // c\n}\n");
+}
+"""
+
+# A preserved comment in a nest's first or last gap stays inside the nest and takes its indent.
+# `block` nests between its braces; `body` is a comment-only body with a second control node (the
+# suppressed optional `;`'s unconditional before-spacing); `tail` is fegen's `term` shape, with an
+# `after` on the nest's last item and a `before` on the closing delimiter, whose spacing the
+# trailing comment's own whitespace replaces. `gn` and `ng` declare a `group` and a `nest` over
+# the same anchors in the two orders: a boundary comment breaks the group only when the group
+# wraps the nest (`join-nest-same-anchor` owns that disagreement). `fltk/unparse/test_unparser.py`
+# runs its Python-backend witnesses over this grammar and config; each backend states its
+# expected text independently.
+NEST_BOUNDARY_TRIVIA_GRAMMAR = (
+    "doc := , stmt* , ;\n"
+    'stmt := kw:"x" , block:block? , semi:";"? , ;\n'
+    'block := "{" , stmt* , "}" ;\n'
+    'body := "{" , stmt* , ";"? , "}" ;\n'
+    'tail := "{" , stmt* , "}" ;\n'
+    'gn := "{" , item* , "}" ;\n'
+    'ng := "{" , item* , "}" ;\n'
+    'item := kw:"y" , semi:";" , ;\n'
+    "_trivia := ( line_comment | line_comment? : )+ ;\n"
+    'line_comment := prefix:"//" . text:/[^\\n]*/ . nl:"\\n" ;\n'
+)
+
+NEST_BOUNDARY_TRIVIA_FORMATTER = (
+    "preserve_blanks: 1;\ntrivia_preserve: LineComment;\nws_allowed: nil;\nws_required: bsp;\n"
+    'rule stmt { before ";" { nil; } after ";" { hard; } }\n'
+    'rule block { after "{" { hard; } before "}" { hard; } after "}" { hard; } '
+    'nest from after "{" to before "}"; }\n'
+    'rule body { after "{" { hard; } before ";" { nil; } nest from after "{" to before "}"; }\n'
+    'rule tail { after "{" { hard; } before "}" { bsp; } after stmt { nbsp; } '
+    'nest from after "{" to before "}"; }\n'
+    'rule item { before ";" { nil; } after ";" { bsp; } }\n'
+    'rule gn { after "{" { bsp; } before "}" { bsp; } '
+    'group from after "{" to before "}"; nest from after "{" to before "}"; }\n'
+    'rule ng { after "{" { bsp; } before "}" { bsp; } '
+    'nest from after "{" to before "}"; group from after "{" to before "}"; }\n'
+)
+
+NEST_BOUNDARY_TRIVIA_RUNTIME = """//! A preserved comment in a nest's first or last gap takes the nest's indent.
+
+use super::parser::Parser;
+use super::unparser::Unparser;
+use ::fltk_unparser_core::{resolve_spacing_specs, Doc, Renderer, RendererConfig};
+
+fn render(doc: Doc) -> String {
+    let resolved = resolve_spacing_specs(doc);
+    Renderer::new(RendererConfig {
+        indent_width: 4,
+        max_width: 80,
+    })
+    .render(&resolved)
+}
+
+/// Format `src` as one rule and assert the output is a fixed point.
+macro_rules! format_rule {
+    ($src:expr, $parse:ident, $unparse:ident) => {{
+        let format_once = |src: &str| -> String {
+            let mut parser = Parser::new(src, None, true);
+            let parsed = parser.$parse(0).expect("the input must parse");
+            assert!(parsed.pos as usize == src.len(), "the parse must consume {src:?}");
+            let guard = parsed.result.read();
+            let unparsed = Unparser::new()
+                .$unparse(&*guard)
+                .expect("a parser-produced CST must unparse");
+            render(unparsed.doc())
+        };
+        let once = format_once($src);
+        assert_eq!(format_once(&once), once, "the layout must be a fixed point");
+        once
+    }};
+}
+
+fn doc(src: &str) -> String {
+    format_rule!(src, apply__parse_doc, unparse_doc)
+}
+
+fn body(src: &str) -> String {
+    format_rule!(src, apply__parse_body, unparse_body)
+}
+
+fn tail(src: &str) -> String {
+    format_rule!(src, apply__parse_tail, unparse_tail)
+}
+
+fn gn(src: &str) -> String {
+    format_rule!(src, apply__parse_gn, unparse_gn)
+}
+
+fn ng(src: &str) -> String {
+    format_rule!(src, apply__parse_ng, unparse_ng)
+}
+
+#[test]
+fn a_leading_comment_takes_the_nest_indent() {
+    assert_eq!(doc("x{\\n// lead\\nx;}"), "x{\\n    // lead\\n    x;\\n}\\n");
+}
+
+#[test]
+fn a_trailing_comment_takes_the_nest_indent() {
+    assert_eq!(doc("x{x;\\n// trail\\n}"), "x{\\n    x;\\n    // trail\\n}\\n");
+}
+
+#[test]
+fn leading_and_trailing_comments_take_the_nest_indent() {
+    assert_eq!(
+        doc("x{\\n// lead\\nx;\\n// trail\\n}"),
+        "x{\\n    // lead\\n    x;\\n    // trail\\n}\\n"
+    );
+}
+
+#[test]
+fn a_comment_alone_in_a_nest_takes_its_indent() {
+    assert_eq!(doc("x{\\n// only\\n}"), "x{\\n    // only\\n}\\n");
+}
+
+#[test]
+fn a_comment_beside_a_second_control_node_takes_the_nest_indent() {
+    assert_eq!(body("{\\n// only\\n}"), "{\\n    // only\\n}");
+}
+
+#[test]
+fn a_blank_before_a_leading_comment_survives() {
+    assert_eq!(doc("x{\\n\\n// c\\nx;}"), "x{\\n\\n    // c\\n    x;\\n}\\n");
+}
+
+#[test]
+fn a_blank_after_a_leading_comment_survives() {
+    assert_eq!(doc("x{\\n// c\\n\\nx;}"), "x{\\n    // c\\n\\n    x;\\n}\\n");
+}
+
+#[test]
+fn a_blank_before_a_trailing_comment_survives() {
+    assert_eq!(doc("x{x;\\n\\n// c\\n}"), "x{\\n    x;\\n\\n    // c\\n}\\n");
+}
+
+#[test]
+fn a_trailing_comment_replaces_the_spacing_after_the_last_item() {
+    assert_eq!(tail("{x;\\n// trail\\n}"), "{\\n    x;\\n    // trail\\n}");
+}
+
+#[test]
+fn a_trailing_comment_after_a_blank_replaces_the_spacing_after_the_last_item() {
+    assert_eq!(tail("{x;\\n\\n// trail\\n}"), "{\\n    x;\\n\\n    // trail\\n}");
+}
+
+#[test]
+fn a_nest_without_trivia_keeps_its_boundary_spacing() {
+    assert_eq!(tail("{x;}"), "{\\n    x;\\n}");
+}
+
+// `gn` declares `group` before `nest` over the same anchors, `ng` the reverse. A boundary comment
+// breaks the group only when the group wraps the nest; `join-nest-same-anchor` owns that
+// disagreement between the two orders.
+
+#[test]
+fn a_group_wrapping_a_nest_stays_flat_without_trivia() {
+    assert_eq!(gn("{y;y;}"), "{ y; y; }");
+}
+
+#[test]
+fn a_group_inside_a_nest_stays_flat_without_trivia() {
+    assert_eq!(ng("{y;y;}"), "{ y; y; }");
+}
+
+#[test]
+fn a_leading_comment_breaks_a_group_wrapping_the_nest() {
+    assert_eq!(gn("{\\n// c\\ny;y;}"), "{\\n    // c\\n    y;\\n    y;\\n}");
+}
+
+#[test]
+fn a_leading_comment_leaves_a_group_inside_the_nest_flat() {
+    assert_eq!(ng("{\\n// c\\ny;y;}"), "{\\n    // c\\n    y; y;\\n}");
+}
+
+#[test]
+fn a_trailing_comment_breaks_a_group_wrapping_the_nest() {
+    assert_eq!(gn("{y;y;\\n// c\\n}"), "{\\n    y;\\n    y;\\n    // c\\n}");
+}
+
+#[test]
+fn a_trailing_comment_leaves_a_group_inside_the_nest_flat() {
+    assert_eq!(ng("{y;y;\\n// c\\n}"), "{\\n    y; y;\\n    // c\\n}");
+}
+
+#[test]
+fn an_interior_comment_breaks_a_group_wrapping_the_nest() {
+    assert_eq!(gn("{y;\\n// c\\ny;}"), "{\\n    y;\\n    // c\\n    y;\\n}");
+}
+
+#[test]
+fn an_interior_comment_breaks_a_group_inside_the_nest() {
+    assert_eq!(ng("{y;\\n// c\\ny;}"), "{\\n    y;\\n    // c\\n    y;\\n}");
+}
 """
 
 # A literal that occupies source but no child position advances the cursor only when the source
@@ -3758,6 +3962,16 @@ CASES = [
         parser=True,
         unparser=True,
         formatter=OPTIONAL_BEFORE_SPEC_FORMATTER,
+        goal="doc",
+    ),
+    Case(
+        "nest_boundary_trivia",
+        NEST_BOUNDARY_TRIVIA_GRAMMAR,
+        runtime=NEST_BOUNDARY_TRIVIA_RUNTIME,
+        ast=False,
+        parser=True,
+        unparser=True,
+        formatter=NEST_BOUNDARY_TRIVIA_FORMATTER,
         goal="doc",
     ),
 ]

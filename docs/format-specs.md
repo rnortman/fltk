@@ -193,6 +193,16 @@ literal `"\n"`. So a line-comment rule whose terminator sits inside the comment 
 0: end the rule in a literal `"\n"` instead, as `fegen.fltkg` does. A `"\r\n"` terminator is
 token bytes, not a layout break.
 
+A preserved comment in a nest's first or last gap — the gap after its opening delimiter or
+before its closing one — is indented with the nest's content, exactly like a comment between
+the nest's items, and the gap renders the source's whitespace around the comment and nothing
+else: a delimiter after an own-line comment starts its own line at the enclosing indent, and a
+delimiter the source put on the comment's line stays there, whether or not the enclosing group
+breaks. Whatever an interior comment does to a layout, a boundary comment does too: a `group`
+that wraps the nest contains the comment and breaks on it, as it would on a comment between
+items. A `group` declared inside the nest — `nest` before `group` over the same anchors, or a
+`group` on a narrower range — does not contain the comment and its body may stay flat.
+
 ### Join
 
 Join items with a separator:

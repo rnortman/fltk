@@ -51,10 +51,15 @@ pub enum Doc {
     /// Spacing applied before the following content.
     BeforeSpec { spacing: Rc<Doc> },
     /// Default separator spacing (fallback if no before/after specs override).
+    ///
+    /// `preserved_trivia` holds source trivia the generated unparser preserved or, when
+    /// `join_separator` is true, the separator of a `Join` the resolver expanded. The
+    /// second is not source text and has no indentation of its own.
     SeparatorSpec {
         spacing: Option<Rc<Doc>>,
         preserved_trivia: Option<Rc<Doc>>,
         required: bool,
+        join_separator: bool,
     },
 }
 
@@ -259,12 +264,14 @@ pub fn after_spec(spacing: Doc) -> Doc {
 /// (`fltk/unparse/gsm2unparser.py:446`): either `spacing` or `preserved_trivia` may
 /// be absent (`None`), and `required` marks a WS-required separator (one that must
 /// not collapse away entirely). Both optional fields are `Rc`-wrapped on the way in,
-/// matching `group`/`nest`/`before_spec`/`after_spec`.
+/// matching `group`/`nest`/`before_spec`/`after_spec`. The separator is never a `Join`'s:
+/// `join_separator` is `false`.
 pub fn separator_spec(spacing: Option<Doc>, preserved_trivia: Option<Doc>, required: bool) -> Doc {
     Doc::SeparatorSpec {
         spacing: spacing.map(Rc::new),
         preserved_trivia: preserved_trivia.map(Rc::new),
         required,
+        join_separator: false,
     }
 }
 
@@ -434,6 +441,7 @@ mod tests {
                 spacing: Some(Rc::new(Doc::HardLine { blank_lines: 1 })),
                 preserved_trivia: None,
                 required: true,
+                join_separator: false,
             }
         );
         // Preserved trivia present, no spacing, not required (the non-trivia-rule shape).
@@ -443,6 +451,7 @@ mod tests {
                 spacing: None,
                 preserved_trivia: Some(Rc::new(text("x"))),
                 required: false,
+                join_separator: false,
             }
         );
     }

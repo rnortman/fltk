@@ -253,14 +253,21 @@ class BeforeSpec(Doc):
 
 @dataclass(slots=True, frozen=True)
 class SeparatorSpec(Doc):
-    """Default separator spacing (fallback if no before/after specs override)."""
+    """Default separator spacing (fallback if no before/after specs override).
+
+    `preserved_trivia` holds source trivia the generated unparser preserved or, when
+    `join_separator` is true, the separator of a `Join` the resolver expanded. The second is
+    not source text and has no indentation of its own.
+    """
 
     spacing: Doc | None
     preserved_trivia: Doc | None
     required: bool
+    join_separator: bool = False
 
     def __repr__(self) -> str:
+        join = ", join_separator=True" if self.join_separator else ""
         return (
             f"SeparatorSpec(spacing={self.spacing!r}, "
-            f"preserved_trivia={self.preserved_trivia!r}, required={self.required})"
+            f"preserved_trivia={self.preserved_trivia!r}, required={self.required}{join})"
         )

@@ -523,30 +523,6 @@ hook exists, `docs/rust-serde-guide.md` documents it, and its scope/unwind lifec
 Location: `crates/fltk-serde-core/src/error.rs` (`impl serde::de::Error for DeserializeError`,
 `custom`), `crates/fltk-serde-core/src/channel.rs`.
 
-## `nest-boundary-trivia-indent`
-
-A standalone comment in the first or last gap of a `Nest` — the gap after an opening `{` or
-before a closing `}` — renders at the *enclosing* indent, flush with the brace, while comments
-between the nest's interior elements render at the nest's indent. Cause: the resolver's boundary
-extraction lifts any leading/trailing `SeparatorSpec` out of the nest regardless of whether it
-carries `preserved_trivia`, and `_extract_all_boundary_specs` / `extract_all_boundary_specs`
-returns a `Nest`'s boundary specs to the parent *outside* the rebuilt nest, so the renderer indents
-the comment from the enclosing item. Both backends. Consumer: brenn's `brennfmt`, whose canonical
-goldens pin the defective form and whose `--check` gate therefore refuses the correct layout —
-tracked there as `TODO(dsl-fmt-trivia-placement)` in `brenn/TODO.md`, blocked on this. Fix = a
-trivia-bearing boundary `SeparatorSpec` inside a `Nest` stays inside the nest; spacing-only
-boundary specs are extracted exactly as today. Constraints: (1) existing resolver boundary tests do
-not move; (2) the predicate is "carries preserved *comment* trivia inside a `Nest`", not "field is
-set" — Join expansion also parks its synthetic separator in `preserved_trivia`, and extraction also
-serves `Group`; both pinned before the change and unchanged after; (3) the line break after `{` and
-before `}` is produced exactly once — a standalone `AfterSpec`/`BeforeSpec` is discarded and the
-collapse pass does not merge two `HardLine`s, so test both the lost-break and doubled-break
-failure modes; (4) both backends, cross-backend parity, seed fixed-point, and a comment-only body
-as its own case (the accumulator pops an all-trivia nest differently); (5) one sentence in
-`docs/format-specs.md` §Nest. Location: `crates/fltk-unparser-core/src/resolve.rs`
-(`extract_all_boundary_specs`, `extract_boundary_specs`), `fltk/unparse/resolve_specs.py`
-(`_extract_all_boundary_specs`, `_extract_boundary_specs`).
-
 ## `anchored-gap-blank-loss`
 
 The existing blank-line cap (`preserve_blanks`, global or rule-level) is silently discarded at a
@@ -582,10 +558,17 @@ pass: when the next line follows directly, that line's text drifts (a trailing c
 `let r = w.hub; // t`, drifts the same way); when a blank line follows the comment, the token
 begins with its newline, so the indent lands on the blank line as trailing whitespace that grows
 every pass while the next line sits stably at its source column.
+The block-opening gap behaves the same way since `nest-boundary-trivia-indent` kept a boundary
+comment inside its nest. Before that the comment was extracted to the enclosing level and the
+following token rendered at the enclosing indent + its bytes — the next line at its source column
+at any `indent_width`, idempotent every pass but correctly indented only where the source indent
+equalled `indent_width`; keeping the comment inside the nest made that gap drift like the interior
+one.
 Deciding whether such children are dropped, normalised, or left to the grammar is a
-formatting-policy design. Done = a gear block with a mid-block comment, own-line or trailing,
-with or without a blank line after it, formats to a fixed point in both backends. Location: `fltk/lsp/test_gear_demo.py`
-(`test_mid_block_comment_drifts`), the pin that a fix trips. The whitespace token is a rule child
+formatting-policy design. Done = a gear block with a comment — opening the block or mid-block,
+own-line or trailing, with or without a blank line after it — formats to a fixed point in both
+backends. Location: `fltk/lsp/test_gear_demo.py` (`test_mid_block_comment_drifts`, including its
+`block_start_next_line_drifts` param), the pin that a fix trips. The whitespace token is a rule child
 of the trivia node, rendered through ordinary rule-child emission, so no code site is the fix's
 until the policy is chosen: dropping or normalising lands in both generators' trivia-node child
 emission (`fltk/unparse/gsm2unparser.py`, `fltk/unparse/gsm2unparser_rs.py`); leaving it to the
@@ -601,9 +584,18 @@ therefore wraps a single `Nest` child and inserts no separator, with no diagnost
 `join from after "[" to before "]" concat([text(","), hard]); nest from after "[" to before "]";`,
 input `[1,2,3]` renders `[ 1 , 2, 3 ]`. With the two statements swapped, the join applies inside
 the nest. This was observed while adding a join guard test and reproduces with the pre-change
-`fltk/unparse/` sources, so this change did not introduce it. Choosing between a canonical nesting
-order for coincident ranges, a diagnostic, and documented statement-order semantics is a design
-question for the `.fltkfmt` language. Done = that rule is chosen, documented in
-`docs/format-specs.md`, and the repro either formats with the join applied or is rejected with an
-error. Location: `_process_range_operation` in `fltk/unparse/fmt_config.py`, which builds the
-anchor operation lists both backends' generators consume.
+`fltk/unparse/` sources, so this change did not introduce it. `group` and `nest` over the same
+anchors show the same order dependence through a boundary comment, since
+`nest-boundary-trivia-indent` keeps such a comment inside the `Nest`: `group …; nest …;` builds
+`Group(Nest(…))`, the comment's `HardLine` is inside the group and breaks it; `nest …; group …;`
+builds `Nest(Group(…))`, the `Group` arm of `_extract_all_boundary_specs` lifts the comment to the
+`Nest`'s level and the body stays flat. Repro: `tests/rust_gate_cases.py`
+`NEST_BOUNDARY_TRIVIA_GRAMMAR`'s `gn` / `ng` rules on `{\n// c\ny;y;}` —
+`{\n    // c\n    y;\n    y;\n}` against `{\n    // c\n    y; y;\n}`. An interior comment breaks
+the group in both orders. Choosing between a canonical nesting order for coincident ranges, a
+diagnostic, and documented statement-order semantics is a design question for the `.fltkfmt`
+language. Done = that rule is chosen, documented in `docs/format-specs.md`, the repro either
+formats with the join applied or is rejected with an error, and the `gn` / `ng` rows render the
+same text or one order is rejected. Location: `_process_range_operation` in
+`fltk/unparse/fmt_config.py`, which builds the anchor operation lists both backends' generators
+consume.

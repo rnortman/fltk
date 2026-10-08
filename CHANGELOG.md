@@ -31,6 +31,26 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- Formatter: a comment just inside a `nest` region — right after the opening delimiter (`{`,
+  `(`) or right before the closing one — is now indented with the nest's content instead of
+  sitting flush with the delimiter, matching comments between the nest's items. Expect golden
+  diffs wherever such comments exist. Knock-on effects in that gap:
+  - The closing delimiter after an own-line comment stays at the enclosing indent; preserved
+    blank lines keep their count.
+  - The comment's own whitespace now wins over `after`/`before` spacing for that gap: a trailing
+    comment followed by `before "}" { hard; }` no longer gets an extra blank line, and a
+    same-line `/* c */` before the delimiter keeps the source's spacing (fixing a non-idempotent
+    `*/)` → `*/ )` → `*/  )`).
+  - A delimiter left on a same-line comment's line stays there even when the enclosing group
+    breaks.
+  - A `group` that shares an anchor with the `nest` (or is declared before it over the same
+    anchors) now contains the comment and breaks on it, where it used to stay flat. With `nest`
+    declared first it still stays flat — an ordering quirk tracked as
+    `TODO(join-nest-same-anchor)`.
+  - Grammars whose whitespace is a byte-rendered token (e.g. the gear demo's `ws := /\s+/`) keep
+    the comment at its source column, but the line after a block-opening comment now drifts one
+    indent per format pass, as it already did after mid-block comments
+    (`TODO(preserved-trivia-ws-bytes)`).
 - Formatter: `before X` spacing on an optional item (`X?` or `X*`) now appears only when `X` is
   actually printed. Previously an absent `X` (or a `*` with zero matches) still left its spacing
   behind. With a common spec such as `before ";" { nil; }` on an optional statement terminator,

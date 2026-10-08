@@ -434,6 +434,7 @@ filegroup(
         "fltk/fegen/fltk.fltkg",
         "fltk/fegen/regex.fltkg",
         "fltk/fegen/test_data/collision_fixture.fltkg",
+        "fltk/fegen/test_data/nest_boundary_comments.fltkg",
         "fltk/fegen/test_data/phase4_roundtrip.fltkg",
         "fltk/fegen/test_data/poc_grammar.fltkg",
         "fltk/fegen/test_data/rust_parser_fixture.fltkg",

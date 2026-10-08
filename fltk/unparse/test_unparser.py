@@ -21,7 +21,12 @@ from fltk.plumbing import (
 from fltk.unparse.combinators import LINE, Concat, HardLine, Line, Text, concat
 from fltk.unparse.fmt_config import FormatterConfig, TriviaConfig
 from fltk.unparse.renderer import RendererConfig
-from tests.rust_gate_cases import OPTIONAL_BEFORE_SPEC_FORMATTER, OPTIONAL_BEFORE_SPEC_GRAMMAR
+from tests.rust_gate_cases import (
+    NEST_BOUNDARY_TRIVIA_FORMATTER,
+    NEST_BOUNDARY_TRIVIA_GRAMMAR,
+    OPTIONAL_BEFORE_SPEC_FORMATTER,
+    OPTIONAL_BEFORE_SPEC_GRAMMAR,
+)
 
 
 @pytest.fixture
@@ -1949,6 +1954,66 @@ def test_authored_blank_after_block_ended_statement_survives(optional_before):
     """An authored blank after a `}`-ended statement is kept under `preserve_blanks: 1`."""
     rendered = optional_before.format("doc", "x{x{x;}\n\nx;}")
     assert rendered == "x{\n    x{\n        x;\n    }\n\n    x;\n}\n", repr(rendered)
+
+
+@pytest.mark.parametrize(
+    ("text", "expected"),
+    [
+        ("x{x{x;}\n// c\n}", "x{\n    x{\n        x;\n    }\n    // c\n}\n"),
+        ("x{x{x;}\n\n// c\n}", "x{\n    x{\n        x;\n    }\n\n    // c\n}\n"),
+    ],
+)
+def test_comment_after_block_ended_statement_takes_the_nest_indent(optional_before, text, expected):
+    """A comment closing a block after a `}`-ended statement: one break before it, one before `}`,
+    and an authored blank before it kept."""
+    assert optional_before.format("doc", text) == expected
+
+
+# A preserved comment in a nest's first or last gap stays inside the nest and takes its indent;
+# a delimiter after an own-line comment keeps the enclosing indent. The grammar and config are
+# the Rust backend's `nest_boundary_trivia` gate case's. The `gn` / `ng` rows declare `group`
+# and `nest` over the same anchors in the two orders: a boundary comment breaks the group only
+# when the group wraps the nest, and `join-nest-same-anchor` owns that disagreement.
+
+
+@pytest.fixture
+def nest_boundary():
+    """Formatter over the nest-boundary trivia grammar."""
+    yield from _formatter(NEST_BOUNDARY_TRIVIA_GRAMMAR, NEST_BOUNDARY_TRIVIA_FORMATTER)
+
+
+@pytest.mark.parametrize(
+    ("rule", "text", "expected"),
+    [
+        pytest.param("doc", "x{\n// lead\nx;}", "x{\n    // lead\n    x;\n}\n", id="leading"),
+        pytest.param("doc", "x{x;\n// trail\n}", "x{\n    x;\n    // trail\n}\n", id="trailing"),
+        pytest.param(
+            "doc",
+            "x{\n// lead\nx;\n// trail\n}",
+            "x{\n    // lead\n    x;\n    // trail\n}\n",
+            id="leading_and_trailing",
+        ),
+        pytest.param("doc", "x{\n// only\n}", "x{\n    // only\n}\n", id="comment_only_leaf"),
+        pytest.param("body", "{\n// only\n}", "{\n    // only\n}", id="comment_only_with_control_node"),
+        pytest.param("doc", "x{\n\n// c\nx;}", "x{\n\n    // c\n    x;\n}\n", id="blank_before_leading"),
+        pytest.param("doc", "x{\n// c\n\nx;}", "x{\n    // c\n\n    x;\n}\n", id="blank_after_leading"),
+        pytest.param("doc", "x{x;\n\n// c\n}", "x{\n    x;\n\n    // c\n}\n", id="blank_before_trailing"),
+        pytest.param("tail", "{x;\n// trail\n}", "{\n    x;\n    // trail\n}", id="after_spec_tail_dropped"),
+        pytest.param("tail", "{x;\n\n// trail\n}", "{\n    x;\n\n    // trail\n}", id="after_spec_tail_dropped_blank"),
+        pytest.param("tail", "{x;}", "{\n    x;\n}", id="no_trivia"),
+        pytest.param("gn", "{y;y;}", "{ y; y; }", id="group_first_no_trivia"),
+        pytest.param("ng", "{y;y;}", "{ y; y; }", id="nest_first_no_trivia"),
+        pytest.param("gn", "{\n// c\ny;y;}", "{\n    // c\n    y;\n    y;\n}", id="group_first_leading"),
+        pytest.param("ng", "{\n// c\ny;y;}", "{\n    // c\n    y; y;\n}", id="nest_first_leading"),
+        pytest.param("gn", "{y;y;\n// c\n}", "{\n    y;\n    y;\n    // c\n}", id="group_first_trailing"),
+        pytest.param("ng", "{y;y;\n// c\n}", "{\n    y; y;\n    // c\n}", id="nest_first_trailing"),
+        pytest.param("gn", "{y;\n// c\ny;}", "{\n    y;\n    // c\n    y;\n}", id="group_first_interior"),
+        pytest.param("ng", "{y;\n// c\ny;}", "{\n    y;\n    // c\n    y;\n}", id="nest_first_interior"),
+    ],
+)
+def test_nest_boundary_comment_takes_the_nest_indent(nest_boundary, rule, text, expected):
+    """A comment in a nest's first or last gap renders at the nest's indent, once."""
+    assert nest_boundary.format(rule, text) == expected
 
 
 if __name__ == "__main__":

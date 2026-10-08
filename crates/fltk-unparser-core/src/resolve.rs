@@ -6,7 +6,10 @@
 //! version uses:
 //!
 //! 1. expand `Join`s into docs interleaved with `SeparatorSpec`s,
-//! 2. extract boundary specs recursively to the top level,
+//! 2. extract boundary specs recursively to the top level, except that a `Nest` keeps a
+//!    boundary run holding preserved source trivia out to its outermost trivia-bearing
+//!    separator and drops the spacing specs beyond it — source trivia is not relocated
+//!    across an indentation boundary,
 //! 3. resolve the remaining specs by pattern matching,
 //! 4. collapse `HardLine` + soft-break sequences.
 //!
@@ -91,7 +94,8 @@ fn concat_rc(docs: Vec<Rc<Doc>>) -> Rc<Doc> {
 /// Initial pass: expand `Join` nodes into docs with `SeparatorSpec`s between them.
 ///
 /// Port of `_expand_joins` (`resolve_specs.py:67`). The separator goes into the
-/// `SeparatorSpec`'s `preserved_trivia` so it takes priority over other separators.
+/// `SeparatorSpec`'s `preserved_trivia` so it takes priority over other separators, and
+/// `join_separator` marks it as not source trivia.
 fn expand_joins(doc: &Rc<Doc>) -> Rc<Doc> {
     match &**doc {
         Doc::Join { docs, separator } => {
@@ -128,6 +132,7 @@ fn expand_joins(doc: &Rc<Doc>) -> Rc<Doc> {
                         spacing: None,
                         preserved_trivia: Some(separator.clone()),
                         required: false,
+                        join_separator: true,
                     }));
                 }
                 expanded.push(expanded_child);
@@ -180,15 +185,39 @@ fn extract_all_boundary_specs(doc: &Rc<Doc>) -> ExtractResult {
             )
         }
         Doc::Nest { indent, content } => {
-            // TODO(nest-boundary-trivia-indent): a trivia-bearing boundary SeparatorSpec is
-            // returned to the parent here, outside the rebuilt nest, so a comment in the gap
-            // after `{` or before `}` is indented from the enclosing item.
-            let (processed_content, inner_leading, inner_trailing) =
+            // A Nest owns the indentation of the source trivia the generator placed inside
+            // it. A boundary run that holds preserved source trivia stays inside the nest out
+            // to its outermost trivia-bearing separator; the pure-spacing specs beyond it
+            // describe the gap the trivia already describes and are dropped (rule 4:
+            // preserved trivia overrides everything). A trivia-free run, or one holding only
+            // a Join's synthetic separator, is returned to the parent exactly as a Group's
+            // would be.
+            let (mut content, mut inner_leading, mut inner_trailing) =
                 extract_all_boundary_specs(content);
+            if has_source_trivia(&inner_leading) {
+                let first = inner_leading
+                    .iter()
+                    .position(bears_trivia)
+                    .expect("a run holding source trivia has a trivia-bearing separator");
+                let mut kept = inner_leading.split_off(first);
+                kept.push(content);
+                content = concat_rc(kept);
+                inner_leading.clear();
+            }
+            if has_source_trivia(&inner_trailing) {
+                let last = inner_trailing
+                    .iter()
+                    .rposition(bears_trivia)
+                    .expect("a run holding source trivia has a trivia-bearing separator");
+                inner_trailing.truncate(last + 1);
+                let mut kept = vec![content];
+                kept.append(&mut inner_trailing);
+                content = concat_rc(kept);
+            }
             (
                 Rc::new(Doc::Nest {
                     indent: *indent,
-                    content: processed_content,
+                    content,
                 }),
                 inner_leading,
                 inner_trailing,
@@ -196,6 +225,33 @@ fn extract_all_boundary_specs(doc: &Rc<Doc>) -> ExtractResult {
         }
         _ => (doc.clone(), Vec::new(), Vec::new()),
     }
+}
+
+/// Whether a boundary run holds a `SeparatorSpec` carrying preserved *source* trivia.
+///
+/// Port of `_has_source_trivia`.
+fn has_source_trivia(run: &[Rc<Doc>]) -> bool {
+    run.iter().any(|d| {
+        matches!(
+            &**d,
+            Doc::SeparatorSpec {
+                preserved_trivia: Some(_),
+                join_separator: false,
+                ..
+            }
+        )
+    })
+}
+
+/// Source trivia or a Join's separator: content, not spacing. Port of `_bears_trivia`.
+fn bears_trivia(doc: &Rc<Doc>) -> bool {
+    matches!(
+        &**doc,
+        Doc::SeparatorSpec {
+            preserved_trivia: Some(_),
+            ..
+        }
+    )
 }
 
 /// Extract leading `BeforeSpec`/`SeparatorSpec`s and trailing `AfterSpec`/`SeparatorSpec`s
@@ -389,6 +445,7 @@ fn mutate_after_sep(ws: &VecDeque<Rc<Doc>>) -> Option<Vec<Rc<Doc>>> {
             spacing: sep_spacing,
             preserved_trivia,
             required,
+            ..
         },
     ) = (&*ws[0], &*ws[1])
     {
@@ -415,6 +472,7 @@ fn mutate_sep_before(ws: &VecDeque<Rc<Doc>>) -> Option<Vec<Rc<Doc>>> {
             spacing: sep_spacing,
             preserved_trivia,
             required,
+            ..
         },
         Doc::BeforeSpec { spacing: before },
     ) = (&*ws[0], &*ws[1])
@@ -571,12 +629,14 @@ fn mutate_consecutive_specs(ws: &VecDeque<Rc<Doc>>) -> Option<Vec<Rc<Doc>>> {
                 spacing,
                 preserved_trivia,
                 required,
+                ..
             } => {
                 let j = i + 1;
                 if let Some(Doc::SeparatorSpec {
                     spacing: next_spacing,
                     preserved_trivia: next_trivia,
                     required: next_required,
+                    ..
                 }) = ws.get(j).map(|d| &**d)
                 {
                     let curr_trivia = preserved_trivia.is_some();
@@ -604,6 +664,7 @@ fn mutate_consecutive_specs(ws: &VecDeque<Rc<Doc>>) -> Option<Vec<Rc<Doc>>> {
                                 spacing: merged_spacing,
                                 preserved_trivia: None,
                                 required: merged_required,
+                                join_separator: false,
                             }));
                         }
                         i = j + 1;
@@ -709,6 +770,7 @@ fn merge_spacing(spacing1: Option<&Rc<Doc>>, spacing2: Option<&Rc<Doc>>) -> Opti
 mod tests {
     use super::*;
     use crate::doc::{hardline, line, nbsp, nil, softline, text};
+    use crate::render::{Renderer, RendererConfig};
 
     // ---- Test builders (raw, unflattened, mirroring the Python `Concat([...])`) ----
 
@@ -737,6 +799,7 @@ mod tests {
             spacing: spacing.map(rc),
             preserved_trivia: trivia.map(rc),
             required,
+            join_separator: false,
         }
     }
 
@@ -1420,5 +1483,580 @@ mod tests {
                 Doc::Group(rc(cat(vec![text("//"), text(" "), text("Hello, Cog!"),]))),
             ])
         );
+    }
+
+    // ---- Nest boundary trivia: a Nest keeps the source trivia in its first/last gap ----
+
+    fn nest1(content: Doc) -> Doc {
+        Doc::Nest {
+            indent: 1,
+            content: rc(content),
+        }
+    }
+
+    fn comment_trivia(content: &str) -> Doc {
+        cat(vec![hardline(0), text(content), hardline(0)])
+    }
+
+    fn comment_sep(content: &str) -> Doc {
+        sep(None, Some(comment_trivia(content)), false)
+    }
+
+    fn render4(doc: &Doc) -> String {
+        render(doc, 80)
+    }
+
+    fn render(doc: &Doc, max_width: usize) -> String {
+        Renderer::new(RendererConfig {
+            indent_width: 4,
+            max_width,
+        })
+        .render(doc)
+    }
+
+    /// `{`, AfterSpec(HardLine), Nest(1, content), [BeforeSpec(before)], `}`.
+    fn braced(nest_content: Doc, before_spacing: Option<Doc>) -> Doc {
+        let mut docs = vec![text("{"), after(hardline(0)), nest1(nest_content)];
+        if let Some(b) = before_spacing {
+            docs.push(before(b));
+        }
+        docs.push(text("}"));
+        cat(docs)
+    }
+
+    #[test]
+    fn nest_keeps_boundary_comments_first_and_last() {
+        // Port of test_nest_keeps_boundary_comments_first_and_last.
+        let doc = braced(
+            cat(vec![comment_sep("// c"), text("x"), comment_sep("// d")]),
+            Some(hardline(0)),
+        );
+        let resolved = resolve_spacing_specs(doc);
+        assert_eq!(
+            resolved,
+            cat(vec![
+                text("{"),
+                nest1(cat(vec![
+                    hardline(0),
+                    text("// c"),
+                    hardline(0),
+                    text("x"),
+                    hardline(0),
+                    text("// d"),
+                    hardline(0),
+                ])),
+                text("}"),
+            ])
+        );
+        assert_eq!(render4(&resolved), "{\n    // c\n    x\n    // d\n}");
+    }
+
+    #[test]
+    fn nest_keeps_leading_boundary_comment() {
+        // Port of test_nest_keeps_leading_boundary_comment.
+        let doc = braced(cat(vec![comment_sep("// c"), text("x")]), Some(hardline(0)));
+        let resolved = resolve_spacing_specs(doc);
+        assert_eq!(
+            resolved,
+            cat(vec![
+                text("{"),
+                nest1(cat(vec![hardline(0), text("// c"), hardline(0), text("x")])),
+                text("}"),
+            ])
+        );
+        assert_eq!(render4(&resolved), "{\n    // c\n    x}");
+    }
+
+    #[test]
+    fn nest_keeps_trailing_boundary_comment() {
+        // Port of test_nest_keeps_trailing_boundary_comment.
+        let doc = braced(cat(vec![text("x"), comment_sep("// c")]), Some(hardline(0)));
+        let resolved = resolve_spacing_specs(doc);
+        assert_eq!(
+            resolved,
+            cat(vec![
+                text("{"),
+                nest1(cat(vec![text("x"), hardline(0), text("// c"), hardline(0)])),
+                text("}"),
+            ])
+        );
+        assert_eq!(render4(&resolved), "{x\n    // c\n}");
+    }
+
+    #[test]
+    fn nest_boundary_comment_beside_spacing_separator_is_one_break() {
+        // Port of test_nest_boundary_comment_beside_spacing_separator_is_one_break.
+        let doc = braced(
+            cat(vec![
+                sep(Some(hardline(0)), None, false),
+                comment_sep("// c"),
+                text("x"),
+            ]),
+            None,
+        );
+        let resolved = resolve_spacing_specs(doc);
+        assert_eq!(
+            resolved,
+            cat(vec![
+                text("{"),
+                nest1(cat(vec![hardline(0), text("// c"), hardline(0), text("x")])),
+                text("}"),
+            ])
+        );
+        assert_eq!(render4(&resolved), "{\n    // c\n    x}");
+    }
+
+    #[test]
+    fn nest_boundary_same_line_comment_invents_no_break() {
+        // Port of test_nest_boundary_same_line_comment_invents_no_break.
+        let trivia = cat(vec![nbsp(), text("// c"), hardline(0)]);
+        let doc = braced(
+            cat(vec![
+                sep(Some(hardline(0)), None, false),
+                sep(None, Some(trivia), false),
+                text("x"),
+            ]),
+            None,
+        );
+        let resolved = resolve_spacing_specs(doc);
+        assert_eq!(
+            resolved,
+            cat(vec![
+                text("{"),
+                nest1(cat(vec![nbsp(), text("// c"), hardline(0), text("x")])),
+                text("}"),
+            ])
+        );
+        assert_eq!(render4(&resolved), "{ // c\n    x}");
+    }
+
+    #[test]
+    fn nest_trivia_free_boundary_runs_extract_as_today() {
+        // Port of test_nest_trivia_free_boundary_runs_extract_as_today (every parametrization).
+        let nil_sep = || sep(Some(nil()), None, false);
+        let cases = [
+            (
+                "first_and_last",
+                braced(cat(vec![nil_sep(), text("x"), nil_sep()]), Some(hardline(0))),
+                cat(vec![
+                    text("{"),
+                    hardline(0),
+                    nest1(text("x")),
+                    hardline(0),
+                    text("}"),
+                ]),
+            ),
+            (
+                "first",
+                braced(cat(vec![nil_sep(), text("x")]), Some(hardline(0))),
+                cat(vec![text("{"), hardline(0), nest1(text("x")), text("}")]),
+            ),
+            (
+                "last",
+                braced(cat(vec![text("x"), nil_sep()]), Some(hardline(0))),
+                cat(vec![text("{"), nest1(text("x")), hardline(0), text("}")]),
+            ),
+            (
+                "spacing_separator_beside_empty_gap",
+                braced(
+                    cat(vec![sep(Some(hardline(0)), None, false), nil_sep(), text("x")]),
+                    None,
+                ),
+                cat(vec![text("{"), hardline(0), nest1(text("x")), text("}")]),
+            ),
+            (
+                "paren_term_tail",
+                paren_term(nil_sep(), line()),
+                Doc::Group(rc(cat(vec![
+                    text("("),
+                    nest1(text("x")),
+                    line(),
+                    text(")"),
+                ]))),
+            ),
+        ];
+        for (id, doc, expected) in cases {
+            assert_eq!(resolve_spacing_specs(doc), expected, "{id}");
+        }
+    }
+
+    #[test]
+    fn expand_joins_marks_the_synthetic_separator() {
+        // Port of test_expand_joins_marks_the_synthetic_separator.
+        let expanded = expand_joins(&rc(Doc::Join {
+            docs: vec![rc(text("x")), rc(text("y"))],
+            separator: rc(text("|")),
+        }));
+        let join_sep = Doc::SeparatorSpec {
+            spacing: None,
+            preserved_trivia: Some(rc(text("|"))),
+            required: false,
+            join_separator: true,
+        };
+        assert_eq!(*expanded, cat(vec![text("x"), join_sep.clone(), text("y")]));
+        assert!(!has_source_trivia(&[rc(join_sep)]));
+        assert!(has_source_trivia(&[rc(comment_sep("// c"))]));
+    }
+
+    #[test]
+    fn nest_join_separator_before_boundary_comment() {
+        // Port of test_nest_join_separator_before_boundary_comment.
+        let doc = braced(
+            Doc::Join {
+                docs: vec![rc(text("x")), rc(comment_sep("// c"))],
+                separator: rc(text("|")),
+            },
+            Some(hardline(0)),
+        );
+        let resolved = resolve_spacing_specs(doc);
+        assert_eq!(
+            resolved,
+            cat(vec![
+                text("{"),
+                nest1(cat(vec![
+                    text("x"),
+                    text("|"),
+                    hardline(0),
+                    text("// c"),
+                    hardline(0),
+                ])),
+                text("}"),
+            ])
+        );
+    }
+
+    #[test]
+    fn nest_join_separator_alone_extracts_as_today() {
+        // Port of test_nest_join_separator_alone_extracts_as_today.
+        let doc = braced(
+            Doc::Join {
+                docs: vec![rc(nil()), rc(text("x"))],
+                separator: rc(text("|")),
+            },
+            Some(hardline(0)),
+        );
+        let resolved = resolve_spacing_specs(doc);
+        assert_eq!(
+            resolved,
+            cat(vec![text("{"), text("|"), nest1(text("x")), text("}")])
+        );
+    }
+
+    #[test]
+    fn nest_join_separator_beyond_boundary_comment_is_kept() {
+        // Port of test_nest_join_separator_beyond_boundary_comment_is_kept.
+        let doc = braced(
+            Doc::Join {
+                docs: vec![rc(text("x")), rc(comment_sep("// c")), rc(nil())],
+                separator: rc(text("|")),
+            },
+            Some(hardline(0)),
+        );
+        let resolved = resolve_spacing_specs(doc);
+        assert_eq!(
+            resolved,
+            cat(vec![
+                text("{"),
+                nest1(cat(vec![
+                    text("x"),
+                    text("|"),
+                    hardline(0),
+                    text("// c"),
+                    hardline(0),
+                    text("|"),
+                ])),
+                text("}"),
+            ])
+        );
+        assert_eq!(render4(&resolved), "{x|\n    // c\n    |}");
+    }
+
+    #[test]
+    fn nest_join_separator_ahead_of_leading_boundary_comment_is_kept() {
+        // Port of test_nest_join_separator_ahead_of_leading_boundary_comment_is_kept.
+        let doc = braced(
+            Doc::Join {
+                docs: vec![rc(nil()), rc(comment_sep("// c")), rc(text("x"))],
+                separator: rc(text("|")),
+            },
+            Some(hardline(0)),
+        );
+        let resolved = resolve_spacing_specs(doc);
+        assert_eq!(
+            resolved,
+            cat(vec![
+                text("{"),
+                nest1(cat(vec![
+                    text("|"),
+                    hardline(0),
+                    text("// c"),
+                    hardline(0),
+                    text("|"),
+                    text("x"),
+                ])),
+                text("}"),
+            ])
+        );
+        assert_eq!(render4(&resolved), "{|\n    // c\n    |x}");
+    }
+
+    #[test]
+    fn nest_leading_run_keeps_every_spec_after_the_comment_in_order() {
+        // Port of test_nest_leading_run_keeps_every_spec_after_the_comment_in_order.
+        let second = sep(None, Some(cat(vec![text("// d"), hardline(0)])), false);
+        let doc = braced(
+            cat(vec![comment_sep("// c"), before(nbsp()), second, text("x")]),
+            None,
+        );
+        let resolved = resolve_spacing_specs(doc);
+        assert_eq!(
+            resolved,
+            cat(vec![
+                text("{"),
+                nest1(cat(vec![
+                    hardline(0),
+                    text("// c"),
+                    hardline(0),
+                    text("// d"),
+                    hardline(0),
+                    text("x"),
+                ])),
+                text("}"),
+            ])
+        );
+        assert_eq!(render4(&resolved), "{\n    // c\n    // d\n    x}");
+    }
+
+    #[test]
+    fn group_boundary_comment_still_extracts() {
+        // Port of test_group_boundary_comment_still_extracts.
+        let doc = cat(vec![
+            text("{"),
+            after(hardline(0)),
+            Doc::Group(rc(cat(vec![comment_sep("// c"), text("x")]))),
+            text("}"),
+        ]);
+        let resolved = resolve_spacing_specs(doc);
+        assert_eq!(
+            resolved,
+            cat(vec![
+                text("{"),
+                hardline(0),
+                text("// c"),
+                hardline(0),
+                Doc::Group(rc(text("x"))),
+                text("}"),
+            ])
+        );
+    }
+
+    #[test]
+    fn group_in_nest_keeps_boundary_comment_in_nest() {
+        // Port of test_group_in_nest_keeps_boundary_comment_in_nest.
+        let doc = nest1(Doc::Group(rc(cat(vec![comment_sep("// c"), text("x")]))));
+        let resolved = resolve_spacing_specs(doc);
+        assert_eq!(
+            resolved,
+            nest1(cat(vec![
+                hardline(0),
+                text("// c"),
+                hardline(0),
+                Doc::Group(rc(text("x"))),
+            ]))
+        );
+    }
+
+    #[test]
+    fn nest_in_group_keeps_boundary_comment() {
+        // Port of test_nest_in_group_keeps_boundary_comment.
+        let doc = Doc::Group(rc(nest1(cat(vec![comment_sep("// c"), text("x")]))));
+        let resolved = resolve_spacing_specs(doc);
+        assert_eq!(
+            resolved,
+            Doc::Group(rc(nest1(cat(vec![
+                hardline(0),
+                text("// c"),
+                hardline(0),
+                text("x"),
+            ]))))
+        );
+    }
+
+    #[test]
+    fn group_sharing_opening_anchor_with_nest_breaks_on_boundary_comment() {
+        // Port of test_group_sharing_opening_anchor_with_nest_breaks_on_boundary_comment.
+        let doc = cat(vec![
+            text("{"),
+            after(line()),
+            Doc::Group(rc(cat(vec![
+                nest1(cat(vec![
+                    comment_sep("// c"),
+                    text("y;"),
+                    sep(Some(line()), None, false),
+                    text("y;"),
+                ])),
+                before(line()),
+                text("}"),
+            ]))),
+        ]);
+        let resolved = resolve_spacing_specs(doc);
+        assert_eq!(
+            resolved,
+            cat(vec![
+                text("{"),
+                Doc::Group(rc(cat(vec![
+                    nest1(cat(vec![
+                        hardline(0),
+                        text("// c"),
+                        hardline(0),
+                        text("y;"),
+                        line(),
+                        text("y;"),
+                    ])),
+                    text("}"),
+                ]))),
+            ])
+        );
+        assert_eq!(render4(&resolved), "{\n    // c\n    y;\n    y;}");
+    }
+
+    #[test]
+    fn nest_in_nest_keeps_boundary_comment_in_inner_nest() {
+        // Port of test_nest_in_nest_keeps_boundary_comment_in_inner_nest.
+        let doc = nest1(nest1(cat(vec![comment_sep("// c"), text("x")])));
+        let resolved = resolve_spacing_specs(doc);
+        assert_eq!(
+            resolved,
+            nest1(nest1(cat(vec![
+                hardline(0),
+                text("// c"),
+                hardline(0),
+                text("x"),
+            ])))
+        );
+    }
+
+    #[test]
+    fn comment_only_nest_leaf_is_unchanged() {
+        // Port of test_comment_only_nest_leaf_is_unchanged.
+        let resolved = resolve_spacing_specs(nest1(comment_sep("// c")));
+        assert_eq!(resolved, nest1(comment_trivia("// c")));
+    }
+
+    #[test]
+    fn comment_only_nest_with_second_control_node_keeps_comment() {
+        // Port of test_comment_only_nest_with_second_control_node_keeps_comment.
+        let resolved = resolve_spacing_specs(nest1(cat(vec![comment_sep("// c"), before(nil())])));
+        assert_eq!(resolved, nest1(comment_trivia("// c")));
+    }
+
+    #[test]
+    fn nest_boundary_comment_keeps_preserved_blank() {
+        // Port of test_nest_boundary_comment_keeps_preserved_blank.
+        let trivia = cat(vec![hardline(1), text("// c"), hardline(0)]);
+        let doc = braced(cat(vec![sep(None, Some(trivia), false), text("x")]), None);
+        let resolved = resolve_spacing_specs(doc);
+        assert_eq!(
+            resolved,
+            cat(vec![
+                text("{"),
+                nest1(cat(vec![hardline(1), text("// c"), hardline(0), text("x")])),
+                text("}"),
+            ])
+        );
+        assert_eq!(render4(&resolved), "{\n\n    // c\n    x}");
+    }
+
+    /// fegen's `term` shape: an after-spec and an empty gap follow the trailing comment.
+    fn paren_term(trivia_sep: Doc, before_spacing: Doc) -> Doc {
+        paren_term_led(None, trivia_sep, before_spacing)
+    }
+
+    /// `paren_term` with `lead`, when given, as the nest's first child ahead of the content.
+    fn paren_term_led(lead: Option<Doc>, trivia_sep: Doc, before_spacing: Doc) -> Doc {
+        let mut content: Vec<Doc> = lead.into_iter().collect();
+        content.extend([
+            text("x"),
+            trivia_sep,
+            after(nbsp()),
+            sep(Some(nil()), None, false),
+        ]);
+        Doc::Group(rc(cat(vec![
+            text("("),
+            after(line()),
+            nest1(cat(content)),
+            before(before_spacing),
+            text(")"),
+        ])))
+    }
+
+    #[test]
+    fn nest_trailing_comment_drops_spacing_tail() {
+        // Port of test_nest_trailing_comment_drops_spacing_tail (both parametrizations).
+        for before_spacing in [line(), hardline(0)] {
+            let resolved = resolve_spacing_specs(paren_term(comment_sep("// c"), before_spacing));
+            assert_eq!(
+                resolved,
+                Doc::Group(rc(cat(vec![
+                    text("("),
+                    nest1(cat(vec![text("x"), hardline(0), text("// c"), hardline(0)])),
+                    text(")"),
+                ])))
+            );
+            assert_eq!(render4(&resolved), "(x\n    // c\n)");
+        }
+    }
+
+    #[test]
+    fn nest_trailing_same_line_comment_keeps_source_whitespace() {
+        // Port of test_nest_trailing_same_line_comment_keeps_source_whitespace.
+        let trivia = cat(vec![nbsp(), text("/* c */"), nbsp()]);
+        let resolved = resolve_spacing_specs(paren_term(sep(None, Some(trivia), false), line()));
+        assert_eq!(
+            resolved,
+            Doc::Group(rc(cat(vec![
+                text("("),
+                nest1(cat(vec![text("x"), nbsp(), text("/* c */"), nbsp()])),
+                text(")"),
+            ])))
+        );
+        assert_eq!(render4(&resolved), "(x /* c */ )");
+    }
+
+    #[test]
+    fn nest_trailing_comment_in_broken_group() {
+        // Port of test_nest_trailing_comment_in_broken_group (both parametrizations).
+        let cases = [
+            (
+                cat(vec![nbsp(), text("/* c */"), nbsp()]),
+                cat(vec![text("x"), nbsp(), text("/* c */"), nbsp()]),
+                "( x /* c */ )",
+                "(\n    x /* c */ )",
+            ),
+            (
+                comment_trivia("// c"),
+                cat(vec![text("x"), hardline(0), text("// c"), hardline(0)]),
+                "(\n    x\n    // c\n)",
+                "(\n    x\n    // c\n)",
+            ),
+        ];
+        for (trivia, expected_content, flat, broken) in cases {
+            let resolved = resolve_spacing_specs(paren_term_led(
+                Some(sep(Some(line()), None, false)),
+                sep(None, Some(trivia), false),
+                line(),
+            ));
+            assert_eq!(
+                resolved,
+                Doc::Group(rc(cat(vec![
+                    text("("),
+                    line(),
+                    nest1(expected_content),
+                    text(")"),
+                ])))
+            );
+            assert_eq!(render(&resolved, 80), flat);
+            assert_eq!(render(&resolved, 8), broken);
+        }
     }
 }

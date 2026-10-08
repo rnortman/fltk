@@ -110,6 +110,7 @@ const CORPUS: &[&str] = &[
     "fltk/fegen/fltk.fltkg",
     "fltk/fegen/regex.fltkg",
     "fltk/fegen/test_data/collision_fixture.fltkg",
+    "fltk/fegen/test_data/nest_boundary_comments.fltkg",
     "fltk/fegen/test_data/phase4_roundtrip.fltkg",
     "fltk/fegen/test_data/poc_grammar.fltkg",
     "fltk/fegen/test_data/rust_parser_fixture.fltkg",
@@ -372,4 +373,65 @@ fn a_blank_after_a_preserved_comment_survives() {
 
     let out2 = run_ok(&["-w", "80", "-i", "2"], Some(&out), "blank-after reformat");
     assert_eq!(out2, out, "blank-after output is not a formatting fixed point");
+}
+
+/// A preserved comment in the first or last gap of a nest takes the nest's indent; a delimiter
+/// after an own-line comment starts its own line at the enclosing indent, and one the source left
+/// on a same-line comment's line stays there even when the group breaks. Same bytes as
+/// `tests/test_fltkfmt_parity.py`'s `test_nest_boundary_comment_layout`, held here so the anchor
+/// runs without Python.
+#[test]
+fn nest_boundary_comments_take_the_nest_indent() {
+    let root = repo_root();
+    let input = root.join("fltk/fegen/test_data/nest_boundary_comments.fltkg");
+    let expected: &[u8] = b"// Comments in the boundary gaps of fegen's two nest regions.
+a :=
+  (
+    // lead
+    \"x\" | \"y\"
+    // trail
+  ) ;
+b :=
+  (
+    // one
+    // two
+    \"x\"
+
+    // after blank
+  ) ;
+c :=
+  ( // same line
+    \"x\"
+  ) ;
+d :=
+  (
+    /* block
+     continued */
+    \"x\"
+  ) ;
+e :=
+  // lead after :=
+  \"x\" ;
+f := ( \"x\" /* trail */ ) ;
+g :=
+  (
+    // lead
+    \"x\" | \"y\" /* trail */ ) ;
+";
+    let out = run_ok(
+        &[input.to_str().unwrap(), "-w", "80", "-i", "2"],
+        None,
+        "nest boundary comments 80/2",
+    );
+    assert_eq!(
+        String::from_utf8_lossy(&out),
+        String::from_utf8_lossy(expected),
+        "nest boundary comments 80/2"
+    );
+    let out2 = run_ok(
+        &["-w", "80", "-i", "2"],
+        Some(&out),
+        "nest boundary comments reformat",
+    );
+    assert_eq!(out2, out, "nest boundary comments output is not a fixed point");
 }

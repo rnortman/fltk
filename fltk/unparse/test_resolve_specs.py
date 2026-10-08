@@ -3,6 +3,7 @@
 import pytest
 
 from fltk.unparse.combinators import (
+    HARDLINE,
     LINE,
     NBSP,
     NIL,
@@ -13,11 +14,13 @@ from fltk.unparse.combinators import (
     Doc,
     Group,
     HardLine,
+    Join,
     Nest,
     SeparatorSpec,
     Text,
 )
-from fltk.unparse.resolve_specs import _extract_boundary_specs, resolve_spacing_specs
+from fltk.unparse.renderer import Renderer, RendererConfig
+from fltk.unparse.resolve_specs import _expand_joins, _extract_boundary_specs, _has_source_trivia, resolve_spacing_specs
 
 
 def test_problematic_sequence():
@@ -756,3 +759,479 @@ def test_text_newline_before_separator_is_not_inspected():
     resolved = resolve_spacing_specs(doc)
 
     assert resolved == Concat((Text("\n"), LINE))
+
+
+# Nest boundary trivia: a Nest keeps the preserved source trivia the generator placed in its
+# first or last gap, so the comment takes the nest's indent.
+
+
+def _comment_sep(content: str = "// c", trivia: Doc | None = None) -> SeparatorSpec:
+    """A separator carrying an own-line comment as preserved source trivia."""
+    if trivia is None:
+        trivia = Concat([HARDLINE, Text(content), HARDLINE])
+    return SeparatorSpec(spacing=None, preserved_trivia=trivia, required=False)
+
+
+def _render(doc: Doc) -> str:
+    return Renderer(RendererConfig(indent_width=4)).render(doc)
+
+
+def _braced(nest_content: Doc, *, before: Doc | None = HARDLINE) -> Doc:
+    """`{`, AfterSpec(HARDLINE), Nest(1, content), [BeforeSpec(before)], `}`."""
+    docs: list[Doc] = [Text("{"), AfterSpec(HARDLINE), Nest(content=nest_content, indent=1)]
+    if before is not None:
+        docs.append(BeforeSpec(before))
+    docs.append(Text("}"))
+    return Concat(docs)
+
+
+def test_nest_keeps_boundary_comments_first_and_last():
+    """Comment trivia as first and last child stays inside the nest; the outer specs are gone."""
+    doc = _braced(Concat([_comment_sep(), Text("x"), _comment_sep("// d")]))
+
+    resolved = resolve_spacing_specs(doc)
+
+    assert resolved == Concat(
+        (
+            Text("{"),
+            Nest(
+                content=Concat((HARDLINE, Text("// c"), HARDLINE, Text("x"), HARDLINE, Text("// d"), HARDLINE)),
+                indent=1,
+            ),
+            Text("}"),
+        )
+    )
+    assert _render(resolved) == "{\n    // c\n    x\n    // d\n}"
+
+
+def test_nest_keeps_leading_boundary_comment():
+    """Comment trivia as first child only: the trailing side extracts."""
+    doc = _braced(Concat([_comment_sep(), Text("x")]))
+
+    resolved = resolve_spacing_specs(doc)
+
+    assert resolved == Concat(
+        (Text("{"), Nest(content=Concat((HARDLINE, Text("// c"), HARDLINE, Text("x"))), indent=1), Text("}"))
+    )
+    assert _render(resolved) == "{\n    // c\n    x}"
+
+
+def test_nest_keeps_trailing_boundary_comment():
+    """Comment trivia as last child only: the leading side extracts."""
+    doc = _braced(Concat([Text("x"), _comment_sep()]))
+
+    resolved = resolve_spacing_specs(doc)
+
+    assert resolved == Concat(
+        (Text("{"), Nest(content=Concat((Text("x"), HARDLINE, Text("// c"), HARDLINE)), indent=1), Text("}"))
+    )
+    assert _render(resolved) == "{x\n    // c\n}"
+
+
+def test_nest_boundary_comment_beside_spacing_separator_is_one_break():
+    """A spacing-only separator beside the comment adds no second break and no blank line."""
+    doc = _braced(
+        Concat([SeparatorSpec(spacing=HARDLINE, preserved_trivia=None, required=False), _comment_sep(), Text("x")]),
+        before=None,
+    )
+
+    resolved = resolve_spacing_specs(doc)
+
+    assert resolved == Concat(
+        (Text("{"), Nest(content=Concat((HARDLINE, Text("// c"), HARDLINE, Text("x"))), indent=1), Text("}"))
+    )
+    assert _render(resolved) == "{\n    // c\n    x}"
+
+
+def test_nest_boundary_same_line_comment_invents_no_break():
+    """Trivia with no leading break renders on the delimiter's line."""
+    trivia = Concat([NBSP, Text("// c"), HARDLINE])
+    doc = _braced(
+        Concat(
+            [
+                SeparatorSpec(spacing=HARDLINE, preserved_trivia=None, required=False),
+                _comment_sep(trivia=trivia),
+                Text("x"),
+            ]
+        ),
+        before=None,
+    )
+
+    resolved = resolve_spacing_specs(doc)
+
+    assert resolved == Concat(
+        (Text("{"), Nest(content=Concat((NBSP, Text("// c"), HARDLINE, Text("x"))), indent=1), Text("}"))
+    )
+    assert _render(resolved) == "{ // c\n    x}"
+
+
+_NIL_SEP = SeparatorSpec(spacing=NIL, preserved_trivia=None, required=False)
+
+
+@pytest.mark.parametrize(
+    ("doc", "expected"),
+    [
+        pytest.param(
+            _braced(Concat([_NIL_SEP, Text("x"), _NIL_SEP])),
+            Concat((Text("{"), HARDLINE, Nest(content=Text("x"), indent=1), HARDLINE, Text("}"))),
+            id="first_and_last",
+        ),
+        pytest.param(
+            _braced(Concat([_NIL_SEP, Text("x")])),
+            Concat((Text("{"), HARDLINE, Nest(content=Text("x"), indent=1), Text("}"))),
+            id="first",
+        ),
+        pytest.param(
+            _braced(Concat([Text("x"), _NIL_SEP])),
+            Concat((Text("{"), Nest(content=Text("x"), indent=1), HARDLINE, Text("}"))),
+            id="last",
+        ),
+        pytest.param(
+            _braced(
+                Concat([SeparatorSpec(spacing=HARDLINE, preserved_trivia=None, required=False), _NIL_SEP, Text("x")]),
+                before=None,
+            ),
+            Concat((Text("{"), HARDLINE, Nest(content=Text("x"), indent=1), Text("}"))),
+            id="spacing_separator_beside_empty_gap",
+        ),
+        pytest.param(
+            Group(
+                Concat(
+                    [
+                        Text("("),
+                        AfterSpec(LINE),
+                        Nest(content=Concat([Text("x"), _NIL_SEP, AfterSpec(NBSP), _NIL_SEP]), indent=1),
+                        BeforeSpec(LINE),
+                        Text(")"),
+                    ]
+                )
+            ),
+            Group(Concat((Text("("), Nest(content=Text("x"), indent=1), LINE, Text(")")))),
+            id="paren_term_tail",
+        ),
+    ],
+)
+def test_nest_trivia_free_boundary_runs_extract_as_today(doc: Doc, expected: Doc):
+    """With no preserved trivia every run leaves the nest and merges with the outer specs into one break."""
+    assert resolve_spacing_specs(doc) == expected
+
+
+def test_expand_joins_marks_the_synthetic_separator():
+    """Join expansion marks its separator; only source trivia counts as source trivia."""
+    expanded = _expand_joins(Join((Text("x"), Text("y")), Text("|")))
+
+    assert expanded == Concat(
+        (
+            Text("x"),
+            SeparatorSpec(spacing=None, preserved_trivia=Text("|"), required=False, join_separator=True),
+            Text("y"),
+        )
+    )
+    assert isinstance(expanded, Concat)
+    assert not _has_source_trivia([expanded.docs[1]])
+    assert _has_source_trivia([_comment_sep()])
+
+
+def test_nest_join_separator_before_boundary_comment():
+    """A Join separator between the content and a comment stays inside with the comment."""
+    doc = _braced(Join((Text("x"), _comment_sep()), Text("|")))
+
+    resolved = resolve_spacing_specs(doc)
+
+    assert resolved == Concat(
+        (
+            Text("{"),
+            Nest(content=Concat((Text("x"), Text("|"), HARDLINE, Text("// c"), HARDLINE)), indent=1),
+            Text("}"),
+        )
+    )
+
+
+def test_nest_join_separator_alone_extracts_as_today():
+    """A Join's synthetic separator in a boundary run is not source trivia and extracts."""
+    doc = _braced(Join((NIL, Text("x")), Text("|")))
+
+    resolved = resolve_spacing_specs(doc)
+
+    assert resolved == Concat((Text("{"), Text("|"), Nest(content=Text("x"), indent=1), Text("}")))
+
+
+def test_nest_join_separator_beyond_boundary_comment_is_kept():
+    """The cut is at the outermost trivia-bearing separator: a Join separator beyond a comment stays."""
+    doc = _braced(Join((Text("x"), _comment_sep(), NIL), Text("|")))
+
+    resolved = resolve_spacing_specs(doc)
+
+    assert resolved == Concat(
+        (
+            Text("{"),
+            Nest(
+                content=Concat((Text("x"), Text("|"), HARDLINE, Text("// c"), HARDLINE, Text("|"))),
+                indent=1,
+            ),
+            Text("}"),
+        )
+    )
+    assert _render(resolved) == "{x|\n    // c\n    |}"
+
+
+def test_nest_join_separator_ahead_of_leading_boundary_comment_is_kept():
+    """Leading side: the cut is at the outermost trivia-bearing separator, here a Join's."""
+    doc = _braced(Join((NIL, _comment_sep(), Text("x")), Text("|")))
+
+    resolved = resolve_spacing_specs(doc)
+
+    assert resolved == Concat(
+        (
+            Text("{"),
+            Nest(
+                content=Concat((Text("|"), HARDLINE, Text("// c"), HARDLINE, Text("|"), Text("x"))),
+                indent=1,
+            ),
+            Text("}"),
+        )
+    )
+    assert _render(resolved) == "{|\n    // c\n    |x}"
+
+
+def test_nest_leading_run_keeps_every_spec_after_the_comment_in_order():
+    """Leading side: a BeforeSpec and a second comment after the first comment stay, in order.
+
+    Hand-built. Generated code emits the `[comment, BeforeSpec]` prefix (an optional item right
+    after the gap); the second comment, whose trivia has no leading break, is not a generated
+    shape and is there so that dropping or reordering anything past the first comment shows.
+    """
+    second = _comment_sep(trivia=Concat([Text("// d"), HARDLINE]))
+    doc = _braced(Concat([_comment_sep(), BeforeSpec(NBSP), second, Text("x")]), before=None)
+
+    resolved = resolve_spacing_specs(doc)
+
+    assert resolved == Concat(
+        (
+            Text("{"),
+            Nest(
+                content=Concat((HARDLINE, Text("// c"), HARDLINE, Text("// d"), HARDLINE, Text("x"))),
+                indent=1,
+            ),
+            Text("}"),
+        )
+    )
+    assert _render(resolved) == "{\n    // c\n    // d\n    x}"
+
+
+def test_group_boundary_comment_still_extracts():
+    """A comment at a Group's boundary leaves the group."""
+    doc = Concat([Text("{"), AfterSpec(HARDLINE), Group(Concat([_comment_sep(), Text("x")])), Text("}")])
+
+    resolved = resolve_spacing_specs(doc)
+
+    assert resolved == Concat((Text("{"), HARDLINE, Text("// c"), HARDLINE, Group(Text("x")), Text("}")))
+
+
+def test_group_in_nest_keeps_boundary_comment_in_nest():
+    """A Group extracting through an enclosing Nest does not strip the comment out of the Nest."""
+    doc = Nest(content=Group(Concat([_comment_sep(), Text("x")])), indent=1)
+
+    resolved = resolve_spacing_specs(doc)
+
+    assert resolved == Nest(content=Concat((HARDLINE, Text("// c"), HARDLINE, Group(Text("x")))), indent=1)
+
+
+def test_nest_in_group_keeps_boundary_comment():
+    doc = Group(Nest(content=Concat([_comment_sep(), Text("x")]), indent=1))
+
+    resolved = resolve_spacing_specs(doc)
+
+    assert resolved == Group(Nest(content=Concat((HARDLINE, Text("// c"), HARDLINE, Text("x"))), indent=1))
+
+
+def test_group_sharing_opening_anchor_with_nest_breaks_on_boundary_comment():
+    """`group from after "{" to "}"` beside `nest from after "{" to before "}"`: the group wraps the comment.
+
+    The nest keeps its leading run, so the outer AfterSpec and the BeforeSpec beside `}` are
+    standalone and dropped; the comment's HardLine is inside the group, which breaks.
+    """
+    doc = Concat(
+        [
+            Text("{"),
+            AfterSpec(LINE),
+            Group(
+                Concat(
+                    [
+                        Nest(
+                            content=Concat(
+                                [
+                                    _comment_sep(),
+                                    Text("y;"),
+                                    SeparatorSpec(spacing=LINE, preserved_trivia=None, required=False),
+                                    Text("y;"),
+                                ]
+                            ),
+                            indent=1,
+                        ),
+                        BeforeSpec(LINE),
+                        Text("}"),
+                    ]
+                )
+            ),
+        ]
+    )
+
+    resolved = resolve_spacing_specs(doc)
+
+    assert resolved == Concat(
+        (
+            Text("{"),
+            Group(
+                Concat(
+                    (
+                        Nest(
+                            content=Concat((HARDLINE, Text("// c"), HARDLINE, Text("y;"), LINE, Text("y;"))),
+                            indent=1,
+                        ),
+                        Text("}"),
+                    )
+                )
+            ),
+        )
+    )
+    assert Renderer(RendererConfig(indent_width=4, max_width=80)).render(resolved) == "{\n    // c\n    y;\n    y;}"
+
+
+def test_nest_in_nest_keeps_boundary_comment_in_inner_nest():
+    doc = Nest(content=Nest(content=Concat([_comment_sep(), Text("x")]), indent=1), indent=1)
+
+    resolved = resolve_spacing_specs(doc)
+
+    assert resolved == Nest(
+        content=Nest(content=Concat((HARDLINE, Text("// c"), HARDLINE, Text("x"))), indent=1), indent=1
+    )
+
+
+def test_comment_only_nest_leaf_is_unchanged():
+    """A single-child nest content is a leaf and never extracted."""
+    resolved = resolve_spacing_specs(Nest(content=_comment_sep(), indent=1))
+
+    assert resolved == Nest(content=Concat((HARDLINE, Text("// c"), HARDLINE)), indent=1)
+
+
+def test_comment_only_nest_with_second_control_node_keeps_comment():
+    resolved = resolve_spacing_specs(Nest(content=Concat([_comment_sep(), BeforeSpec(NIL)]), indent=1))
+
+    assert resolved == Nest(content=Concat((HARDLINE, Text("// c"), HARDLINE)), indent=1)
+
+
+def test_nest_boundary_comment_keeps_preserved_blank():
+    """A preserved blank line before a boundary comment is kept once, not doubled or lost."""
+    trivia = Concat([HardLine(blank_lines=1), Text("// c"), HARDLINE])
+    doc = _braced(Concat([_comment_sep(trivia=trivia), Text("x")]), before=None)
+
+    resolved = resolve_spacing_specs(doc)
+
+    assert resolved == Concat(
+        (
+            Text("{"),
+            Nest(content=Concat((HardLine(blank_lines=1), Text("// c"), HARDLINE, Text("x"))), indent=1),
+            Text("}"),
+        )
+    )
+    assert _render(resolved) == "{\n\n    // c\n    x}"
+
+
+def _paren_term(trivia_sep: SeparatorSpec, before: Doc, *, lead: SeparatorSpec | None = None) -> Doc:
+    """fegen's `term` shape: an after-spec and an empty gap follow the trailing comment.
+
+    `lead`, when given, is the nest's first child, ahead of the content.
+    """
+    return Group(
+        Concat(
+            [
+                Text("("),
+                AfterSpec(LINE),
+                Nest(
+                    content=Concat(
+                        [
+                            *([lead] if lead is not None else []),
+                            Text("x"),
+                            trivia_sep,
+                            AfterSpec(NBSP),
+                            SeparatorSpec(spacing=NIL, preserved_trivia=None, required=False),
+                        ]
+                    ),
+                    indent=1,
+                ),
+                BeforeSpec(before),
+                Text(")"),
+            ]
+        )
+    )
+
+
+@pytest.mark.parametrize("before", [LINE, HARDLINE], ids=["line", "hardline"])
+def test_nest_trailing_comment_drops_spacing_tail(before: Doc):
+    """Spacing specs beyond the outermost trivia are dropped: `)` lands at the delimiter column."""
+    resolved = resolve_spacing_specs(_paren_term(_comment_sep(), before))
+
+    assert resolved == Group(
+        Concat(
+            (
+                Text("("),
+                Nest(content=Concat((Text("x"), HARDLINE, Text("// c"), HARDLINE)), indent=1),
+                Text(")"),
+            )
+        )
+    )
+    assert _render(resolved) == "(x\n    // c\n)"
+
+
+def test_nest_trailing_same_line_comment_keeps_source_whitespace():
+    trivia = Concat([NBSP, Text("/* c */"), NBSP])
+    resolved = resolve_spacing_specs(_paren_term(_comment_sep(trivia=trivia), LINE))
+
+    assert resolved == Group(
+        Concat(
+            (
+                Text("("),
+                Nest(content=Concat((Text("x"), NBSP, Text("/* c */"), NBSP)), indent=1),
+                Text(")"),
+            )
+        )
+    )
+    assert _render(resolved) == "(x /* c */ )"
+
+
+_LINE_SEP = SeparatorSpec(spacing=LINE, preserved_trivia=None, required=False)
+
+
+@pytest.mark.parametrize(
+    ("trivia_sep", "expected_content", "flat", "broken"),
+    [
+        pytest.param(
+            _comment_sep(trivia=Concat([NBSP, Text("/* c */"), NBSP])),
+            Concat((Text("x"), NBSP, Text("/* c */"), NBSP)),
+            "( x /* c */ )",
+            "(\n    x /* c */ )",
+            id="same_line",
+        ),
+        pytest.param(
+            _comment_sep(),
+            Concat((Text("x"), HARDLINE, Text("// c"), HARDLINE)),
+            "(\n    x\n    // c\n)",
+            "(\n    x\n    // c\n)",
+            id="own_line",
+        ),
+    ],
+)
+def test_nest_trailing_comment_in_broken_group(
+    trivia_sep: SeparatorSpec, expected_content: Doc, flat: str, broken: str
+):
+    """A comment-bearing boundary gap is not a break opportunity: the delimiter lands where the trivia leaves it.
+
+    The leading spacing separator gives the group a soft break after `(`, so at width 8 the group
+    breaks; a same-line comment keeps `)` on its line in both modes.
+    """
+    resolved = resolve_spacing_specs(_paren_term(trivia_sep, LINE, lead=_LINE_SEP))
+
+    assert resolved == Group(Concat((Text("("), LINE, Nest(content=expected_content, indent=1), Text(")"))))
+    assert Renderer(RendererConfig(indent_width=4, max_width=80)).render(resolved) == flat
+    assert Renderer(RendererConfig(indent_width=4, max_width=8)).render(resolved) == broken

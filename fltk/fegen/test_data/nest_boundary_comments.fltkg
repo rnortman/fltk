@@ -1,0 +1,26 @@
+// Comments in the boundary gaps of fegen's two nest regions.
+a := (
+  // lead
+  "x" | "y"
+  // trail
+  ) ;
+b := (
+  // one
+  // two
+  "x"
+
+  // after blank
+  ) ;
+c := ( // same line
+  "x" ) ;
+d := (
+  /* block
+     continued */
+  "x" ) ;
+e :=
+  // lead after :=
+  "x" ;
+f := ( "x" /* trail */ ) ;
+g := (
+  // lead
+  "x" | "y" /* trail */ ) ;

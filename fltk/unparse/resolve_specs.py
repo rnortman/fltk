@@ -37,6 +37,10 @@ def resolve_spacing_specs(doc: Doc) -> Doc:
     2. SeparatorSpec is the fallback when no before/after specs apply
     3. If there is no SeparatorSpec, then After/Before are ignored
     4. If there is preserved trivia, that overrides everything
+    5. A Nest keeps a boundary run that holds preserved source trivia, out to its outermost
+       trivia-bearing separator; the spacing specs beyond that describe the gap the trivia
+       already fills and are dropped (rule 4). Boundary extraction is a spacing-merge pass and
+       does not relocate source trivia across an indentation boundary.
 
     This is done in three passes:
     - Initial pass: Expand Join nodes into docs with SeparatorSpecs
@@ -90,7 +94,9 @@ def _expand_joins(doc: Doc) -> Doc:
 
             if need_sep and not isinstance(d, AfterSpec | BeforeSpec):
                 # Put the separator in preserved_trivia so it takes priority
-                separator_spec = SeparatorSpec(spacing=None, preserved_trivia=doc.separator, required=False)
+                separator_spec = SeparatorSpec(
+                    spacing=None, preserved_trivia=doc.separator, required=False, join_separator=True
+                )
                 expanded.append(separator_spec)
             expanded.append(expanded_child)
             trailing_separators.clear()
@@ -141,13 +147,40 @@ def _extract_all_boundary_specs(doc: Doc) -> tuple[Doc, list[Doc], list[Doc]]:
         if isinstance(doc, Group):
             return Group(processed_content), inner_leading, inner_trailing
         else:
-            # TODO(nest-boundary-trivia-indent): a trivia-bearing boundary SeparatorSpec is
-            # returned to the parent here, outside the rebuilt nest, so a comment in the gap
-            # after `{` or before `}` is indented from the enclosing item.
-            return Nest(content=processed_content, indent=doc.indent), inner_leading, inner_trailing
+            # A Nest owns the indentation of the source trivia the generator placed inside it.
+            # A boundary run that holds preserved source trivia stays inside the nest out to its
+            # outermost trivia-bearing separator; the pure-spacing specs beyond it describe the
+            # gap the trivia already describes and are dropped (rule 4: preserved trivia
+            # overrides everything). A trivia-free run, or one holding only a Join's synthetic
+            # separator, is returned to the parent exactly as a Group's would be.
+            content = processed_content
+            if _has_source_trivia(inner_leading):
+                first = next(i for i, d in enumerate(inner_leading) if _bears_trivia(d))
+                content = concat([*inner_leading[first:], content])
+                inner_leading = []
+            if _has_source_trivia(inner_trailing):
+                last = max(i for i, d in enumerate(inner_trailing) if _bears_trivia(d))
+                content = concat([content, *inner_trailing[: last + 1]])
+                inner_trailing = []
+            return Nest(content=content, indent=doc.indent), inner_leading, inner_trailing
     else:
         # Leaf nodes pass through unchanged
         return doc, [], []
+
+
+def _has_source_trivia(run: Sequence[Doc]) -> bool:
+    """Whether a boundary run holds a SeparatorSpec carrying preserved *source* trivia."""
+    return any(_is_source_trivia(d) for d in run)
+
+
+def _is_source_trivia(doc: Doc) -> bool:
+    """A SeparatorSpec carrying trivia from the source, not a Join's separator."""
+    return isinstance(doc, SeparatorSpec) and doc.preserved_trivia is not None and not doc.join_separator
+
+
+def _bears_trivia(doc: Doc) -> bool:
+    """Source trivia or a Join's separator: content, not spacing."""
+    return isinstance(doc, SeparatorSpec) and doc.preserved_trivia is not None
 
 
 def _extract_boundary_specs(docs: list[Doc]) -> tuple[list[Doc], list[Doc], list[Doc]]:

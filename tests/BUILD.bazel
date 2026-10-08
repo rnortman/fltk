@@ -261,6 +261,11 @@ _RUST_GATE_FILES = [
     "optional_before_spec/unparser.rs",
     "optional_before_spec/runtime.rs",
     "optional_before_spec/mod.rs",
+    "nest_boundary_trivia/cst.rs",
+    "nest_boundary_trivia/parser.rs",
+    "nest_boundary_trivia/unparser.rs",
+    "nest_boundary_trivia/runtime.rs",
+    "nest_boundary_trivia/mod.rs",
 ]
 
 py_binary(
