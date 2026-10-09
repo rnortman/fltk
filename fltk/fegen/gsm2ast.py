@@ -1172,7 +1172,9 @@ class AstGenerator:
             f"class {binary.name}:",
             f'    """One link of the {nesting}-nested chain rule ``{rule_name}`` folds into.',
             "",
-            f"    ``span`` covers everything below the link; ``{am.FOLD_LHS}``/``{am.FOLD_RHS}`` hold "
+            f"    ``span`` covers everything below the link when the operands were read in order from "
+            f"one source, as in every parsed chain; a chain synthesised by ``to_cst`` has unknown link "
+            f"spans.  ``{am.FOLD_LHS}``/``{am.FOLD_RHS}`` hold "
             f"either an operand or a deeper link.  Comparing two long chains recurses as deep as "
             f"they are, as comparing any deep Python structure does.",
             '    """',

@@ -212,18 +212,6 @@ _CASES: list[tuple[str, Any, dict[str, Any]]] = [
         lambda: astrt.unfold_left(_Link("+", 1, _Link("-", 2, 3)), _Link, "op", "expr"),
         {"rule": "expr", "side": "right"},
     ),
-    (
-        "a fold over operands from two sources",
-        lambda: astrt.fold_left(
-            # The merge fails before a link is built, so nothing here has to be a real link class.
-            lambda *_arguments: None,
-            [1, 2],
-            [terminalsrc.Span.with_source(0, 1, "a"), terminalsrc.Span.with_source(0, 1, "b")],
-            ["+"],
-            "expr",
-        ),
-        {"rule": "expr"},
-    ),
 ]
 
 _CASE_IDS = [name for name, _call, _values in _CASES]

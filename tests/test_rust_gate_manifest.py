@@ -86,7 +86,7 @@ def test_every_runtime_module_carries_at_least_one_test() -> None:
 _RUNTIME_TEST_COUNTS = {
     "anchored_blanks": 9,
     "anchored_blanks_rule_level": 2,
-    "ast_guide": 3,
+    "ast_guide": 4,
     "boxed_link_fold": 1,
     "config": 30,
     "fold": 18,
@@ -98,7 +98,7 @@ _RUNTIME_TEST_COUNTS = {
     "nullable_loop": 2,
     "optional_before_spec": 12,
     "nest_boundary_trivia": 19,
-    "prelude": 1,
+    "prelude": 3,
     "preserve_blanks": 3,
     "preserved_comment_blanks": 5,
     "rule_level_blanks": 2,

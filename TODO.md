@@ -227,25 +227,6 @@ invert that test when this closes. Location: `fltk/fegen/gsm2tree.py` (`concrete
 `append`/`extend` branches, `_check_child_type_for_mutators`), `fltk/fegen/gsm2tree_rs.py`
 (`_per_label_methods`, `extract_from_pyobject`).
 
-## `astrt-fold-roundtrip-span-merge`
-
-`to_cst()` on an AST value from a `fold`-using rule produces a CST that `from_cst()` then refuses:
-the round trip raises `AstError` with "the operands of a fold come from different sources, so their
-spans cannot merge". Reverse construction synthesises each node's span against its own source text,
-one text per node, and `Span.merge` rejects operands from different sources by construction — so
-this fires on any real parse of such a rule, not just on a hand-mixed tree. It needs the operands to
-carry spans: a sidecar that erases them to plain scalars leaves nothing to merge and round-trips
-today, so a fix validated only on that shape proves nothing. Pre-existing, and backend-independent
-(`to_cst` is Python-backend-only either way). Closing it means deciding how synthesised spans
-compose across sources —
-whether reverse construction should share one synthetic source per conversion, whether a fold link's
-span should be synthesised rather than merged, and what a consumer reading `.span` off a
-round-tripped node is entitled to — which is a design cycle, not a patch. Pinned by
-`test_fold_roundtrip_raises_on_span_merge` in `tests/test_ast_fold_roundtrip.py`; invert that test
-when this closes. Location: `fltk/fegen/pyrt/astrt.py` (`_merged`). Shares its resolution with
-`ast-synthesised-literal-spans` — both ask what a synthesised span is worth, and the same design
-cycle should close both.
-
 ## `ast-synthesised-literal-spans`
 
 `to_cst()` on a terminal-shaped rule re-matches the node's text and hands each captured group its
@@ -264,8 +245,9 @@ the Rust runtime's `crates/fltk-ast-core/src/synth.rs` (`TerminalShape::split`),
 `fltk/fegen/gsm2ast_rs.py` (`terminal_to_cst_body`) — or change the accessor contract, which is a
 breaking change to generated public API and is disfavoured. Check Python-backend parity (what the
 Python generated accessor does on the same synthesised child) as part of closing, so both backends
-land the same contract. Shares its resolution with `astrt-fold-roundtrip-span-merge`, the same
-question in its fold form; the same design cycle should close both. Pinned by
+land the same contract. The contract for a synthesised tree is already fixed and this inherits it:
+leaves carry a token-local source with readable text, composites carry unknown spans, and nothing in
+a synthesised tree is a file position. Pinned by
 `the_synthesised_cst_splits_the_text_back_into_its_two_children` in `tests/rust_gate_cases.py`
 (the span-only case's runtime module); that assertion inverts when this closes. Location:
 `fltk/fegen/pyrt/astrt.py` (`terminal_to_cst`), `crates/fltk-ast-core/src/synth.rs`

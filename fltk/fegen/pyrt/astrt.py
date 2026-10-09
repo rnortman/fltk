@@ -508,20 +508,22 @@ def check_fold_arity(operands: int, operators: int, rule: str, span: SpanProtoco
         raise AstError(msg, span)
 
 
-def _merged(left: Any, right: Any, rule: str) -> Any:
-    """The span covering both operands of one link.
+def _link_span(left: Any, right: Any) -> Any:
+    """The span of one link: the cover of its two sides, or an unknown span.
 
-    Both spans of a parser-produced fold come from the same parse, so the source-mismatch
-    arm is reachable only from a hand-built CST mixing sources.
+    The cover is taken only when both sides are sourced from one text and lie in order without
+    overlap; a zero-width pair at one position precedes nothing, so it does not lie in order.
+    Every parsed chain qualifies.  A chain synthesised by ``to_cst`` does not — each leaf carries
+    its own text — and neither does anything after an unknown side, so an unknown accumulator
+    keeps every later link unknown.
+
+    The unknown span is ``Span(-1, -1)`` of the operands' own span type, so a chain over a Rust
+    CST's native spans stays native: the native ``shares_source`` rejects a pure-Python span as
+    its argument, which is where ``fold_right`` passes the accumulator.
     """
-    try:
+    if left.shares_source(right) and left.end <= right.start and left.start < right.end:
         return left.merge(right)
-    except ValueError as error:
-        # TODO(astrt-fold-roundtrip-span-merge): a reverse-constructed CST synthesises each node's
-        # span against its own source text, so this arm fires for every AST -> to_cst -> from_cst
-        # round trip of a fold rule.
-        msg = f"rule {rule!r}: the operands of a fold come from different sources, so their spans cannot merge"
-        raise AstError(msg, left) from error
+    return type(left)(-1, -1)
 
 
 def fold_left(
@@ -529,8 +531,11 @@ def fold_left(
 ) -> Any:
     """Left-nest a fold rule's operands: ``a op b op c`` becomes ``(a op b) op c``.
 
-    ``spans`` are the operands' own CST spans, in source order; each synthesised link carries
-    the merge of everything below it.  A single operand is returned unwrapped.
+    ``spans`` are the operands' own CST spans, in source order.  A link's span is the cover of
+    its operands when they are sourced from one text and lie in order without overlap, and an
+    unknown span of the operands' own span type otherwise, which is what every link of a
+    reverse-constructed chain carries.
+    A single operand is returned unwrapped.
 
     The interleaving is checked here — one operator between each operand pair — so a caller who
     has not run :func:`check_fold_arity` over its own runs gets that diagnostic rather than a
@@ -541,7 +546,7 @@ def fold_left(
     result = values[0]
     span = spans[0]
     for operator, value, value_span in zip(operators, values[1:], spans[1:], strict=True):
-        span = _merged(span, value_span, rule)
+        span = _link_span(span, value_span)
         result = binary(operator, result, value, span)
     return result
 
@@ -551,14 +556,14 @@ def fold_right(
 ) -> Any:
     """Right-nest a fold rule's operands: ``a op b op c`` becomes ``a op (b op c)``.
 
-    The interleaving is checked here, as in :func:`fold_left`.
+    Link spans and the interleaving check are as in :func:`fold_left`.
     """
     check_fold_arity(len(values), len(operators), rule, spans[-1] if spans else terminalsrc.UnknownSpan)
     result = values[-1]
     span = spans[-1]
     pairs = zip(reversed(operators), reversed(values[:-1]), reversed(spans[:-1]), strict=True)
     for operator, value, value_span in pairs:
-        span = _merged(value_span, span, rule)
+        span = _link_span(value_span, span)
         result = binary(operator, value, result, span)
     return result
 

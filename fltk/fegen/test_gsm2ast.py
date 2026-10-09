@@ -2667,18 +2667,140 @@ class TestFoldErrors:
             generated.ast.sum_from_cst(generated.parser.cst_module.Sum())
         assert "a fold needs at least one operand" in exc.value.message
 
-    def test_operands_from_two_sources_cannot_merge_their_spans(self) -> None:
+    def test_operands_from_two_sources_give_the_link_an_unknown_span(self) -> None:
         """Each synthesised ``Word`` span carries its own single-token source, so a chain built
-        out of them mixes sources the way only a hand-built CST can."""
+        out of them mixes sources the way only a hand-built CST can: it converts, and the link
+        is positioned nowhere."""
         generated = self.generated()
         cst = generated.parser.cst_module
         node = cst.Sum()
         node.append(generated.ast.word_to_cst(generated.ast.Word(text="a")), node.Label.WORD)
         node.append(generated.ast.sign_to_cst(generated.ast.Sign(generated.ast.SignValue.PLUS)), node.Label.OP)
         node.append(generated.ast.word_to_cst(generated.ast.Word(text="b")), node.Label.WORD)
-        with pytest.raises(astrt.AstError) as exc:
-            generated.ast.sum_from_cst(node)
-        assert "rule 'sum': the operands of a fold come from different sources" in exc.value.message
+        value = generated.ast.sum_from_cst(node)
+        assert value.span == terminalsrc.UnknownSpan
+        assert not value.span.has_source()
+        assert (value.lhs, value.rhs) == (generated.ast.Word(text="a"), generated.ast.Word(text="b"))
+
+
+def _chain_links(value: typing.Any, binary: type, side: str) -> list[typing.Any]:
+    """The links of a fold chain, outermost first, descending ``side``."""
+    links = []
+    while isinstance(value, binary):
+        links.append(value)
+        value = getattr(value, side)
+    return links
+
+
+class _Link(typing.NamedTuple):
+    """The link :func:`_fold` builds, shaped like a generated one."""
+
+    op: object
+    lhs: object
+    rhs: object
+    span: typing.Any
+
+
+def _fold(spans: list[typing.Any]) -> dict[str, list[typing.Any]]:
+    """Fold ``spans`` both ways over ``0, 1, …``; each direction's link spans, outermost first."""
+    values = list(range(len(spans)))
+    operators = ["+"] * (len(spans) - 1)
+    left = astrt.fold_left(_Link, values, spans, operators, "sum")
+    right = astrt.fold_right(_Link, values, spans, operators, "sum")
+    return {
+        "left": [link.span for link in _chain_links(left, _Link, "lhs")],
+        "right": [link.span for link in _chain_links(right, _Link, "rhs")],
+    }
+
+
+def _assert_unknown(span: typing.Any) -> None:
+    assert span == terminalsrc.UnknownSpan
+    assert not span.has_source()
+
+
+class TestFoldLinkSpans:
+    """The runtime's link-span rule over hand-made spans: a cover when the operands are sourced
+    from one text and lie in order without overlap, ``UnknownSpan`` otherwise."""
+
+    def test_operands_in_order_in_one_source_are_covered(self) -> None:
+        source = terminalsrc.SourceText("1+2+3")
+        spans = [terminalsrc.Span.with_source(start, start + 1, source) for start in (0, 2, 4)]
+        links = _fold(spans)
+        assert [span.text() for span in links["left"]] == ["1+2+3", "1+2"]
+        assert [span.text() for span in links["right"]] == ["1+2+3", "2+3"]
+
+    def test_overlapping_or_reordered_operands_give_an_unknown_link(self) -> None:
+        source = terminalsrc.SourceText("1+2+3")
+        overlapping = [terminalsrc.Span.with_source(0, 3, source), terminalsrc.Span.with_source(2, 5, source)]
+        reordered = [terminalsrc.Span.with_source(4, 5, source), terminalsrc.Span.with_source(0, 1, source)]
+        for spans in (overlapping, reordered):
+            for links in _fold(spans).values():
+                _assert_unknown(links[0])
+
+    def test_operands_from_two_sources_give_an_unknown_link(self) -> None:
+        # Distinct texts: two equal literals can be one interned object, which is one source.
+        spans = [
+            terminalsrc.Span.with_source(0, 1, terminalsrc.SourceText("1+2")),
+            terminalsrc.Span.with_source(2, 3, terminalsrc.SourceText("3+4")),
+        ]
+        for links in _fold(spans).values():
+            _assert_unknown(links[0])
+
+    def test_two_zero_width_operands_at_one_position_give_an_unknown_link(self) -> None:
+        """What two synthesised empty leaves carry: one interned ``""``, so they share a source."""
+        spans = [terminalsrc.Span.with_source(0, 0, ""), terminalsrc.Span.with_source(0, 0, "")]
+        assert spans[0].shares_source(spans[1])
+        for links in _fold(spans).values():
+            _assert_unknown(links[0])
+
+    def test_a_zero_width_operand_beside_a_non_empty_one_is_covered(self) -> None:
+        source = terminalsrc.SourceText("ab")
+        leading = [terminalsrc.Span.with_source(0, 0, source), terminalsrc.Span.with_source(0, 2, source)]
+        trailing = [terminalsrc.Span.with_source(0, 1, source), terminalsrc.Span.with_source(1, 1, source)]
+        for spans, text in ((leading, "ab"), (trailing, "a")):
+            for links in _fold(spans).values():
+                assert links[0].text() == text
+
+    def test_sourceless_positioned_operands_give_an_unknown_link(self) -> None:
+        for links in _fold([terminalsrc.Span(0, 1), terminalsrc.Span(2, 3)]).values():
+            _assert_unknown(links[0])
+
+    def test_an_unknown_operand_between_sourced_ones_makes_both_links_unknown(self) -> None:
+        source = terminalsrc.SourceText("1+2+3")
+        spans = [
+            terminalsrc.Span.with_source(0, 1, source),
+            terminalsrc.UnknownSpan,
+            terminalsrc.Span.with_source(4, 5, source),
+        ]
+        for links in _fold(spans).values():
+            assert len(links) == 2
+            for span in links:
+                _assert_unknown(span)
+
+    def test_a_sourced_operand_does_not_resurrect_a_cover_once_a_link_is_unknown(self) -> None:
+        source = terminalsrc.SourceText("1+2+3+4")
+        at = [terminalsrc.Span.with_source(start, start + 1, source) for start in (0, 2, 4, 6)]
+
+        left = _fold([at[0], at[1], terminalsrc.UnknownSpan, at[3]])["left"]
+        assert len(left) == 3
+        _assert_unknown(left[0])
+        _assert_unknown(left[1])
+        assert left[2].text() == "1+2"
+
+        right = _fold([at[0], terminalsrc.UnknownSpan, at[2], at[3]])["right"]
+        assert len(right) == 3
+        _assert_unknown(right[0])
+        _assert_unknown(right[1])
+        assert right[2].text() == "3+4"
+
+    def test_one_operand_builds_no_link(self) -> None:
+        def link(*_arguments: object) -> object:
+            message = "one operand builds no link"
+            raise AssertionError(message)
+
+        span = terminalsrc.Span.with_source(0, 1, "1")
+        for fold in (astrt.fold_left, astrt.fold_right):
+            assert fold(link, [7], [span], [], "sum") == 7
 
 
 # The most compact fold a user can write: both the operand and the operator are labeled regexes.
@@ -2721,6 +2843,55 @@ class TestFoldOverTerminals:
         generated = self.generated()
         with pytest.raises(astrt.AstError, match=re.escape("does not match the terminal /[+-]/")):
             generated.ast.unparse(generated.ast.ExprBinary("*", "x", "y"))
+
+    @pytest.mark.parametrize(
+        ("direction", "text", "covers"),
+        [
+            ("fold_left", "a + b", ["a + b"]),
+            ("fold_left", "a + a", ["a + a"]),
+            ("fold_left", "a + b - c", ["a + b - c", "a + b"]),
+            ("fold_right", "a + b", ["a + b"]),
+            ("fold_right", "a + a", ["a + a"]),
+            ("fold_right", "a + b - c", ["a + b - c", "b - c"]),
+        ],
+    )
+    def test_a_synthesised_chain_round_trips_with_unknown_link_spans(
+        self, direction: str, text: str, covers: list[str]
+    ) -> None:
+        generated = build_roundtrip(TERMINAL_FOLD_GRAMMAR, "expr", SPACED_FORMAT, f"rule expr {{ {direction}: op; }}\n")
+        side = "lhs" if direction == "fold_left" else "rhs"
+        value = generated.ast.parse(text)
+        again = generated.ast.expr_from_cst(value.to_cst())
+        assert again == value
+
+        parsed = _chain_links(value, generated.ast.ExprBinary, side)
+        assert [link.span.text() for link in parsed] == covers
+        synthesised = _chain_links(again, generated.ast.ExprBinary, side)
+        assert len(synthesised) == len(covers)
+        for link in synthesised:
+            _assert_unknown(link.span)
+
+    @pytest.mark.parametrize("direction", ["fold_left", "fold_right"])
+    @pytest.mark.parametrize("text", ["+", "+b"])
+    def test_empty_operands_round_trip_with_unknown_link_spans(self, direction: str, text: str) -> None:
+        """An operand terminal that admits the empty match synthesises ``Span.with_source(0, 0, "")``,
+        and two of those share CPython's one ``""``: the link is unknown all the same."""
+        generated = build_roundtrip(
+            EMPTY_TERMINAL_FOLD_GRAMMAR, "expr", SPACED_FORMAT, f"rule expr {{ {direction}: op; }}\n"
+        )
+        side = "lhs" if direction == "fold_left" else "rhs"
+        value = generated.ast.parse(text)
+        again = generated.ast.expr_from_cst(value.to_cst())
+        assert again == value
+        synthesised = _chain_links(again, generated.ast.ExprBinary, side)
+        assert len(synthesised) == 1
+        _assert_unknown(synthesised[0].span)
+
+
+# A fold whose operand terminal admits the empty match, so a synthesised operand can be zero-width.
+EMPTY_TERMINAL_FOLD_GRAMMAR = """
+expr := t:/[a-z]*/ , ( , op:/[+-]/ , t:/[a-z]*/)* ;
+"""
 
 
 class TestFoldNaming:

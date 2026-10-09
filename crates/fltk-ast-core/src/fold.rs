@@ -12,9 +12,13 @@
 //! `fltk.fegen.pyrt.astrt`, and the message templates are one text under the translation
 //! `tests/test_ast_error_message_parity.py` enforces.
 //!
+//! A link's span is the cover of its two sides when both are sourced from one text and lie in
+//! order without overlap, and [`Span::unknown`] otherwise. Every parsed chain qualifies; a chain
+//! synthesised by `to_cst` does not, since each of its leaves carries its own text, so every link
+//! of a synthesised chain is unknown. Once a link is unknown, every link above it is too.
+//!
 //! A parser-produced CST always interleaves as the grammar says, so the arity failure is
-//! reachable only from a hand-built or mutated one, and the source-mismatch failure only from one
-//! whose operands were parsed from different sources. [`fold_left`] and [`fold_right`] check the
+//! reachable only from a hand-built or mutated one. [`fold_left`] and [`fold_right`] check the
 //! interleaving themselves, so a caller who has not run [`check_fold_arity`] over its own runs —
 //! anything but a generated converter, which checks against the CST node's span first — gets the
 //! same diagnostic rather than a chain with values quietly dropped from it.
@@ -61,20 +65,23 @@ pub fn against_direction(rule: &str, side: &str) -> AstError {
     )
 }
 
-/// The span covering both sides of one link.
-fn merge(left: &Span, right: &Span, rule: &str) -> Result<Span, AstError> {
-    left.merge(right).map_err(|_| {
-        AstError::new(
-            format!("rule {rule:?}: the operands of a fold come from different sources, so their spans cannot merge"),
-            left.clone(),
-        )
-    })
+/// The span of one link: the cover of its two sides, or [`Span::unknown`].
+///
+/// The cover is taken only when both sides share one source and lie in order without overlap; a
+/// zero-width pair at one position precedes nothing, so it does not lie in order. An unknown side
+/// shares no source, so an unknown accumulator keeps every later link unknown.
+fn link_span(left: &Span, right: &Span) -> Span {
+    if left.shares_source(right) && left.end() <= right.start() && left.start() < right.end() {
+        left.merge(right).unwrap_or_else(|_| Span::unknown())
+    } else {
+        Span::unknown()
+    }
 }
 
 /// Left-nest a fold rule's operands: `a op b op c` becomes `(a op b) op c`.
 ///
-/// Each operand arrives with its own CST span, in source order; every synthesized link carries the
-/// merge of everything below it. A single operand comes back wrapped by `operand` and nothing
+/// Each operand arrives with its own CST span, in source order; each link's span follows the rule
+/// in the module docs. A single operand comes back wrapped by `operand` and nothing
 /// else, so the link type appears only where the grammar actually repeated. `span` is the whole
 /// node's, used for the arity diagnostic, which has no operand to point at.
 ///
@@ -93,7 +100,7 @@ pub fn fold_left<T, O, V>(
     let mut value = operand(first);
     let mut covered = first_span;
     for ((next, next_span), operator) in rest.zip(operators) {
-        covered = merge(&covered, &next_span, rule)?;
+        covered = link_span(&covered, &next_span);
         value = link(operator, value, operand(next), covered.clone());
     }
     Ok(value)
@@ -116,7 +123,7 @@ pub fn fold_right<T, O, V>(
     let mut value = operand(last);
     let mut covered = last_span;
     for ((previous, previous_span), operator) in rest.into_iter().rev().zip(operators.into_iter().rev()) {
-        covered = merge(&previous_span, &covered, rule)?;
+        covered = link_span(&previous_span, &covered);
         value = link(operator, operand(previous), value, covered.clone());
     }
     Ok(value)
@@ -290,16 +297,137 @@ mod tests {
         );
     }
 
+    /// A chain's link spans, outermost first, descending whichever side holds the deeper link.
+    fn link_spans(folded: &Chain) -> Vec<Span> {
+        let mut spans = Vec::new();
+        let mut node = folded;
+        while let Chain::Link(current) = node {
+            spans.push(current.span.clone());
+            node = if matches!(current.lhs, Chain::Link(_)) {
+                &current.lhs
+            } else {
+                &current.rhs
+            };
+        }
+        spans
+    }
+
+    fn assert_unknown(span: &Span) {
+        assert_eq!(*span, Span::unknown());
+        assert!(!span.has_source());
+    }
+
+    /// Fold `spans` both ways over `1, 2, …` with `+` between, returning each direction's links.
+    fn both_ways(spans: &[Span]) -> [Vec<Span>; 2] {
+        let operands: Vec<(i64, Span)> = spans
+            .iter()
+            .enumerate()
+            .map(|(index, span)| (i64::try_from(index).expect("index fits"), span.clone()))
+            .collect();
+        let operators = vec!['+'; spans.len() - 1];
+        let left = fold_left("expr", &span(), operands.clone(), operators.clone(), operand, link).expect("left");
+        let right = fold_right("expr", &span(), operands, operators, operand, link).expect("right");
+        [link_spans(&left), link_spans(&right)]
+    }
+
     #[test]
-    fn operands_from_two_sources_cannot_be_covered_by_one_span() {
+    fn operands_from_two_sources_give_the_link_an_unknown_span() {
         let other = SourceText::from_str("9", None);
         let mut mixed = operands(2);
         mixed[1].1 = Span::new_with_source(0, 1, &other);
-        let error = fold_left("expr", &span(), mixed, vec!['+'], operand, link).unwrap_err();
-        assert_eq!(
-            error.message,
-            "rule \"expr\": the operands of a fold come from different sources, so their spans cannot merge"
-        );
+        let folded = fold_left("expr", &span(), mixed, vec!['+'], operand, link).expect("two operands");
+        let Chain::Link(folded) = folded else {
+            panic!("two operands fold into a link");
+        };
+        assert_unknown(&folded.span);
+        assert_eq!((folded.lhs, folded.rhs), (Chain::Operand(1), Chain::Operand(2)));
+        let spans = [
+            Span::new_with_source(0, 1, &source()),
+            Span::new_with_source(2, 3, &SourceText::from_str("1+2", None)),
+        ];
+        for links in both_ways(&spans) {
+            assert_eq!(links.len(), 1);
+            assert_unknown(&links[0]);
+        }
+    }
+
+    #[test]
+    fn overlapping_operands_give_the_link_an_unknown_span() {
+        let text = source();
+        let spans = [Span::new_with_source(0, 3, &text), Span::new_with_source(2, 5, &text)];
+        for links in both_ways(&spans) {
+            assert_unknown(&links[0]);
+        }
+        // Out of order is not in order, even when the two do not overlap.
+        let spans = [Span::new_with_source(4, 5, &text), Span::new_with_source(0, 1, &text)];
+        for links in both_ways(&spans) {
+            assert_unknown(&links[0]);
+        }
+    }
+
+    #[test]
+    fn two_zero_width_operands_at_one_position_give_the_link_an_unknown_span() {
+        let text = SourceText::from_str("", None);
+        let spans = [Span::new_with_source(0, 0, &text), Span::new_with_source(0, 0, &text)];
+        for links in both_ways(&spans) {
+            assert_unknown(&links[0]);
+        }
+    }
+
+    #[test]
+    fn a_zero_width_operand_beside_a_non_empty_one_is_covered() {
+        let text = SourceText::from_str("ab", None);
+        let spans = [Span::new_with_source(0, 0, &text), Span::new_with_source(0, 2, &text)];
+        for links in both_ways(&spans) {
+            assert_eq!((links[0].start(), links[0].end()), (0, 2));
+            assert_eq!(links[0].text().as_deref(), Some("ab"));
+        }
+        let spans = [Span::new_with_source(0, 1, &text), Span::new_with_source(1, 1, &text)];
+        for links in both_ways(&spans) {
+            assert_eq!(links[0].text().as_deref(), Some("a"));
+        }
+    }
+
+    #[test]
+    fn sourceless_operands_give_the_link_an_unknown_span() {
+        let spans = [Span::new_sourceless(0, 1), Span::new_sourceless(2, 3)];
+        for links in both_ways(&spans) {
+            assert_unknown(&links[0]);
+        }
+    }
+
+    #[test]
+    fn an_unknown_operand_between_sourced_ones_makes_both_links_unknown() {
+        let text = source();
+        let spans = [
+            Span::new_with_source(0, 1, &text),
+            Span::unknown(),
+            Span::new_with_source(4, 5, &text),
+        ];
+        for links in both_ways(&spans) {
+            assert_eq!(links.len(), 2);
+            links.iter().for_each(assert_unknown);
+        }
+    }
+
+    #[test]
+    fn a_sourced_operand_does_not_resurrect_a_cover_once_a_link_is_unknown() {
+        let text = SourceText::from_str("1+2+3+4", None);
+        let at = |index: i64| Span::new_with_source(index * 2, index * 2 + 1, &text);
+
+        // Left: the innermost link covers `1+2`; the unknown third operand ends the cover.
+        let [left, _] = both_ways(&[at(0), at(1), Span::unknown(), at(3)]);
+        assert_eq!(left.len(), 3);
+        assert_unknown(&left[0]);
+        assert_unknown(&left[1]);
+        assert_eq!(left[2].text().as_deref(), Some("1+2"));
+
+        // Right: the innermost link covers `3+4`; the unknown second operand ends the cover.
+        let [_, right] = both_ways(&[at(0), Span::unknown(), at(2), at(3)]);
+        assert_eq!(right.len(), 3);
+        assert_unknown(&right[0]);
+        assert_unknown(&right[1]);
+        assert_eq!(right[2].text().as_deref(), Some("3+4"));
     }
 
     #[test]

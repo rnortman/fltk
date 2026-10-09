@@ -128,6 +128,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- AST converters, both backends: converting an AST value to a CST and back
+  (`from_cst(to_cst(v))`) no longer fails for `fold_left:` / `fold_right:` rules with two or
+  more operands whose operands are plain tokens — a regex child, a terminal-only rule, or a
+  `transparent;` number as in the AST guide's quick start. It used to raise "the operands of a
+  fold come from different sources" (and on Python only for some inputs: `1+2` failed, `1+1`
+  passed with a wrong span). The span on each fold link is now the range covering its operands
+  when they sit in order in one source text — always true for parsed input, so parsed spans are
+  unchanged — and unknown otherwise, matching every other node `to_cst` builds. A CST hand-stitched
+  from two parses also converts now, with unknown link spans, instead of being refused.
+
 - Rust backend: reading a span's text (`Span::text` / `text_str` in Rust, `Span.text()` /
   `text_or_raise()` from Python, and the generated `*_text()` CST accessors) no longer rescans
   the source from the beginning on every call. Each read used to cost time proportional to how

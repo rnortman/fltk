@@ -239,6 +239,67 @@ def test_a_nested_values_span_carries_its_own_backends_span(layer: Layer) -> Non
     assert type(from_python.node.span) is not type(from_rust.node.span)
 
 
+class _Link(typing.NamedTuple):
+    op: typing.Any
+    lhs: typing.Any
+    rhs: typing.Any
+    span: typing.Any
+
+
+def _native_operand_spans(text: str) -> list[typing.Any]:
+    """The `term` operand spans of a Rust-parsed `sum_chain`, in source order."""
+    node = parse_rust_cst(rust_parser_fixture.parser, "sum_chain", text, capture_trivia=False)
+    return [term.span for term in node.term()]
+
+
+def _link_spans(fold: typing.Any, spans: list[typing.Any]) -> list[typing.Any]:
+    """The link spans `fold` builds over `spans`, outermost first."""
+    chain = fold(_Link, list(range(len(spans))), spans, ["+"] * (len(spans) - 1), "chain")
+    links = []
+    while isinstance(chain, _Link):
+        links.append(chain.span)
+        chain = chain.lhs if fold is astrt.fold_left else chain.rhs
+    return links
+
+
+@pytest.mark.parametrize("fold", [astrt.fold_left, astrt.fold_right], ids=["left", "right"])
+class TestFoldLinkSpansOverNativeSpans:
+    """The Python runtime folding a Rust CST's operand spans keeps every link span native.
+
+    A link that is not a cover is the operands' own backend's unknown span.  Were it the
+    pure-Python sentinel instead, the next link would hand it to the native `shares_source` —
+    which `fold_right` does, as the accumulator is that link's right side — and the native method
+    rejects a foreign span with a `TypeError`.
+    """
+
+    def test_a_parsed_chain_covers_with_native_spans(self, fold: typing.Any) -> None:
+        spans = _native_operand_spans("1+2+3")
+        links = _link_spans(fold, spans)
+        assert [link.text() for link in links] == ["1+2+3", "1+2" if fold is astrt.fold_left else "2+3"]
+        assert all(type(link) is type(spans[0]) for link in links)
+
+    def test_an_unknown_operand_gives_native_unknown_links(self, fold: typing.Any) -> None:
+        spans = _native_operand_spans("1+2+3")
+        spans[1] = type(spans[1])(-1, -1)
+        links = _link_spans(fold, spans)
+        assert len(links) == 2
+        for link in links:
+            assert type(link) is type(spans[0])
+            assert (link.start, link.end) == (-1, -1)
+            assert not link.has_source()
+
+    def test_operands_from_two_parses_give_native_unknown_links(self, fold: typing.Any) -> None:
+        spans = _native_operand_spans("1+2+3")
+        spans[0] = _native_operand_spans("4+5")[0]
+        links = _link_spans(fold, spans)
+        assert all(type(link) is type(spans[0]) for link in links)
+        assert not links[0].has_source()
+        if fold is astrt.fold_left:
+            assert not links[1].has_source()
+        else:
+            assert links[1].text() == "2+3"
+
+
 class TestWrongShapedNodes:
     """The error paths are backend-independent: same constructor, same message, same span.
 
@@ -336,11 +397,12 @@ class TestBackpointer:
 
 
 def test_the_reverse_direction_builds_python_nodes_from_a_rust_derived_value(layer: Layer) -> None:
-    """`to_cst` is Python-backend-only by design, whatever backend the value was converted from.
+    """A Python AST value's `to_cst` builds Python CST nodes, whatever backend it was converted from.
 
-    The AST is backend-neutral data, but reverse construction needs span synthesis, which only the
-    Python backend offers.  A value converted from a Rust CST therefore round-trips back into a
-    Python CST — and that node is the one the Python unparser takes.
+    The AST is backend-neutral data, and the Python AST module's reverse constructors build the
+    Python backend's nodes; the Rust-generated AST has its own `to_cst`, which builds Rust nodes.
+    A value converted from a Rust CST therefore round-trips back into a Python CST — and that node
+    is the one the Python unparser takes.
     """
     from_rust = layer.convert("stmt", layer.rust_cst("stmt", "x = y"))
     rebuilt = from_rust.to_cst()

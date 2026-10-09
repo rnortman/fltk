@@ -713,7 +713,8 @@ class RustAstGenerator:
             binary.name,
             rule_name,
             f"One link of the {nesting}-nested chain rule `{rule_name}` folds into. "
-            f"`span` covers everything below the link.",
+            f"`span` covers everything below the link when the operands were read in order from one "
+            f"source, as in every parsed chain; a chain synthesised by `to_cst` has unknown link spans.",
             (
                 (self.member_name(binary.op.name), self.field_type(binary.name, binary.op)),
                 # The chain's own indirections, which the recursion analysis therefore ignores.

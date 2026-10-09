@@ -323,7 +323,9 @@ pub struct ExprBinary { pub op: AddOpValue, pub lhs: Box<Expr>, pub rhs: Box<Exp
 pub enum Expr { Operand(i64), Binary(ExprBinary) }
 ```
 
-A link's `span` covers everything below it. The Rust chain types carry a worklist-based `Drop`
+A link's `span` covers everything below it when its operands were read from one source in order —
+every parsed chain. A chain synthesised by `to_cst` has unknown link spans: its leaves each carry
+their own text, but nothing in a synthesised tree is a position in a file. The Rust chain types carry a worklist-based `Drop`
 and a worklist-based equality walk, so a chain as deep as its source neither overflows the stack
 on teardown nor on comparison. Python compares chains by ordinary dataclass recursion, which is
 as deep as any Python structure walk.

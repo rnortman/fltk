@@ -2423,25 +2423,33 @@ into_iterator := "runs" : "{" , into* , "}" , ;
 into   := key:/[a-z]+/ , "=" , value:string , ";" , ;
 tag    := item:string | item:iterator | item:/[!@#$]+/ ;
 join   := term:/[a-z]+/ , ( , op:/[-+]/ , term:/[a-z]+/)* ;
+join_right := term:/[a-z]+/ , ( , op:/[-+]/ , term:/[a-z]+/)* ;
 """
 
 # `into` is keyed `multi`, so the map value is `IndexMap<K, ::std::vec::Vec<Into>>` — the spelling a
 # singly-keyed region never emits; `tag` is a product over a union label, so its field-enum
-# converter is emitted; `join` folds over text operands, so its teardown sentinel is a `String`.
+# converter is emitted; `join` folds over text operands, so its teardown sentinel is a `String`;
+# `join_right` is `join` folded the other way, the one right fold any gate grammar runs through
+# `to_cst` and back.
 PRELUDE_SIDECAR = """rule doc   { name: Debug; }
 rule clone { key: key; }
 rule into  { key: key multi; }
 rule tag   { product; }
 rule drop  { fold_left: op; }
 rule join  { fold_left: op; }
+rule join_right { fold_right: op; }
 """
 
 PRELUDE_RUNTIME = """//! A document of the grammar whose rule names are the std prelude's.
 
 use super::ast;
 use super::de;
+use super::parser::Parser;
 
 const TEXT: &str = "vec { alpha = one ; beta = two ; } result ok_val! yes plus no name_a name_b\\n";
+
+/// A text chain, read through the rule's own parse entry point, since `doc` never reaches it.
+const CHAIN: &str = "a + b - c";
 
 #[test]
 fn a_grammar_named_after_the_prelude_parses_converts_and_deserializes() {
@@ -2479,6 +2487,68 @@ fn a_grammar_named_after_the_prelude_parses_converts_and_deserializes() {
     let child = parsed.r#box.child.as_ref().expect("the outer box carries a child");
     assert_eq!(child.name.text, "name_b");
     assert!(child.child.is_none());
+}
+
+#[test]
+fn a_join_synthesised_from_its_own_value_converts_back() {
+    let mut parser = Parser::new(CHAIN, None, false);
+    let parsed = parser.apply__parse_join(0).expect("the chain must parse");
+    assert_eq!(parsed.pos as usize, CHAIN.len(), "the parse must consume the chain");
+    let value = ast::Join::from_cst(&parsed.result).expect("a parser-produced CST must convert");
+
+    // The parsed chain is the positive control: its links cover their operands in the document.
+    let ast::Join::Binary(outer) = &value else {
+        panic!("two operators fold into a link");
+    };
+    assert_eq!(outer.span.text().as_deref(), Some("a + b - c"));
+    let ast::Join::Binary(inner) = &*outer.lhs else {
+        panic!("the left side of a left fold is the deeper chain");
+    };
+    assert_eq!(inner.span.text().as_deref(), Some("a + b"));
+
+    // Every synthesised leaf carries its own text, so a re-read link covers no one source.
+    let again = ast::Join::from_cst(&value.to_cst().expect("a parsed value must synthesise"))
+        .expect("a synthesised CST must convert");
+    assert_eq!(again, value);
+    let mut links = 0;
+    let mut current = &again;
+    while let ast::Join::Binary(link) = current {
+        assert_eq!(link.span, ::fltk_cst_core::Span::unknown());
+        assert!(!link.span.has_source());
+        links += 1;
+        current = link.lhs.as_ref();
+    }
+    assert_eq!(links, 2);
+}
+
+#[test]
+fn a_right_fold_synthesised_from_its_own_value_converts_back() {
+    let mut parser = Parser::new(CHAIN, None, false);
+    let parsed = parser.apply__parse_join_right(0).expect("the chain must parse");
+    assert_eq!(parsed.pos as usize, CHAIN.len(), "the parse must consume the chain");
+    let value = ast::JoinRight::from_cst(&parsed.result).expect("a parser-produced CST must convert");
+
+    let ast::JoinRight::Binary(outer) = &value else {
+        panic!("two operators fold into a link");
+    };
+    assert_eq!(outer.span.text().as_deref(), Some("a + b - c"));
+    let ast::JoinRight::Binary(inner) = &*outer.rhs else {
+        panic!("the right side of a right fold is the deeper chain");
+    };
+    assert_eq!(inner.span.text().as_deref(), Some("b - c"));
+
+    let again = ast::JoinRight::from_cst(&value.to_cst().expect("a parsed value must synthesise"))
+        .expect("a synthesised CST must convert");
+    assert_eq!(again, value);
+    let mut links = 0;
+    let mut current = &again;
+    while let ast::JoinRight::Binary(link) = current {
+        assert_eq!(link.span, ::fltk_cst_core::Span::unknown());
+        assert!(!link.span.has_source());
+        links += 1;
+        current = link.rhs.as_ref();
+    }
+    assert_eq!(links, 2);
 }
 """
 
@@ -2574,6 +2644,27 @@ fn the_snippets_other_arm_is_the_operand_the_coercion_carries() {
         panic!("one operand does not fold into a link");
     };
     assert_eq!(n, 42_i64);
+}
+
+#[test]
+fn a_synthesised_chain_round_trips_with_unknown_link_spans() {
+    // Equal and unequal operand texts alike: each synthesised number carries its own text, so no
+    // re-read link is a position in any one source.
+    for text in ["1 + 2 - 3", "1 + 1"] {
+        let value = ast::parse_str(text, None).expect("the expression must parse");
+        let node = value.to_cst().expect("a parsed value must synthesise");
+        let again = ast::Expr::from_cst(&node).expect("a synthesised CST must convert");
+        assert_eq!(again, value, "{text}");
+        let mut links = 0;
+        let mut current = &again;
+        while let ast::Expr::Binary(link) = current {
+            assert_eq!(link.span, ::fltk_cst_core::Span::unknown(), "{text}");
+            assert!(!link.span.has_source(), "{text}");
+            links += 1;
+            current = link.lhs.as_ref();
+        }
+        assert_eq!(links, text.matches(['+', '-']).count(), "{text}");
+    }
 }
 """
 )

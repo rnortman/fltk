@@ -10,9 +10,11 @@ use fltk_cst_core::Span;
 /// the result is [`Span::unknown`].
 ///
 /// This is the lenient merge a frame positions *itself* with — a wrapper over a collection
-/// field, an error about a run of children. It is deliberately not the merge
-/// [`fold_left`](crate::fold_left) builds a chain's links with: a span baked into a value must
-/// be correct, while a span on a one-off diagnostic can fall back.
+/// field, an error about a run of children — and it keeps the cover so far on a mismatch because
+/// a one-off diagnostic is better placed approximately than not at all. A fold link's span
+/// ([`fold_left`](crate::fold_left)) is baked into a value, so it goes to [`Span::unknown`] on
+/// any break in source, order or coverage instead. The two fallbacks differ on purpose; neither
+/// is to be used for the other's job.
 pub fn merged_span<I: IntoIterator<Item = Span>>(spans: I) -> Span {
     let unknown = Span::unknown();
     let mut merged: Option<Span> = None;
