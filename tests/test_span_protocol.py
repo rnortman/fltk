@@ -262,6 +262,23 @@ class TestProtocolHasStartEnd:
         assert py.end == rs.end == 4
         assert py.text() == rs.text() == "é"
 
+    @pytest.mark.skipif(not _rust_available, reason="Rust extension not available")
+    def test_codepoint_slice_at_large_offset_multibyte(self):
+        # Non-ASCII source with multibyte codepoints far from byte 0: the Rust backend resolves
+        # both ends through its per-source codepoint → byte table and must agree with Python.
+        text = ("x" * 5000) + "é" + ("y" * 5000) + "é"
+        py_src = PySourceText(text)
+        rs_src = _fltk_native.SourceText(text)
+        for start, end, expected in [
+            (5000, 5001, "é"),
+            (10001, 10002, "é"),
+            (10002, 10002, ""),
+            (10002, 10003, None),
+        ]:
+            py = PySpan.with_source(start, end, py_src)
+            rs = _fltk_native.Span.with_source(start, end, rs_src)
+            assert py.text() == rs.text() == expected, (start, end)
+
 
 class TestLineColProtocolConformance:
     """Both backends satisfy SpanProtocol.line_col / line_col_or_raise / filename after extension."""

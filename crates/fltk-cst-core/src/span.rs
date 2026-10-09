@@ -51,11 +51,11 @@ pub struct SourceInner {
     /// Lazy codepoint count of `text`.  Populated on first `line_col()` call
     /// (together with `line_ends`) so that warm-cache domain checks are O(1).
     pub(crate) char_count: OnceLock<i64>,
-    /// Lazy "the text is all ASCII" flag.  Populated on first `spells_at()` call, where it
-    /// turns the codepoint-index → byte-offset resolution into an identity.
+    /// Lazy "the text is all ASCII" flag.  Populated on the first `byte_offset()` call over the
+    /// source, where it turns the codepoint-index → byte-offset resolution into an identity.
     pub(crate) is_ascii: OnceLock<bool>,
-    /// Lazy codepoint-index → byte-offset table, built on first `spells_at()` call over a
-    /// non-ASCII source.  All-ASCII sources never populate it (the identity serves), so the
+    /// Lazy codepoint-index → byte-offset table, built by `byte_offset()` on its first call over
+    /// a non-ASCII source.  All-ASCII sources never populate it (the identity serves), so the
     /// `usize`-per-codepoint cost is paid only by text that needs it.  Holds `char_count + 1`
     /// entries: the last is `text.len()`, so a cursor at end-of-input resolves.
     pub(crate) char_bytes: OnceLock<Vec<usize>>,
@@ -64,6 +64,26 @@ pub struct SourceInner {
     /// Note: `TerminalSource` maintains its own independent `line_ends` cache over the
     /// same immutable text; the two caches derive from identical data and cannot disagree.
     pub(crate) line_ends: OnceLock<Vec<i64>>,
+}
+
+impl SourceInner {
+    /// Byte offset of codepoint index `cp` in `text`, or `None` when `cp > char_count`.
+    /// `cp == char_count` resolves to `text.len()`.
+    ///
+    /// O(1) after a one-time per-source cost: all-ASCII text indexes directly; anything else
+    /// resolves through the `char_bytes` table, built once and shared by every span over it.
+    fn byte_offset(&self, cp: usize) -> Option<usize> {
+        let src = &self.text;
+        if *self.is_ascii.get_or_init(|| src.is_ascii()) {
+            return Some(cp).filter(|&byte| byte <= src.len());
+        }
+        let table = self.char_bytes.get_or_init(|| {
+            let mut table: Vec<usize> = src.char_indices().map(|(byte_idx, _)| byte_idx).collect();
+            table.push(src.len());
+            table
+        });
+        table.get(cp).copied()
+    }
 }
 
 /// Opaque handle to a shared source string, exposed to Python as ``fltk._native.SourceText``.
@@ -385,29 +405,10 @@ impl Span {
         if cursor < self.start || cursor + lit_len > self.end {
             return false;
         }
-        let src = &inner.text;
-        // Codepoint index → byte offset, O(1) either way. All-ASCII sources index directly.
-        // Anything else resolves through a table built once per source and shared by every span
-        // over it, so a single non-ASCII character in a file does not make every probe a scan.
-        let byte = if *inner.is_ascii.get_or_init(|| src.is_ascii()) {
-            let byte = cursor as usize;
-            if byte > src.len() {
-                return false;
-            }
-            byte
-        } else {
-            let table = inner.char_bytes.get_or_init(|| {
-                let mut table: Vec<usize> =
-                    src.char_indices().map(|(byte_idx, _)| byte_idx).collect();
-                table.push(src.len());
-                table
-            });
-            match table.get(cursor as usize) {
-                Some(byte_idx) => *byte_idx,
-                None => return false,
-            }
+        let Some(byte) = inner.byte_offset(cursor as usize) else {
+            return false;
         };
-        src[byte..].starts_with(literal)
+        inner.text[byte..].starts_with(literal)
     }
 
     /// Whether ``other``'s positions are positions in *this* span's source.
@@ -484,11 +485,13 @@ impl Span {
     /// Return the source text slice ``[start, end)`` as a borrowed ``&str``, or ``None`` under
     /// the same conditions as [`text`](Self::text).
     ///
-    /// This is the allocation-free analogue of [`text`](Self::text) (which is implemented in terms
-    /// of it): the returned reference borrows directly from the attached source rather than copying
-    /// into an owned `String`. Use it where the slice is only inspected and immediately dropped
-    /// (e.g. counting newlines in inter-token trivia); use [`text`](Self::text) where an owned
-    /// `String` is retained. The reference borrows from `&self`, which holds the source `Arc` alive.
+    /// The returned reference borrows from the attached source rather than copying into an owned
+    /// `String`; use [`text`](Self::text) where an owned `String` is retained. The reference
+    /// borrows from `&self`, which holds the source `Arc` alive.
+    ///
+    /// The first call over a source may scan it once for ASCII-ness and, if it is not all ASCII,
+    /// build the per-source codepoint → byte-offset table shared with
+    /// [`spells_at`](Self::spells_at); every call after that is O(span length).
     pub fn text_str(&self) -> Option<&str> {
         let inner = self.source.as_ref()?;
         if self.start < 0 || self.end < 0 {
@@ -499,40 +502,9 @@ impl Span {
         if start > end {
             return None;
         }
-        let src = &inner.text;
-        // TODO(unparse-quadratic-scaling): scans from byte 0 on every call with no
-        // cached index table. Suspect in the measured quadratic formatting curve;
-        // profile before changing anything here.
-        // Single forward pass: scan char_indices once to collect both byte offsets.
-        let mut byte_start: Option<usize> = None;
-        let mut byte_end: Option<usize> = None;
-        let mut char_count = 0usize;
-        for (byte_idx, _) in src.char_indices() {
-            if char_count == start {
-                byte_start = Some(byte_idx);
-            }
-            if char_count == end {
-                byte_end = Some(byte_idx);
-                break;
-            }
-            char_count += 1;
-        }
-        // Handle end == char_count (valid: slice to end of string).
-        if byte_end.is_none() && char_count == end {
-            byte_end = Some(src.len());
-        }
-        // A start index sitting exactly at the end of the source has no char_indices entry, so
-        // the loop above leaves byte_start unset; the span slices empty there. Covers a rule that
-        // matched nothing at end of input (Span(n, n)) and the empty span on an empty source.
-        // The loop only exits without setting byte_start when it ran to completion, so char_count
-        // is the full codepoint count at this point.
-        if byte_start.is_none() && start == char_count {
-            byte_start = Some(src.len());
-        }
-        match (byte_start, byte_end) {
-            (Some(bs), Some(be)) => Some(&src[bs..be]),
-            _ => None,
-        }
+        let bs = inner.byte_offset(start)?;
+        let be = inner.byte_offset(end)?;
+        Some(&inner.text[bs..be])
     }
 
     /// Return the source text slice ``[start, end)``, or a message explaining why it is
@@ -543,9 +515,10 @@ impl Span {
     /// ``terminalsrc.Span``; the out-of-bounds wording names the codepoint count and differs
     /// from it.  The success value borrows from ``&self``, which holds the source ``Arc`` alive.
     ///
-    /// The success path is exactly [`text_str`](Self::text_str) — no whole-source scan is
-    /// performed to pre-validate.  Diagnosis (and the `char_count` cache fill it needs)
-    /// happens only once `text_str` has already declined.
+    /// The success path is exactly [`text_str`](Self::text_str), whose only whole-source work is
+    /// the one-time per-source codepoint → byte index; nothing is scanned to pre-validate.
+    /// Diagnosis (and the `char_count` cache fill it needs) happens only once `text_str` has
+    /// already declined.
     pub fn text_or_message(&self) -> Result<&str, String> {
         if let Some(text) = self.text_str() {
             return Ok(text);
@@ -1062,5 +1035,70 @@ mod text_str_tests {
                 assert_eq!(span.text_or_message().ok(), span.text_str());
             }
         }
+    }
+
+    /// Every `(start, end)` in `0..=char_count + 1` squared against a slice computed by walking
+    /// `chars()` — an expectation independent of the codepoint → byte resolution under test.
+    ///
+    /// The range reaches one past end-of-input on both axes, so it is also the specification of
+    /// the end-of-input rows: `(n, n)` is `Some("")`, `(n, n + 1)` is `None`, and a start past
+    /// the end, `(n + 1, n + 1)`, is `None` rather than an empty slice.
+    fn assert_every_pair_matches_codepoint_slice(text: &str) {
+        let src = SourceText::from_str(text, None);
+        let char_count = text.chars().count();
+        for start in 0..=char_count + 1 {
+            for end in 0..=char_count + 1 {
+                let expected = if start > end || end > char_count {
+                    None
+                } else {
+                    Some(text.chars().skip(start).take(end - start).collect::<String>())
+                };
+                let span = Span::new_with_source(start as i64, end as i64, &src);
+                assert_eq!(
+                    span.text_str().map(str::to_owned),
+                    expected,
+                    "Span({start}, {end}) over {text:?}"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn text_str_every_pair_matches_codepoint_slice() {
+        // 11 codepoints, 13 bytes: the non-ASCII resolution path.
+        assert_eq!("héllo wörld".chars().count(), 11);
+        assert_eq!("héllo wörld".len(), 13);
+        assert_every_pair_matches_codepoint_slice("héllo wörld");
+    }
+
+    #[test]
+    fn text_str_every_pair_matches_codepoint_slice_ascii() {
+        // All-ASCII: the identity resolution path.
+        assert_every_pair_matches_codepoint_slice("hello world");
+    }
+
+    #[test]
+    fn text_str_after_spells_at_shares_cache() {
+        // spells_at first, then text_str at a different position.
+        let src = SourceText::from_str("héllo wörld", None);
+        assert!(Span::new_with_source(0, 11, &src).spells_at(1, "é"));
+        assert_eq!(Span::new_with_source(6, 11, &src).text_str(), Some("wörld"));
+        assert!(src.inner.char_bytes.get().is_some());
+
+        // text_str first, then spells_at, on a fresh source.
+        let src = SourceText::from_str("héllo wörld", None);
+        assert_eq!(Span::new_with_source(1, 4, &src).text_str(), Some("éll"));
+        assert_eq!(src.inner.is_ascii.get(), Some(&false));
+        assert!(src.inner.char_bytes.get().is_some());
+        assert!(Span::new_with_source(0, 11, &src).spells_at(7, "ö"));
+        assert!(!Span::new_with_source(0, 11, &src).spells_at(7, "o"));
+
+        // An all-ASCII source never builds the table, in either order.
+        let src = SourceText::from_str("hello world", None);
+        assert_eq!(Span::new_with_source(6, 11, &src).text_str(), Some("world"));
+        assert_eq!(src.inner.is_ascii.get(), Some(&true));
+        assert!(src.inner.char_bytes.get().is_none());
+        assert!(Span::new_with_source(0, 11, &src).spells_at(0, "hello"));
+        assert!(src.inner.char_bytes.get().is_none());
     }
 }

@@ -122,6 +122,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- Rust backend: reading a span's text (`Span::text` / `text_str` in Rust, `Span.text()` /
+  `text_or_raise()` from Python, and the generated `*_text()` CST accessors) no longer rescans
+  the source from the beginning on every call. Each read used to cost time proportional to how
+  far into the file the span sat, which made the Rust formatter roughly quadratic in document
+  size (about 4× slower per doubling); a read now costs only the span's length, after a one-time
+  index built per source. Results are unchanged. The first read on a large non-ASCII source now
+  builds and keeps that index (about 8 bytes per character).
+
 - Formatter: blank lines kept by `preserve_blanks` are no longer lost at a gap that has an anchor
   spacing on each side — an `after "x" { ... }` rule on the item before the gap and a
   `before "y" { ... }` rule on the item after it (e.g. `after ";"` plus `before "}"`), in both

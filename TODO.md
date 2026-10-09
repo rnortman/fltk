@@ -487,21 +487,6 @@ both generators beside the before-side one and a rendered witness over `xz` / `x
 `gen_alternative_unparser` in `fltk/unparse/gsm2unparser.py` and of `_gen_alternative_body` in
 `fltk/unparse/gsm2unparser_rs.py`.
 
-## `unparse-quadratic-scaling`
-
-Formatting time grows quadratically with document size: `brennfmt` over a synthetic `.brenn` of
-N one-line statements takes 0.34s at N=500, 1.21s at N=1000, 4.52s at N=2000 and 18.07s at
-N=4000 — 4x per doubling. This predates the trivia-ownership work (the same measurement on the
-`preserve_blanks` commit gives the same numbers), so it is not the source cursor; the candidates
-are the per-gap span reads that resolve a codepoint index by scanning the source from byte 0
-(`Span::text_str`; `Span::line_col` and `Span::spells_at` cache their index tables), and the
-accumulator/renderer's handling of a long
-statement list. Small inputs hide it — every in-tree grammar and config formats in well under a
-second — but the ceiling is real for any consumer formatting a large generated document. Needs
-profiling before a fix is designed; do not guess at the site. Location: `crates/fltk-cst-core/src/span.rs`
-(`text_str`, `line_col`), `crates/fltk-unparser-core` (accumulator/renderer), and the generated
-unparser's per-gap trivia processing.
-
 ## `serde-user-positioned-error`
 
 A generic `impl Deserialize` running under a fltk Deserializer cannot return a positioned error.
