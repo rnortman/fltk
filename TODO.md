@@ -487,27 +487,6 @@ both generators beside the before-side one and a rendered witness over `xz` / `x
 `gen_alternative_unparser` in `fltk/unparse/gsm2unparser.py` and of `_gen_alternative_body` in
 `fltk/unparse/gsm2unparser_rs.py`.
 
-## `serde-user-positioned-error`
-
-A generic `impl Deserialize` running under a fltk Deserializer cannot return a positioned error.
-`D::Error: serde::de::Error` exposes exactly one constructor, `custom`, and `DeserializeError`'s
-`custom` is `Span::unknown()` (`crates/fltk-serde-core/src/error.rs`); `DeserializeError::new` /
-`with_related` take a span but are unreachable from a generic impl, which cannot construct or
-downcast to the concrete type. The channel (`crates/fltk-serde-core/src/channel.rs`) flows
-payloads inward to the visitor only — nothing carries a span or `related` outward on the error
-path. So user code that already holds the exact span (e.g. an element read through `Spanned<T>`)
-can only report it inside the message text; the generated Deserializer then positions the error at
-the enclosing frame, which for a list element is the list's `[`. Consumer: brenn's `brenn-dsl`
-`projection_deserialize!` macro, which today does `custom(error.message)` and drops the span and
-`related` it already has — tracked there as `TODO(dsl-list-element-span)` in `brenn/TODO.md`, ruled
-blocked on this. Fix = give user `Deserialize` code a way to hand back a `DeserializeError` with a
-non-unknown span (and `related`) through `D::Error`. Design points: the outward slot must be tied to
-the error it belongs to and cleared on every exit (scoped, unwind-safe, as the inward channel's
-stack already is), and it must decide whether it carries a span or a whole diagnostic. Done = the
-hook exists, `docs/rust-serde-guide.md` documents it, and its scope/unwind lifecycle is tested.
-Location: `crates/fltk-serde-core/src/error.rs` (`impl serde::de::Error for DeserializeError`,
-`custom`), `crates/fltk-serde-core/src/channel.rs`.
-
 ## `preserved-trivia-ws-bytes`
 
 A preserved trivia node renders its non-preserved whitespace-token children as `Text` bytes

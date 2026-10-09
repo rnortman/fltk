@@ -9,6 +9,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- Serde frontend: new `fltk_serde_core::positioned_error`. A hand-written `Deserialize` impl
+  that rejects a value after building it (say, a duplicate element found by comparing a list's
+  `Spanned<T>` items) can now report the error at the offending element's source position, with
+  related locations attached, instead of at the enclosing field or with no position at all.
+  Under a non-FLTK deserializer the message is kept and only the position is dropped. See
+  `docs/rust-serde-guide.md`.
 - Bazel: `generate_rust_parser` gains `unparser` (emit `unparser.rs`), `format_config` (bake a
   `.fltkfmt` spec into it), and `out_dir` (declare the generated `.rs` files at a
   package-relative directory such as `src/`, so a pure-Rust `rust_library` can glob its own

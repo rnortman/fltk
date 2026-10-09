@@ -190,6 +190,9 @@ pub fn provide<R>(payload: Payload, f: impl FnOnce() -> R) -> R {
 
 /// Truncates the stack to the depth its frame pushed at, on every exit path including a
 /// panic — which is what makes an untaken payload impossible to leak.
+///
+/// The outward error handoff in `error.rs` (`positioned_error`, `Reclaim`, `take_frame`) keeps
+/// its own stack with the same discipline; a fix to one applies to both.
 struct Unwind {
     depth: usize,
 }

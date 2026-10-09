@@ -2290,6 +2290,135 @@ mod tests {
         assert_eq!(channel::take_span(), None);
     }
 
+    /// A setting whose scalar gate accepts `99999`, so that every element of the fixture
+    /// builds and the only failure is a post-hoc one.
+    #[derive(Debug, Deserialize)]
+    #[allow(dead_code)]
+    struct CheckedSetting {
+        name: String,
+        value: u64,
+        flag: bool,
+        extra: Option<String>,
+    }
+
+    const PORT_REFUSAL: &str = "`port` is not allowed here";
+
+    /// Every element is already built. Reject the one named `port`, citing the first element
+    /// as related. `None` when there is nothing to reject.
+    fn reject_port<E: serde::de::Error>(items: &[Spanned<CheckedSetting>]) -> Option<E> {
+        let bad = items.iter().find(|item| item.name == "port")?;
+        Some(crate::positioned_error(DeserializeError::with_related(
+            PORT_REFUSAL,
+            bad.span().clone(),
+            vec![("first setting here".to_string(), items[0].span().clone())],
+        )))
+    }
+
+    /// The fixture both post-hoc tests read: `host` on line 1, `port` on line 2.
+    fn host_and_port(source: &SourceText) -> Node {
+        config(
+            source,
+            vec![
+                setting(source, "host = 1 !", "host", "1", true),
+                setting(source, "port = 99999", "port", "99999", false),
+            ],
+        )
+    }
+
+    fn assert_rejected_at_port(source: &SourceText, error: &DeserializeError) {
+        assert_eq!(error.message, PORT_REFUSAL);
+        assert_eq!(error.span, span(source, "port = 99999"));
+        assert_eq!(
+            error.related,
+            vec![("first setting here".to_string(), span(source, "host = 1 !"))]
+        );
+        assert_eq!(channel::depth(), 0);
+        assert_eq!(crate::error::handoff_depth(), 0);
+    }
+
+    #[test]
+    fn a_post_hoc_rejection_in_a_field_keeps_the_element_span_and_related() {
+        /// Reads the whole list, then validates it against itself.
+        #[derive(Debug)]
+        #[allow(dead_code)]
+        struct Checked(Vec<CheckedSetting>);
+
+        impl<'de> Deserialize<'de> for Checked {
+            fn deserialize<D: serde::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+                let items = Vec::<Spanned<CheckedSetting>>::deserialize(deserializer)?;
+                if let Some(error) = reject_port(&items) {
+                    return Err(error);
+                }
+                Ok(Checked(items.into_iter().map(Spanned::into_value).collect()))
+            }
+        }
+
+        #[derive(Debug, Deserialize)]
+        #[allow(dead_code)]
+        struct Target {
+            settings: Checked,
+        }
+
+        let source = source();
+        let error = from_node::<Target>(host_and_port(&source)).unwrap_err();
+        // Not the field frame's position (its first child, the `host` line), nor the node's.
+        assert_rejected_at_port(&source, &error);
+    }
+
+    /// A derived struct that cannot fail over the `host_and_port` fixture.
+    #[derive(Debug, Deserialize)]
+    #[allow(dead_code)]
+    struct Plain {
+        settings: Vec<Spanned<CheckedSetting>>,
+    }
+
+    #[test]
+    fn a_post_hoc_rejection_at_root_level_is_positioned_without_any_frame() {
+        /// Rejects only after `Plain` has fully returned, outside every positioning frame.
+        #[derive(Debug)]
+        #[allow(dead_code)]
+        struct Root(Plain);
+
+        impl<'de> Deserialize<'de> for Root {
+            fn deserialize<D: serde::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+                let plain = Plain::deserialize(deserializer)?;
+                if let Some(error) = reject_port(&plain.settings) {
+                    return Err(error);
+                }
+                Ok(Root(plain))
+            }
+        }
+
+        let source = source();
+        let error = from_node::<Root>(host_and_port(&source)).unwrap_err();
+        assert_rejected_at_port(&source, &error);
+    }
+
+    #[test]
+    fn a_root_level_custom_without_the_hook_has_no_position() {
+        /// `Root`, refusing through a bare `custom`: nothing encloses the refusal, so nothing
+        /// positions it.
+        #[derive(Debug)]
+        #[allow(dead_code)]
+        struct RootUnhooked(Plain);
+
+        impl<'de> Deserialize<'de> for RootUnhooked {
+            fn deserialize<D: serde::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+                let plain = Plain::deserialize(deserializer)?;
+                if plain.settings.iter().any(|item| item.name == "port") {
+                    return Err(serde::de::Error::custom(PORT_REFUSAL));
+                }
+                Ok(RootUnhooked(plain))
+            }
+        }
+
+        let source = source();
+        let error = from_node::<RootUnhooked>(host_and_port(&source)).unwrap_err();
+        assert_eq!(error.message, PORT_REFUSAL);
+        assert_eq!(error.span, Span::unknown());
+        assert!(error.related.is_empty());
+    }
+
     #[test]
     fn a_presence_flag_is_positioned_where_it_was_written() {
         #[derive(Debug, Deserialize)]

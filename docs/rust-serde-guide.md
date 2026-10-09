@@ -570,6 +570,67 @@ The message text is serde's where serde raised it and FLTK's where FLTK did. The
 templates — the duplicate-key refusal, the scalar gates, the arity refusals — are shared with the
 AST layer, so the two layers say the same thing about the same problem.
 
+### Returning a position you already hold
+
+Three different things are easy to conflate here:
+
+- **Obtaining a span.** `Spanned<T>` (see [Positions](#positions-spanned-and-raw)) is how a
+  `Deserialize` impl learns where a value was written. It rides an inward protocol, and under a
+  foreign Deserializer or a [buffering adapter](#buffering-adapters) it fails loudly.
+- **Returning a positioned diagnostic** when your impl already holds the span —
+  `fltk_serde_core::positioned_error`. A generic impl reaches its error type only through
+  `D::Error::custom(message)`, which carries no position; `positioned_error` carries a whole
+  `DeserializeError` — message, span and `related` — through that call. Under FLTK's Deserializer
+  the error you hand it is the error your caller gets. Under any other error type, the plain
+  message is passed to that type's `custom` and the position is dropped.
+- **Adapters that replace your error altogether.** An `#[serde(untagged)]` enum, or a `flatten`
+  inside one, buffers the input and reports its own `data did not match any variant` when every
+  variant fails; your error, positioned or not, is discarded. No hook survives that.
+
+The degradation under a foreign error type is the opposite of the wrapper types' "fail loudly"
+rule, deliberately. The wrappers fail loudly because degrading them would produce a silently
+wrong *value*. No value is at stake in an error that is already being returned: a diagnostic
+that keeps its text and loses its caret is more useful than one replaced by a protocol error
+about carets.
+
+The typical use is validation that one element cannot do alone, because it needs to see its
+siblings: read the whole value with `Spanned` elements, then check it.
+
+```rust
+use std::collections::HashMap;
+
+use fltk_serde_core::{positioned_error, DeserializeError, Spanned};
+use serde::{Deserialize, Deserializer};
+
+struct Names(Vec<String>);
+
+impl<'de> Deserialize<'de> for Names {
+    fn deserialize<D: Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        let items = Vec::<Spanned<String>>::deserialize(deserializer)?;
+        let mut first_seen = HashMap::new();
+        for item in &items {
+            if let Some(first) = first_seen.insert(item.value().as_str(), item.span()) {
+                return Err(positioned_error(DeserializeError::with_related(
+                    format!("duplicate name `{}`", item.value()),
+                    item.span().clone(),
+                    vec![("first defined here".to_string(), first.clone())],
+                )));
+            }
+        }
+        Ok(Names(items.into_iter().map(Spanned::into_value).collect()))
+    }
+}
+```
+
+The error comes back with the duplicate's span, which survives every enclosing frame for the
+reason [above](#where-a-position-comes-from): a position is filled in only if the error does not
+have one already. That holds at the root of a `from_node` / `from_str` call too, where no frame
+would have positioned a plain `custom` at all. An error handed in with `Span::unknown()` is
+positioned by the enclosing frame like any other.
+
+Write the message as it should read on its own: under a foreign error type it is all that
+survives.
+
 ## The supported serde surface
 
 **Externally tagged enums are the contract.** That is what the derive produces by default and

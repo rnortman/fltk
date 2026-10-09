@@ -10,6 +10,8 @@
 //!
 //! - [`DeserializeError`], which positions serde's own unknown-field / missing-field /
 //!   invalid-type messages by CST span, and [`ParseToTargetError`], the `from_str` failure.
+//! - [`positioned_error`], through which a generic `Deserialize` impl that already holds a
+//!   span returns a [`DeserializeError`] — span and `related` intact — as its `D::Error`.
 //! - [`Spanned`] and [`Raw`], the two things a grammar cannot produce as content: a source
 //!   position, and a subtree held as syntax rather than deserialized.
 //! - The [`tree`] description a generated module supplies — one [`NodeShape`] impl and one
@@ -39,7 +41,7 @@ mod wrappers;
 
 pub use channel::{provide, take_ast, take_conversion, take_node, take_span, Carried, Conversion, Payload};
 pub use de::from_node;
-pub use error::{DeserializeError, ParseToTargetError};
+pub use error::{positioned_error, DeserializeError, ParseToTargetError};
 pub use tree::{
     Alternative, Child, Container, Content, Direction, Field, Fold, Form, Key, KeyKind, Node, NodeShape, Shape, Variant,
     Wrapper,
