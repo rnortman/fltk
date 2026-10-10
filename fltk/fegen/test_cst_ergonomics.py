@@ -221,7 +221,24 @@ class TestNameHelpers:
 
     def test_reserved_covers_both_backends(self) -> None:
         # A sample from each fixed-member family the planner must protect.
-        assert {"children", "span", "clear", "push_child", "shared", "to_py_canonical"} <= ce.RESERVED_MEMBER_NAMES
+        assert {
+            "children",
+            "span",
+            "clear",
+            "push_child",
+            "shared",
+            "to_py_canonical",
+            "_check_child_type_for_label",
+            "py_label_admits_child",
+        } <= ce.RESERVED_MEMBER_NAMES
+
+    def test_no_rust_handle_fixed_member_has_a_quintet_prefix(self) -> None:
+        """The handle's quintet pymethods are never checked against the fixed members.
+
+        So a fixed member spelled with a quintet prefix (``child_<x>``) would be a duplicate
+        inherent method on any grammar with a label ``<x>``.
+        """
+        assert not [name for name in ce._RUST_HANDLE_FIXED_MEMBERS if name.startswith(ce._QUINTET_PREFIXES)]
 
     def test_unrawable_keywords_are_not_in_rawable_set(self) -> None:
         assert not (ce.RUST_UNRAWABLE_KEYWORDS & ce.RUST_KEYWORDS)
@@ -331,11 +348,12 @@ class TestCollisionPolicy:
         assert "already taken" in skipped_by_name(plan)["text"].reason
         assert emitted_member_names(plan) == {"x"}
 
-    def test_reserved_fixed_member_beats_label(self) -> None:
-        plan = plan_for("children:item")
+    @pytest.mark.parametrize("label", ["children", "_check_child_type_for_label", "py_label_admits_child"])
+    def test_reserved_fixed_member_beats_label(self, label: str) -> None:
+        plan = plan_for(f"{label}:item")
 
         assert plan.bare_accessors == {}
-        skipped = skipped_by_name(plan)["children"]
+        skipped = skipped_by_name(plan)[label]
         assert skipped.kind is ce.MemberKind.BARE_ACCESSOR
         assert "already taken" in skipped.reason
 

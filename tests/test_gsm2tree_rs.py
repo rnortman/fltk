@@ -16,6 +16,8 @@ import pytest
 
 from fltk.fegen import gsm
 from fltk.fegen.gsm2tree_rs import RustCstGenerator, _escape_source_name
+from fltk.plumbing import parse_grammar
+from tests.gsm2tree_helpers import MIXED_SPAN_LABEL_GRAMMAR
 from tests.gsm2tree_helpers import make_generator as _make_generator
 from tests.gsm2tree_helpers import make_labeled_grammar as _make_labeled_grammar
 from tests.gsm2tree_helpers import make_zero_label_grammar as _make_zero_label_grammar
@@ -2623,3 +2625,110 @@ class TestRustParserRegisterClasses:
             snippet = src[idx : idx + 120] if idx >= 0 else "(not found)"
             msg = f"parser.rs register_classes must use qualified pyo3::types::PyModule. Found: {snippet}"
             raise AssertionError(msg)
+
+
+# ---------------------------------------------------------------------------
+# Per-label child check on the handle's labelled writes
+# ---------------------------------------------------------------------------
+
+
+def _handle_method_body(source: str, class_name: str, method: str) -> str:
+    """The body of one pymethod on ``Py<class_name>``, sliced within that class's pymethods block."""
+    impl_at = source.index(f"#[pymethods]\nimpl Py{class_name} {{")
+    impl_block = source[impl_at : source.index("\n}\n", impl_at)]
+    start = impl_block.index(f"    fn {method}(")
+    end = impl_block.find("\n    fn ", start + 1)
+    return impl_block[start:] if end == -1 else impl_block[start:end]
+
+
+def _plain_handle_impl(source: str, class_name: str) -> str:
+    """The python-gated plain ``impl Py<class_name>`` block (bridge methods, not pymethods)."""
+    impl_at = source.index(f'#[cfg(feature = "python")]\nimpl Py{class_name} {{')
+    return source[impl_at : source.index("\n}\n", impl_at)]
+
+
+@pytest.fixture(scope="module")
+def fixture_source() -> str:
+    """Generated Rust source for the rust_parser_fixture grammar."""
+    from fltk.fegen.genparser import _parse_grammar_raw  # noqa: PLC0415
+
+    path = pathlib.Path(__file__).parent.parent / "fltk" / "fegen" / "test_data" / "rust_parser_fixture.fltkg"
+    return RustCstGenerator(_parse_grammar_raw(path)).generate()
+
+
+class TestPyLabelAdmitsChild:
+    """``py_label_admits_child`` narrows every labelled write to the label's own child types."""
+
+    def test_emitted_on_labelled_classes_only(self, poc_source: str) -> None:
+        assert "fn py_label_admits_child(" in _plain_handle_impl(poc_source, "Items")
+        assert "fn py_label_admits_child(" in _plain_handle_impl(poc_source, "Identifier")
+        zero_label = RustCstGenerator(_make_zero_label_grammar()).generate()
+        assert "py_label_admits_child" not in _plain_handle_impl(zero_label, "Foo")
+        assert "py_label_admits_child" not in _handle_method_body(zero_label, "Foo", "append")
+
+    def test_a_label_admitting_every_variant_is_a_constant(self, poc_source: str) -> None:
+        """poc ``Identifier``: ``name`` holds Spans, the only variant; nothing to match on."""
+        expected = (
+            "    fn py_label_admits_child(_label: &IdentifierLabel, _child: &IdentifierChild) -> bool {\n"
+            "        true\n"
+            "    }"
+        )
+        assert expected in _plain_handle_impl(poc_source, "Identifier")
+
+    def test_labels_with_equal_sets_share_an_arm_and_no_wildcard_is_emitted(self, poc_source: str) -> None:
+        expected = (
+            "    fn py_label_admits_child(label: &ItemsLabel, child: &ItemsChild) -> bool {\n"
+            "        match label {\n"
+            "            ItemsLabel::Item => matches!(child, ItemsChild::Identifier(_)),\n"
+            "            ItemsLabel::NoWs | ItemsLabel::WsAllowed | ItemsLabel::WsRequired"
+            " => matches!(child, ItemsChild::Span(_)),\n"
+            "        }\n"
+            "    }"
+        )
+        assert expected in _plain_handle_impl(poc_source, "Items")
+        assert "_ =>" not in _plain_handle_impl(poc_source, "Items")
+
+    def test_a_single_narrower_label_is_a_bare_matches(self, fixture_source: str) -> None:
+        """Fixture ``paren_expr``: ``inner`` = {Atom} on a node-wide {Atom, Trivia}."""
+        expected = (
+            "    fn py_label_admits_child(_label: &ParenExprLabel, child: &ParenExprChild) -> bool {\n"
+            "        matches!(child, ParenExprChild::Atom(_))\n"
+            "    }"
+        )
+        assert expected in _plain_handle_impl(fixture_source, "ParenExpr")
+
+    def test_a_union_label_lists_its_variants_in_enum_order(self, fixture_source: str) -> None:
+        """Fixture ``rec_via_sub``: ``inner`` = {Atom, RecViaSub}, ``suffix`` = {Name}."""
+        impl = _plain_handle_impl(fixture_source, "RecViaSub")
+        assert "RecViaSubLabel::Inner => matches!(child, RecViaSubChild::Atom(_) | RecViaSubChild::RecViaSub(_))," in (
+            impl
+        )
+        assert "RecViaSubLabel::Suffix => matches!(child, RecViaSubChild::Name(_))," in impl
+
+    def test_a_node_and_span_label_inside_a_wider_node_names_both_variants(self) -> None:
+        """``mix``: ``item`` = {Num, Span} on a node-wide {Span, Name, Num}; ``other`` = {Name}."""
+        impl = _plain_handle_impl(RustCstGenerator(parse_grammar(MIXED_SPAN_LABEL_GRAMMAR)).generate(), "Mix")
+        assert "MixLabel::Item => matches!(child, MixChild::Span(_) | MixChild::Num(_))," in impl, impl
+        assert "MixLabel::Other => matches!(child, MixChild::Name(_))," in impl, impl
+
+    @pytest.mark.parametrize("method", ["append_item", "extend_item", "append", "extend", "insert", "replace_at"])
+    def test_extraction_then_predicate_then_write(self, poc_source: str, method: str) -> None:
+        body = _handle_method_body(poc_source, "Items", method)
+        extract_at = body.index("ItemsChild::extract_from_pyobject(")
+        predicate_at = body.index("Self::py_label_admits_child(")
+        assert extract_at < predicate_at < body.index(".write()"), body
+        assert 'return Err(unsupported_child_type_error("Items", ' in body[predicate_at:], body
+
+    def test_per_label_writes_pass_their_own_member(self, poc_source: str) -> None:
+        body = _handle_method_body(poc_source, "Items", "append_item")
+        assert "if !Self::py_label_admits_child(&ItemsLabel::Item, &native_child) {" in body, body
+
+    def test_generic_writes_check_only_when_given_a_label(self, poc_source: str) -> None:
+        body = _handle_method_body(poc_source, "Items", "append")
+        assert ".is_some_and(|lbl| !Self::py_label_admits_child(lbl, &native_child))" in body, body
+
+    def test_the_message_template_is_emitted_once(self, poc_source: str, fixture_source: str) -> None:
+        for source in (poc_source, fixture_source):
+            assert source.count("unsupported child type {module}.{qualname}") == 1
+            assert "unsupported child type {}.{}" not in source
+        assert 'Err(unsupported_child_type_error("Items", obj))' in poc_source

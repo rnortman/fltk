@@ -338,12 +338,13 @@ class TestConversionErrors:
     def test_sum_with_a_child_no_alternative_accepts_under_its_label(self, config: Generated) -> None:
         """A labeled child occupying no (label, kind) pair belongs to no alternative at all.
 
-        The parser cannot produce one — the label decides the kind — so this is the hand-built
-        case, and both backends have to refuse it the same way.
+        The parser cannot produce one — the label decides the kind — and no labelled write accepts
+        one, so this is the hand-built case, written through the raw children list, and both
+        backends have to refuse it the same way.
         """
         cst = config.parser.cst_module
         node = cst.Value()
-        node.append(source_node(cst.Number, "1"), cst.Value.Label.STRING)
+        node.children.append((cst.Value.Label.STRING, source_node(cst.Number, "1")))
         with pytest.raises(astrt.AstError, match="no alternative matches"):
             config.ast.value_from_cst(node)
 
@@ -413,7 +414,8 @@ class TestConversionErrors:
         generated = build(PAIR_GRAMMAR)
         cst = generated.parser.cst_module
         node = cst.Pair()
-        node.append(source_node(cst.Number, "1"), cst.Pair.Label.KEY)
+        # Only the raw children list can hold a node under a Span label.
+        node.children.append((cst.Pair.Label.KEY, source_node(cst.Number, "1")))
         node.append(source_node(cst.Number, "1"), cst.Pair.Label.VALUE)
         with pytest.raises(astrt.AstError, match="rule 'pair': label 'key' has a child of unexpected kind"):
             generated.ast.pair_from_cst(node)
@@ -422,7 +424,7 @@ class TestConversionErrors:
         generated = build('marks := bang:"!" , name:word ;\nword := c:/[a-z]+/ ;\n')
         cst = generated.parser.cst_module
         node = cst.Marks()
-        node.append(source_node(cst.Word, "a"), cst.Marks.Label.BANG)
+        node.children.append((cst.Marks.Label.BANG, source_node(cst.Word, "a")))
         node.append(source_node(cst.Word, "b"), cst.Marks.Label.NAME)
         with pytest.raises(astrt.AstError, match="rule 'marks': label 'bang' has a child of unexpected kind"):
             generated.ast.marks_from_cst(node)

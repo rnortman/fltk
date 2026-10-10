@@ -40,6 +40,7 @@ from fltk._native import Span as NativeSpan  # noqa: E402
 from fltk.fegen import fltk_cst as py_cst  # noqa: E402
 from fltk.fegen import fltk_cst_protocol as py_protocol  # noqa: E402
 from fltk.fegen.pyrt import terminalsrc  # noqa: E402
+from tests.cst_mutator_helpers import assert_rejected  # noqa: E402
 from tests.gsm2tree_helpers import make_generator as _make_generator  # noqa: E402
 from tests.gsm2tree_helpers import make_zero_label_grammar as _make_zero_label_grammar  # noqa: E402
 
@@ -258,7 +259,7 @@ class TestRemoveAt:
         node = mod.Items()
         s0 = _span(backend, 0, 1)
         s1 = _span(backend, 1, 2)
-        node.append_item(s0)
+        node.append_ws_allowed(s0)
         node.append_no_ws(s1)
         # Read what children[0] looks like before removal
         prior = node.children[0]
@@ -487,7 +488,7 @@ class TestErrorBehavior:
         """replace_at with bad child type raises TypeError."""
         mod = _mod(backend)
         node = mod.Items()
-        node.append_item(_span(backend, 0, 1))
+        node.append_no_ws(_span(backend, 0, 1))
         with pytest.raises(TypeError):
             node.replace_at(0, "not_a_span")  # type: ignore[arg-type]
 
@@ -710,11 +711,16 @@ class TestMultiLabelCanonicalNormalization:
     `children_<label>()` bucket or in `astrt.bucket_children`.
     """
 
+    @staticmethod
+    def _child_for(mod, backend: str, member: str):
+        """A child the member's own label admits: `item` holds `Item` nodes, the rest Spans."""
+        return mod.Item() if member == "ITEM" else _span(backend, 0, 1)
+
     def test_sentinel_resolves_to_its_own_member(self, backend: str, member: str) -> None:
         mod = _mod(backend)
         node = mod.Items()
         expected = getattr(mod.Items.Label, member)
-        node.append(_span(backend, 0, 1), getattr(py_protocol.ItemsLabel, member))
+        node.append(self._child_for(mod, backend, member), getattr(py_protocol.ItemsLabel, member))
         (stored, _child) = node.child()
         assert isinstance(stored, mod.Items.Label), type(stored)
         assert stored == expected
@@ -725,7 +731,7 @@ class TestMultiLabelCanonicalNormalization:
         mod = _mod(backend)
         other = rust_cst if backend == "py" else py_cst
         node = mod.Items()
-        node.append(_span(backend, 0, 1), getattr(other.Items.Label, member))
+        node.append(self._child_for(mod, backend, member), getattr(other.Items.Label, member))
         (stored, _child) = node.child()
         assert isinstance(stored, mod.Items.Label), type(stored)
         assert stored == getattr(mod.Items.Label, member)
@@ -769,7 +775,7 @@ class TestForeignChildrenAreRejected:
     def test_other_backends_child_on_replace_at(self, backend: str) -> None:
         other = rust_cst if backend == "py" else py_cst
         node = _mod(backend).Items()
-        node.append_item(_span(backend, 0, 1))
+        node.append_no_ws(_span(backend, 0, 1))
         with pytest.raises(TypeError, match="unsupported child type"):
             node.replace_at(0, other.Item())
 
@@ -824,23 +830,62 @@ class TestAppendFamilyChildValidation:
             node.append_item(other.Item())
         assert len(node.children) == 0
 
-    def test_per_label_append_stores_an_off_type_known_child(self, backend: str) -> None:
-        """TODO(cst-per-label-mutator-narrow-child-check): pins the gap, invert when it closes.
+    def test_per_label_append_rejects_an_off_type_known_child(self, backend: str) -> None:
+        """``Trivia`` is a class ``Items`` can hold, but never under ``ITEM``.
 
-        ``append_item`` validates against the node-wide child union, not the ``item`` label's own
-        child annotation, so a ``Trivia`` — a class ``Items`` can hold, but never under ``ITEM`` —
-        is accepted, and ``children_item()`` then hands it back under an ``Item`` annotation.  The
-        assertions are on the child's identity, not on a count: the defect is the type confusion,
-        so an accessor that started filtering by kind must fail here.
+        A labelled write checks the label's own child type set, so the typed readers, which filter
+        by label alone, can never hand a ``Trivia`` back under an ``Item`` annotation.  Same
+        message as an unknown type.
         """
         mod = _mod(backend)
         node = mod.Items()
-        node.append_item(mod.Trivia())  # type: ignore[arg-type]
-        assert len(node.children) == 1
-        assert node.children[0][0] == mod.Items.Label.ITEM
-        assert node.children[0][1].kind == mod.NodeKind.TRIVIA
-        (item,) = node.children_item()
-        assert item.kind == mod.NodeKind.TRIVIA
+        trivia = mod.Trivia()
+        assert_rejected(node, lambda: node.append_item(trivia), trivia)  # type: ignore[arg-type]
+
+    def test_per_label_extend_rejects_an_off_type_known_child(self, backend: str) -> None:
+        mod = _mod(backend)
+        node = mod.Items()
+        trivia = mod.Trivia()
+        assert_rejected(node, lambda: node.extend_item([trivia]), trivia)  # type: ignore[list-item]
+
+    def test_per_label_writes_reject_a_span_under_a_node_typed_label(self, backend: str) -> None:
+        mod = _mod(backend)
+        node = mod.Items()
+        span = _span(backend, 0, 1)
+        assert_rejected(node, lambda: node.append_item(span), span)  # type: ignore[arg-type]
+        assert_rejected(node, lambda: node.extend_item([span]), span)  # type: ignore[list-item]
+
+    def test_per_label_append_rejects_a_node_under_a_span_label(self, backend: str) -> None:
+        mod = _mod(backend)
+        node = mod.Items()
+        item = mod.Item()
+        assert_rejected(node, lambda: node.append_no_ws(item), item)  # type: ignore[arg-type]
+
+    @pytest.mark.parametrize("mutator", _LABELED_MUTATORS)
+    def test_generic_mutators_with_a_label_check_its_own_type(self, backend: str, mutator: str) -> None:
+        """A label given to a generic mutator narrows the child check exactly as ``append_<l>`` does."""
+        mod = _mod(backend)
+        node = mod.Items()
+        item = mod.Item()
+        node.append_item(item)
+        label = mod.Items.Label.ITEM
+        trivia = mod.Trivia()
+        span = _span(backend, 0, 1)
+        calls = {
+            "append": (lambda: node.append(trivia, label), trivia),
+            "extend": (lambda: node.extend([trivia], label), trivia),
+            "insert": (lambda: node.insert(0, span, label), span),
+            "replace_at": (lambda: node.replace_at(0, trivia, label), trivia),
+        }
+        call, rejected = calls[mutator]
+        assert_rejected(node, call, rejected)
+
+    def test_an_unlabelled_append_keeps_the_node_wide_check(self, backend: str) -> None:
+        mod = _mod(backend)
+        node = mod.Items()
+        node.append(mod.Trivia())
+        node.extend([mod.Trivia(), _span(backend, 0, 1)])
+        assert [label for label, _child in node.children] == [None, None, None]
 
     def test_extend_rejects_junk(self, backend: str) -> None:
         node = _mod(backend).Items()
@@ -848,22 +893,28 @@ class TestAppendFamilyChildValidation:
             node.extend(["not_a_span"])  # type: ignore[list-item]
         assert len(node.children) == 0
 
-    def test_extend_is_atomic_on_a_mid_sequence_failure(self, backend: str) -> None:
-        """A rejected element leaves the node exactly as it was: no partial extend."""
+    @pytest.mark.parametrize("bad", ["junk", "trivia"])
+    def test_extend_is_atomic_on_a_mid_sequence_failure(self, backend: str, bad: str) -> None:
+        """A rejected element leaves the node exactly as it was: no partial extend.
+
+        The prefix is valid under the label, so the failure is genuinely mid-sequence — both for
+        an unknown type and for a known type the label does not admit.
+        """
         mod = _mod(backend)
         node = mod.Items()
-        node.append_item(_span(backend, 0, 1))
-        good = _span(backend, 1, 2)
-        with pytest.raises(TypeError, match="unsupported child type"):
-            node.extend([good, "not_a_span"], mod.Items.Label.ITEM)  # type: ignore[list-item]
+        first = mod.Item()
+        node.append_item(first)
+        rejected = "not_a_span" if bad == "junk" else mod.Trivia()
+        assert_rejected(node, lambda: node.extend([mod.Item(), rejected], mod.Items.Label.ITEM), rejected)
         assert len(node.children) == 1
-        assert _span_eq(node.children[0][1], _span(backend, 0, 1))
+        assert node.children[0][0] == mod.Items.Label.ITEM
+        assert node.children[0][1] == first
 
     def test_per_label_extend_is_atomic_on_a_mid_sequence_failure(self, backend: str) -> None:
-        node = _mod(backend).Items()
-        good = _span(backend, 1, 2)
-        with pytest.raises(TypeError, match="unsupported child type"):
-            node.extend_item([good, "not_a_span"])  # type: ignore[list-item]
+        mod = _mod(backend)
+        node = mod.Items()
+        span = _span(backend, 1, 2)
+        assert_rejected(node, lambda: node.extend_item([mod.Item(), span]), span)  # type: ignore[list-item]
         assert len(node.children) == 0
 
     def test_extend_children_rejects_foreign_backend_other(self, backend: str) -> None:
@@ -878,7 +929,7 @@ class TestAppendFamilyChildValidation:
         other = rust_cst if backend == "py" else py_cst
         node = _mod(backend).Items()
         donor = other.Items()
-        donor.append_item(_span("py" if backend == "rust" else "rust", 0, 1))
+        donor.append_no_ws(_span("py" if backend == "rust" else "rust", 0, 1))
         with pytest.raises(TypeError) as exc_info:
             node.extend_children(donor)
         if backend == "py":
@@ -902,10 +953,10 @@ class TestAppendFamilyChildValidation:
         mod = _mod(backend)
         node = mod.Items()
         donor = mod.Items()
-        donor.append_item(_span(backend, 0, 1))
+        donor.append_no_ws(_span(backend, 0, 1))
         node.extend_children(donor)
         assert len(node.children) == 1
-        assert node.children[0][0] == mod.Items.Label.ITEM
+        assert node.children[0][0] == mod.Items.Label.NO_WS
 
 
 class TestExtendLengthHintIsNotTrusted:
@@ -955,6 +1006,9 @@ class TestExtendLengthHintIsNotTrusted:
 # ---------------------------------------------------------------------------
 # Cross-backend message parity (exact equality)
 # ---------------------------------------------------------------------------
+
+
+_NATIVE_SPAN_NAME = f"{NativeSpan.__module__}.{NativeSpan.__qualname__}"
 
 
 class TestMessageParity:
@@ -1055,6 +1109,25 @@ class TestMessageParity:
         py_msg = self._try_and_capture(TypeError, lambda: py_node.extend_item(["not_a_span"]))  # type: ignore
         emb_msg = self._try_and_capture(TypeError, lambda: emb_node.extend_item(["not_a_span"]))  # type: ignore
         assert py_msg == emb_msg
+
+    def test_native_span_under_a_node_typed_label_message_parity(self) -> None:
+        """The one value both backends reject through the per-label check rather than node-wide.
+
+        A native Span is a known child type of ``Items`` on both — the Python backend admits it
+        node-wide, and it *is* the Rust backend's Span — but ``item`` holds only ``Item`` nodes.
+        """
+        py_node = py_cst.Items()
+        emb_node = rust_cst.Items()
+        py_msg = self._try_and_capture(TypeError, lambda: py_node.append_item(NativeSpan(0, 1)))  # type: ignore
+        emb_msg = self._try_and_capture(TypeError, lambda: emb_node.append_item(NativeSpan(0, 1)))  # type: ignore
+        assert py_msg == emb_msg == f"Items: unsupported child type {_NATIVE_SPAN_NAME}"
+
+    def test_native_span_under_a_node_typed_generic_label_message_parity(self) -> None:
+        py_node = py_cst.Items()
+        emb_node = rust_cst.Items()
+        py_msg = self._try_and_capture(TypeError, lambda: py_node.append(NativeSpan(0, 1), py_cst.Items.Label.ITEM))
+        emb_msg = self._try_and_capture(TypeError, lambda: emb_node.append(NativeSpan(0, 1), rust_cst.Items.Label.ITEM))
+        assert py_msg == emb_msg == f"Items: unsupported child type {_NATIVE_SPAN_NAME}"
 
     def test_remove_at_large_positive_message_parity(self) -> None:
         big = 10**25
@@ -1169,6 +1242,15 @@ class TestSpanHandInPerBackend:
         node.extend_name([NativeSpan(3, 4)])
         assert [(c.start, c.end) for _label, c in node.children] == [(0, 1), (1, 2), (2, 3), (3, 4)]
 
+    def test_python_per_label_check_refuses_a_native_span_under_a_node_typed_label(self) -> None:
+        """The native-Span miss path is only reached from arms that admit a Span."""
+        node = py_cst.Items()
+        span = NativeSpan(0, 1)
+        assert_rejected(node, lambda: node.append_item(span), span)  # type: ignore[arg-type]
+        assert_rejected(node, lambda: node.extend_item([span]), span)  # type: ignore[list-item]
+        node.append_no_ws(span)
+        assert len(node.children) == 1
+
     def test_python_append_family_accepts_a_terminalsrc_span(self) -> None:
         node = py_cst.Identifier()
         node.append(terminalsrc.Span(0, 1), py_cst.Identifier.Label.NAME)
@@ -1203,9 +1285,8 @@ class TestItemsMultiLabel:
         """insert with different labels stores each label correctly."""
         mod = _mod(backend)
         node = mod.Items()
-        s0 = _span(backend, 0, 1)
         s1 = _span(backend, 1, 2)
-        node.insert(0, s0, mod.Items.Label.ITEM)
+        node.insert(0, mod.Item(), mod.Items.Label.ITEM)
         node.insert(1, s1, mod.Items.Label.NO_WS)
         ch = node.children
         assert len(ch) == 2
@@ -1218,7 +1299,7 @@ class TestItemsMultiLabel:
         node = mod.Items()
         s0 = _span(backend, 0, 1)
         s1 = _span(backend, 1, 2)
-        node.append_item(s0)
+        node.append_ws_allowed(s0)
         node.append_no_ws(s1)
         lbl, child = node.remove_at(1)
         assert lbl == mod.Items.Label.NO_WS
@@ -1230,7 +1311,7 @@ class TestItemsMultiLabel:
         node = mod.Items()
         s_old = _span(backend, 0, 1)
         s_new = _span(backend, 5, 6)
-        node.append_item(s_old)
+        node.append_no_ws(s_old)
         node.replace_at(0, s_new, mod.Items.Label.WS_ALLOWED)
         ch = node.children
         assert ch[0][0] == mod.Items.Label.WS_ALLOWED

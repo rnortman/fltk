@@ -309,7 +309,8 @@ Underscore-only labels are rejected (`gsm.py:305-320`), for the same reason as r
 Each label produces, on the node class, a nested `Label` enum member and a **quintet of
 accessor methods** (`_emit_label_quintet`, `gsm2tree.py:820-867`):
 
-- `append_<label>(child)` and `extend_<label>(children)` — mutators.
+- `append_<label>(child)` and `extend_<label>(children)` — mutators, validating each child
+  against the label's own child type (§10.4).
 - `children_<label>() -> Iterator[T]` — every child carrying that label. The returned iterator
   is **fresh, single-pass, and over a snapshot taken at call time**, identically on both
   backends: a second pass over the same object is empty, two calls give two independent
@@ -675,7 +676,7 @@ about child types, and the named ones enforce cross-backend-parity ordering:
 - **Every** mutator validates its child on both backends: `append`, `extend`, `insert`,
   `replace_at` and the per-label `append_<label>` / `extend_<label>` reject an unknown or
   foreign-backend child with `TypeError: <Class>: unsupported child type <module>.<qualname>`
-  (`gsm2tree.py`, `_check_child_type_for_mutators`). The rejected type is module-qualified because
+  (`gsm2tree.py`, `_check_child_type_for_mutators` and `_check_child_type_for_label`). The rejected type is module-qualified because
   both backends export their node classes under the same Python names; code matching on the older
   unqualified wording (`unsupported child type Item`) needs updating. The native `Span` is
   admitted lazily, on the rejection path, so the module stays pure-Python-importable without
@@ -687,10 +688,16 @@ about child types, and the named ones enforce cross-backend-parity ordering:
   annotated `SpanProtocol`, but a third-party structural implementation of that protocol is
   refused — children are backend-native, and the Rust backend has nowhere to put a foreign span.
   Convert to one of the two span classes before handing a span to a mutator.
-- The check is against the **node-wide** child union, not the label's own child type, so
-  `append_<label>` accepts any class the node can hold and stores it under that label
-  (`TODO(cst-per-label-mutator-narrow-child-check)`); the Rust per-label mutators have the same
-  ceiling. Only outright foreign or unknown types are refused there.
+- A labelled write — `append_<label>` / `extend_<label>`, and `append` / `extend` / `insert`
+  / `replace_at` given a `label=` — validates the child against **that label's own child
+  type set** (`gsm2tree.py`, `_check_child_type_for_label`; the Rust handle's
+  `py_label_admits_child`), with the same `unsupported child type` message as an unknown
+  type. A child stored under a label therefore always has one of the types the label's
+  accessors are annotated with, which is why the typed readers filter by label alone. An
+  unlabelled write (`label=None`) checks the node-wide union. From Python, the one unchecked
+  path is the Python dataclass's raw `children` list; on the Rust backend, Rust code writing the
+  native data struct directly (`push_child`, `insert_child`, `replace_child`, a union label's
+  `append_<label>`) takes any child variant and is not label-checked either.
 - `extend` and `extend_<label>` validate the whole sequence before storing any of it, so a
   rejected element leaves the node unmutated on both backends.
 - Every mutator validates **label, then child, then index** (where it has one), on both backends.
@@ -728,7 +735,8 @@ change back goes through the node's mutators.
 The concrete mutators (`append`, `extend`, `insert`, `replace_at`, `extend_children`, and the
 per-label `append_<label>` / `extend_<label>`) accept the protocol node types and
 `LabelProtocol` labels, so either backend's values type-check as inputs. The annotations are not
-what keeps a foreign value out of the tree — the runtime checks are: a foreign-backend child is a
+what keeps a foreign value, or a value under a label it does not fit, out of the tree — the
+runtime checks are: a foreign-backend child is a
 `TypeError` from every mutator on both backends (§10.4). Node-typed accessor, `child()` and
 `remove_at()` return types stay concrete on both backends — the Rust extension's `.pyi` declares
 them as its own stub-local classes. Label-typed positions do not: `variant()` is annotated

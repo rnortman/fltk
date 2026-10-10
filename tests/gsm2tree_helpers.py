@@ -113,6 +113,15 @@ def make_rule_ref_grammar(*, labeled: bool) -> gsm.Grammar:
     return gsm.Grammar(rules=(foo, ref), identifiers={"foo": foo, "baz": ref})
 
 
+# ``mix.item`` = {Num, Span} sits strictly inside the node-wide {Name, Num, Span}: a label whose set
+# holds a node class and a Span, on a node with a type the label refuses.
+MIXED_SPAN_LABEL_GRAMMAR = """\
+num := value:/[0-9]+/ ;
+name := value:/[a-z]+/ ;
+mix := item:num | item:/[!@#$]+/ | other:name ;
+"""
+
+
 def make_generator(grammar: gsm.Grammar) -> CstGenerator:
     """Construct a CstGenerator with default context and Python builtins module."""
     return CstGenerator(grammar=grammar, py_module=pyreg.Builtins, context=create_default_context())

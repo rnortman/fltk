@@ -345,21 +345,28 @@ class RustCstGenerator:
         cached = self._child_variants_cache.get(rule_name)
         if cached is not None:
             return cached
-        model = self._py_gen.rule_models[rule_name]
-        child_class_names: list[str] = []
-        has_span = False
-        for model_type in model.types:
-            if isinstance(model_type, str):
-                child_class_names.append(self._py_gen.class_name_for_rule_node(model_type))
-            else:
-                # TypeKey — must be the Span key
-                has_span = True
         # Pure function of the immutable rule model, so memoize: callers (here and in the
         # unparser generator via num_child_variants) re-request the same rule's variants
         # repeatedly. Callers treat the list as read-only.
-        result = (sorted(child_class_names), has_span)
+        result = self._child_variants_for_types(self._py_gen.rule_models[rule_name].types)
         self._child_variants_cache[rule_name] = result
         return result
+
+    def _child_variants_for_types(self, model_types: Iterable[ModelType]) -> tuple[list[str], bool]:
+        """Return (sorted_child_class_names, has_span_child) for any set of model types.
+
+        The one mapping from a model type to its child-enum variant: a rule name is that rule's
+        node class, any other key is the Span variant.
+        """
+        child_class_names: set[str] = set()
+        has_span = False
+        for model_type in model_types:
+            if isinstance(model_type, str):
+                child_class_names.add(self._py_gen.class_name_for_rule_node(model_type))
+            else:
+                # TypeKey — must be the Span key
+                has_span = True
+        return sorted(child_class_names), has_span
 
     def generate_pyi(self, protocol_module: str) -> str:
         """Return a complete .pyi stub for the generated Rust extension as a string.
@@ -663,6 +670,24 @@ class RustCstGenerator:
             "/// and let the vec grow normally beyond this point.\n"
             '#[cfg(feature = "python")]\n'
             "const EXTEND_CAPACITY_HINT_CAP: usize = 1024;\n"
+            "\n"
+            # The one home of the rejected-child message, shared by node-wide extraction and the
+            # per-label check.  The rejected type is qualified with its module: both backends export
+            # their node classes under the same Python names, so a bare type name would render a
+            # cross-backend mix-up as "Grammar: unsupported child type Grammar".  Both backends use
+            # module.qualname unconditionally (no builtins stripping) so their messages agree.
+            "/// The `TypeError` for a child a mutator refuses: `<Class>: unsupported child type\n"
+            "/// <module>.<qualname>`.\n"
+            '#[cfg(feature = "python")]\n'
+            "fn unsupported_child_type_error(class_name: &str, obj: &Bound<'_, pyo3::PyAny>) -> pyo3::PyErr {\n"
+            "    let rejected_type = obj.get_type();\n"
+            "    match (rejected_type.module(), rejected_type.qualname()) {\n"
+            "        (Ok(module), Ok(qualname)) => {\n"
+            '            PyTypeError::new_err(format!("{class_name}: unsupported child type {module}.{qualname}"))\n'
+            "        }\n"
+            "        (Err(e), _) | (_, Err(e)) => e,\n"
+            "    }\n"
+            "}\n"
             "\n"
         )
 
@@ -1130,16 +1155,7 @@ class RustCstGenerator:
             # Degenerate case: no known child types — always error.
             # Use the underscore-prefixed param names chosen above to suppress unused-variable warnings.
             lines.append("        let _ = (_py, _span_type);")
-        # Qualify the rejected type with its module: both backends export their node classes under
-        # the same Python names, so a bare type name renders a cross-backend mix-up as
-        # "Grammar: unsupported child type Grammar".  Both backends must use module.qualname
-        # unconditionally (no builtins stripping) so their messages agree.
-        lines.append("        let rejected_type = obj.get_type();")
-        lines.append("        Err(pyo3::exceptions::PyTypeError::new_err(format!(")
-        lines.append(f'            "{class_name}: unsupported child type {{}}.{{}}",')
-        lines.append("            rejected_type.module()?,")
-        lines.append("            rejected_type.qualname()?")
-        lines.append("        )))")
+        lines.append(f'        Err(unsupported_child_type_error("{class_name}", obj))')
         lines.append("    }")
         lines.append("}")
         lines.append("")
@@ -1407,6 +1423,7 @@ class RustCstGenerator:
         lines.append("    }")
         if labels:
             lines.extend(self._children_snapshot_helper(class_name))
+            lines.extend(self._py_label_admits_child_fn(class_name, rule_name, labels))
         lines.append("}")
         lines.append("")
 
@@ -1566,6 +1583,7 @@ class RustCstGenerator:
             "        };",
             "        let span_type = get_span_type(py)?;",
             f"        let native_child = {enum_name}::extract_from_pyobject(py, child, &span_type)?;",
+            *self._optional_label_admits_check(class_name, labels, "child", "        "),
             "        self.inner.write().children.push((native_label, native_child));",
             "        Ok(())",
             "    }",
@@ -1650,6 +1668,7 @@ class RustCstGenerator:
             "        for child_result in iter {",
             "            let child = child_result?;",
             f"            let native_child = {enum_name}::extract_from_pyobject(py, &child, &span_type)?;",
+            *self._optional_label_admits_check(class_name, labels, "&child", "            "),
             "            pending.push((native_label.clone(), native_child));",
             "        }",
             "        self.inner.write().children.extend(pending);",
@@ -1775,6 +1794,7 @@ class RustCstGenerator:
             "        };",
             "        let span_type = get_span_type(py)?;",
             f"        let native_child = {enum_name}::extract_from_pyobject(py, child, &span_type)?;",
+            *self._optional_label_admits_check(class_name, labels, "child", "        "),
             "        // Index normalization via operator.index (PyNumber_Index semantics).",
             "        // This raises TypeError (not AttributeError) for non-indexable inputs, matching Python's",
             "        // operator.index contract. Must be done BEFORE taking any lock.",
@@ -1905,6 +1925,7 @@ class RustCstGenerator:
             "        };",
             "        let span_type = get_span_type(py)?;",
             f"        let native_child = {enum_name}::extract_from_pyobject(py, child, &span_type)?;",
+            *self._optional_label_admits_check(class_name, labels, "child", "        "),
             "        // Capture the caller's original string representation BEFORE normalization.",
             "        let orig_str = index.str()?.to_string_lossy().into_owned();",
             "        // Normalize via operator.index: raises TypeError for non-indexable inputs.",
@@ -2510,7 +2531,8 @@ class RustCstGenerator:
 
         The count check reproduces the ``child_<lbl>`` / ``maybe_<lbl>`` pymethod messages; the
         text lookup reproduces ``Span.text_or_raise``.  A child of the wrong variant stored under
-        the label is only reachable through the untyped mutators and raises ``TypeError``.
+        the label raises ``TypeError``; every Python-facing labelled write refuses one, so only
+        Rust code writing the data struct directly can store it.
         """
         label_enum_name = self._label_enum_rust_name(class_name)
         rust_variant = _rust_variant_name(label)
@@ -2630,20 +2652,96 @@ class RustCstGenerator:
             "    }",
         ]
 
+    def _py_label_admits_child_fn(self, class_name: str, rule_name: str, labels: list[str]) -> list[str]:
+        """Emit the handle's `py_label_admits_child(label, child)` predicate.
+
+        Whether `child` may be stored under `label`: the label's own child type set, which every
+        Python-facing labelled write checks after node-wide extraction so the typed readers can
+        trust the label alone.  Labels with the same set share an arm; a label admitting every
+        variant gets `true`.  No emitted form has a wildcard or a `matches!` that cannot fail, so
+        nothing trips `-D warnings`: when every label admits every variant the body is `true`,
+        and when all labels share one set the body is that set's expression with no `match`.
+        """
+        label_enum_name = self._label_enum_rust_name(class_name)
+        enum_name = self.child_enum_name(class_name)
+        child_classes, has_span = self._child_variants_for_rule(rule_name)
+        node_variants = (["Span"] if has_span else []) + child_classes
+        model = self._py_gen.rule_models[rule_name]
+
+        groups: dict[str, list[str]] = {}
+        for label in labels:
+            label_classes, label_has_span = self._child_variants_for_types(model.labels[label])
+            admitted = {*label_classes, *(["Span"] if label_has_span else [])}
+            if admitted >= set(node_variants):
+                expr = "true"
+            else:
+                pattern = " | ".join(f"{enum_name}::{v}(_)" for v in node_variants if v in admitted)
+                expr = f"matches!(child, {pattern})"
+            groups.setdefault(expr, []).append(label)
+
+        doc = [
+            "",
+            "    /// Whether `child` may be stored under `label`: the label's own child type set, which the",
+            "    /// Python-facing labelled writes enforce so the typed readers can trust the label alone.",
+        ]
+        if len(groups) == 1:
+            ((expr, _),) = groups.items()
+            child_param = "_child" if expr == "true" else "child"
+            return [
+                *doc,
+                f"    fn py_label_admits_child(_label: &{label_enum_name}, {child_param}: &{enum_name}) -> bool {{",
+                f"        {expr}",
+                "    }",
+            ]
+        lines = [
+            *doc,
+            f"    fn py_label_admits_child(label: &{label_enum_name}, child: &{enum_name}) -> bool {{",
+            "        match label {",
+        ]
+        for expr, group_labels in groups.items():
+            pattern = " | ".join(f"{label_enum_name}::{_rust_variant_name(lbl)}" for lbl in group_labels)
+            lines.append(f"            {pattern} => {expr},")
+        lines.extend(["        }", "    }"])
+        return lines
+
+    @staticmethod
+    def _label_admits_check(class_name: str, label_expr: str, child_expr: str, indent: str) -> list[str]:
+        """The per-label rejection a labelled write runs right after node-wide extraction."""
+        return [
+            f"{indent}if !Self::py_label_admits_child({label_expr}, &native_child) {{",
+            f'{indent}    return Err(unsupported_child_type_error("{class_name}", {child_expr}));',
+            f"{indent}}}",
+        ]
+
+    @staticmethod
+    def _optional_label_admits_check(class_name: str, labels: list[str], child_expr: str, indent: str) -> list[str]:
+        """The per-label rejection for a generic mutator: runs only when a label was given."""
+        if not labels:
+            return []
+        return [
+            f"{indent}if native_label",
+            f"{indent}    .as_ref()",
+            f"{indent}    .is_some_and(|lbl| !Self::py_label_admits_child(lbl, &native_child))",
+            f"{indent}{{",
+            f'{indent}    return Err(unsupported_child_type_error("{class_name}", {child_expr}));',
+            f"{indent}}}",
+        ]
+
     def _per_label_methods(self, class_name: str, label: str, child_enum_name: str) -> list[str]:
         label_enum_name = self._label_enum_rust_name(class_name)
         rust_variant = _rust_variant_name(label)
 
         lines: list[str] = []
 
-        # TODO(cst-per-label-mutator-narrow-child-check): extraction goes through the node-wide
-        # child enum, so a wrong-but-known class is accepted and stored under this label.
+        own_label = f"&{label_enum_name}::{rust_variant}"
+
         # append_<label>: push one child with the given label
         lines.extend(
             [
                 f"    fn append_{label}(&self, py: Python<'_>, child: &Bound<'_, pyo3::PyAny>) -> pyo3::PyResult<()> {{",  # noqa: E501
                 "        let span_type = get_span_type(py)?;",
                 f"        let native_child = {child_enum_name}::extract_from_pyobject(py, child, &span_type)?;",
+                *self._label_admits_check(class_name, own_label, "child", "        "),
                 f"        self.inner.write().children.push((Some({label_enum_name}::{rust_variant}), native_child));",
                 "        Ok(())",
                 "    }",
@@ -2664,6 +2762,7 @@ class RustCstGenerator:
                 "        for child_result in iter {",
                 "            let child = child_result?;",
                 f"            let native_child = {child_enum_name}::extract_from_pyobject(py, &child, &span_type)?;",
+                *self._label_admits_check(class_name, own_label, "&child", "            "),
                 f"            pending.push((Some({label_enum_name}::{rust_variant}), native_child));",
                 "        }",
                 "        self.inner.write().children.extend(pending);",

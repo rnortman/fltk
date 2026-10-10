@@ -36,6 +36,7 @@ py_library(
     name = "test_support",
     srcs = [
         "cargo_scan.py",
+        "cst_mutator_helpers.py",
         "fegen_ast_fixture.py",
         "fixture_ast_layer.py",
         "gsm2tree_helpers.py",
@@ -426,6 +427,7 @@ _TESTS = {
         "data": ["//:fegen_test_data"],
         "deps": _RUST_PARSER_FIXTURE,
     },
+    "test_cst_label_child_types.py": {"deps": _RUST_PARSER_FIXTURE + [":test_support"]},
     "test_cst_mutators_identity.py": {"deps": _PHASE4_ROUNDTRIP_CST},
     "test_cst_mutators_parity.py": {"deps": _FEGEN_RUST_CST + [":test_support"]},
     "test_doc_guide_cli_examples.py": {

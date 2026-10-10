@@ -301,19 +301,27 @@ class TestFoldLinkSpansOverNativeSpans:
 
 
 class TestWrongShapedNodes:
-    """The error paths are backend-independent: same constructor, same message, same span.
+    """The AST module's error paths over trees each backend can build.
 
-    The wrong-shape cases are reachable only from a hand-built or mutated CST — the parser never
-    puts a child of the wrong kind under a label — so each mutates a parsed node through the
-    backend's own mutators.  The duplicate-key case is the one a parse alone reaches.
+    A child of the wrong kind under a label is reachable only through the Python backend's raw
+    children list — the parser never produces one, and every labelled write refuses it on both
+    backends — so those cases convert a Python tree and pin the Rust tree's refusal of the write;
+    they compare no message across backends.  The cases both backends reach (an emptied node, a
+    duplicate key) pin the same constructor, message and span from either backend's tree.
     """
 
     @staticmethod
     def _swap_child(node: typing.Any, index: int, child: typing.Any) -> typing.Any:
-        """Replace one child in place, keeping the label already on it."""
-        label = node.children[index][0]
-        node.replace_at(index, child, label)
+        """Replace one child of a Python tree through the raw list, keeping its label."""
+        node.children[index] = (node.children[index][0], child)
         return node
+
+    @staticmethod
+    def _assert_swap_refused(node: typing.Any, index: int, child: typing.Any) -> None:
+        """The labelled write that would build the same wrong-kind tree on the Rust backend."""
+        label = node.children[index][0]
+        with pytest.raises(TypeError, match="unsupported child type"):
+            node.replace_at(index, child, label)
 
     def _raises(self, layer: Layer, rule: str, node: typing.Any) -> astrt.AstError:
         with pytest.raises(astrt.AstError) as excinfo:
@@ -325,10 +333,7 @@ class TestWrongShapedNodes:
         from_python = self._raises(
             layer, "atom", self._swap_child(layer.py_cst("atom", "42"), 0, layer.py_cst("name", "zz"))
         )
-        from_rust = self._raises(
-            layer, "atom", self._swap_child(layer.rust_cst("atom", "42"), 0, layer.rust_cst("name", "zz"))
-        )
-        assert str(from_python) == str(from_rust)
+        self._assert_swap_refused(layer.rust_cst("atom", "42"), 0, layer.rust_cst("name", "zz"))
         assert "no alternative matches" in str(from_python)
 
     def test_a_product_whose_label_holds_a_child_of_the_wrong_kind(self, layer: Layer) -> None:
@@ -336,10 +341,7 @@ class TestWrongShapedNodes:
         from_python = self._raises(
             layer, "entry", self._swap_child(layer.py_cst("entry", "a = 1 ;"), 0, layer.py_cst("atom", "9"))
         )
-        from_rust = self._raises(
-            layer, "entry", self._swap_child(layer.rust_cst("entry", "a = 1 ;"), 0, layer.rust_cst("atom", "9"))
-        )
-        assert str(from_python) == str(from_rust)
+        self._assert_swap_refused(layer.rust_cst("entry", "a = 1 ;"), 0, layer.rust_cst("atom", "9"))
         assert "unexpected kind" in str(from_python)
 
     def test_a_missing_required_child(self, layer: Layer) -> None:

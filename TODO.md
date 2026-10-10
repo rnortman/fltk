@@ -192,22 +192,6 @@ generated-type change for every `transparent;` rule that erases to text and has 
 against that break for out-of-tree consumers. Location: `fltk/fegen/ast_model.py`
 (`_distinguishable`).
 
-## `cst-per-label-mutator-narrow-child-check`
-
-`append_<label>` / `extend_<label>` are annotated with the label's own child type but validate
-against the *node-wide* child union, on both backends. On `Items`, `append_item(trivia_node)` is a
-pyright error and a runtime success: the `Trivia` is stored under `Items.Label.ITEM`, comes back
-out of `children_item()` typed as `Item`, and is silently skipped by the native Rust data-struct
-accessors, which do match on the child variant. Deferred rather than fixed because the Python side
-alone is not the ceiling: the Rust per-label mutators extract through the node-wide child enum
-(`extract_from_pyobject`), so closing this means either a per-label extraction path in the Rust
-emitter or a per-label allowed-class tuple threaded through both emitters, plus a decision about
-what the two backends' typed readers should do with an off-type child already in a tree. Pinned by
-`test_per_label_append_stores_an_off_type_known_child` in `tests/test_cst_mutators_parity.py` —
-invert that test when this closes. Location: `fltk/fegen/gsm2tree.py` (`concrete_body_for`'s
-`append`/`extend` branches, `_check_child_type_for_mutators`), `fltk/fegen/gsm2tree_rs.py`
-(`_per_label_methods`, `extract_from_pyobject`).
-
 ## `ast-synthesised-literal-spans`
 
 `to_cst()` on a terminal-shaped rule re-matches the node's text and hands each captured group its

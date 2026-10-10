@@ -58,7 +58,11 @@ class Grammar:
             if label is None or isinstance(label, Grammar.Label)
             else self._check_label_type_for_mutators(label, "append")
         )
-        checked_child = self._check_child_type_for_mutators(child)
+        checked_child = (
+            self._check_child_type_for_mutators(child)
+            if checked_label is None
+            else self._check_child_type_for_label(checked_label, child)
+        )
         self.children.append((checked_label, checked_child))
 
     def extend(
@@ -71,7 +75,12 @@ class Grammar:
             if label is None or isinstance(label, Grammar.Label)
             else self._check_label_type_for_mutators(label, "extend")
         )
-        self.children.extend([(checked_label, self._check_child_type_for_mutators(child)) for child in children])
+        if checked_label is None:
+            self.children.extend([(None, self._check_child_type_for_mutators(child)) for child in children])
+        else:
+            self.children.extend(
+                [(checked_label, self._check_child_type_for_label(checked_label, child)) for child in children]
+            )
 
     def extend_children(self, other: _cstp.Grammar) -> None:
         if not isinstance(other, Grammar):
@@ -105,6 +114,12 @@ class Grammar:
         msg = f"{_cn}.{method}: label argument is not a {_cn}_Label; got {type(label).__name__}"
         raise TypeError(msg)
 
+    def _check_child_type_for_label(self, _label: Grammar.Label, child: _cstp.Rule | _cstp.Trivia) -> Rule | Trivia:
+        if isinstance(child, Rule):
+            return child
+        msg = f"Grammar: unsupported child type {_type_name_for_error(child)}"
+        raise TypeError(msg)
+
     def insert(
         self,
         index: int,
@@ -116,7 +131,11 @@ class Grammar:
             if label is None or isinstance(label, Grammar.Label)
             else self._check_label_type_for_mutators(label, "insert")
         )
-        checked_child = self._check_child_type_for_mutators(child)
+        checked_child = (
+            self._check_child_type_for_mutators(child)
+            if checked_label is None
+            else self._check_child_type_for_label(checked_label, child)
+        )
         idx = operator.index(index)
         n = len(self.children)
         if idx < 0:
@@ -145,7 +164,11 @@ class Grammar:
             if label is None or isinstance(label, Grammar.Label)
             else self._check_label_type_for_mutators(label, "replace_at")
         )
-        checked_child = self._check_child_type_for_mutators(child)
+        checked_child = (
+            self._check_child_type_for_mutators(child)
+            if checked_label is None
+            else self._check_child_type_for_label(checked_label, child)
+        )
         idx = operator.index(index)
         n = len(self.children)
         norm = idx + n if idx < 0 else idx
@@ -161,10 +184,12 @@ class Grammar:
         return [child for (lbl, child) in self.children if lbl == label]
 
     def append_rule(self, child: _cstp.Rule) -> None:
-        self.children.append((Grammar.Label.RULE, self._check_child_type_for_mutators(child)))
+        self.children.append((Grammar.Label.RULE, self._check_child_type_for_label(Grammar.Label.RULE, child)))
 
     def extend_rule(self, children: typing.Iterable[_cstp.Rule]) -> None:
-        self.children.extend([(Grammar.Label.RULE, self._check_child_type_for_mutators(child)) for child in children])
+        self.children.extend(
+            [(Grammar.Label.RULE, self._check_child_type_for_label(Grammar.Label.RULE, child)) for child in children]
+        )
 
     def children_rule(self) -> typing.Iterator[Rule]:
         return iter(typing.cast("list[Rule]", self._children_snapshot(Grammar.Label.RULE)))
@@ -227,7 +252,11 @@ class Rule:
             if label is None or isinstance(label, Rule.Label)
             else self._check_label_type_for_mutators(label, "append")
         )
-        checked_child = self._check_child_type_for_mutators(child)
+        checked_child = (
+            self._check_child_type_for_mutators(child)
+            if checked_label is None
+            else self._check_child_type_for_label(checked_label, child)
+        )
         self.children.append((checked_label, checked_child))
 
     def extend(
@@ -240,7 +269,12 @@ class Rule:
             if label is None or isinstance(label, Rule.Label)
             else self._check_label_type_for_mutators(label, "extend")
         )
-        self.children.extend([(checked_label, self._check_child_type_for_mutators(child)) for child in children])
+        if checked_label is None:
+            self.children.extend([(None, self._check_child_type_for_mutators(child)) for child in children])
+        else:
+            self.children.extend(
+                [(checked_label, self._check_child_type_for_label(checked_label, child)) for child in children]
+            )
 
     def extend_children(self, other: _cstp.Rule) -> None:
         if not isinstance(other, Rule):
@@ -276,6 +310,18 @@ class Rule:
         msg = f"{_cn}.{method}: label argument is not a {_cn}_Label; got {type(label).__name__}"
         raise TypeError(msg)
 
+    def _check_child_type_for_label(
+        self, label: Rule.Label, child: _cstp.Alternatives | _cstp.Identifier | _cstp.Trivia
+    ) -> Alternatives | Identifier | Trivia:
+        if label is Rule.Label.ALTERNATIVES:
+            if isinstance(child, Alternatives):
+                return child
+        elif label is Rule.Label.NAME:
+            if isinstance(child, Identifier):
+                return child
+        msg = f"Rule: unsupported child type {_type_name_for_error(child)}"
+        raise TypeError(msg)
+
     def insert(
         self,
         index: int,
@@ -287,7 +333,11 @@ class Rule:
             if label is None or isinstance(label, Rule.Label)
             else self._check_label_type_for_mutators(label, "insert")
         )
-        checked_child = self._check_child_type_for_mutators(child)
+        checked_child = (
+            self._check_child_type_for_mutators(child)
+            if checked_label is None
+            else self._check_child_type_for_label(checked_label, child)
+        )
         idx = operator.index(index)
         n = len(self.children)
         if idx < 0:
@@ -316,7 +366,11 @@ class Rule:
             if label is None or isinstance(label, Rule.Label)
             else self._check_label_type_for_mutators(label, "replace_at")
         )
-        checked_child = self._check_child_type_for_mutators(child)
+        checked_child = (
+            self._check_child_type_for_mutators(child)
+            if checked_label is None
+            else self._check_child_type_for_label(checked_label, child)
+        )
         idx = operator.index(index)
         n = len(self.children)
         norm = idx + n if idx < 0 else idx
@@ -332,11 +386,16 @@ class Rule:
         return [child for (lbl, child) in self.children if lbl == label]
 
     def append_alternatives(self, child: _cstp.Alternatives) -> None:
-        self.children.append((Rule.Label.ALTERNATIVES, self._check_child_type_for_mutators(child)))
+        self.children.append(
+            (Rule.Label.ALTERNATIVES, self._check_child_type_for_label(Rule.Label.ALTERNATIVES, child))
+        )
 
     def extend_alternatives(self, children: typing.Iterable[_cstp.Alternatives]) -> None:
         self.children.extend(
-            [(Rule.Label.ALTERNATIVES, self._check_child_type_for_mutators(child)) for child in children]
+            [
+                (Rule.Label.ALTERNATIVES, self._check_child_type_for_label(Rule.Label.ALTERNATIVES, child))
+                for child in children
+            ]
         )
 
     def children_alternatives(self) -> typing.Iterator[Alternatives]:
@@ -357,10 +416,12 @@ class Rule:
         return children[0] if children else None
 
     def append_name(self, child: _cstp.Identifier) -> None:
-        self.children.append((Rule.Label.NAME, self._check_child_type_for_mutators(child)))
+        self.children.append((Rule.Label.NAME, self._check_child_type_for_label(Rule.Label.NAME, child)))
 
     def extend_name(self, children: typing.Iterable[_cstp.Identifier]) -> None:
-        self.children.extend([(Rule.Label.NAME, self._check_child_type_for_mutators(child)) for child in children])
+        self.children.extend(
+            [(Rule.Label.NAME, self._check_child_type_for_label(Rule.Label.NAME, child)) for child in children]
+        )
 
     def children_name(self) -> typing.Iterator[Identifier]:
         return iter(typing.cast("list[Identifier]", self._children_snapshot(Rule.Label.NAME)))
@@ -422,7 +483,11 @@ class Alternatives:
             if label is None or isinstance(label, Alternatives.Label)
             else self._check_label_type_for_mutators(label, "append")
         )
-        checked_child = self._check_child_type_for_mutators(child)
+        checked_child = (
+            self._check_child_type_for_mutators(child)
+            if checked_label is None
+            else self._check_child_type_for_label(checked_label, child)
+        )
         self.children.append((checked_label, checked_child))
 
     def extend(
@@ -435,7 +500,12 @@ class Alternatives:
             if label is None or isinstance(label, Alternatives.Label)
             else self._check_label_type_for_mutators(label, "extend")
         )
-        self.children.extend([(checked_label, self._check_child_type_for_mutators(child)) for child in children])
+        if checked_label is None:
+            self.children.extend([(None, self._check_child_type_for_mutators(child)) for child in children])
+        else:
+            self.children.extend(
+                [(checked_label, self._check_child_type_for_label(checked_label, child)) for child in children]
+            )
 
     def extend_children(self, other: _cstp.Alternatives) -> None:
         if not isinstance(other, Alternatives):
@@ -469,6 +539,14 @@ class Alternatives:
         msg = f"{_cn}.{method}: label argument is not a {_cn}_Label; got {type(label).__name__}"
         raise TypeError(msg)
 
+    def _check_child_type_for_label(
+        self, _label: Alternatives.Label, child: _cstp.Items | _cstp.Trivia
+    ) -> Items | Trivia:
+        if isinstance(child, Items):
+            return child
+        msg = f"Alternatives: unsupported child type {_type_name_for_error(child)}"
+        raise TypeError(msg)
+
     def insert(
         self,
         index: int,
@@ -480,7 +558,11 @@ class Alternatives:
             if label is None or isinstance(label, Alternatives.Label)
             else self._check_label_type_for_mutators(label, "insert")
         )
-        checked_child = self._check_child_type_for_mutators(child)
+        checked_child = (
+            self._check_child_type_for_mutators(child)
+            if checked_label is None
+            else self._check_child_type_for_label(checked_label, child)
+        )
         idx = operator.index(index)
         n = len(self.children)
         if idx < 0:
@@ -509,7 +591,11 @@ class Alternatives:
             if label is None or isinstance(label, Alternatives.Label)
             else self._check_label_type_for_mutators(label, "replace_at")
         )
-        checked_child = self._check_child_type_for_mutators(child)
+        checked_child = (
+            self._check_child_type_for_mutators(child)
+            if checked_label is None
+            else self._check_child_type_for_label(checked_label, child)
+        )
         idx = operator.index(index)
         n = len(self.children)
         norm = idx + n if idx < 0 else idx
@@ -525,11 +611,16 @@ class Alternatives:
         return [child for (lbl, child) in self.children if lbl == label]
 
     def append_items(self, child: _cstp.Items) -> None:
-        self.children.append((Alternatives.Label.ITEMS, self._check_child_type_for_mutators(child)))
+        self.children.append(
+            (Alternatives.Label.ITEMS, self._check_child_type_for_label(Alternatives.Label.ITEMS, child))
+        )
 
     def extend_items(self, children: typing.Iterable[_cstp.Items]) -> None:
         self.children.extend(
-            [(Alternatives.Label.ITEMS, self._check_child_type_for_mutators(child)) for child in children]
+            [
+                (Alternatives.Label.ITEMS, self._check_child_type_for_label(Alternatives.Label.ITEMS, child))
+                for child in children
+            ]
         )
 
     def children_items(self) -> typing.Iterator[Items]:
@@ -602,7 +693,11 @@ class Items:
             if label is None or isinstance(label, Items.Label)
             else self._check_label_type_for_mutators(label, "append")
         )
-        checked_child = self._check_child_type_for_mutators(child)
+        checked_child = (
+            self._check_child_type_for_mutators(child)
+            if checked_label is None
+            else self._check_child_type_for_label(checked_label, child)
+        )
         self.children.append((checked_label, checked_child))
 
     def extend(
@@ -615,7 +710,12 @@ class Items:
             if label is None or isinstance(label, Items.Label)
             else self._check_label_type_for_mutators(label, "extend")
         )
-        self.children.extend([(checked_label, self._check_child_type_for_mutators(child)) for child in children])
+        if checked_label is None:
+            self.children.extend([(None, self._check_child_type_for_mutators(child)) for child in children])
+        else:
+            self.children.extend(
+                [(checked_label, self._check_child_type_for_label(checked_label, child)) for child in children]
+            )
 
     def extend_children(self, other: _cstp.Items) -> None:
         if not isinstance(other, Items):
@@ -655,6 +755,22 @@ class Items:
         msg = f"{_cn}.{method}: label argument is not a {_cn}_Label; got {type(label).__name__}"
         raise TypeError(msg)
 
+    def _check_child_type_for_label(
+        self, label: Items.Label, child: _cstp.Item | _cstp.Trivia | fltk.fegen.pyrt.span_protocol.SpanProtocol
+    ) -> Item | Trivia | fltk.fegen.pyrt.span_protocol.SpanProtocol:
+        if label is Items.Label.ITEM:
+            if isinstance(child, Item):
+                return child
+        elif label is Items.Label.NO_WS or label is Items.Label.WS_ALLOWED or label is Items.Label.WS_REQUIRED:
+            if isinstance(child, fltk.fegen.pyrt.terminalsrc.Span):
+                return child
+            _ns = _get_native_span_type()
+            if _ns is not None and isinstance(child, _ns):
+                native_span: typing.Any = child
+                return native_span
+        msg = f"Items: unsupported child type {_type_name_for_error(child)}"
+        raise TypeError(msg)
+
     def insert(
         self,
         index: int,
@@ -666,7 +782,11 @@ class Items:
             if label is None or isinstance(label, Items.Label)
             else self._check_label_type_for_mutators(label, "insert")
         )
-        checked_child = self._check_child_type_for_mutators(child)
+        checked_child = (
+            self._check_child_type_for_mutators(child)
+            if checked_label is None
+            else self._check_child_type_for_label(checked_label, child)
+        )
         idx = operator.index(index)
         n = len(self.children)
         if idx < 0:
@@ -695,7 +815,11 @@ class Items:
             if label is None or isinstance(label, Items.Label)
             else self._check_label_type_for_mutators(label, "replace_at")
         )
-        checked_child = self._check_child_type_for_mutators(child)
+        checked_child = (
+            self._check_child_type_for_mutators(child)
+            if checked_label is None
+            else self._check_child_type_for_label(checked_label, child)
+        )
         idx = operator.index(index)
         n = len(self.children)
         norm = idx + n if idx < 0 else idx
@@ -713,10 +837,12 @@ class Items:
         return [child for (lbl, child) in self.children if lbl == label]
 
     def append_item(self, child: _cstp.Item) -> None:
-        self.children.append((Items.Label.ITEM, self._check_child_type_for_mutators(child)))
+        self.children.append((Items.Label.ITEM, self._check_child_type_for_label(Items.Label.ITEM, child)))
 
     def extend_item(self, children: typing.Iterable[_cstp.Item]) -> None:
-        self.children.extend([(Items.Label.ITEM, self._check_child_type_for_mutators(child)) for child in children])
+        self.children.extend(
+            [(Items.Label.ITEM, self._check_child_type_for_label(Items.Label.ITEM, child)) for child in children]
+        )
 
     def children_item(self) -> typing.Iterator[Item]:
         return iter(typing.cast("list[Item]", self._children_snapshot(Items.Label.ITEM)))
@@ -736,10 +862,12 @@ class Items:
         return children[0] if children else None
 
     def append_no_ws(self, child: fltk.fegen.pyrt.span_protocol.SpanProtocol) -> None:
-        self.children.append((Items.Label.NO_WS, self._check_child_type_for_mutators(child)))
+        self.children.append((Items.Label.NO_WS, self._check_child_type_for_label(Items.Label.NO_WS, child)))
 
     def extend_no_ws(self, children: typing.Iterable[fltk.fegen.pyrt.span_protocol.SpanProtocol]) -> None:
-        self.children.extend([(Items.Label.NO_WS, self._check_child_type_for_mutators(child)) for child in children])
+        self.children.extend(
+            [(Items.Label.NO_WS, self._check_child_type_for_label(Items.Label.NO_WS, child)) for child in children]
+        )
 
     def children_no_ws(self) -> typing.Iterator[fltk.fegen.pyrt.span_protocol.SpanProtocol]:
         return iter(
@@ -765,11 +893,14 @@ class Items:
         return children[0] if children else None
 
     def append_ws_allowed(self, child: fltk.fegen.pyrt.span_protocol.SpanProtocol) -> None:
-        self.children.append((Items.Label.WS_ALLOWED, self._check_child_type_for_mutators(child)))
+        self.children.append((Items.Label.WS_ALLOWED, self._check_child_type_for_label(Items.Label.WS_ALLOWED, child)))
 
     def extend_ws_allowed(self, children: typing.Iterable[fltk.fegen.pyrt.span_protocol.SpanProtocol]) -> None:
         self.children.extend(
-            [(Items.Label.WS_ALLOWED, self._check_child_type_for_mutators(child)) for child in children]
+            [
+                (Items.Label.WS_ALLOWED, self._check_child_type_for_label(Items.Label.WS_ALLOWED, child))
+                for child in children
+            ]
         )
 
     def children_ws_allowed(self) -> typing.Iterator[fltk.fegen.pyrt.span_protocol.SpanProtocol]:
@@ -798,11 +929,16 @@ class Items:
         return children[0] if children else None
 
     def append_ws_required(self, child: fltk.fegen.pyrt.span_protocol.SpanProtocol) -> None:
-        self.children.append((Items.Label.WS_REQUIRED, self._check_child_type_for_mutators(child)))
+        self.children.append(
+            (Items.Label.WS_REQUIRED, self._check_child_type_for_label(Items.Label.WS_REQUIRED, child))
+        )
 
     def extend_ws_required(self, children: typing.Iterable[fltk.fegen.pyrt.span_protocol.SpanProtocol]) -> None:
         self.children.extend(
-            [(Items.Label.WS_REQUIRED, self._check_child_type_for_mutators(child)) for child in children]
+            [
+                (Items.Label.WS_REQUIRED, self._check_child_type_for_label(Items.Label.WS_REQUIRED, child))
+                for child in children
+            ]
         )
 
     def children_ws_required(self) -> typing.Iterator[fltk.fegen.pyrt.span_protocol.SpanProtocol]:
@@ -901,7 +1037,11 @@ class Item:
             if label is None or isinstance(label, Item.Label)
             else self._check_label_type_for_mutators(label, "append")
         )
-        checked_child = self._check_child_type_for_mutators(child)
+        checked_child = (
+            self._check_child_type_for_mutators(child)
+            if checked_label is None
+            else self._check_child_type_for_label(checked_label, child)
+        )
         self.children.append((checked_label, checked_child))
 
     def extend(
@@ -914,7 +1054,12 @@ class Item:
             if label is None or isinstance(label, Item.Label)
             else self._check_label_type_for_mutators(label, "extend")
         )
-        self.children.extend([(checked_label, self._check_child_type_for_mutators(child)) for child in children])
+        if checked_label is None:
+            self.children.extend([(None, self._check_child_type_for_mutators(child)) for child in children])
+        else:
+            self.children.extend(
+                [(checked_label, self._check_child_type_for_label(checked_label, child)) for child in children]
+            )
 
     def extend_children(self, other: _cstp.Item) -> None:
         if not isinstance(other, Item):
@@ -950,6 +1095,26 @@ class Item:
         msg = f"{_cn}.{method}: label argument is not a {_cn}_Label; got {type(label).__name__}"
         raise TypeError(msg)
 
+    def _check_child_type_for_label(
+        self,
+        label: Item.Label,
+        child: _cstp.Disposition | _cstp.Identifier | _cstp.Quantifier | _cstp.Term | _cstp.Trivia,
+    ) -> Disposition | Identifier | Quantifier | Term | Trivia:
+        if label is Item.Label.DISPOSITION:
+            if isinstance(child, Disposition):
+                return child
+        elif label is Item.Label.LABEL:
+            if isinstance(child, Identifier):
+                return child
+        elif label is Item.Label.QUANTIFIER:
+            if isinstance(child, Quantifier):
+                return child
+        elif label is Item.Label.TERM:
+            if isinstance(child, Term):
+                return child
+        msg = f"Item: unsupported child type {_type_name_for_error(child)}"
+        raise TypeError(msg)
+
     def insert(
         self,
         index: int,
@@ -961,7 +1126,11 @@ class Item:
             if label is None or isinstance(label, Item.Label)
             else self._check_label_type_for_mutators(label, "insert")
         )
-        checked_child = self._check_child_type_for_mutators(child)
+        checked_child = (
+            self._check_child_type_for_mutators(child)
+            if checked_label is None
+            else self._check_child_type_for_label(checked_label, child)
+        )
         idx = operator.index(index)
         n = len(self.children)
         if idx < 0:
@@ -990,7 +1159,11 @@ class Item:
             if label is None or isinstance(label, Item.Label)
             else self._check_label_type_for_mutators(label, "replace_at")
         )
-        checked_child = self._check_child_type_for_mutators(child)
+        checked_child = (
+            self._check_child_type_for_mutators(child)
+            if checked_label is None
+            else self._check_child_type_for_label(checked_label, child)
+        )
         idx = operator.index(index)
         n = len(self.children)
         norm = idx + n if idx < 0 else idx
@@ -1006,11 +1179,14 @@ class Item:
         return [child for (lbl, child) in self.children if lbl == label]
 
     def append_disposition(self, child: _cstp.Disposition) -> None:
-        self.children.append((Item.Label.DISPOSITION, self._check_child_type_for_mutators(child)))
+        self.children.append((Item.Label.DISPOSITION, self._check_child_type_for_label(Item.Label.DISPOSITION, child)))
 
     def extend_disposition(self, children: typing.Iterable[_cstp.Disposition]) -> None:
         self.children.extend(
-            [(Item.Label.DISPOSITION, self._check_child_type_for_mutators(child)) for child in children]
+            [
+                (Item.Label.DISPOSITION, self._check_child_type_for_label(Item.Label.DISPOSITION, child))
+                for child in children
+            ]
         )
 
     def children_disposition(self) -> typing.Iterator[Disposition]:
@@ -1031,10 +1207,12 @@ class Item:
         return children[0] if children else None
 
     def append_label(self, child: _cstp.Identifier) -> None:
-        self.children.append((Item.Label.LABEL, self._check_child_type_for_mutators(child)))
+        self.children.append((Item.Label.LABEL, self._check_child_type_for_label(Item.Label.LABEL, child)))
 
     def extend_label(self, children: typing.Iterable[_cstp.Identifier]) -> None:
-        self.children.extend([(Item.Label.LABEL, self._check_child_type_for_mutators(child)) for child in children])
+        self.children.extend(
+            [(Item.Label.LABEL, self._check_child_type_for_label(Item.Label.LABEL, child)) for child in children]
+        )
 
     def children_label(self) -> typing.Iterator[Identifier]:
         return iter(typing.cast("list[Identifier]", self._children_snapshot(Item.Label.LABEL)))
@@ -1054,11 +1232,14 @@ class Item:
         return children[0] if children else None
 
     def append_quantifier(self, child: _cstp.Quantifier) -> None:
-        self.children.append((Item.Label.QUANTIFIER, self._check_child_type_for_mutators(child)))
+        self.children.append((Item.Label.QUANTIFIER, self._check_child_type_for_label(Item.Label.QUANTIFIER, child)))
 
     def extend_quantifier(self, children: typing.Iterable[_cstp.Quantifier]) -> None:
         self.children.extend(
-            [(Item.Label.QUANTIFIER, self._check_child_type_for_mutators(child)) for child in children]
+            [
+                (Item.Label.QUANTIFIER, self._check_child_type_for_label(Item.Label.QUANTIFIER, child))
+                for child in children
+            ]
         )
 
     def children_quantifier(self) -> typing.Iterator[Quantifier]:
@@ -1079,10 +1260,12 @@ class Item:
         return children[0] if children else None
 
     def append_term(self, child: _cstp.Term) -> None:
-        self.children.append((Item.Label.TERM, self._check_child_type_for_mutators(child)))
+        self.children.append((Item.Label.TERM, self._check_child_type_for_label(Item.Label.TERM, child)))
 
     def extend_term(self, children: typing.Iterable[_cstp.Term]) -> None:
-        self.children.extend([(Item.Label.TERM, self._check_child_type_for_mutators(child)) for child in children])
+        self.children.extend(
+            [(Item.Label.TERM, self._check_child_type_for_label(Item.Label.TERM, child)) for child in children]
+        )
 
     def children_term(self) -> typing.Iterator[Term]:
         return iter(typing.cast("list[Term]", self._children_snapshot(Item.Label.TERM)))
@@ -1166,7 +1349,11 @@ class Term:
             if label is None or isinstance(label, Term.Label)
             else self._check_label_type_for_mutators(label, "append")
         )
-        checked_child = self._check_child_type_for_mutators(child)
+        checked_child = (
+            self._check_child_type_for_mutators(child)
+            if checked_label is None
+            else self._check_child_type_for_label(checked_label, child)
+        )
         self.children.append((checked_label, checked_child))
 
     def extend(
@@ -1181,7 +1368,12 @@ class Term:
             if label is None or isinstance(label, Term.Label)
             else self._check_label_type_for_mutators(label, "extend")
         )
-        self.children.extend([(checked_label, self._check_child_type_for_mutators(child)) for child in children])
+        if checked_label is None:
+            self.children.extend([(None, self._check_child_type_for_mutators(child)) for child in children])
+        else:
+            self.children.extend(
+                [(checked_label, self._check_child_type_for_label(checked_label, child)) for child in children]
+            )
 
     def extend_children(self, other: _cstp.Term) -> None:
         if not isinstance(other, Term):
@@ -1217,6 +1409,26 @@ class Term:
         msg = f"{_cn}.{method}: label argument is not a {_cn}_Label; got {type(label).__name__}"
         raise TypeError(msg)
 
+    def _check_child_type_for_label(
+        self,
+        label: Term.Label,
+        child: _cstp.Alternatives | _cstp.Identifier | _cstp.Literal | _cstp.RawString | _cstp.Trivia,
+    ) -> Alternatives | Identifier | Literal | RawString | Trivia:
+        if label is Term.Label.ALTERNATIVES:
+            if isinstance(child, Alternatives):
+                return child
+        elif label is Term.Label.IDENTIFIER:
+            if isinstance(child, Identifier):
+                return child
+        elif label is Term.Label.LITERAL:
+            if isinstance(child, Literal):
+                return child
+        elif label is Term.Label.REGEX:
+            if isinstance(child, RawString):
+                return child
+        msg = f"Term: unsupported child type {_type_name_for_error(child)}"
+        raise TypeError(msg)
+
     def insert(
         self,
         index: int,
@@ -1228,7 +1440,11 @@ class Term:
             if label is None or isinstance(label, Term.Label)
             else self._check_label_type_for_mutators(label, "insert")
         )
-        checked_child = self._check_child_type_for_mutators(child)
+        checked_child = (
+            self._check_child_type_for_mutators(child)
+            if checked_label is None
+            else self._check_child_type_for_label(checked_label, child)
+        )
         idx = operator.index(index)
         n = len(self.children)
         if idx < 0:
@@ -1257,7 +1473,11 @@ class Term:
             if label is None or isinstance(label, Term.Label)
             else self._check_label_type_for_mutators(label, "replace_at")
         )
-        checked_child = self._check_child_type_for_mutators(child)
+        checked_child = (
+            self._check_child_type_for_mutators(child)
+            if checked_label is None
+            else self._check_child_type_for_label(checked_label, child)
+        )
         idx = operator.index(index)
         n = len(self.children)
         norm = idx + n if idx < 0 else idx
@@ -1273,11 +1493,16 @@ class Term:
         return [child for (lbl, child) in self.children if lbl == label]
 
     def append_alternatives(self, child: _cstp.Alternatives) -> None:
-        self.children.append((Term.Label.ALTERNATIVES, self._check_child_type_for_mutators(child)))
+        self.children.append(
+            (Term.Label.ALTERNATIVES, self._check_child_type_for_label(Term.Label.ALTERNATIVES, child))
+        )
 
     def extend_alternatives(self, children: typing.Iterable[_cstp.Alternatives]) -> None:
         self.children.extend(
-            [(Term.Label.ALTERNATIVES, self._check_child_type_for_mutators(child)) for child in children]
+            [
+                (Term.Label.ALTERNATIVES, self._check_child_type_for_label(Term.Label.ALTERNATIVES, child))
+                for child in children
+            ]
         )
 
     def children_alternatives(self) -> typing.Iterator[Alternatives]:
@@ -1298,11 +1523,14 @@ class Term:
         return children[0] if children else None
 
     def append_identifier(self, child: _cstp.Identifier) -> None:
-        self.children.append((Term.Label.IDENTIFIER, self._check_child_type_for_mutators(child)))
+        self.children.append((Term.Label.IDENTIFIER, self._check_child_type_for_label(Term.Label.IDENTIFIER, child)))
 
     def extend_identifier(self, children: typing.Iterable[_cstp.Identifier]) -> None:
         self.children.extend(
-            [(Term.Label.IDENTIFIER, self._check_child_type_for_mutators(child)) for child in children]
+            [
+                (Term.Label.IDENTIFIER, self._check_child_type_for_label(Term.Label.IDENTIFIER, child))
+                for child in children
+            ]
         )
 
     def children_identifier(self) -> typing.Iterator[Identifier]:
@@ -1323,10 +1551,12 @@ class Term:
         return children[0] if children else None
 
     def append_literal(self, child: _cstp.Literal) -> None:
-        self.children.append((Term.Label.LITERAL, self._check_child_type_for_mutators(child)))
+        self.children.append((Term.Label.LITERAL, self._check_child_type_for_label(Term.Label.LITERAL, child)))
 
     def extend_literal(self, children: typing.Iterable[_cstp.Literal]) -> None:
-        self.children.extend([(Term.Label.LITERAL, self._check_child_type_for_mutators(child)) for child in children])
+        self.children.extend(
+            [(Term.Label.LITERAL, self._check_child_type_for_label(Term.Label.LITERAL, child)) for child in children]
+        )
 
     def children_literal(self) -> typing.Iterator[Literal]:
         return iter(typing.cast("list[Literal]", self._children_snapshot(Term.Label.LITERAL)))
@@ -1346,10 +1576,12 @@ class Term:
         return children[0] if children else None
 
     def append_regex(self, child: _cstp.RawString) -> None:
-        self.children.append((Term.Label.REGEX, self._check_child_type_for_mutators(child)))
+        self.children.append((Term.Label.REGEX, self._check_child_type_for_label(Term.Label.REGEX, child)))
 
     def extend_regex(self, children: typing.Iterable[_cstp.RawString]) -> None:
-        self.children.extend([(Term.Label.REGEX, self._check_child_type_for_mutators(child)) for child in children])
+        self.children.extend(
+            [(Term.Label.REGEX, self._check_child_type_for_label(Term.Label.REGEX, child)) for child in children]
+        )
 
     def children_regex(self) -> typing.Iterator[RawString]:
         return iter(typing.cast("list[RawString]", self._children_snapshot(Term.Label.REGEX)))
@@ -1431,7 +1663,11 @@ class Disposition:
             if label is None or isinstance(label, Disposition.Label)
             else self._check_label_type_for_mutators(label, "append")
         )
-        checked_child = self._check_child_type_for_mutators(child)
+        checked_child = (
+            self._check_child_type_for_mutators(child)
+            if checked_label is None
+            else self._check_child_type_for_label(checked_label, child)
+        )
         self.children.append((checked_label, checked_child))
 
     def extend(
@@ -1444,7 +1680,12 @@ class Disposition:
             if label is None or isinstance(label, Disposition.Label)
             else self._check_label_type_for_mutators(label, "extend")
         )
-        self.children.extend([(checked_label, self._check_child_type_for_mutators(child)) for child in children])
+        if checked_label is None:
+            self.children.extend([(None, self._check_child_type_for_mutators(child)) for child in children])
+        else:
+            self.children.extend(
+                [(checked_label, self._check_child_type_for_label(checked_label, child)) for child in children]
+            )
 
     def extend_children(self, other: _cstp.Disposition) -> None:
         if not isinstance(other, Disposition):
@@ -1484,6 +1725,18 @@ class Disposition:
         msg = f"{_cn}.{method}: label argument is not a {_cn}_Label; got {type(label).__name__}"
         raise TypeError(msg)
 
+    def _check_child_type_for_label(
+        self, _label: Disposition.Label, child: fltk.fegen.pyrt.span_protocol.SpanProtocol
+    ) -> fltk.fegen.pyrt.span_protocol.SpanProtocol:
+        if isinstance(child, fltk.fegen.pyrt.terminalsrc.Span):
+            return child
+        _ns = _get_native_span_type()
+        if _ns is not None and isinstance(child, _ns):
+            native_span: typing.Any = child
+            return native_span
+        msg = f"Disposition: unsupported child type {_type_name_for_error(child)}"
+        raise TypeError(msg)
+
     def insert(
         self,
         index: int,
@@ -1495,7 +1748,11 @@ class Disposition:
             if label is None or isinstance(label, Disposition.Label)
             else self._check_label_type_for_mutators(label, "insert")
         )
-        checked_child = self._check_child_type_for_mutators(child)
+        checked_child = (
+            self._check_child_type_for_mutators(child)
+            if checked_label is None
+            else self._check_child_type_for_label(checked_label, child)
+        )
         idx = operator.index(index)
         n = len(self.children)
         if idx < 0:
@@ -1524,7 +1781,11 @@ class Disposition:
             if label is None or isinstance(label, Disposition.Label)
             else self._check_label_type_for_mutators(label, "replace_at")
         )
-        checked_child = self._check_child_type_for_mutators(child)
+        checked_child = (
+            self._check_child_type_for_mutators(child)
+            if checked_label is None
+            else self._check_child_type_for_label(checked_label, child)
+        )
         idx = operator.index(index)
         n = len(self.children)
         norm = idx + n if idx < 0 else idx
@@ -1540,11 +1801,16 @@ class Disposition:
         return [child for (lbl, child) in self.children if lbl == label]
 
     def append_include(self, child: fltk.fegen.pyrt.span_protocol.SpanProtocol) -> None:
-        self.children.append((Disposition.Label.INCLUDE, self._check_child_type_for_mutators(child)))
+        self.children.append(
+            (Disposition.Label.INCLUDE, self._check_child_type_for_label(Disposition.Label.INCLUDE, child))
+        )
 
     def extend_include(self, children: typing.Iterable[fltk.fegen.pyrt.span_protocol.SpanProtocol]) -> None:
         self.children.extend(
-            [(Disposition.Label.INCLUDE, self._check_child_type_for_mutators(child)) for child in children]
+            [
+                (Disposition.Label.INCLUDE, self._check_child_type_for_label(Disposition.Label.INCLUDE, child))
+                for child in children
+            ]
         )
 
     def children_include(self) -> typing.Iterator[fltk.fegen.pyrt.span_protocol.SpanProtocol]:
@@ -1565,11 +1831,16 @@ class Disposition:
         return children[0] if children else None
 
     def append_inline(self, child: fltk.fegen.pyrt.span_protocol.SpanProtocol) -> None:
-        self.children.append((Disposition.Label.INLINE, self._check_child_type_for_mutators(child)))
+        self.children.append(
+            (Disposition.Label.INLINE, self._check_child_type_for_label(Disposition.Label.INLINE, child))
+        )
 
     def extend_inline(self, children: typing.Iterable[fltk.fegen.pyrt.span_protocol.SpanProtocol]) -> None:
         self.children.extend(
-            [(Disposition.Label.INLINE, self._check_child_type_for_mutators(child)) for child in children]
+            [
+                (Disposition.Label.INLINE, self._check_child_type_for_label(Disposition.Label.INLINE, child))
+                for child in children
+            ]
         )
 
     def children_inline(self) -> typing.Iterator[fltk.fegen.pyrt.span_protocol.SpanProtocol]:
@@ -1590,11 +1861,16 @@ class Disposition:
         return children[0] if children else None
 
     def append_suppress(self, child: fltk.fegen.pyrt.span_protocol.SpanProtocol) -> None:
-        self.children.append((Disposition.Label.SUPPRESS, self._check_child_type_for_mutators(child)))
+        self.children.append(
+            (Disposition.Label.SUPPRESS, self._check_child_type_for_label(Disposition.Label.SUPPRESS, child))
+        )
 
     def extend_suppress(self, children: typing.Iterable[fltk.fegen.pyrt.span_protocol.SpanProtocol]) -> None:
         self.children.extend(
-            [(Disposition.Label.SUPPRESS, self._check_child_type_for_mutators(child)) for child in children]
+            [
+                (Disposition.Label.SUPPRESS, self._check_child_type_for_label(Disposition.Label.SUPPRESS, child))
+                for child in children
+            ]
         )
 
     def children_suppress(self) -> typing.Iterator[fltk.fegen.pyrt.span_protocol.SpanProtocol]:
@@ -1713,7 +1989,11 @@ class Quantifier:
             if label is None or isinstance(label, Quantifier.Label)
             else self._check_label_type_for_mutators(label, "append")
         )
-        checked_child = self._check_child_type_for_mutators(child)
+        checked_child = (
+            self._check_child_type_for_mutators(child)
+            if checked_label is None
+            else self._check_child_type_for_label(checked_label, child)
+        )
         self.children.append((checked_label, checked_child))
 
     def extend(
@@ -1726,7 +2006,12 @@ class Quantifier:
             if label is None or isinstance(label, Quantifier.Label)
             else self._check_label_type_for_mutators(label, "extend")
         )
-        self.children.extend([(checked_label, self._check_child_type_for_mutators(child)) for child in children])
+        if checked_label is None:
+            self.children.extend([(None, self._check_child_type_for_mutators(child)) for child in children])
+        else:
+            self.children.extend(
+                [(checked_label, self._check_child_type_for_label(checked_label, child)) for child in children]
+            )
 
     def extend_children(self, other: _cstp.Quantifier) -> None:
         if not isinstance(other, Quantifier):
@@ -1766,6 +2051,18 @@ class Quantifier:
         msg = f"{_cn}.{method}: label argument is not a {_cn}_Label; got {type(label).__name__}"
         raise TypeError(msg)
 
+    def _check_child_type_for_label(
+        self, _label: Quantifier.Label, child: fltk.fegen.pyrt.span_protocol.SpanProtocol
+    ) -> fltk.fegen.pyrt.span_protocol.SpanProtocol:
+        if isinstance(child, fltk.fegen.pyrt.terminalsrc.Span):
+            return child
+        _ns = _get_native_span_type()
+        if _ns is not None and isinstance(child, _ns):
+            native_span: typing.Any = child
+            return native_span
+        msg = f"Quantifier: unsupported child type {_type_name_for_error(child)}"
+        raise TypeError(msg)
+
     def insert(
         self,
         index: int,
@@ -1777,7 +2074,11 @@ class Quantifier:
             if label is None or isinstance(label, Quantifier.Label)
             else self._check_label_type_for_mutators(label, "insert")
         )
-        checked_child = self._check_child_type_for_mutators(child)
+        checked_child = (
+            self._check_child_type_for_mutators(child)
+            if checked_label is None
+            else self._check_child_type_for_label(checked_label, child)
+        )
         idx = operator.index(index)
         n = len(self.children)
         if idx < 0:
@@ -1806,7 +2107,11 @@ class Quantifier:
             if label is None or isinstance(label, Quantifier.Label)
             else self._check_label_type_for_mutators(label, "replace_at")
         )
-        checked_child = self._check_child_type_for_mutators(child)
+        checked_child = (
+            self._check_child_type_for_mutators(child)
+            if checked_label is None
+            else self._check_child_type_for_label(checked_label, child)
+        )
         idx = operator.index(index)
         n = len(self.children)
         norm = idx + n if idx < 0 else idx
@@ -1822,11 +2127,16 @@ class Quantifier:
         return [child for (lbl, child) in self.children if lbl == label]
 
     def append_one_or_more(self, child: fltk.fegen.pyrt.span_protocol.SpanProtocol) -> None:
-        self.children.append((Quantifier.Label.ONE_OR_MORE, self._check_child_type_for_mutators(child)))
+        self.children.append(
+            (Quantifier.Label.ONE_OR_MORE, self._check_child_type_for_label(Quantifier.Label.ONE_OR_MORE, child))
+        )
 
     def extend_one_or_more(self, children: typing.Iterable[fltk.fegen.pyrt.span_protocol.SpanProtocol]) -> None:
         self.children.extend(
-            [(Quantifier.Label.ONE_OR_MORE, self._check_child_type_for_mutators(child)) for child in children]
+            [
+                (Quantifier.Label.ONE_OR_MORE, self._check_child_type_for_label(Quantifier.Label.ONE_OR_MORE, child))
+                for child in children
+            ]
         )
 
     def children_one_or_more(self) -> typing.Iterator[fltk.fegen.pyrt.span_protocol.SpanProtocol]:
@@ -1847,11 +2157,16 @@ class Quantifier:
         return children[0] if children else None
 
     def append_optional(self, child: fltk.fegen.pyrt.span_protocol.SpanProtocol) -> None:
-        self.children.append((Quantifier.Label.OPTIONAL, self._check_child_type_for_mutators(child)))
+        self.children.append(
+            (Quantifier.Label.OPTIONAL, self._check_child_type_for_label(Quantifier.Label.OPTIONAL, child))
+        )
 
     def extend_optional(self, children: typing.Iterable[fltk.fegen.pyrt.span_protocol.SpanProtocol]) -> None:
         self.children.extend(
-            [(Quantifier.Label.OPTIONAL, self._check_child_type_for_mutators(child)) for child in children]
+            [
+                (Quantifier.Label.OPTIONAL, self._check_child_type_for_label(Quantifier.Label.OPTIONAL, child))
+                for child in children
+            ]
         )
 
     def children_optional(self) -> typing.Iterator[fltk.fegen.pyrt.span_protocol.SpanProtocol]:
@@ -1872,11 +2187,16 @@ class Quantifier:
         return children[0] if children else None
 
     def append_zero_or_more(self, child: fltk.fegen.pyrt.span_protocol.SpanProtocol) -> None:
-        self.children.append((Quantifier.Label.ZERO_OR_MORE, self._check_child_type_for_mutators(child)))
+        self.children.append(
+            (Quantifier.Label.ZERO_OR_MORE, self._check_child_type_for_label(Quantifier.Label.ZERO_OR_MORE, child))
+        )
 
     def extend_zero_or_more(self, children: typing.Iterable[fltk.fegen.pyrt.span_protocol.SpanProtocol]) -> None:
         self.children.extend(
-            [(Quantifier.Label.ZERO_OR_MORE, self._check_child_type_for_mutators(child)) for child in children]
+            [
+                (Quantifier.Label.ZERO_OR_MORE, self._check_child_type_for_label(Quantifier.Label.ZERO_OR_MORE, child))
+                for child in children
+            ]
         )
 
     def children_zero_or_more(self) -> typing.Iterator[fltk.fegen.pyrt.span_protocol.SpanProtocol]:
@@ -1987,7 +2307,11 @@ class Identifier:
             if label is None or isinstance(label, Identifier.Label)
             else self._check_label_type_for_mutators(label, "append")
         )
-        checked_child = self._check_child_type_for_mutators(child)
+        checked_child = (
+            self._check_child_type_for_mutators(child)
+            if checked_label is None
+            else self._check_child_type_for_label(checked_label, child)
+        )
         self.children.append((checked_label, checked_child))
 
     def extend(
@@ -2000,7 +2324,12 @@ class Identifier:
             if label is None or isinstance(label, Identifier.Label)
             else self._check_label_type_for_mutators(label, "extend")
         )
-        self.children.extend([(checked_label, self._check_child_type_for_mutators(child)) for child in children])
+        if checked_label is None:
+            self.children.extend([(None, self._check_child_type_for_mutators(child)) for child in children])
+        else:
+            self.children.extend(
+                [(checked_label, self._check_child_type_for_label(checked_label, child)) for child in children]
+            )
 
     def extend_children(self, other: _cstp.Identifier) -> None:
         if not isinstance(other, Identifier):
@@ -2040,6 +2369,18 @@ class Identifier:
         msg = f"{_cn}.{method}: label argument is not a {_cn}_Label; got {type(label).__name__}"
         raise TypeError(msg)
 
+    def _check_child_type_for_label(
+        self, _label: Identifier.Label, child: fltk.fegen.pyrt.span_protocol.SpanProtocol
+    ) -> fltk.fegen.pyrt.span_protocol.SpanProtocol:
+        if isinstance(child, fltk.fegen.pyrt.terminalsrc.Span):
+            return child
+        _ns = _get_native_span_type()
+        if _ns is not None and isinstance(child, _ns):
+            native_span: typing.Any = child
+            return native_span
+        msg = f"Identifier: unsupported child type {_type_name_for_error(child)}"
+        raise TypeError(msg)
+
     def insert(
         self,
         index: int,
@@ -2051,7 +2392,11 @@ class Identifier:
             if label is None or isinstance(label, Identifier.Label)
             else self._check_label_type_for_mutators(label, "insert")
         )
-        checked_child = self._check_child_type_for_mutators(child)
+        checked_child = (
+            self._check_child_type_for_mutators(child)
+            if checked_label is None
+            else self._check_child_type_for_label(checked_label, child)
+        )
         idx = operator.index(index)
         n = len(self.children)
         if idx < 0:
@@ -2080,7 +2425,11 @@ class Identifier:
             if label is None or isinstance(label, Identifier.Label)
             else self._check_label_type_for_mutators(label, "replace_at")
         )
-        checked_child = self._check_child_type_for_mutators(child)
+        checked_child = (
+            self._check_child_type_for_mutators(child)
+            if checked_label is None
+            else self._check_child_type_for_label(checked_label, child)
+        )
         idx = operator.index(index)
         n = len(self.children)
         norm = idx + n if idx < 0 else idx
@@ -2096,11 +2445,14 @@ class Identifier:
         return [child for (lbl, child) in self.children if lbl == label]
 
     def append_name(self, child: fltk.fegen.pyrt.span_protocol.SpanProtocol) -> None:
-        self.children.append((Identifier.Label.NAME, self._check_child_type_for_mutators(child)))
+        self.children.append((Identifier.Label.NAME, self._check_child_type_for_label(Identifier.Label.NAME, child)))
 
     def extend_name(self, children: typing.Iterable[fltk.fegen.pyrt.span_protocol.SpanProtocol]) -> None:
         self.children.extend(
-            [(Identifier.Label.NAME, self._check_child_type_for_mutators(child)) for child in children]
+            [
+                (Identifier.Label.NAME, self._check_child_type_for_label(Identifier.Label.NAME, child))
+                for child in children
+            ]
         )
 
     def children_name(self) -> typing.Iterator[fltk.fegen.pyrt.span_protocol.SpanProtocol]:
@@ -2174,7 +2526,11 @@ class RawString:
             if label is None or isinstance(label, RawString.Label)
             else self._check_label_type_for_mutators(label, "append")
         )
-        checked_child = self._check_child_type_for_mutators(child)
+        checked_child = (
+            self._check_child_type_for_mutators(child)
+            if checked_label is None
+            else self._check_child_type_for_label(checked_label, child)
+        )
         self.children.append((checked_label, checked_child))
 
     def extend(
@@ -2187,7 +2543,12 @@ class RawString:
             if label is None or isinstance(label, RawString.Label)
             else self._check_label_type_for_mutators(label, "extend")
         )
-        self.children.extend([(checked_label, self._check_child_type_for_mutators(child)) for child in children])
+        if checked_label is None:
+            self.children.extend([(None, self._check_child_type_for_mutators(child)) for child in children])
+        else:
+            self.children.extend(
+                [(checked_label, self._check_child_type_for_label(checked_label, child)) for child in children]
+            )
 
     def extend_children(self, other: _cstp.RawString) -> None:
         if not isinstance(other, RawString):
@@ -2227,6 +2588,18 @@ class RawString:
         msg = f"{_cn}.{method}: label argument is not a {_cn}_Label; got {type(label).__name__}"
         raise TypeError(msg)
 
+    def _check_child_type_for_label(
+        self, _label: RawString.Label, child: fltk.fegen.pyrt.span_protocol.SpanProtocol
+    ) -> fltk.fegen.pyrt.span_protocol.SpanProtocol:
+        if isinstance(child, fltk.fegen.pyrt.terminalsrc.Span):
+            return child
+        _ns = _get_native_span_type()
+        if _ns is not None and isinstance(child, _ns):
+            native_span: typing.Any = child
+            return native_span
+        msg = f"RawString: unsupported child type {_type_name_for_error(child)}"
+        raise TypeError(msg)
+
     def insert(
         self,
         index: int,
@@ -2238,7 +2611,11 @@ class RawString:
             if label is None or isinstance(label, RawString.Label)
             else self._check_label_type_for_mutators(label, "insert")
         )
-        checked_child = self._check_child_type_for_mutators(child)
+        checked_child = (
+            self._check_child_type_for_mutators(child)
+            if checked_label is None
+            else self._check_child_type_for_label(checked_label, child)
+        )
         idx = operator.index(index)
         n = len(self.children)
         if idx < 0:
@@ -2267,7 +2644,11 @@ class RawString:
             if label is None or isinstance(label, RawString.Label)
             else self._check_label_type_for_mutators(label, "replace_at")
         )
-        checked_child = self._check_child_type_for_mutators(child)
+        checked_child = (
+            self._check_child_type_for_mutators(child)
+            if checked_label is None
+            else self._check_child_type_for_label(checked_label, child)
+        )
         idx = operator.index(index)
         n = len(self.children)
         norm = idx + n if idx < 0 else idx
@@ -2283,11 +2664,14 @@ class RawString:
         return [child for (lbl, child) in self.children if lbl == label]
 
     def append_value(self, child: fltk.fegen.pyrt.span_protocol.SpanProtocol) -> None:
-        self.children.append((RawString.Label.VALUE, self._check_child_type_for_mutators(child)))
+        self.children.append((RawString.Label.VALUE, self._check_child_type_for_label(RawString.Label.VALUE, child)))
 
     def extend_value(self, children: typing.Iterable[fltk.fegen.pyrt.span_protocol.SpanProtocol]) -> None:
         self.children.extend(
-            [(RawString.Label.VALUE, self._check_child_type_for_mutators(child)) for child in children]
+            [
+                (RawString.Label.VALUE, self._check_child_type_for_label(RawString.Label.VALUE, child))
+                for child in children
+            ]
         )
 
     def children_value(self) -> typing.Iterator[fltk.fegen.pyrt.span_protocol.SpanProtocol]:
@@ -2361,7 +2745,11 @@ class Literal:
             if label is None or isinstance(label, Literal.Label)
             else self._check_label_type_for_mutators(label, "append")
         )
-        checked_child = self._check_child_type_for_mutators(child)
+        checked_child = (
+            self._check_child_type_for_mutators(child)
+            if checked_label is None
+            else self._check_child_type_for_label(checked_label, child)
+        )
         self.children.append((checked_label, checked_child))
 
     def extend(
@@ -2374,7 +2762,12 @@ class Literal:
             if label is None or isinstance(label, Literal.Label)
             else self._check_label_type_for_mutators(label, "extend")
         )
-        self.children.extend([(checked_label, self._check_child_type_for_mutators(child)) for child in children])
+        if checked_label is None:
+            self.children.extend([(None, self._check_child_type_for_mutators(child)) for child in children])
+        else:
+            self.children.extend(
+                [(checked_label, self._check_child_type_for_label(checked_label, child)) for child in children]
+            )
 
     def extend_children(self, other: _cstp.Literal) -> None:
         if not isinstance(other, Literal):
@@ -2414,6 +2807,18 @@ class Literal:
         msg = f"{_cn}.{method}: label argument is not a {_cn}_Label; got {type(label).__name__}"
         raise TypeError(msg)
 
+    def _check_child_type_for_label(
+        self, _label: Literal.Label, child: fltk.fegen.pyrt.span_protocol.SpanProtocol
+    ) -> fltk.fegen.pyrt.span_protocol.SpanProtocol:
+        if isinstance(child, fltk.fegen.pyrt.terminalsrc.Span):
+            return child
+        _ns = _get_native_span_type()
+        if _ns is not None and isinstance(child, _ns):
+            native_span: typing.Any = child
+            return native_span
+        msg = f"Literal: unsupported child type {_type_name_for_error(child)}"
+        raise TypeError(msg)
+
     def insert(
         self,
         index: int,
@@ -2425,7 +2830,11 @@ class Literal:
             if label is None or isinstance(label, Literal.Label)
             else self._check_label_type_for_mutators(label, "insert")
         )
-        checked_child = self._check_child_type_for_mutators(child)
+        checked_child = (
+            self._check_child_type_for_mutators(child)
+            if checked_label is None
+            else self._check_child_type_for_label(checked_label, child)
+        )
         idx = operator.index(index)
         n = len(self.children)
         if idx < 0:
@@ -2454,7 +2863,11 @@ class Literal:
             if label is None or isinstance(label, Literal.Label)
             else self._check_label_type_for_mutators(label, "replace_at")
         )
-        checked_child = self._check_child_type_for_mutators(child)
+        checked_child = (
+            self._check_child_type_for_mutators(child)
+            if checked_label is None
+            else self._check_child_type_for_label(checked_label, child)
+        )
         idx = operator.index(index)
         n = len(self.children)
         norm = idx + n if idx < 0 else idx
@@ -2470,10 +2883,12 @@ class Literal:
         return [child for (lbl, child) in self.children if lbl == label]
 
     def append_value(self, child: fltk.fegen.pyrt.span_protocol.SpanProtocol) -> None:
-        self.children.append((Literal.Label.VALUE, self._check_child_type_for_mutators(child)))
+        self.children.append((Literal.Label.VALUE, self._check_child_type_for_label(Literal.Label.VALUE, child)))
 
     def extend_value(self, children: typing.Iterable[fltk.fegen.pyrt.span_protocol.SpanProtocol]) -> None:
-        self.children.extend([(Literal.Label.VALUE, self._check_child_type_for_mutators(child)) for child in children])
+        self.children.extend(
+            [(Literal.Label.VALUE, self._check_child_type_for_label(Literal.Label.VALUE, child)) for child in children]
+        )
 
     def children_value(self) -> typing.Iterator[fltk.fegen.pyrt.span_protocol.SpanProtocol]:
         return iter(self._children_snapshot(Literal.Label.VALUE))
@@ -2549,7 +2964,11 @@ class Trivia:
             if label is None or isinstance(label, Trivia.Label)
             else self._check_label_type_for_mutators(label, "append")
         )
-        checked_child = self._check_child_type_for_mutators(child)
+        checked_child = (
+            self._check_child_type_for_mutators(child)
+            if checked_label is None
+            else self._check_child_type_for_label(checked_label, child)
+        )
         self.children.append((checked_label, checked_child))
 
     def extend(
@@ -2562,7 +2981,12 @@ class Trivia:
             if label is None or isinstance(label, Trivia.Label)
             else self._check_label_type_for_mutators(label, "extend")
         )
-        self.children.extend([(checked_label, self._check_child_type_for_mutators(child)) for child in children])
+        if checked_label is None:
+            self.children.extend([(None, self._check_child_type_for_mutators(child)) for child in children])
+        else:
+            self.children.extend(
+                [(checked_label, self._check_child_type_for_label(checked_label, child)) for child in children]
+            )
 
     def extend_children(self, other: _cstp.Trivia) -> None:
         if not isinstance(other, Trivia):
@@ -2602,6 +3026,20 @@ class Trivia:
         msg = f"{_cn}.{method}: label argument is not a {_cn}_Label; got {type(label).__name__}"
         raise TypeError(msg)
 
+    def _check_child_type_for_label(
+        self,
+        label: Trivia.Label,
+        child: _cstp.BlockComment | _cstp.LineComment | fltk.fegen.pyrt.span_protocol.SpanProtocol,
+    ) -> BlockComment | LineComment | fltk.fegen.pyrt.span_protocol.SpanProtocol:
+        if label is Trivia.Label.BLOCK_COMMENT:
+            if isinstance(child, BlockComment):
+                return child
+        elif label is Trivia.Label.LINE_COMMENT:
+            if isinstance(child, LineComment):
+                return child
+        msg = f"Trivia: unsupported child type {_type_name_for_error(child)}"
+        raise TypeError(msg)
+
     def insert(
         self,
         index: int,
@@ -2613,7 +3051,11 @@ class Trivia:
             if label is None or isinstance(label, Trivia.Label)
             else self._check_label_type_for_mutators(label, "insert")
         )
-        checked_child = self._check_child_type_for_mutators(child)
+        checked_child = (
+            self._check_child_type_for_mutators(child)
+            if checked_label is None
+            else self._check_child_type_for_label(checked_label, child)
+        )
         idx = operator.index(index)
         n = len(self.children)
         if idx < 0:
@@ -2644,7 +3086,11 @@ class Trivia:
             if label is None or isinstance(label, Trivia.Label)
             else self._check_label_type_for_mutators(label, "replace_at")
         )
-        checked_child = self._check_child_type_for_mutators(child)
+        checked_child = (
+            self._check_child_type_for_mutators(child)
+            if checked_label is None
+            else self._check_child_type_for_label(checked_label, child)
+        )
         idx = operator.index(index)
         n = len(self.children)
         norm = idx + n if idx < 0 else idx
@@ -2662,11 +3108,16 @@ class Trivia:
         return [child for (lbl, child) in self.children if lbl == label]
 
     def append_block_comment(self, child: _cstp.BlockComment) -> None:
-        self.children.append((Trivia.Label.BLOCK_COMMENT, self._check_child_type_for_mutators(child)))
+        self.children.append(
+            (Trivia.Label.BLOCK_COMMENT, self._check_child_type_for_label(Trivia.Label.BLOCK_COMMENT, child))
+        )
 
     def extend_block_comment(self, children: typing.Iterable[_cstp.BlockComment]) -> None:
         self.children.extend(
-            [(Trivia.Label.BLOCK_COMMENT, self._check_child_type_for_mutators(child)) for child in children]
+            [
+                (Trivia.Label.BLOCK_COMMENT, self._check_child_type_for_label(Trivia.Label.BLOCK_COMMENT, child))
+                for child in children
+            ]
         )
 
     def children_block_comment(self) -> typing.Iterator[BlockComment]:
@@ -2687,11 +3138,16 @@ class Trivia:
         return children[0] if children else None
 
     def append_line_comment(self, child: _cstp.LineComment) -> None:
-        self.children.append((Trivia.Label.LINE_COMMENT, self._check_child_type_for_mutators(child)))
+        self.children.append(
+            (Trivia.Label.LINE_COMMENT, self._check_child_type_for_label(Trivia.Label.LINE_COMMENT, child))
+        )
 
     def extend_line_comment(self, children: typing.Iterable[_cstp.LineComment]) -> None:
         self.children.extend(
-            [(Trivia.Label.LINE_COMMENT, self._check_child_type_for_mutators(child)) for child in children]
+            [
+                (Trivia.Label.LINE_COMMENT, self._check_child_type_for_label(Trivia.Label.LINE_COMMENT, child))
+                for child in children
+            ]
         )
 
     def children_line_comment(self) -> typing.Iterator[LineComment]:
@@ -2761,7 +3217,11 @@ class LineComment:
             if label is None or isinstance(label, LineComment.Label)
             else self._check_label_type_for_mutators(label, "append")
         )
-        checked_child = self._check_child_type_for_mutators(child)
+        checked_child = (
+            self._check_child_type_for_mutators(child)
+            if checked_label is None
+            else self._check_child_type_for_label(checked_label, child)
+        )
         self.children.append((checked_label, checked_child))
 
     def extend(
@@ -2774,7 +3234,12 @@ class LineComment:
             if label is None or isinstance(label, LineComment.Label)
             else self._check_label_type_for_mutators(label, "extend")
         )
-        self.children.extend([(checked_label, self._check_child_type_for_mutators(child)) for child in children])
+        if checked_label is None:
+            self.children.extend([(None, self._check_child_type_for_mutators(child)) for child in children])
+        else:
+            self.children.extend(
+                [(checked_label, self._check_child_type_for_label(checked_label, child)) for child in children]
+            )
 
     def extend_children(self, other: _cstp.LineComment) -> None:
         if not isinstance(other, LineComment):
@@ -2814,6 +3279,18 @@ class LineComment:
         msg = f"{_cn}.{method}: label argument is not a {_cn}_Label; got {type(label).__name__}"
         raise TypeError(msg)
 
+    def _check_child_type_for_label(
+        self, _label: LineComment.Label, child: fltk.fegen.pyrt.span_protocol.SpanProtocol
+    ) -> fltk.fegen.pyrt.span_protocol.SpanProtocol:
+        if isinstance(child, fltk.fegen.pyrt.terminalsrc.Span):
+            return child
+        _ns = _get_native_span_type()
+        if _ns is not None and isinstance(child, _ns):
+            native_span: typing.Any = child
+            return native_span
+        msg = f"LineComment: unsupported child type {_type_name_for_error(child)}"
+        raise TypeError(msg)
+
     def insert(
         self,
         index: int,
@@ -2825,7 +3302,11 @@ class LineComment:
             if label is None or isinstance(label, LineComment.Label)
             else self._check_label_type_for_mutators(label, "insert")
         )
-        checked_child = self._check_child_type_for_mutators(child)
+        checked_child = (
+            self._check_child_type_for_mutators(child)
+            if checked_label is None
+            else self._check_child_type_for_label(checked_label, child)
+        )
         idx = operator.index(index)
         n = len(self.children)
         if idx < 0:
@@ -2854,7 +3335,11 @@ class LineComment:
             if label is None or isinstance(label, LineComment.Label)
             else self._check_label_type_for_mutators(label, "replace_at")
         )
-        checked_child = self._check_child_type_for_mutators(child)
+        checked_child = (
+            self._check_child_type_for_mutators(child)
+            if checked_label is None
+            else self._check_child_type_for_label(checked_label, child)
+        )
         idx = operator.index(index)
         n = len(self.children)
         norm = idx + n if idx < 0 else idx
@@ -2870,11 +3355,16 @@ class LineComment:
         return [child for (lbl, child) in self.children if lbl == label]
 
     def append_content(self, child: fltk.fegen.pyrt.span_protocol.SpanProtocol) -> None:
-        self.children.append((LineComment.Label.CONTENT, self._check_child_type_for_mutators(child)))
+        self.children.append(
+            (LineComment.Label.CONTENT, self._check_child_type_for_label(LineComment.Label.CONTENT, child))
+        )
 
     def extend_content(self, children: typing.Iterable[fltk.fegen.pyrt.span_protocol.SpanProtocol]) -> None:
         self.children.extend(
-            [(LineComment.Label.CONTENT, self._check_child_type_for_mutators(child)) for child in children]
+            [
+                (LineComment.Label.CONTENT, self._check_child_type_for_label(LineComment.Label.CONTENT, child))
+                for child in children
+            ]
         )
 
     def children_content(self) -> typing.Iterator[fltk.fegen.pyrt.span_protocol.SpanProtocol]:
@@ -2895,11 +3385,16 @@ class LineComment:
         return children[0] if children else None
 
     def append_prefix(self, child: fltk.fegen.pyrt.span_protocol.SpanProtocol) -> None:
-        self.children.append((LineComment.Label.PREFIX, self._check_child_type_for_mutators(child)))
+        self.children.append(
+            (LineComment.Label.PREFIX, self._check_child_type_for_label(LineComment.Label.PREFIX, child))
+        )
 
     def extend_prefix(self, children: typing.Iterable[fltk.fegen.pyrt.span_protocol.SpanProtocol]) -> None:
         self.children.extend(
-            [(LineComment.Label.PREFIX, self._check_child_type_for_mutators(child)) for child in children]
+            [
+                (LineComment.Label.PREFIX, self._check_child_type_for_label(LineComment.Label.PREFIX, child))
+                for child in children
+            ]
         )
 
     def children_prefix(self) -> typing.Iterator[fltk.fegen.pyrt.span_protocol.SpanProtocol]:
@@ -2993,7 +3488,11 @@ class BlockComment:
             if label is None or isinstance(label, BlockComment.Label)
             else self._check_label_type_for_mutators(label, "append")
         )
-        checked_child = self._check_child_type_for_mutators(child)
+        checked_child = (
+            self._check_child_type_for_mutators(child)
+            if checked_label is None
+            else self._check_child_type_for_label(checked_label, child)
+        )
         self.children.append((checked_label, checked_child))
 
     def extend(
@@ -3006,7 +3505,12 @@ class BlockComment:
             if label is None or isinstance(label, BlockComment.Label)
             else self._check_label_type_for_mutators(label, "extend")
         )
-        self.children.extend([(checked_label, self._check_child_type_for_mutators(child)) for child in children])
+        if checked_label is None:
+            self.children.extend([(None, self._check_child_type_for_mutators(child)) for child in children])
+        else:
+            self.children.extend(
+                [(checked_label, self._check_child_type_for_label(checked_label, child)) for child in children]
+            )
 
     def extend_children(self, other: _cstp.BlockComment) -> None:
         if not isinstance(other, BlockComment):
@@ -3046,6 +3550,18 @@ class BlockComment:
         msg = f"{_cn}.{method}: label argument is not a {_cn}_Label; got {type(label).__name__}"
         raise TypeError(msg)
 
+    def _check_child_type_for_label(
+        self, _label: BlockComment.Label, child: fltk.fegen.pyrt.span_protocol.SpanProtocol
+    ) -> fltk.fegen.pyrt.span_protocol.SpanProtocol:
+        if isinstance(child, fltk.fegen.pyrt.terminalsrc.Span):
+            return child
+        _ns = _get_native_span_type()
+        if _ns is not None and isinstance(child, _ns):
+            native_span: typing.Any = child
+            return native_span
+        msg = f"BlockComment: unsupported child type {_type_name_for_error(child)}"
+        raise TypeError(msg)
+
     def insert(
         self,
         index: int,
@@ -3057,7 +3573,11 @@ class BlockComment:
             if label is None or isinstance(label, BlockComment.Label)
             else self._check_label_type_for_mutators(label, "insert")
         )
-        checked_child = self._check_child_type_for_mutators(child)
+        checked_child = (
+            self._check_child_type_for_mutators(child)
+            if checked_label is None
+            else self._check_child_type_for_label(checked_label, child)
+        )
         idx = operator.index(index)
         n = len(self.children)
         if idx < 0:
@@ -3086,7 +3606,11 @@ class BlockComment:
             if label is None or isinstance(label, BlockComment.Label)
             else self._check_label_type_for_mutators(label, "replace_at")
         )
-        checked_child = self._check_child_type_for_mutators(child)
+        checked_child = (
+            self._check_child_type_for_mutators(child)
+            if checked_label is None
+            else self._check_child_type_for_label(checked_label, child)
+        )
         idx = operator.index(index)
         n = len(self.children)
         norm = idx + n if idx < 0 else idx
@@ -3102,11 +3626,16 @@ class BlockComment:
         return [child for (lbl, child) in self.children if lbl == label]
 
     def append_content(self, child: fltk.fegen.pyrt.span_protocol.SpanProtocol) -> None:
-        self.children.append((BlockComment.Label.CONTENT, self._check_child_type_for_mutators(child)))
+        self.children.append(
+            (BlockComment.Label.CONTENT, self._check_child_type_for_label(BlockComment.Label.CONTENT, child))
+        )
 
     def extend_content(self, children: typing.Iterable[fltk.fegen.pyrt.span_protocol.SpanProtocol]) -> None:
         self.children.extend(
-            [(BlockComment.Label.CONTENT, self._check_child_type_for_mutators(child)) for child in children]
+            [
+                (BlockComment.Label.CONTENT, self._check_child_type_for_label(BlockComment.Label.CONTENT, child))
+                for child in children
+            ]
         )
 
     def children_content(self) -> typing.Iterator[fltk.fegen.pyrt.span_protocol.SpanProtocol]:
@@ -3127,11 +3656,14 @@ class BlockComment:
         return children[0] if children else None
 
     def append_end(self, child: fltk.fegen.pyrt.span_protocol.SpanProtocol) -> None:
-        self.children.append((BlockComment.Label.END, self._check_child_type_for_mutators(child)))
+        self.children.append((BlockComment.Label.END, self._check_child_type_for_label(BlockComment.Label.END, child)))
 
     def extend_end(self, children: typing.Iterable[fltk.fegen.pyrt.span_protocol.SpanProtocol]) -> None:
         self.children.extend(
-            [(BlockComment.Label.END, self._check_child_type_for_mutators(child)) for child in children]
+            [
+                (BlockComment.Label.END, self._check_child_type_for_label(BlockComment.Label.END, child))
+                for child in children
+            ]
         )
 
     def children_end(self) -> typing.Iterator[fltk.fegen.pyrt.span_protocol.SpanProtocol]:
@@ -3152,11 +3684,16 @@ class BlockComment:
         return children[0] if children else None
 
     def append_start(self, child: fltk.fegen.pyrt.span_protocol.SpanProtocol) -> None:
-        self.children.append((BlockComment.Label.START, self._check_child_type_for_mutators(child)))
+        self.children.append(
+            (BlockComment.Label.START, self._check_child_type_for_label(BlockComment.Label.START, child))
+        )
 
     def extend_start(self, children: typing.Iterable[fltk.fegen.pyrt.span_protocol.SpanProtocol]) -> None:
         self.children.extend(
-            [(BlockComment.Label.START, self._check_child_type_for_mutators(child)) for child in children]
+            [
+                (BlockComment.Label.START, self._check_child_type_for_label(BlockComment.Label.START, child))
+                for child in children
+            ]
         )
 
     def children_start(self) -> typing.Iterator[fltk.fegen.pyrt.span_protocol.SpanProtocol]:

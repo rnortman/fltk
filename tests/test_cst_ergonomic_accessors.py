@@ -216,6 +216,7 @@ class TestProtocolMirrorsConcrete:
             concrete -= {
                 "_check_child_type_for_mutators",
                 "_check_label_type_for_mutators",
+                "_check_child_type_for_label",
                 "_children_snapshot",
             }
             # The protocol declares children as a read-only property; the concrete class as a field.

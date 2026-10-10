@@ -58,6 +58,17 @@ class ItemsModel:
         self.types |= other.types
 
 
+# A child checker's lazy native-Span acceptance, emitted after the isinstance against the pure-Python
+# classes misses: fltk._native is resolved only here, so the generated module stays importable
+# without it and the construction hot path never touches it.
+_NATIVE_SPAN_MISS_PATH = """\
+_ns = _get_native_span_type()
+if _ns is not None and isinstance(child, _ns):
+    native_span: typing.Any = child
+    return native_span
+"""
+
+
 class CstGenerator:
     def __init__(self, grammar: gsm.Grammar, py_module: pyreg.Module, context: CompilerContext):
         self.grammar = grammar
@@ -320,6 +331,68 @@ def _type_name_for_error(obj: object) -> str:
             return (fast_path, "checked_label")
         return (f'if label is not None:\n    self._check_label_type_for_mutators(label, "{method}")\n', "None")
 
+    @staticmethod
+    def _child_check_expr(*, labels: bool) -> str:
+        """The expression a generic mutator validates ``child`` with, after ``_label_check_source``.
+
+        On a labelled class a write given a label checks the child against that label's own type
+        set, and an unlabelled write against the node-wide union.  pyright narrows the conditional,
+        so ``checked_label`` is the class's own ``Label`` on the per-label branch.
+        """
+        if labels:
+            return (
+                "self._check_child_type_for_mutators(child) if checked_label is None"
+                " else self._check_child_type_for_label(checked_label, child)"
+            )
+        return "self._check_child_type_for_mutators(child)"
+
+    def _emit_check_child_type_for_label(
+        self, class_name: str, types: _ChildTypes, model: ItemsModel
+    ) -> ast.FunctionDef:
+        """Emit ``_check_child_type_for_label(label, child)``: the child checker for a labelled write.
+
+        A flat dispatch over the label, one arm per distinct allowed type set (labels sharing a set
+        share an arm), each an isinstance against the label's own classes.  ``label`` is always the
+        class's own member — the per-label mutators pass a constant, the generic ones the label
+        ``_check_label_type_for_mutators`` resolved — so the arms compare with ``is``.  Every
+        label's set is a subset of the node-wide one, so a pass here also proves node-wide
+        membership.  The annotations match ``_check_child_type_for_mutators``, keeping every entry a
+        mutator builds statically checked against the children element type.  When every label
+        shares one set there is no dispatch: the body is that set's check alone.
+        """
+        groups: dict[tuple[tuple[str, ...], bool], list[str]] = {}
+        for label in sorted(model.labels):
+            classes, has_span = self._allowed_child_classes(model.labels[label])
+            groups.setdefault((tuple(classes), has_span), []).append(label)
+        arms: list[str] = []
+        if len(groups) == 1:
+            ((classes, has_span),) = groups
+            arms.append(f"if isinstance(child, {' | '.join(classes)}):\n    return child\n")
+            if has_span:
+                arms.append(_NATIVE_SPAN_MISS_PATH)
+            label_param = "_label"
+        else:
+            for i, ((classes, has_span), group_labels) in enumerate(groups.items()):
+                keyword = "if" if i == 0 else "elif"
+                condition = " or ".join(f"label is {class_name}.Label.{label.upper()}" for label in group_labels)
+                body = f"    if isinstance(child, {' | '.join(classes)}):\n        return child\n"
+                if has_span:
+                    body += "".join(f"    {line}\n" for line in _NATIVE_SPAN_MISS_PATH.splitlines())
+                arms.append(f"{keyword} {condition}:\n{body}")
+            label_param = "label"
+        fn = pygen.function(
+            "_check_child_type_for_label",
+            f"self, {label_param}: {class_name}.Label, child: {types.input_child}",
+            types.concrete_child,
+        )
+        fn.body.extend(
+            ast.parse(
+                "".join(arms) + f'msg = f"{class_name}: unsupported child type {{_type_name_for_error(child)}}"\n'
+                "raise TypeError(msg)\n"
+            ).body
+        )
+        return fn
+
     def py_class_for_model(self, class_name: str, model: ItemsModel, rule_name: str = "") -> list[ast.stmt]:
         """Emit the dataclass for a rule node plus its post-class Label canonical-name assignments.
 
@@ -403,10 +476,11 @@ def _type_name_for_error(obj: object) -> str:
         # Label before child, on every mutator and both backends: one validation order, so error
         # precedence needs no per-mutator rule.
         prep, label_expr = self._label_check_source(class_name, labels=bool(labels), method="append")
+        child_check = self._child_check_expr(labels=bool(labels))
         append_fn.body.extend(
             ast.parse(
                 f"""\
-{prep}checked_child = self._check_child_type_for_mutators(child)
+{prep}checked_child = {child_check}
 self.children.append(({label_expr}, checked_child))
 """
             ).body
@@ -422,13 +496,21 @@ self.children.append(({label_expr}, checked_child))
         # generator: every child is validated before any is stored, so a rejected element leaves the
         # node unmutated.
         prep, label_expr = self._label_check_source(class_name, labels=bool(labels), method="extend")
-        extend_fn.body.extend(
-            ast.parse(
-                f"""\
+        if labels:
+            # Branch once on the resolved label: each comprehension sees `checked_label` narrowed.
+            extend_src = f"""\
+{prep}if checked_label is None:
+    self.children.extend([(None, self._check_child_type_for_mutators(child)) for child in children])
+else:
+    self.children.extend(
+        [(checked_label, self._check_child_type_for_label(checked_label, child)) for child in children]
+    )
+"""
+        else:
+            extend_src = f"""\
 {prep}self.children.extend([({label_expr}, self._check_child_type_for_mutators(child)) for child in children])
 """
-            ).body
-        )
+        extend_fn.body.extend(ast.parse(extend_src).body)
         klass.body.append(extend_fn)
 
         extend_children_fn = pygen.function(
@@ -492,17 +574,13 @@ self.children.extend(other.children)
 
         def concrete_body_for(method: str, label: str) -> list[ast.stmt]:
             upper = label.upper()
-            # TODO(cst-per-label-mutator-narrow-child-check): append_<label>/extend_<label> validate
-            # against the node-wide child union, not this label's own child annotation, so a child
-            # of a wrong-but-known class is stored under this label and then silently skipped by the
-            # typed readers.  The Rust per-label mutators share the hole (node-wide child enum).
             if method == "append":
                 # No escape hatch: the label is this node's own enum member and the checker returns
                 # the node's concrete child union, which is the children element type.
                 return [
                     pygen.stmt(
                         f"self.children.append(({class_name}.Label.{upper},"
-                        " self._check_child_type_for_mutators(child)))"
+                        f" self._check_child_type_for_label({class_name}.Label.{upper}, child)))"
                     )
                 ]
             if method == "extend":
@@ -511,7 +589,7 @@ self.children.extend(other.children)
                 return [
                     pygen.stmt(
                         f"self.children.extend([({class_name}.Label.{upper},"
-                        " self._check_child_type_for_mutators(child)) for child in children])"
+                        f" self._check_child_type_for_label({class_name}.Label.{upper}, child)) for child in children])"
                     )
                 ]
             if method == "children":
@@ -596,7 +674,8 @@ self.children.extend(other.children)
         re-listing ``children_<label>()``'s iterator, which would copy it a second time.
 
         ``<label>_text`` raises ``TypeError`` when a non-Span child is stored under a span
-        label — only reachable through the untyped mutators.
+        label — only reachable by writing the raw ``children`` list, since every labelled write
+        checks the label's own child types.
         """
         if member == "bare":
             arity = plan.bare_accessors[label]
@@ -646,6 +725,23 @@ raise ValueError(msg)
         msg = f"Unknown ergonomic member: {member!r}"
         raise ValueError(msg)
 
+    def _allowed_child_classes(self, model_types: Iterable[ModelType]) -> tuple[list[str], bool]:
+        """The concrete classes a child checker admits for ``model_types``, and whether a Span is one.
+
+        Rule references become their node class names and the Span key becomes
+        ``fltk.fegen.pyrt.terminalsrc.Span`` (a native Span is admitted separately, through the
+        checker's lazy miss path).  The list is sorted and deduplicated: the type sets are sets, so
+        without the sort each generation run could order the isinstance unions differently under a
+        different ``PYTHONHASHSEED``.
+        """
+        model_types = list(model_types)
+        allowed = {
+            self.class_name_for_rule_node(mt) if isinstance(mt, str) else "fltk.fegen.pyrt.terminalsrc.Span"
+            for mt in model_types
+        }
+        has_span = any(not isinstance(mt, str) for mt in model_types)
+        return sorted(allowed), has_span
+
     def _emit_py_mutators(
         self,
         class_name: str,
@@ -661,31 +757,7 @@ raise ValueError(msg)
         """
         fns: list[ast.stmt] = []
 
-        # Collect allowed concrete child classes (rule references → class names; Span types).
-        allowed_classes: list[str] = []
-        for mt in model.types:
-            if isinstance(mt, str):
-                # rule reference → class name in this module
-                allowed_classes.append(self.class_name_for_rule_node(mt))
-            else:
-                # Span type key → fltk.fegen.pyrt.terminalsrc.Span
-                # (native Span also accepted, resolved lazily — see _validate_child helper)
-                allowed_classes.append("fltk.fegen.pyrt.terminalsrc.Span")
-
-        # Deduplicate and sort for deterministic output.
-        # Sort is required because model.types is a set (hash order varies per PYTHONHASHSEED);
-        # without sorting, each generation run can produce differently-ordered isinstance unions
-        # with no semantic difference — pure churn.
-        # The sorted-annotation precedent is py_annotation_for_model_types (gsm2tree.py:88).
-        seen: set[str] = set()
-        unique_classes: list[str] = []
-        for c in sorted(allowed_classes):
-            if c not in seen:
-                seen.add(c)
-                unique_classes.append(c)
-
-        # Determine if there are Span types among the model types (need native Span check).
-        has_span_types = any(not isinstance(mt, str) for mt in model.types)
+        unique_classes, has_span_types = self._allowed_child_classes(model.types)
 
         # Returns the child so a mutator can validate inline in the expression that builds the
         # children entry.  The declared return is the node's *concrete* child union: the isinstance
@@ -699,16 +771,7 @@ raise ValueError(msg)
         check_child_fn = pygen.function(
             "_check_child_type_for_mutators", f"self, child: {types.input_child}", types.concrete_child
         )
-        native_span_branch = (
-            """\
-_ns = _get_native_span_type()
-if _ns is not None and isinstance(child, _ns):
-    native_span: typing.Any = child
-    return native_span
-"""
-            if has_span_types
-            else ""
-        )
+        native_span_branch = _NATIVE_SPAN_MISS_PATH if has_span_types else ""
         check_child_fn.body.extend(
             ast.parse(
                 f"""\
@@ -750,6 +813,7 @@ raise TypeError(msg)
                 ).body
             )
             fns.append(check_label_fn)
+            fns.append(self._emit_check_child_type_for_label(class_name, types, model))
         else:
             # Label-free node: any non-None label is an error
             check_label_fn = pygen.function(
@@ -777,10 +841,11 @@ if label is not None:
             "None",
         )
         prep, label_expr = self._label_check_source(class_name, labels=bool(model.labels), method="insert")
+        child_check = self._child_check_expr(labels=bool(model.labels))
         insert_fn.body.extend(
             ast.parse(
                 f"""\
-{prep}checked_child = self._check_child_type_for_mutators(child)
+{prep}checked_child = {child_check}
 idx = operator.index(index)
 n = len(self.children)
 if idx < 0:
@@ -831,7 +896,8 @@ if norm < 0 or norm >= n:
             "None",
         )
         prep, label_expr = self._label_check_source(class_name, labels=bool(model.labels), method="replace_at")
-        replace_fn.body.extend(ast.parse(f"{prep}checked_child = self._check_child_type_for_mutators(child)\n").body)
+        child_check = self._child_check_expr(labels=bool(model.labels))
+        replace_fn.body.extend(ast.parse(f"{prep}checked_child = {child_check}\n").body)
         replace_fn.body.extend(_emit_bounds_check_stmts("replace_at"))
         replace_fn.body.extend(ast.parse(f"self.children[norm] = ({label_expr}, checked_child)\n").body)
         fns.append(replace_fn)

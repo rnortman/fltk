@@ -37,6 +37,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- **Breaking (narrow)** — generated CST node classes, both backends: a child written under a
+  label must now have that label's own type. `append_<label>`, `extend_<label>`, and the generic
+  `append` / `extend` / `insert` / `replace_at` called with `label=` used to accept any child
+  type the node could hold anywhere — so `items.append_item(Trivia())` succeeded and the
+  `Trivia` came back from `children_item()` typed as `Item`. They now raise the existing
+  `TypeError: <Class>: unsupported child type <module>.<qualname>` and leave the node unchanged.
+  Code this breaks was already a pyright error on the per-label methods, or built a tree the
+  generated unparser refuses. Unlabelled writes (`label=None`), all readers, generated names and
+  annotations are unchanged; the raw Python `children` list remains unchecked.
 - **Breaking (narrow)** — LSP server: the `--resolver HEAD:attr` flag now decides whether `HEAD`
   is a file or a Python module from the text alone. It is a file if it ends in `.py` or contains a
   `/` or `\`; anything else is imported as a module. Before, a bare head like `mylang.resolvers`

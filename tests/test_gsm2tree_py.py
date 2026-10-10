@@ -6,6 +6,8 @@ Tests validate AST-level output of py_class_for_model, not compiled execution.
 from __future__ import annotations
 
 import ast
+import inspect
+import textwrap
 
 import pytest
 
@@ -808,32 +810,53 @@ class TestMutatorEntryShapes:
             src = self._method_source(grammar, rule, class_name, method=method)
             assert self._label_check(class_name, labeled=labeled, method=method) in src, (method, class_name, src)
 
+    @staticmethod
+    def _child_check(*, labeled: bool) -> str:
+        """A labelled write checks the label's own types; an unlabelled one the node-wide union."""
+        if labeled:
+            return (
+                "checked_child = self._check_child_type_for_mutators(child) if checked_label is None"
+                " else self._check_child_type_for_label(checked_label, child)"
+            )
+        return "checked_child = self._check_child_type_for_mutators(child)"
+
     @pytest.mark.parametrize("method", ["append", "extend", "insert", "replace_at"])
     def test_the_label_is_checked_before_the_child(self, method: str) -> None:
         """One validation order on both backends: label, then child, then (where it exists) index."""
-        for grammar, rule, class_name, _labeled in self._GRAMMARS:
+        for grammar, rule, class_name, labeled in self._GRAMMARS:
             src = self._method_source(grammar, rule, class_name, method=method)
-            assert src.index("_check_label_type_for_mutators") < src.index("_check_child_type_for_mutators"), (
-                method,
-                class_name,
-                src,
-            )
+            label_at = src.index("_check_label_type_for_mutators")
+            assert label_at < src.index("_check_child_type_for_mutators"), (method, class_name, src)
+            if labeled:
+                assert label_at < src.index("_check_child_type_for_label"), (method, class_name, src)
 
     def test_append_stores_both_checkers_returns(self) -> None:
         for grammar, rule, class_name, labeled in self._GRAMMARS:
             src = self._method_source(grammar, rule, class_name)
             label_expr = "checked_label" if labeled else "None"
-            assert "checked_child = self._check_child_type_for_mutators(child)" in src, src
+            assert self._child_check(labeled=labeled) in src, src
             assert f"self.children.append(({label_expr}, checked_child))" in src, src
             assert "typing.Any" not in src, src
 
     def test_extend_resolves_its_label_once_outside_the_comprehension(self) -> None:
-        """Resolving per element would repeat the lookup; a bad label must abort before any read."""
+        """Resolving per element would repeat the lookup; a bad label must abort before any read.
+
+        On a labelled class the resolved label picks the child checker once, before any child is
+        read: the node-wide union for ``None``, the label's own types otherwise.
+        """
         for grammar, rule, class_name, labeled in self._GRAMMARS:
             src = self._method_source(grammar, rule, class_name, method="extend")
-            label_expr = "checked_label" if labeled else "None"
-            entries = f"[({label_expr}, self._check_child_type_for_mutators(child)) for child in children]"
-            assert f"self.children.extend({entries})" in src, src
+            if labeled:
+                unlabelled = "[(None, self._check_child_type_for_mutators(child)) for child in children]"
+                labelled = (
+                    "[(checked_label, self._check_child_type_for_label(checked_label, child)) for child in children]"
+                )
+                assert "if checked_label is None:" in src, src
+                assert f"self.children.extend({unlabelled})" in src, src
+                assert f"self.children.extend({labelled})" in src, src
+            else:
+                entries = "[(None, self._check_child_type_for_mutators(child)) for child in children]"
+                assert f"self.children.extend({entries})" in src, src
             assert "typing.Any" not in src, src
 
     @pytest.mark.parametrize("method", ["insert", "replace_at"])
@@ -847,22 +870,28 @@ class TestMutatorEntryShapes:
                 if method == "insert"
                 else f"self.children[norm] = ({label_expr}, checked_child)"
             )
-            assert "checked_child = self._check_child_type_for_mutators(child)" in src, src
+            assert self._child_check(labeled=labeled) in src, src
             assert stored in src, src
             assert "typing.Any" not in src, src
 
     def test_per_label_mutators_supply_the_member_and_check_the_child(self) -> None:
         span_labeled = self._method_source(_make_labeled_grammar(), "bar", "Bar", method="append_name")
-        assert "self.children.append((Bar.Label.NAME, self._check_child_type_for_mutators(child)))" in span_labeled, (
-            span_labeled
-        )
+        assert (
+            "self.children.append((Bar.Label.NAME, self._check_child_type_for_label(Bar.Label.NAME, child)))"
+            in span_labeled
+        ), span_labeled
         assert "typing.Any" not in span_labeled, span_labeled
 
         rule_ref = self._method_source(_rule_ref_grammar(labeled=True), "baz", "Baz", method="append_inner")
-        assert "self.children.append((Baz.Label.INNER, self._check_child_type_for_mutators(child)))" in rule_ref, (
-            rule_ref
-        )
+        assert (
+            "self.children.append((Baz.Label.INNER, self._check_child_type_for_label(Baz.Label.INNER, child)))"
+            in rule_ref
+        ), rule_ref
         assert "typing.Any" not in rule_ref, rule_ref
+
+        extend = self._method_source(_rule_ref_grammar(labeled=True), "baz", "Baz", method="extend_inner")
+        entries = "[(Baz.Label.INNER, self._check_child_type_for_label(Baz.Label.INNER, child)) for child in children]"
+        assert f"self.children.extend({entries})" in extend, extend
 
     def test_extend_children_narrows_other_before_reading_its_children(self) -> None:
         """`other: _cstp.Foo` is the protocol class, so without the guard `other.children` is a
@@ -912,6 +941,152 @@ class TestChildCheckerShape:
         assert first.startswith("if isinstance(child, "), first
         assert "return child" in first, first
         assert src.index("_get_native_span_type()") > src.index("return child"), src
+
+
+class TestPerLabelChildCheckerShape:
+    """``_check_child_type_for_label`` is a flat dispatch, one arm per distinct label type set."""
+
+    @staticmethod
+    def _seed_checker(node_class: type) -> ast.FunctionDef:
+        fn = ast.parse(textwrap.dedent(inspect.getsource(node_class._check_child_type_for_label))).body[0]
+        assert isinstance(fn, ast.FunctionDef)
+        return fn
+
+    @staticmethod
+    def _arms(fn: ast.FunctionDef) -> list[ast.If]:
+        """The dispatch's arms, in order: the leading ``if`` and its ``elif`` chain."""
+        arms: list[ast.If] = []
+        node = fn.body[0]
+        while isinstance(node, ast.If):
+            arms.append(node)
+            node = node.orelse[0] if len(node.orelse) == 1 else None
+        return arms
+
+    @pytest.mark.parametrize(
+        ("grammar", "rule", "class_name", "labeled"),
+        TestMutatorEntryShapes._GRAMMARS,
+    )
+    def test_it_exists_exactly_on_labelled_classes(
+        self,
+        grammar: gsm.Grammar,
+        rule: str,
+        class_name: str,
+        labeled: bool,  # noqa: FBT001
+    ) -> None:
+        gen = _make_generator(grammar)
+        klass = _get_class_def(gen.py_class_for_model(class_name, gen.rule_models[rule], rule), class_name)
+        assert (_find_function(klass, "_check_child_type_for_label") is not None) == labeled
+
+    def test_labels_with_equal_type_sets_share_an_arm(self) -> None:
+        """fegen ``Items``: ``item`` holds ``Item``; ``no_ws`` / ``ws_allowed`` / ``ws_required`` hold Spans."""
+        arms = self._arms(self._seed_checker(fltk_cst.Items))
+        assert [ast.unparse(arm.test) for arm in arms] == [
+            "label is Items.Label.ITEM",
+            "label is Items.Label.NO_WS or label is Items.Label.WS_ALLOWED or label is Items.Label.WS_REQUIRED",
+        ]
+        assert ast.unparse(arms[0].body[0].test) == "isinstance(child, Item)"
+        assert ast.unparse(arms[1].body[0].test) == "isinstance(child, fltk.fegen.pyrt.terminalsrc.Span)"
+
+    def test_the_native_span_probe_is_only_in_span_admitting_arms(self) -> None:
+        item_arm, span_arm = self._arms(self._seed_checker(fltk_cst.Items))
+        assert "_get_native_span_type" not in ast.unparse(item_arm.body), ast.unparse(item_arm)
+        assert "_get_native_span_type" in ast.unparse(span_arm.body), ast.unparse(span_arm)
+
+    def test_the_return_type_is_the_concrete_child_union(self) -> None:
+        fn = self._seed_checker(fltk_cst.Items)
+        ret = _annotation_source(fn.returns)
+        assert gsm2tree_mod.PROTOCOL_MODULE_ALIAS not in ret, ret
+        assert ret == "Item | Trivia | fltk.fegen.pyrt.span_protocol.SpanProtocol", ret
+        assert _annotation_source(fn.args.args[1].annotation) == "Items.Label"
+
+    @staticmethod
+    def _unsorted_dispatch_grammar() -> gsm.Grammar:
+        """``bar := zeta:b . mid:/x/ . alpha:/y/ | zeta:a`` plus two leaf rules ``b`` and ``a``.
+
+        Every list the emitter sorts is declared here in reverse: ``zeta`` (union {B, A}) comes
+        first, and the Span labels ``mid`` / ``alpha`` share an arm in that order.
+        """
+
+        def item(label: str, term: gsm.Term) -> gsm.Item:
+            return gsm.Item(label=label, disposition=gsm.Disposition.INCLUDE, term=term, quantifier=gsm.REQUIRED)
+
+        def leaf(name: str) -> gsm.Rule:
+            return gsm.Rule(
+                name=name,
+                alternatives=[
+                    gsm.Items(
+                        items=[
+                            gsm.Item(
+                                label=None,
+                                disposition=gsm.Disposition.INCLUDE,
+                                term=gsm.Literal(name),
+                                quantifier=gsm.REQUIRED,
+                            )
+                        ],
+                        sep_after=[gsm.Separator.NO_WS],
+                    )
+                ],
+            )
+
+        bar = gsm.Rule(
+            name="bar",
+            alternatives=[
+                gsm.Items(
+                    items=[
+                        item("zeta", gsm.Identifier("b")),
+                        item("mid", gsm.Regex("x")),
+                        item("alpha", gsm.Regex("y")),
+                    ],
+                    sep_after=[gsm.Separator.NO_WS] * 3,
+                ),
+                gsm.Items(items=[item("zeta", gsm.Identifier("a"))], sep_after=[gsm.Separator.NO_WS]),
+            ],
+        )
+        rules = (bar, leaf("b"), leaf("a"))
+        return gsm.Grammar(rules=rules, identifiers={rule.name: rule for rule in rules})
+
+    def test_arms_labels_and_classes_are_sorted(self) -> None:
+        """Every list the emitter builds is a sort over a set, so output is hash-seed independent."""
+        gen = _make_generator(self._unsorted_dispatch_grammar())
+        klass = _get_class_def(gen.py_class_for_model("Bar", gen.rule_models["bar"], "bar"), "Bar")
+        checker = _find_function(klass, "_check_child_type_for_label")
+        assert checker is not None
+        arms = self._arms(checker)
+        assert [ast.unparse(arm.test) for arm in arms] == [
+            "label is Bar.Label.ALPHA or label is Bar.Label.MID",
+            "label is Bar.Label.ZETA",
+        ]
+        assert ast.unparse(arms[1].body[0].test) == "isinstance(child, A | B)"
+
+    @pytest.mark.parametrize(
+        ("node_class", "isinstance_test", "has_span"),
+        [
+            # Three labels, every one holding a Span.
+            (fltk_cst.Disposition, "isinstance(child, fltk.fegen.pyrt.terminalsrc.Span)", True),
+            # One label, holding a node.
+            (fltk_cst.Grammar, "isinstance(child, Rule)", False),
+        ],
+    )
+    def test_one_shared_type_set_emits_no_label_dispatch(
+        self,
+        node_class: type,
+        isinstance_test: str,
+        has_span: bool,  # noqa: FBT001
+    ) -> None:
+        """When every label admits the same set the label decides nothing, so nothing tests it."""
+        fn = self._seed_checker(node_class)
+        src = ast.unparse(fn)
+        assert "label is" not in src, src
+        assert fn.args.args[1].arg == "_label"
+        first = fn.body[0]
+        assert isinstance(first, ast.If)
+        assert ast.unparse(first.test) == isinstance_test
+        assert ("_get_native_span_type" in src) == has_span, src
+        assert isinstance(fn.body[-1], ast.Raise)
+
+    def test_a_rejection_raises_the_shared_template(self) -> None:
+        src = ast.unparse(self._seed_checker(fltk_cst.Items))
+        assert "msg = f'Items: unsupported child type {_type_name_for_error(child)}'" in src, src
 
 
 class TestLabelCheckerShape:

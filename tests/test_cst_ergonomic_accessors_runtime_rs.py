@@ -187,34 +187,36 @@ def test_optional_label_text_error_matches_its_own_quintet_member() -> None:
 
 
 def test_wrong_child_type_under_a_span_label_raises_type_error() -> None:
-    """Only reachable through the untyped mutators; both backends name class, member and label."""
-    messages = []
-    for node in _both("kw_labels", "abc#7"):
-        num_child = node.child_match()
-        node.clear()
-        node.append(num_child, type(node).Label.TYPE)
-        with pytest.raises(TypeError) as excinfo:
-            node.type_text()
-        messages.append(str(excinfo.value))
+    """Only reachable by writing the Python children list directly: every labelled write refuses
+    the child on both backends."""
+    py_node, rs_node = _both("kw_labels", "abc#7")
+    rs_num = rs_node.child_match()
+    with pytest.raises(TypeError, match="KwLabels: unsupported child type"):
+        rs_node.append(rs_num, type(rs_node).Label.TYPE)
 
-    assert messages[0] == messages[1]
-    assert messages[0] == "KwLabels.type_text: child labelled 'type' is not a Span"
+    py_num = py_node.child_match()
+    py_node.clear()
+    py_node.children.append((type(py_node).Label.TYPE, py_num))
+    with pytest.raises(TypeError) as excinfo:
+        py_node.type_text()
+    assert str(excinfo.value) == "KwLabels.type_text: child labelled 'type' is not a Span"
 
 
 def test_wrong_child_type_under_an_optional_span_label_raises_type_error() -> None:
     """The optional arity has its own wrong-variant arm, reached when exactly one child is
-    stored under the label; both backends word it like the required arity."""
-    messages = []
-    for node in _both("mixed_opt", "ab7"):
-        num_child = node.child_node()
-        node.clear()
-        node.append(num_child, type(node).Label.KEY)
-        with pytest.raises(TypeError) as excinfo:
-            node.key_text()
-        messages.append(str(excinfo.value))
+    stored under the label; worded like the required arity.  As above, only the raw Python
+    children list can store it."""
+    py_node, rs_node = _both("mixed_opt", "ab7")
+    rs_num = rs_node.child_node()
+    with pytest.raises(TypeError, match="MixedOpt: unsupported child type"):
+        rs_node.append(rs_num, type(rs_node).Label.KEY)
 
-    assert messages[0] == messages[1]
-    assert messages[0] == "MixedOpt.key_text: child labelled 'key' is not a Span"
+    py_num = py_node.child_node()
+    py_node.clear()
+    py_node.children.append((type(py_node).Label.KEY, py_num))
+    with pytest.raises(TypeError) as excinfo:
+        py_node.key_text()
+    assert str(excinfo.value) == "MixedOpt.key_text: child labelled 'key' is not a Span"
 
 
 def test_optional_span_label_beside_a_node_label() -> None:

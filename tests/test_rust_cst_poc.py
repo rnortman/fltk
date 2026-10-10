@@ -15,6 +15,11 @@ def _span(start: int = 0, end: int = 1) -> Span:
     return Span(start, end)
 
 
+def _ident(start: int = 0, end: int = 1) -> Identifier:
+    """An ``Identifier`` node, the one type the ``item`` label holds; the span tells them apart."""
+    return Identifier(span=_span(start, end))
+
+
 class TestLabelSemantics:
     def test_label_identity_equality(self):
         """AC-1: Same-variant equality."""
@@ -312,7 +317,7 @@ class TestItemsMethods:
 
     def test_item_label(self):
         node = self._make_node()
-        s = _span(0, 1)
+        s = _ident(0, 1)
         node.append_item(s)
         assert node.child_item() == s
         assert list(node.children_item()) == [s]
@@ -323,13 +328,23 @@ class TestItemsMethods:
         with pytest.raises(ValueError, match="Expected one item child but have 0"):
             node2.child_item()
 
-        node.append_item(_span(1, 2))
+        node.append_item(_ident(1, 2))
         with pytest.raises(ValueError, match="Expected at most one item child but have at least 2"):
             node.maybe_item()
 
         node3 = self._make_node()
-        node3.extend_item([_span(0, 1), _span(1, 2)])
-        assert list(node3.children_item()) == [_span(0, 1), _span(1, 2)]
+        node3.extend_item([_ident(0, 1), _ident(1, 2)])
+        assert list(node3.children_item()) == [_ident(0, 1), _ident(1, 2)]
+
+    def test_item_label_rejects_a_span(self):
+        """``item`` holds ``Identifier`` nodes only, though ``Items`` admits a Span node-wide."""
+        node = self._make_node()
+        span = _span(0, 1)
+        with pytest.raises(TypeError) as exc_info:
+            node.append_item(span)  # type: ignore[arg-type]
+        span_type = type(span)
+        assert str(exc_info.value) == f"Items: unsupported child type {span_type.__module__}.{span_type.__qualname__}"
+        assert node.children == []
 
     def test_no_ws_label(self):
         node = self._make_node()
@@ -404,9 +419,9 @@ class TestItemsMethods:
     def test_cross_label_filtering(self):
         """children_item() must return only ITEM-labeled children, not NO_WS etc."""
         node = Items()
-        s_item1 = _span(0, 1)
+        s_item1 = _ident(0, 1)
         s_no_ws = _span(1, 2)
-        s_item2 = _span(2, 3)
+        s_item2 = _ident(2, 3)
         s_ws_allowed = _span(3, 4)
         node.append_item(s_item1)
         node.append_no_ws(s_no_ws)
@@ -533,7 +548,7 @@ class TestFilterUnderGuardRegression:
     def _make_items_with_mixed_labels(self) -> tuple["Items", list, list]:
         """Return an Items node with many item-labeled and no_ws-labeled children interleaved."""
         node = Items()
-        item_spans = [_span(i * 2, i * 2 + 1) for i in range(5)]
+        item_spans = [_ident(i * 2, i * 2 + 1) for i in range(5)]
         no_ws_spans = [_span(i * 2 + 1, i * 2 + 2) for i in range(5)]
         # Interleave: item, no_ws, item, no_ws, ...
         for i in range(5):
@@ -574,7 +589,7 @@ class TestFilterUnderGuardRegression:
         """child_<label> succeeds when exactly one child matches, ignoring non-matching entries."""
         node = Items()
         non_target = _span(0, 1)
-        target = _span(1, 2)
+        target = _ident(1, 2)
         another_non_target = _span(2, 3)
         node.append_no_ws(non_target)
         node.append_item(target)
@@ -586,7 +601,7 @@ class TestFilterUnderGuardRegression:
         """maybe_<label> returns the sole match when exactly one child has that label."""
         node = Items()
         node.append_no_ws(_span(0, 1))
-        target = _span(1, 2)
+        target = _ident(1, 2)
         node.append_item(target)
         node.append_no_ws(_span(2, 3))
         result = node.maybe_item()

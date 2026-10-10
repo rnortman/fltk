@@ -193,6 +193,7 @@ _PYTHON_FIXED_MEMBERS = frozenset(
         "Label",
         "_check_child_type_for_mutators",
         "_check_label_type_for_mutators",
+        "_check_child_type_for_label",
         "_LABELS_BY_CANONICAL_NAME",
         "_children_snapshot",
     }
@@ -212,7 +213,7 @@ _RUST_NATIVE_FIXED_MEMBERS = frozenset(
 )
 
 # Fixed method names on the Rust handle struct.
-_RUST_HANDLE_FIXED_MEMBERS = frozenset({"shared", "to_py_canonical", "py_children_snapshot"})
+_RUST_HANDLE_FIXED_MEMBERS = frozenset({"shared", "to_py_canonical", "py_children_snapshot", "py_label_admits_child"})
 
 # Trait methods callable on the generated Rust structs, either through a derive (`Clone`,
 # `Debug`, `PartialEq`) or through a blanket impl (`Into`, `Borrow`, `ToOwned`, `TryInto`,
