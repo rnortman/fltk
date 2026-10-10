@@ -48,7 +48,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   of literals and regexes alone is terminal-only, already erased to text, and is unaffected. Before,
   every non-literal value of such a rule unparsed as the literal, so no working code could depend
   on either old type; now parsed input round-trips and out-of-set text is refused.
-
+- **Breaking (narrow)** — `fltk-fmt-cli`: a formatter binary's `--version`/`-V` now prints its
+  own identity, `<name> <version>`, instead of the scaffolding's (`fltk-fmt-cli 0.4.0`).
+  `fltk_formatter_main!` invocations need no edit: `name` and `version` default to the invoking
+  crate's `CARGO_PKG_NAME` / `CARGO_PKG_VERSION` — under Bazel, the `rust_binary` target name
+  and its `version` attribute, which rules_rust sets to `0.0.0` when absent. Add `version` to
+  your formatter's `rust_binary`, or it reports `0.0.0`. `run_main(about, format_fn)` becomes
+  `run_main(FormatterInfo { about, name, version }, format_fn)`; a direct caller builds the
+  struct. `FmtArgs`'s derived command no longer declares a version, so `FmtArgs::parse()` used
+  on its own has no `--version` flag; `run_main` supplies it. New optional `name:` and
+  `version:` macro keys (after `about:`, in that order) override the defaults — useful when the
+  Bazel target name is not what users should see.
 - `fltk_unparser_core::Doc::SeparatorSpec` gains a `preserved_blank_lines: u32` field (the capped
   source blank count a spacing-only separator carries; `0` when none), and
   `preserved_blank_separator_spec(blank_lines, required)` is a new re-exported constructor.

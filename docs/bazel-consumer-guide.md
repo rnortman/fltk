@@ -304,6 +304,8 @@ rust_binary(
     name = "mylang_fmt",
     srcs = ["main.rs"],
     edition = "2021",
+    # What `--version` prints; omitted, rules_rust supplies 0.0.0.
+    version = "1.0.0",
     deps = [
         ":mylang",
         "@fltk//crates/fltk-fmt-cli",
@@ -312,7 +314,9 @@ rust_binary(
 ```
 
 See `docs/rust-formatter-guide.md` for the macro invocation itself; the Bazel-specific part
-is only the two deps above. `tests/bazel_consumer` builds exactly this shape and diff-tests
+is only the two deps and the `version` above. `--version` prints the target name and that
+`version`; an existing consumer upgrading past the release that made `--version` per-consumer
+needs only to add the attribute. `tests/bazel_consumer` builds exactly this shape and diff-tests
 the binary's output.
 
 ---

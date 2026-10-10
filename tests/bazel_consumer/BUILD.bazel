@@ -163,6 +163,9 @@ rust_binary(
     name = "consumer_fmt_bin",
     srcs = ["consumer_fmt_main.rs"],
     edition = "2021",
+    # What `--version` prints. The pre-release tag names this fixture, so it can never equal
+    # fltk's own crate version: consumer_fmt_version_test tells the two apart.
+    version = "0.0.1-consumer",
     deps = [
         ":consumer_fmt",
         "@fltk//crates/fltk-fmt-cli",
@@ -187,6 +190,35 @@ diff_test(
     name = "consumer_fmt_cli_test",
     file1 = ":consumer_fmt_actual",
     file2 = "consumer_fmt_expected.txt",
+)
+
+# The same formatter through the macro's `name:`/`version:` override keys. Its `version`
+# attribute differs from the overrides, so the test tells a given value from a default.
+rust_binary(
+    name = "consumer_fmt_override_bin",
+    srcs = ["consumer_fmt_override_main.rs"],
+    edition = "2021",
+    version = "0.0.1-consumer",
+    deps = [
+        ":consumer_fmt",
+        "@fltk//crates/fltk-fmt-cli",
+    ],
+)
+
+# --version/-V through the macro's default arm must print this binary's own target name and
+# `version` attribute, never fltk-fmt-cli's; through the override keys, the given values.
+rust_test(
+    name = "consumer_fmt_version_test",
+    srcs = ["consumer_fmt_version_test.rs"],
+    data = [
+        ":consumer_fmt_bin",
+        ":consumer_fmt_override_bin",
+    ],
+    edition = "2021",
+    env = {
+        "CONSUMER_FMT_BIN": "$(rootpath :consumer_fmt_bin)",
+        "CONSUMER_FMT_OVERRIDE_BIN": "$(rootpath :consumer_fmt_override_bin)",
+    },
 )
 
 # ── extension-mode unparser path ──────────────────────────────────────────────

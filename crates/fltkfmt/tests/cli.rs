@@ -17,7 +17,7 @@
 //! Outputs are compared as raw bytes (never lossily decoded), and every temp file uses a
 //! pid+counter-unique name and is cleaned up, so parallel `cargo test` execution is safe.
 
-use std::io::Write;
+use std::io::{ErrorKind, Write};
 use std::path::PathBuf;
 use std::process::{Command, Stdio};
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -60,7 +60,11 @@ fn run(args: &[&str], stdin: Option<&[u8]>) -> (i32, Vec<u8>, Vec<u8>) {
     {
         let mut child_stdin = child.stdin.take().expect("child stdin");
         if let Some(bytes) = stdin {
-            child_stdin.write_all(bytes).expect("write child stdin");
+            // A child that exits before draining stdin (`--help`, `--version`, an argument
+            // error) closes the pipe; the exit code and outputs below are what get asserted.
+            if let Err(e) = child_stdin.write_all(bytes) {
+                assert_eq!(e.kind(), ErrorKind::BrokenPipe, "write child stdin: {e}");
+            }
         }
         // Dropping `child_stdin` here closes the pipe, signaling EOF.
     }
@@ -285,9 +289,8 @@ fn parse_errors_report_filename_and_position() {
 ///
 /// `about` is threaded through the `fltk_formatter_main!` macro → `run_main` → `clap`
 /// wiring; that threading is only observable through a real consumer binary (the
-/// `fltk-fmt-cli` unit tests call `command_with_about` directly, bypassing
-/// `run_main`/`get_matches()`). This pins the deleted `TODO(fltkfmt-integration-tests)`'s
-/// explicit ask that `--help` output contain the fegen `about` literal.
+/// `fltk-fmt-cli` unit tests call `command_with_info` directly, bypassing
+/// `run_main`/`get_matches()`).
 #[test]
 fn help_shows_consumer_about() {
     for flag in ["--help", "-h"] {
@@ -297,6 +300,34 @@ fn help_shows_consumer_about() {
             stdout.contains(ABOUT),
             "{flag} stdout should contain the consumer about string {ABOUT:?}; got:\n{stdout}"
         );
+    }
+}
+
+/// Test 6 — `--version`/`-V` print `fltkfmt`'s own identity and exit before any work.
+///
+/// The nonexistent file argument and the unparseable stdin would each yield exit 2 and a
+/// stderr line if the pipeline ran, so exit 0 with empty stderr proves clap exited first.
+/// This witnesses the name half of the identity (`fltkfmt`, not the scaffolding crate's
+/// name); the version half cannot be told apart here, since `fltkfmt` declares the same
+/// version constant the scaffolding does — the consumer-lane fixture witnesses that half.
+#[test]
+fn version_shows_consumer_identity() {
+    let expected = format!("fltkfmt {}\n", from_env("FLTKFMT_VERSION"));
+    for flag in ["--version", "-V"] {
+        let (code, out, err) = run(&[flag, "/nonexistent/path.fltkg"], Some(b"%%% not a grammar\n"));
+        let stdout = String::from_utf8_lossy(&out);
+        assert_eq!(
+            code,
+            0,
+            "{flag} exited {code}: {}",
+            String::from_utf8_lossy(&err)
+        );
+        assert!(
+            !stdout.contains("fltk-fmt-cli"),
+            "{flag} printed the scaffolding crate's name: {stdout:?}"
+        );
+        assert_eq!(stdout, expected, "{flag} stdout");
+        assert!(err.is_empty(), "{flag} stderr: {}", String::from_utf8_lossy(&err));
     }
 }
 

@@ -30,21 +30,13 @@ pub use fltk_unparser_core::{resolve_spacing_specs, Renderer};
 /// The grammar and format spec are baked into each binary at code-generation time, so
 /// this struct only carries the runtime knobs: which files to format, the output mode
 /// (stdout / `--output` / `--in-place` / `--check`), and the render dimensions
-/// (`--width`, `--indent`). clap supplies `--help`/`--version` automatically.
+/// (`--width`, `--indent`).
 ///
-/// The per-consumer `--help` `about` text is not baked in here; it is threaded through
-/// `run_main` (see `command_with_about`) so each formatter binary describes the language it
-/// actually formats rather than inheriting one grammar's wording from this shared crate.
+/// No identity is baked in here: the `--help` `about` text and the `--version` name and
+/// version are all supplied per consumer through `run_main`'s [`FormatterInfo`] (see
+/// `command_with_info`), so each formatter binary describes and identifies itself rather than
+/// inheriting this shared crate's wording, name or version.
 #[derive(Parser, Debug)]
-// TODO(fmt-cli-per-consumer-version): `#[command(version)]` expands `CARGO_PKG_VERSION` where
-// `FmtArgs` is defined, so every consumer binary reports this scaffolding crate's version rather
-// than its own. Thread `version` (and possibly `name`) through `run_main`/`fltk_formatter_main!`
-// so `<consumer> --version` prints the consumer's own version. Do NOT add a second bare
-// `&'static str` positional next to `about` on `run_main` — two adjacent indistinguishable
-// string params can be swapped silently (version rendered as the description). Introduce an
-// identity struct (e.g. `FormatterInfo::new(about).version(..)`) so this and any later knob are
-// non-breaking additions.
-#[command(version)]
 pub struct FmtArgs {
     /// Input files to format. With none (or a `-`), read from stdin.
     pub files: Vec<PathBuf>,
@@ -234,7 +226,23 @@ fn write_atomic(path: &Path, content: &str, stderr: &mut dyn Write) -> io::Resul
     Ok(())
 }
 
-/// Build the clap `Command` for `FmtArgs` with a per-consumer `about` description.
+/// The identity a formatter binary presents on its CLI: what `-h`/`--help` say it does and
+/// what `--version`/`-V` print. Every field is required and none falls back to this
+/// scaffolding crate's own name or version — a consumer binary must identify itself.
+///
+/// `fltk_formatter_main!` fills `name` and `version` from the consumer crate's
+/// `CARGO_PKG_NAME` / `CARGO_PKG_VERSION`; a direct `run_main` caller writes the literal.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct FormatterInfo {
+    /// One-line description shown by `-h`/`--help`, e.g. "Format FLTK grammar (.fltkg) files.".
+    pub about: &'static str,
+    /// The name `--version` prints, e.g. "fltkfmt".
+    pub name: &'static str,
+    /// The version `--version` prints, e.g. "0.4.0".
+    pub version: &'static str,
+}
+
+/// Build the clap `Command` for `FmtArgs` carrying a consumer's [`FormatterInfo`].
 ///
 /// clap's derive maps the first paragraph of the `FmtArgs` doc comment to `about` and the
 /// full multi-paragraph comment to `long_about`; `--help` prefers `long_about` while `-h`
@@ -242,11 +250,19 @@ fn write_atomic(path: &Path, content: &str, stderr: &mut dyn Write) -> io::Resul
 /// actually read) showing the generic scaffolding prose, so `.long_about(None)` resets it —
 /// making both `-h` and `--help` show the consumer's text.
 ///
+/// `.name(..)` is required because clap's `--version` renderer prints the command `name`,
+/// which `get_matches()` never sets from `argv[0]` (it sets only `bin_name`, used by the
+/// usage line). `.version(..)` is what creates the `--version`/`-V` flags, since the `FmtArgs`
+/// derive declares no version; an absent version would mean no flag, which is why
+/// `FormatterInfo::version` is not optional.
+///
 /// Private on purpose: consumers go through `run_main`. It exists so unit tests can assert on
-/// rendered help without spawning a process or letting clap exit.
-fn command_with_about(about: &'static str) -> clap::Command {
+/// rendered help and version without spawning a process or letting clap exit.
+fn command_with_info(info: &FormatterInfo) -> clap::Command {
     <FmtArgs as clap::CommandFactory>::command()
-        .about(about)
+        .name(info.name)
+        .version(info.version)
+        .about(info.about)
         .long_about(None)
 }
 
@@ -263,10 +279,10 @@ fn command_with_about(about: &'static str) -> clap::Command {
 /// (stdout / `--output` / `--in-place` / `--check`), error-path filename prefixing, and
 /// exit codes — lives here.
 ///
-/// `about` is the one-line description shown by `-h`/`--help` (e.g. "Format FLTK grammar
-/// (.fltkg) files."); each consumer binary supplies its own so the help text describes the
-/// language it formats rather than this shared scaffolding.
-pub fn run_main<F>(about: &'static str, format_fn: F) -> ExitCode
+/// `info` is the binary's [`FormatterInfo`]: the `about` line `-h`/`--help` show and the
+/// `name`/`version` pair `--version`/`-V` print as `<name> <version>`. Each consumer binary
+/// supplies its own, so neither help nor version describes this shared scaffolding.
+pub fn run_main<F>(info: FormatterInfo, format_fn: F) -> ExitCode
 where
     F: Fn(&str, Option<&str>, RendererConfig) -> Result<String, String>,
 {
@@ -274,7 +290,7 @@ where
     // `-h`/`--help`/`--version`, prints a usage error and exits 2 on bad flags. After a
     // successful `get_matches` on a command built from `FmtArgs` itself, `from_arg_matches`
     // cannot realistically fail; `e.exit()` covers it identically to `parse()`.
-    let matches = command_with_about(about).get_matches();
+    let matches = command_with_info(&info).get_matches();
     let args = FmtArgs::from_arg_matches(&matches).unwrap_or_else(|e| e.exit());
     let mut stdin = io::stdin().lock();
     let mut stdout = io::stdout().lock();
@@ -300,6 +316,24 @@ where
 /// }
 /// ```
 ///
+/// The binary's `--version` prints `<name> <version>`, where `name` and `version` default to
+/// the *consumer* crate's `CARGO_PKG_NAME` and `CARGO_PKG_VERSION` (under Bazel: the
+/// `rust_binary` target name and its `version` attribute, `0.0.0` when unset). Either can be
+/// overridden by an optional keyed field; the keys are positional in the order `about`,
+/// `name`, `version`, `parser`, `unparser`, `parse`, `unparse`:
+///
+/// ```ignore
+/// fltk_fmt_cli::fltk_formatter_main! {
+///     about:    "Format MyLang files.",
+///     name:     "mylangfmt",
+///     version:  "1.2.3",
+///     parser:   mylang::parser::Parser,
+///     unparser: mylang::unparser::Unparser,
+///     parse:    apply__parse_file,
+///     unparse:  unparse_file,
+/// }
+/// ```
+///
 /// The expansion is pure sugar over [`run_main`]: it builds a `format_fn` closure that runs
 /// the proven pure-Rust pipeline — `Parser::new(src, filename, true)` → `parser.$parse(0)`
 /// (`None` ⇒ `Err(parser.error_message())`) → [`fully_consumed`] check (a partial parse is
@@ -317,6 +351,8 @@ where
 macro_rules! fltk_formatter_main {
     (
         about: $about:expr,
+        $(name: $name:expr,)?
+        $(version: $version:expr,)?
         parser: $parser:path,
         unparser: $unparser:path,
         parse: $parse:ident,
@@ -324,7 +360,17 @@ macro_rules! fltk_formatter_main {
     ) => {
         fn main() -> ::std::process::ExitCode {
             $crate::run_main(
-                $about,
+                // `env!` in the expansion is evaluated in the invoking crate, so the defaults
+                // are the consumer binary's own name and version, never this crate's.
+                $crate::FormatterInfo {
+                    about: $about,
+                    name: $crate::__fltk_fmt_cli_or_default!(
+                        $($name)?; ::core::env!("CARGO_PKG_NAME")
+                    ),
+                    version: $crate::__fltk_fmt_cli_or_default!(
+                        $($version)?; ::core::env!("CARGO_PKG_VERSION")
+                    ),
+                },
                 |src: &str,
                  filename: ::core::option::Option<&str>,
                  cfg: $crate::RendererConfig|
@@ -365,6 +411,20 @@ macro_rules! fltk_formatter_main {
                 },
             )
         }
+    };
+}
+
+/// `fltk_formatter_main!` support: expands to the given expression, or to the default when
+/// none was given. Exported only because a macro expansion in a consumer crate can reach it
+/// solely through `$crate::`; not a supported entry point.
+#[doc(hidden)]
+#[macro_export]
+macro_rules! __fltk_fmt_cli_or_default {
+    ($given:expr; $default:expr) => {
+        $given
+    };
+    (; $default:expr) => {
+        $default
     };
 }
 
@@ -606,7 +666,13 @@ mod tests {
         assert!(FmtArgs::try_parse_from(["fltkfmt", "--nope"]).is_err());
     }
 
-    // --- per-consumer `about` help text (command_with_about) ---
+    // --- per-consumer identity (command_with_info) ---
+
+    const INFO: FormatterInfo = FormatterInfo {
+        about: "Format Foo files.",
+        name: "foofmt",
+        version: "1.2.3",
+    };
 
     #[test]
     fn long_help_shows_consumer_about() {
@@ -624,9 +690,7 @@ mod tests {
             .get_long_about()
             .expect("FmtArgs doc comment supplies a long_about")
             .to_string();
-        let help = command_with_about("Format Foo files.")
-            .render_long_help()
-            .to_string();
+        let help = command_with_info(&INFO).render_long_help().to_string();
         assert!(help.contains("Format Foo files."));
         assert!(!help.contains(&default_long_about));
     }
@@ -639,19 +703,17 @@ mod tests {
             .get_about()
             .expect("FmtArgs doc comment supplies an about")
             .to_string();
-        let help = command_with_about("Format Foo files.")
-            .render_help()
-            .to_string();
+        let help = command_with_info(&INFO).render_help().to_string();
         assert!(help.contains("Format Foo files."));
         assert!(!help.contains(&default_about));
     }
 
     #[test]
-    fn command_with_about_parses_args_unchanged() {
-        // Mutating the `Command`'s about/long_about must not disturb argument definitions or
-        // defaults: parsing through `command_with_about` yields the same field values the
-        // `fmt_args_*` tests check.
-        let matches = command_with_about("Format Foo files.")
+    fn command_with_info_parses_args_unchanged() {
+        // Setting the `Command`'s identity must not disturb argument definitions or defaults:
+        // parsing through `command_with_info` yields the same field values the `fmt_args_*`
+        // tests check.
+        let matches = command_with_info(&INFO)
             .try_get_matches_from(["fltkfmt", "--check", "-w", "100", "in.fltkg"])
             .unwrap();
         let args = FmtArgs::from_arg_matches(&matches).unwrap();
@@ -661,6 +723,36 @@ mod tests {
         assert_eq!(args.indent, 2);
         assert!(args.output.is_none());
         assert_eq!(args.files, vec![PathBuf::from("in.fltkg")]);
+    }
+
+    #[test]
+    fn fmt_args_derive_carries_no_version() {
+        // The derive must carry no identity of its own: a version on `FmtArgs` would be this
+        // scaffolding crate's, which is exactly what a consumer binary must never print.
+        let cmd = <FmtArgs as clap::CommandFactory>::command();
+        assert!(cmd.get_version().is_none());
+        assert!(cmd.get_long_version().is_none());
+    }
+
+    #[test]
+    fn render_version_is_consumer_identity() {
+        assert_eq!(command_with_info(&INFO).render_version(), "foofmt 1.2.3\n");
+    }
+
+    #[test]
+    fn or_default_prefers_given_over_default() {
+        assert_eq!(crate::__fltk_fmt_cli_or_default!("zzfmt"; "default"), "zzfmt");
+        assert_eq!(crate::__fltk_fmt_cli_or_default!(; "default"), "default");
+    }
+
+    #[test]
+    fn version_flags_exit_with_display_version() {
+        for flag in ["--version", "-V"] {
+            let err = command_with_info(&INFO)
+                .try_get_matches_from(["x", flag])
+                .expect_err("a version flag displays the version instead of parsing");
+            assert_eq!(err.kind(), clap::error::ErrorKind::DisplayVersion, "{flag}");
+        }
     }
 
     // --- run_inner integration tests (driven with stub format_fns, no parser) ---

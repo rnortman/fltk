@@ -175,6 +175,7 @@ The entire `src/main.rs` is one invocation:
 
 ```rust
 fltk_fmt_cli::fltk_formatter_main! {
+    about:    "Format MyGrammar files.",
     parser:   my_grammar_cst::parser::Parser,
     unparser: my_grammar_cst::unparser::Unparser,
     parse:    apply__parse_<start_rule>,
@@ -186,6 +187,9 @@ Parameters:
 
 | Parameter  | What it is | Value |
 |------------|------------|-------|
+| `about`    | Required. The one-line description `-h`/`--help` show (`expr`). | `"Format MyGrammar files."` |
+| `name`     | Optional. The name `--version` prints (`expr`). | Default `env!("CARGO_PKG_NAME")` of *your* crate |
+| `version`  | Optional. The version `--version` prints (`expr`). | Default `env!("CARGO_PKG_VERSION")` of *your* crate |
 | `parser`   | Path to your grammar's generated parser type (`path`). | `my_grammar_cst::parser::Parser` |
 | `unparser` | Path to your grammar's generated unparser type (`path`). | `my_grammar_cst::unparser::Unparser` |
 | `parse`    | The start-rule parse method name (a bare `ident`, not a path). | `apply__parse_<start_rule>` |
@@ -196,14 +200,22 @@ are taken as identifiers (no `paste`/`concat_idents` needed), so substitute your
 directly: e.g. start rule `document` → `parse: apply__parse_document`, `unparse:
 unparse_document`.
 
-The four keys must appear in exactly the order shown — `parser`, `unparser`, `parse`, `unparse`.
-Despite the keyword labels they are positional (the macro has a single fixed-order arm), so
-reordering them produces a macro-match error rather than working.
+The keys must appear in exactly this order — `about`, `name`, `version`, `parser`, `unparser`,
+`parse`, `unparse` — with `name` and `version` omittable. Despite the keyword labels they are
+positional (the macro has a single fixed-order arm), so reordering them produces a macro-match
+error rather than working.
+
+The `name` and `version` defaults are evaluated in your crate, so `--version` prints your
+binary's identity, never `fltk-fmt-cli`'s. Under Bazel, `CARGO_PKG_NAME` is the `rust_binary`
+target name and `CARGO_PKG_VERSION` is its `version` attribute — `0.0.0` when the attribute is
+unset. So set `version` on your `rust_binary`, and pass `name:` if the target name is not what
+users should see.
 
 The expansion is pure sugar over `fltk_fmt_cli::run_main`. If you need to customize the
-pipeline (e.g. a different consumed-input policy), call `run_main` directly with your own
-`Fn(&str, Option<&str>, RendererConfig) -> Result<String, String>` closure instead of using the
-macro.
+pipeline (e.g. a different consumed-input policy), call
+`run_main(FormatterInfo { about, name, version }, closure)` directly, with your own
+`Fn(&str, Option<&str>, RendererConfig) -> Result<String, String>` closure, instead of using the
+macro. All three `FormatterInfo` fields are required.
 
 ---
 
@@ -219,7 +231,8 @@ Every generated binary exposes the same flags (from `FmtArgs` / clap):
 | `-w, --width <N>` | Maximum line width. Default `80`. |
 | `-i, --indent <N>` | Indentation width. Default `2`. |
 | `-o, --output <PATH>` | Write output to this file instead of stdout (single input only). |
-| `--help`, `--version` | Supplied automatically by clap. |
+| `-h`, `--help` | Your `about` text. |
+| `-V`, `--version` | `<name> <version>` — your binary's, never `fltk-fmt-cli`'s. An unversioned Bazel target prints `0.0.0`. |
 
 Behavior baked into the scaffolding:
 
@@ -240,6 +253,7 @@ For a grammar whose start rule is `grammar` (this is exactly `crates/fltkfmt/src
 
 ```rust
 fltk_fmt_cli::fltk_formatter_main! {
+    about:    "Format FLTK grammar (.fltkg) files.",
     parser:   fegen_rust_cst::parser::Parser,
     unparser: fegen_rust_cst::unparser::Unparser,
     parse:    apply__parse_grammar,

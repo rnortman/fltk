@@ -11,8 +11,8 @@ rust_library(
     srcs = glob(["src/**/*.rs"]),
     crate_name = "fltk_fmt_cli",
     edition = "2021",
-    # What clap's #[command(version)] expands to for every formatter binary built on this
-    # scaffolding — see TODO(fmt-cli-per-consumer-version).
+    # This crate's own identity, for rustdoc and CARGO_PKG_VERSION inside the crate; nothing a
+    # consumer formatter binary prints comes from it.
     version = FLTK_CRATE_VERSION,
     visibility = ["//visibility:public"],
     deps = [

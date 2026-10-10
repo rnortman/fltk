@@ -1,5 +1,6 @@
 load("@rules_rust//rust:defs.bzl", "rust_binary", "rust_test")
 load("//bzl:cargo_probe.bzl", "cargo_file_probe")
+load("//bzl:version.bzl", "FLTK_CRATE_VERSION")
 
 # pyo3 must be absent from this target's graph (the cquery loop in `make bazel-test` asserts it),
 # which is why the fegen dependency is the `:no_python` flavor.
@@ -7,6 +8,8 @@ rust_binary(
     name = "fltkfmt",
     srcs = ["src/main.rs"],
     edition = "2021",
+    # What `fltkfmt --version` prints.
+    version = FLTK_CRATE_VERSION,
     visibility = ["//visibility:public"],
     deps = [
         "//crates/fegen-rust:no_python",
@@ -31,6 +34,7 @@ rust_test(
     env = {
         "FLTKFMT_BIN": "$(rootpath :fltkfmt)",
         "FLTKFMT_TEST_ROOT": ".",
+        "FLTKFMT_VERSION": FLTK_CRATE_VERSION,
     },
 )
 
