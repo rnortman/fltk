@@ -4,13 +4,25 @@ A retirement gate is one shape: take a set of files that can carry a command, ru
 their lines, and report every hit with enough context to fix it. `tests/uv_scan.py` and
 `tests/cargo_scan.py` own the matchers; the walk, the comment stripping and the
 `<path>:<lineno>: <line>` report live here, so a third gate inherits them rather than growing a
-third copy that drifts on its first false positive.
+third copy that drifts on its first false positive. So does the walk's file set: what in a
+runfiles tree is the workspace's own, as opposed to another repository's.
 """
 
 from __future__ import annotations
 
 import pathlib
 from collections.abc import Callable
+
+#: Top-level runfiles directories holding other repositories' files. Third-party crates ship
+#: manifests and third-party rules ship `select()`s, so a walk over the workspace's own files
+#: has to stop here or it reports theirs.
+NOT_OURS = ("bazel-out", "external")
+
+
+def workspace_files(root: pathlib.Path, *patterns: str) -> list[pathlib.Path]:
+    """Every file under the runfiles root `root` matching one of `patterns`, outside `NOT_OURS`."""
+    found = {path for pattern in patterns for path in root.rglob(pattern)}
+    return sorted(path for path in found if path.is_file() and path.relative_to(root).parts[0] not in NOT_OURS)
 
 
 def strip_comment(line: str) -> str:

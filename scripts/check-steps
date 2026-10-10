@@ -1,0 +1,75 @@
+#!/usr/bin/env bash
+# The `make check` step loop: run every step in order, stop at the first failure.
+#
+#   scripts/check-steps --make MAKE --verbose 0|1 STEP...
+#
+# `make check-common` calls it with `$(MAKE)` and `$(CHECK_STEPS)`.  The make program is an
+# option rather than read from the environment, so no `MAKE` variable leaks into the child
+# make's environment.
+#
+#   --make     the program each step is run with, as `MAKE STEP`.
+#   --verbose  `1` streams each step's output as it runs; anything else buffers it and prints
+#              it only when the step fails.
+#
+# Exit 0: every step passed.  Exit 1: a step failed.  Exit 2: called wrong — including with no
+# steps, since a gate that ran nothing must not report success.
+#
+# The heartbeat/timing lines sit outside the verbose branch: both modes report which step is
+# running and how long it took, giving step-granular timing without instrumentation.  A failing
+# step reports its wall time and the gate total too — "the gate failed and it took forever" is
+# the case where the number matters most.
+#
+# The per-step notes exist because the step NAMES no longer partition the work: bazel-test's
+# invocation builds the lint surface as well, which makes bazel-lint's time a cache-hit
+# confirmation rather than the cost of linting.  Without the notes the timing surface reads as
+# "lint is free", pointing the next person at the wrong lane.
+set -eu
+
+usage() {
+    echo "usage: $0 --make MAKE --verbose 0|1 STEP..." >&2
+    exit 2
+}
+
+make=""
+verbose=""
+while [ $# -gt 0 ]; do
+    case "$1" in
+        --make) [ $# -ge 2 ] || usage; make="$2"; shift 2;;
+        --verbose) [ $# -ge 2 ] || usage; verbose="$2"; shift 2;;
+        --) shift; break;;
+        -*) echo "$0: unknown option $1" >&2; usage;;
+        *) break;;
+    esac
+done
+[ -n "$make" ] && [ $# -gt 0 ] || usage
+
+tmpfile=""
+trap 'rm -f -- "${tmpfile:-}"' EXIT
+
+gate_start=$(date +%s)
+for step in "$@"; do
+    case "$step" in
+        bazel-test) note=" [builds the lint surface too: same --config lint configuration]";;
+        bazel-lint) note=" [same-configuration cache-hit confirmation; lint's cost is in bazel-test]";;
+        *) note="";;
+    esac
+    echo "check-common: running $step$note"
+    step_start=$(date +%s)
+    if [ "$verbose" = "1" ]; then
+        if ! "$make" "$step"; then
+            echo "FAILED: $step after $(( $(date +%s) - step_start ))s (gate ran $(( $(date +%s) - gate_start ))s)"
+            exit 1
+        fi
+    else
+        tmpfile=$(mktemp)
+        if ! "$make" "$step" >"$tmpfile" 2>&1; then
+            echo "FAILED: $step after $(( $(date +%s) - step_start ))s (gate ran $(( $(date +%s) - gate_start ))s)"
+            cat "$tmpfile"
+            exit 1
+        fi
+        rm -f -- "$tmpfile"
+        tmpfile=""
+    fi
+    echo "check-common: $step passed in $(( $(date +%s) - step_start ))s$note"
+done
+echo "check-common: all steps passed in $(( $(date +%s) - gate_start ))s ($*)"

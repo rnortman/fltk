@@ -322,6 +322,8 @@ exports_files(
         "pyproject.toml",
         "pytest.ini",
         "runbs.py",
+        "scripts/check-steps",
+        "scripts/pyo3-guard",
     ],
     visibility = ["//tests:__pkg__"],
 )
@@ -382,12 +384,16 @@ filegroup(
 # retirement gate beside it.  Prose docs are not the only place a retired tool's recipe can
 # survive: pyproject.toml is where `[tool.uv]` lived, .bazelrc can name a tool in an
 # --action_env or a --run_under, and .claude/settings.json can run one from an agent hook.
+# The scripts are the shell the Makefile's recipes call, so a retired tool's invocation could
+# survive there as easily as in a recipe.
 filegroup(
     name = "repo_tooling_files",
     srcs = [
         ".bazelrc",
         ".claude/settings.json",
         "pyproject.toml",
+        "scripts/check-steps",
+        "scripts/pyo3-guard",
     ],
     visibility = ["//tests:__pkg__"],
 )

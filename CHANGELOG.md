@@ -179,6 +179,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Multi-valued accessors on the generated protocol module are declared `typing.Sequence`, not
   `list`. Protocol-typed code that mutated an accessor result in place must copy it into a
   `list` first.
+- Contributor tooling: the `make check` step loop and the check that no `:no_python` target
+  pulls in pyo3 now live in `scripts/check-steps` and `scripts/pyo3-guard` instead of inline in
+  the `Makefile`, and tests now run their failure paths against stub `make`/`bazel` binaries.
+  `make check` runs the same steps in the same order, with the same output.
 
 ### Fixed
 

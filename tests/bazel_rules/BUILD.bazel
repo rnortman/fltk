@@ -6,6 +6,14 @@ load(":py_test_tests.bzl", "py_test_test_suite")
 load(":rules_bzl_tests.bzl", "rules_bzl_test_suite")
 load(":rust_bzl_tests.bzl", "rust_bzl_test_suite")
 
+# The analysis-test macros, for the no-select() fence in tests/test_check_step_order.py: a
+# select() in a macro instantiated here would be a target the root lane's pyo3 guard sweeps.
+filegroup(
+    name = "starlark_srcs",
+    srcs = glob(["*.bzl"]),
+    visibility = ["//tests:__pkg__"],
+)
+
 # ── generate_parser targets under test ────────────────────────────────────────
 #
 # Every one carries "manual" for the standard reason: the analysis tests only analyze

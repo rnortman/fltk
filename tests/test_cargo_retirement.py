@@ -37,7 +37,7 @@ import ast
 import pathlib
 
 from tests.cargo_scan import CARGO_ARTIFACT, CARGO_INVOCATION, names_cargo, offenders
-from tests.retirement_scan import strip_comment
+from tests.retirement_scan import strip_comment, workspace_files
 
 _REPO_ROOT = pathlib.Path(__file__).parent.parent
 
@@ -49,30 +49,18 @@ _MAKEFILE = _REPO_ROOT / "Makefile"
 _WORKFLOW = _REPO_ROOT / ".github" / "workflows" / "ci.yml"
 _BAZELRC = _REPO_ROOT / ".bazelrc"
 _AGENT_SETTINGS = _REPO_ROOT / ".claude" / "settings.json"
+_SCRIPTS = (_REPO_ROOT / "scripts" / "check-steps", _REPO_ROOT / "scripts" / "pyo3-guard")
 _STARLARK = (_REPO_ROOT / "rules.bzl", _REPO_ROOT / "rust.bzl", *sorted((_REPO_ROOT / "bzl").glob("*.bzl")))
-
-
-#: Where third-party crate sources land in the runfiles tree. Every crates.io package ships a
-#: manifest, so the walks below have to stop at the workspace's own files or they report pyo3's.
-_NOT_OURS = ("bazel-out", "external")
-
-
-def _ours(path: pathlib.Path) -> bool:
-    return path.is_file() and path.relative_to(_REPO_ROOT).parts[0] not in _NOT_OURS
 
 
 def _build_files() -> list[pathlib.Path]:
     """Every package BUILD file in the runfiles tree — i.e. every one a probe carried in."""
-    return sorted(path for path in _REPO_ROOT.rglob("BUILD.bazel") if _ours(path))
+    return workspace_files(_REPO_ROOT, "BUILD.bazel")
 
 
 def test_no_retired_cargo_file_reaches_the_runfiles_tree() -> None:
     """The probes are globs, so what they declare is whatever the tree holds — ideally nothing."""
-    found = [
-        str(path.relative_to(_REPO_ROOT))
-        for path in _REPO_ROOT.rglob("*")
-        if path.name in _RETIRED_FILENAMES and _ours(path)
-    ]
+    found = [str(path.relative_to(_REPO_ROOT)) for path in workspace_files(_REPO_ROOT, *_RETIRED_FILENAMES)]
     assert not found, f"cargo is retired but these files are back in the tree: {found}"
 
 
@@ -113,9 +101,10 @@ def test_the_probe_reaches_every_package_that_declares_one() -> None:
 
 
 def test_the_makefile_invokes_no_cargo() -> None:
-    """`make check` is the gate; a cargo step in it is a host-toolchain dependency for everyone."""
-    hits = offenders([_MAKEFILE], _REPO_ROOT)
-    assert not hits, f"cargo is retired but these Makefile lines still invoke it: {hits}"
+    """`make check` is the gate, and the scripts its recipes call; a cargo step in either is a
+    host-toolchain dependency for everyone."""
+    hits = offenders([_MAKEFILE, *_SCRIPTS], _REPO_ROOT)
+    assert not hits, f"cargo is retired but these Makefile or script lines still invoke it: {hits}"
 
 
 def test_the_ci_workflow_invokes_no_cargo() -> None:
@@ -151,7 +140,9 @@ def test_no_build_file_or_starlark_helper_invokes_cargo_or_leaves_the_sandbox_fo
 def test_the_scanned_files_are_all_present() -> None:
     """Every scan above is vacuous if its file did not reach the runfiles tree."""
     missing = [
-        str(path) for path in (_MAKEFILE, _WORKFLOW, _BAZELRC, _AGENT_SETTINGS, *_STARLARK) if not path.is_file()
+        str(path)
+        for path in (_MAKEFILE, *_SCRIPTS, _WORKFLOW, _BAZELRC, _AGENT_SETTINGS, *_STARLARK)
+        if not path.is_file()
     ]
     assert not missing, f"the cargo retirement scan cannot read: {missing}"
 

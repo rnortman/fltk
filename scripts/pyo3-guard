@@ -1,0 +1,106 @@
+#!/usr/bin/env bash
+# The no-pyo3 guard: every target named on the command line has a pyo3-free Bazel graph.
+#
+#   scripts/pyo3-guard --lane NAME --control LABEL [--cquery-flags "FLAGS"] TARGET...
+#
+# `make bazel-test` runs it over every derived :no_python target, every rust_binary and
+# //tests:rust_gate_lib; `make bazel-consumer-check` runs it from inside tests/bazel_consumer
+# over the consumer module's pure-Rust targets.  A :no_python graph that has picked up pyo3
+# builds and tests exactly like one that has not, so this is the only witness to the promise.
+#
+#   --lane          prefix for every message (the calling make target's name).
+#   --control       the runtime-crate label every TARGET must reach, e.g.
+#                   //crates/fltk-cst-core:no_python or @fltk//crates/fltk-cst-core:no_python.
+#   --cquery-flags  whitespace-separated flags spliced into every `bazel cquery` and into no
+#                   `bazel query`: the control below is loading-phase and takes no configuration.
+#
+# Exit 0: pyo3 absent.  Exit 1: pyo3 present, or the guard could not establish that its own
+# graph is real.  Exit 2: called wrong.
+#
+# The pyo3 assertion is ONE cquery over the union of the targets, not one per target:
+# `deps(set(a b c))` is `deps(a) ∪ deps(b) ∪ deps(c)`, so the property is the same and a cquery
+# costs ~6s even fully hot.  On a hit the per-target loop attributes the failure; the guard
+# fails unconditionally after it (including when the loop finds nothing — a union/per-target
+# disagreement is itself a bug).
+#
+# The positive control is TWO facts, because a negative assertion over a graph that is not what
+# you think it is passes vacuously:
+#   - the union cquery's output reaches the control label, which is what proves the cquery
+#     itself ran and printed a real graph rather than nothing;
+#   - EVERY target reaches it, which a union-level control cannot prove: over a union, one
+#     member reaching the runtime crates satisfies the control for all the others, so a target
+#     that stopped reaching them at all (retargeted, stubbed, aliased somewhere harmless) would
+#     go on passing "no pyo3" while proving nothing about itself.
+# The second is `rdeps(set(TARGETS), CONTROL)`, which names every member on a path to the
+# control.  It runs as a loading-phase `bazel query` (~2s) rather than a cquery (~25s,
+# reverse-dep inversion over the whole configured graph): "this target still reaches the
+# runtime crates" is a structural fact about the unconfigured graph, where `query` unions every
+# select() branch.
+#
+# Residual, accepted: no per-target CONFIGURED fact is asserted.  A target whose edge to the
+# runtime crates sat in a select() branch the configuration does not take would pass the
+# unconfigured control while contributing nothing to the union, whose own control the other
+# members satisfy.  Buying the fact back costs a cquery per target (~53s over the root
+# lane's targets).  It is sound today because tracked Starlark holds no select() at all —
+# the runtime crates split flavours into parallel targets — and
+# tests/test_check_step_order.py::test_no_select_in_tracked_starlark holds that fact.  The
+# //crates/fltk-serde-core:serde label_flag is configurable too, but it repoints serde, never
+# the edge to the runtime crates.
+#
+# Stderr of every Bazel invocation goes to a file rather than /dev/null, so a passing run stays
+# quiet while the reason for a failing one (analysis error, renamed label, stale crate_universe
+# repos wanting CARGO_BAZEL_REPIN) is printed with the failure: the guard has to be diagnosable
+# from a CI log alone.
+set -eu
+
+usage() {
+    echo "usage: $0 --lane NAME --control LABEL [--cquery-flags FLAGS] TARGET..." >&2
+    exit 2
+}
+
+lane=""
+control=""
+cquery_flags=""
+while [ $# -gt 0 ]; do
+    case "$1" in
+        --lane) [ $# -ge 2 ] || usage; lane="$2"; shift 2;;
+        --control) [ $# -ge 2 ] || usage; control="$2"; shift 2;;
+        --cquery-flags) [ $# -ge 2 ] || usage; cquery_flags="$2"; shift 2;;
+        --) shift; break;;
+        -*) echo "$0: unknown option $1" >&2; usage;;
+        *) break;;
+    esac
+done
+[ -n "$lane" ] && [ -n "$control" ] && [ $# -gt 0 ] || usage
+
+# The control label as it appears in cquery output, whatever repository spelling the caller
+# used: `@fltk//x:y` prints as `@@fltk+//x:y (…)` from a consumer module and `//x:y (…)` here.
+control_in_output="//${control#*//}"
+
+err="$(mktemp)"
+trap 'rm -f -- "$err"' EXIT
+
+reaching="$(bazel query "rdeps(set($*), $control)" 2>"$err")" \
+    || { echo "FAIL: $lane broken: rdeps query for the positive control failed"; cat "$err"; exit 1; }
+for target in "$@"; do
+    echo "$reaching" | grep -qxF "$target" \
+        || { echo "FAIL: $lane broken: $target does not reach $control, so its pyo3 assertion proves nothing"; cat "$err"; exit 1; }
+done
+
+# $cquery_flags is unquoted on purpose: `--config lint` is two words.
+# shellcheck disable=SC2086
+graph="$(bazel cquery $cquery_flags "deps(set($*))" 2>"$err")" \
+    || { echo "FAIL: $lane broken: union cquery over $* failed"; cat "$err"; exit 1; }
+echo "$graph" | grep -qF "$control_in_output" \
+    || { echo "FAIL: $lane broken: union cquery output lacks $control_in_output"; cat "$err"; exit 1; }
+if echo "$graph" | grep -qi pyo3; then
+    echo "FAIL: pyo3 present in the union of the $lane pyo3-free Bazel graphs; attributing per target:"
+    for target in "$@"; do
+        # shellcheck disable=SC2086
+        one="$(bazel cquery $cquery_flags "deps($target)" 2>"$err")" \
+            || { echo "  cquery for $target failed"; cat "$err"; continue; }
+        ! echo "$one" | grep -qi pyo3 || echo "  pyo3 present in the $target Bazel graph"
+    done
+    exit 1
+fi
+echo "$lane: pyo3 absent from the union of $# targets: $*"

@@ -11,6 +11,11 @@ gate run demands be committed.
 
 `check` and `check-ci` are aliases. A divergence between the two lanes is a defect, not a
 policy, which is what `test_the_two_lanes_do_not_diverge` holds in place.
+
+Recipes in the Makefile are thin call sites: shell with control flow — the step loop and the
+no-pyo3 guard — lives in `scripts/`, where `tests/test_check_scripts.py` executes it under stub
+binaries. What this module asserts about those two is the call: the arguments each recipe
+passes. No test executes `make`.
 """
 
 from __future__ import annotations
@@ -18,10 +23,14 @@ from __future__ import annotations
 import fnmatch
 import pathlib
 import re
+import shlex
+import subprocess
 
+from tests.retirement_scan import offenders, uncommented, workspace_files
 from tests.uv_scan import names_uv
 
-_MAKEFILE = pathlib.Path(__file__).parent.parent / "Makefile"
+_REPO_ROOT = pathlib.Path(__file__).parent.parent
+_MAKEFILE = _REPO_ROOT / "Makefile"
 
 #: The shape of a legal step: a Bazel lane, or a diff of a tracked lockfile. `bazel test //...`
 #: runs the tests and `bazel build --config lint //...` runs the linters, so a step outside this
@@ -155,103 +164,68 @@ def _from(recipe: str, marker: str) -> str:
     return recipe[recipe.index(marker) :]
 
 
-def test_the_pyo3_guard_survives_in_the_bazel_test_recipe() -> None:
-    """`bazel test //...` cannot state this property, and no step name carries it.
+def _guard_call(recipe: str) -> list[str]:
+    """The ``scripts/pyo3-guard`` invocation in ``recipe``, as argv after the script path."""
+    assert recipe.count("scripts/pyo3-guard") == 1, f"the recipe must call the shared guard exactly once: {recipe}"
+    call = recipe[recipe.index("scripts/pyo3-guard") :]
+    lines: list[str] = []
+    for line in call.splitlines():
+        lines.append(line.rstrip().removesuffix("\\").removesuffix(";"))
+        if not line.rstrip().endswith("\\"):
+            break
+    return shlex.split(" ".join(lines))[1:]
 
-    A `:no_python` graph that has picked up pyo3 builds and tests exactly like one that has
-    not, so a green run witnesses nothing without this explicit check.
+
+def _option(argv: list[str], name: str) -> str | None:
+    return argv[argv.index(name) + 1] if name in argv else None
+
+
+def test_both_lanes_call_the_shared_pyo3_guard() -> None:
+    """One guard, two call sites: the attribution arm runs only on a red gate, so two copies of
+    it diverge on the one day it must not be wrong. Each lane names itself in the messages."""
+    for lane in ("bazel-test", "bazel-consumer-check"):
+        argv = _guard_call(_recipe(lane))
+        assert _option(argv, "--lane") == lane, f"{lane} calls the guard with the wrong --lane: {argv}"
+
+
+def test_the_root_lane_passes_its_configuration_and_its_derived_labels() -> None:
+    """`bazel test //...` cannot state "no pyo3", and a derivation that comes back empty must fail.
+
+    The guard's cqueries run at the gate's own configuration, so the lane passes it; the label set
+    is derived, not listed, so a new :no_python target or rust_binary is guarded the day it lands.
     """
     recipe = _recipe("bazel-test")
-    assert 'attr(name, "^no_python$$", //...) union kind("rust_binary rule", //...)' in recipe, recipe
-    assert 'test -n "$$labels"' in recipe, f"an empty target derivation must fail, not pass: {recipe}"
-    assert "deps(set(" in recipe, f"the pyo3 assertion must run over the union, not one cquery per target: {recipe}"
-    _assert_the_union_carries_its_own_control(recipe)
-    assert "grep -qi pyo3" in recipe, recipe
+    argv = _guard_call(recipe)
+    assert _option(argv, "--cquery-flags") == "--config lint", f"the guard must run at the gate's configuration: {argv}"
+    assert _option(argv, "--control") == "//crates/fltk-cst-core:no_python", argv
+    assert argv[-1] == "$$labels", f"the guard must run over the derived labels: {argv}"
+    head = recipe[: recipe.index("scripts/pyo3-guard")]
+    assert (
+        'attr(name, "^no_python$$", //...) union kind("rust_binary rule", //...) union set(//tests:rust_gate_lib)'
+        in head
+    ), recipe
+    assert 'test -n "$$labels"' in head, f"an empty target derivation must fail, not pass: {recipe}"
+    assert "bazel cquery" not in recipe, f"the guard's cqueries belong in scripts/pyo3-guard: {recipe}"
 
 
-def _assert_the_union_carries_its_own_control(recipe: str) -> None:
-    """The union cquery's *own* output has to be shown to be a real graph.
+def test_the_consumer_lane_passes_its_three_targets_and_the_cross_module_control() -> None:
+    """The cross-module half, at the consumer's default configuration.
 
-    A bare "fltk-cst-core:no_python is mentioned somewhere in this recipe" is satisfied by the
-    per-target `rdeps` control alone, which is a different query over a different (unconfigured)
-    graph: the configured half could be deleted with the suite green, and a union cquery that
-    printed nothing would then pass `! grep -qi pyo3` vacuously.
+    The serde assertions stay on `deps(//:consumer_serde)` alone: over the union the property is
+    satisfiable by any member. That is the lane's one configured cquery of its own; the guard's
+    single green-path cquery is counted where it runs, in tests/test_check_scripts.py.
     """
-    union = _from(recipe, "deps(set(")
-    assert "\"$$graph\" | grep -q 'fltk-cst-core:no_python'" in union, (
-        f"the union cquery's own output must be checked for the runtime crate: {recipe}"
+    recipe = _recipe("bazel-consumer-check")
+    argv = _guard_call(recipe)
+    assert _option(argv, "--control") == "@fltk//crates/fltk-cst-core:no_python", argv
+    assert "--cquery-flags" not in argv, f"the consumer module has no lint configuration to pass: {argv}"
+    assert argv[-3:] == ["//:consumer_ast", "//:consumer_fmt_bin", "//:consumer_serde"], argv
+    serde_step = _from(recipe, "deps(//:consumer_serde)")
+    assert "consumer_crates.*:serde" in serde_step, f"the one-serde assertion went missing: {recipe}"
+    assert "fltk_crates.*:serde" in serde_step, (
+        f"the serde assertions must run against deps(//:consumer_serde), not the union: {recipe}"
     )
-
-
-def test_the_positive_control_stays_per_target_in_both_lanes() -> None:
-    """A negative assertion over a graph that is not what you think it is passes vacuously.
-
-    The control is what rules that out, and it has to hold for *every* derived target: over a
-    union, one member reaching the runtime crates satisfies it for all the others, so a target
-    that stopped reaching them at all — retargeted, stubbed, aliased somewhere harmless — would
-    go on passing "no pyo3" while proving nothing. `rdeps(set(...), X)` names every member that
-    reaches X, which restores the per-target fact in one query rather than one per target.
-    """
-    for lane, universe in (("bazel-test", "$$labels"), ("bazel-consumer-check", "$$targets")):
-        recipe = _recipe(lane)
-        control = _from(recipe, "rdeps(set(")
-        expression = re.match(r"rdeps\(set\((?P<universe>.*?)\), (?P<reached>[^)]+)\)", control)
-        assert expression is not None, f"{lane}'s control is not an rdeps over a target set: {recipe}"
-        assert universe in expression.group("universe"), (
-            f"{lane}'s control must run over the same derived target set its pyo3 assertion does: {recipe}"
-        )
-        assert expression.group("reached").endswith("//crates/fltk-cst-core:no_python"), (
-            f"{lane}'s control names no runtime crate to reach: {recipe}"
-        )
-        assert re.search(r"for target in \$\$\w+; do", control), (
-            f"{lane} must require the control of every derived target, not of the set: {recipe}"
-        )
-        assert 'grep -qxF "$$target"' in control, (
-            f"{lane} must match each target against a whole line of the rdeps output: {recipe}"
-        )
-
-
-def test_the_pyo3_guard_attributes_a_union_failure_and_still_fails() -> None:
-    """A union hit names no target, so the per-target loop survives as the failure path.
-
-    The `exit 1` sits after the loop unconditionally: the union already proved pyo3 is
-    reachable, so the loop disagreeing is itself a failure — a fallback that could turn a
-    red union result green would be worse than none.
-    """
-    for lane in ("bazel-test", "bazel-consumer-check"):
-        recipe = _recipe(lane)
-        attribution = _from(recipe, "grep -qi pyo3; then")
-        assert "for target in $$" in attribution, f"{lane} lost its per-target attribution loop: {recipe}"
-        assert re.search(r"done; \\\n\s*exit 1;", attribution), (
-            f"{lane}'s attribution fallback must fail unconditionally after the loop: {recipe}"
-        )
-
-
-def _passing_path(recipe: str) -> str:
-    """The recipe minus the per-target attribution block, which runs only on a red gate."""
-    attribution = _from(recipe, "grep -qi pyo3; then")
-    assert "fi; \\" in attribution, f"the attribution block never closes its `if`: {recipe}"
-    head = recipe[: recipe.index("grep -qi pyo3; then")]
-    return head + attribution[attribution.index("fi; \\") :]
-
-
-def test_a_green_gate_run_pays_one_configured_cquery_per_graph() -> None:
-    """The batched shape is the whole point of the guard's reshape, and only a count states it.
-
-    Re-adding the per-target `cquery deps($target)` loop to the *passing* path satisfies every
-    other assertion here — `deps(set(` is still there, so are the controls and the attribution
-    block — while restoring the ~60s of serial cquery dispatch this gate was measured to lose to
-    it. The per-target control is held to a loading-phase `bazel query` for the same reason: as a
-    `cquery` it costs ~25s to prove a fact about the unconfigured graph.
-    """
-    for lane, cqueries in (("bazel-test", 1), ("bazel-consumer-check", 2)):
-        passing = _passing_path(_recipe(lane))
-        assert passing.count("bazel cquery") == cqueries, (
-            f"{lane}'s passing path runs {passing.count('bazel cquery')} configured cqueries, not {cqueries}: {passing}"
-        )
-        assert 'bazel query "rdeps(set(' in passing, (
-            f"{lane}'s positive control must stay a loading-phase query, not a cquery: {passing}"
-        )
+    assert recipe.count("bazel cquery") == 1, f"only the serde step's cquery belongs in this recipe: {recipe}"
 
 
 def test_the_probe_coverage_sweep_survives_in_the_bazel_test_recipe() -> None:
@@ -267,25 +241,6 @@ def test_the_probe_coverage_sweep_survives_in_the_bazel_test_recipe() -> None:
     assert 'test -n "$$probed"' in recipe, f"an empty probe derivation must fail, not pass: {recipe}"
 
 
-def test_the_pyo3_guard_survives_in_the_consumer_recipe() -> None:
-    """The cross-module half of the same property, over the consumer's own three targets.
-
-    Batched into one union cquery like the root lane's. The serde assertions stay on
-    `deps(//:consumer_serde)` alone: over the union the property is satisfiable by any member.
-    """
-    recipe = _recipe("bazel-consumer-check")
-    for target in ("//:consumer_ast", "//:consumer_fmt_bin", "//:consumer_serde"):
-        assert target in recipe, f"{target} lost its pyo3 cquery: {recipe}"
-    assert "deps(set(" in recipe, f"the pyo3 assertion must run over the union, not one cquery per target: {recipe}"
-    _assert_the_union_carries_its_own_control(recipe)
-    assert "grep -qi pyo3" in recipe, recipe
-    serde_step = _from(recipe, "deps(//:consumer_serde)")
-    assert "consumer_crates.*:serde" in serde_step, f"the one-serde assertion went missing: {recipe}"
-    assert "fltk_crates.*:serde" in serde_step, (
-        f"the serde assertions must run against deps(//:consumer_serde), not the union: {recipe}"
-    )
-
-
 def test_verbose_defaults_quiet_locally_and_verbose_in_ci() -> None:
     """The gate is unreadable in CI when it prints nothing until the end, and noisy locally."""
     text = _MAKEFILE.read_text()
@@ -295,97 +250,22 @@ def test_verbose_defaults_quiet_locally_and_verbose_in_ci() -> None:
     )
 
 
-# TODO(check-common-executable-coverage): every assertion over the `check-common` recipe below is
-# a grep on Makefile text, so the shell it describes is never run — a VERBOSE comparison against
-# the wrong token, a failure that does not propagate, or a broken arithmetic expansion all pass.
-def test_quiet_mode_buffers_and_dumps_on_failure() -> None:
-    """Quiet must stay quiet only about a *passing* step.
+def test_check_common_is_a_call_site_for_the_step_script() -> None:
+    """The step loop's control flow is executed by tests/test_check_scripts.py, not read here.
 
-    A buffered failure whose buffer is never printed says a step failed with no reason why.
+    `$(MAKE)` stays literally on the line: it is what makes GNU make treat the recipe as
+    recursive, so `make -n check` still walks the steps and `-j`'s jobserver reaches them.
     """
     recipe = _recipe("check-common")
-    quiet = _quiet_arm(recipe)
-    assert "tmpfile=$$(mktemp)" in quiet, recipe
-    assert '>"$$tmpfile" 2>&1' in quiet, f"the quiet path must still buffer the step's output: {recipe}"
-    assert 'cat "$$tmpfile"' in quiet, f"a buffered failure must dump its buffer: {recipe}"
-    assert "FAILED: $$step" in quiet, recipe
-
-
-def _quiet_arm(recipe: str) -> str:
-    """The buffering arm of ``check-common``, located by what it does rather than by `else`."""
-    return _from(recipe, "tmpfile=$$(mktemp)")
-
-
-def _verbose_arm(recipe: str) -> str:
-    """The streaming arm: from the VERBOSE test up to where the buffering arm begins."""
-    branch = _from(recipe, '[ "$(VERBOSE)" = "1" ]')
-    return branch[: branch.index("tmpfile=$$(mktemp)")] if "tmpfile=$$(mktemp)" in branch else branch
-
-
-def test_verbose_mode_streams() -> None:
-    """Verbose mode streams each step's output as it runs.
-
-    No redirect at all — a tee or tmpfile would put Bazel's progress UI behind a pipe.
-    The `FAILED: $$step` trailer stays in both arms so grepping for it works either way.
-    """
-    recipe = _recipe("check-common")
-    assert '[ "$(VERBOSE)" = "1" ]' in recipe, f"check-common must branch on VERBOSE: {recipe}"
-    verbose = _verbose_arm(recipe)
-    assert re.search(r"\$\(MAKE\) \$\$step \|\| \{ echo \"FAILED: \$\$step", verbose), (
-        f"the verbose arm must run the step unredirected and still print the FAILED trailer: {recipe}"
-    )
-    assert "mktemp" not in verbose and '>"$$tmpfile"' not in verbose, (
-        f"the verbose arm must not buffer the step's output: {recipe}"
-    )
-
-
-def test_every_step_reports_its_wall_time() -> None:
-    """Step-granular wall time, the answer to "why is `make check` slow".
-
-    The echoes sit outside the VERBOSE branch — available in both modes, not just the one
-    where you happened to suspect a problem.
-    """
-    recipe = _recipe("check-common")
-    assert "check-common: running $$step" in recipe, f"no heartbeat when a step starts: {recipe}"
-    passed = "check-common: $$step passed in"
-    assert passed in recipe, f"no per-step wall time when a step passes: {recipe}"
-    assert re.search(r'fi; \\\n\s*echo "check-common: \$\$step passed in', recipe), (
-        f"the timing echo must follow the `fi` closing the VERBOSE branch, so both modes reach it: {recipe}"
-    )
-    quiet = _quiet_arm(recipe)
-    assert passed not in quiet[: quiet.rindex("fi; \\")], (
-        f"the timing echo sits inside the buffering arm, so verbose runs report no timing: {recipe}"
-    )
-    assert "gate_start" in recipe, f"the whole gate's wall time is the number the developer quotes: {recipe}"
-
-
-def test_a_failing_step_reports_its_wall_time_too() -> None:
-    """A failed gate that took forever is the case where the number matters most.
-
-    A step that died three seconds in and one that hung for twenty minutes end a CI log the
-    same way otherwise, and the gate total never prints at all on a failure.
-    """
-    recipe = _recipe("check-common")
-    for mode, arm in (("verbose", _verbose_arm(recipe)), ("quiet", _quiet_arm(recipe))):
-        failure = _from(arm, "FAILED: $$step")
-        failure = failure[: failure.index("\n")]
-        assert "step_start" in failure, f"the {mode} arm's failure line reports no step duration: {recipe}"
-        assert "gate_start" in failure, f"the {mode} arm's failure line reports no gate total: {recipe}"
-
-
-def test_the_heartbeat_says_which_step_carries_the_lint_surface() -> None:
-    """The step names no longer partition the work, so the timings need saying so.
-
-    `bazel test --config lint //...` builds every lint target, which leaves `bazel-lint` a
-    cache-hit confirmation. Unannotated, the pair reads as "linting takes two seconds" and
-    points the next person optimizing the gate at the wrong lane.
-    """
-    recipe = _recipe("check-common")
-    for step in ("bazel-test", "bazel-lint"):
-        assert re.search(rf'{step}\) note="[^"]+";;', recipe), (
-            f"{step}'s heartbeat carries no note about what its time covers: {recipe}"
-        )
-    assert recipe.count("$$note") >= 2, f"the note must ride both the start and the timing line: {recipe}"
+    body = [line for line in recipe.splitlines() if line.startswith("\t")]
+    assert len(body) == 1, f"check-common must be one call into scripts/check-steps: {recipe}"
+    argv = shlex.split(body[0].lstrip("\t@"))
+    assert argv[0] == "scripts/check-steps", argv
+    assert _option(argv, "--make") == "$(MAKE)", argv
+    assert _option(argv, "--verbose") == "$(VERBOSE)", argv
+    assert argv[-1] == "$(CHECK_STEPS)", argv
+    for construct in ("for ", "if ", "mktemp"):
+        assert construct not in body[0], f"{construct!r} is control flow; it belongs in scripts/check-steps: {recipe}"
 
 
 #: Bazel verbs that never configure a target, so `--config lint` is meaningless for them.
@@ -413,7 +293,9 @@ def test_root_gate_runs_one_configuration() -> None:
     is the Makefile's advertised extension point: a new step running a bare `bazel build` in the
     root workspace reintroduces the discard just as effectively as an edit to `bazel-test`.
     `bazel-consumer-check` is exempt — a separate workspace, its own server, and no `build:lint`
-    block to name.
+    block to name. The pyo3 guard's cqueries run inside `scripts/pyo3-guard`, out of this sweep's
+    sight; that they carry the configuration is asserted by executing the script, in
+    tests/test_check_scripts.py.
     """
     for step in check_steps():
         if step == "bazel-consumer-check":
@@ -430,8 +312,8 @@ def test_root_gate_runs_one_configuration() -> None:
 
 def test_no_recipe_invokes_uv() -> None:
     """A `uv` call would be a second Python dependency writer."""
-    offenders = [line for line in _MAKEFILE.read_text().splitlines() if line.startswith("\t") and names_uv(line)]
-    assert not offenders, f"uv is retired but these recipe lines still invoke it: {offenders}"
+    invoking = [line for line in _MAKEFILE.read_text().splitlines() if line.startswith("\t") and names_uv(line)]
+    assert not invoking, f"uv is retired but these recipe lines still invoke it: {invoking}"
 
 
 def test_every_step_is_a_declared_phony_target() -> None:
@@ -440,3 +322,76 @@ def test_every_step_is_a_declared_phony_target() -> None:
     phony = text[text.index(".PHONY:") : text.index("\n\n", text.index(".PHONY:"))].replace("\\\n", " ").split()
     for step in check_steps():
         assert step in phony, f"{step} is in CHECK_STEPS but not .PHONY"
+
+
+def test_the_lane_notes_reach_the_steps_the_makefile_names() -> None:
+    """`scripts/check-steps` keys its lane notes on step names that `CHECK_STEPS` defines.
+
+    Run over the real list with `true` as the make program: a lane renamed on either side drops
+    its note from every gate run, and the timing lines go back to reading as "lint is free".
+    """
+    result = subprocess.run(  # noqa: S603
+        ["bash", str(_REPO_ROOT / "scripts" / "check-steps"), "--make", "true", "--verbose", "1", *check_steps()],  # noqa: S607
+        capture_output=True,
+        text=True,
+        check=False,
+        timeout=60,
+    )
+    assert result.returncode == 0, result.stdout + result.stderr
+    noted = {
+        match.group(1)
+        for line in result.stdout.splitlines()
+        if (match := re.fullmatch(r"check-common: running (\S+) \[.+\]", line))
+    }
+    assert noted == {"bazel-test", "bazel-lint"}, f"the lane notes no longer land on bazel-test and bazel-lint: {noted}"
+
+
+#: A configuration-dependent edge, by its call: `select(`, `config_setting(`, skylib's
+#: `config_setting_group(` and its `selects.` family, which bottoms out in `select()`. A call
+#: pattern rather than a word, because `.bzl` docstrings are strings the comment stripper keeps.
+_SELECT = re.compile(r"\b(select|config_setting|config_setting_group)\s*\(|\bselects\s*\.")
+
+
+def _tracked_starlark() -> list[pathlib.Path]:
+    """The root module's own Starlark in the runfiles tree: every package's BUILD file (the probe
+    roll-up carries each in) and every `.bzl`, the analysis-test macros included."""
+    return workspace_files(_REPO_ROOT, "BUILD.bazel", "*.bzl")
+
+
+def _select_hits(lines: list[str]) -> list[str]:
+    return [line.strip() for line in lines if _SELECT.search(line)]
+
+
+def test_the_select_matcher_sees_calls_and_not_prose() -> None:
+    """A matcher that matches nothing passes the fence below; one that matches prose cries wolf."""
+    for line in (
+        'config_setting(name = "lint_on", flag_values = {":lint": "true"})',
+        "    deps = select({...}),",
+        "    deps = selects.with_or({...}),",
+        "config_setting_group(",
+    ):
+        assert _select_hits([line]), f"matcher missed: {line}"
+    for path in ("crates/fltk-cst-core/BUILD.bazel", "crates/fltk-parser-core/BUILD.bazel"):
+        prose = [line for line in (_REPO_ROOT / path).read_text().splitlines() if "select()" in line]
+        assert prose, f"{path} no longer explains why it has no select(); pick another prose fixture"
+        hits = _select_hits([line for line in uncommented(_REPO_ROOT / path) if line.strip()])
+        assert not hits, f"the prose in {path} must strip to nothing: {hits}"
+
+
+def test_no_select_in_tracked_starlark() -> None:
+    """No `select()` or `config_setting()` text in tracked Starlark, so no edge can switch on the
+    lint configuration the root lane's pyo3 guard runs at. It does not see `label_flag`s: the one
+    in `crates/fltk-serde-core/BUILD.bazel` is configurable, but no `.bazelrc` lint line sets it."""
+    paths = _tracked_starlark()
+    names = {str(path.relative_to(_REPO_ROOT)) for path in paths}
+    for required in ("bzl/BUILD.bazel", "crates/fltk-cst-core/BUILD.bazel", "rust.bzl"):
+        assert required in names, f"{required} is not in the scan set, so the fence is blind: {sorted(names)}"
+    assert len(paths) > 10, f"the Starlark scan set collapsed to {sorted(names)}"
+    hits = offenders(paths, _REPO_ROOT, lambda line: bool(_SELECT.search(line)), strip_comments=True)
+    assert not hits, (
+        "`make bazel-test`'s pyo3 guard runs at `--config lint` only, and the per-target control is a "
+        "loading-phase query; both are sound because no `select()` exists in the tree (flavours are "
+        "parallel targets — see `crates/fltk-cst-core/BUILD.bazel`). These lines introduce one: "
+        f"{hits}. If it is needed, narrow this test to the configuration-independent cases and "
+        "re-examine the residual in `scripts/pyo3-guard`'s header and `CLAUDE.md`; do not delete it."
+    )

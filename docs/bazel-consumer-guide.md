@@ -460,7 +460,8 @@ echo "$graph" | grep -q 'fltk-cst-core:no_python' || { echo "query broken"; exit
 ! echo "$graph" | grep -qi pyo3 || { echo "FAIL: pyo3 in the graph"; exit 1; }
 ```
 
-FLTK runs this shape over its own graphs, in `make bazel-test` (every `:no_python` target,
+FLTK runs this shape over its own graphs (`scripts/pyo3-guard` is the readable reference
+implementation), in `make bazel-test` (every `:no_python` target,
 every `rust_binary`, and the compile-gate crate) and `make bazel-consumer-check` (the
 cross-module consumer targets).
 

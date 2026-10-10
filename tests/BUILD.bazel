@@ -392,9 +392,25 @@ _TESTS = {
         ],
         "deps": [":test_support"],
     },
+    # Executes the two scripts the Makefile's recipes call, under stub `bazel` and `make`.
+    "test_check_scripts.py": {
+        "data": [
+            "//:scripts/check-steps",
+            "//:scripts/pyo3-guard",
+        ],
+    },
     "test_check_step_order.py": {
-        # :test_support carries uv_scan, the one matcher all three uv-retirement lanes share.
-        "data": ["//:Makefile"],
+        # :test_support carries uv_scan, the one matcher all three uv-retirement lanes share, and
+        # retirement_scan's comment stripper.  The Starlark is what the no-select() fence reads:
+        # the probe roll-up carries every package's BUILD file.  The step script is run over the
+        # Makefile's CHECK_STEPS to join its lane notes to the names it keys them on.
+        "data": [
+            "//:Makefile",
+            "//:cargo_file_probe",
+            "//:scripts/check-steps",
+            "//:starlark_srcs",
+            "//tests/bazel_rules:starlark_srcs",
+        ],
         "deps": [":test_support"],
     },
     # The properties of the CI runner that `make check-ci` cannot state itself: no uv, no
