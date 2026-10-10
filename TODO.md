@@ -29,20 +29,6 @@ subprocess) or a parser-level step/time budget threaded down into the generated 
 work that would dominate this round. Deferred with the stale-token policy covering the degraded mode
 meanwhile. Location: `fltk/lsp/server.py` (`FltkLanguageServer._analyze_blocking`).
 
-## `ast-dispatch-order`
-
-`alternatives_are_disjoint` (`fltk/fegen/grammar_shape.py`) decides whether two alternatives of a
-rule can be told apart in the CST from their labeled children's occurrence counts and kinds alone.
-It cannot use child *order*, so `x := a:num , b:name | b:name , a:num ;` reads as non-disjoint even
-though the child order distinguishes the two, and the rule classifies as a merged product where a
-sum would be sound. Closing this means an order-sensitive signature (the sequence of labeled item
-positions per alternative, matched against the children in source order) in both the classifier and
-the generated dispatch, on both backends. It must ship opt-in or with a major version: rules that
-default to a merged product today would silently become sums, which is a breaking change to
-generated public API for every downstream consumer of such a grammar. Location:
-`fltk/fegen/grammar_shape.py` (`alternatives_are_disjoint`, and `alternatives_are_sum` /
-`AltSignature` with it), `fltk/fegen/pyrt/astrt.py` (`AltSignature.accepts`).
-
 ## `ast-select-count-blind`
 
 `to_cst` alternative selection on a merged product tests which labels are populated
@@ -56,11 +42,11 @@ under `rule x { product; }`: parsed `grey` gives `v=["grey"]`; alternative 0 pas
 `TEXT` kind tests, its literal position takes `"grey"`, its required regex position has nothing,
 and `filled` raises on a value the parser itself produced, on both backends. It predates
 literal-content selection (the older own-text body guard refused `"grey"` one position earlier),
-and it is not `ast-dispatch-order`, which is the `from_cst` sum/product classifier. Closing it
-means a count-aware selection conjunct — per label, the alternative's minimum and maximum
-position counts tested against the field's value count — on both backends, decided against how it
-composes with optional and repeated positions and with hoisted groups. Location:
-`fltk/fegen/gsm2ast.py` and `fltk/fegen/gsm2ast_rs.py` (`trial_lines`).
+and it is not the `from_cst` sum/product classifier (`alternatives_are_disjoint`), which is
+decided to be order-blind. Closing it means a count-aware selection conjunct — per label, the
+alternative's minimum and maximum position counts tested against the field's value count — on
+both backends, decided against how it composes with optional and repeated positions and with
+hoisted groups. Location: `fltk/fegen/gsm2ast.py` and `fltk/fegen/gsm2ast_rs.py` (`trial_lines`).
 
 ## `ast-select-untagged-erased-text`
 

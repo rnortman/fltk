@@ -286,7 +286,7 @@ class TestSumVersusProduct:
         assert isinstance(node, am.SumNode)
 
     def test_order_only_difference_merges(self) -> None:
-        """The count-based test cannot use child order, so this over-approximates."""
+        """The same labels in another order are one merged shape."""
         node = node_for("a:item , b:other | b:other , a:item")
         assert isinstance(node, am.ProductNode)
         assert node.merged is True
@@ -1112,11 +1112,45 @@ class TestShapeOverride:
         assert isinstance(node, am.ProductNode)
         assert node.merged is True
 
-    def test_sum_on_a_non_disjoint_pair_is_an_error(self) -> None:
-        errors = configured_errors("a:item | a:item . b:other?", "rule target { sum; }")
+    @pytest.mark.parametrize(
+        "body",
+        ["a:item | a:item . b:other?", "a:item , b:other | b:other , a:item"],
+        ids=["optional_extra", "order_only"],
+    )
+    def test_sum_on_a_non_disjoint_pair_is_an_error(self, body: str) -> None:
+        errors = configured_errors(body, "rule target { sum; }")
         assert len(errors) == 1
         assert "alternatives 1 and 2 cannot be" in errors[0]
-        assert "label a distinguishing terminal" in errors[0]
+        assert "their order is not considered" in errors[0]
+        assert errors[0].index("split them into sub-rules") < errors[0].index("label a distinguishing terminal")
+
+    GUIDE_TAIL = "num := v:/[0-9]+/ ;\nname := v:/[a-z]+/ ;\n"
+
+    def test_sub_rule_split_of_an_order_only_pair_is_a_sum(self) -> None:
+        """The split ``docs/ast-guide.md`` recommends for an order-only pair."""
+        model = model_for_text(
+            f"pair := fwd:fwd | rev:rev ;\nfwd := a:num , b:name ;\nrev := b:name , a:num ;\n{self.GUIDE_TAIL}"
+        )
+        node = model.nodes["pair"]
+        assert isinstance(node, am.SumNode)
+        assert [variant.name for variant in node.variants] == ["Fwd", "Rev"]
+        assert list(fields_by_name(model.nodes["fwd"])) == ["a", "b"]
+        assert list(fields_by_name(model.nodes["rev"])) == ["b", "a"]
+
+    VAL = "val := item:num | item:name | item:/[!@#$]+/ ;\n"
+
+    def test_shared_label_sum_collides_on_its_variant_name(self) -> None:
+        with pytest.raises(am.AstModelError) as exc:
+            model_for_text(f"{self.VAL}{self.GUIDE_TAIL}")
+        assert len(exc.value.errors) == 2
+        assert all("both produce variant name 'Item'" in error for error in exc.value.errors)
+
+    def test_product_on_a_shared_label_sum_is_one_union_field(self) -> None:
+        model = configured_model(f"{self.VAL}{self.GUIDE_TAIL}", "rule val { product; }")
+        node = model.nodes["val"]
+        assert isinstance(node, am.ProductNode)
+        assert [field.name for field in node.fields] == ["item"]
+        assert len(am.field_elements(model, node.fields[0])) == 3
 
     def test_stating_the_default_is_harmless(self) -> None:
         assert isinstance(configured("a:item | b:other", "rule target { sum; }").nodes["target"], am.SumNode)

@@ -221,6 +221,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   Cargo build steps are replaced by a pointer to the consumer guide. A test now checks that the
   guide's macro invocation and key table match the macro and the `fltkfmt` binary. The guide
   is now listed in `README.md`.
+- AST docs and diagnostics: the order of labeled children never decides whether a rule is a sum
+  (one variant per alternative) or a merged product, and the docs now say this is by design.
+  So `x := a:num , b:name | b:name , a:num ;` is a product. To get a sum with named variants,
+  split the alternatives into sub-rules (`x := fwd:fwd | rev:rev ; ...`). `docs/ast-guide.md`
+  states the rule, and the error for a `sum;` that cannot hold now gives the reason and lists the
+  sub-rule split first. The guide also corrects its claim about the three-`item` example: left
+  as a sum it is a duplicate-variant-name error, not three variants called `Item`. Generated
+  output is unchanged.
 
 ### Fixed
 

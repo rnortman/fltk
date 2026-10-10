@@ -3234,9 +3234,10 @@ class _ModelBuilder:
                 sound = False
                 self.error(
                     f"Rule {rule.name!r}: `sum;` needs every pair of alternatives to be told apart "
-                    f"by their labeled children, but alternatives {one.index + 1} and "
-                    f"{other.index + 1} cannot be; label a distinguishing terminal, split them into "
-                    f"sub-rules, or drop the `sum;` and take the merged product"
+                    f"by the counts and kinds of their labeled children (their order is not "
+                    f"considered), but alternatives {one.index + 1} and {other.index + 1} cannot be; "
+                    f"split them into sub-rules, label a distinguishing terminal, or drop the `sum;` "
+                    f"and take the merged product"
                 )
         return sound
 

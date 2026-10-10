@@ -195,7 +195,7 @@ two multi-alternative forms).
 |---|---|---|
 | **enum-shaped** | Two or more alternatives, each exactly one required labeled literal (`red:"red" \| blue:"blue"`) | A value enum `<Rule>Value` plus a node holding it in `value` |
 | **terminal-only** | Every child a terminal, at least one of them a regex | A node holding the matched text in `text` (or a coerced `value`) |
-| **sum** | Two or more alternatives told apart by their labeled children | Rust: an enum over the alternatives. Python: a union alias |
+| **sum** | Two or more alternatives told apart by the *counts and kinds* of their labeled children — never by their order (see [`sum;` / `product;`](#sum--product)) | Rust: an enum over the alternatives. Python: a union alias |
 | **product** | Everything else | A struct / dataclass with one member per label |
 
 A rule whose terminals are all *literals* is a product, not terminal-only: its span is a grammar
@@ -639,8 +639,34 @@ and a poor Python field name.
 ### `sum;` / `product;`
 
 A multi-alternative rule classifies as a sum when every pair of alternatives is told apart by its
-labeled children and no pair is a strict extension of another; otherwise it is a product. The
-override chooses explicitly:
+labeled children and no pair is a strict extension of another; otherwise it is a product. Two
+alternatives are told apart when some label's occurrence count cannot be satisfied by both, or
+when a label required by both cannot hold the same child kind in both. **The order of labeled
+children is never consulted**: alternatives that differ only in order are one merged product, by
+design rather than by limitation. Dispatch on both backends uses the same count-and-kind test, so
+the classifier and the runtime always agree.
+
+```
+pair := a:num , b:name | b:name , a:num ;
+```
+
+Both alternatives carry one `a` holding `num` and one `b` holding `name`, so counts and kinds
+cannot tell them apart and `pair` is a merged product with fields `a` and `b`; the
+forward/reverse distinction is not recorded. `rule pair { sum; }` is refused at generation time.
+To get a sum, split the alternatives into sub-rules:
+
+```
+pair := fwd:fwd | rev:rev ;
+fwd := a:num , b:name ;
+rev := b:name , a:num ;
+```
+
+Now `pair` is a sum with variants `Fwd` and `Rev`, each variant is its own product, and `to_cst`
+reproduces the right order because each variant knows its own rule. This is the recommended shape
+whenever the *order* of the same children is the distinction: the variants carry your names
+rather than generated ones.
+
+The override chooses explicitly:
 
 ```
 val := item:num | item:name | item:/[!@#$]+/ ;
@@ -649,9 +675,11 @@ val := item:num | item:name | item:/[!@#$]+/ ;
 rule val { product; }
 ```
 
-Left alone this is three alternatives all labeled `item`, which as a sum would mint three
-variants called `Item`. One product with a union-typed field is what the union label means. The
-override applies only to multi-alternative, non-enum-shaped rules.
+Left alone this is a sum — `num`, `name` and matched text are different kinds, so every pair is
+told apart — and generation then fails, because all three alternatives are labeled `item` and so
+all three compute the variant name `Item`. The `product;` override makes it one product with a
+union-typed `item` field, which is what the shared label means. The override applies only to
+multi-alternative, non-enum-shaped rules.
 
 ## Spans and equality
 

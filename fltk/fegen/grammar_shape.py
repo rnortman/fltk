@@ -194,7 +194,10 @@ class LabelSignature:
 
 @dataclasses.dataclass(frozen=True, slots=True)
 class AltSignature:
-    """What one alternative's labeled children look like, for dispatch and shape tests."""
+    """What one alternative's labeled children look like, for dispatch and shape tests.
+
+    Counts and kinds per label; no order.
+    """
 
     labels: Mapping[str, LabelSignature]
 
@@ -217,14 +220,15 @@ def _counts_intersect(left: LabelSignature | None, right: LabelSignature | None)
     return low_left <= high_right and low_right <= high_left
 
 
-# TODO(ast-dispatch-order): use child order to tell two alternatives apart as well.
 def alternatives_are_disjoint(left: AltSignature, right: AltSignature) -> bool:
     """True when some label tells the two alternatives apart in the CST.
 
     Either the label's occurrence counts cannot both be satisfied, or the label is
-    required in both alternatives with disjoint child kinds.  The test cannot use child
-    order, so it is an over-approximation of indistinguishability: alternatives that
-    differ only in the order of the same labels read as non-disjoint.
+    required in both alternatives with disjoint child kinds.  Child order is not part of
+    the test: alternatives that differ only in the order of the same labels
+    (``a:x , b:y | b:y , a:x``) are not disjoint.  This test must agree with the runtime
+    dispatchers (``astrt.AltSignature.accepts``, ``dispatch::Table::select``); widening
+    one means widening all.  See ``docs/adr/2026/10/10-fltk--todo-ast-dispatch-order/``.
     """
     for label in {*left.labels, *right.labels}:
         one = left.labels.get(label)
