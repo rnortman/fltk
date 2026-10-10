@@ -358,18 +358,45 @@ class TransparentType:
     """A rule erased by ``transparent;``: use sites carry its payload, not a node of its own.
 
     ``payload`` is what the rule's single value is — the text of a terminal-only rule, its
-    value enum, or the type of a single-field product's one field, which may itself be
-    erased.  ``coercion`` is the rule's ``type:`` when it has one, and then ``payload`` is
-    the raw text the coerced value replaces.  The rule name is kept because the conversion
-    still goes through the erased rule's own private helper in both directions.
+    value enum, or the whole type of a single-field product's one field, container included:
+    a rule erased to a repeated field is a list (or a map, for keyed elements), and a use site
+    wraps its own container around that.  The payload's element may itself be erased.
+    ``coercion`` is the rule's ``type:`` when it has one, and then ``payload`` is the raw text
+    the coerced value replaces.  The rule name is kept because the conversion still goes
+    through the erased rule's own private helper in both directions.
     """
 
     rule_name: str
-    payload: ElementType
+    payload: FieldType
     coercion: Coercion | None = None
+
+    @property
+    def inner(self) -> ElementType | None:
+        """The element a payload walk may look through: the payload's element when it is held
+        single, ``None`` when the payload is itself a container."""
+        return self.payload.element if self.payload.container is Container.SINGLE else None
 
 
 ElementType: TypeAlias = ScalarType | NodeType | CustomType | TransparentType
+
+
+def erased_container_type(element: ElementType) -> FieldType | None:
+    """The container type a value of an uncoerced erased element *is*, or ``None`` for one plain value.
+
+    Walks through uncoerced single payloads: an erased single field that references an erased
+    collection is itself list-valued, and what it holds is that collection's payload.
+    """
+    while isinstance(element, TransparentType) and element.coercion is None:
+        if element.payload.container is not Container.SINGLE:
+            return element.payload
+        element = element.payload.element
+    return None
+
+
+def erased_container(element: ElementType) -> Container | None:
+    """The container a value of an uncoerced erased element *is*, or ``None`` for one plain value."""
+    payload = erased_container_type(element)
+    return None if payload is None else payload.container
 
 
 class Container(enum.Enum):
@@ -1285,16 +1312,18 @@ def payload_elements(
     """Every element type a value of ``element`` can be, for a type test.
 
     A field enum and a sum alias both stand for several concrete types, so both are expanded
-    to the types behind them; a value enum is one type and stands alone.
+    to the types behind them; a value enum is one type and stands alone.  An erased container
+    stands alone too: the value is the list or the map, not one of its elements.
     """
     if isinstance(element, CustomType):
         return (element,)
     if isinstance(element, TransparentType):
-        if element.coercion is not None:
+        inner = element.inner
+        if element.coercion is not None or inner is None:
             return (element,)
         if element.rule_name in seen:
             return ()
-        return payload_elements(model, element.payload, seen | {element.rule_name})
+        return payload_elements(model, inner, seen | {element.rule_name})
     if isinstance(element, NodeType):
         rule = model.rule_of_type.get(element.name)
         if rule is not None:
@@ -1308,6 +1337,17 @@ def payload_elements(
             elements.extend(member for member in deeper if member not in elements)
         return tuple(elements)
     return (element,)
+
+
+def container_valued(model: AstModel, element: ElementType) -> bool:
+    """Whether some value a field element admits is an erased container.
+
+    The same expansion a type test uses, so a sum, a fold or a field enum with one
+    erased-collection member answers ``True``, as do a direct reference and a transitive erasure.
+    A field for which this holds keeps a list or a map as *one* value, so its shape and presence
+    have to be read off its static container rather than off what the value happens to be.
+    """
+    return any(erased_container(member) is not None for member in payload_elements(model, element))
 
 
 def element_precedence(element: ElementType) -> int:
@@ -1346,13 +1386,18 @@ def converter_guarded(element: ElementType) -> bool:
 
     False for a ``type: custom(...)`` coercion: its rendering goes through the user's unparse
     function, which is written for the declared type and may do anything at all with a value of
-    another.  False for a value enum or a node payload, which are concrete types already.
+    another.  False for a value enum or a node payload, which are concrete types already, and
+    for an erased container: the helper accepts every list of the right shape, so it cannot
+    tell two erased lists apart.
     """
     if not isinstance(element, TransparentType):
         return False
     if element.coercion is not None:
         return isinstance(element.coercion, BuiltinCoercion)
-    return element.payload == TEXT or converter_guarded(element.payload)
+    inner = element.inner
+    if inner is None:
+        return False
+    return inner == TEXT or converter_guarded(inner)
 
 
 def node_guard(model: AstModel, rule_name: str) -> Guard:
@@ -1846,7 +1891,8 @@ def map_key_scalar(element: ElementType) -> str:
         return ScalarKind.TEXT.value
     assert isinstance(element, TransparentType), f"{element!r} cannot key a map"
     if element.coercion is None:
-        return map_key_scalar(element.payload)
+        assert element.inner is not None, f"{element!r} is a container, which cannot key a map"
+        return map_key_scalar(element.inner)
     assert isinstance(element.coercion, BuiltinCoercion) and element.coercion.is_integer, (
         f"{element.coercion!r} cannot key a map"
     )
@@ -1953,12 +1999,14 @@ def embedded_types(element: ElementType) -> tuple[str, ...]:
 
     A scalar, a coerced value and a ``custom(...)`` rule's user type hold none: the first two are
     not generated types at all, and the third is opaque — the generator does not know its shape,
-    so it cannot place it in a cycle.
+    so it cannot place it in a cycle.  An erased container holds none either: a ``Vec`` or a map
+    is an indirection, exactly as a collection field is.
     """
     if isinstance(element, TransparentType):
-        if element.coercion is not None:
+        inner = element.inner
+        if element.coercion is not None or inner is None:
             return ()
-        return embedded_types(element.payload)
+        return embedded_types(inner)
     if isinstance(element, NodeType):
         return (element.name,)
     return ()
@@ -2089,9 +2137,11 @@ def recursion(model: AstModel) -> Recursion:
 
 def _element_carries_span(element: ElementType, bearing: frozenset[str] | set[str]) -> bool:
     if isinstance(element, TransparentType):
-        if element.coercion is not None:
+        # A coerced value is a bare scalar, and an erased container a list or a map: no span.
+        inner = element.inner
+        if element.coercion is not None or inner is None:
             return False
-        return _element_carries_span(element.payload, bearing)
+        return _element_carries_span(inner, bearing)
     if isinstance(element, NodeType):
         return element.name in bearing
     return False
@@ -2200,7 +2250,8 @@ def _element_witness(element: ElementType, known: Mapping[str, Witness]) -> Witn
     """A witness value of one element, or ``None`` where nothing can construct one yet.
 
     A ``custom(...)`` rule and a ``type: custom(...)`` coercion are permanently ``None``: the
-    generator knows nothing about the user's type, so it can name no value of it.
+    generator knows nothing about the user's type, so it can name no value of it.  An erased
+    container's witness is the empty container.
     """
     if isinstance(element, ScalarType):
         return ScalarWitness(element)
@@ -2208,7 +2259,10 @@ def _element_witness(element: ElementType, known: Mapping[str, Witness]) -> Witn
         return None
     if isinstance(element, TransparentType):
         if element.coercion is None:
-            return _element_witness(element.payload, known)
+            inner = element.inner
+            if inner is None:
+                return EmptyWitness(element.payload.container)
+            return _element_witness(inner, known)
         return ScalarWitness(element) if isinstance(element.coercion, BuiltinCoercion) else None
     return known.get(element.name)
 
@@ -2259,7 +2313,9 @@ def _node_members(node: RuleNode) -> Sequence[tuple[str, ElementType, Container]
     if isinstance(node, TerminalNode):
         if node.coercion is None:
             return [("text", TEXT, Container.SINGLE)]
-        coerced = TransparentType(rule_name=node.rule_name, payload=TEXT, coercion=node.coercion)
+        coerced = TransparentType(
+            rule_name=node.rule_name, payload=FieldType(TEXT, Container.SINGLE), coercion=node.coercion
+        )
         return [("value", coerced, Container.SINGLE)]
     if isinstance(node, EnumNode):
         if node.bool_truthy is not None:
@@ -2810,12 +2866,16 @@ class _ModelBuilder:
             return None
         form = self.rule_form(rule)
         if form is gshape.RuleShape.TERMINAL:
-            return TransparentType(rule_name=rule_name, payload=TEXT, coercion=self.coercion_for(configured))
+            return TransparentType(
+                rule_name=rule_name,
+                payload=FieldType(TEXT, Container.SINGLE),
+                coercion=self.coercion_for(configured),
+            )
         if form is gshape.RuleShape.ENUM:
             if configured.bool_truthy is not None:
-                return TransparentType(rule_name=rule_name, payload=BOOL)
+                return TransparentType(rule_name=rule_name, payload=FieldType(BOOL, Container.SINGLE))
             value_name = f"{self.rule_type_names[rule_name]}Value"
-            return TransparentType(rule_name=rule_name, payload=NodeType(value_name))
+            return TransparentType(rule_name=rule_name, payload=FieldType(NodeType(value_name), Container.SINGLE))
         if form is gshape.RuleShape.SUM:
             self.error(
                 f"Rule {rule_name!r}: `transparent;` applies to terminal-only, enum-shaped and "
@@ -2835,7 +2895,13 @@ class _ModelBuilder:
         return terms
 
     def erased_product_payload(self, rule: gsm.Rule) -> TransparentType | None:
-        """The payload of a ``transparent;`` product: the type of its one field."""
+        """The payload of a ``transparent;`` product: the whole type of its one field.
+
+        The field is typed exactly as an ordinary field of the rule would be, so a repeated
+        label erases to a collection and a repeated ``key:`` element to the map.  An optional
+        label is refused before its element is looked at: an optional payload is a stated
+        limitation, whatever it holds.
+        """
         arities = ce.compute_label_arities(rule)
         terms = self.merged_terms(self.alt_infos(rule))
         if len(terms) != 1:
@@ -2846,26 +2912,14 @@ class _ModelBuilder:
             )
             return None
         (label,) = terms
-        if arities[label].arity_class is not ce.ArityClass.REQUIRED_SINGLE:
-            # TODO(ast-transparent-container-payload): erase to the container type instead.
-            self.error(
-                f"Rule {rule.name!r}: `transparent;` erases the rule to its {label!r} field, which "
-                f"is {arities[label].arity_class.value} — only a field occurring exactly once can "
-                f"be a payload; drop `transparent;`, or make the item required"
-            )
+        arity = arities[label].arity_class
+        if arity is ce.ArityClass.OPTIONAL_SINGLE:
+            self.error(f"Rule {rule.name!r}: {ac.optional_payload_problem(rule.name, label)}")
             return None
-        elements = self.element_types(rule, label, terms[label])
-        if elements is None:
+        payload = self.field_type(rule, self.rule_type_names[rule.name], label, arity, terms[label])
+        if payload is None:
             return None
-        if len(elements) > 1 and SPAN in elements:
-            # As for a field: a literal beside other kinds carries its text, not a bare position.
-            elements = _dedupe([TEXT if element == SPAN else element for element in elements])
-        element = (
-            elements[0]
-            if len(elements) == 1
-            else self.field_enum(rule, self.rule_type_names[rule.name], label, elements)
-        )
-        if element == SPAN:
+        if payload.element == SPAN:
             self.error(
                 f"Rule {rule.name!r}: `transparent;` would erase the rule to the position of the "
                 f"{label!r} literal, which carries no value — a literal's text is a grammar "
@@ -2873,7 +2927,7 @@ class _ModelBuilder:
             )
             return None
         self.erasure_labels[rule.name] = label
-        return TransparentType(rule_name=rule.name, payload=element)
+        return TransparentType(rule_name=rule.name, payload=payload)
 
     def build_erased_product(self, rule: gsm.Rule, type_name: str) -> ProductNode:
         """The node of a ``transparent;`` product: one field carrying the resolved payload.
@@ -2886,7 +2940,7 @@ class _ModelBuilder:
         label = self.erasure_labels.get(rule.name)
         fields: tuple[Field, ...] = ()
         if erased is not None and label is not None:
-            fields = (Field(name="value", label=label, type=FieldType(erased.payload, Container.SINGLE)),)
+            fields = (Field(name="value", label=label, type=erased.payload),)
         return ProductNode(
             name=type_name,
             rule_name=rule.name,
@@ -3111,6 +3165,14 @@ class _ModelBuilder:
         elements = self.element_types(rule, label, terms[label])
         if elements is None:
             return None
+        if len(elements) == 1 and isinstance(elements[0], TransparentType):
+            container = erased_container(elements[0])
+            if container is not None:
+                problem = ac.container_key_problem(
+                    rule_name, label, elements[0].rule_name, keyed=container is Container.MAP
+                )
+                self.error(f"Rule {rule_name!r}: {problem}")
+                return None
         if len(elements) != 1 or not _is_key_scalar(elements[0]):
             self.error(
                 f"Rule {rule_name!r}: the `key:` field {label!r} does not resolve to a string or an "
@@ -3887,7 +3949,14 @@ def _payload_identity(element: ElementType) -> frozenset[tuple[str, str]]:
         return frozenset((backend, path) for backend, path in entries if path is not None)
     if isinstance(element, TransparentType):
         if element.coercion is None:
-            return _payload_identity(element.payload)
+            inner = element.inner
+            if inner is not None:
+                return _payload_identity(inner)
+            # A container's identity is the container: an empty one says nothing about its
+            # elements, and the identity has to collide on both backends together.
+            if element.payload.container is Container.MAP:
+                return frozenset({("python", "dict"), ("rust", "IndexMap")})
+            return frozenset({("python", "list"), ("rust", "Vec")})
         if isinstance(element.coercion, CustomCoercion):
             entries = (("python", element.coercion.python_type), ("rust", element.coercion.rust_type))
             return frozenset((backend, path) for backend, path in entries if path is not None)
@@ -3907,10 +3976,16 @@ def coercion_float_bits(coercion: Coercion | None) -> int | None:
 
 
 def element_float_bits(element: ElementType) -> int | None:
-    """The float width a field element's value is held at, or ``None`` when it is not a float."""
+    """The float width a field element's value is held at, or ``None`` when it is not a float.
+
+    An erased collection's elements are held at their own width; a map's elements are nodes,
+    which keep their own fields at width.
+    """
     if isinstance(element, TransparentType):
         if element.coercion is None:
-            return element_float_bits(element.payload)
+            if element.payload.container is Container.MAP:
+                return None
+            return element_float_bits(element.payload.element)
         return coercion_float_bits(element.coercion)
     return None
 
@@ -3924,7 +3999,8 @@ def _is_key_scalar(element: ElementType) -> bool:
         return True
     if isinstance(element, TransparentType):
         if element.coercion is None:
-            return _is_key_scalar(element.payload)
+            inner = element.inner
+            return inner is not None and _is_key_scalar(inner)
         return isinstance(element.coercion, BuiltinCoercion) and element.coercion.is_integer
     return False
 

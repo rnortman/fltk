@@ -9,6 +9,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- AST: `transparent;` in a `.fltkast` sidecar now works on a rule whose one field repeats.
+  `transparent;` removes a single-field rule's own AST class and puts the field's type in its
+  place. That type now includes the field's list or map. The usual bracketed list
+  (`list := "[" , (value , ("," , value)* , ","?)? , "]" ;`) becomes `list[Value]` /
+  `Vec<Value>` on both backends, and repeated `key:` entries become the map the guide describes.
+  Wrapping is never collapsed: an optional use site gives `list[T] | None` / `Option<Vec<T>>`, a
+  repeated one gives `list[list[T]]` / `Vec<Vec<T>>`, and `[]` round-trips the same way through
+  `to_cst` on both backends. Two cases are still refused, with an error that says so: a field
+  that is only optional (`only:item?`), and a list used as a map key. Every grammar and sidecar
+  accepted before generates the same output as before. See the `transparent;` section of
+  `docs/ast-guide.md`.
 - Serde frontend: new `fltk_serde_core::positioned_error`. A hand-written `Deserialize` impl
   that rejects a value after building it (say, a duplicate element found by comparing a list's
   `Spanned<T>` items) can now report the error at the offending element's source position, with

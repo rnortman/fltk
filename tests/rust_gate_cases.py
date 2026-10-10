@@ -4396,6 +4396,493 @@ fn the_rule_level_cap_invents_no_blank() {
 """
 )
 
+# The Rust half of the Python emitter's `TestTransparentListPayload`: the same values, the same text.
+TRANSPARENT_LIST_RUNTIME = """//! `list` erased to `Vec<Value>`: converted, built by hand, rendered and read back.
+
+use super::ast::{self, Config, ServerDef, Setting, Stanza, Value};
+use super::de;
+use serde::Deserialize;
+
+const TEXT: &str = r#"
+server web {
+  host = "localhost";
+  port = 8080;
+  debug = true;
+  tags = [1, 2];
+}
+metric hits : counter interval 30 ;
+"#;
+
+fn from_text(text: &str) -> Config {
+    ast::parse_str(text, None).expect("the document must parse and convert")
+}
+
+/// One server holding one `tags` setting, whose value is ``value``.
+fn one_setting(value: Value) -> Config {
+    Config {
+        stanzas: vec![Stanza::ServerDef(ServerDef {
+            name: "web".to_string(),
+            settings: vec![Setting {
+                key: "tags".to_string(),
+                value,
+                span: ::fltk_cst_core::Span::unknown(),
+            }],
+            span: ::fltk_cst_core::Span::unknown(),
+        })],
+        span: ::fltk_cst_core::Span::unknown(),
+    }
+}
+
+/// The rendered text with every space and newline removed, and the value it reads back as.
+fn round_trip(value: &Config) -> String {
+    let rendered = ast::unparse_str(value, 80, 2).expect("a hand-built value must render");
+    assert_eq!(&from_text(&rendered), value, "{rendered}");
+    rendered.replace([' ', '\\n'], "")
+}
+
+#[test]
+fn a_parsed_list_is_a_plain_vec() {
+    let parsed = from_text(TEXT);
+    let Stanza::ServerDef(server) = &parsed.stanzas[0] else {
+        panic!("the first stanza is a server definition");
+    };
+    assert_eq!(server.settings[3].value, Value::List(vec![Value::Number(1), Value::Number(2)]));
+}
+
+#[test]
+fn an_empty_list_at_the_sum_typed_field_renders_and_round_trips() {
+    assert!(round_trip(&one_setting(Value::List(vec![]))).contains("tags=[];"));
+}
+
+#[test]
+fn a_flat_list_renders_and_round_trips() {
+    let value = one_setting(Value::List(vec![Value::Number(1), Value::Number(2)]));
+    assert!(round_trip(&value).contains("tags=[1,2];"));
+}
+
+#[test]
+fn nested_lists_render_and_round_trip() {
+    let value = one_setting(Value::List(vec![Value::List(vec![]), Value::List(vec![Value::Number(1)])]));
+    assert!(round_trip(&value).contains("tags=[[],[1]];"));
+}
+
+#[derive(Debug, Deserialize, PartialEq)]
+struct Document {
+    stanzas: Vec<Entry>,
+}
+
+#[derive(Debug, Deserialize, PartialEq)]
+enum Entry {
+    ServerDef(Server),
+}
+
+#[derive(Debug, Deserialize, PartialEq)]
+struct Server {
+    settings: Vec<Row>,
+}
+
+#[derive(Debug, Deserialize, PartialEq)]
+struct Row {
+    key: String,
+    value: Val,
+}
+
+#[derive(Debug, Deserialize, PartialEq)]
+enum Val {
+    String(String),
+    Number(i64),
+    Flag(bool),
+    List(Vec<Val>),
+}
+
+#[test]
+fn serde_serves_the_erased_list_as_a_sequence() {
+    let text = "server web { tags = [1, [], [2]]; }";
+    let parsed: Document = de::from_str(text, None).expect("the document must deserialize");
+    assert_eq!(
+        parsed.stanzas,
+        vec![Entry::ServerDef(Server {
+            settings: vec![Row {
+                key: "tags".to_string(),
+                value: Val::List(vec![Val::Number(1), Val::List(vec![]), Val::List(vec![Val::Number(2)])]),
+            }],
+        })]
+    );
+}
+"""
+
+# The Rust half of the Python emitter's `TestTransparentCells`: the same values, the same text.
+TRANSPARENT_CELLS_RUNTIME = """//! Every use-site-by-payload cell of an erased collection, converted both ways.
+
+use super::ast::{self, Doc, Item, Mix, MixA, Pick, PickInts, PickWords, Solo, SoloA};
+use super::de;
+use serde::Deserialize;
+
+const TEXT: &str = "req [1, 2] opt [3] many [4] [] grid < [5] [] > outer ( [6] ) pick { ab cd } \\
+    mix [7] ef solo @ [8] table { gh = 9; ij = 10; } some [11] alt { 12 } ! [13] ? [14] ;";
+
+fn unknown() -> ::fltk_cst_core::Span {
+    ::fltk_cst_core::Span::unknown()
+}
+
+fn item(key: &str, value: i64) -> Item {
+    Item {
+        key: key.to_string(),
+        value,
+        span: unknown(),
+    }
+}
+
+/// A document with every section at a small default, which each test overrides in place.
+fn doc() -> Doc {
+    Doc {
+        req: vec![1],
+        opt: None,
+        many: vec![],
+        grid: vec![],
+        outer: vec![2],
+        pick: Pick::Ints(PickInts {
+            ints: vec![3],
+            span: unknown(),
+        }),
+        mix: Mix {
+            a: vec![MixA::Nums(vec![4]), MixA::Word("ab".to_string())],
+            span: unknown(),
+        },
+        solo: Solo {
+            a: SoloA::Word("cd".to_string()),
+            span: unknown(),
+        },
+        table: ::fltk_ast_core::IndexMap::default(),
+        some: vec![5],
+        alt: vec![],
+        held: None,
+        spare: None,
+        span: unknown(),
+    }
+}
+
+fn from_text(text: &str) -> Doc {
+    ast::parse_str(text, None).expect("the document must parse and convert")
+}
+
+/// The rendered text with every space and newline removed, after checking it reads back as ``value``.
+fn round_trip(value: &Doc) -> String {
+    let rendered = ast::unparse_str(value, 80, 2).expect("a hand-built value must render");
+    assert_eq!(&from_text(&rendered), value, "{rendered}");
+    rendered.replace([' ', '\\n'], "")
+}
+
+#[test]
+fn the_whole_document_converts_and_round_trips() {
+    let value = from_text(TEXT);
+    assert_eq!(value.req, vec![1, 2]);
+    assert_eq!(value.opt, Some(vec![3]));
+    assert_eq!(value.many, vec![vec![4], vec![]]);
+    assert_eq!(value.grid, vec![vec![5], vec![]]);
+    assert_eq!(value.outer, vec![6]);
+    assert_eq!(
+        value.pick,
+        Pick::Words(PickWords {
+            words: vec!["ab".to_string(), "cd".to_string()],
+            span: unknown(),
+        })
+    );
+    assert_eq!(value.mix.a, vec![MixA::Nums(vec![7]), MixA::Word("ef".to_string())]);
+    assert_eq!(value.solo.a, SoloA::Nums(vec![8]));
+    assert_eq!(value.table.keys().collect::<Vec<_>>(), vec!["gh", "ij"]);
+    assert_eq!(value.table["ij"], item("ij", 10));
+    assert_eq!((value.some.clone(), value.alt.clone(), value.held.clone()), (vec![11], vec![12], Some(vec![13])));
+    assert_eq!(value.spare, Some(vec![14]));
+    round_trip(&value);
+}
+
+#[test]
+fn an_absent_and_an_empty_optional_list_render_differently() {
+    let absent = round_trip(&doc());
+    let empty = round_trip(&Doc { opt: Some(vec![]), ..doc() });
+    assert!(empty.contains("opt[]"), "{empty}");
+    assert!(!absent.contains("opt[]"), "{absent}");
+}
+
+#[test]
+fn a_repeated_use_site_hands_out_each_inner_list() {
+    let rendered = round_trip(&Doc {
+        many: vec![vec![], vec![1, 2]],
+        ..doc()
+    });
+    assert!(rendered.contains("many[][1,2]"), "{rendered}");
+}
+
+#[test]
+fn a_list_of_erased_lists_round_trips() {
+    for grid in [vec![], vec![vec![]], vec![vec![1], vec![2, 3]]] {
+        round_trip(&Doc { grid, ..doc() });
+    }
+}
+
+#[test]
+fn a_single_field_over_an_erased_list_round_trips() {
+    for outer in [vec![], vec![1, 2]] {
+        round_trip(&Doc { outer, ..doc() });
+    }
+}
+
+#[test]
+fn sibling_erased_lists_take_an_empty_payload_in_either_alternative() {
+    let ints = Pick::Ints(PickInts {
+        ints: vec![],
+        span: unknown(),
+    });
+    let words = Pick::Words(PickWords {
+        words: vec![],
+        span: unknown(),
+    });
+    for pick in [ints, words] {
+        round_trip(&Doc { pick, ..doc() });
+    }
+}
+
+#[test]
+fn a_repeated_field_enum_takes_an_empty_list() {
+    let mix = Mix {
+        a: vec![MixA::Nums(vec![]), MixA::Word("xy".to_string())],
+        span: unknown(),
+    };
+    round_trip(&Doc { mix, ..doc() });
+}
+
+#[test]
+fn a_single_field_enum_holds_a_list_or_text() {
+    for a in [SoloA::Nums(vec![]), SoloA::Nums(vec![1]), SoloA::Word("xy".to_string())] {
+        let solo = Solo { a, span: unknown() };
+        round_trip(&Doc { solo, ..doc() });
+    }
+}
+
+#[test]
+fn a_keyed_payload_round_trips() {
+    let mut table = ::fltk_ast_core::IndexMap::default();
+    table.insert("ab".to_string(), item("ab", 1));
+    table.insert("cd".to_string(), item("cd", 2));
+    round_trip(&Doc { table, ..doc() });
+}
+
+#[test]
+fn a_keyed_payload_refuses_a_duplicate_key() {
+    let error = ast::parse_str(&TEXT.replace("ij = 10", "gh = 10"), None).expect_err("two items share a key");
+    let ::fltk_ast_core::ParseToAstError::Ast(inner) = &error else {
+        panic!("a duplicate key is a conversion failure");
+    };
+    assert!(inner.message.contains("duplicate item key \\"gh\\""), "{}", inner.message);
+}
+
+#[test]
+fn an_erased_list_whose_grammar_needs_an_element_refuses_empty() {
+    let error = ast::unparse_str(&Doc { some: vec![], ..doc() }, 80, 2).expect_err("`some` needs one element");
+    assert!(
+        error
+            .message
+            .contains("the grammar needs 1 \\"n\\" value(s) at this position, but 0"),
+        "{}",
+        error.message
+    );
+}
+
+#[test]
+fn a_merged_payload_picks_the_alternative_an_empty_list_fits() {
+    let rendered = round_trip(&Doc { alt: vec![], ..doc() });
+    assert!(rendered.contains("alt[]"), "{rendered}");
+}
+
+#[test]
+fn a_flattened_wrapper_is_rebuilt_around_an_empty_list() {
+    let empty = round_trip(&Doc {
+        held: Some(vec![]),
+        ..doc()
+    });
+    let absent = round_trip(&doc());
+    assert!(empty.contains("![]"), "{empty}");
+    assert!(!absent.contains('!'), "{absent}");
+}
+
+#[test]
+fn an_optional_field_inside_a_flattened_wrapper_takes_an_empty_list() {
+    let rendered = round_trip(&Doc {
+        held: Some(vec![1]),
+        spare: Some(vec![]),
+        ..doc()
+    });
+    assert!(rendered.contains("![1]?[]"), "{rendered}");
+}
+
+#[test]
+fn a_required_use_site_takes_an_empty_list() {
+    let rendered = round_trip(&Doc { req: vec![], ..doc() });
+    assert!(rendered.contains("req[]opt"), "{rendered}");
+}
+
+#[derive(Debug, Deserialize, PartialEq)]
+struct Cells {
+    req: Vec<i64>,
+    opt: Option<Vec<i64>>,
+    many: Vec<Vec<i64>>,
+    grid: Vec<Vec<i64>>,
+    outer: Vec<i64>,
+}
+
+#[test]
+fn serde_serves_every_container_cell_as_a_sequence() {
+    let parsed: Cells = de::from_str(TEXT, None).expect("the document must deserialize");
+    assert_eq!(
+        parsed,
+        Cells {
+            req: vec![1, 2],
+            opt: Some(vec![3]),
+            many: vec![vec![4], vec![]],
+            grid: vec![vec![5], vec![]],
+            outer: vec![6],
+        }
+    );
+}
+"""
+
+TRANSPARENT_LIST_GOAL_RUNTIME = """//! The goal rule erased to `Vec<i64>`: the entry points take and return the list.
+
+use super::ast;
+
+#[test]
+fn an_empty_list_parses_and_renders() {
+    assert_eq!(ast::parse_str("[]", None).expect("an empty list parses"), Vec::<i64>::new());
+    let rendered = ast::unparse_str(&[], 80, 2).expect("an empty list renders");
+    assert_eq!(rendered.trim(), "[]");
+}
+
+#[test]
+fn a_list_round_trips_through_text() {
+    let value = ast::parse_str("[1, -2]", None).expect("a list parses");
+    assert_eq!(value, vec![1, -2]);
+    let rendered = ast::unparse_str(&value, 80, 2).expect("a parsed list renders");
+    assert_eq!(ast::parse_str(&rendered, None).expect("the rendering parses"), value);
+}
+"""
+
+# The Rust half of the Python emitter's `TestConverterProbeBesideAnErasedList` and
+# `TestFoldOverAnErasedList`: the same values, the same text.
+TRANSPARENT_PROBE_RUNTIME = """//! An erased list beside a converter-guarded text payload, and a fold over erased lists.
+
+use super::ast::{self, Chain, ChainBinary, Doc, Pair, PairA, Pin, PinA, SignValue};
+
+const TEXT: &str = "pin @ { ab cd } pair { { ef } } chain [1] + [] - [2, 3] ;";
+
+fn unknown() -> ::fltk_cst_core::Span {
+    ::fltk_cst_core::Span::unknown()
+}
+
+fn words(items: &[&str]) -> Vec<String> {
+    items.iter().map(|item| item.to_string()).collect()
+}
+
+fn link(op: SignValue, lhs: Chain, rhs: Chain) -> Chain {
+    Chain::Binary(ChainBinary {
+        op,
+        lhs: Box::new(lhs),
+        rhs: Box::new(rhs),
+        span: unknown(),
+    })
+}
+
+/// A document with every section at a small default, which each test overrides in place.
+fn doc() -> Doc {
+    Doc {
+        pin: Pin {
+            a: PinA::Word("ab".to_string()),
+            span: unknown(),
+        },
+        pair: Pair {
+            a: PairA::Word("cd".to_string()),
+            span: unknown(),
+        },
+        chain: Chain::Operand(vec![1]),
+        span: unknown(),
+    }
+}
+
+fn from_text(text: &str) -> Doc {
+    ast::parse_str(text, None).expect("the document must parse and convert")
+}
+
+/// The rendered text with every space and newline removed, after checking it reads back as ``value``.
+fn round_trip(value: &Doc) -> String {
+    let rendered = ast::unparse_str(value, 80, 2).expect("a hand-built value must render");
+    assert_eq!(&from_text(&rendered), value, "{rendered}");
+    rendered.replace([' ', '\\n'], "")
+}
+
+#[test]
+fn the_document_converts_and_round_trips() {
+    let value = from_text(TEXT);
+    assert_eq!(value.pin.a, PinA::Words(words(&["ab", "cd"])));
+    assert_eq!(value.pair.a, PairA::Words(words(&["ef"])));
+    let chain = link(
+        SignValue::Minus,
+        link(SignValue::Plus, Chain::Operand(vec![1]), Chain::Operand(vec![])),
+        Chain::Operand(vec![2, 3]),
+    );
+    assert_eq!(value.chain, chain);
+    round_trip(&value);
+}
+
+#[test]
+fn a_dispatched_label_renders_each_kind_through_its_own_branch() {
+    let cases = [
+        (PinA::Word("ab".to_string()), "@(ab)pair"),
+        (PinA::Words(words(&[])), "@{}pair"),
+        (PinA::Words(words(&["ab"])), "@{ab}pair"),
+        (PinA::Words(words(&["ab", "cd"])), "@{abcd}pair"),
+    ];
+    for (a, text) in cases {
+        let rendered = round_trip(&Doc {
+            pin: Pin { a, span: unknown() },
+            ..doc()
+        });
+        assert!(rendered.contains(text), "{rendered}");
+    }
+}
+
+#[test]
+fn alternative_selection_renders_each_kind_through_its_own_alternative() {
+    let cases = [
+        (PairA::Word("ab".to_string()), "<(ab)>chain"),
+        (PairA::Words(words(&[])), "{{}}chain"),
+        (PairA::Words(words(&["ab"])), "{{ab}}chain"),
+    ];
+    for (a, text) in cases {
+        let rendered = round_trip(&Doc {
+            pair: Pair { a, span: unknown() },
+            ..doc()
+        });
+        assert!(rendered.contains(text), "{rendered}");
+    }
+}
+
+#[test]
+fn a_chain_of_list_operands_round_trips() {
+    let cases: [(Vec<Vec<i64>>, &str); 3] = [
+        (vec![vec![]], "chain[];"),
+        (vec![vec![], vec![1]], "chain[]+[1];"),
+        (vec![vec![1, 2], vec![], vec![3]], "chain[1,2]+[]+[3];"),
+    ];
+    for (operands, text) in cases {
+        let mut operands = operands.into_iter();
+        let first = Chain::Operand(operands.next().expect("one operand at least"));
+        let chain = operands.fold(first, |lhs, rhs| link(SignValue::Plus, lhs, Chain::Operand(rhs)));
+        let rendered = round_trip(&Doc { chain, ..doc() });
+        assert!(rendered.contains(text), "{rendered}");
+    }
+}
+"""
+
 CASES = [
     # A sum, a keyed collection, every scalar erasure, a coercion, a renamed field, and a
     # label spelled `type` (so `r#type` is exercised). Carries the entry-point tests too, which
@@ -4454,6 +4941,48 @@ CASES = [
         fixtures.MERGED_SIDECAR,
         runtime=MERGED_RUNTIME,
         support=MERGED_SUPPORT,
+    ),
+    # The config language with its `list` rule erased to the repeated field: `Value::List` holds
+    # a `Vec<Value>` directly, at a required use site reached through a sum.
+    Case(
+        "transparent_list",
+        fixtures.CONFIG_GRAMMAR,
+        fixtures.TRANSPARENT_LIST_SIDECAR,
+        runtime=TRANSPARENT_LIST_RUNTIME,
+        parser=True,
+        unparser=True,
+        serde=True,
+    ),
+    # Every use-site-by-payload cell of an erased collection in one document, including the
+    # flattened wrapper whose helper takes the erased list as a slice.
+    Case(
+        "transparent_cells",
+        fixtures.CELLS_GRAMMAR,
+        fixtures.CELLS_SIDECAR,
+        runtime=TRANSPARENT_CELLS_RUNTIME,
+        parser=True,
+        unparser=True,
+        serde=True,
+    ),
+    # The goal rule itself erased to a list, so the one-call entry points take and return a `Vec`.
+    Case(
+        "transparent_list_goal",
+        fixtures.LIST_GOAL_GRAMMAR,
+        fixtures.LIST_GOAL_SIDECAR,
+        runtime=TRANSPARENT_LIST_GOAL_RUNTIME,
+        parser=True,
+        unparser=True,
+        goal="items",
+    ),
+    # An erased list beside a text payload told apart by its converter, at one label, and a fold
+    # whose operands are erased lists.
+    Case(
+        "transparent_probe",
+        fixtures.PROBE_GRAMMAR,
+        fixtures.PROBE_SIDECAR,
+        runtime=TRANSPARENT_PROBE_RUNTIME,
+        parser=True,
+        unparser=True,
     ),
     # A sum whose rule holds one kind of child: every dispatch clause is a bare increment, so
     # nothing reads the child and binding it by name is an unused variable.

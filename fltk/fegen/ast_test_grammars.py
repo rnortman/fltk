@@ -71,6 +71,107 @@ KEYED_SIDECAR = CONFIG_SIDECAR + "rule setting { key: key; }\n"
 MULTI_SIDECAR = CONFIG_SIDECAR + "rule setting { key: key multi; }\n"
 """``KEYED_SIDECAR``'s accumulating form: one key of ``ServerDef.settings`` holds a run."""
 
+TRANSPARENT_LIST_SIDECAR = CONFIG_SIDECAR + "rule list { transparent; }\n"
+"""``CONFIG_SIDECAR`` with ``list`` erased to its repeated field: a list value is ``list[Value]``."""
+
+CELLS_GRAMMAR = """
+doc   := "req" , req:nums , "opt" , opt:nums? , "many" , ( , many:nums)* , "grid" , grid:grid ,
+         "outer" , outer:outer , "pick" , pick:pick , "mix" , mix:mix : "solo" , solo:solo :
+         "table" , table:table , "some" , some:some , "alt" , alt:alt , holder? , ";" , ;
+nums  := "[" , (n:num , ("," , n:num)*)? , "]" ;
+grid  := "<" , ( , row:nums)* , ">" ;
+outer := "(" , inner:nums , ")" ;
+pick  := ints:nums | words:words ;
+words := "{" , (w:word :)* , "}" ;
+mix   := a:nums , a:word ;
+solo  := "@" , (a:nums | a:word) ;
+table := "{" , ( , item)* , "}" ;
+item  := key:word , "=" , value:num , ";" ;
+some  := "[" , n:num , ("," , n:num)* , "]" ;
+alt   := "[" , ( , n:num)* , "]" | "{" , ( , n:num)+ , "}" ;
+holder := "!" , held:nums , ("?" , spare:nums)? ;
+num   := v:/[0-9]+/ ;
+word  := w:/[a-z]+/ ;
+"""
+"""One document reaching every use-site-by-payload cell of an erased collection.
+
+A required (``req``), optional (``opt``) and repeated (``many``) use site of one erased list;
+erasure over erasure both ways — a list of erased lists (``grid``) and a single field over one
+(``outer``); two erased lists as the variants of one sum (``pick``); a field enum mixing an erased
+list with text, repeated (``mix``) and single (``solo``); a keyed payload (``table``); a payload
+whose grammar demands an element (``some``); a merged payload whose alternatives differ in what
+they demand (``alt``); and a flattened wrapper over an erased list at an optional use site
+(``holder``), whose second field is itself optional inside the wrapper (``spare``).  Every
+section starts with its own keyword so an empty or absent one cannot be mistaken for its
+neighbour on the way back.
+"""
+
+CELLS_TEXT = (
+    "req [1, 2] opt [3] many [4] [] grid < [5] [] > outer ( [6] ) pick { ab cd } mix [7] ef "
+    "solo @ [8] table { gh = 9; ij = 10; } some [11] alt { 12 } ! [13] ? [14] ;"
+)
+"""One document of ``CELLS_GRAMMAR`` with every optional section present and non-empty."""
+
+CELLS_SIDECAR = """
+rule nums   { transparent; }
+rule grid   { transparent; }
+rule outer  { transparent; }
+rule words  { transparent; }
+rule table  { transparent; }
+rule some   { transparent; }
+rule alt    { transparent; }
+rule holder { flatten; }
+rule item   { key: key; }
+rule num    { type: i64; transparent; }
+rule word   { transparent; }
+"""
+"""Erases every list-shaped rule of ``CELLS_GRAMMAR`` to its repeated field."""
+
+PROBE_GRAMMAR = """
+doc   := "pin" , pin:pin , "pair" , pair:pair , "chain" , chain:chain , ";" ;
+pin   := "@" , (a:word | a:words) ;
+pair  := "<" , a:word , ">" | "{" , a:words , "}" ;
+chain := lst , ( , op:sign , lst)* ;
+words := "{" , (w:name :)* , "}" ;
+word  := "(" , w:name , ")" ;
+lst   := "[" , (n:num , ("," , n:num)*)? , "]" ;
+sign  := plus:"+" | minus:"-" ;
+name  := v:/[a-z]+/ ;
+num   := v:/[0-9]+/ ;
+"""
+"""An erased list beside a converter-guarded text payload, and a fold over an erased list.
+
+``pin`` and ``pair`` each give one label an erased list (``words``) and a product erased to text
+(``word``), whose position is told apart by probing ``word``'s converter: once in a dispatch over
+one item position, once in the choice between two alternatives.  The text branch comes first,
+so a one-element list offered to it must be refused rather than read as the text.  ``chain`` is a
+left fold whose operands are erased lists.
+"""
+
+PROBE_TEXT = "pin @ { ab cd } pair { { ef } } chain [1] + [] - [2, 3] ;"
+"""One document of ``PROBE_GRAMMAR``: list values at both probed labels, a three-operand chain."""
+
+PROBE_SIDECAR = """
+rule pair  { product; }
+rule chain { fold_left: op; }
+rule words { transparent; }
+rule word  { transparent; }
+rule lst   { transparent; }
+rule sign  { transparent; }
+rule name  { transparent; }
+rule num   { type: i64; transparent; }
+"""
+"""Erases every leaf and list of ``PROBE_GRAMMAR``, keeps ``pair`` one product, folds ``chain``."""
+
+LIST_GOAL_GRAMMAR = """
+items := "[" , (n:num , ("," , n:num)*)? , "]" ;
+num   := v:/-?[0-9]+/ ;
+"""
+"""A grammar whose goal rule is a bracketed list."""
+
+LIST_GOAL_SIDECAR = "rule items { transparent; }\nrule num { type: i64; transparent; }\n"
+"""Erases the goal itself to ``list[int]``, so ``parse`` returns a plain list."""
+
 # Each repetition carries a leading separator, which is what lets a second operator follow
 # whitespace.
 FOLD_GRAMMAR = """
@@ -351,6 +452,30 @@ text — except that a child read from a literal item, and only such a child, is
 no source.  Where it does not, the parser refuses the text and so does ``to_cst``.  The Python
 suite parametrizes over it and the Rust gate case generates its tests from it.
 """
+
+
+SIDECAR_PAIRS: dict[str, tuple[str, str | None]] = {
+    "config": (CONFIG_GRAMMAR, CONFIG_SIDECAR),
+    "keyed": (CONFIG_GRAMMAR, KEYED_SIDECAR),
+    "multi": (CONFIG_GRAMMAR, MULTI_SIDECAR),
+    "transparent_list": (CONFIG_GRAMMAR, TRANSPARENT_LIST_SIDECAR),
+    "fold": (FOLD_GRAMMAR, FOLD_SIDECAR),
+    "task": (TASK_GRAMMAR, TASK_SIDECAR),
+    "leaf": (LEAF_GRAMMAR, LEAF_SIDECAR),
+    "merged": (MERGED_GRAMMAR, MERGED_SIDECAR),
+    "custom_fold": (CUSTOM_FOLD_GRAMMAR, CUSTOM_FOLD_SIDECAR),
+    "boxed_link": (BOXED_LINK_GRAMMAR, BOXED_LINK_SIDECAR),
+    "backpointer_fold": (BACKPOINTER_FOLD_GRAMMAR, BACKPOINTER_FOLD_SIDECAR),
+    "literal_select": (LITERAL_SELECT_GRAMMAR, LITERAL_SELECT_SIDECAR),
+    "terminal_walk": (TERMINAL_WALK_GRAMMAR, None),
+    "cells": (CELLS_GRAMMAR, CELLS_SIDECAR),
+    "list_goal": (LIST_GOAL_GRAMMAR, LIST_GOAL_SIDECAR),
+    "probe": (PROBE_GRAMMAR, PROBE_SIDECAR),
+}
+"""The grammar/sidecar pairs this module defines, by name; a new pair belongs here."""
+
+CONTAINER_PAYLOAD_PAIRS: frozenset[str] = frozenset({"transparent_list", "cells", "list_goal", "probe"})
+"""The ``SIDECAR_PAIRS`` whose sidecar erases a rule to a collection or a map payload."""
 
 
 def literal_labels(grammar_text: str) -> dict[str, frozenset[str]]:

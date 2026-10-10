@@ -148,6 +148,18 @@ class TestForms:
         assert f"form: {RUNTIME}::Form::Transparent {{" in emitted
         assert 'label: "v",' in emitted
 
+    def test_a_transparent_product_over_a_repeated_field_serves_the_collection(self) -> None:
+        src = generate(fixtures.CONFIG_GRAMMAR, fixtures.TRANSPARENT_LIST_SIDECAR)
+        emitted = shape(src, "list")
+        assert f"form: {RUNTIME}::Form::Transparent {{" in emitted
+        assert f"container: {RUNTIME}::Container::Collection" in emitted
+
+    def test_a_transparent_product_over_keyed_elements_serves_the_map(self) -> None:
+        src = generate(fixtures.CELLS_GRAMMAR, fixtures.CELLS_SIDECAR)
+        emitted = shape(src, "table")
+        assert f"form: {RUNTIME}::Form::Transparent {{" in emitted
+        assert f"container: {RUNTIME}::Container::Map({RUNTIME}::Key {{" in emitted
+
     def test_a_flattened_wrapper_keeps_a_product_shape_of_its_own(self) -> None:
         """Its use sites splice its fields, but the wrapper's own node is still served."""
         src = generate(HOIST_GRAMMAR, HOIST_SIDECAR)

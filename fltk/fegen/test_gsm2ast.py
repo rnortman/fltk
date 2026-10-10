@@ -2210,6 +2210,314 @@ class TestTransparentFieldEnumMember:
         assert generated.ast.parse(generated.ast.unparse(value)) == value
 
 
+@pytest.fixture(scope="module")
+def listed() -> Generated:
+    return build_roundtrip(CONFIG_GRAMMAR, "config", config_text=fixtures.TRANSPARENT_LIST_SIDECAR)
+
+
+def _one_setting(generated: Generated, value: typing.Any) -> typing.Any:
+    ast = generated.ast
+    return ast.Config(stanzas=[ast.ServerDef(name="web", settings=[ast.Setting(key="tags", value=value)])])
+
+
+class TestTransparentListPayload:
+    """``list`` erased to its repeated field: a list value is a plain ``list[Value]``."""
+
+    def test_a_parsed_list_is_a_plain_list(self, listed: Generated) -> None:
+        server = listed.ast.parse(CONFIG_TEXT).stanzas[0]
+        assert server.settings[3].value == [1, 2]
+        assert not hasattr(listed.ast, "List")
+
+    def test_the_sum_alias_spells_the_list(self, listed: Generated) -> None:
+        assert 'Value: typing.TypeAlias = "str | int | bool | list[Value]"' in listed.source
+        assert "_VALUE_PAYLOADS = (str, int, bool, list,)" in listed.source
+
+    def test_the_sum_typed_field_hands_its_list_out_whole(self, listed: Generated) -> None:
+        assert "astrt.single_cursor(self.value)" in listed.source
+        assert "astrt.cursor(self.value)" not in listed.source
+        assert "astrt.holds(self.value)" not in listed.source
+
+    @pytest.mark.parametrize(
+        ("value", "text"),
+        [([], "tags=[];"), ([1, 2], "tags=[1,2];"), ([[], [1]], "tags=[[],[1]];")],
+        ids=["empty", "flat", "nested"],
+    )
+    def test_a_hand_built_list_renders_and_round_trips(self, listed: Generated, value: list, text: str) -> None:
+        document = _one_setting(listed, value)
+        rendered = listed.ast.unparse(document)
+        assert text in rendered.replace(" ", "")
+        assert listed.ast.parse(rendered) == document
+
+    def test_the_erased_helpers_stay_private(self, listed: Generated) -> None:
+        assert not hasattr(listed.ast, "list_from_cst")
+        assert not hasattr(listed.ast, "list_to_cst")
+        assert hasattr(listed.ast, "_erased_list_from_cst")
+
+
+@pytest.fixture(scope="module")
+def cells() -> Generated:
+    return build_roundtrip(fixtures.CELLS_GRAMMAR, "doc", config_text=fixtures.CELLS_SIDECAR)
+
+
+def _cells_doc(generated: Generated, **overrides: typing.Any) -> typing.Any:
+    """A ``CELLS_GRAMMAR`` document with every section at a small default, overridden by name."""
+    ast = generated.ast
+    values: dict[str, typing.Any] = {
+        "req": [1],
+        "opt": None,
+        "many": [],
+        "grid": [],
+        "outer": [2],
+        "pick": ast.PickInts(ints=[3]),
+        "mix": ast.Mix(a=[[4], "ab"]),
+        "solo": ast.Solo(a="cd"),
+        "table": {},
+        "some": [5],
+        "alt": [],
+        "held": None,
+        "spare": None,
+    }
+    values.update(overrides)
+    return ast.Doc(**values)
+
+
+def _round_trip(generated: Generated, value: typing.Any) -> str:
+    rendered = generated.ast.unparse(value)
+    assert generated.ast.parse(rendered) == value
+    return rendered
+
+
+class TestTransparentCells:
+    """Every use-site-by-payload cell of an erased collection, converted both ways."""
+
+    def test_the_whole_document_converts_and_round_trips(self, cells: Generated) -> None:
+        ast = cells.ast
+        value = ast.parse(fixtures.CELLS_TEXT)
+        assert (value.req, value.opt, value.many, value.grid, value.outer) == ([1, 2], [3], [[4], []], [[5], []], [6])
+        assert value.pick == ast.PickWords(words=["ab", "cd"])
+        assert value.mix == ast.Mix(a=[[7], "ef"])
+        assert value.solo == ast.Solo(a=[8])
+        assert value.table == {"gh": ast.Item(key="gh", value=9), "ij": ast.Item(key="ij", value=10)}
+        assert (value.some, value.alt, value.held, value.spare) == ([11], [12], [13], [14])
+        _round_trip(cells, value)
+
+    def test_the_annotations_compose_containers(self, cells: Generated) -> None:
+        for line in (
+            "    req: list[int]",
+            "    opt: list[int] | None",
+            "    many: list[list[int]]",
+            "    grid: list[list[int]]",
+            "    outer: list[int]",
+            "    table: dict[str, Item]",
+            "    held: list[int] | None",
+        ):
+            assert line in cells.source
+        assert 'SoloA: typing.TypeAlias = "list[int] | str"' in cells.source
+
+    def test_an_absent_and_an_empty_optional_list_render_differently(self, cells: Generated) -> None:
+        absent = _round_trip(cells, _cells_doc(cells))
+        empty = _round_trip(cells, _cells_doc(cells, opt=[]))
+        assert "opt[]" in empty.replace(" ", "")
+        assert "opt[]" not in absent.replace(" ", "")
+
+    def test_a_repeated_use_site_hands_out_each_inner_list(self, cells: Generated) -> None:
+        rendered = _round_trip(cells, _cells_doc(cells, many=[[], [1, 2]]))
+        assert "many[][1,2]" in rendered.replace(" ", "").replace("\n", "")
+
+    @pytest.mark.parametrize("value", [[], [[]], [[1], [2, 3]]], ids=["empty", "one_empty", "two"])
+    def test_a_list_of_erased_lists_round_trips(self, cells: Generated, value: list) -> None:
+        _round_trip(cells, _cells_doc(cells, grid=value))
+
+    @pytest.mark.parametrize("value", [[], [1, 2]], ids=["empty", "two"])
+    def test_a_single_field_over_an_erased_list_round_trips(self, cells: Generated, value: list) -> None:
+        assert "astrt.single_cursor(value)" in cells.source
+        _round_trip(cells, _cells_doc(cells, outer=value))
+
+    @pytest.mark.parametrize("variant", ["PickInts", "PickWords"])
+    def test_sibling_erased_lists_fall_back_to_payload_classes(self, cells: Generated, variant: str) -> None:
+        payload = getattr(cells.ast, variant)
+        field = "ints" if variant == "PickInts" else "words"
+        _round_trip(cells, _cells_doc(cells, pick=payload(**{field: []})))
+
+    def test_a_repeated_field_enum_takes_an_empty_list(self, cells: Generated) -> None:
+        _round_trip(cells, _cells_doc(cells, mix=cells.ast.Mix(a=[[], "xy"])))
+
+    @pytest.mark.parametrize("value", [[], [1], "xy"], ids=["empty", "one", "text"])
+    def test_a_single_field_enum_holds_a_list_or_text(self, cells: Generated, value: typing.Any) -> None:
+        assert "astrt.single_cursor(self.a)" in cells.source
+        _round_trip(cells, _cells_doc(cells, solo=cells.ast.Solo(a=value)))
+
+    def test_a_keyed_payload_round_trips(self, cells: Generated) -> None:
+        ast = cells.ast
+        table = {"ab": ast.Item(key="ab", value=1), "cd": ast.Item(key="cd", value=2)}
+        _round_trip(cells, _cells_doc(cells, table=table))
+
+    def test_a_keyed_payload_refuses_a_duplicate_key(self, cells: Generated) -> None:
+        with pytest.raises(astrt.AstError, match="duplicate item key 'gh'"):
+            cells.ast.parse(fixtures.CELLS_TEXT.replace("ij = 10", "gh = 10"))
+
+    def test_an_erased_list_whose_grammar_needs_an_element_refuses_empty(self, cells: Generated) -> None:
+        with pytest.raises(astrt.AstError, match=r"the grammar needs 1 'n' value\(s\) at this position, but 0"):
+            cells.ast.unparse(_cells_doc(cells, some=[]))
+
+    def test_a_merged_payload_picks_the_alternative_an_empty_list_fits(self, cells: Generated) -> None:
+        rendered = _round_trip(cells, _cells_doc(cells, alt=[]))
+        assert "alt[]" in rendered.replace(" ", "")
+
+    def test_a_flattened_wrapper_is_rebuilt_around_an_empty_list(self, cells: Generated) -> None:
+        empty = _round_trip(cells, _cells_doc(cells, held=[]))
+        absent = _round_trip(cells, _cells_doc(cells))
+        assert "![]" in empty.replace(" ", "")
+        assert "!" not in absent
+
+    def test_an_optional_field_inside_a_flattened_wrapper_takes_an_empty_list(self, cells: Generated) -> None:
+        rendered = _round_trip(cells, _cells_doc(cells, held=[1], spare=[]))
+        assert "![1]?[]" in rendered.replace(" ", "")
+
+    def test_a_required_use_site_takes_an_empty_list(self, cells: Generated) -> None:
+        rendered = _round_trip(cells, _cells_doc(cells, req=[]))
+        assert "req[]opt" in rendered.replace(" ", "")
+
+
+@pytest.fixture(scope="module")
+def probe() -> Generated:
+    return build_roundtrip(fixtures.PROBE_GRAMMAR, "doc", config_text=fixtures.PROBE_SIDECAR)
+
+
+def _probe_doc(generated: Generated, **overrides: typing.Any) -> typing.Any:
+    """A ``PROBE_GRAMMAR`` document with every section at a small default, overridden by name."""
+    ast = generated.ast
+    values: dict[str, typing.Any] = {
+        "pin": ast.Pin(a="ab"),
+        "pair": ast.Pair(a="cd"),
+        "chain": [1],
+    }
+    values.update(overrides)
+    return ast.Doc(**values)
+
+
+class TestConverterProbeBesideAnErasedList:
+    """A label carrying an erased list and a text payload told apart by the text rule's converter."""
+
+    def test_the_document_converts_and_round_trips(self, probe: Generated) -> None:
+        ast = probe.ast
+        value = ast.parse(fixtures.PROBE_TEXT)
+        assert value.pin == ast.Pin(a=["ab", "cd"])
+        assert value.pair == ast.Pair(a=["ef"])
+        assert value.chain == ast.ChainBinary(ast.SignValue.MINUS, ast.ChainBinary(ast.SignValue.PLUS, [1], []), [2, 3])
+        _round_trip(probe, value)
+
+    def test_the_converter_guard_refuses_a_container(self, probe: Generated) -> None:
+        assert "astrt.ScalarConvertible(_erased_word_to_cst)" in probe.source
+        assert "astrt.Convertible(" not in probe.source
+
+    @pytest.mark.parametrize(
+        ("value", "text"),
+        [("ab", "@(ab)pair"), ([], "@{}pair"), (["ab"], "@{ab}pair"), (["ab", "cd"], "@{abcd}pair")],
+        ids=["text", "empty", "one", "two"],
+    )
+    def test_a_dispatched_label_renders_each_kind_through_its_own_branch(
+        self, probe: Generated, value: typing.Any, text: str
+    ) -> None:
+        rendered = _round_trip(probe, _probe_doc(probe, pin=probe.ast.Pin(a=value)))
+        assert text in rendered.replace(" ", "")
+
+    @pytest.mark.parametrize(
+        ("value", "text"),
+        [("ab", "<(ab)>chain"), ([], "{{}}chain"), (["ab"], "{{ab}}chain")],
+        ids=["text", "empty", "one"],
+    )
+    def test_alternative_selection_renders_each_kind_through_its_own_alternative(
+        self, probe: Generated, value: typing.Any, text: str
+    ) -> None:
+        rendered = _round_trip(probe, _probe_doc(probe, pair=probe.ast.Pair(a=value)))
+        assert text in rendered.replace(" ", "")
+
+
+class TestFoldOverAnErasedList:
+    """A left fold whose operands are erased lists: each operand is one value, empty or not."""
+
+    def test_the_annotations_spell_the_list_operand(self, probe: Generated) -> None:
+        assert 'Chain: typing.TypeAlias = "list[int] | ChainBinary"' in probe.source
+
+    @pytest.mark.parametrize(
+        ("operands", "text"),
+        [([[]], "chain[];"), ([[], [1]], "chain[]+[1];"), ([[1, 2], [], [3]], "chain[1,2]+[]+[3];")],
+        ids=["empty", "empty_lhs", "three"],
+    )
+    def test_a_chain_of_list_operands_round_trips(self, probe: Generated, operands: list, text: str) -> None:
+        ast = probe.ast
+        chain: typing.Any = operands[0]
+        for operand in operands[1:]:
+            chain = ast.ChainBinary(ast.SignValue.PLUS, chain, operand)
+        rendered = _round_trip(probe, _probe_doc(probe, chain=chain))
+        assert text in rendered.replace(" ", "")
+
+
+class TestTransparentListGoal:
+    """The goal rule itself erased to a list: the conveniences take and return a plain list."""
+
+    @staticmethod
+    def generated() -> Generated:
+        return build_roundtrip(fixtures.LIST_GOAL_GRAMMAR, "items", config_text=fixtures.LIST_GOAL_SIDECAR)
+
+    def test_the_conveniences_carry_the_list(self) -> None:
+        generated = self.generated()
+        assert "def parse(source: str, filename: str | None = None) -> list[int]:" in generated.source
+        assert generated.ast.parse("[]") == []
+        assert generated.ast.parse("[1, 2]") == [1, 2]
+        assert generated.ast.unparse([]).strip() == "[]"
+
+
+def _class_sources(source: str) -> dict[str, str]:
+    tree = pyast.parse(source)
+    return {
+        node.name: pyast.get_source_segment(source, node) or ""
+        for node in tree.body
+        if isinstance(node, pyast.ClassDef)
+    }
+
+
+@pytest.mark.parametrize("pair", list(fixtures.SIDECAR_PAIRS))
+def test_every_container_valued_field_takes_the_explicit_forms(pair: str) -> None:
+    """The emitter half of the gate: a field reads its shape off the value exactly when no value
+    it admits is an erased container, and off its static container otherwise."""
+    model = fixtures.model_for(*fixtures.SIDECAR_PAIRS[pair])
+    source = gsm2ast.generate_ast_module(model, "cst_module", protocol_module_name="cst_protocol")
+    classes = _class_sources(source)
+    owners = [
+        (node.name, node.fields)
+        for rule_name, node in model.nodes.items()
+        if isinstance(node, am.ProductNode)
+        and rule_name not in model.transparent_types
+        and rule_name not in model.flattened_rules
+    ]
+    owners.extend((payload.name, payload.fields) for payload in model.payload_classes.values())
+    for class_name, fields in owners:
+        body = classes[class_name]
+        for field in fields:
+            container = field.type.container
+            if field.wrapper is not None or field.type.element == am.BOOL:
+                continue
+            if container not in (am.Container.SINGLE, am.Container.OPTIONAL):
+                continue
+            member = f"self.{field.name}"
+            explicit = (
+                f"astrt.single_cursor({member})"
+                if container is am.Container.SINGLE
+                else f"astrt.optional_cursor({member})"
+            )
+            if am.container_valued(model, field.type.element):
+                assert explicit in body, (class_name, field.name)
+                assert f"astrt.cursor({member})" not in body, (class_name, field.name)
+                assert f"astrt.holds({member})" not in body, (class_name, field.name)
+                assert f"astrt.field_fits({member}," not in body, (class_name, field.name)
+            else:
+                assert f"astrt.cursor({member})" in body, (class_name, field.name)
+                for form in (explicit, f"astrt.held({member})", f"astrt.value_fits({member},"):
+                    assert form not in body, (class_name, field.name)
+
+
 class TestBoolMapping:
     """``bool:`` on a two-alternative enum-shaped rule: the value is a plain boolean."""
 

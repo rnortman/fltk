@@ -298,3 +298,50 @@ class TestTerminalToCst:
         assert _children(node) == [(None, None), ("A", "abc"), (None, None)]
         with pytest.raises(astrt.AstError):
             _split("ab1", redirect, redirected=True)
+
+
+class TestContainerExplicitForms:
+    """The entry points for a field whose one value may itself be a list or a map."""
+
+    def test_a_single_cursor_hands_a_list_out_whole(self) -> None:
+        assert astrt.single_cursor([]).take(astrt.UNBOUNDED) == [[]]
+        assert astrt.single_cursor([1, 2]).take(astrt.UNBOUNDED) == [[1, 2]]
+        assert astrt.single_cursor("ab").take(astrt.UNBOUNDED) == ["ab"]
+
+    def test_an_optional_cursor_is_empty_only_for_none(self) -> None:
+        assert astrt.optional_cursor(None).take(astrt.UNBOUNDED) == []
+        assert astrt.optional_cursor([]).take(astrt.UNBOUNDED) == [[]]
+        assert astrt.optional_cursor({}).take(astrt.UNBOUNDED) == [{}]
+
+    def test_held_reads_only_none_as_absent(self) -> None:
+        assert not astrt.held(None)
+        assert astrt.held([])
+        assert astrt.held({})
+        assert astrt.held(False)
+
+    def test_value_fits_tests_the_list_itself(self) -> None:
+        assert astrt.value_fits([], (list,))
+        assert astrt.value_fits([1], (list,))
+        assert not astrt.value_fits([1], (int,))
+        assert astrt.value_fits("ab", (list, str))
+        assert astrt.value_fits(None, (int,))
+
+    def test_a_scalar_converter_guard_refuses_a_container_without_probing(self) -> None:
+        probed: list[typing.Any] = []
+
+        def convert(value: typing.Any) -> typing.Any:
+            probed.append(value)
+            return value
+
+        guard = astrt.ScalarConvertible(convert)
+        assert astrt.accepts(guard, "ab")
+        assert not astrt.accepts(guard, ["ab"])
+        assert not astrt.accepts(guard, {"k": "ab"})
+        assert probed == ["ab"]
+
+    def test_a_scalar_converter_guard_keeps_the_converter_verdict(self) -> None:
+        def convert(value: typing.Any) -> typing.Any:
+            msg = f"refused {value!r}"
+            raise astrt.AstError(msg, terminalsrc.UnknownSpan)
+
+        assert not astrt.accepts(astrt.ScalarConvertible(convert), "ab")

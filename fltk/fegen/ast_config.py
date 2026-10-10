@@ -880,6 +880,46 @@ _TEXT_KEY = "#text"
 _LITERAL_KEY = "#literal-position"
 _CUSTOM_KEY = "#custom-type"
 
+
+@dataclasses.dataclass(frozen=True)
+class _ContainerKey:
+    """A `key:` field resolving through ``rule_name``, an erased rule whose payload is repeated.
+
+    ``keyed`` says the repeated element is a `key:` rule, so the payload erases to a map.
+    """
+
+    rule_name: str
+    keyed: bool
+
+
+def container_key_problem(rule_name: str, label: str, erased_rule: str, *, keyed: bool) -> str:
+    """Why a `key:` field resolving through an erased collection or map cannot key a map.
+
+    One text for the sidecar validator and the model, which refuses the same shape in a
+    hand-built config.
+    """
+    kind = "a map" if keyed else "a collection"
+    return (
+        f"the `key:` field {label!r} of rule {rule_name!r} resolves through the erased rule "
+        f"{erased_rule!r} to {kind}, which cannot key a map; key on another field, or give the "
+        f"field a single string or integer"
+    )
+
+
+def optional_payload_problem(rule_name: str, label: str) -> str:
+    """Why ``transparent;`` refuses a product whose one field is optional.
+
+    One text for the sidecar validator and the model, which refuses the same shape in a
+    hand-built config.
+    """
+    return (
+        f"`transparent;` erases rule {rule_name!r} to its {label!r} field, which is "
+        f"{ce.ArityClass.OPTIONAL_SINGLE.value} — an optional payload is a stated limitation: the "
+        f"backends share no spelling for an optional use site of it (`Option<Option<T>>` has none "
+        f"in Python); make the field required or repeated, or write the `?` at the use site"
+    )
+
+
 # A Python path needs at least a module and an attribute for the generated module to import.
 _MIN_PATH_PARTS = 2
 
@@ -1313,6 +1353,10 @@ class _Resolver:
                 f"`transparent;` needs a product rule with exactly one field, but rule "
                 f"{block.rule_name!r} has {len(fields)}: {', '.join(fields) or '(none)'}",
             )
+            return
+        (info,) = rule_index.label_index.values()
+        if info.arity is ce.ArityClass.OPTIONAL_SINGLE:
+            self.error(statement.span, optional_payload_problem(block.rule_name, info.label))
 
     def check_key(self, block: RuleBlock, rule_index: RuleIndex, form: gshape.RuleShape, statement: KeyStmt) -> None:
         if form is not gshape.RuleShape.PRODUCT:
@@ -1467,6 +1511,9 @@ class _Resolver:
                 f"string or an integer",
             )
             return
+        if isinstance(key_type, _ContainerKey):
+            self.error(statement, container_key_problem(rule_name, label, key_type.rule_name, keyed=key_type.keyed))
+            return
         if key_type == _CUSTOM_KEY:
             self.error(
                 statement,
@@ -1487,7 +1534,7 @@ class _Resolver:
             f"the `key:` field {label!r} of rule {rule_name!r} resolves to {key_type!r}; {allowed}",
         )
 
-    def key_type(self, info: LabelIndex, resolved: ResolvedAstConfig, seen: set[str]) -> str | None:
+    def key_type(self, info: LabelIndex, resolved: ResolvedAstConfig, seen: set[str]) -> str | _ContainerKey | None:
         """What a field resolves to: a sentinel, a builtin name, or ``None`` for a node type."""
         if info.kinds == frozenset({LITERAL_KIND}):
             return _LITERAL_KEY
@@ -1517,6 +1564,12 @@ class _Resolver:
         if rule_index.shape is not gshape.RuleShape.PRODUCT or len(rule_index.label_index) != 1:
             return None
         (payload,) = rule_index.label_index.values()
+        if payload.arity is ce.ArityClass.COLLECTION:
+            elements = payload.rule_kinds
+            keyed = len(payload.kinds) == 1 and len(elements) == 1
+            keyed = keyed and resolved.for_rule(next(iter(elements))).key is not None
+            return _ContainerKey(rule_name, keyed=keyed)
+        # An optional payload is `check_transparent`'s refusal; the key resolves as if it held.
         return self.key_type(payload, resolved, seen)
 
     def check_cycles(

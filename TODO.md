@@ -43,21 +43,6 @@ generated public API for every downstream consumer of such a grammar. Location:
 `fltk/fegen/grammar_shape.py` (`alternatives_are_disjoint`, and `alternatives_are_sum` /
 `AltSignature` with it), `fltk/fegen/pyrt/astrt.py` (`AltSignature.accepts`).
 
-## `ast-transparent-container-payload`
-
-`transparent;` on a single-field product erases the rule to the type of its one field, but only
-when that field occurs exactly once: an optional or repeated field is a generation error
-(`_ModelBuilder.erased_product_payload`). Design §5.4 states the payload as "the field's type"
-without restricting arity, so `list := "[" , (value , ("," , value)* , ","?)? , "]" ;` marked
-`transparent;` should erase to `Vec<Value>` / `list[Value]` rather than being refused. Closing this
-means composing two container levels: `FieldType` carries one `Container`, so a use site of an
-erased collection payload needs `list[list[T]]` annotations, and `astrt.cursor` — which tells a
-single value from a collection by `isinstance(value, list)` — would take a list-valued single field
-for several values, so the emitter must construct the cursor explicitly at such positions.  Both
-halves have to land in the Rust emitter the same way, or the two ASTs stop being shape-equivalent.
-Location: `fltk/fegen/ast_model.py` (`_ModelBuilder.erased_product_payload`'s arity check),
-`fltk/fegen/gsm2ast.py` (`field_annotation`, `cursor_expression`).
-
 ## `ast-select-count-blind`
 
 `to_cst` alternative selection on a merged product tests which labels are populated

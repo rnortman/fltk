@@ -195,12 +195,14 @@ def _resolved_element(element: am.ElementType) -> am.ElementType:
     """What a member actually holds, with ``transparent;`` erasure applied.
 
     A coerced erasure stops the walk: the member holds the coercion's own value type, which is
-    neither a generated node nor a span.
+    neither a generated node nor a span.  So does an erased container: the member holds a
+    ``Vec`` or a map, not one of its elements.
     """
     while isinstance(element, am.TransparentType):
-        if element.coercion is not None:
+        inner = element.inner
+        if element.coercion is not None or inner is None:
             return element
-        element = element.payload
+        element = inner
     return element
 
 
@@ -513,7 +515,7 @@ class RustAstGenerator:
         if isinstance(element, am.TransparentType):
             if element.coercion is not None:
                 return self.coercion_type(element.coercion)
-            return self.element_type(element.payload)
+            return self.container_type(None, element.payload)
         return _SCALAR_TYPES[element.kind]
 
     def is_boxed_element(self, owner: str | None, element: am.ElementType) -> bool:
@@ -580,14 +582,18 @@ class RustAstGenerator:
 
     def field_type(self, owner: str | None, field: am.Field) -> str:
         """The Rust type of one field of ``owner``."""
-        container = field.type.container
+        return self.container_type(owner, field.type)
+
+    def container_type(self, owner: str | None, field_type: am.FieldType) -> str:
+        """The Rust type of a value of ``field_type`` held by ``owner``; ``None`` boxes nothing."""
+        container = field_type.container
         if container is am.Container.COLLECTION:
-            return f"{STD_VEC}<{self.element_type(field.type.element)}>"
+            return f"{STD_VEC}<{self.element_type(field_type.element)}>"
         if container is am.Container.MAP:
-            assert field.type.key is not None
-            key = self.element_type(field.type.key.element)
-            return f"{_INDEX_MAP_TYPE}<{key}, {self.map_value_type(field.type)}>"
-        inner = self.embedded_type(owner, field.type.element)
+            assert field_type.key is not None
+            key = self.element_type(field_type.key.element)
+            return f"{_INDEX_MAP_TYPE}<{key}, {self.map_value_type(field_type)}>"
+        inner = self.embedded_type(owner, field_type.element)
         return f"{STD_OPTION}<{inner}>" if container is am.Container.OPTIONAL else inner
 
     # --- Emission ------------------------------------------------------------------------
@@ -1160,9 +1166,7 @@ class RustAstGenerator:
 
     def span_expression(self, element: am.ElementType) -> str:
         """Where the span of one payload is read: a member, or the payload's own accessor."""
-        resolved = element
-        while isinstance(resolved, am.TransparentType):
-            resolved = resolved.payload
+        resolved = _resolved_element(element)
         assert isinstance(resolved, am.NodeType)
         return "payload.span()" if resolved.name in self.span_methods else "&payload.span"
 
@@ -2306,6 +2310,10 @@ class RustAstGenerator:
             return "bool"
         element = self.element_type(field.type.element)
         container = field.type.container
+        erased = am.erased_container_type(field.type.element)
+        if container is am.Container.SINGLE and erased is not None and erased.container is am.Container.COLLECTION:
+            # The one value is itself a `Vec`, which a helper takes as a slice: `&Vec<T>` is a lint.
+            return f"&[{self.element_type(erased.element)}]"
         if container is am.Container.COLLECTION:
             return f"&[{element}]"
         if container is am.Container.MAP:
@@ -2462,9 +2470,8 @@ class RustAstGenerator:
 
     def emit_erased_reverse(self, rule_name: str, node: am.RuleNode) -> None:
         """The reverse helper of a ``transparent;`` rule, which takes the payload it erases to."""
-        payload = self.element_type(self.model.transparent_types[rule_name])
         name = am.erased_converter_names(rule_name)[1]
-        parameters = f"value: &{_BORROWED_TYPES.get(payload, payload)}"
+        parameters = f"value: {self.erased_parameter_type(rule_name)}"
         doc = f"Synthesise a `{rule_name}` CST node from the payload its type erases to."
         if isinstance(node, am.TerminalNode):
             lines = self.terminal_to_cst_body(rule_name, node, self.parameter_held())
@@ -2490,6 +2497,19 @@ class RustAstGenerator:
                         f"Synthesise alternative {plan.index} of the erased rule `{rule_name}`.",
                     )
         self.emit_reverse_function(name, parameters, rule_name, lines, doc)
+
+    def erased_parameter_type(self, rule_name: str) -> str:
+        """The type an erased rule's reverse helper takes its payload as.
+
+        A product form takes it as the helper's one field, which is what makes a collection
+        payload a slice; a terminal or enum form takes its scalar or value enum by reference.
+        """
+        node = self.model.nodes[rule_name]
+        if isinstance(node, am.ProductNode):
+            (field,) = node.fields
+            return self.parameter_type(field)
+        payload = self.element_type(self.model.transparent_types[rule_name])
+        return f"&{_BORROWED_TYPES.get(payload, payload)}"
 
     def emit_flat_reverse(self, rule_name: str, node: am.RuleNode) -> None:
         """The reverse helper of a ``flatten;`` wrapper, which rebuilds it from the hoisted fields."""
@@ -3123,6 +3143,9 @@ class RustAstGenerator:
 
     def goal_parameter(self) -> str:
         """The goal type as ``unparse_str`` takes it: by reference, and never as a ``&String``."""
+        goal = self.goal_rule or ""
+        if goal in self.model.transparent_types and goal not in self.model.custom_types:
+            return self.erased_parameter_type(goal)
         goal_type = self.goal_type()
         return f"&{_BORROWED_TYPES.get(goal_type, goal_type)}"
 

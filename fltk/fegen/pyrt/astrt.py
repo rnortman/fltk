@@ -659,12 +659,26 @@ class Convertible:
     convert: Callable[[Any], Any]
 
 
+@dataclasses.dataclass(frozen=True)
+class ScalarConvertible:
+    """A ``Convertible`` guard at a label whose other kinds include an erased list or map.
+
+    The position holds one scalar, so a list or a map is refused without probing: an erased
+    product's converter reads a list as its field's values, and would take a one-element list for
+    the scalar it holds.
+    """
+
+    convert: Callable[[Any], Any]
+
+
 def accepts(guard: Any, value: Any) -> bool:
     """Whether ``value`` can occupy an item position carrying ``guard``."""
     if isinstance(guard, Pattern):
         return isinstance(value, str) and re.fullmatch(guard.pattern, value) is not None
     if isinstance(guard, LiteralText):
         return isinstance(value, str) and value in guard.spellings
+    if isinstance(guard, ScalarConvertible):
+        return not isinstance(value, list | dict) and accepts(Convertible(guard.convert), value)
     if isinstance(guard, Convertible):
         try:
             guard.convert(value)
@@ -721,6 +735,37 @@ def field_values(value: Any) -> Sequence[Any]:
 def cursor(value: Any) -> Cursor:
     """A cursor over one field: absent, single, collection or keyed map alike."""
     return Cursor(field_values(value))
+
+
+def single_cursor(value: Any) -> Cursor:
+    """A cursor over a required field whose one value may itself be a container.
+
+    ``cursor`` reads a list as several values; a field whose type is an erased collection holds
+    the whole list as one, so it is handed out whole — empty or not.
+    """
+    return Cursor((value,))
+
+
+def optional_cursor(value: Any) -> Cursor:
+    """A cursor over an optional field whose value, when present, may itself be a container."""
+    return Cursor(() if value is None else (value,))
+
+
+def held(value: Any) -> bool:
+    """Whether an optional field whose value may be an empty container is present.
+
+    Only ``None`` is absent: an empty list there is a present value with nothing in it.
+    """
+    return value is not None
+
+
+def value_fits(value: Any, guards: Sequence[Any]) -> bool:
+    """The kind half of selection for a field holding one value that may be a container.
+
+    ``field_fits`` tests a list's elements; here the list itself is the value tested.  An absent
+    value constrains nothing.
+    """
+    return value is None or any(accepts(guard, value) for guard in guards)
 
 
 def multi_values(grouped: Mapping[Any, Sequence[Any]], rule: str) -> list[Any]:

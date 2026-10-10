@@ -254,7 +254,7 @@ Element types:
 | A literal terminal, required, alone under its label | `Span` | `SpanProtocol` |
 | A literal terminal, optional | `bool` (presence) | `bool` |
 | A rule reference | that rule's type | that rule's type |
-| A `transparent;` rule reference | the erased payload | the erased payload |
+| A `transparent;` rule reference | the erased payload, container included — a rule erased to a repeated field is `Vec<T>` here, and the use site's own container wraps that | the erased payload, container included — a rule erased to a repeated field is `list[T]` here, and the use site's own container wraps that |
 | More than one kind under one label | a generated field enum `<Rule><Label>` | a union alias |
 
 A required labeled literal is a **position**, not text: the CST records which alternative
@@ -497,6 +497,38 @@ Erasure is transitive — a transparent rule whose one field is itself transpare
 way down — and a cycle of transparent rules is a generation error: at least one rule in the
 cycle must keep a type of its own.
 
+A single-field product erases to its field's **whole type, container included**. The field may
+occur exactly once, or be repeatable: `list := "[" , (value , ("," , value)*)? , "]" ;` marked
+`transparent;` erases to `Vec<Value>` / `list[Value]`, and to `IndexMap<K, T>` / `dict[K, T]`
+when the repeated element declares `key:`. A use site wraps its own container around that, with
+no collapsing:
+
+| Use site | Payload `Vec<T>` / `list[T]` | Payload `IndexMap<K, T>` / `dict[K, T]` |
+|---|---|---|
+| Exactly once | `Vec<T>` / `list[T]` | `IndexMap<K, T>` / `dict[K, T]` |
+| At most once | `Option<Vec<T>>` / `list[T] \| None` | `Option<IndexMap<K, T>>` / `dict[K, T] \| None` |
+| Repeatable | `Vec<Vec<T>>` / `list[list[T]]` | `Vec<IndexMap<K, T>>` / `list[dict[K, T]]` |
+
+The same holds where the erased collection is one arm of a sum or a field enum (`Value::List(Vec<Value>)`,
+`str | int | bool | list[Value]`). Presence is decided by each level's own container, identically on
+both backends: an empty list in a required field is a value, and `to_cst` hands it whole to the
+erased rule, where it is an empty repetition — so `[]` renders as the grammar's empty form, or is
+refused with "the grammar needs 1 … value(s)" when the grammar demands an element. An optional
+use site distinguishes `None` (the position is omitted) from an empty list (the position is
+written, empty). Two erased collections cannot be told apart by their values, so two of them as
+sibling sum variants get generated payload classes, as any two variants sharing a payload type do.
+
+Three shapes stay refused:
+
+- **An optional field** (`wrap := only:item? ;`). An optional use site of it would be
+  `Option<Option<T>>`, which Python's `T | None` cannot spell; collapsing the two would conflate
+  "no wrapper" with "a wrapper holding nothing". Make the field required or repeated, or write
+  the `?` at the use site instead.
+- **A labeled literal at any arity** (`wrap := f:"x"* ;`): it would erase the rule to a literal's
+  position, which carries no value.
+- **A key through an erased collection**: a `key:` field resolving to a rule erased to a
+  collection or a map is refused, since a container cannot key a map.
+
 ### `text_from:`
 
 Redirects a terminal-only rule's `text` to one child's span. The label must occur exactly once.
@@ -520,7 +552,8 @@ Rules:
 
 - The keying label must occur **exactly once** on the element rule. An optional or repeatable
   key is a generation error, with or without `multi`.
-- The key must resolve to text or to one of the eight integer builtins. A key that still has a
+- The key must resolve to text or to one of the eight integer builtins. A key resolving
+  through a `transparent;` rule erased to a collection or a map is refused. A key that still has a
   node type is refused — mark the referenced rule `transparent;` (as `identifier` is above) so
   the key resolves to a string. So are a `type: custom(...)` type, a float, and a literal's
   position (a literal's text is a grammar constant, so every element would share one key).

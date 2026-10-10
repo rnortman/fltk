@@ -1493,9 +1493,8 @@ mod tests {
 
     // wrapped := '(' . inner:number . ')' ;    with `transparent;`
     // held := inner:wrapped ;                  with `transparent;`
-    // listing: a transparent form over a collection field. No sidecar spells this — erasure is
-    // admitted only over a single required field — so it is a runtime-only shape, here because
-    // the runtime serves what a description says and not what an emitter happens to write.
+    // listing := '[' . item:number* . ']' ;     with `transparent;`
+    // A transparent form over a collection field: the rule erases to the whole list.
     mock_rule!(
         Wrapped,
         WRAPPED,

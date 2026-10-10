@@ -23,6 +23,7 @@ results.  A negative fixture keeps the static half from passing vacuously.
 
 from __future__ import annotations
 
+import ast as pyast
 import importlib.util
 import pathlib
 import sys
@@ -30,7 +31,9 @@ import typing
 
 import pytest
 
-from fltk.fegen import fltk_parser
+from fltk.fegen import ast_test_grammars, fltk_parser, gsm2ast, gsm2tree
+from fltk.iir.context import create_default_context
+from fltk.iir.py import reg as pyreg
 from tests import tree_paths
 from tests.fegen_ast_fixture import AST_MODULE_NAME, FEGEN_FLTKG, write_fegen_ast_module
 from tests.parser_parity import parse_py_cst, parse_rust_cst
@@ -340,6 +343,38 @@ def test_every_consumer_shape_type_checks(
     """
     errors = _diags_for_file(consumer_diagnostics, fixture)
     assert errors == [], f"{fixture} does not type-check:\n{errors}"
+
+
+def _write_transparent_list_modules(target: pathlib.Path) -> str:
+    """Write the config grammar's CST, protocol and AST modules with ``list`` erased; name the AST file.
+
+    The AST module's ``Value`` alias reaches itself through ``list[Value]``, which only a type
+    checker reading the quoted alias can tell is well formed: executing the module never
+    evaluates it.
+    """
+    grammar = ast_test_grammars.classified_grammar(ast_test_grammars.CONFIG_GRAMMAR)
+    cstgen = gsm2tree.CstGenerator(
+        grammar=grammar, py_module=pyreg.Module(["config_cst"]), context=create_default_context(capture_trivia=True)
+    )
+    (target / "config_cst_protocol.py").write_text(cstgen.gen_protocol_module_text())
+    (target / "config_cst.py").write_text(pyast.unparse(cstgen.gen_py_module("config_cst_protocol")))
+    model = ast_test_grammars.model_for(ast_test_grammars.CONFIG_GRAMMAR, ast_test_grammars.TRANSPARENT_LIST_SIDECAR)
+    source = gsm2ast.generate_ast_module(model, "config_cst", protocol_module_name="config_cst_protocol")
+    (target / "config_ast.py").write_text(source)
+    return "config_ast.py"
+
+
+def test_an_alias_recursing_through_an_erased_list_type_checks(
+    pyright_available: bool,  # noqa: FBT001
+    tmp_path: pathlib.Path,
+) -> None:
+    """``Value: TypeAlias = "str | int | bool | list[Value]"`` and every use of it, under pyright."""
+    write_pyright_config(tmp_path, extra_paths=[str(_REPO_ROOT), str(tmp_path)])
+    name = _write_transparent_list_modules(tmp_path)
+    diagnostics = _run_pyright_over_dir(tmp_path, pyright_available=pyright_available)
+    assert 'list[Value]"' in (tmp_path / name).read_text()
+    errors = _diags_for_file(diagnostics, name)
+    assert errors == [], f"{name} does not type-check:\n{errors}"
 
 
 @pytest.mark.parametrize("template", [_SWITCHABLE_TEMPLATE, _CST_DESCENT_TEMPLATE], ids=["switchable", "cst_descent"])

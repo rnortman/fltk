@@ -526,6 +526,12 @@ marker      := %"(" . %number . %")" ;
 alias_a     := "@" . inner:number ;
 loop_a      := "a" . inner:loop_b ;
 loop_b      := "b" . inner:loop_a ;
+opt_wrap    := "(" . only:number? . ")" ;
+list_wrap   := "[" . only:number* . "]" ;
+entries     := "{" . only:entry* . "}" ;
+named_list  := k:list_wrap . "=" . v:number ;
+named_map   := k:entries . "=" . v:number ;
+named_opt   := k:opt_wrap . "=" . v:number ;
 """
 
 TRANSPARENT_IDENTIFIER = "rule identifier { transparent; }"
@@ -934,6 +940,12 @@ class TestShapeCompatibility:
     def test_flatten_on_a_single_arity_wrapper(self) -> None:
         assert _rule("rule schedule { flatten; }", "schedule").flatten is True
 
+    def test_transparent_admits_a_repeated_only_field(self) -> None:
+        assert _rule("rule list_wrap { transparent; }", "list_wrap").transparent is True
+
+    def test_transparent_admits_a_keyed_only_field(self) -> None:
+        assert _rule("rule entries { transparent; }\nrule entry { key: name; }", "entries").transparent is True
+
     def test_transparent_chain_that_bottoms_out(self) -> None:
         resolved = _resolve("rule alias_a { transparent; }\nrule number { transparent; }")
         assert resolved.for_rule("alias_a").transparent is True
@@ -1037,6 +1049,12 @@ class TestShapeErrors:
         assert "needs a product rule with exactly one field" in message
         assert "has 0: (none)" in message
 
+    def test_transparent_refuses_an_optional_only_field(self) -> None:
+        message = _errors("rule opt_wrap { transparent; }")
+        assert "At line 1, column 17:" in message
+        assert ast_config.optional_payload_problem("opt_wrap", "only") in message
+        assert "an optional payload is a stated limitation" in message
+
     def test_transparent_rejects_a_fold_rule(self) -> None:
         message = _errors("rule expr { fold_left: op; transparent; }")
         assert "cannot apply to the fold rule 'expr'" in message
@@ -1083,6 +1101,25 @@ class TestShapeErrors:
         text = f"rule setting {{ key: key; }}\nrule identifier {{ transparent; type: custom({CUSTOM_TYPE_ARGS}); }}"
         message = _errors(text)
         assert "resolves to a `type: custom(...)` type, which cannot key a map" in message
+
+    def test_key_refuses_a_field_resolving_through_an_erased_collection(self) -> None:
+        message = _errors("rule named_list { key: k; }\nrule list_wrap { transparent; }")
+        assert (
+            "the `key:` field 'k' of rule 'named_list' resolves through the erased rule 'list_wrap' to a "
+            "collection, which cannot key a map"
+        ) in message
+        assert "node type" not in message
+
+    def test_key_refuses_a_field_resolving_through_an_erased_map(self) -> None:
+        message = _errors("rule named_map { key: k; }\nrule entries { transparent; }\nrule entry { key: name; }")
+        assert ast_config.container_key_problem("named_map", "k", "entries", keyed=True) in message
+        assert "to a collection" not in message
+
+    def test_key_through_an_optional_payload_reports_only_the_optional_refusal(self) -> None:
+        message = _errors("rule named_opt { key: k; }\nrule opt_wrap { transparent; }\nrule number { transparent; }")
+        assert ast_config.optional_payload_problem("opt_wrap", "only") in message
+        assert "cannot key a map" not in message
+        assert "node type" not in message
 
     def test_key_rejects_a_float(self) -> None:
         message = _errors("rule setting { key: key; }\nrule identifier { transparent; type: f64; }")

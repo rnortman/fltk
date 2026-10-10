@@ -376,6 +376,76 @@ class TestCustomAndErasedRules:
         assert "pub unit: ::std::option::Option<TimeUnitValue>," in body
 
 
+@pytest.fixture(scope="module")
+def listed_src() -> str:
+    return generate(fixtures.CONFIG_GRAMMAR, fixtures.TRANSPARENT_LIST_SIDECAR)
+
+
+@pytest.fixture(scope="module")
+def cells_src() -> str:
+    return generate(fixtures.CELLS_GRAMMAR, fixtures.CELLS_SIDECAR)
+
+
+class TestTransparentContainerPayloads:
+    """A ``transparent;`` rule erased to a repeated field is spelled as the container it is."""
+
+    def test_a_sum_variant_holds_the_erased_vec_unboxed(self, listed_src: str) -> None:
+        body = block(listed_src, "pub enum Value")
+        assert "    List(::std::vec::Vec<Value>),\n" in body
+        assert "Box" not in body
+        assert "pub struct List" not in listed_src
+        assert not has_span_method(listed_src, "Value")
+
+    def test_the_erased_helpers_return_and_take_the_collection(self, listed_src: str) -> None:
+        assert (
+            "fn _erased_list_from_cst(node: &::fltk_cst_core::Shared<cst::List>)"
+            " -> ::std::result::Result<::std::vec::Vec<Value>, ::fltk_ast_core::AstError> {"
+        ) in listed_src
+        assert "fn _erased_list_to_cst(value: &[Value])" in listed_src
+
+    def test_use_sites_compose_their_container_around_the_payload(self, cells_src: str) -> None:
+        body = block(cells_src, "pub struct Doc")
+        for line in (
+            "pub req: ::std::vec::Vec<i64>,",
+            "pub opt: ::std::option::Option<::std::vec::Vec<i64>>,",
+            "pub many: ::std::vec::Vec<::std::vec::Vec<i64>>,",
+            "pub grid: ::std::vec::Vec<::std::vec::Vec<i64>>,",
+            "pub outer: ::std::vec::Vec<i64>,",
+            "pub table: ::fltk_ast_core::IndexMap<::std::string::String, Item>,",
+            "pub held: ::std::option::Option<::std::vec::Vec<i64>>,",
+        ):
+            assert f"    {line}\n" in body
+        assert "    Nums(::std::vec::Vec<i64>),\n" in block(cells_src, "pub enum SoloA")
+
+    def test_every_helper_takes_an_erased_collection_as_a_slice(self, cells_src: str) -> None:
+        """A ``&Vec<T>`` parameter is clippy's ``ptr_arg``; an optional one stays ``Option<&Vec<T>>``,
+        which is what the call sites hand over."""
+        assert "fn _erased_nums_to_cst(value: &[i64])" in cells_src
+        assert "fn _erased_grid_to_cst(value: &[::std::vec::Vec<i64>])" in cells_src
+        assert "fn _erased_outer_to_cst(value: &[i64])" in cells_src
+        assert ("fn _erased_table_to_cst(value: &::fltk_ast_core::IndexMap<::std::string::String, Item>)") in cells_src
+        assert ("fn _flat_holder_to_cst(v0: &[i64], v1: ::std::option::Option<&::std::vec::Vec<i64>>)") in cells_src
+        assert re.search(r"[(,] ?\w+: &::std::vec::Vec<", cells_src) is None
+
+    def test_presence_follows_the_static_container_at_each_level(self, cells_src: str) -> None:
+        helper = block(cells_src, "fn _erased_nums_to_cst")
+        assert "::fltk_ast_core::Cursor::new(value.iter().collect());" in helper
+        parent = block(cells_src, "impl Doc {\n    /// Synthesise")
+        assert "::fltk_ast_core::Cursor::new(vec![&self.req]);" in parent
+        assert "::fltk_ast_core::Cursor::new(self.opt.iter().collect());" in parent
+        assert "!value.is_empty()" in block(cells_src, "fn _erased_alt_to_cst(")
+
+    def test_an_erased_goal_list_is_what_the_entry_points_carry(self) -> None:
+        src = generate(
+            fixtures.LIST_GOAL_GRAMMAR,
+            fixtures.LIST_GOAL_SIDECAR,
+            parser_mod_path="super::parser",
+            unparser_mod_path="super::unparser",
+        )
+        assert "-> ::std::result::Result<::std::vec::Vec<i64>, ::fltk_ast_core::ParseToAstError> {" in src
+        assert "pub fn unparse_str(value: &[i64], max_width: usize, indent_width: usize)" in src
+
+
 class TestCstBackpointers:
     def test_every_type_carries_the_cst_node_it_came_from(self) -> None:
         src = generate("word := w:/[a-z]+/ ;", "option cst = true;\n")

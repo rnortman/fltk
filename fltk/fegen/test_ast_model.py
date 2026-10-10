@@ -81,6 +81,11 @@ def fields_by_name(node: am.RuleNode) -> dict[str, am.FieldType]:
     return {field.name: field.type for field in node.fields}
 
 
+def _single(element: am.ElementType) -> am.FieldType:
+    """An erased rule's payload when it is one value rather than a container."""
+    return am.FieldType(element, am.Container.SINGLE)
+
+
 class TestAritiesForAlternative:
     """The per-alternative view keeps what ``compute_label_arities`` folds away."""
 
@@ -1395,8 +1400,8 @@ class TestTransparent:
 
     def test_a_terminal_only_rule_erases_to_its_text(self) -> None:
         model = configured("x:item", "rule item { transparent; }")
-        assert element_of(model, "target", "x") == am.TransparentType("item", am.TEXT)
-        assert model.transparent_types["item"] == am.TransparentType("item", am.TEXT)
+        assert element_of(model, "target", "x") == am.TransparentType("item", _single(am.TEXT))
+        assert model.transparent_types["item"] == am.TransparentType("item", _single(am.TEXT))
 
     def test_an_erased_rule_is_not_a_public_node(self) -> None:
         model = configured("x:item", "rule item { transparent; }")
@@ -1406,7 +1411,8 @@ class TestTransparent:
 
     def test_a_coercion_travels_with_the_payload(self) -> None:
         model = configured_model(SCALAR_GRAMMAR, "rule num { type: i64; transparent; }")
-        assert element_of(model, "target", "n") == am.TransparentType("num", am.TEXT, am.BuiltinCoercion("i64"))
+        expected = am.TransparentType("num", _single(am.TEXT), am.BuiltinCoercion("i64"))
+        assert element_of(model, "target", "n") == expected
 
     def test_the_container_of_the_use_site_is_untouched(self) -> None:
         model = configured("x:item*", "rule item { transparent; }")
@@ -1414,17 +1420,17 @@ class TestTransparent:
 
     def test_an_enum_shaped_rule_erases_to_its_value_enum(self) -> None:
         model = configured_model(ENUM_GRAMMAR + ITEM_TAIL, "rule flag { transparent; }")
-        assert element_of(model, "target", "f") == am.TransparentType("flag", am.NodeType("FlagValue"))
+        assert element_of(model, "target", "f") == am.TransparentType("flag", _single(am.NodeType("FlagValue")))
         assert set(model.value_enums) == {"FlagValue"}
 
     def test_a_bool_rule_erases_to_a_plain_boolean(self) -> None:
         model = configured_model(ENUM_GRAMMAR + ITEM_TAIL, "rule flag { bool: yes; transparent; }")
-        assert element_of(model, "target", "f") == am.TransparentType("flag", am.BOOL)
+        assert element_of(model, "target", "f") == am.TransparentType("flag", _single(am.BOOL))
         assert model.value_enums == {}
 
     def test_a_single_field_product_erases_to_its_field(self) -> None:
         model = configured_model(WRAPPER_GRAMMAR, "rule wrap { transparent; }")
-        assert element_of(model, "target", "w") == am.TransparentType("wrap", am.NodeType("Item"))
+        assert element_of(model, "target", "w") == am.TransparentType("wrap", _single(am.NodeType("Item")))
 
     def test_the_erased_products_node_keeps_the_field_for_its_converter(self) -> None:
         """No public field is emitted, so the field is named uniformly rather than after its label."""
@@ -1435,14 +1441,15 @@ class TestTransparent:
 
     def test_erasure_is_transitive(self) -> None:
         model = configured_model(WRAPPER_GRAMMAR, "rule wrap { transparent; }\nrule item { transparent; }")
-        assert element_of(model, "target", "w") == am.TransparentType("wrap", am.TransparentType("item", am.TEXT))
+        item = am.TransparentType("item", _single(am.TEXT))
+        assert element_of(model, "target", "w") == am.TransparentType("wrap", _single(item))
 
     def test_a_field_enum_can_be_the_payload(self) -> None:
         model = configured_model(
             "target := w:wrap ;\nwrap := ( only:item | only:other ) ;\n" + ITEM_TAIL,
             "rule wrap { transparent; }",
         )
-        assert element_of(model, "target", "w") == am.TransparentType("wrap", am.NodeType("WrapOnly"))
+        assert element_of(model, "target", "w") == am.TransparentType("wrap", _single(am.NodeType("WrapOnly")))
         assert [variant.name for variant in model.field_enums["WrapOnly"].variants] == ["Item", "Other"]
 
     LWORD = 'target := e:lword ;\nlword := v:"lit" | v:/[0-9]+/ | v:word ;\nword := w:/[a-z]+/ ;\n'
@@ -1451,7 +1458,7 @@ class TestTransparent:
     def test_a_literal_mixed_into_the_payload_label_carries_text(self) -> None:
         """As in a field of the same label: the literal contributes its text, not a position."""
         model = configured_model(self.LWORD, self.LWORD_SIDECAR)
-        assert element_of(model, "target", "e") == am.TransparentType("lword", am.NodeType("LwordV"))
+        assert element_of(model, "target", "e") == am.TransparentType("lword", _single(am.NodeType("LwordV")))
         assert [variant.name for variant in model.field_enums["LwordV"].variants] == ["Text", "Word"]
 
     def test_a_literal_mixed_with_regexes_erases_to_text(self) -> None:
@@ -1464,7 +1471,7 @@ class TestTransparent:
             'target := e:ltext ;\nltext := v:"lit" . %semi? | v:/[0-9]+/ ;\nsemi := s:";" ;\n',
             "rule ltext { product; transparent; }\n",
         )
-        assert element_of(model, "target", "e") == am.TransparentType("ltext", am.TEXT)
+        assert element_of(model, "target", "e") == am.TransparentType("ltext", _single(am.TEXT))
         assert "LtextV" not in model.field_enums
 
     def test_the_erased_rules_type_name_is_free_for_reuse(self) -> None:
@@ -1475,7 +1482,7 @@ class TestTransparent:
         )
         assert model.rule_type_names["thing"] == "Item"
         assert element_of(model, "target", "y") == am.NodeType("Item")
-        assert element_of(model, "target", "x") == am.TransparentType("item", am.TEXT)
+        assert element_of(model, "target", "x") == am.TransparentType("item", _single(am.TEXT))
 
     def test_a_reserved_label_needs_no_rename_once_the_rule_is_erased(self) -> None:
         """The label produces no public field, so it never has to be a usable identifier."""
@@ -1484,13 +1491,13 @@ class TestTransparent:
             "target := w:wrap ;\nwrap := text:item ;\n" + ITEM_TAIL,
             "rule wrap { transparent; }",
         )
-        assert element_of(model, "target", "w") == am.TransparentType("wrap", am.NodeType("Item"))
+        assert element_of(model, "target", "w") == am.TransparentType("wrap", _single(am.NodeType("Item")))
 
     def test_an_erased_direct_sum_payload_carries_the_payload_type(self) -> None:
         model = configured("a:item | b:other", "rule item { transparent; }")
         node = model.nodes["target"]
         assert isinstance(node, am.SumNode)
-        assert node.variants[0].payload == am.TransparentType("item", am.TEXT)
+        assert node.variants[0].payload == am.TransparentType("item", _single(am.TEXT))
         assert node.variants[0].payload_rule == "item"
 
     def test_two_rules_erasing_to_one_python_type_fall_back_to_payload_classes(self) -> None:
@@ -1517,25 +1524,206 @@ class TestTransparent:
         assert [variant.payload_rule for variant in node.variants] == ["item", "other"]
 
 
+# An erased collection beside the shapes that reach one: a direct use site at each arity, the
+# transitive single-over-collection `outer`, and a keyed payload.
+CONTAINER_GRAMMAR = (
+    "target := a:wrap , b:wrap? , c:wrap* , o:outer ;\n"
+    'wrap := "[" . only:item* . "]" ;\n'
+    'outer := "<" . x:wrap . ">" ;\n' + ITEM_TAIL
+)
+CONTAINER_SIDECAR = "rule wrap { transparent; }\nrule outer { transparent; }\n"
+LIST_OF_ITEMS = am.TransparentType("wrap", am.FieldType(am.NodeType("Item"), am.Container.COLLECTION))
+
+KEYED_PAYLOAD_GRAMMAR = (
+    'target := w:wrap ;\nwrap := "{" . only:entry* . "}" ;\nentry := k:word . "=" . v:word ;\nword := w:/[a-z]+/ ;\n'
+)
+KEYED_PAYLOAD_SIDECAR = "rule wrap { transparent; }\nrule entry { key: k; }\nrule word { transparent; }\n"
+
+
+class TestTransparentContainers:
+    """A product erased to a repeated field carries the field's whole type, container included."""
+
+    def test_a_repeated_only_field_erases_to_the_collection(self) -> None:
+        model = configured_model(CONTAINER_GRAMMAR, CONTAINER_SIDECAR)
+        assert model.transparent_types["wrap"] == LIST_OF_ITEMS
+        node = model.nodes["wrap"]
+        assert isinstance(node, am.ProductNode)
+        assert [field.type for field in node.fields] == [LIST_OF_ITEMS.payload]
+
+    def test_a_keyed_only_field_erases_to_the_map(self) -> None:
+        model = configured_model(KEYED_PAYLOAD_GRAMMAR, KEYED_PAYLOAD_SIDECAR)
+        key = am.MapKey(
+            rule_name="entry", label="k", field_name="k", element=am.TransparentType("word", _single(am.TEXT))
+        )
+        assert model.transparent_types["wrap"] == am.TransparentType(
+            "wrap", am.FieldType(am.NodeType("Entry"), am.Container.MAP, key)
+        )
+
+    def test_a_use_site_of_an_erased_collection_composes_containers(self) -> None:
+        """The use site keeps its own container; the payload's is inside the element."""
+        fields = fields_by_name(configured_model(CONTAINER_GRAMMAR, CONTAINER_SIDECAR).nodes["target"])
+        assert fields["a"] == am.FieldType(LIST_OF_ITEMS, am.Container.SINGLE)
+        assert fields["b"] == am.FieldType(LIST_OF_ITEMS, am.Container.OPTIONAL)
+        assert fields["c"] == am.FieldType(LIST_OF_ITEMS, am.Container.COLLECTION)
+
+    def test_a_single_field_over_an_erased_collection_adds_no_container(self) -> None:
+        model = configured_model(CONTAINER_GRAMMAR, CONTAINER_SIDECAR)
+        assert model.transparent_types["outer"] == am.TransparentType("outer", _single(LIST_OF_ITEMS))
+        assert model.transparent_types["outer"].inner == LIST_OF_ITEMS
+        assert LIST_OF_ITEMS.inner is None
+
+    def test_sibling_erased_collections_in_a_sum_fall_back_to_payload_classes(self) -> None:
+        """Both are a list on both backends, and an empty one says nothing about its elements."""
+        model = configured(
+            "a:lsta | b:lstb",
+            "rule lsta { transparent; }\nrule lstb { transparent; }",
+            'lsta := "[" . i:item* . "]" ;\nlstb := "{" . i:other* . "}" ;\n',
+        )
+        node = model.nodes["target"]
+        assert isinstance(node, am.SumNode)
+        assert [payload_name(variant) for variant in node.variants] == ["TargetA", "TargetB"]
+
+    def test_an_erased_collection_beside_a_node_stays_direct(self) -> None:
+        model = configured("a:lsta | b:other", "rule lsta { transparent; }", 'lsta := "[" . i:item* . "]" ;\n')
+        node = model.nodes["target"]
+        assert isinstance(node, am.SumNode)
+        assert [variant.payload_rule for variant in node.variants] == ["lsta", "other"]
+
+    def test_two_erased_collections_under_one_label_are_not_distinguishable(self) -> None:
+        model = configured(
+            'x:lsta . "!" | x:lstb',
+            "rule target { product; }\nrule lsta { transparent; }\nrule lstb { transparent; }",
+            'lsta := "[" . i:item* . "]" ;\nlstb := "{" . i:other* . "}" ;\n',
+        )
+        node = model.nodes["target"]
+        assert isinstance(node, am.ProductNode)
+        for plan in model.plans["target"].alternatives:
+            assert am.selection_guards(model, node.fields, plan) == ()
+
+    RECURSIVE = 'value := n:num | l:lst ;\nlst := "[" . (v:value . ("," . v:value)*)? . "]" ;\nnum := d:/[0-9]+/ ;\n'
+
+    def test_an_erased_collection_variant_is_not_a_by_value_edge(self) -> None:
+        model = configured_model(self.RECURSIVE, "rule lst { transparent; }")
+        recursion = am.recursion(model)
+        assert recursion.boxed == frozenset()
+        assert "Value" not in recursion.deep
+
+    def test_an_erased_collection_payload_has_no_span(self) -> None:
+        assert "Value" in am.span_bearing(model_for_text(self.RECURSIVE))
+        assert "Value" not in am.span_bearing(configured_model(self.RECURSIVE, "rule lst { transparent; }"))
+
+    def test_an_erased_collection_payload_witness_is_the_empty_container(self) -> None:
+        witness = am.witnesses(configured_model(CONTAINER_GRAMMAR, CONTAINER_SIDECAR))["Target"]
+        assert isinstance(witness, am.StructWitness)
+        values = {member.name: member.value for member in witness.members}
+        assert values["a"] == am.EmptyWitness(am.Container.COLLECTION)
+        assert values["o"] == am.EmptyWitness(am.Container.COLLECTION)
+        assert values["b"] == am.EmptyWitness(am.Container.OPTIONAL)
+
+    def test_an_erased_collection_is_not_converter_guarded(self) -> None:
+        model = configured_model(CONTAINER_GRAMMAR, CONTAINER_SIDECAR + "rule item { transparent; }\n")
+        assert am.converter_guarded(model.transparent_types["item"])
+        assert not am.converter_guarded(model.transparent_types["wrap"])
+        assert am.node_guard(model, "wrap") == am.Guard(am.GuardKind.NODE, rule_name="wrap")
+
+    def test_float_bits_look_through_a_collection_payload(self) -> None:
+        model = configured_model(
+            'target := w:wrap ;\nwrap := "[" . f:flt* . "]" ;\nflt := v:/[0-9.]+/ ;\n',
+            "rule wrap { transparent; }\nrule flt { type: f32; transparent; }\n",
+        )
+        assert am.element_float_bits(element_of(model, "target", "w")) == 32
+
+    def test_a_map_payload_has_no_float_bits(self) -> None:
+        model = configured_model(KEYED_PAYLOAD_GRAMMAR, KEYED_PAYLOAD_SIDECAR)
+        assert am.element_float_bits(element_of(model, "target", "w")) is None
+
+    def test_a_container_payload_identity_is_its_container(self) -> None:
+        model = configured_model(CONTAINER_GRAMMAR, CONTAINER_SIDECAR)
+        list_identity = frozenset({("python", "list"), ("rust", "Vec")})
+        assert am.accepted_identities(model, "wrap") == list_identity
+        assert am.accepted_identities(model, "outer") == list_identity
+        keyed = configured_model(KEYED_PAYLOAD_GRAMMAR, KEYED_PAYLOAD_SIDECAR)
+        assert am.accepted_identities(keyed, "wrap") == frozenset({("python", "dict"), ("rust", "IndexMap")})
+
+
+class TestContainerValued:
+    """Which fields hold an erased container as one value, through every shape that reaches one."""
+
+    def test_erased_container_answers_for_direct_and_transitive_erasures(self) -> None:
+        model = configured_model(CONTAINER_GRAMMAR, CONTAINER_SIDECAR + "rule item { transparent; }\n")
+        assert am.erased_container(model.transparent_types["wrap"]) is am.Container.COLLECTION
+        assert am.erased_container(model.transparent_types["outer"]) is am.Container.COLLECTION
+        assert am.erased_container(model.transparent_types["item"]) is None
+        keyed = configured_model(KEYED_PAYLOAD_GRAMMAR, KEYED_PAYLOAD_SIDECAR)
+        assert am.erased_container(keyed.transparent_types["wrap"]) is am.Container.MAP
+
+    def test_a_coerced_erasure_is_one_plain_value(self) -> None:
+        model = configured_model(SCALAR_GRAMMAR, "rule num { type: i64; transparent; }")
+        assert am.erased_container(element_of(model, "target", "n")) is None
+        assert not am.container_valued(model, element_of(model, "target", "n"))
+
+    def test_direct_and_transitive_use_sites_are_container_valued(self) -> None:
+        model = configured_model(CONTAINER_GRAMMAR, CONTAINER_SIDECAR)
+        for name in ("a", "b", "c", "o"):
+            assert am.container_valued(model, element_of(model, "target", name))
+
+    def test_a_sum_with_an_erased_collection_arm_is_container_valued(self) -> None:
+        model = fixtures.model_for(fixtures.CONFIG_GRAMMAR, fixtures.TRANSPARENT_LIST_SIDECAR)
+        assert element_of(model, "setting", "value") == am.NodeType("Value")
+        assert am.container_valued(model, am.NodeType("Value"))
+
+    def test_a_field_enum_with_an_erased_collection_arm_is_container_valued(self) -> None:
+        model = configured(
+            '"(" . (a:lsta | a:item) . ")"', "rule lsta { transparent; }", 'lsta := "[" . i:item* . "]" ;\n'
+        )
+        element = element_of(model, "target", "a")
+        assert element == am.NodeType("TargetA")
+        assert am.container_valued(model, element)
+
+    def test_a_fold_over_an_erased_collection_is_container_valued(self) -> None:
+        model = configured_model(
+            'target := e:expr ;\nexpr := d:lst , ( , op:sign , d:lst)* ;\nsign := p:"+" | m:"-" ;\n'
+            'lst := "[" . i:item* . "]" ;\n' + ITEM_TAIL,
+            "rule expr { fold_left: op; }\nrule lst { transparent; }\n",
+        )
+        assert am.container_valued(model, element_of(model, "target", "e"))
+        assert am.container_valued(model, fold_node(model, "expr").operand.type.element)
+
+    @pytest.mark.parametrize("pair", sorted(set(fixtures.SIDECAR_PAIRS) - fixtures.CONTAINER_PAYLOAD_PAIRS))
+    def test_no_field_of_a_grammar_without_a_container_payload_holds_one(self, pair: str) -> None:
+        """Every container-explicit emission is dead for these, so their output cannot change."""
+        model = fixtures.model_for(*fixtures.SIDECAR_PAIRS[pair])
+        fields: list[am.Field] = []
+        for node in model.nodes.values():
+            if isinstance(node, am.ProductNode):
+                fields.extend(node.fields)
+            elif isinstance(node, am.FoldNode):
+                fields.extend((node.operand, node.operators, node.binary.op))
+        for payload in model.payload_classes.values():
+            fields.extend(payload.fields)
+        # A terminal-only grammar has no field at all, so nothing in it can hold a container.
+        assert fields or all(isinstance(node, am.TerminalNode) for node in model.nodes.values())
+        for field in fields:
+            assert not am.container_valued(model, field.type.element), field
+        for erased in model.transparent_types.values():
+            assert am.erased_container(erased) is None
+
+    @pytest.mark.parametrize("pair", sorted(fixtures.CONTAINER_PAYLOAD_PAIRS))
+    def test_a_container_payload_pair_erases_a_container(self, pair: str) -> None:
+        model = fixtures.model_for(*fixtures.SIDECAR_PAIRS[pair])
+        assert any(am.erased_container(erased) is not None for erased in model.transparent_types.values())
+
+
 class TestTransparentErrors:
     """Erasures the model refuses, whether or not the sidecar validator can see them."""
 
-    def test_an_optional_only_field_has_no_single_payload(self) -> None:
-        errors = configured_errors(
-            "w:wrap",
-            "rule wrap { transparent; }",
-            "wrap := only:item? ;\n",
-        )
-        assert len(errors) == 1
-        assert "erases the rule to its 'only' field, which is optional" in errors[0]
-
-    def test_a_repeated_only_field_has_no_single_payload(self) -> None:
-        errors = configured_errors("w:wrap", "rule wrap { transparent; }", "wrap := only:item* ;\n")
-        assert len(errors) == 1
-        assert "which is collection" in errors[0]
-
     def test_a_literal_only_field_carries_no_value(self) -> None:
         errors = configured_errors("w:wrap", "rule wrap { transparent; }", 'wrap := only:"!" . %item ;\n')
+        assert len(errors) == 1
+        assert "position of the 'only' literal, which carries no value" in errors[0]
+
+    def test_a_repeated_literal_payload_is_refused(self) -> None:
+        errors = configured_errors("w:wrap", "rule wrap { transparent; }", 'wrap := only:"!"* . %item ;\n')
         assert len(errors) == 1
         assert "position of the 'only' literal, which carries no value" in errors[0]
 
@@ -1548,6 +1736,17 @@ class TestTransparentErrors:
         with pytest.raises(am.AstModelError) as exc:
             am.build_ast_model(pipeline(parse_grammar(text)), config)
         return exc.value.errors
+
+    def test_an_optional_only_field_is_a_stated_limitation(self) -> None:
+        errors = self.hand_built(f"target := w:wrap ;\nwrap := only:item? ;\n{ITEM_TAIL}", "wrap")
+        assert errors == (f"Rule 'wrap': {ac.optional_payload_problem('wrap', 'only')}",)
+        assert "an optional payload is a stated limitation" in errors[0]
+
+    def test_an_optional_literal_payload_is_refused_as_optional(self) -> None:
+        """Not as a presence flag: the arity is checked before the element is looked at."""
+        errors = self.hand_built(f'target := w:wrap ;\nwrap := only:"!"? . %item ;\n{ITEM_TAIL}', "wrap")
+        assert len(errors) == 1
+        assert "an optional payload is a stated limitation" in errors[0]
 
     def test_a_sum_has_no_common_payload(self) -> None:
         errors = self.hand_built(f"target := s:pick ;\npick := a:item | b:other ;\n{ITEM_TAIL}", "pick")
@@ -1876,7 +2075,7 @@ class TestKeyedCollections:
         field = fields_by_name(configured_model(KEYED_GRAMMAR, KEYED_CONFIG).nodes["top"])["e"]
         assert field.container is am.Container.MAP
         assert field.key == am.MapKey(
-            rule_name="entry", label="name", field_name="name", element=am.TransparentType("word", am.TEXT)
+            rule_name="entry", label="name", field_name="name", element=am.TransparentType("word", _single(am.TEXT))
         )
 
     def test_multi_keeps_the_map_container_and_records_the_accumulation(self) -> None:
@@ -1887,7 +2086,7 @@ class TestKeyedCollections:
             rule_name="entry",
             label="name",
             field_name="name",
-            element=am.TransparentType("word", am.TEXT),
+            element=am.TransparentType("word", _single(am.TEXT)),
             multi=True,
         )
 
@@ -1899,12 +2098,12 @@ class TestKeyedCollections:
 
     def test_the_key_field_stays_a_field_of_the_element(self) -> None:
         fields = fields_by_name(configured_model(KEYED_GRAMMAR, KEYED_CONFIG).nodes["entry"])
-        assert fields["name"] == am.FieldType(am.TransparentType("word", am.TEXT), am.Container.SINGLE)
+        assert fields["name"] == am.FieldType(am.TransparentType("word", _single(am.TEXT)), am.Container.SINGLE)
 
     def test_an_erased_key_field_resolves_through_to_text(self) -> None:
         field = fields_by_name(configured_model(KEYED_GRAMMAR, KEYED_CONFIG).nodes["top"])["e"]
         assert field.key is not None
-        assert field.key.element == am.TransparentType("word", am.TEXT)
+        assert field.key.element == am.TransparentType("word", _single(am.TEXT))
 
     def test_a_labeled_regex_keys_directly(self) -> None:
         model = configured_model(KEYED_GRAMMAR.replace("name:word", "name:/[a-z]+/"), "rule entry { key: name; }")
@@ -1919,7 +2118,7 @@ class TestKeyedCollections:
         )
         field = fields_by_name(model.nodes["top"])["e"]
         assert field.key is not None
-        assert field.key.element == am.TransparentType("num", am.TEXT, am.BuiltinCoercion("u32"))
+        assert field.key.element == am.TransparentType("num", _single(am.TEXT), am.BuiltinCoercion("u32"))
 
     def test_a_renamed_key_field_is_named_by_its_new_name(self) -> None:
         """Both directions read the key off the element, so the member is what they need."""
@@ -1966,6 +2165,44 @@ class TestKeyedCollectionErrors:
         with pytest.raises(am.AstModelError) as exc:
             am.build_ast_model(pipeline(parse_grammar(text)), config)
         return exc.value.errors
+
+    def test_a_container_payload_cannot_key_a_map(self) -> None:
+        grammar = pipeline(
+            parse_grammar(
+                'target := e:entry* ;\nentry := k:names . "=" . v:item ;\nnames := "[" . n:item* . "]" ;\n' + ITEM_TAIL
+            )
+        )
+        config = ac.ResolvedAstConfig(
+            rules={
+                "names": ac.ResolvedRule(rule_name="names", transparent=True),
+                "entry": ac.ResolvedRule(rule_name="entry", key=ac.ResolvedKey(label="k")),
+            }
+        )
+        with pytest.raises(am.AstModelError) as exc:
+            am.build_ast_model(grammar, config)
+        assert len(exc.value.errors) == 1
+        assert (
+            "resolves through the erased rule 'names' to a collection, which cannot key a map" in (exc.value.errors[0])
+        )
+
+    def test_a_map_payload_cannot_key_a_map(self) -> None:
+        grammar = pipeline(
+            parse_grammar(
+                'target := e:entry* ;\nentry := k:table . "=" . v:item ;\ntable := "{" . r:row* . "}" ;\n'
+                'row := rk:item . ":" . rv:other ;\n' + ITEM_TAIL
+            )
+        )
+        config = ac.ResolvedAstConfig(
+            rules={
+                "table": ac.ResolvedRule(rule_name="table", transparent=True),
+                "row": ac.ResolvedRule(rule_name="row", key=ac.ResolvedKey(label="rk")),
+                "item": ac.ResolvedRule(rule_name="item", transparent=True),
+                "entry": ac.ResolvedRule(rule_name="entry", key=ac.ResolvedKey(label="k")),
+            }
+        )
+        with pytest.raises(am.AstModelError) as exc:
+            am.build_ast_model(grammar, config)
+        assert exc.value.errors == (f"Rule 'entry': {ac.container_key_problem('entry', 'k', 'table', keyed=True)}",)
 
     def test_a_node_typed_key_is_refused(self) -> None:
         errors = self.hand_built(KEYED_GRAMMAR, entry="name")
@@ -2039,7 +2276,7 @@ class TestFoldForm:
         binary = fold_node(configured_model(FOLD_GRAMMAR, FOLD_SIDECAR), "expr").binary
         assert binary.name == "ExprBinary"
         assert binary.op.name == "op"
-        operator = am.TransparentType("add_op", am.NodeType("AddOpValue"))
+        operator = am.TransparentType("add_op", _single(am.NodeType("AddOpValue")))
         assert binary.op.type == am.FieldType(operator, am.Container.SINGLE)
 
     def test_the_operand_and_operators_are_the_flattened_chain(self) -> None:
@@ -2056,7 +2293,7 @@ class TestFoldForm:
             "rule expr { fold_left: op; }\nrule word { transparent; }\n",
             "expr := w:word , ( , op:other , w:word)* ;\nword := t:/[a-z]+/ ;\n",
         )
-        assert fold_node(model, "expr").operand.type.element == am.TransparentType("word", am.TEXT)
+        assert fold_node(model, "expr").operand.type.element == am.TransparentType("word", _single(am.TEXT))
 
     def test_a_fold_is_reachable_as_a_sum_payload(self) -> None:
         """``factor``'s ``paren`` variant carries the erased wrapper's ``Expr`` chain."""
@@ -2064,7 +2301,7 @@ class TestFoldForm:
         node = model.nodes["factor"]
         assert isinstance(node, am.SumNode)
         payloads = {variant.name: variant.payload for variant in node.variants}
-        assert payloads["Paren"] == am.TransparentType("paren_expr", am.NodeType("Expr"))
+        assert payloads["Paren"] == am.TransparentType("paren_expr", _single(am.NodeType("Expr")))
         assert fold_node(model, "term").operand.type.element == am.NodeType("Factor")
 
     def test_the_link_name_is_claimed_globally(self) -> None:
@@ -2745,11 +2982,11 @@ class TestSelectionGuards:
         first, second = selection_for("x:digits . x:flag | x:word", config, extra)
         assert accepted_elements(first) == {
             "x": [
-                am.TransparentType(rule_name="flag", payload=am.BOOL),
-                am.TransparentType(rule_name="digits", payload=am.TEXT, coercion=am.BuiltinCoercion("i64")),
+                am.TransparentType(rule_name="flag", payload=_single(am.BOOL)),
+                am.TransparentType(rule_name="digits", payload=_single(am.TEXT), coercion=am.BuiltinCoercion("i64")),
             ]
         }
-        assert accepted_elements(second) == {"x": [am.TransparentType(rule_name="word", payload=am.TEXT)]}
+        assert accepted_elements(second) == {"x": [am.TransparentType(rule_name="word", payload=_single(am.TEXT))]}
 
 
 class TestGroupChecks:
@@ -2844,7 +3081,7 @@ class TestInstanceElements:
         elements = am.instance_elements(configured_model(FOLD_GRAMMAR, FOLD_SIDECAR), "term")
         assert elements[-1] == am.NodeType("TermBinary")
         assert am.NodeType("Factor") not in elements
-        assert am.TransparentType("number", am.TEXT, am.BuiltinCoercion("i64")) in elements
+        assert am.TransparentType("number", _single(am.TEXT), am.BuiltinCoercion("i64")) in elements
 
     def test_a_field_enum_expands_to_its_arms(self) -> None:
         model = model_for("( a:item | a:other )")
@@ -3396,7 +3633,7 @@ class TestWitnesses:
         name, value = member
         assert name == "value"
         assert isinstance(value, am.ScalarWitness)
-        assert value.element == am.TransparentType("num", am.TEXT, am.BuiltinCoercion("i64"))
+        assert value.element == am.TransparentType("num", _single(am.TEXT), am.BuiltinCoercion("i64"))
 
     def test_an_enum_shaped_rule_takes_its_value_enums_first_variant(self) -> None:
         model = model_for_text('pick := a:"a" | b:"b" ;\n')

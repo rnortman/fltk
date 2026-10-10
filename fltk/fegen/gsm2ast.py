@@ -260,10 +260,25 @@ class AstGenerator:
         if isinstance(element, am.CustomType):
             return self.custom_path(element)
         if isinstance(element, am.TransparentType):
+            container = am.erased_container(element)
+            if container is am.Container.COLLECTION:
+                return "list"
+            if container is am.Container.MAP:
+                return "dict"
             return self.element_annotation(element)
         if isinstance(element, am.NodeType):
             return element.name
         return _SCALAR_CLASS[element.kind]
+
+    def holds_one_container(self, field: am.Field) -> bool:
+        """Whether a single or optional field may hold a list or a map as its *one* value.
+
+        Such a field's shape and presence are read off its static container: the inferring
+        runtime helpers would spread the list into several values and read an empty one as absent.
+        """
+        return field.type.container in (am.Container.SINGLE, am.Container.OPTIONAL) and am.container_valued(
+            self.model, field.type.element
+        )
 
     def custom_path(self, custom: am.CustomType) -> str:
         """The dotted path of a ``custom(...)`` rule's Python type."""
@@ -322,7 +337,7 @@ class AstGenerator:
         if isinstance(element, am.TransparentType):
             if element.coercion is not None:
                 return self.scalar_annotation(element.coercion)
-            return self.element_annotation(element.payload)
+            return self.field_annotation(element.payload)
         return {am.ScalarKind.TEXT: "str", am.ScalarKind.SPAN: _SPAN_TYPE, am.ScalarKind.BOOL: "bool"}[element.kind]
 
     def field_annotation(self, field_type: am.FieldType) -> str:
@@ -719,7 +734,9 @@ class AstGenerator:
         where the alternative's text there comes only from literals, or the erased rule's own
         converter where its payload is a bare scalar.
         """
-        guards = _tuple_literal([self.guard_expression(kind.guard) for kind in guard.accepted])
+        guards = _tuple_literal([self.guard_expression(kind.guard, field) for kind in guard.accepted])
+        if self.holds_one_container(field):
+            return f"astrt.value_fits({values(field)}, {guards})"
         return f"astrt.field_fits({values(field)}, {guards})"
 
     def alternative_body(
@@ -814,6 +831,9 @@ class AstGenerator:
     def populated_expression(self, field: am.Field, values: _Values) -> str:
         """Whether a field carries something, for alternative and branch selection."""
         value = values(field)
+        if self.holds_one_container(field):
+            # An empty container is a value here: a required field is always populated.
+            return "True" if field.type.container is am.Container.SINGLE else f"astrt.held({value})"
         if am.populated_directly(field):
             return value
         return f"astrt.holds({value})"
@@ -839,6 +859,10 @@ class AstGenerator:
     def cursor_expression(self, field: am.Field, value: str) -> str:
         if field.type.element == am.BOOL:
             return f"astrt.flag_cursor({value})"
+        if self.holds_one_container(field):
+            if field.type.container is am.Container.SINGLE:
+                return f"astrt.single_cursor({value})"
+            return f"astrt.optional_cursor({value})"
         key = field.type.key
         if key is not None and key.multi:
             # A grouped map hands its elements out group by group, so a key holding none is
@@ -856,7 +880,7 @@ class AstGenerator:
         lines = [f"for _child in {self.at_least(taken, run, rule_name)}:"]
         for index, placement in enumerate(run.placements):
             keyword = "if" if index == 0 else "elif"
-            lines.append(f"    {keyword} astrt.accepts({self.guard_expression(placement.guard)}, _child):")
+            lines.append(f"    {keyword} astrt.accepts({self.guard_expression(placement.guard, field)}, _child):")
             lines.append(f"        _node.append({self.child_expression(rule_name, placement.slot)}, {label})")
         lines.append("    else:")
         lines.append(f'        astrt.unplaceable(_child, "{rule_name}", "{run.label}")')
@@ -868,14 +892,22 @@ class AstGenerator:
             return taken
         return f'astrt.filled({taken}, {run.minimum}, "{rule_name}", "{run.label or ""}")'
 
-    def guard_expression(self, guard: am.Guard) -> str:
-        """The runtime guard object one item position tests a value against."""
+    def guard_expression(self, guard: am.Guard, field: am.Field) -> str:
+        """The runtime guard object one item position of ``field`` tests a value against.
+
+        A converter guard on a field that may also hold an erased list or map refuses those
+        outright: the position holds one scalar, and the probe alone could mistake a one-element
+        list for it.
+        """
         if guard.kind is am.GuardKind.NONE:
             return "None"
         if guard.kind is am.GuardKind.NODE:
             return self.instance_types(guard.rule_name or "")
         if guard.kind is am.GuardKind.CONVERTIBLE:
-            return f"astrt.Convertible({self.erased_reverse(guard.rule_name or '')})"
+            convert = self.erased_reverse(guard.rule_name or "")
+            if am.container_valued(self.model, field.type.element):
+                return f"astrt.ScalarConvertible({convert})"
+            return f"astrt.Convertible({convert})"
         if guard.kind is am.GuardKind.TEXT:
             return "str"
         if guard.kind is am.GuardKind.PATTERN:
@@ -892,7 +924,7 @@ class AstGenerator:
         if field is None:
             return []
         label = f"cst.{self.cst_class(rule_name)}.Label.{(slot.label or '').upper()}"
-        guard = self.guard_expression(run.placements[0].guard)
+        guard = self.guard_expression(run.placements[0].guard, field)
         taken = f"_c_{field.name}.take({_count(run.maximum)}, {run.reserve}, {guard})"
         return [
             f"for _child in {self.at_least(taken, run, rule_name)}:",
