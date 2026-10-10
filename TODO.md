@@ -180,24 +180,6 @@ recipe is back in `docs/bazel-consumer-guide.md` §4 and exercised by a target i
 resulting module from a `py_test`. Location: `tests/bazel_consumer/BUILD.bazel`,
 `bzl/pyo3_ext.bzl`, `rust.bzl`, `docs/bazel-consumer-guide.md` §4.
 
-## `cargo-guides-bazel-rewrite`
-
-`docs/rust-cst-extension-guide.md` and `docs/rust-formatter-guide.md` are written around a
-consumer crate with its own `Cargo.toml` pinning FLTK's runtime crates by path or git rev
-(`fltk-cst-core = { path = "../fltk/crates/fltk-cst-core" }` and friends). Those pins name
-manifests that no longer exist — every FLTK crate is a Bazel target now — and consuming FLTK from
-Cargo never actually worked even when they did, so the recipes were dead before they were stale.
-Each guide carries a note at the top saying so and pointing at `docs/bazel-consumer-guide.md`,
-which is the recipe book that does work (§4 for a Python extension, §5.3 for a formatter binary).
-The concepts in both guides are still accurate: what the generated code needs at runtime, the
-`pub mod parser/unparser` requirement, the `fltk_formatter_main!` invocation, the cfg-gated
-`python` feature. Closing this means rewriting the build mechanics of both onto `bazel_dep` +
-`generate_rust_parser` / `fltk_pyo3_cdylib`, or folding what survives into the consumer guide and
-deleting them — a call about how many guides this project wants, not a mechanical edit, which is
-why it is deferred rather than done alongside the cargo retirement. Done = no guide instructs a
-Cargo pin into this repo, and the notes come out with the recipes they warn about. Location:
-`docs/rust-cst-extension-guide.md`, `docs/rust-formatter-guide.md`.
-
 ## `rust-supply-chain-audit`
 
 There is no advisory, license or yanked-crate gate over the Rust dependencies anymore.

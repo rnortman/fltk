@@ -38,5 +38,11 @@ rust_test(
     },
 )
 
+# The formatter guide's worked example is held to this invocation by //tests:test_doc_guide_cli_examples.
+exports_files(
+    ["src/main.rs"],
+    visibility = ["//tests:__pkg__"],
+)
+
 # This package's half of the Cargo retirement gate's declaration probe.
 cargo_file_probe()

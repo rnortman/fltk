@@ -208,6 +208,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   pulls in pyo3 now live in `scripts/check-steps` and `scripts/pyo3-guard` instead of inline in
   the `Makefile`, and tests now run their failure paths against stub `make`/`bazel` binaries.
   `make check` runs the same steps in the same order, with the same output.
+- Docs: `docs/bazel-consumer-guide.md` is now the only build guide for Rust extensions and
+  formatters. `docs/rust-cst-extension-guide.md` is deleted. It described a Cargo/maturin build
+  and a `generate_parser(rust_cst_module=...)` API that no longer exist. Its one still-true
+  topic, the runtime contract, now lives in §4 of the consumer guide. That section explains
+  that `fltk._native` reaches your targets through the extension's own Bazel target. It also
+  explains that a version or layout mismatch raises `TypeError` and a missing `fltk._native`
+  raises `RuntimeError`, both at the first span operation that crosses extensions rather than
+  at import. §4 also gains a usage example showing the `capture_trivia` argument, and now says
+  correctly that `ast`/`de` are Rust-only modules, not Python submodules.
+  `docs/rust-formatter-guide.md` keeps its `fltk_formatter_main!` and CLI reference, but its
+  Cargo build steps are replaced by a pointer to the consumer guide. A test now checks that the
+  guide's macro invocation and key table match the macro and the `fltkfmt` binary. The guide
+  is now listed in `README.md`.
 
 ### Fixed
 

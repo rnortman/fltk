@@ -484,10 +484,13 @@ _TESTS = {
     "test_cst_mutators_parity.py": {"deps": _FEGEN_RUST_CST + [":test_support"]},
     "test_doc_guide_cli_examples.py": {
         # It pins the guides' CLI invocations against the real CLI, and imports the compile
-        # gate's case library for its grammar fixtures.
+        # gate's case library for its grammar fixtures, and the formatter macro's worked example
+        # and arm.
         "data": GENCODE_TOOL_DATA + [
             "//:Makefile",
             "//:doc_guides",
+            "//crates/fltk-fmt-cli:src/lib.rs",
+            "//crates/fltkfmt:src/main.rs",
         ],
         "deps": GENCODE_TOOL_DEPS + [":test_support"],
     },

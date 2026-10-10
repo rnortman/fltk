@@ -797,9 +797,9 @@ def fltk_pyo3_cdylib(
        the abi3 suffix (the convention maturin produces for abi3-py310 builds).
 
     4. **py_library wrapper**: places <name>.abi3.so on the Python import path
-       and carries @fltk//:native_py as a data dep so `import fltk._native`
-       resolves inside any test sandbox that depends on this target (closing
-       invariant #1: fltk._native must be importable by the consumer cdylib).
+       and depends on @fltk//:native_py so `import fltk._native` resolves in any
+       target that depends on this one — the generated cst.rs imports
+       `fltk._native.Span` on its first cross-cdylib span operation.
 
     Consumer lib.rs template:
         use fltk_cst_core::register_submodule;

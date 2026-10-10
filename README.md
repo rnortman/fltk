@@ -81,6 +81,7 @@ rule := label:identifier , "literal" , /regex_pattern/ ;
 - [CST Structure Guide](docs/cst-structure.md) - How grammars map to Concrete Syntax Trees
 - [AST Guide](docs/ast-guide.md) - Generated typed trees and the `.fltkast` shaping sidecar
 - [Rust serde Guide](docs/rust-serde-guide.md) - Deserializing source text into your own `#[derive(Deserialize)]` types
+- [Rust Formatter Guide](docs/rust-formatter-guide.md) - A standalone pure-Rust formatter binary for your grammar with `fltk_formatter_main!`
 - [Trivia Guide](docs/trivia-guide.md) - Handling whitespace and comments
 
 ## Architecture

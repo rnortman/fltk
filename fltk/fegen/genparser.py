@@ -533,9 +533,10 @@ def gen_rust_cst(
     """Emit Rust CST source (.rs) from a grammar file, and optionally a .pyi stub.
 
     Generates a standalone PyO3 Rust extension source file from a grammar.
-    The user compiles and installs it with their own build tool (e.g. maturin).
-    The generated .rs file is independent of FLTK's crate at link time; it
-    depends on fltk._native only at runtime for the UnknownSpan sentinel.
+    Bazel's fltk_pyo3_cdylib compiles it into an extension (see
+    docs/bazel-consumer-guide.md). The generated .rs file does not link
+    fltk._native; at run time the extension imports fltk._native.Span on its
+    first cross-cdylib span operation, and a failed import raises RuntimeError.
 
     The generated cst.rs wires into the cst submodule of the compiled extension,
     e.g. <module>.cst. Import Span and SourceText from fltk._native, not from

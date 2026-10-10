@@ -9,14 +9,6 @@ parser and unparser types.
 `crates/fltkfmt/` (the `.fltkg` formatter, built from `fegen.fltkg`) is the canonical worked
 example; this guide mirrors it.
 
-> **The Cargo recipes below do not work.** FLTK's runtime crates are Bazel targets and carry no
-> Cargo manifests, so the `path = "../fltk/crates/..."` pins this guide shows resolve to nothing.
-> `crates/fltkfmt/BUILD.bazel` is the same worked example in the form that does build, and
-> `docs/bazel-consumer-guide.md` §5.3 is the consumer recipe for a formatter binary. Rewriting
-> this guide onto that footing is `TODO(cargo-guides-bazel-rewrite)`; the macro semantics, the
-> `pub mod parser/unparser` requirement and the `fltk_formatter_main!` invocation are all still
-> accurate.
-
 ---
 
 ## Overview
@@ -34,152 +26,37 @@ No Python, PyO3, or GIL is involved at any stage.
 
 ---
 
-## Step 1: Prerequisites — a pure-Rust parser + unparser crate for your grammar
+## The crate it formats
 
-You need a Rust crate that exposes, for your grammar, a `parser::Parser` and an
-`unparser::Unparser`, and that is consumable as a plain `rlib` with pyo3 dropped — i.e. the
-same crate the Rust CST extension builds, but with a `crate-type` that includes `rlib` and a
-feature split that lets `default-features = false` strip pyo3 and produce a pure-Rust library.
-The canonical template is `crates/fegen-rust/` (package `fegen-rust-cst`, lib `fegen_rust_cst`);
-this section reproduces its essentials.
+The binary needs your grammar's pure-Rust parser and unparser. They come from the pure-Rust
+`generate_rust_parser` target of [`docs/bazel-consumer-guide.md`](bazel-consumer-guide.md) §5,
+with `unparser = True` (§5.2), and the binary itself is the `rust_binary` of §5.3. That guide
+owns the module pin, the codegen target, the runtime deps (`fltk-parser-core:no_python`,
+`fltk-unparser-core`, …) and the binary's `version` attribute; nothing here repeats them.
 
-### 1a. Generate the source
+The crate root declares its `parser` and `unparser` modules `pub` (the consumer guide's recipe
+prints them that way) because the binary names `my_grammar_cst::parser::Parser` and
+`my_grammar_cst::unparser::Unparser` from outside the crate: with private `mod` declarations those
+paths fail to resolve. `cst` may stay private — the generated parser and unparser reach it as
+`super::cst`.
 
-```bash
-# CST node classes (one struct per rule + label enums)
-bazel run --run_under="cd $PWD &&" @fltk//:genparser -- gen-rust-cst      my_grammar.fltkg src/cst.rs
-# Parser (start-rule methods named apply__parse_<rule>)
-bazel run --run_under="cd $PWD &&" @fltk//:genparser -- gen-rust-parser   my_grammar.fltkg src/parser.rs
-# Unparser (start-rule methods named unparse_<rule>); the format spec is baked in here
-bazel run --run_under="cd $PWD &&" @fltk//:genparser -- gen-rust-unparser my_grammar.fltkg src/unparser.rs \
-    --format-config my_grammar.fltkfmt
-```
-
-`--run_under="cd $PWD &&"` makes the relative paths after `--` resolve in the directory you
-invoked Bazel from rather than in the runfiles tree; see [usage.md](usage.md#quick-start-source-generation).
-
-The generated `parser.rs` does `use fltk_parser_core::...` and `unparser.rs` does
-`use fltk_unparser_core::...`, so the crate must depend on **both** of those plus
-`fltk-cst-core` — not `fltk-cst-core` alone.
-
-### 1b. `Cargo.toml`
-
-The crate must build as an `rlib` (a `cdylib`-only crate cannot be used as a normal Cargo
-library dependency) and must keep pyo3 behind an optional feature so the formatter can consume
-it with `default-features = false`:
-
-```toml
-[package]
-name = "my-grammar-cst"
-version = "0.1.0"
-edition = "2021"
-
-[lib]
-name = "my_grammar_cst"
-# rlib so the formatter can use it as a library dependency; cdylib if you also build it as a
-# Python extension module.
-crate-type = ["cdylib", "rlib"]
-
-[features]
-default = ["extension-module"]
-extension-module = ["python", "pyo3/extension-module"]
-python = ["dep:pyo3", "fltk-cst-core/python"]
-
-[dependencies]
-pyo3 = { version = "0.29", features = ["abi3-py310"], optional = true }
-# The *-core crates are not published to crates.io; pin by path (local checkout) or git rev.
-fltk-cst-core      = { path = "../fltk/crates/fltk-cst-core", default-features = false }
-fltk-parser-core   = { path = "../fltk/crates/fltk-parser-core" }
-fltk-unparser-core = { path = "../fltk/crates/fltk-unparser-core" }
-```
-
-### 1c. `src/lib.rs`
-
-`gen-rust-lib` emits a pyo3 cdylib skeleton, but its output is **not** directly usable here: it
-declares the submodules as private `mod parser;` / `mod unparser;` and emits an unconditional
-`#[pymodule]`, whereas the formatter macro needs `pub mod parser;` / `pub mod unparser;` (so
-`my_grammar_cst::parser::Parser` resolves) and the pyo3 wiring gated behind the `python` feature
-(so `default-features = false` yields a pure rlib). Hand-write `src/lib.rs` exactly as
-`crates/fegen-rust/src/lib.rs` does:
-
-```rust
-#[cfg(feature = "python")]
-use fltk_cst_core::register_submodule;
-#[cfg(feature = "python")]
-use pyo3::prelude::*;
-
-mod cst; // private: parser/unparser reach it via `super::cst`
-pub mod parser; // pub so `my_grammar_cst::parser::Parser` resolves
-pub mod unparser; // pub so `my_grammar_cst::unparser::Unparser` resolves
-
-#[cfg(feature = "python")]
-#[pymodule]
-fn my_grammar_cst(m: &Bound<'_, PyModule>) -> PyResult<()> {
-    register_submodule(m, "cst", cst::register_classes)?;
-    register_submodule(m, "parser", parser::register_classes)?;
-    register_submodule(m, "unparser", unparser::register_classes)?;
-    Ok(())
-}
-```
-
-Your start rule determines the method names the formatter macro will reference — for
-`fegen.fltkg` the start rule is `grammar`, giving `apply__parse_grammar` and `unparse_grammar`.
-
-See `docs/rust-cst-extension-guide.md` for the broader Rust-CST background (building/installing
-the crate as a Python extension module, and the pin alternatives for the `*-core` crates). The
-formatter-specific deltas — `rlib` in `crate-type`, the `fltk-parser-core` / `fltk-unparser-core`
-dependencies, the `pub mod parser/unparser`, and consuming with `default-features = false` — are
-the parts shown above.
+Your start rule determines the method names the macro references: `apply__parse_<rule>` and
+`unparse_<rule>`. For `fegen.fltkg` the start rule is `grammar`, giving `apply__parse_grammar` and
+`unparse_grammar`.
 
 ---
 
-## Step 2: The consumer crate and its `Cargo.toml`
-
-Create a binary crate. It needs exactly two dependencies: your grammar's CST crate (with
-`default-features = false` to drop pyo3) and `fltk-fmt-cli`. The render types
-(`RendererConfig`, `Renderer`, `resolve_spacing_specs`) reach the macro through
-`fltk-fmt-cli`'s re-exports, so you do **not** name `fltk-unparser-core` yourself; the parser /
-unparser runtime crates come in transitively.
-
-```toml
-# A standalone workspace (like crates/fltkfmt): the CST dependency's *default* features pull in
-# pyo3, so keeping this crate out of any parent workspace avoids feature unification re-enabling
-# pyo3. Consequence: build artifacts land under this crate's own target/, not a parent
-# workspace root — see the run commands below. Drop this line if you instead make the crate a
-# member of an existing workspace.
-[workspace]
-
-[package]
-name = "my-grammar-fmt"
-version = "0.1.0"
-edition = "2021"
-
-[[bin]]
-name = "my-grammar-fmt"
-path = "src/main.rs"
-
-[dependencies]
-# Your grammar's pure-Rust parser + unparser. default-features = false drops pyo3.
-my-grammar-cst = { path = "../my-grammar-cst", default-features = false }
-# Reusable CLI scaffolding: the fltk_formatter_main! macro + the render re-exports it names.
-# fltk-fmt-cli is not published to crates.io; pin by path or git, as for the *-core crates
-# (see docs/rust-cst-extension-guide.md).
-fltk-fmt-cli = { path = "../fltk/crates/fltk-fmt-cli" }
-```
-
----
-
-## Step 3: Invoke the macro
+## The macro invocation
 
 The entire `src/main.rs` is one invocation:
 
 ```rust
 fltk_fmt_cli::fltk_formatter_main! {
-    about:    "Format MyGrammar files.",
-    parser:   my_grammar_cst::parser::Parser,
+    about: "Format MyGrammar files.",
+    parser: my_grammar_cst::parser::Parser,
     unparser: my_grammar_cst::unparser::Unparser,
-    parse:    apply__parse_<start_rule>,
-    unparse:  unparse_<start_rule>,
+    parse: apply__parse_<start_rule>,
+    unparse: unparse_<start_rule>,
 }
 ```
 
@@ -247,45 +124,35 @@ Behavior baked into the scaffolding:
 
 ---
 
-## Minimal end-to-end example
+## Worked example
 
 For a grammar whose start rule is `grammar` (this is exactly `crates/fltkfmt/src/main.rs`):
 
 ```rust
 fltk_fmt_cli::fltk_formatter_main! {
-    about:    "Format FLTK grammar (.fltkg) files.",
-    parser:   fegen_rust_cst::parser::Parser,
+    about: "Format FLTK grammar (.fltkg) files.",
+    parser: fegen_rust_cst::parser::Parser,
     unparser: fegen_rust_cst::unparser::Unparser,
-    parse:    apply__parse_grammar,
-    unparse:  unparse_grammar,
+    parse: apply__parse_grammar,
+    unparse: unparse_grammar,
 }
 ```
 
-Build and run:
-
-Because the consumer crate is its own workspace (Step 2), its artifacts land under
-`crates/my-grammar-fmt/target/`, not a parent workspace root. Use the manifest-relative binary
-path (or `cargo run --manifest-path ...`):
+Build it, then run the built binary (`//:mylang_fmt` is the consumer guide's §5.3 target):
 
 ```bash
-cargo build --release --manifest-path crates/my-grammar-fmt/Cargo.toml
-BIN=crates/my-grammar-fmt/target/release/my-grammar-fmt
+bazel build //:mylang_fmt
+BIN=bazel-bin/mylang_fmt
 
-# Format a file to stdout
-"$BIN" input.mygrammar
-
-# Reformat in place at 100 columns, 4-space indent
+"$BIN" input.mygrammar                       # format to stdout
 "$BIN" --in-place -w 100 -i 4 src/*.mygrammar
-
-# CI gate: fail if anything is unformatted
-"$BIN" --check src/*.mygrammar
-
-# Pipe through stdin → stdout
-cat input.mygrammar | "$BIN"
+"$BIN" --check src/*.mygrammar               # CI gate
+cat input.mygrammar | "$BIN"                 # stdin → stdout
 ```
 
-(If you instead made the crate a member of an existing workspace, the binary is at that
-workspace root's `target/release/my-grammar-fmt`.)
+`bazel run //:mylang_fmt -- …` works too, but only with `--run_under="cd $PWD &&"`: `bazel run`
+executes in the runfiles tree, so without it every relative file path above names a different
+file or none.
 
-That is the whole recipe: generate the pure-Rust parser + unparser for your grammar, add the
-two-line `Cargo.toml`, and write one `fltk_formatter_main!` invocation.
+That is the whole recipe: the §5.2 codegen target, the two `pub mod` lines, and one
+`fltk_formatter_main!` invocation.

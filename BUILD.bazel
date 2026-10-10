@@ -357,11 +357,14 @@ filegroup(
     visibility = ["//tests:__pkg__"],
 )
 
-# The guides tests/test_doc_guide_cli_examples.py pins against the real CLI.
+# The guides tests/test_doc_guide_cli_examples.py pins against the CLI and the formatter macro.
+# Not every guide here is in that file's GUIDES: the formatter guide prints no genparser command
+# and is joined to the macro by its own tests.
 filegroup(
     name = "doc_guides",
     srcs = [
         "docs/ast-guide.md",
+        "docs/rust-formatter-guide.md",
         "docs/rust-serde-guide.md",
     ],
     visibility = ["//tests:__pkg__"],

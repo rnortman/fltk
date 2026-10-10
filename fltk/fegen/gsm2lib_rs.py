@@ -226,9 +226,7 @@ class RustLibGenerator:
 
         # --- UNKNOWN_SPAN static ---
         # The static is set once at module init (see the #[pymodule] body below) and
-        # exposed to Python callers as `UnknownSpan`.  Generated node code does not
-        # read it directly — each extension caches the sentinel via its own
-        # PyOnceLock by importing fltk._native.UnknownSpan at runtime.
+        # exists for Python callers only: generated node code must not read it.
         if spec.unknown_span_static:
             lines.append(
                 f"// UNKNOWN_SPAN is set at module init (below) and exposed as `{spec.module_name}.UnknownSpan`."

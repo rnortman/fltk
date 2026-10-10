@@ -1,10 +1,10 @@
-"""What the AST and serde guides print is checked against the CLI, and run.
+"""What the AST, serde and formatter guides print is checked against the code, and run.
 
 The guides tell out-of-tree consumers how to generate public API for their own code, so a
 renamed flag or a dropped command is a downstream break that no other test in the repo notices
 — nothing mechanically connects the prose to `genparser`.
 
-Two things are pinned here:
+Three things are pinned here:
 
 - The mechanical surface: command names and option spellings, in the invocations *and* in each
   command's option table.
@@ -17,6 +17,9 @@ Two things are pinned here:
   ignores. The Python quick start has no compile gate to join to, so it runs here: the printed
   invocations generate a package and the printed snippet imports and parses through it, which is
   what fails when a printed module path is wrong.
+- The formatter guide's `fltk_formatter_main!` invocations and key table, held to the invocation
+  `//crates/fltkfmt:fltkfmt` compiles and to the macro arm in `crates/fltk-fmt-cli/src/lib.rs`.
+  That guide prints no `genparser` command, so it is not one of `GUIDES`.
 
 Block lookups are keyed by the guide's own structure — a `###` subsection and a fence language —
 never by position, and never by a string the test also judges: a wrong printed module path has to
@@ -186,25 +189,37 @@ _H2 = re.compile(r"^## ")
 _H3 = re.compile(r"^### (.+)")
 
 
+def _section_lines(text: str, marker: str) -> list[str]:
+    """The lines after the first line containing `marker`, up to the next `##` outside a fence.
+
+    Every guide lookup is bounded by this, so a block or table row from a later section of the
+    guide cannot drift into a lookup here.
+    """
+    lines = text.splitlines()
+    start = next((index for index, raw in enumerate(lines) if marker in raw), len(lines))
+    section: list[str] = []
+    fenced = False
+    for raw in lines[start + 1 :]:
+        if raw.startswith("```"):
+            fenced = not fenced
+        elif not fenced and _H2.match(raw):
+            break
+        section.append(raw)
+    return section
+
+
 def _fenced_blocks_after(text: str, marker: str) -> list[tuple[str, str, str]]:
-    """Each fenced block after the first line containing `marker`, in order.
+    """Each fenced block in `marker`'s section (see `_section_lines`), in order.
 
     One entry per block: the `###` subsection it sits under (empty above the first), its fence
-    language, and its body. Extraction stops at the next `##`, so a block from a later section of
-    the guide cannot drift into a lookup here.
+    language, and its body.
     """
     blocks: list[tuple[str, str, str]] = []
     current: list[str] | None = None
     section = ""
     language = ""
-    reached = False
-    for raw in text.splitlines():
-        if not reached:
-            reached = marker in raw
-            continue
+    for raw in _section_lines(text, marker):
         if current is None:
-            if _H2.match(raw):
-                break
             subsection = _H3.match(raw)
             if subsection:
                 section = subsection.group(1).strip()
@@ -340,3 +355,83 @@ def test_the_ast_guides_python_quick_start_runs_as_printed(
     assert isinstance(value, expr_binary), "the printed isinstance arm is the one taken"
     assert value.op.name == "MINUS", "the outer link of a left fold carries the last operator"
     assert (value.lhs.lhs, value.lhs.rhs, value.rhs) == (1, 2, 3), "the operands coerce in source order"
+
+
+_FORMATTER_GUIDE = "docs/rust-formatter-guide.md"
+_FLTKFMT_MAIN = "crates/fltkfmt/src/main.rs"
+_FMT_CLI_LIB = "crates/fltk-fmt-cli/src/lib.rs"
+
+_INVOCATION_KEY = re.compile(r"^\s*([a-z_]+):")  # `about: …,` lines
+_MACRO_ARM_KEY = re.compile(r"^\s*(?:\$\()?([a-z_]+): \$[a-z_]+:")  # `about: $about:expr,` / `$(name: $name:expr,)?`
+_TABLE_KEY = re.compile(r"^\|\s*`([a-z_]+)`\s*\|")  # key-table rows
+
+
+def _invocation_keys(text: str) -> list[str]:
+    """The `key:` names, in order, between `fltk_formatter_main! {` and its closing `}`."""
+    keys: list[str] = []
+    inside = False
+    for line in text.splitlines():
+        if not inside:
+            inside = "fltk_formatter_main! {" in line
+            continue
+        if line.strip() == "}":
+            break
+        key = _INVOCATION_KEY.match(line)
+        if key:
+            keys.append(key.group(1))
+    assert keys, "no `fltk_formatter_main!` invocation keys found — the extractor stopped matching"
+    return keys
+
+
+def _macro_arm_keys() -> list[str]:
+    """The key names, in order, the `fltk_formatter_main!` arm accepts."""
+    keys: list[str] = []
+    inside = False
+    for line in _guide_text(_FMT_CLI_LIB).splitlines():
+        if not inside:
+            inside = "macro_rules! fltk_formatter_main {" in line
+            continue
+        if ") => {" in line:
+            break
+        key = _MACRO_ARM_KEY.match(line)
+        if key:
+            keys.append(key.group(1))
+    assert keys and keys[0] == "about", f"the macro arm extractor stopped matching: {keys}"
+    return keys
+
+
+def _formatter_guide_rust_block(heading: str) -> str:
+    """The one `rust` block in the formatter guide's `heading` section."""
+    blocks = _fenced_blocks_after(_guide_text(_FORMATTER_GUIDE), heading)
+    blocks = [body for _, language, body in blocks if language == "rust"]
+    assert len(blocks) == 1, f"`{heading}` must hold exactly one `rust` block, found {len(blocks)}"
+    return blocks[0]
+
+
+def test_the_formatter_guides_invocation_is_the_one_fltkfmt_compiles() -> None:
+    """The guide's macro template and worked example are the invocation `fltkfmt` compiles.
+
+    `//crates/fltkfmt:fltkfmt` builds `main.rs` through the real macro and `cli_test` runs it, so
+    holding the printed blocks to that file holds them to an invocation that compiles. The
+    template's literal values are placeholders and only its keys are compared; the worked example
+    is printed as "exactly" `main.rs`, so it is compared whole.
+    """
+    main_rs = _guide_text(_FLTKFMT_MAIN)
+    template = _formatter_guide_rust_block("## The macro invocation")
+    assert _invocation_keys(template) == _invocation_keys(main_rs), (
+        "the template's keys are not the ones fltkfmt's invocation uses, in that order"
+    )
+
+    invocation = "".join(f"{line}\n" for line in main_rs.splitlines() if not line.startswith("//!"))
+    worked = _formatter_guide_rust_block("## Worked example")
+    assert worked.strip() == invocation.strip(), f"the worked example is not exactly {_FLTKFMT_MAIN}"
+
+
+def test_the_formatter_guides_key_table_is_the_macros_arm() -> None:
+    """The key table names the keys the macro arm accepts, in the arm's order.
+
+    The only check that sees the optional `name` / `version` keys, which `fltkfmt` does not pass.
+    """
+    section = _section_lines(_guide_text(_FORMATTER_GUIDE), "## The macro invocation")
+    rows = [key.group(1) for key in map(_TABLE_KEY.match, section) if key]
+    assert rows == _macro_arm_keys(), f"the key table is not the macro arm's keys: {rows}"

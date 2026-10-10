@@ -29,5 +29,11 @@ rust_test(
     crate = ":fltk-fmt-cli",
 )
 
+# The formatter guide's key table is held to the macro arm here by //tests:test_doc_guide_cli_examples.
+exports_files(
+    ["src/lib.rs"],
+    visibility = ["//tests:__pkg__"],
+)
+
 # This package's half of the Cargo retirement gate's declaration probe.
 cargo_file_probe()

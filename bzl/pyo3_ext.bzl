@@ -12,8 +12,8 @@ load("@rules_python//python:defs.bzl", "py_library")
 def pyo3_extension_py_library(name, cdylib, data = [], visibility = None):
     """Wrap a PyO3 cdylib as an importable Python extension module.
 
-    Two steps, and both carry an invariant that is invisible at build time and shows up as an
-    ImportError or a silent pure-Python fallback at run time:
+    Two steps, and both carry an invariant that is invisible at build time and shows up at run
+    time — as an ImportError, or as a `RuntimeError` on the first span operation:
 
     1. **ABI3 rename**: rules_rust emits `lib<crate_name>.so`; CPython's stable-ABI loader
        wants `<name>.abi3.so` (the convention maturin produces for abi3-py310 builds).
@@ -21,8 +21,9 @@ def pyo3_extension_py_library(name, cdylib, data = [], visibility = None):
        (debug info, say) cannot be picked up positionally.
     2. **py_library wrapper**: `imports = ["."]` puts the .so's directory on sys.path so
        `import <name>` resolves, and `@fltk//:native_py` rides along so `import fltk._native`
-       does too — the generated cst.rs resolves the canonical Span type through it at run time
-       and falls back to pure Python when it is absent.
+       does too — the generated cst.rs resolves the canonical `fltk._native.Span` type through
+       it on the first cross-cdylib span operation (`cross_cdylib::get_span_type`), and a failed
+       import there is a `RuntimeError`, not a fallback.
 
     Used by fltk_pyo3_cdylib and by the in-tree fixture packages, which assemble their crates
     by hand (they need a cst-core flavor the public macro does not link, or host two grammars

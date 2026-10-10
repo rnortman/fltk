@@ -96,11 +96,11 @@ match the import root your `py_library` establishes: with `imports = ["."]` in p
 `mylang/`, `mylang_cst` is correct; with `imports = ["../.."]` the modules are named
 `mylang.mylang_cst` and `cst_mod_path` must say so. A mismatch fails at analysis time.
 
-`@fltk` is the pure-Python library. Generated Python CST/parser modules never name
+`@fltk` is the pure-Python library. Generated Python CST/parser modules never import
 `fltk._native`, so this path needs nothing else. Add `@fltk//:native_py` (the `py_library`
-that puts `fltk/_native.abi3.so` on the path) if something in your graph does import
-`fltk._native` — a Rust CST extension resolving `UnknownSpan` at runtime is the usual
-reason.
+that puts `fltk/_native.abi3.so` on the path) only when your *own* Python imports
+`fltk._native` directly — naming `fltk._native.Span` in an `isinstance` check, say — and
+nothing in its deps already carries it. A §4 extension does, through its wrapper `py_library`.
 
 The emitted modules are formatter-normalized by the generator itself, against a ruff version
 and config that FLTK pins. Your own ruff settings do not apply to them and cannot: generated
@@ -145,16 +145,33 @@ py_test(
 )
 ```
 
+```python
+import mylang_native
+
+parser = mylang_native.parser.Parser(src, None, True)   # (text, filename, capture_trivia)
+result = parser.apply__parse_<start_rule>(0)
+assert result is not None and result.pos == len(src)
+node = result.result
+```
+
+The Rust binding's `capture_trivia` defaults to `False`, unlike `fltk.plumbing.generate_parser`,
+which captures trivia by default; the generated unparser reads trivia nodes, so pass `True`
+whenever the tree will be unparsed.
+
 The macro generates the crate root, assembles the crate, builds the cdylib, renames it to the
 abi3 convention, and wraps it in a `py_library` named `mylang_native`; `import mylang_native`
-then works, with `mylang_native.cst`, `.parser`, `.unparser`, `.ast`, `.de` as submodules
-according to the attributes you set. It links FLTK's runtime crates for you — do not add them
-to `deps` yourself.
+then works, with `mylang_native.cst`, `.parser` and (with `unparser = True`) `.unparser` as
+Python submodules. `ast = True` and `serde = True` add `ast.rs` / `de.rs` to the crate as
+`pub mod` Rust modules: they hold no pyclasses and register nothing, so Python never sees them,
+and Rust code that uses them has to live in the crate itself, through your own `lib_rs` (below).
+It links FLTK's runtime crates for you — do not add them to `deps` yourself.
 
-**If you pass your own `lib_rs`**, you own the module declarations: an `.rs` file that no
-`mod` declaration names is silently not compiled, so a hand-authored crate root that omits
-`mod unparser;` (or `ast` / `de`) builds green with the submodule simply missing at import
-time. Let the macro generate the crate root unless you have a reason not to.
+**If you pass your own `lib_rs`** on the same `generate_rust_parser(python_extension = True, …)`
+call, the macro still assembles and compiles the crate — it requires `cst.rs` and `parser.rs` and
+links the runtime crates — and you own the `mod` declarations and the `#[pymodule]`
+registration. An `.rs` file that no `mod` declaration names is silently not compiled, so a
+hand-authored crate root that omits `mod unparser;` (or `ast` / `de`) builds green with the
+module simply missing. Let the macro generate the crate root unless you have a reason not to.
 
 `protocol_module` turns on `.pyi` emission into a stub package named after the target; the
 stub package lists exactly the submodules you enabled.
@@ -164,45 +181,37 @@ generated `#[pyclass]` code against the *same* pyo3 instance `@fltk//crates/fltk
 and crate_universe hub repos are module-local, so a downstream module has no way to name it. Build
 Python extensions with `fltk_pyo3_cdylib` — see `TODO(bazel-consumer-pyo3-seam)` in `TODO.md`.
 
-A pure-Rust crate gets its `.pyi` stub package from the same codegen target that emits its `.rs`:
-set `protocol_module` and `extension_name` on the pure-Rust `generate_rust_parser` call your crate
-already uses.
+What the extension needs at run time:
 
-```starlark
-generate_rust_parser(
-    name = "mylang_srcs",
-    src = "mylang.fltkg",
-    out_dir = "src",                                  # the crate's own source directory
-    extension_name = "mylang",                        # the importable module name
-    protocol_module = "mypkg.mylang_cst_protocol",
-    submodules = ["cst", "parser", "unparser", "other_cst"],
-    unparser = True,
-    format_config = "mylang.fltkfmt",
-)
-```
+- `fltk._native` reaches any `py_test` / `py_binary` that depends on the extension, transitively
+  through the extension's wrapper `py_library`; nothing is installed by hand.
+- The first operation that passes a span between the extension and Python — getting or setting
+  `node.span`, a `span=` constructor argument, reading a span-typed child, and the like — imports
+  `fltk._native.Span` and checks its version marker and layout. A
+  detected version or layout mismatch raises `TypeError`; an unimportable `fltk._native` raises
+  `RuntimeError`. Both surface at that first operation, not at `import`.
+- The extension must be rebuilt against the FLTK it runs with. The checks catch the common
+  skews; they are not a compatibility guarantee. Under Bazel the `git_override` pin makes the
+  extension and `fltk._native` one unit, so this is a concern only when a built `.so` outlives
+  the pin it was built from.
+- `node.children` is a snapshot; mutation goes through the node's own mutator methods, which
+  the `protocol_module` stub package lists.
 
-The `.rs` land under `out_dir` and the stub package under `<package>/<extension_name>/`, from one
-action — a second, stubs-only codegen target would re-parse the grammar and regenerate the CST to
-throw it away. Because the target's outputs are now of two kinds, the macro also declares
-`:mylang_srcs_rust_srcs` (feed that to your `rust_library`'s `srcs`) and `:mylang_srcs_stub_srcs`
-(the stub package, for whatever target ships it to your type checker).
-
-`submodules` is the list written into the `__init__.pyi` marker. Leave it empty and the marker
-names only what this action generated, which understates a crate root registering modules from
-another grammar; state it explicitly when that is the case. It belongs to this hand-assembly
-recipe only: with `python_extension = True` the macro builds the cdylib out of that one target's
-sources, so a wider list would name submodules no stub file backs, and setting it there is an
-error. A type checker reaches the package
-by putting the directory *holding* it on its search path (`extraPaths`), since the directory
-name is the import name.
+The pure-Rust form of `protocol_module` (with `extension_name`, and optionally `submodules`)
+emits the same stub package from the pure-Rust codegen target, for a crate root that assembles
+its own extension. FLTK's in-tree fixtures (`tests/rust_parser_fixture`) are its users; out of
+tree that assembly is the unsupported case above, so a consumer reaches stubs through
+`python_extension = True`. Either way, a type checker reaches the package by putting the
+directory *holding* it on its search path (`extraPaths`), since the directory name is the import
+name.
 
 ---
 
 ## 5. Pure Rust
 
 In pure-Rust mode `generate_rust_parser` emits `.rs` files and no cdylib. You compile them into
-your own crate. (It emits the `.pyi` stub package too if you ask for one — see §4 for that
-shape; without `protocol_module` there is no Python in the output at all.)
+your own crate. (Without `protocol_module` there is no Python in the output at all; a consumer
+gets the `.pyi` stub package from the §4 `python_extension = True` form.)
 
 Use `out_dir` to declare the generated files inside your crate's source directory. The
 generated modules address each other as `super::` siblings, so they must land next to your
@@ -292,7 +301,11 @@ an error.
 
 With `ast = True` as well, `ast.rs` also gains its `unparse_str` entry point.
 
-Add `"@fltk//crates/fltk-unparser-core"` to the library's `deps`.
+Then declare the module and link its runtime crate:
+
+- add `pub mod unparser;` to `src/lib.rs`, next to the `pub mod` lines of §5 — a generated
+  module no `mod` declaration names is compiled by nobody;
+- add `"@fltk//crates/fltk-unparser-core"` to the library's `deps`.
 
 ### 5.3 A formatter binary
 
@@ -313,11 +326,12 @@ rust_binary(
 )
 ```
 
-See `docs/rust-formatter-guide.md` for the macro invocation itself; the Bazel-specific part
-is only the two deps and the `version` above. `--version` prints the target name and that
-`version`; an existing consumer upgrading past the release that made `--version` per-consumer
-needs only to add the attribute. `tests/bazel_consumer` builds exactly this shape and diff-tests
-the binary's output.
+`main.rs` is one `fltk_formatter_main!` invocation. `docs/rust-formatter-guide.md` is the
+reference for its keys, why the crate root's `parser` and `unparser` modules must be `pub`, the
+CLI surface every such binary gets, exit codes, and the `run_main` escape hatch. `--version`
+prints the target name and that `version`; an existing consumer upgrading past the release that
+made `--version` per-consumer needs only to add the attribute. `tests/bazel_consumer` builds
+exactly this shape and diff-tests the binary's output.
 
 ---
 
