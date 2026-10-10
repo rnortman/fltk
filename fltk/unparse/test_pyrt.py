@@ -6,6 +6,8 @@ Distinct from ``tests/test_pyrt_errors.py``, which despite the name is scoped to
 
 from __future__ import annotations
 
+import subprocess
+import sys
 from dataclasses import dataclass
 
 import pytest
@@ -210,3 +212,27 @@ class TestCappedBlankLines:
 
     def test_a_zero_cap_yields_no_blanks(self):
         assert capped_blank_lines(5, 0) == 0
+
+
+_RUNTIME_IMPORT_SCRIPT = """
+import sys
+import fltk.unparse.pyrt
+assert "fltk.fegen.pyrt.terminalsrc" in sys.modules, "control: terminalsrc should be loaded"
+assert "fltk.fegen.pyrt.span_protocol" not in sys.modules, "span_protocol imported at runtime"
+print("PASS")
+"""
+
+
+def test_pyrt_does_not_import_span_protocol_at_runtime():
+    """Importing the unparser runtime must not load ``span_protocol``, whose import runs the
+    ``fltk._native`` backend probe. A fresh interpreter makes this a runtime fact: this pytest
+    process already has ``span_protocol`` loaded through other modules."""
+    result = subprocess.run(  # noqa: S603
+        [sys.executable, "-c", _RUNTIME_IMPORT_SCRIPT],
+        capture_output=True,
+        text=True,
+        timeout=60,
+        check=False,
+    )
+    assert result.returncode == 0, f"stdout: {result.stdout}\nstderr: {result.stderr}"
+    assert "PASS" in result.stdout

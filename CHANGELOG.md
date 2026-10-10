@@ -34,9 +34,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - `docs/bazel-consumer-guide.md`: per-configuration recipes (pure Python, PyO3 extension, pure
   Rust, unparser/formatter, serde), the one-serde rule for serde-mode pure-Rust consumers, the
   pin-lockstep rule, and no-pyo3 verification queries for both build systems.
+- LSP config: `fltk.lsp.lsp_config.parse_lsp_config_text(text)` parses `.fltklsp` text into
+  the unvalidated config model, the counterpart of `parse_ast_config_text` for `.fltkast`. It
+  raises `LspConfigError` (with a caret diagnostic) on a parse failure, including trailing
+  unparsable text; checking names against a grammar stays with `load_lsp_config`.
 
 ### Changed
 
+- **Breaking (narrow)** — reading the text under a CST span, Python side: the `.fltklsp`,
+  `.fltkfmt` and `.fltkast` config loaders, the grammar reader (`Cst2Gsm`) and the Python
+  unparser runtime's `extract_span_text` now share one helper,
+  `fltk.fegen.pyrt.terminalsrc.span_text(span, terminals)`. Two consequences for hand-built
+  CSTs: a span that says it has a source but cannot produce text now raises `ValueError`
+  instead of silently returning a slice of an unrelated buffer; and spans must provide the full
+  `SpanProtocol` (`start`, `end`, `text()`, `has_source()`) — an object carrying only offsets,
+  previously accepted, now raises `AttributeError`. Spans from either backend's parser are
+  unaffected. `extract_span_text` keeps its name and arguments and now accepts any
+  `SpanProtocol` span.
 - **Breaking (narrow)** — grammar acceptance, both backends: `deep_debug` is now a reserved
   name, claimed by the private support module behind the Rust AST's depth-bounded `Debug`
   (alongside `eq_walk`). A `.fltkast` rename that spells `deep_debug` exactly

@@ -67,8 +67,8 @@ _CHILD_SPAN_PARAMS = pytest.mark.parametrize(
 class TestChildSpanAccessorContract:
     """Focused regression tests for Rust-backed fegen node child span accessors.
 
-    Pins the contracts required by fltk2gsm._span_text (used by visit_identifier,
-    visit_literal, visit_regex) on objects returned by child_name()/child_value().
+    Pins the contracts ``terminalsrc.span_text`` requires of the objects returned by
+    child_name()/child_value().
     The AC8 equality tests cover this indirectly; these tests give a localized failure
     signal if an accessor's return type or source-preservation regresses.
     """

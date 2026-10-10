@@ -5,7 +5,6 @@ import pytest
 from fltk import plumbing
 from fltk.fegen.pyrt import terminalsrc
 from fltk.lsp import lsp_config
-from fltk.lsp.fltklsp_parser import Parser
 
 # A small target grammar exercising labels, invoked rules, and literals.
 #   greeting: labels {kw, name}, literals {"hello", "!"}, invoked rules {word}
@@ -20,18 +19,9 @@ def _index() -> lsp_config.GrammarIndex:
     return lsp_config.build_grammar_index(plumbing.parse_grammar(_GRAMMAR))
 
 
-# TODO(lsp-test-parse-helper): fold this parse boilerplate into plumbing.parse_lsp_config once
-# that wrapper lands (shared with test_lsp_config._load, which reports failures with a caret).
-def _parse(config_text: str) -> tuple[lsp_config.LspConfig, terminalsrc.TerminalSource]:
-    terminals = terminalsrc.TerminalSource(config_text)
-    result = Parser(terminals).apply__parse_lsp_spec(0)
-    assert result is not None and result.pos == len(terminals.terminals), "config text failed to parse"
-    return lsp_config.lsp_cst_to_config(result.result, terminals), terminals
-
-
 def _validate(config_text: str) -> None:
-    config, terminals = _parse(config_text)
-    lsp_config.validate_config(config, _index(), terminals)
+    config = lsp_config.parse_lsp_config_text(config_text)
+    lsp_config.validate_config(config, _index(), terminalsrc.TerminalSource(config_text))
 
 
 def test_valid_config_passes() -> None:

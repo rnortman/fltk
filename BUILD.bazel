@@ -773,6 +773,7 @@ _FLTK_TESTS = {
     "fltk/fegen/pyrt/test_memo.py": {},
     "fltk/fegen/pyrt/test_span_protocol_assignability.py": {},
     "fltk/fegen/pyrt/test_span_protocol_native_free.py": {},
+    "fltk/fegen/pyrt/test_span_text.py": {"fail_on_skip": True},
     "fltk/fegen/test_ast_config.py": {},
     "fltk/fegen/test_ast_model.py": {},
     "fltk/fegen/test_cst_ergonomics.py": {},

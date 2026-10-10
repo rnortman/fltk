@@ -4,6 +4,7 @@ and validation against a grammar."""
 from __future__ import annotations
 
 import functools
+from typing import Any
 
 import pytest
 
@@ -1171,3 +1172,21 @@ class TestOptionErrors:
 
     def test_cst_takes_a_boolean(self) -> None:
         assert "takes `true` or `false`, not a string" in _errors('option cst = "yes";')
+
+
+def _poison_terminal_spans(node: Any) -> None:
+    """Replace every terminal span under ``node`` with a source-bearing span whose offsets
+    run past its source, so ``text()`` is ``None`` while ``has_source()`` is ``True``."""
+    for index, (label, child) in enumerate(node.children):
+        if isinstance(child, terminalsrc.Span):
+            node.children[index] = (label, terminalsrc.Span.with_source(child.start, child.start + 10_000, "x"))
+        elif hasattr(child, "children"):
+            _poison_terminal_spans(child)
+
+
+def test_inconsistent_source_bearing_span_raises_value_error_not_config_error() -> None:
+    spec = _parse("rule x { transparent; }\n")
+    _poison_terminal_spans(spec)
+    with pytest.raises(ValueError, match=r"source-bearing span") as excinfo:
+        ast_config.ast_cst_to_config(spec, terminalsrc.TerminalSource("rule x { transparent; }\n"))
+    assert not isinstance(excinfo.value, ast_config.AstConfigError)

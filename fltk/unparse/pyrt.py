@@ -7,7 +7,7 @@ from collections.abc import Sequence
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, NoReturn, cast
 
-from fltk.fegen.pyrt.terminalsrc import Span
+from fltk.fegen.pyrt.terminalsrc import Span, span_text
 
 if TYPE_CHECKING:
     import fltk.unparse.combinators
@@ -37,23 +37,13 @@ class UnparseResult:
         return self.accumulator.doc
 
 
-def extract_span_text(span: Span, terminals: str) -> str:
-    """Extract the text content from a span using the terminals string.
+def extract_span_text(span: SpanProtocol, terminals: str) -> str:
+    """Extract the text content from a span, falling back to ``terminals`` for a sourceless span.
 
-    Handles both Python-backend terminalsrc.Span (uses .start/.end slice) and
-    Rust-backend fltk._native.Span (uses .text() which carries its own source).
+    The policy is ``terminalsrc.span_text``'s: a source-bearing span whose ``text()`` is
+    ``None`` raises ``ValueError``.
     """
-    text = span.text() if hasattr(span, "text") else None
-    if text is not None:
-        return text
-    # Fallback: sourceless Python-backend span — slice from terminals directly.
-    # Guard: only fall back for spans without source. A source-bearing span
-    # whose text() returns None indicates invalid byte offsets, not a missing
-    # source; use the terminals slice only for genuinely sourceless spans.
-    if hasattr(span, "has_source") and span.has_source():
-        msg = f"span.text() returned None for source-bearing span {span!r}; codepoint offsets may be out of range"
-        raise ValueError(msg)
-    return terminals[span.start : span.end]
+    return span_text(span, terminals)
 
 
 def literal_span_matches(span: Span, allowed: Sequence[str]) -> bool:
@@ -223,7 +213,7 @@ def cursor_expect(cursor: int | None, anchor: SpanProtocol, literal: str) -> int
     return None
 
 
-def count_span_newlines(span: Span, terminals: str) -> int:
+def count_span_newlines(span: SpanProtocol, terminals: str) -> int:
     """Count newline characters in a span's text.
 
     Uses extract_span_text to handle both Python and Rust backends.
@@ -255,7 +245,7 @@ def _child_span_text(child: object, terminals: str) -> str | None:
     span = child if is_span(child) else getattr(child, "span", None)
     if span is None:
         return None
-    return extract_span_text(cast(Span, span), terminals)
+    return extract_span_text(cast("SpanProtocol", span), terminals)
 
 
 def count_whitespace_newlines(child: object, terminals: str) -> int:
@@ -268,7 +258,7 @@ def count_whitespace_newlines(child: object, terminals: str) -> int:
     contributes 0, degrading to the direct-span-only behavior and never over-counting.
     """
     if is_span(child):
-        return count_span_newlines(cast(Span, child), terminals)
+        return count_span_newlines(cast("SpanProtocol", child), terminals)
     text = _child_span_text(child, terminals)
     if text is not None and _is_unicode_whitespace_only(text):
         return text.count("\n")

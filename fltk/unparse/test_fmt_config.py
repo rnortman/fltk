@@ -1,8 +1,11 @@
 """Tests for formatter configuration."""
 
+from typing import Any
+
 import pytest
 
 from fltk.fegen import gsm
+from fltk.fegen.pyrt import terminalsrc
 from fltk.plumbing import parse_format_config, parse_grammar
 from fltk.unparse.combinators import (
     HARDLINE,
@@ -29,7 +32,9 @@ from fltk.unparse.fmt_config import (
     RuleConfig,
     TriviaConfig,
     before_spacing_is_tentative,
+    fmt_cst_to_config,
 )
+from fltk.unparse.unparsefmt_parser import Parser as FmtParser
 
 
 class TestFormatterConfigAPI:
@@ -1726,3 +1731,22 @@ def _item(grammar_text: str) -> gsm.Item:
 def test_before_spacing_is_tentative(grammar_text, disposition, expected):
     """Only an included optional item rendered `Normal` takes its before-spacing into its attempt."""
     assert before_spacing_is_tentative(_item(grammar_text), disposition) is expected
+
+
+def _poison_terminal_spans(node: Any) -> None:
+    """Replace every terminal span under ``node`` with a source-bearing span whose offsets
+    run past its source, so ``text()`` is ``None`` while ``has_source()`` is ``True``."""
+    for index, (label, child) in enumerate(node.children):
+        if isinstance(child, terminalsrc.Span):
+            node.children[index] = (label, terminalsrc.Span.with_source(child.start, child.start + 10_000, "x"))
+        elif hasattr(child, "children"):
+            _poison_terminal_spans(child)
+
+
+def test_inconsistent_source_bearing_span_raises_value_error() -> None:
+    terminals = terminalsrc.TerminalSource("preserve_blanks: 1;\n")
+    result = FmtParser(terminals).apply__parse_formatter(0)
+    assert result is not None
+    _poison_terminal_spans(result.result)
+    with pytest.raises(ValueError, match=r"source-bearing span"):
+        fmt_cst_to_config(result.result, terminals)

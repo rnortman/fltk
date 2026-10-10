@@ -250,15 +250,6 @@ class AstConfig:
 _STRING_ESCAPES = {'"': '"', "\\": "\\", "n": "\n", "r": "\r", "t": "\t"}
 
 
-# TODO(lsp-cst-text-helpers): fourth copy of the span-text helper; consolidate with
-# lsp_config, fmt_config, and unparse.pyrt.
-def _span_text(span: span_protocol.SpanProtocol, terminal_src: terminalsrc.TerminalSource) -> str:
-    text = span.text()
-    if text is not None:
-        return text
-    return terminal_src.terminals[span.start : span.end]
-
-
 def _render_offense(span: span_protocol.SpanProtocol, terminals: terminalsrc.TerminalSource, message: str) -> str:
     """Format one offense with a caret line.
 
@@ -296,7 +287,7 @@ class _Mapper:
 
 
 def _identifier(identifier: cst.Identifier, mapper: _Mapper) -> str:
-    return _span_text(identifier.child_name(), mapper.terminal_src)
+    return terminalsrc.span_text(identifier.child_name(), mapper.terminal_src.terminals)
 
 
 def _string_value(string: cst.String, mapper: _Mapper) -> str:
@@ -306,7 +297,7 @@ def _string_value(string: cst.String, mapper: _Mapper) -> str:
     verbatim so the pass can continue.
     """
     value_span = string.child_value()
-    quoted = _span_text(value_span, mapper.terminal_src)
+    quoted = terminalsrc.span_text(value_span, mapper.terminal_src.terminals)
     body = quoted[1:-1]
     out: list[str] = []
     index = 0

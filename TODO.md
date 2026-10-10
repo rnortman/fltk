@@ -16,29 +16,6 @@ The `.fltkfmt` grammar allows multiple `position_spec_statement*` inside an `aft
 
 The `.fltkfmt` grammar admits a `preserve_blanks` directive inside an `after`/`before` anchor block (`fltk/unparse/unparsefmt.fltkg`'s `position_spec_statement`), but there is no per-anchor blank policy in the config model or either unparser generator, so the directive was silently ignored. `parse_format_config` now rejects it with an error rather than swallowing it. Implementing per-anchor blank policy — the next granularity after global and rule-level, for languages that want blanks preserved only at specific positions (e.g. between struct fields but not inside an expression) — means an `AnchorConfig` operation carrying the count and threading it through both generators' anchor-spacing paths. Location: `fltk/unparse/fmt_config.py` (`_position_spec_spacing`).
 
-## `lsp-cst-text-helpers`
-
-`fltk/lsp/lsp_config.py`'s `_span_text` / `_identifier_text` and the inline literal-extraction
-sequence in `_parse_anchor` duplicate helpers that already exist for `.fltkfmt`:
-`fltk/unparse/fmt_config.py` (`_span_text`, `_extract_identifier_text`, `_extract_literal_text`)
-and the more careful `fltk/unparse/pyrt.py:extract_span_text` (which guards against a
-source-bearing span whose `text()` returns `None` — a guard the `fmt_config` and `lsp_config`
-copies both lack). There is also a fourth single-backend copy at `fltk/fegen/fltk2gsm.py`
-(`Cst2Gsm._span_text`). Consolidate into one canonical, `SpanProtocol`-typed helper (dropping
-the `hasattr` probe and `type: ignore`s now that `SpanProtocol` includes `text()`), keeping the
-pyrt source-bearing guard, and migrate all copies to it. Deferred because it touches out-of-round
-modules (`fmt_config`, `unparse.pyrt`). Location: `fltk/lsp/lsp_config.py` (`_span_text`,
-`_identifier_text`, `_parse_anchor`).
-
-## `lsp-test-parse-helper`
-
-`fltk/lsp/test_lsp_config.py` (`_load`) and `fltk/lsp/test_lsp_validation.py` (`_parse`) each
-hand-roll the same `TerminalSource` → `Parser` → `apply__parse_lsp_spec` → full-consumption
-check, diverging only on failure reporting (`_load` renders a caret diagnostic; `_parse`
-bare-asserts). The design's `plumbing.parse_lsp_config` wrapper (not yet built) is the intended
-home for this sequence; fold both helpers onto it once it lands, rather than building a throwaway
-interim shared helper. Location: `fltk/lsp/test_lsp_config.py`, `fltk/lsp/test_lsp_validation.py`.
-
 ## `lsp-analysis-watchdog`
 
 `fltk/lsp/server.py`'s analysis runs on a single-worker `ThreadPoolExecutor`, and Python worker

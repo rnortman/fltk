@@ -115,19 +115,8 @@ class LspConfig:
     rule_blocks: tuple[RuleBlock, ...]
 
 
-# TODO(lsp-cst-text-helpers): consolidate the span-text / identifier / literal extraction
-# helpers shared with fmt_config and unparse.pyrt into one guarded, SpanProtocol-typed helper.
-def _span_text(span: object, terminal_src: terminalsrc.TerminalSource) -> str:
-    """Return the source text for a span, handling both Python and Rust backends."""
-    if hasattr(span, "text"):
-        text = span.text()  # type: ignore[union-attr]
-        if text is not None:
-            return text
-    return terminal_src.terminals[span.start : span.end]  # type: ignore[union-attr]
-
-
 def _identifier_text(identifier: cst.Identifier, terminal_src: terminalsrc.TerminalSource) -> str:
-    return _span_text(identifier.child_name(), terminal_src)
+    return terminalsrc.span_text(identifier.child_name(), terminal_src.terminals)
 
 
 def _dotted_name(dotted: cst.DottedName, terminal_src: terminalsrc.TerminalSource) -> tuple[str, ...]:
@@ -137,7 +126,7 @@ def _dotted_name(dotted: cst.DottedName, terminal_src: terminalsrc.TerminalSourc
 def _parse_anchor(anchor: cst.Anchor, terminal_src: terminalsrc.TerminalSource) -> Anchor:
     literal = anchor.maybe_literal()
     if literal is not None:
-        quoted = _span_text(literal.child_value(), terminal_src)
+        quoted = terminalsrc.span_text(literal.child_value(), terminal_src.terminals)
         try:
             value = literal_eval(quoted)
         except (SyntaxError, ValueError) as exc:
@@ -725,16 +714,13 @@ def resolve_config(config: LspConfig, index: GrammarIndex) -> ResolvedLspConfig:
     )
 
 
-def load_lsp_config(config_text: str, grammar: gsm.Grammar) -> ResolvedLspConfig:
-    """Parse, transform, validate, and resolve ``.fltklsp`` text against ``grammar`` in one call.
+def _parse_config(config_text: str) -> tuple[LspConfig, terminalsrc.TerminalSource]:
+    """Parse ``.fltklsp`` text, returning the model and the source it was read from.
 
-    Empty or whitespace-only text short-circuits to an empty resolved config (the built-in
-    defaults alone are a usable baseline). A parse failure or any validation offense raises
+    The source comes back because offense rendering re-attaches it to the stored spans.
+    A parse failure — including a successful prefix followed by unconsumed text — raises
     :class:`LspConfigError`.
     """
-    if not config_text.strip():
-        return ResolvedLspConfig(node_paints={}, child_matchers={}, global_child_matchers=())
-
     terminals = terminalsrc.TerminalSource(config_text)
     parser = Parser(terminals)
     result = parser.apply__parse_lsp_spec(0)
@@ -746,8 +732,31 @@ def load_lsp_config(config_text: str, grammar: gsm.Grammar) -> ResolvedLspConfig
         )
         msg = f".fltklsp config parse failed:\n{error_msg}"
         raise LspConfigError(msg)
+    return lsp_cst_to_config(result.result, terminals), terminals
 
-    config = lsp_cst_to_config(result.result, terminals)
+
+def parse_lsp_config_text(config_text: str) -> LspConfig:
+    """Parse ``.fltklsp`` text into the pre-validation :class:`LspConfig` model.
+
+    No validation against a grammar happens here: an unknown anchor or scope token is
+    accepted and is :func:`validate_config`'s to reject. A parse failure raises
+    :class:`LspConfigError`. Empty and comment-only text parse to an empty model through
+    the same path as everything else (no short-circuit).
+    """
+    return _parse_config(config_text)[0]
+
+
+def load_lsp_config(config_text: str, grammar: gsm.Grammar) -> ResolvedLspConfig:
+    """Parse, transform, validate, and resolve ``.fltklsp`` text against ``grammar`` in one call.
+
+    Empty or whitespace-only text short-circuits to an empty resolved config (the built-in
+    defaults alone are a usable baseline). A parse failure or any validation offense raises
+    :class:`LspConfigError`.
+    """
+    if not config_text.strip():
+        return ResolvedLspConfig(node_paints={}, child_matchers={}, global_child_matchers=())
+
+    config, terminals = _parse_config(config_text)
     index = build_grammar_index(grammar)
     validate_config(config, index, terminals)
     return resolve_config(config, index)

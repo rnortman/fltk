@@ -1407,7 +1407,8 @@ class RustUnparserGenerator:
         naming the rule, the item, the child position, and the span's ``Debug`` form rather
         than silently returning ``None`` (which would delete the term's text from the output
         with no record of which span failed).  This halts loudly, matching the Python
-        backend's ``extract_span_text`` raise-with-context policy (``pyrt.py:48``).
+        backend's ``terminalsrc.span_text`` raise-with-context policy (which
+        ``unparse.pyrt.extract_span_text`` delegates to).
 
         The catch-all ``_ => return None`` arm on the ``Span``-binding ``match`` is emitted
         only when the child enum has more than one variant (matching the span/identifier

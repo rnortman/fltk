@@ -2,7 +2,10 @@ import bisect
 import enum
 import re
 from dataclasses import dataclass, field
-from typing import Final, Literal
+from typing import TYPE_CHECKING, Final, Literal
+
+if TYPE_CHECKING:
+    from fltk.fegen.pyrt.span_protocol import SpanProtocol
 
 
 @dataclass(frozen=True, slots=True)
@@ -256,6 +259,25 @@ class Span:
 
 
 UnknownSpan: Final = Span(-1, -1)
+
+
+def span_text(span: "SpanProtocol", terminals: str) -> str:
+    """The text a span covers: its own source if it has one, else a slice of ``terminals``.
+
+    A span that claims a source (``has_source()``) but cannot produce text is
+    inconsistent — its offsets are not offsets into its source — and raises
+    ``ValueError`` rather than returning a plausible slice of an unrelated buffer.
+    Only a sourceless span is sliced from ``terminals``, with ordinary Python slicing
+    (no bounds validation). ``span`` must satisfy ``SpanProtocol``: ``start``, ``end``,
+    ``text()`` and ``has_source()`` are read unconditionally.
+    """
+    text = span.text()
+    if text is not None:
+        return text
+    if span.has_source():
+        msg = f"span.text() returned None for source-bearing span {span!r}; codepoint offsets may be out of range"
+        raise ValueError(msg)
+    return terminals[span.start : span.end]
 
 
 @dataclass(frozen=True, eq=True, slots=True)
