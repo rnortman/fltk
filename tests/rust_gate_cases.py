@@ -446,19 +446,14 @@ fn a_chain_nested_against_the_folds_direction_has_no_grammar_shape() {
     );
 }
 
-#[test]
-fn a_chain_of_two_hundred_thousand_links_tears_down_without_recursing() {
-    // A fold turns flat input into depth, so a chain is as long as the source repeated the
-    // operator. Derived drop glue recurses once per link, which is a stack overflow — a process
-    // abort, not a catchable failure — well below this length. There is nothing to assert
-    // afterwards: without the emitted `Drop` this takes the whole test binary down with it.
-    const LINKS: usize = 200_000;
+/// A flat left fold of `links` links over the operand `1`, built without a parse.
+fn long_chain(links: usize) -> Expr {
     let span = ::fltk_cst_core::Span::unknown();
-    let operands: Vec<(Term, ::fltk_cst_core::Span)> = (0..=LINKS)
+    let operands: Vec<(Term, ::fltk_cst_core::Span)> = (0..=links)
         .map(|_| (Term::Operand(Box::new(Factor::Num(1))), span.clone()))
         .collect();
-    let operators = vec![AddOpValue::Plus; LINKS];
-    let chain = ::fltk_ast_core::fold_left(
+    let operators = vec![AddOpValue::Plus; links];
+    ::fltk_ast_core::fold_left(
         "expr",
         &span,
         operands,
@@ -473,19 +468,147 @@ fn a_chain_of_two_hundred_thousand_links_tears_down_without_recursing() {
             })
         },
     )
-    .expect("a long run of operands folds");
+    .expect("a long run of operands folds")
+}
+
+/// `levels` parenthesised sums of `links` links each, every one the first operand of the next.
+///
+/// A left fold puts its first operand at the deepest `lhs`, so the leftmost path crosses
+/// `levels * links` links, re-entering the chain through `Term` -> `Factor::Paren` -> `Expr`.
+fn nested(levels: usize, links: usize) -> Expr {
+    let mut text = String::from("1");
+    for _ in 0..levels {
+        text = format!("({text}{})", "+1".repeat(links));
+    }
+    expr(&text)
+}
+
+#[test]
+fn a_chain_of_two_hundred_thousand_links_tears_down_without_recursing() {
+    // A fold turns flat input into depth, so a chain is as long as the source repeated the
+    // operator. Derived drop glue recurses once per link, which is a stack overflow — a process
+    // abort, not a catchable failure — well below this length. There is nothing to assert
+    // afterwards: without the emitted `Drop` this takes the whole test binary down with it.
+    let chain = long_chain(200_000);
     assert!(matches!(chain, Expr::Binary(_)));
     drop(chain);
 }
+
+#[test]
+fn a_chain_of_two_hundred_thousand_links_clones_without_recursing() {
+    // Derived `Clone` recurses once per link, which aborts well below this length.
+    let original = long_chain(200_000);
+    let copy = original.clone();
+    assert_eq!(copy, long_chain(200_000));
+    drop(copy);
+    drop(original);
+}
+
+#[test]
+fn a_cloned_chain_keeps_every_span() {
+    // Spans take no part in equality, so only reading them proves the copy kept them.
+    let value = expr("1+2-3");
+    let copy = value.clone();
+    assert_eq!(copy, value);
+    for chain in [&value, &copy] {
+        let Expr::Binary(outer) = chain else {
+            panic!("three operands fold into a link");
+        };
+        assert_eq!(outer.span.text().as_deref(), Some("1+2-3"));
+        let Expr::Binary(inner) = outer.lhs.as_ref() else {
+            panic!("the left side is the deeper chain");
+        };
+        assert_eq!(inner.span.text().as_deref(), Some("1+2"));
+    }
+}
+
+#[test]
+fn a_chain_nested_against_the_direction_clones_and_renders() {
+    // A hand-built chain in the off side is valid data, so both traits have to handle it.
+    let against = Expr::Binary(ExprBinary {
+        op: AddOpValue::Plus,
+        lhs: Box::new(expr("1")),
+        rhs: Box::new(expr("2-3")),
+        span: ::fltk_cst_core::Span::unknown(),
+    });
+    assert_eq!(against.clone(), against);
+    assert!(format!("{against:?}").contains("rhs: Binary(ExprBinary {"));
+}
+
+#[test]
+fn a_chain_of_two_hundred_thousand_links_renders_with_bounded_depth() {
+    // On the default test thread in the default compilation mode: this is the stack measurement
+    // behind the depth budget.
+    let long = long_chain(200_000);
+    let shorter = long_chain(10_000);
+    let compact = format!("{long:?}");
+    let pretty = format!("{long:#?}");
+    // Both are past the budget, so they render the same links and elide the rest.
+    assert_eq!(compact, format!("{shorter:?}"));
+    assert_eq!(pretty, format!("{shorter:#?}"));
+    assert!(compact.contains(".."));
+    assert!(pretty.contains(".."));
+    // The output is bounded by the budget, not by the chain.
+    assert!(compact.len() < 200_000, "{} bytes", compact.len());
+    // A few hundred links render in full.
+    assert!(!format!("{:?}", long_chain(300)).contains(".."));
+}
+
+#[test]
+fn the_budget_renders_exactly_its_depth_of_links() {
+    // A flat left fold of N links has N links on its leftmost path.
+    assert!(!format!("{:?}", long_chain(512)).contains(".."));
+    let past = format!("{:?}", long_chain(513));
+    assert_eq!(past.matches("..").count(), 1, "{past}");
+    assert_eq!(past.matches("ExprBinary {").count(), 512);
+}
+
+/// A writer with room for so many bytes, which panics when a write overruns it.
+struct Cramped(usize);
+
+impl ::std::fmt::Write for Cramped {
+    fn write_str(&mut self, text: &str) -> ::std::fmt::Result {
+        self.0 = self.0.checked_sub(text.len()).expect("the rendering overruns the writer");
+        Ok(())
+    }
+}
+
+#[test]
+fn a_rendering_that_unwinds_gives_its_budget_back() {
+    // The panic leaves the rendering a few dozen links down, each holding a level of the budget.
+    let deep = long_chain(513);
+    let unwound = ::std::panic::catch_unwind(::std::panic::AssertUnwindSafe(|| {
+        let _ = ::std::fmt::Write::write_fmt(&mut Cramped(1_000), format_args!("{deep:?}"));
+    }));
+    assert!(unwound.is_err(), "the writer must run out mid-rendering");
+    // The same thread still has the whole budget.
+    assert!(!format!("{:?}", long_chain(512)).contains(".."));
+    assert_eq!(format!("{deep:?}").matches("..").count(), 1);
+}
+
+#[test]
+fn chains_nested_through_parentheses_share_one_budget() {
+    // Each chain of the second value is within the budget on its own; only a budget shared
+    // across the whole path elides it.
+    assert!(!format!("{:?}", nested(3, 100)).contains(".."));
+    assert!(format!("{:?}", nested(3, 200)).contains(".."));
+}
+
+#[test]
+fn deeply_nested_chains_render_without_recursing() {
+    // About 4 000 links on the leftmost path, well within the parser's depth limit: the parsed
+    // input a per-chain budget would abort on.
+    let value = nested(8, 500);
+    assert!(format!("{value:?}").contains(".."));
+    assert!(format!("{value:#?}").contains(".."));
+}
 """
 
-# Labeled-literal trial matching on the compiled Rust formatter. `fegen.fltkg`'s nine labeled
-# literals are all single-spelling, so the existing byte-parity sweep exercises only the "text
-# matches the one spelling" direction; these grammars reach the multi-spelling and rival-regex
-# paths. An inverted `is_some_and`, or a mis-rendered pattern alternation, passes every
-# emitted-source assertion and fails here. `tsplit` and `trange` are compile-only: their terminal
-# splits group alternatives pushing identical children into one arm,
-# `matches!(split.alternative, 0 | 1)` and `matches!(split.alternative, 0..=2)`.
+# Labeled-literal trial matching on the compiled Rust formatter, over multi-spelling and
+# rival-regex labels that single-spelling grammars never reach. An inverted `is_some_and`, or a
+# mis-rendered pattern alternation, passes every emitted-source assertion and fails here.
+# `tsplit` and `trange` are compile-only: they exist to make terminal splits group alternatives
+# into one `matches!` arm, as an or-pattern and as a range respectively.
 LITERAL_LABEL_GRAMMAR = (
     'val := ( x:"null" | x:/[0-9]+/ ) . u:word ;\n'
     'seq := x:"null"? . x:/[0-9]+/ . u:word ;\n'
@@ -2001,19 +2124,6 @@ fn an_absent_optional_wrapper_leaves_out_every_field_it_carried() {
 }
 """
 
-BOXED_LINK_GRAMMAR = (
-    "expr := d:atom , ( , op:sub , d:atom)* ;\n"
-    'sub := "[" . e:expr . "]" ;\n'
-    "atom := id:ident , amount:money , tags:word* , note:word? ;\n"
-    "ident := $/[0-9a-fA-F-]+/ ;\nmoney := $/[0-9.]+/ ;\nword := w:/[a-z]+/ ;\n"
-)
-BOXED_LINK_SIDECAR = (
-    "rule expr  { fold_left: op; }\n"
-    "rule ident { type: uuid; transparent; }\n"
-    "rule money { type: decimal; transparent; }\n"
-    "rule word  { transparent; }\n"
-)
-
 BOXED_LINK_RUNTIME = """//! Teardown of a chain whose link variant the recursion analysis boxes.
 
 use super::ast::{Atom, Expr, ExprBinary, Sub};
@@ -2029,22 +2139,24 @@ fn atom() -> Atom {
     }
 }
 
-#[test]
-fn a_chain_behind_a_boxed_link_variant_tears_down_without_recursing() {
-    // Derived glue at this chain length is a stack overflow, which is a process abort — so
-    // there is nothing to assert after the drop.
-    const LINKS: usize = 150_000;
+fn sub() -> Box<Sub> {
+    Box::new(Sub {
+        e: Box::new(Expr::Operand(atom())),
+        span: Span::unknown(),
+    })
+}
+
+/// A flat left fold of `links` links whose link variant is boxed, built without a parse.
+///
+/// The first operand, which the fold puts at the bottom of the leftmost path, is `first`.
+fn boxed_chain(links: usize, first: Atom) -> Expr {
     let span = Span::unknown();
-    let operands: Vec<(Atom, Span)> = (0..=LINKS).map(|_| (atom(), span.clone())).collect();
-    let operators: Vec<Box<Sub>> = (0..LINKS)
-        .map(|_| {
-            Box::new(Sub {
-                e: Box::new(Expr::Operand(atom())),
-                span: span.clone(),
-            })
-        })
+    let operands: Vec<(Atom, Span)> = ::std::iter::once(first)
+        .chain((0..links).map(|_| atom()))
+        .map(|operand| (operand, span.clone()))
         .collect();
-    let chain = ::fltk_ast_core::fold_left(
+    let operators: Vec<Box<Sub>> = (0..links).map(|_| sub()).collect();
+    ::fltk_ast_core::fold_left(
         "expr",
         &span,
         operands,
@@ -2059,9 +2171,140 @@ fn a_chain_behind_a_boxed_link_variant_tears_down_without_recursing() {
             }))
         },
     )
-    .expect("a long run of operands folds");
+    .expect("a long run of operands folds")
+}
+
+#[test]
+fn a_chain_behind_a_boxed_link_variant_tears_down_without_recursing() {
+    // Derived glue at this chain length is a stack overflow, which is a process abort — so
+    // there is nothing to assert after the drop.
+    let chain = boxed_chain(150_000, atom());
     assert!(matches!(chain, Expr::Binary(_)));
     drop(chain);
+}
+
+#[test]
+fn a_chain_behind_a_boxed_link_variant_clones_and_renders_without_recursing() {
+    // Only the bottom operand differs, so a copy that swaps the sides of the deepest link, or
+    // loses that operand, is told apart from the original.
+    let marked = Atom {
+        amount: ::fltk_ast_core::Decimal::ONE,
+        ..atom()
+    };
+    let chain = boxed_chain(150_000, marked);
+    let copy = chain.clone();
+    assert_eq!(copy, chain);
+    assert_ne!(copy, boxed_chain(150_000, atom()));
+    assert!(format!("{chain:#?}").contains(".."));
+}
+
+#[test]
+fn a_boxed_link_renders_as_the_derive_would() {
+    // The leaves are derived types, so their text is the derive's; around them is the text a
+    // derived `Debug` on the two chain types writes, spelled out.
+    let value = Expr::Binary(Box::new(ExprBinary {
+        op: sub(),
+        lhs: Box::new(Expr::Binary(Box::new(ExprBinary {
+            op: sub(),
+            lhs: Box::new(Expr::Operand(atom())),
+            rhs: Box::new(Expr::Operand(atom())),
+            span: Span::unknown(),
+        }))),
+        rhs: Box::new(Expr::Operand(atom())),
+        span: Span::unknown(),
+    }));
+    let a = format!("{:?}", atom());
+    let s = format!("{:?}", Span::unknown());
+    let op = format!("Sub {{ e: Operand({a}), span: {s} }}");
+    let inner = format!("Binary(ExprBinary {{ op: {op}, lhs: Operand({a}), rhs: Operand({a}), span: {s} }})");
+    let expected = format!("Binary(ExprBinary {{ op: {op}, lhs: {inner}, rhs: Operand({a}), span: {s} }})");
+    assert_eq!(format!("{value:?}"), expected);
+}
+"""
+
+FOLD_BACKPOINTERS_RUNTIME = """//! A chain's copy and rendering over literal positions and CST back-pointers.
+
+use super::ast::{Num, Task, TaskBinary};
+use super::cst;
+use super::parser::Parser;
+use ::fltk_cst_core::{Shared, Span};
+
+fn parse(text: &str) -> Shared<cst::Task> {
+    let mut parser = Parser::new(text, None, false);
+    let parsed = parser.apply__parse_task(0).expect("the chain must parse");
+    assert!(parsed.pos as usize == text.len(), "the parse must consume {text:?}");
+    parsed.result
+}
+
+/// The leaf at the bottom of a left fold's leftmost path.
+fn leftmost(chain: &Task) -> &Num {
+    let mut below = chain;
+    loop {
+        match below {
+            Task::Binary(link) => below = link.lhs.as_ref(),
+            Task::Operand(num) => return num,
+        }
+    }
+}
+
+#[test]
+fn a_clone_keeps_literal_positions_and_back_pointers() {
+    // Equality skips literal positions and back-pointers, so each is read directly.
+    let node = parse("1+2+3");
+    let mut value = Task::from_cst(&node).expect("a parser-produced CST must convert");
+    let Task::Binary(outer) = &mut value else {
+        panic!("three operands fold into a link");
+    };
+    // A converted link stands for no CST node of its own, so one is attached by hand.
+    outer.cst = Some(node.clone());
+    let copy = value.clone();
+    assert_eq!(copy, value);
+    let (Task::Binary(original), Task::Binary(copied)) = (&value, &copy) else {
+        panic!("the copy of a link is a link");
+    };
+    assert_eq!(copied.op, original.op);
+    assert_eq!(copied.op.text().as_deref(), Some("+"));
+    assert_eq!(copied.op.start(), 3);
+    let (Some(copied_cst), Some(original_cst)) = (&copied.cst, &original.cst) else {
+        panic!("the back-pointer is copied, not dropped");
+    };
+    assert!(Shared::ptr_eq(copied_cst, original_cst));
+    let (Some(copied_leaf), Some(original_leaf)) = (&leftmost(&copy).cst, &leftmost(&value).cst) else {
+        panic!("a converted leaf carries its CST node, and so does its copy");
+    };
+    assert!(Shared::ptr_eq(copied_leaf, original_leaf));
+}
+
+#[test]
+fn a_chain_with_back_pointers_renders_with_bounded_depth() {
+    const LINKS: usize = 100_000;
+    let node = parse("1+2");
+    let span = Span::unknown();
+    let leaf = || Num {
+        text: String::from("1"),
+        span: Span::unknown(),
+        cst: None,
+    };
+    let operands: Vec<(Num, Span)> = (0..=LINKS).map(|_| (leaf(), span.clone())).collect();
+    let operators = vec![Span::unknown(); LINKS];
+    let chain = ::fltk_ast_core::fold_left(
+        "task",
+        &span,
+        operands,
+        operators,
+        Task::Operand,
+        |op, lhs, rhs, span| {
+            Task::Binary(TaskBinary {
+                op,
+                lhs: Box::new(lhs),
+                rhs: Box::new(rhs),
+                span,
+                cst: Some(node.clone()),
+            })
+        },
+    )
+    .expect("a long run of operands folds");
+    assert!(format!("{chain:#?}").contains(".."));
 }
 """
 
@@ -4163,9 +4406,20 @@ CASES = [
     # input reaching the struct-witness renderer and the empty-container spellings under `cargo`.
     Case(
         "boxed_link_fold",
-        BOXED_LINK_GRAMMAR,
-        BOXED_LINK_SIDECAR,
+        fixtures.BOXED_LINK_GRAMMAR,
+        fixtures.BOXED_LINK_SIDECAR,
         runtime=BOXED_LINK_RUNTIME,
+    ),
+    # A fold carrying literal-position operators and CST back-pointers, which the chain's copy
+    # has to keep although equality ignores both. The fold is named `task` so the helper enum
+    # inside its emitted `clone` shares the type's name: this compiling is what shows the body
+    # never names a node type unqualified.
+    Case(
+        "fold_backpointers",
+        fixtures.BACKPOINTER_FOLD_GRAMMAR,
+        fixtures.BACKPOINTER_FOLD_SIDECAR,
+        runtime=FOLD_BACKPOINTERS_RUNTIME,
+        parser=True,
     ),
     # One label carrying two kinds, at every container the selection conjunct is spelled for:
     # a bare member, an `Option`, a `Vec`, and one held through a `Box`. The compiled half of

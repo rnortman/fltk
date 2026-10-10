@@ -71,6 +71,13 @@ A Rust module and a Rust type share one namespace, so a rule renamed to this spe
 collide with it; the name is claimed on both backends because the claim table is one namespace.
 """
 
+DEBUG_SUPPORT_MODULE = "deep_debug"
+"""The Rust module holding the depth budget behind the fold chain types' ``Debug``.
+
+Claimed for the same reason as ``EQ_SUPPORT_MODULE``: a rule renamed to this spelling would
+collide with the module, and the claim table is one namespace across both backends.
+"""
+
 ALT_SUFFIX = "_alt"
 """What the per-alternative halves of a private reverse helper are suffixed with."""
 
@@ -2423,6 +2430,7 @@ class _ModelBuilder:
         for name in ENTRY_POINTS:
             self.claim_name(name, f"the module-level `{name}()` entry point")
         self.claim_name(EQ_SUPPORT_MODULE, f"the Rust `{EQ_SUPPORT_MODULE}` equality-walk module")
+        self.claim_name(DEBUG_SUPPORT_MODULE, f"the Rust `{DEBUG_SUPPORT_MODULE}` depth-bounded Debug module")
 
     def imported_paths(self) -> Iterator[tuple[str, str]]:
         """Each dotted Python path a generated module names, with what asks for it.

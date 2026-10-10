@@ -8,6 +8,7 @@ a span — are tested in ``fltk/fegen/test_ast_model.py``.
 from __future__ import annotations
 
 import pathlib
+import re
 
 import pytest
 
@@ -82,6 +83,16 @@ def impl_blocks(src: str, type_name: str) -> list[str]:
         blocks.append(src[start:end])
         start = src.find(header, end)
     return blocks
+
+
+def _derives_above_declarations(src: str) -> dict[str, str]:
+    """The line above each node type's declaration, by type name; value enums are left out."""
+    lines = src.splitlines()
+    return {
+        line.split()[2]: lines[index - 1]
+        for index, line in enumerate(lines)
+        if line.startswith(("pub struct ", "pub enum ")) and not line.endswith("Value {")
+    }
 
 
 def has_span_method(src: str, type_name: str) -> bool:
@@ -217,14 +228,17 @@ class TestConfigLanguage:
 
     def test_every_node_type_derives_debug_and_clone(self, config_src: str) -> None:
         """No ``PartialEq`` derive: equality skips span-typed members, so it is written out."""
-        lines = config_src.splitlines()
-        declarations = [
-            index
-            for index, line in enumerate(lines)
-            if line.startswith(("pub struct ", "pub enum ")) and not line.endswith("Value {")
-        ]
-        assert declarations
-        assert {lines[index - 1] for index in declarations} == {"#[derive(Debug, Clone)]"}
+        assert set(_derives_above_declarations(config_src).values()) == {"#[derive(Debug, Clone)]"}
+
+    def test_only_the_fold_chain_types_give_up_the_derive(self, fold_src: str) -> None:
+        """A chain nests as deep as its source, so its two types carry emitted impls instead."""
+        derives = _derives_above_declarations(fold_src)
+        chain = {"ExprBinary", "TermBinary", "Expr", "Term"}
+        assert {name for name in derives if name not in chain} >= {"Factor"}
+        assert {derives[name] for name in derives if name not in chain} == {"#[derive(Debug, Clone)]"}
+        assert derives["Expr"] == derives["Term"] == "#[derive(Debug)]"
+        assert derives["ExprBinary"].startswith("///")
+        assert derives["TermBinary"].startswith("///")
 
 
 class TestExpressionGrammar:
@@ -692,6 +706,14 @@ class TestIterativeDrop:
         declaration = src[: src.index("pub struct ExprBinary {")].rsplit("\n\n", 1)[1]
         assert declaration.startswith("/// One link of the left-nested chain rule `expr` folds into.")
         assert "/// Teardown recurses once per link:" in declaration
+        # The bounded-traits note sits before the residual, which still speaks only of teardown, and
+        # does not itself claim the teardown the residual says recurses.
+        bounded = declaration.index("/// Equality, `Clone` and `Debug` are bounded-stack at any depth: ")
+        assert bounded < declaration.index("/// Teardown recurses once per link:")
+        assert "Teardown, equality" not in declaration
+        assert "/// Teardown recurses once per link: this rule's operands reach a type the generator cannot " in (
+            declaration
+        )
 
     def test_a_witness_bearing_chain_carries_no_residual_note(self, fold_src: str) -> None:
         assert "Teardown recurses once per link" not in fold_src
@@ -735,6 +757,255 @@ class TestIterativeDrop:
             "rule expr { fold_left: op; }\nrule sign { transparent; }\nrule pick { transparent; }\n",
         )
         assert block(src, _WITNESS_HEADER) == ("fn _expr_drop_witness() -> Expr {\n    Expr::Operand(PickValue::A)\n}")
+
+
+_CLONE_HEADER = "impl ::std::clone::Clone for Expr {"
+_LINK_CLONE_HEADER = "impl ::std::clone::Clone for ExprBinary {"
+_LINK_DEBUG_HEADER = "impl ::std::fmt::Debug for ExprBinary {"
+_BUILD_HEADER = "                Task::Build(link) => {"
+
+
+class TestChainCloneAndDebug:
+    """A fold's chain types copy through a worklist and render within a per-thread depth budget."""
+
+    def test_the_enum_clone_rebuilds_the_chain_bottom_up(self, fold_src: str) -> None:
+        assert block(fold_src, _CLONE_HEADER) == (
+            "impl ::std::clone::Clone for Expr {\n"
+            "    /// Bounded stack: the copy is built bottom-up through a worklist, not by recursion.\n"
+            "    fn clone(&self) -> Self {\n"
+            "        // A value still to copy, or a link whose two copied sides are the top of `finished`.\n"
+            "        // The node types are spelled `self::…`: this enum is a block-scoped item, and an\n"
+            "        // unqualified type here would resolve to it for a fold whose type is named `Task`.\n"
+            "        enum Task<'a> {\n"
+            "            Visit(&'a self::Expr),\n"
+            "            Build(&'a self::ExprBinary),\n"
+            "        }\n"
+            "        // A bare operand copies directly, without the two worklists' allocations.\n"
+            "        let root = match self {\n"
+            "            Self::Operand(payload) => return Self::Operand(::std::clone::Clone::clone(payload)),\n"
+            "            Self::Binary(link) => link,\n"
+            "        };\n"
+            "        let mut tasks = vec![\n"
+            "            Task::Build(root),\n"
+            "            Task::Visit(&root.rhs),\n"
+            "            Task::Visit(&root.lhs),\n"
+            "        ];\n"
+            "        let mut finished: ::std::vec::Vec<Self> = ::std::vec::Vec::new();\n"
+            "        while let Some(task) = tasks.pop() {\n"
+            "            match task {\n"
+            "                Task::Visit(Self::Operand(payload)) => {\n"
+            "                    finished.push(Self::Operand(::std::clone::Clone::clone(payload)));\n"
+            "                }\n"
+            "                Task::Visit(Self::Binary(link)) => {\n"
+            "                    // The left side is popped, and so copied, first; the link is built once both are.\n"
+            "                    tasks.push(Task::Build(link));\n"
+            "                    tasks.push(Task::Visit(&link.rhs));\n"
+            "                    tasks.push(Task::Visit(&link.lhs));\n"
+            "                }\n"
+            "                Task::Build(link) => {\n"
+            "                    let rhs = finished.pop()"
+            '.expect("the right side is copied before its link is built");\n'
+            "                    let lhs = finished.pop()"
+            '.expect("the left side is copied before its link is built");\n'
+            "                    finished.push(Self::Binary(self::ExprBinary {\n"
+            "                        op: ::std::clone::Clone::clone(&link.op),\n"
+            "                        lhs: ::std::boxed::Box::new(lhs),\n"
+            "                        rhs: ::std::boxed::Box::new(rhs),\n"
+            "                        span: link.span.clone(),\n"
+            "                    }));\n"
+            "                }\n"
+            "            }\n"
+            "        }\n"
+            '        finished.pop().expect("the root is the last value copied")\n'
+            "    }\n"
+            "}"
+        )
+
+    def test_the_link_clone_goes_through_the_enums_for_each_side(self, fold_src: str) -> None:
+        assert block(fold_src, _LINK_CLONE_HEADER) == (
+            "impl ::std::clone::Clone for ExprBinary {\n"
+            "    /// Each side copies through `Expr`'s bounded-stack `clone`, so a link copies at any depth.\n"
+            "    fn clone(&self) -> Self {\n"
+            "        Self {\n"
+            "            op: ::std::clone::Clone::clone(&self.op),\n"
+            "            lhs: self.lhs.clone(),\n"
+            "            rhs: self.rhs.clone(),\n"
+            "            span: self.span.clone(),\n"
+            "        }\n"
+            "    }\n"
+            "}"
+        )
+
+    def test_the_link_debug_is_the_derives_calls_behind_the_budget(self, fold_src: str) -> None:
+        assert block(fold_src, _LINK_DEBUG_HEADER) == (
+            "impl ::std::fmt::Debug for ExprBinary {\n"
+            "    /// Bounded stack: a rendering descends `deep_debug::DEPTH` links down any path, counted\n"
+            "    /// across every chain the path passes through, and prints `..` for a link below that.\n"
+            "    fn fmt(&self, f: &mut ::std::fmt::Formatter<'_>) -> ::std::fmt::Result {\n"
+            "        let Some(_level) = deep_debug::Level::descend() else {\n"
+            '            return f.write_str("..");\n'
+            "        };\n"
+            '        f.debug_struct("ExprBinary")\n'
+            '            .field("op", &self.op)\n'
+            '            .field("lhs", &self.lhs)\n'
+            '            .field("rhs", &self.rhs)\n'
+            '            .field("span", &self.span)\n'
+            "            .finish()\n"
+            "    }\n"
+            "}"
+        )
+
+    def test_the_budget_module_is_one_counter_restored_on_drop(self, fold_src: str) -> None:
+        assert block(fold_src, "mod deep_debug {") == (
+            "mod deep_debug {\n"
+            "    /// How many links deep a rendering descends, on any path, before a link prints `..`.\n"
+            "    pub(super) const DEPTH: usize = 512;\n"
+            "\n"
+            "    ::std::thread_local! {\n"
+            "        /// Levels left for the rendering in progress on this thread; `DEPTH` when none is.\n"
+            "        static REMAINING: ::std::cell::Cell<usize> = const { ::std::cell::Cell::new(DEPTH) };\n"
+            "    }\n"
+            "\n"
+            "    /// One level of the budget, held while a link renders and given back when it is dropped —\n"
+            "    /// through `Drop`, so a field's `Debug` panicking cannot leave the thread's budget short.\n"
+            "    pub(super) struct Level(usize);\n"
+            "\n"
+            "    impl Level {\n"
+            "        pub(super) fn descend() -> ::std::option::Option<Self> {\n"
+            "            REMAINING.with(|remaining| {\n"
+            "                let left = remaining.get();\n"
+            "                remaining.set(left.checked_sub(1)?);\n"
+            "                ::std::option::Option::Some(Self(left))\n"
+            "            })\n"
+            "        }\n"
+            "    }\n"
+            "\n"
+            "    impl ::std::ops::Drop for Level {\n"
+            "        fn drop(&mut self) {\n"
+            "            REMAINING.with(|remaining| remaining.set(self.0));\n"
+            "        }\n"
+            "    }\n"
+            "}"
+        )
+
+    def test_the_budget_is_the_emitters_named_constant(self, fold_src: str) -> None:
+        assert f"pub(super) const DEPTH: usize = {gsm2ast_rs._DEBUG_DEPTH};" in fold_src
+
+    def test_the_enum_keeps_its_derived_debug(self, fold_src: str) -> None:
+        assert "impl ::std::fmt::Debug for Expr {" not in fold_src
+        assert "impl ::std::fmt::Debug for Term {" not in fold_src
+        assert "impl ::std::fmt::Debug for TermBinary {" in fold_src
+
+    def test_the_clone_body_names_node_types_only_through_self(self, fold_src: str) -> None:
+        """A bare type name inside ``fn clone`` would resolve to the helper enum for a fold named ``task``."""
+        body = block(fold_src, _CLONE_HEADER).split("    fn clone(&self) -> Self {\n", 1)[1]
+        assert "            Visit(&'a self::Expr),\n            Build(&'a self::ExprBinary),\n" in body
+        assert "finished.push(Self::Binary(self::ExprBinary {\n" in body
+        bare = re.findall(r"(?<![\w:])(?:Expr|ExprBinary)\b", body)
+        assert not bare, bare
+
+    def test_a_grammar_with_no_fold_emits_neither_the_impls_nor_the_module(self, config_src: str) -> None:
+        assert "mod deep_debug" not in config_src
+        assert "impl ::std::clone::Clone for" not in config_src
+        assert "impl ::std::fmt::Debug for" not in config_src
+
+    def test_the_module_is_emitted_once_for_two_folds(self, fold_src: str) -> None:
+        assert fold_src.count("mod deep_debug {") == 1
+        assert fold_src.count("pub(super) const DEPTH") == 1
+        assert fold_src.count("impl ::std::clone::Clone for") == 4
+
+    def test_the_back_pointer_is_copied_as_a_handle_and_rendered(self) -> None:
+        src = generate(fixtures.FOLD_GRAMMAR, "option cst = true;\n" + fixtures.FOLD_SIDECAR)
+        assert "                        span: link.span.clone(),\n                        cst: link.cst.clone(),\n" in (
+            block(src, _BUILD_HEADER)
+        )
+        assert "            span: self.span.clone(),\n            cst: self.cst.clone(),\n" in block(
+            src, _LINK_CLONE_HEADER
+        )
+        assert '            .field("span", &self.span)\n            .field("cst", &self.cst)\n' in block(
+            src, _LINK_DEBUG_HEADER
+        )
+
+    def test_a_boxed_link_variant_is_rebuilt_boxed_and_rendered_unchanged(self, fold_src: str) -> None:
+        src = generate(fixtures.BOXED_LINK_GRAMMAR, fixtures.BOXED_LINK_SIDECAR)
+        assert "    Binary(::std::boxed::Box<ExprBinary>),\n" in block(src, "pub enum Expr")
+        build = block(src, _BUILD_HEADER)
+        assert "finished.push(Self::Binary(::std::boxed::Box::new(self::ExprBinary {\n" in build
+        assert build.endswith("                    })));\n                }")
+        visit = block(src, "                Task::Visit(Self::Binary(link)) => {")
+        assert visit == block(fold_src, "                Task::Visit(Self::Binary(link)) => {")
+        assert block(src, _LINK_DEBUG_HEADER) == block(fold_src, _LINK_DEBUG_HEADER)
+
+    def test_a_renamed_link_variant_reaches_both_arms(self) -> None:
+        src = generate(
+            fixtures.FOLD_GRAMMAR,
+            fixtures.FOLD_SIDECAR.replace("fold_left: op;", "fold_left: op; variant Binary: Link;"),
+        )
+        body = block(src, _CLONE_HEADER)
+        assert "            Self::Link(link) => link,\n" in body
+        assert "                Task::Visit(Self::Link(link)) => {\n" in body
+        assert "finished.push(Self::Link(self::ExprLink {\n" in body
+
+    def test_a_keyword_operator_is_accessed_raw_and_printed_bare(self) -> None:
+        src = generate(fixtures.FOLD_GRAMMAR, TestFoldConverters.renamed("type"))
+        assert "r#type: ::std::clone::Clone::clone(&link.r#type),\n" in block(src, _BUILD_HEADER)
+        assert "r#type: ::std::clone::Clone::clone(&self.r#type),\n" in block(src, _LINK_CLONE_HEADER)
+        assert '            .field("type", &self.r#type)\n' in block(src, _LINK_DEBUG_HEADER)
+
+    def test_a_fold_named_like_the_helper_enum_still_names_its_types_through_self(self) -> None:
+        src = generate(fixtures.BACKPOINTER_FOLD_GRAMMAR, fixtures.BACKPOINTER_FOLD_SIDECAR)
+        body = block(src, "impl ::std::clone::Clone for Task {")
+        assert "            Visit(&'a self::Task),\n            Build(&'a self::TaskBinary),\n" in body
+        assert "finished.push(Self::Binary(self::TaskBinary {\n" in body
+
+    def test_the_direction_plays_no_part(self, fold_src: str) -> None:
+        src = generate(fixtures.FOLD_GRAMMAR, TestFoldConverters.RIGHT_SIDECAR)
+        for header in (_CLONE_HEADER, _LINK_CLONE_HEADER, _LINK_DEBUG_HEADER):
+            assert block(src, header) == block(fold_src, header)
+
+    def test_a_chain_with_no_teardown_witness_still_gets_both_impls(self) -> None:
+        src = generate(fixtures.CUSTOM_FOLD_GRAMMAR, fixtures.CUSTOM_FOLD_SIDECAR)
+        assert "impl ::std::ops::Drop for ExprBinary {" not in src
+        assert _CLONE_HEADER in src
+        assert _LINK_CLONE_HEADER in src
+        assert _LINK_DEBUG_HEADER in src
+        assert "mod deep_debug {" in src
+
+    def test_the_link_doc_names_all_four_bounded_traits(self, fold_src: str) -> None:
+        declaration = fold_src[: fold_src.index("pub struct ExprBinary {")].rsplit("\n\n", 1)[1]
+        assert (
+            "/// Teardown, equality, `Clone` and `Debug` are all bounded-stack at any depth: `clone` rebuilds the "
+            "chain through a worklist and `Debug` renders at most 512 links down any path — summed over every "
+            "chain the path passes through — printing `..` for a link below that.\n"
+        ) in declaration
+
+    def test_the_header_describes_the_chain_types_only_where_there_is_a_fold(
+        self, fold_src: str, config_src: str
+    ) -> None:
+        paragraph = (
+            "//! compare them by value.\n"
+            "//!\n"
+            "//! A fold rule's chain types — its link struct and the enum over operand-or-link — nest as\n"
+            "//! deep as the source has operands. Their `Drop`, `PartialEq`, `Clone` and `Debug` are all\n"
+            "//! bounded-stack at any depth; `Debug` renders 512 links down any path, counted across\n"
+            "//! every chain of this module the path passes through, and `..` below. A chain of another\n"
+            "//! generated module reached through a `custom(...)` operand starts that module's own count.\n"
+        )
+        assert paragraph in fold_src
+        assert "chain types" not in config_src
+
+    def test_the_header_does_not_claim_drop_for_a_chain_with_recursive_teardown(self) -> None:
+        src = generate(fixtures.CUSTOM_FOLD_GRAMMAR, fixtures.CUSTOM_FOLD_SIDECAR)
+        paragraph = (
+            "//! A fold rule's chain types — its link struct and the enum over operand-or-link — nest as\n"
+            "//! deep as the source has operands. Their `PartialEq`, `Clone` and `Debug` are bounded-stack\n"
+            "//! at any depth, and so is their `Drop` except where a link type's own doc says its teardown\n"
+            "//! recurses; `Debug` renders 512 links down any path, counted across\n"
+            "//! every chain of this module the path passes through, and `..` below. A chain of another\n"
+            "//! generated module reached through a `custom(...)` operand starts that module's own count.\n"
+        )
+        assert paragraph in src
+        assert "Their `Drop`, `PartialEq`" not in src
 
 
 class TestConverters:
@@ -1818,6 +2089,13 @@ class TestReverseProducts:
             "            cst_node.push_child(Some(cst::ExprLabel::Term), cst::ExprChild::Term(operand.to_cst()?));\n"
             "        }\n"
         ) in body
+
+    def test_a_literal_operator_is_not_bound_by_the_unfolded_run(self) -> None:
+        """The literal's child is the grammar's text, so a bound `operator` is an unused variable."""
+        src = generate(fixtures.BACKPOINTER_FOLD_GRAMMAR, fixtures.BACKPOINTER_FOLD_SIDECAR)
+        body = block(src, "impl Task {\n    /// Synthesise")
+        assert "        for (_, operand) in operators.into_iter().zip(operands.into_iter().skip(1)) {\n" in body
+        assert "            cst_node.push_child(Some(cst::TaskLabel::Op), cst::TaskChild::Span(" in body
 
     def test_a_right_fold_descends_the_other_side(self) -> None:
         src = generate(fixtures.FOLD_GRAMMAR, fixtures.FOLD_SIDECAR.replace("fold_left", "fold_right"))

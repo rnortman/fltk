@@ -300,10 +300,9 @@ mod tests {
         assert_eq!(render(Unparser::new().unparse_colour(&guard)), "black");
     }
 
-    #[test]
-    fn a_fold_rule_parses_into_a_left_nested_chain() {
-        let parsed = parse_sum_chain("1+2-3");
-        let expected = SumChain::Binary(SumChainBinary {
+    /// The hand-built chain `1+2-3` parses into, with unknown spans.
+    fn hand_built_chain() -> SumChain {
+        SumChain::Binary(SumChainBinary {
             op: "-".to_string(),
             lhs: Box::new(SumChain::Binary(SumChainBinary {
                 op: "+".to_string(),
@@ -313,8 +312,13 @@ mod tests {
             })),
             rhs: Box::new(SumChain::Operand(num("3"))),
             span: Span::unknown(),
-        });
-        assert_eq!(parsed, expected);
+        })
+    }
+
+    #[test]
+    fn a_fold_rule_parses_into_a_left_nested_chain() {
+        let parsed = parse_sum_chain("1+2-3");
+        assert_eq!(parsed, hand_built_chain());
         // Operator and operand separators are ws-allowed, so the rendering need not be the
         // document's; what has to hold is that it parses back to the same chain.
         let node = parsed.to_cst().expect("a chain must synthesise");
@@ -427,9 +431,14 @@ mod tests {
     /// reaches last, so `first_op` is what an equality walk has to descend the whole chain
     /// to see.
     fn long_chain(first_op: &str) -> SumChain {
+        chain_of(OPERANDS, first_op)
+    }
+
+    /// `long_chain` over `count` operands.
+    fn chain_of(count: usize, first_op: &str) -> SumChain {
         let span = Span::unknown();
-        let operands: Vec<(Num, Span)> = (0..OPERANDS).map(|_| (num("1"), span.clone())).collect();
-        let operators: Vec<String> = (0..OPERANDS - 1)
+        let operands: Vec<(Num, Span)> = (0..count).map(|_| (num("1"), span.clone())).collect();
+        let operators: Vec<String> = (0..count - 1)
             .map(|index| if index == 0 { first_op } else { "+" }.to_string())
             .collect();
         fltk_ast_core::fold_left(
@@ -462,5 +471,107 @@ mod tests {
         // every link — it cannot be answered at the root.
         assert_ne!(chain, long_chain("-"));
         drop(chain);
+    }
+    // ------------------------------------------------------------------
+    // The chain types' emitted `Clone` and `Debug`.
+    // ------------------------------------------------------------------
+
+    /// `SumChain`'s two types with derived `Clone` and `Debug` in place of the emitted impls, so a
+    /// rendering can be compared with the derive's own text.
+    // The fields are read only by the derived `Debug`, which dead-code analysis does not count.
+    #[allow(dead_code)]
+    mod twin {
+        use crate::ast::Num;
+        use fltk_cst_core::Span;
+
+        #[derive(Debug)]
+        pub enum SumChain {
+            Operand(Num),
+            Binary(SumChainBinary),
+        }
+
+        #[derive(Debug)]
+        pub struct SumChainBinary {
+            pub op: String,
+            pub lhs: Box<SumChain>,
+            pub rhs: Box<SumChain>,
+            pub span: Span,
+        }
+    }
+
+    /// The derive twin of a chain; recursive, so for small values only.
+    fn derived_twin(value: &SumChain) -> twin::SumChain {
+        match value {
+            SumChain::Operand(num) => twin::SumChain::Operand(num.clone()),
+            SumChain::Binary(link) => twin::SumChain::Binary(twin::SumChainBinary {
+                op: link.op.clone(),
+                lhs: Box::new(derived_twin(&link.lhs)),
+                rhs: Box::new(derived_twin(&link.rhs)),
+                span: link.span.clone(),
+            }),
+        }
+    }
+
+    #[test]
+    fn a_small_chains_debug_rendering_is_the_derives() {
+        // Downstream snapshot output of a value within the budget must not change.
+        let against = SumChain::Binary(SumChainBinary {
+            op: "+".to_string(),
+            lhs: Box::new(SumChain::Operand(num("1"))),
+            rhs: Box::new(hand_built_chain()),
+            span: Span::unknown(),
+        });
+        for value in [
+            parse_sum_chain("1+2-3"),
+            hand_built_chain(),
+            against,
+            SumChain::Operand(num("7")),
+        ] {
+            let twin = derived_twin(&value);
+            assert_eq!(format!("{value:?}"), format!("{twin:?}"));
+            assert_eq!(format!("{value:#?}"), format!("{twin:#?}"));
+        }
+    }
+
+    #[test]
+    fn a_chain_of_one_hundred_thousand_operands_clones_without_recursing() {
+        // Derived `Clone` overflows the stack at this length, which is a process abort.
+        assert_eq!(long_chain("+").clone(), long_chain("+"));
+        // The `-` is on the innermost link, so the copy has to be faithful to the bottom.
+        assert_ne!(long_chain("-").clone(), long_chain("+"));
+    }
+
+    #[test]
+    fn a_cloned_parsed_chain_keeps_its_spans() {
+        // Spans take no part in equality, so only reading them proves the copy kept them.
+        let parsed = parse_sum_chain("1+2-3");
+        let copy = parsed.clone();
+        let (SumChain::Binary(outer), SumChain::Binary(copied_outer)) = (&parsed, &copy) else {
+            panic!("three operands fold into a link, and so does their copy");
+        };
+        let (SumChain::Binary(inner), SumChain::Binary(copied_inner)) = (outer.lhs.as_ref(), copied_outer.lhs.as_ref())
+        else {
+            panic!("the left side of a left fold is the deeper chain");
+        };
+        for (original, copied) in [(&outer.span, &copied_outer.span), (&inner.span, &copied_inner.span)] {
+            assert_eq!(copied, original);
+            assert_eq!(copied.text(), original.text());
+            assert_ne!(*copied, Span::unknown());
+        }
+    }
+
+    #[test]
+    fn a_chain_of_one_hundred_thousand_operands_renders_with_bounded_depth() {
+        let long = long_chain("+");
+        let shorter = chain_of(10_000, "+");
+        let compact = format!("{long:?}");
+        let pretty = format!("{long:#?}");
+        // Both are past the budget, so they render the same links and elide the rest.
+        assert_eq!(compact, format!("{shorter:?}"));
+        assert_eq!(pretty, format!("{shorter:#?}"));
+        assert!(compact.contains(".."));
+        assert!(pretty.contains(".."));
+        assert!(compact.len() < 200_000, "{} bytes", compact.len());
+        assert!(!format!("{:?}", chain_of(300, "+")).contains(".."));
     }
 }

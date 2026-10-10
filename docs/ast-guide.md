@@ -329,10 +329,19 @@ pub enum Expr { Operand(i64), Binary(ExprBinary) }
 
 A link's `span` covers everything below it when its operands were read from one source in order —
 every parsed chain. A chain synthesised by `to_cst` has unknown link spans: its leaves each carry
-their own text, but nothing in a synthesised tree is a position in a file. The Rust chain types carry a worklist-based `Drop`
-and a worklist-based equality walk, so a chain as deep as its source neither overflows the stack
-on teardown nor on comparison. Python compares chains by ordinary dataclass recursion, which is
-as deep as any Python structure walk.
+their own text, but nothing in a synthesised tree is a position in a file. The Rust chain types are stack-safe at any parsed
+depth on all four of their traits: `Drop` and `PartialEq` work through a worklist, `Clone` rebuilds
+the chain bottom-up through a worklist, and `Debug` renders at most 512 links down any path and
+prints `..` for a link below that. The one exception is teardown of a chain whose operands reach a
+`custom(...)` type: the generator has no value to tear it down with, so that chain's `Drop` recurses
+once per link, as its link type's own doc states. The 512 is one per-thread budget for the whole generated module,
+so a chain nested inside another chain's operand or operator — `(1+…+1)*(…)` — continues the count
+rather than starting its own; `{:?}` of a value nested within the budget is byte-identical to what a
+derived `Debug` would print, and `{:?}` of a deeper value completes with the deepest links elided.
+The one thing the budget does not span is a chain of a *different* generated module reached through
+a `custom(...)` operand, which starts that module's own count; the parser's depth limit bounds how
+often that can happen. Python compares and copies chains by ordinary recursion, which raises
+`RecursionError` rather than aborting.
 
 ### Module surface
 

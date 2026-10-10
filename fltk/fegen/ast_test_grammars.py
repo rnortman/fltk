@@ -188,6 +188,29 @@ CUSTOM_FOLD_SIDECAR = 'rule expr { fold_left: op; }\nrule atom { custom(python: 
 the model naming no witness and the emitter writing no ``Drop`` — are checked against one input.
 """
 
+BOXED_LINK_GRAMMAR = (
+    "expr := d:atom , ( , op:sub , d:atom)* ;\n"
+    'sub := "[" . e:expr . "]" ;\n'
+    "atom := id:ident , amount:money , tags:word* , note:word? ;\n"
+    "ident := $/[0-9a-fA-F-]+/ ;\nmoney := $/[0-9.]+/ ;\nword := w:/[a-z]+/ ;\n"
+)
+"""A fold whose operator re-enters the fold, so the recursion analysis boxes the link variant."""
+
+BOXED_LINK_SIDECAR = (
+    "rule expr  { fold_left: op; }\n"
+    "rule ident { type: uuid; transparent; }\n"
+    "rule money { type: decimal; transparent; }\n"
+    "rule word  { transparent; }\n"
+)
+"""Folds ``expr`` and erases the operand's leaves to the two feature-gated builtins and text."""
+
+BACKPOINTER_FOLD_GRAMMAR = 'task := d:num , ( , op:"+" , d:num)* ;\nnum := v:/[0-9]+/ ;\n'
+"""A fold over a literal-position operator, named ``task``: the helper enum inside the chain's
+emitted ``clone`` shares the type's name, so the body must never name a node type bare."""
+
+BACKPOINTER_FOLD_SIDECAR = "option cst = true;\nrule task { fold_left: op; }\n"
+"""Folds ``task`` with CST back-pointers on, which the chain's copy keeps as shared handles."""
+
 LITERAL_SELECT_GRAMMAR = (
     'lit := v:"lit" | v:/[0-9]+/ | v:word ;\n'
     'seq := v:"lit" . n:word | v:/[0-9]+/ . n:word ;\n'

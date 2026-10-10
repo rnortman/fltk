@@ -2984,6 +2984,13 @@ class TestGeneratedNameCollisions:
         assert f"the Rust `{am.EQ_SUPPORT_MODULE}` equality-walk module" in errors[0]
         assert "collides with rule 'item'" in errors[0]
 
+    def test_a_renamed_type_can_collide_with_the_debug_budget_module(self) -> None:
+        """The chain types' `Debug` budget lives in a module of its own, so its name is claimed too."""
+        errors = configured_errors("x:item", f"rule item {{ name: {am.DEBUG_SUPPORT_MODULE}; }}\n")
+        assert len(errors) == 1
+        assert f"the Rust `{am.DEBUG_SUPPORT_MODULE}` depth-bounded Debug module" in errors[0]
+        assert "collides with rule 'item'" in errors[0]
+
     @pytest.mark.parametrize("alias", ["cst", "astrt", "typing", "_parser", "parser"])
     def test_a_renamed_type_can_collide_with_an_import_a_generated_module_binds(self, alias: str) -> None:
         """A class emitted under an import of the same name wins, and every use of it breaks."""
@@ -3168,7 +3175,15 @@ class TestClaimTableExhaustiveness:
         model = fixtures.model_for(FOLD_GRAMMAR, FOLD_SIDECAR, ac.Backend.RUST)
         source = gsm2ast_rs.generate_ast_rs(model, "super::cst", parser_mod_path="super::parser")
         names = _rust_module_level_names(source)
-        assert {"_factor_alternative", am.EQ_SUPPORT_MODULE, "_expr_drop_witness", "Expr", "cst", "parser"} <= names
+        assert {
+            "_factor_alternative",
+            am.EQ_SUPPORT_MODULE,
+            am.DEBUG_SUPPORT_MODULE,
+            "_expr_drop_witness",
+            "Expr",
+            "cst",
+            "parser",
+        } <= names
 
 
 RECURSIVE_GRAMMAR = """

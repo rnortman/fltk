@@ -139,20 +139,6 @@ halves have to land in the Rust emitter the same way, or the two ASTs stop being
 Location: `fltk/fegen/ast_model.py` (`_ModelBuilder.erased_product_payload`'s arity check),
 `fltk/fegen/gsm2ast.py` (`field_annotation`, `cursor_expression`).
 
-## `ast-deep-clone-debug`
-
-Generated Rust fold types derive `Clone` and `Debug` (`gsm2ast_rs.py`, `_NODE_DERIVES`), and both
-derives recurse once per chain link, so cloning or `{:?}`-formatting a fold chain of some tens of
-thousands of operands overflows the stack — the same hazard the emitted iterative `Drop` closes for
-teardown and the emitted `eq_walk` closes for comparison. Unlike those two, `Clone` and `Debug` are
-explicit consumer calls: they are avoidable, no design law rests on them, and a consumer who needs
-neither pays nothing. So v1 documents the limit rather than emitting worklist implementations.
-Closing it means emitting a written-out `Clone` (build the new chain bottom-up from a worklist over
-the old one) and `Debug` (render iteratively, or bound the depth) for the types the recursion
-analysis marks `deep`, in place of the derives. Do it when a consumer actually hits it — the
-`PartialEq` walk is the shape to copy. Location: `fltk/fegen/gsm2ast_rs.py` (`_NODE_DERIVES`).
-
-
 ## `ast-select-count-blind`
 
 `to_cst` alternative selection on a merged product tests which labels are populated
