@@ -29,21 +29,6 @@ subprocess) or a parser-level step/time budget threaded down into the generated 
 work that would dominate this round. Deferred with the stale-token policy covering the degraded mode
 meanwhile. Location: `fltk/lsp/server.py` (`FltkLanguageServer._analyze_blocking`).
 
-## `ast-terminal-repeat-synthesis`
-
-`to_cst` on a terminal-only AST node rebuilds the CST by matching the node's `text` against one
-regex per alternative, with a named capture group per included item
-(`fltk/fegen/ast_model.py`, `_terminal_plan`). That construction cannot express an item whose
-quantifier admits more than one occurrence — a single group would capture the whole run rather
-than each occurrence — so `_terminal_plan` marks such an alternative unsynthesisable
-(`pattern=None`), and `astrt.terminal_to_cst` raises `AstError` for it. The parse direction is
-unaffected: `from_cst` reads the node's own span, so a rule like `word := c:/[a-z]/+ ;` converts
-fine and only fails on the way back out. Closing this means splitting the text per occurrence
-(walk the alternative's items left to right, matching each pattern at the current offset with
-backtracking) and mirroring the algorithm in the Rust emitter so both backends synthesise the same
-children. Location: `fltk/fegen/ast_model.py` (`_terminal_plan`'s `bounds != (1, 1)` return),
-`fltk/fegen/pyrt/astrt.py` (`terminal_to_cst`).
-
 ## `ast-dispatch-order`
 
 `alternatives_are_disjoint` (`fltk/fegen/grammar_shape.py`) decides whether two alternatives of a
@@ -114,18 +99,18 @@ against that break for out-of-tree consumers. Location: `fltk/fegen/ast_model.py
 
 ## `ast-synthesised-literal-spans`
 
-`to_cst()` on a terminal-shaped rule re-matches the node's text and hands each captured group its
-own span, but a non-captured piece — a labeled literal above all — gets the sentinel span
-`(-1, -1)`. The generated `*_text()` accessors panic on such a child
+`to_cst()` on a terminal-shaped rule replays the parser over the node's text item by item and
+hands each regex occurrence its own span, but a literal occurrence — a labeled literal above all,
+and the sibling literals of a `text_from:` rule — gets the sentinel span `(-1, -1)`. The generated `*_text()` accessors panic on such a child
 (`fltk/fegen/gsm2tree_rs.py`, `_native_ergonomic_methods`, whose required- and optional-arity
 branches both `unwrap_or_else(|e| panic!(...))` on an unusable span), so a consumer reading a
 literal-valued label off a round-tripped tree panics inside generated code it did not write and
 cannot edit — generated accessors are public API for out-of-tree consumers. For
 `line := text:/[a-z]+/ . bang:"!" ;`, `Line::to_cst()` gives `bang` no source and `bang_text()`
 panics while `text_text()` and the node's own `text()` work. Closing this means deciding what a
-synthesised non-captured child carries: either attach the statically-known text during synthesis
-(a literal's text is in the grammar, and a non-captured regex piece is recoverable from the match
-the split already performs) on both backends — `fltk/fegen/pyrt/astrt.py` (`terminal_to_cst`) and
+synthesised literal child carries: either attach the statically-known text during synthesis
+(a literal's text is in the grammar, and every walked occurrence is already a known slice of the
+node's text) on both backends — `fltk/fegen/pyrt/astrt.py` (`terminal_to_cst`) and
 the Rust runtime's `crates/fltk-ast-core/src/synth.rs` (`TerminalShape::split`), as driven by
 `fltk/fegen/gsm2ast_rs.py` (`terminal_to_cst_body`) — or change the accessor contract, which is a
 breaking change to generated public API and is disfavoured. Check Python-backend parity (what the
@@ -137,6 +122,28 @@ a synthesised tree is a file position. Pinned by
 (the span-only case's runtime module); that assertion inverts when this closes. Location:
 `fltk/fegen/pyrt/astrt.py` (`terminal_to_cst`), `crates/fltk-ast-core/src/synth.rs`
 (`TerminalShape::split`).
+
+## `ast-terminal-subexpression-walk`
+
+`to_cst` on a terminal-only rule replays the parser over the node's text item by item, but only for
+alternatives made of flat literal and regex items: an alternative holding a sub-expression is passed
+over, and a rule whose every alternative holds one is refused with the shape error. Closing this
+means walking sub-expression alternatives the way the parser does — a sub-expression is a nested
+ordered choice of flat-item sequences, with its own quantifier, consumed at the current offset with
+the same commitment and progress rules as the top-level walk — on both backends (the plan, the
+Python runtime, the Rust runtime and both emitters), so that `_terminal_plan` never returns
+`steps=None`, the `Unsupported` / `TerminalAlt(None)` arms and the shape error go, and the skip and
+its residual go with them. The residual has two halves, both shown by
+`t := ( "a" | "b" ) . x:/[0-9]/ | y:/[a-z0-9]+/ ;`: on a text the parser gives to the sub-expression
+alternative (`a1`) the walk skips it and a later flat alternative emits a different child list under
+an equal AST — a wrong split; on a text the parser refuses after committing to the sub-expression
+alternative (`a1z`) the walk accepts it through a later flat alternative, against the AST layer's
+rule that `to_cst` accepts only text that re-parses. Sub-expressions were a non-goal of the
+per-item walk on purpose; the refusal variant (fail at the first sub-expression alternative the walk
+reaches) was considered and rejected as scaffolding that over-refuses texts the parser handles and is
+discarded by this fix. Location: `fltk/fegen/ast_model.py` (`_terminal_plan`'s `steps=None` return),
+`fltk/fegen/pyrt/astrt.py` (`terminal_to_cst`'s unsupported-alternative `continue`),
+`crates/fltk-ast-core/src/synth.rs` (`TerminalShape::split`'s `Unsupported` arm).
 
 ## `version-bump-0-6-0`
 

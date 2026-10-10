@@ -681,23 +681,41 @@ class TestSynthesisPlans:
         assert len({slot.group for slot in slots}) == 1
         assert [slot.branch for slot in slots] == [0, 1, 1]
 
-    def test_terminal_plan_spells_an_alternative_as_one_regex(self) -> None:
+    @staticmethod
+    def steps(body: str) -> list[tuple[str, bool, bool, str | None, int, float]]:
+        steps = model_for(body).plans["target"].terminals[0].steps
+        assert steps is not None
+        return [(s.term, s.literal, s.included, s.label, s.minimum, s.maximum) for s in steps]
+
+    def test_terminal_plan_spells_an_alternative_as_steps(self) -> None:
         plan = model_for_text('target := a:"x" . b:/[0-9]+/ ;\n').plans["target"].terminals[0]
-        assert plan.pattern is not None
-        assert re.fullmatch(plan.pattern, "x42") is not None
-        assert re.fullmatch(plan.pattern, "y42") is None
-        assert [(piece.label, piece.group is None) for piece in plan.pieces] == [("a", True), ("b", False)]
+        assert plan.steps == (
+            am.TerminalStep(term="x", literal=True, included=True, label="a", minimum=1, maximum=1),
+            am.TerminalStep(term="[0-9]+", literal=False, included=True, label="b", minimum=1, maximum=1),
+        )
+        assert plan.pattern is None
+        assert plan.pieces == ()
 
     @pytest.mark.parametrize(
-        "body",
-        ["c:/[a-z]/+", '( a:"x" . b:/[0-9]+/ )'],
-        ids=["repeated_included_item", "sub_expression"],
+        ("body", "step"),
+        [
+            ("c:/[a-z]/+", ("[a-z]", False, True, "c", 1, math.inf)),
+            ("t:/x/?", ("x", False, True, "t", 0, 1)),
+            ("%/[0-9]/*", ("[0-9]", False, False, None, 0, math.inf)),
+            ('a:"a.b" . b:/x/', ("a.b", True, True, "a", 1, 1)),
+        ],
+        ids=["repeated", "optional", "suppressed_star", "unescaped_literal"],
     )
-    def test_unsynthesisable_terminal_shapes_have_no_pattern(self, body: str) -> None:
-        """One regex cannot say which slice of the text each occurrence took."""
-        node = node_for(body)
-        assert isinstance(node, am.TerminalNode)
-        assert model_for(body).plans["target"].terminals[0].pattern is None
+    def test_a_step_records_its_bounds_and_disposition(
+        self, body: str, step: tuple[str, bool, bool, str | None, int, float]
+    ) -> None:
+        assert self.steps(body)[0] == step
+
+    def test_a_sub_expression_alternative_is_not_walked(self) -> None:
+        body = '( a:"x" . b:/[0-9]+/ )'
+        assert isinstance(node_for(body), am.TerminalNode)
+        plan = model_for(body).plans["target"].terminals[0]
+        assert (plan.steps, plan.pattern, plan.pieces) == (None, None, ())
 
     def test_a_literal_slot_records_the_text_it_renders(self) -> None:
         """The position renders that text whatever spelling it took: the text comes from the grammar."""
@@ -713,53 +731,48 @@ class TestSynthesisPlans:
 
 
 class TestTerminalPatternComposition:
-    """A rule's terminals are concatenated into one pattern, which has to compile."""
+    """The group-name check belongs to the ``text_from:`` route, where one generated group wraps
+    one user terminal."""
 
-    def test_two_terminals_sharing_a_group_name_is_an_error(self) -> None:
-        errors = errors_for("a:/(?P<d>[0-9])/ . b:/(?P<d>[a-z])/")
-        assert len(errors) == 1
-        assert "capture group 'd' is defined more than once" in errors[0]
-        assert "make it non-capturing" in errors[0]
-
-    def test_a_group_named_like_a_generated_one_is_an_error(self) -> None:
-        errors = errors_for("a:/(?P<_ast_g0>[0-9])+/")
-        assert len(errors) == 1
-        assert "capture group '_ast_g0' is defined more than once" in errors[0]
+    @pytest.mark.parametrize(
+        ("body", "terms"),
+        [
+            ("a:/(?P<d>[0-9])/ . b:/(?P<d>[a-z])/", ["(?P<d>[0-9])", "(?P<d>[a-z])"]),
+            ("a:/(?P<_ast_g0>[0-9])+/", ["(?P<_ast_g0>[0-9])+"]),
+            ("a:/(?<=x)(?<d>[0-9])/ . b:/(?<=y)(?<d>[a-z])/", ["(?<=x)(?<d>[0-9])", "(?<=y)(?<d>[a-z])"]),
+            ("a:/(?<=x)[0-9]+/ . b:/(?<=x)[a-z]+/", ["(?<=x)[0-9]+", "(?<=x)[a-z]+"]),
+        ],
+    )
+    def test_a_walked_alternative_composes_nothing(self, body: str, terms: list[str]) -> None:
+        """Each step compiles alone, so group names in different terminals cannot collide."""
+        steps = model_for(body).plans["target"].terminals[0].steps
+        assert steps is not None
+        assert [step.term for step in steps] == terms
 
     def test_a_redirected_text_checks_its_own_item(self) -> None:
         errors = configured_errors('"<" . a:/(?P<_ast_g0>[0-9]+)/ . ">"', "rule target { text_from: a; }")
         assert len(errors) == 1
         assert "capture group '_ast_g0' is defined more than once" in errors[0]
-
-    def test_distinct_group_names_compose_into_a_pattern_that_compiles(self) -> None:
-        plan = model_for("a:/(?P<d>[0-9])/ . b:/(?P<e>[a-z])/").plans["target"].terminals[0]
-        assert plan.pattern is not None
-        assert re.fullmatch(plan.pattern, "1a") is not None
+        assert "make it non-capturing" in errors[0]
 
     def test_an_escaped_parenthesis_is_no_group(self) -> None:
         """A literal ``(?P<`` in the terminal's text defines nothing."""
-        plan = model_for(r"a:/\(\?P<d>x/ . b:/\(\?P<d>y/").plans["target"].terminals[0]
+        model = configured(r'"<" . a:/\(\?P<_ast_g0>x/ . ">"', "rule target { text_from: a; }")
+        plan = model.plans["target"].terminals[0]
         assert plan.pattern is not None
-        assert re.fullmatch(plan.pattern, "(?P<d>x(?P<d>y") is not None
+        assert re.fullmatch(plan.pattern, "(?P<_ast_g0>x") is not None
 
     def test_a_duplicate_behind_a_lookbehind_is_still_found(self) -> None:
         """``(?<=`` opens a lookbehind, so the group after it is a definition like any other."""
-        errors = errors_for("a:/(?<=x)(?P<d>[0-9])/ . b:/(?P<d>[a-z])/")
+        errors = configured_errors('"<" . a:/(?<=x)(?P<_ast_g0>[0-9])/ . ">"', "rule target { text_from: a; }")
         assert len(errors) == 1
-        assert "capture group 'd' is defined more than once" in errors[0]
+        assert "capture group '_ast_g0' is defined more than once" in errors[0]
 
-    @pytest.mark.parametrize("assertion", ["(?<=x)", "(?<!x)", "(?=x)", "(?!x)"])
-    def test_a_lookaround_defines_no_group(self, assertion: str) -> None:
-        """The same assertion twice is not a repeated group name, so the rule composes."""
-        model = model_for(f"a:/{assertion}[0-9]+/ . b:/{assertion}[a-z]+/")
+    def test_a_lookaround_defines_no_group(self) -> None:
+        model = configured('"<" . a:/(?<=x)[0-9]+/ . ">"', "rule target { text_from: a; }")
         plan = model.plans["target"].terminals[0]
         assert plan.pattern is not None
-        assert re.compile(plan.pattern).groupindex.keys() == {"_ast_g0", "_ast_g1"}
-
-    def test_two_lookbehinds_naming_one_group_after_them_are_one_error(self) -> None:
-        errors = errors_for("a:/(?<=x)(?<d>[0-9])/ . b:/(?<=y)(?<d>[a-z])/")
-        assert len(errors) == 1
-        assert "capture group 'd' is defined more than once" in errors[0]
+        assert re.compile(plan.pattern).groupindex.keys() == {"_ast_g0"}
 
 
 class TestNameHygiene:
@@ -1283,6 +1296,7 @@ class TestTextFrom:
         (plan,) = model.plans["quoted"].terminals
         assert plan.pattern == '(?P<_ast_g0>[^"]*)'
         assert [piece.label for piece in plan.pieces] == ["content"]
+        assert plan.steps is None
 
     def test_a_literal_sibling_keeps_its_position(self) -> None:
         """An included literal comes back from the grammar, so it stays a group-less piece."""

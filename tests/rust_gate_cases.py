@@ -47,7 +47,7 @@ from pathlib import Path
 from fltk.fegen import ast_config as ac
 from fltk.fegen import ast_model as am
 from fltk.fegen import ast_test_grammars as fixtures
-from fltk.fegen import gsm
+from fltk.fegen import gsm, naming
 from fltk.fegen.gsm2ast_rs import generate_ast_rs
 from fltk.fegen.gsm2parser_rs import RustParserGenerator
 from fltk.fegen.gsm2serde_rs import generate_de_rs
@@ -854,10 +854,17 @@ fn a_boolean_value_appends_the_label_of_the_alternative_it_names() {
 
 #[test]
 fn text_the_terminal_cannot_match_is_refused() {
-    let error = num("12x").to_cst().expect_err("the terminal does not accept a trailing letter");
+    let error = num("x12").to_cst().expect_err("the terminal does not accept a leading letter");
     assert_eq!(
         error.message,
-        "rule \\"num\\": text \\"12x\\" is not something the rule could have matched"
+        "rule \\"num\\": text \\"x12\\" is not something the rule could have matched"
+    );
+    // The terminal matches a prefix, and the parser commits to it: the rest is never consumed.
+    let error = num("12x").to_cst().expect_err("the terminal does not accept a trailing letter");
+    assert!(
+        error.message.contains("alternative 0 matches only its first 2 codepoint(s), and the parser commits"),
+        "{}",
+        error.message
     );
 }
 
@@ -2597,6 +2604,109 @@ fn the_content_test_leaves_a_node_kind_beside_it_alone() {
 LITERAL_SELECT_RUNTIME = _LITERAL_SELECT_PRELUDE + _literal_select_renderings() + _LITERAL_SELECT_CHECKS
 
 
+# Terminal-only `to_cst` against the generated parser, over the case list the Python suite runs
+# (`ast_test_grammars.TERMINAL_WALK_CASES`): a text the parser reads comes back as the parse's
+# children, and a text it refuses is refused.
+_TERMINAL_WALK_MACROS = """
+/// The label and text of each child of `$node`, in order.
+macro_rules! labelled_texts {
+    ($node:expr, $span:path) => {{
+        let guard = $node.read();
+        guard
+            .children()
+            .iter()
+            .map(|(label, child)| match child {
+                $span(span) => (label.clone(), span.text().map(|text| text.to_string())),
+            })
+            .collect::<Vec<_>>()
+    }};
+}
+
+/// Parse `$text` as the rule, convert it, synthesise it back, and compare the two child lists.
+/// `$literals` are the labels of the rule's literal items, the only children synthesised with no
+/// source.
+macro_rules! agrees_with_the_parser {
+    ($text:expr, $parse:ident, $type:ident, $span:path, $literals:expr) => {{
+        let text: &str = $text;
+        let literals: &[_] = $literals;
+        let mut parser = Parser::new(text, None, false);
+        let parsed = parser.$parse(0).expect("the parser must match the text");
+        // The parser counts its position in codepoints.
+        assert!(parsed.pos as usize == text.chars().count(), "the parser must consume {text:?}");
+        let value = $type::from_cst(&parsed.result).expect("a parsed CST must convert");
+        let node = value.to_cst().expect("a parsed value must synthesise");
+        let read = labelled_texts!(parsed.result, $span);
+        let walked = labelled_texts!(node, $span);
+        assert_eq!(walked.len(), read.len(), "{text:?}: the child counts differ");
+        for (index, (walked, read)) in walked.iter().zip(&read).enumerate() {
+            assert_eq!(walked.0, read.0, "{text:?}: the labels of child {index} differ");
+            let expected = if read.0.as_ref().is_some_and(|label| literals.contains(label)) {
+                None
+            } else {
+                read.1.clone()
+            };
+            assert_eq!(walked.1, expected, "{text:?}: the texts of child {index} differ");
+        }
+        assert_eq!($type::from_cst(&node).expect("a synthesised CST must convert"), value);
+    }};
+}
+
+/// The parser refuses `$text` as the rule, and `to_cst` refuses it as the rule's text.
+macro_rules! refused_like_the_parser {
+    ($text:expr, $parse:ident, $type:ident) => {{
+        let text: &str = $text;
+        let mut parser = Parser::new(text, None, false);
+        if let Some(parsed) = parser.$parse(0) {
+            assert!(parsed.pos as usize != text.chars().count(), "the parser must refuse {text:?}");
+        }
+        let value = $type {
+            text: text.to_string(),
+            span: Span::unknown(),
+        };
+        let error = value.to_cst().expect_err("text the parser refuses must not synthesise");
+        assert!(
+            error.message.contains("is not something the rule could have matched"),
+            "{}",
+            error.message
+        );
+    }};
+}
+"""
+
+
+def _terminal_walk_runtime() -> str:
+    """One `#[test]` per row of the shared terminal-walk table."""
+    types = sorted({naming.snake_to_upper_camel(rule) for rule, _, _ in fixtures.TERMINAL_WALK_CASES})
+    prelude = (
+        "//! Terminal-only `to_cst` replays the generated parser.\n\n"
+        f"use super::ast::{{{', '.join(types)}}};\n"
+        "use super::cst;\n"
+        "use super::parser::Parser;\n"
+        "use ::fltk_cst_core::Span;\n"
+    )
+    literal_labels = fixtures.literal_labels(fixtures.TERMINAL_WALK_GRAMMAR)
+    tests = []
+    for index, (rule, text, parses) in enumerate(fixtures.TERMINAL_WALK_CASES):
+        name = naming.snake_to_upper_camel(rule)
+        literal = json.dumps(text, ensure_ascii=False)
+        if parses:
+            labels = ", ".join(
+                f"cst::{name}Label::{naming.snake_to_upper_camel(label)}" for label in sorted(literal_labels[rule])
+            )
+            body = (
+                f"agrees_with_the_parser!({literal}, apply__parse_{rule}, {name}, cst::{name}Child::Span, &[{labels}]);"
+            )
+            test = f"case_{index:02}_{rule}_agrees_with_the_parser"
+        else:
+            body = f"refused_like_the_parser!({literal}, apply__parse_{rule}, {name});"
+            test = f"case_{index:02}_{rule}_is_refused_like_the_parser"
+        tests.append(f"\n#[test]\nfn {test}() {{\n    {body}\n}}\n")
+    return prelude + _TERMINAL_WALK_MACROS + "".join(tests)
+
+
+TERMINAL_WALK_RUNTIME = _terminal_walk_runtime()
+
+
 # A `multi` keyed collection whose element is the recursive type: the accumulating `from_cst`,
 # the grouped synthesis, and the equality walk's key-then-run arm, which is the one shape a
 # `Vec`-valued map makes the plain map arm unable to compile.
@@ -4326,6 +4436,8 @@ CASES = [
     ),
     # The leaf node forms of the serialize direction, built by hand and read back.
     Case("serialize", fixtures.LEAF_GRAMMAR, fixtures.LEAF_SIDECAR, runtime=SERIALIZE_RUNTIME),
+    # Terminal-only `to_cst` held to the generated parser, item by item.
+    Case("terminal_walk", fixtures.TERMINAL_WALK_GRAMMAR, runtime=TERMINAL_WALK_RUNTIME, parser=True),
     # A flattened wrapper at an optional use site, hoisting two fields into its parent.
     Case(
         "task",

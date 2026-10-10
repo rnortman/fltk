@@ -68,6 +68,9 @@ class _Link:
 _BRANCHES = (frozenset({"a"}), frozenset({"b"}))
 """One sub-expression alternation's two branches, as `check_group` reads them."""
 
+_DIGITS = astrt.TerminalStep("[0-9]+", literal=False, included=True, label=None, minimum=1, maximum=1)
+"""A terminal-only alternative's one step, `/[0-9]+/`."""
+
 
 def _rust_templates() -> list[str]:
     templates: list[str] = []
@@ -159,13 +162,18 @@ _CASES: list[tuple[str, Any, dict[str, Any]]] = [
     (
         "a terminal-only rule no split can rebuild",
         # The failure is decided before the class is touched, so nothing here has to be a node class.
-        lambda: astrt.terminal_to_cst(object(), "anything", [astrt.TerminalAlt(None, ())], "parts"),
+        lambda: astrt.terminal_to_cst(object(), "anything", [astrt.TerminalAlt(None)], "parts"),
         {"rule": "parts"},
     ),
     (
         "text a terminal-only rule could not have matched",
-        lambda: astrt.terminal_to_cst(object(), "zz", [astrt.TerminalAlt("[0-9]+", ())], "num"),
+        lambda: astrt.terminal_to_cst(object(), "zz", [astrt.TerminalAlt((_DIGITS,))], "num"),
         {"rule": "num", "text": "zz"},
+    ),
+    (
+        "text a terminal-only rule's committed alternative does not consume",
+        lambda: astrt.terminal_to_cst(object(), "42x", [astrt.TerminalAlt((_DIGITS,))], "num"),
+        {"rule": "num", "text": "42x", "index": 0, "consumed": 2},
     ),
     (
         "an item position the grammar requires a value for",

@@ -109,6 +109,7 @@ _RUNTIME_TEST_COUNTS = {
     "shapes": 5,
     "span_only": 7,
     "task": 5,
+    "terminal_walk": 19,
     "trivia_ownership": 11,
     "union_label": 5,
     "verbatim_text": 7,

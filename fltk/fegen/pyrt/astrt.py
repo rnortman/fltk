@@ -895,12 +895,84 @@ def source_span(text: str) -> terminalsrc.Span:
 
 
 @dataclasses.dataclass(frozen=True)
-class TerminalAlt:
-    """One alternative of a terminal-only rule, as a single regex over the node's text."""
+class TerminalStep:
+    """One flat item of a terminal-only alternative, consumed the way the generated parser does."""
 
-    pattern: str | None
-    pieces: tuple[tuple[str | None, str | None], ...]
-    """Per included item: its label name (``None`` when unlabeled) and capture group."""
+    term: str
+    """The literal's text, or the regex as written."""
+
+    literal: bool
+    included: bool
+    """Whether each occurrence becomes a child; a suppressed step only consumes text."""
+
+    label: str | None
+    """The CST ``Label`` member an included occurrence carries, ``None`` when unlabeled."""
+
+    minimum: int
+    maximum: float
+
+
+@dataclasses.dataclass(frozen=True)
+class TerminalAlt:
+    """One alternative of a terminal-only rule.
+
+    ``steps`` is the walk over the node's text.  ``pattern`` and ``pieces`` are the
+    ``text_from:`` route instead: the redirected text fullmatched against one terminal in a
+    named group, and per included item its label and capture group (``None`` for a literal).
+    An alternative with neither cannot be rebuilt from text.
+    """
+
+    steps: tuple[TerminalStep, ...] | None
+    pattern: str | None = None
+    pieces: tuple[tuple[str | None, str | None], ...] = ()
+
+
+def _consume(source: terminalsrc.TerminalSource, step: TerminalStep, pos: int) -> int | None:
+    """Where one occurrence of ``step`` at ``pos`` ends, consumed by the parser's own primitives."""
+    span = source.consume_literal(pos, step.term) if step.literal else source.consume_regex(pos, step.term)
+    return None if span is None else span.end
+
+
+def _occurrence_span(step: TerminalStep, text: str) -> terminalsrc.Span:
+    if step.literal:
+        # TODO(ast-synthesised-literal-spans): a literal occurrence gets no source, and the
+        # generated text accessors panic on it.
+        return terminalsrc.UnknownSpan
+    return source_span(text)
+
+
+def _walk(steps: Sequence[TerminalStep], text: str) -> tuple[list[tuple[str | None, terminalsrc.Span]], int] | None:
+    """Replay the parser's item sequence over ``text`` from its start.
+
+    Returns the included occurrences in order and where the walk stopped, or ``None`` when the
+    alternative fails.  A ``+``/``*`` step loops, stopping at the first failed or
+    non-advancing match; a single or ``?`` step consumes once and keeps even an empty match.
+    """
+    source = terminalsrc.TerminalSource(text)
+    pos = 0
+    children: list[tuple[str | None, terminalsrc.Span]] = []
+    for step in steps:
+        if step.maximum > 1:
+            start = pos
+            while True:
+                end = _consume(source, step, pos)
+                if end is None or end <= pos:
+                    break
+                if step.included:
+                    children.append((step.label, _occurrence_span(step, text[pos:end])))
+                pos = end
+            if step.minimum > 0 and pos == start:
+                return None
+            continue
+        end = _consume(source, step, pos)
+        if end is None:
+            if step.minimum > 0:
+                return None
+            continue
+        if step.included:
+            children.append((step.label, _occurrence_span(step, text[pos:end])))
+        pos = end
+    return children, pos
 
 
 def terminal_to_cst(
@@ -913,22 +985,44 @@ def terminal_to_cst(
 ) -> Any:
     """Rebuild a terminal-only rule's node by splitting its text across the grammar's items.
 
+    Alternatives are tried in grammar order and the first that matches is committed to, as
+    the parser does: if it leaves text unconsumed the text is refused rather than offered to
+    the next alternative.
+
     The node's span must carry the full text for round-tripping through ``from_cst``, which
     reads it back.  Under ``text_from:`` the text belongs to one child instead, so the node's
     own span stays unknown and ``redirected`` says so.
     """
-    if all(alternative.pattern is None for alternative in alternatives):
+    if all(alternative.steps is None and alternative.pattern is None for alternative in alternatives):
         msg = (
             f"rule {rule!r}: the rule's shape cannot be rebuilt from text — every alternative holds "
-            f"a repeated terminal, a sub-expression or a rule reference, so no split of the text "
-            f"back into children is determined; restructure the rule or convert it by hand"
+            f"a sub-expression, so no split of the text back into children is determined; "
+            f"restructure the rule or convert it by hand"
         )
         raise AstError(msg, terminalsrc.UnknownSpan)
     if not isinstance(text, str):
         msg = f"rule {rule!r}: text is {type(text).__name__}, not text"
         raise AstError(msg, terminalsrc.UnknownSpan)
-    for alternative in alternatives:
+    for index, alternative in enumerate(alternatives):
+        if alternative.steps is not None:
+            walked = _walk(alternative.steps, text)
+            if walked is None:
+                continue
+            children, consumed = walked
+            if consumed != len(text):
+                msg = (
+                    f"rule {rule!r}: text {text!r} is not something the rule could have matched — "
+                    f"alternative {index} matches only its first {consumed} codepoint(s), and the parser "
+                    f"commits to the first alternative that matches rather than trying the next"
+                )
+                raise AstError(msg, terminalsrc.UnknownSpan)
+            node = node_class(span=terminalsrc.UnknownSpan if redirected else source_span(text))
+            for label, span in children:
+                node.append(span, None if label is None else getattr(node_class.Label, label))
+            return node
         if alternative.pattern is None:
+            # TODO(ast-terminal-subexpression-walk): replay a sub-expression alternative as the
+            # parser does instead of passing over it.
             continue
         match = re.fullmatch(alternative.pattern, text)
         if match is None:

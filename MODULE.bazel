@@ -77,7 +77,8 @@ crate.spec(
 
 # Single writer for the regex engine.  fltk-parser-core compiles a grammar's terminals for
 # anchored prefix matching and fltk-ast-core compiles the same terminals for full-match
-# validation, so the two must agree on version *and* feature set: a pattern the generated
+# validation and for the anchored prefix matching that replays a terminal-only rule's parse
+# when rebuilding its CST, so the two must agree on version *and* feature set: a pattern the generated
 # parser accepts has to compile in the AST layer too.  This one spec is that agreement.
 crate.spec(
     default_features = False,

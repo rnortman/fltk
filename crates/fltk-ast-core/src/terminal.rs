@@ -5,6 +5,16 @@ use regex_automata::meta::Regex;
 
 use crate::error::AstError;
 
+/// Compile `compiled`, a form of the grammar terminal `pattern`, with the engine and settings the
+/// generated parser uses for terminals.
+///
+/// The pattern comes from a grammar the parser generator has already accepted, so one that does
+/// not compile is a generator bug rather than a user error, and this panics naming `pattern`.
+pub(crate) fn compile_terminal(pattern: &str, compiled: &str) -> Regex {
+    Regex::new(compiled)
+        .unwrap_or_else(|e| panic!("terminal pattern {pattern:?} is not supported by regex_automata::meta::Regex: {e}"))
+}
+
 /// One grammar terminal, compiled for whole-text matching.
 pub struct TerminalPattern {
     pattern: String,
@@ -12,20 +22,14 @@ pub struct TerminalPattern {
 }
 
 impl TerminalPattern {
-    /// Compile a grammar terminal.
-    ///
-    /// The pattern comes from a grammar the parser generator has already accepted, so an
-    /// unsupported one is a generator bug rather than a user error, and this panics on it.
+    /// Compile a grammar terminal; panics as [`compile_terminal`] does.
     ///
     /// The compiled form is `\A(?:<pattern>)\z`, which is what makes matching a *full* match
     /// rather than a prefix one: an alternation whose first branch matches a shorter prefix
     /// (`a|ab` against `"ab"`) must still match the whole text, as Python's
     /// `re.fullmatch` does.
     pub fn new(pattern: &str) -> Self {
-        let whole = format!(r"\A(?:{pattern})\z");
-        let regex = Regex::new(&whole).unwrap_or_else(|e| {
-            panic!("terminal pattern {pattern:?} is not supported by regex_automata::meta::Regex: {e}")
-        });
+        let regex = compile_terminal(pattern, &format!(r"\A(?:{pattern})\z"));
         Self {
             pattern: pattern.to_string(),
             regex,

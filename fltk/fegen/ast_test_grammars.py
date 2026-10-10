@@ -300,6 +300,77 @@ Byte-exact except where a sibling spelling canonicalises to the first (``grey`` 
 from it, so the two backends are held to one list.
 """
 
+TERMINAL_WALK_GRAMMAR = (
+    "competing := a:/[a-z]/+ | b:/[a-z]+/ ;\n"
+    "nullable_first := x:/a*/ . y:/b/ ;\n"
+    "optional_nullable := x:/a*/? . y:/b/ ;\n"
+    'optional_literal := sign:"-"? . d:/[0-9]+/ ;\n'
+    'repeated_literal := star:"*"+ . w:/[a-z]+/ ;\n'
+    'two_words := a:/[^ ]+/ . %" " . b:/[^ ]+/ ;\n'
+    "accented := c:/[À-ÿ]/+ ;\n"
+    "skipped_digits := %/[0-9]/* . w:/[a-z]+/ ;\n"
+    "greedy := a:/a+/ . b:/a/ ;\n"
+    "prefix := a:/a/ | b:/ab/ ;\n"
+    "mixed := p:/[a-z]/* | w:/[0-9]+/ ;\n"
+    "boundary := w:/[a-z]+/ . d:/\\b[0-9]/? . n:/[0-9]*/ ;\n"
+)
+"""Terminal-only rules whose ``to_cst`` has to replay the generated parser item by item.
+
+Every rule is text-valued, so ``to_cst`` rebuilds its children from the text alone: competing
+alternatives, nullable single and optional items, optional and repeated included literals,
+multi-byte codepoints, a suppressed repeated regex, the shapes PEG commitment refuses, and a
+``\\b`` that has to see the text before its own offset.
+"""
+
+TERMINAL_WALK_CASES: tuple[tuple[str, str, bool], ...] = (
+    ("competing", "abc", True),
+    ("nullable_first", "b", True),
+    ("nullable_first", "aab", True),
+    ("optional_nullable", "b", True),
+    ("optional_nullable", "aab", True),
+    ("optional_literal", "-5", True),
+    ("optional_literal", "5", True),
+    ("repeated_literal", "***ab", True),
+    ("two_words", "café bar", True),
+    ("accented", "Àé", True),
+    ("skipped_digits", "12ab", True),
+    ("skipped_digits", "ab", True),
+    ("prefix", "a", True),
+    ("mixed", "abc", True),
+    ("mixed", "", True),
+    ("boundary", "ab12", True),
+    ("greedy", "aa", False),
+    ("prefix", "ab", False),
+    ("mixed", "42", False),
+)
+"""``(rule, text, parses)`` over ``TERMINAL_WALK_GRAMMAR``, on both backends.
+
+Where ``parses`` holds, the generated parser reads the whole text as ``rule`` and the children
+``to_cst`` synthesises from the converted value are the parse's, label for label and text for
+text — except that a child read from a literal item, and only such a child, is synthesised with
+no source.  Where it does not, the parser refuses the text and so does ``to_cst``.  The Python
+suite parametrizes over it and the Rust gate case generates its tests from it.
+"""
+
+
+def literal_labels(grammar_text: str) -> dict[str, frozenset[str]]:
+    """Per rule of ``grammar_text``, the labels its literal items carry.
+
+    Read from the grammar rather than from the AST model's plan, so a differential suite that
+    expects a sourceless child exactly at these labels does not take its expectation from the
+    code under test.
+    """
+    return {
+        rule.name: frozenset(
+            item.label
+            for alternative in rule.alternatives
+            for item in alternative.items
+            if item.label is not None and isinstance(item.term, gsm.Literal)
+        )
+        for rule in parse_grammar(grammar_text).rules
+    }
+
+
 EXAMPLES: tuple[tuple[str, str, str], ...] = (
     ("config", CONFIG_GRAMMAR, KEYED_SIDECAR),
     ("fold", FOLD_GRAMMAR, FOLD_SIDECAR),

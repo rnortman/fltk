@@ -527,7 +527,18 @@ MIXED_TERMINAL_GRAMMAR = """
 holder := val:mixed , ";" ;
 mixed := p:/[a-z]/* | w:/[0-9]+/ ;
 """
-"""One alternative a repeated item leaves unrebuildable, one that a single regex spells."""
+"""The first alternative matches every text, so the parser commits to it whatever follows."""
+
+PARTIAL_TERMINAL_GRAMMAR = """
+holder := val:mixed , ";" ;
+mixed := ( "a" | "b" ) . x:/[0-9]/ | w:/[0-9]+/ ;
+"""
+"""A sub-expression alternative, which is not rebuilt from text, then a flat one."""
+
+SUB_EXPRESSION_TERMINAL_GRAMMAR = """
+holder := val:pick , ";" ;
+pick := ( "a" | "b" ) . x:/[0-9]/ ;
+"""
 
 
 class TestSerializeErrors:
@@ -542,25 +553,40 @@ class TestSerializeErrors:
         with pytest.raises(astrt.AstError, match="not something the rule could have matched"):
             trip.ast.StringLiteral(text="unquoted").to_cst()
 
-    def test_terminal_only_rule_whose_shape_cannot_be_split(self) -> None:
-        """A repeated included item leaves no determined split."""
+    def test_a_repeated_terminal_is_split_per_occurrence(self) -> None:
         generated = build(REPEATED_TERMINAL_GRAMMAR)
         value = generated.convert("abc;", "holder").word
         assert value.text == "abc"
-        with pytest.raises(astrt.AstError, match="rule 'word': the rule's shape cannot be rebuilt from text"):
+        node = value.to_cst()
+        assert [child.text() for _label, child in node.children] == ["a", "b", "c"]
+        assert generated.ast.Word.from_cst(node) == value
+
+    def test_terminal_only_rule_whose_shape_cannot_be_split(self) -> None:
+        """Every alternative holds a sub-expression, which the split does not replay."""
+        generated = build(SUB_EXPRESSION_TERMINAL_GRAMMAR)
+        value = generated.convert("a1;", "holder").val
+        with pytest.raises(astrt.AstError, match="rule 'pick': the rule's shape cannot be rebuilt from text"):
             value.to_cst()
+
+    def test_the_first_alternative_that_matches_is_committed_to(self) -> None:
+        """`p:/[a-z]/*` matches the empty prefix of `42`, so the parser never tries `w`."""
+        generated = build(MIXED_TERMINAL_GRAMMAR)
+        with pytest.raises(astrt.AstError, match="alternative 0 matches only its first 0 codepoint"):
+            generated.ast.Mixed(text="42").to_cst()
+        node = generated.ast.Mixed(text="abc").to_cst()
+        assert [child.text() for _label, child in node.children] == ["a", "b", "c"]
 
     def test_a_rule_only_some_of_whose_alternatives_can_be_split(self) -> None:
         """The rebuildable alternative still serves the texts it matches."""
-        generated = build(MIXED_TERMINAL_GRAMMAR)
+        generated = build(PARTIAL_TERMINAL_GRAMMAR)
         node = generated.ast.Mixed(text="42").to_cst()
         assert [child.text() for _label, child in node.children] == ["42"]
 
     def test_text_only_an_unrebuildable_alternative_could_have_matched(self) -> None:
         """The rule as a whole can be rebuilt, so the text is what the diagnostic names."""
-        generated = build(MIXED_TERMINAL_GRAMMAR)
-        with pytest.raises(astrt.AstError, match="rule 'mixed': text 'abc' is not something"):
-            generated.ast.Mixed(text="abc").to_cst()
+        generated = build(PARTIAL_TERMINAL_GRAMMAR)
+        with pytest.raises(astrt.AstError, match="rule 'mixed': text 'a1' is not something"):
+            generated.ast.Mixed(text="a1").to_cst()
 
     def test_more_values_than_the_grammar_has_positions_for(self) -> None:
         generated = build_roundtrip(PAIR_GRAMMAR, "pair")
@@ -587,6 +613,63 @@ class TestSerializeErrors:
     def test_a_value_the_sum_has_no_variant_for(self, trip: Generated) -> None:
         with pytest.raises(astrt.AstError, match="cannot synthesise from a"):
             trip.ast.value_to_cst(trip.ast.Identifier(text="oops"))
+
+
+@pytest.fixture(scope="module")
+def walk() -> Generated:
+    return build(fixtures.TERMINAL_WALK_GRAMMAR)
+
+
+def _labelled_texts(node: typing.Any) -> list[tuple[typing.Any, str | None]]:
+    return [(label, child.text()) for label, child in node.children]
+
+
+class TestTerminalWalkAgainstTheParser:
+    """Terminal-only ``to_cst`` rebuilds exactly the children the generated parser produces."""
+
+    @pytest.mark.parametrize(
+        ("rule", "text"),
+        [(rule, text) for rule, text, parses in fixtures.TERMINAL_WALK_CASES if parses],
+    )
+    def test_the_synthesised_children_are_the_parsed_ones(self, walk: Generated, rule: str, text: str) -> None:
+        parsed = parse_text(walk.parser, text, rule)
+        assert parsed.success, parsed.error_message
+        value = getattr(walk.ast, f"{rule}_from_cst")(parsed.cst)
+        node = value.to_cst()
+        read = _labelled_texts(parsed.cst)
+        walked = _labelled_texts(node)
+        assert [label for label, _ in walked] == [label for label, _ in read]
+        # A literal occurrence, and only a literal occurrence, is synthesised as the sentinel span.
+        literals = {label.upper() for label in fixtures.literal_labels(fixtures.TERMINAL_WALK_GRAMMAR)[rule]}
+        assert [text for _, text in walked] == [
+            None if label is not None and label.name in literals else read_text for label, read_text in read
+        ]
+        assert type(value).from_cst(node) == value
+
+    @pytest.mark.parametrize(
+        ("rule", "text"),
+        [(rule, text) for rule, text, parses in fixtures.TERMINAL_WALK_CASES if not parses],
+    )
+    def test_text_the_parser_refuses_is_refused(self, walk: Generated, rule: str, text: str) -> None:
+        assert not parse_text(walk.parser, text, rule).success
+        value = getattr(walk.ast, naming.snake_to_upper_camel(rule))(text=text)
+        with pytest.raises(astrt.AstError, match=f"rule '{rule}': text '{text}' is not something"):
+            value.to_cst()
+
+    def test_competing_alternatives_commit_to_the_first(self, walk: Generated) -> None:
+        """`b:/[a-z]+/` would take `abc` whole; the parser never reaches it."""
+        node = walk.ast.Competing(text="abc").to_cst()
+        assert [(label.name, child.text()) for label, child in node.children] == [("A", "a"), ("A", "b"), ("A", "c")]
+
+    def test_an_optional_literal_comes_back_only_when_present(self, walk: Generated) -> None:
+        labels = [label.name for label, _ in walk.ast.OptionalLiteral(text="-5").to_cst().children]
+        assert labels == ["SIGN", "D"]
+        labels = [label.name for label, _ in walk.ast.OptionalLiteral(text="5").to_cst().children]
+        assert labels == ["D"]
+
+    def test_a_nullable_single_item_is_appended_empty(self, walk: Generated) -> None:
+        node = walk.ast.NullableFirst(text="b").to_cst()
+        assert [child.text() for _, child in node.children] == ["", "b"]
 
 
 class TestInlineTerminalFields:

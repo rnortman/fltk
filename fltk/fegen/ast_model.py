@@ -718,16 +718,42 @@ class TerminalPiece:
 
 
 @dataclasses.dataclass(frozen=True, slots=True)
+class TerminalStep:
+    """One flat item of a terminal-only alternative, as the parser consumes it."""
+
+    term: str
+    """The literal's text or the regex, as written: never escaped and never composed."""
+
+    literal: bool
+    """``term`` is a literal, consumed by string comparison rather than as a regex."""
+
+    included: bool
+    """The item is INCLUDE; a suppressed step consumes text and contributes no child."""
+
+    label: str | None
+    """The grammar label of the item, ``None`` when it has none."""
+
+    minimum: int
+    maximum: float
+
+
+@dataclasses.dataclass(frozen=True, slots=True)
 class TerminalPlan:
     """How a terminal-only alternative splits a node's text back into children.
 
-    ``pattern`` is the whole alternative spelled as one regex, with a named capture group
-    per included regex item.  It is ``None`` when the alternative cannot be reconstructed
-    from text alone (a sub-expression, a rule reference, or a repeated included item):
-    a single regex cannot say which slice of the text each occurrence took.
+    There are two routes.  ``steps`` is the walk: the alternative's items in grammar order,
+    which the runtimes consume against the text the way the generated parser does.  It is
+    ``None`` when the alternative holds a sub-expression, which the walk does not replay, and
+    always ``None`` for a ``text_from:`` rule.
+
+    ``pattern`` and ``pieces`` are the ``text_from:`` route: the redirected item's terminal in
+    one named capture group, and the included items in grammar order.  ``pattern`` is ``None``
+    and ``pieces`` empty on a walked plan.  An alternative with neither route cannot be rebuilt
+    from text and is passed over.
     """
 
     index: int
+    steps: tuple[TerminalStep, ...] | None
     pattern: str | None
     pieces: tuple[TerminalPiece, ...]
 
@@ -742,8 +768,6 @@ class SynthesisPlan:
 
 
 _GROUP_PREFIX = "_ast_g"
-
-_QUANTIFIER_SUFFIX = {(1, 1): "", (0, 1): "?", (0, math.inf): "*", (1, math.inf): "+"}
 
 # A group name's first character rules out `(?<=` and `(?<!`, which open a lookbehind rather
 # than a group and whose body would otherwise be read as a name up to some later `>`.  `(?P<=`
@@ -866,35 +890,28 @@ def _alt_plan(
 
 
 def _terminal_plan(index: int, items: gsm.Items) -> TerminalPlan:
-    parts: list[str] = []
-    pieces: list[TerminalPiece] = []
-    unsupported = TerminalPlan(index=index, pattern=None, pieces=())
+    """The walk over one alternative of a terminal-only rule: one step per item."""
+    steps: list[TerminalStep] = []
     for item in items.items:
         if item.disposition == gsm.Disposition.INLINE:
             msg = f"{ce.INLINE_NOT_EXPANDED_MSG} (item {item!r})"
             raise ValueError(msg)
         term = item.term
-        if isinstance(term, gsm.Literal):
-            pattern = re.escape(term.value)
-        elif isinstance(term, gsm.Regex):
-            pattern = term.value
-        else:
-            return unsupported
-        bounds = _item_bounds(item)
-        if item.disposition != gsm.Disposition.INCLUDE:
-            parts.append(f"(?:{pattern}){_QUANTIFIER_SUFFIX[bounds]}")
-            continue
-        if bounds != (1, 1):
-            # TODO(ast-terminal-repeat-synthesis): split the text per occurrence instead.
-            return unsupported
-        if isinstance(term, gsm.Regex):
-            group = f"{_GROUP_PREFIX}{len(pieces)}"
-            parts.append(f"(?P<{group}>{pattern})")
-            pieces.append(TerminalPiece(label=item.label, group=group))
-        else:
-            parts.append(f"(?:{pattern})")
-            pieces.append(TerminalPiece(label=item.label, group=None))
-    return TerminalPlan(index=index, pattern="".join(parts), pieces=tuple(pieces))
+        if not isinstance(term, (gsm.Literal, gsm.Regex)):
+            # TODO(ast-terminal-subexpression-walk): replay a sub-expression as the parser does.
+            return TerminalPlan(index=index, steps=None, pattern=None, pieces=())
+        minimum, maximum = _item_bounds(item)
+        steps.append(
+            TerminalStep(
+                term=term.value,
+                literal=isinstance(term, gsm.Literal),
+                included=item.disposition == gsm.Disposition.INCLUDE,
+                label=item.label,
+                minimum=minimum,
+                maximum=maximum,
+            )
+        )
+    return TerminalPlan(index=index, steps=tuple(steps), pattern=None, pieces=())
 
 
 def _text_from_plan(index: int, items: gsm.Items, label: str) -> TerminalPlan:
@@ -918,7 +935,7 @@ def _text_from_plan(index: int, items: gsm.Items, label: str) -> TerminalPlan:
         elif isinstance(term, gsm.Regex):
             own = term.value
         else:
-            return TerminalPlan(index=index, pattern=None, pieces=())
+            return TerminalPlan(index=index, steps=None, pattern=None, pieces=())
         if item.label == label:
             group = f"{_GROUP_PREFIX}{len(pieces)}"
             pattern = f"(?P<{group}>{own})"
@@ -926,8 +943,8 @@ def _text_from_plan(index: int, items: gsm.Items, label: str) -> TerminalPlan:
         else:
             pieces.append(TerminalPiece(label=item.label, group=None))
     if pattern is None:
-        return TerminalPlan(index=index, pattern=None, pieces=())
-    return TerminalPlan(index=index, pattern=pattern, pieces=tuple(pieces))
+        return TerminalPlan(index=index, steps=None, pattern=None, pieces=())
+    return TerminalPlan(index=index, steps=None, pattern=pattern, pieces=tuple(pieces))
 
 
 @dataclasses.dataclass(frozen=True, slots=True)
@@ -2670,14 +2687,14 @@ class _ModelBuilder:
                     )
 
     def check_terminal_pattern(self, rule_name: str, plan: TerminalPlan) -> None:
-        """The pattern that rebuilds one alternative's text has to compile.
+        """The pattern that rebuilds a ``text_from:`` alternative's text has to compile.
 
-        Text synthesis spells a whole alternative as a single regex, wrapping each included
-        regex item in a named group of its own.  That composition is an artifact nothing else
-        has ever validated — the parser generators saw only the individual terminals — so a
-        group name two of the rule's terminals both define, or one that collides with the
-        generated prefix, would reach a regex engine only at the first serialize: a panic on
-        the Rust backend, a raw ``re.error`` on the Python one.
+        That route wraps the redirected item's terminal in a named group of its own, an
+        artifact the parser generators never saw, so a group name in the terminal that
+        collides with the generated prefix would reach a regex engine only at the first
+        serialize: a panic on the Rust backend, a raw ``re.error`` on the Python one.  A walked
+        alternative compiles each terminal alone, exactly as the parser does, and has nothing
+        to check here.
         """
         if plan.pattern is None:
             return
@@ -2685,7 +2702,7 @@ class _ModelBuilder:
             self.error(
                 f"Rule {rule_name!r}: the capture group {name!r} is defined more than once in the "
                 f"pattern that rebuilds this rule's text, which no regex engine compiles — a named "
-                f"group in a terminal-only rule must be unique across the alternative and must not "
+                f"group in a redirected terminal must be unique and must not "
                 f"start with {_GROUP_PREFIX!r}; rename it, or make it non-capturing (`(?:...)`)"
             )
 

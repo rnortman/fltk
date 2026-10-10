@@ -317,6 +317,34 @@ pub struct Num { pub text: String, pub span: Span }
 quote-stripping idiom: `quoted := %"'" . value:/[a-z]+/ . %"'"` with `text_from: value;`).
 A `type:` coercion replaces `text: String` with `value: <coerced type>`.
 
+`to_cst` rebuilds the node's children from `text` by replaying the generated parser over it,
+item by item. Literal and regex items with any quantifier, included or suppressed, come back as
+the children the parser would have produced: `word := c:/[a-z]/+` on `abc` gives three `c`
+children, and an optional item is a child exactly when the text has it. The replay follows the
+parser's rules, not a regex engine's:
+
+- **Ordered choice commits.** The first alternative that matches a prefix of the text is the one
+  the parser takes, and the text must then be fully consumed — `t := a:/a/ | b:/ab/` refuses `ab`,
+  because the parser takes `a`, commits, and leaves `b` unread. The error names the alternative
+  and how many codepoints it consumed.
+- **Items are greedy and never give back.** `t := a:/a+/ . b:/a/` refuses `aa`: `a` takes both
+  characters and `b` has nothing left, exactly as in the parser.
+- **A sub-expression is not replayed.** A rule whose every alternative holds a parenthesised
+  sub-expression is refused at `to_cst` (restructure the rule, or use `text_from:`). In a rule
+  that mixes such an alternative with flat ones, the sub-expression alternative is passed over:
+  a text the parser would have read through it may come back split by a later flat alternative
+  instead, and a text the parser would have refused after committing to it may be accepted
+  through a later flat alternative. This is a known limitation, tracked as
+  `ast-terminal-subexpression-walk` in `TODO.md`.
+- **Context outside the node is gone.** The replay reproduces the parse of the node's text on
+  its own, not the parse the node came from, because the text is all the AST keeps. A terminal
+  regex that reads context outside its own match — `^`, `$`, `\A`, `\z`, `\b`, `\B`, lookahead,
+  lookbehind — or whose match depends on what follows it, such as an alternation whose earlier
+  branch is longer (`abc|a`), sees only the node's text. Such a rule may refuse or split
+  differently text that parsed fine inside a larger document: in a rule with several
+  alternatives, an earlier alternative that failed in the document can take the text. FLTK does
+  not try to recover the context.
+
 ### Folds
 
 `fold_left: op;` / `fold_right: op;` on a rule shaped `operand , (op , operand)*` turns the flat
@@ -689,8 +717,10 @@ deliberately differs from the input:
 3. **`multi` maps** render in grouped order.
 
 `unparse_str` / `unparse` go through `to_cst` first, so every refusal `to_cst` can raise — an
-unplaceable value, a text that would not re-parse, an empty `multi` group — surfaces here as an
-`AstError` before any rendering happens.
+unplaceable value, a text that would not re-parse, an empty `multi` group, a terminal-only rule's
+text that the replayed parser cannot match or leaves partly unconsumed, a terminal-only rule whose
+every alternative holds a sub-expression (see [Terminal-only rules](#terminal-only-rules)) —
+surfaces here as an `AstError` before any rendering happens.
 
 ## Labeling literals
 

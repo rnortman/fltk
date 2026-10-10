@@ -1593,18 +1593,35 @@ class TestReverseConverters:
     """``to_cst`` on the forms whose whole CST node comes out of their own value."""
 
     def test_a_terminal_rule_gets_one_static_holding_its_alternatives(self, leaf_src: str) -> None:
-        """The patterns are data; the regexes behind them are compiled on first use."""
+        """The steps are data; the regexes behind them are compiled on first use."""
         assert (
             "static _TAG_TERMINALS: ::fltk_ast_core::TerminalShape =\n"
             "    ::fltk_ast_core::TerminalShape::new(&[\n"
-            "        ::fltk_ast_core::TerminalAlt {\n"
-            '            pattern: Some("(?:\\\\#)(?P<_ast_g1>[a-z]+)"),\n'
-            '            groups: &[None, Some("_ast_g1")],\n'
-            "        },\n"
-            "        ::fltk_ast_core::TerminalAlt {\n"
-            '            pattern: Some("(?P<_ast_g0>[A-Z]+)"),\n'
-            '            groups: &[Some("_ast_g0")],\n'
-            "        },\n"
+            "        ::fltk_ast_core::TerminalAlt::Walk(&[\n"
+            "            ::fltk_ast_core::TerminalStep {\n"
+            '                term: "#",\n'
+            "                literal: true,\n"
+            "                included: true,\n"
+            "                minimum: 1,\n"
+            "                maximum: 1,\n"
+            "            },\n"
+            "            ::fltk_ast_core::TerminalStep {\n"
+            '                term: "[a-z]+",\n'
+            "                literal: false,\n"
+            "                included: true,\n"
+            "                minimum: 1,\n"
+            "                maximum: 1,\n"
+            "            },\n"
+            "        ]),\n"
+            "        ::fltk_ast_core::TerminalAlt::Walk(&[\n"
+            "            ::fltk_ast_core::TerminalStep {\n"
+            '                term: "[A-Z]+",\n'
+            "                literal: false,\n"
+            "                included: true,\n"
+            "                minimum: 1,\n"
+            "                maximum: 1,\n"
+            "            },\n"
+            "        ]),\n"
             "    ]);\n"
         ) in leaf_src
 
@@ -1617,7 +1634,7 @@ class TestReverseConverters:
             "        let text = self.text.as_str();\n"
             '        let split = _NUM_TERMINALS.split(text, "num")?;\n'
             "        let mut cst_node = cst::Num::new(::fltk_ast_core::source_span(text));\n"
-            "        cst_node.push_child(Some(cst::NumLabel::D), cst::NumChild::Span(split.spans[0].clone()));\n"
+            "        cst_node.push_child(Some(cst::NumLabel::D), cst::NumChild::Span(split.pieces[0][0].clone()));\n"
             "        Ok(cst_node.into())\n"
             "    }\n"
             "}"
@@ -1627,10 +1644,14 @@ class TestReverseConverters:
         body = block(leaf_src, "impl Tag {\n    /// Synthesise")
         assert "if split.alternative == 0 {" in body
         # The `$`-included literal takes a position; only the regex item takes a span from the split.
-        assert "cst_node.push_child(None, cst::TagChild::Span(split.spans[0].clone()));" in body
-        assert "cst_node.push_child(Some(cst::TagLabel::Name), cst::TagChild::Span(split.spans[1].clone()));" in body
+        assert "cst_node.push_child(None, cst::TagChild::Span(split.pieces[0][0].clone()));" in body
+        assert (
+            "cst_node.push_child(Some(cst::TagLabel::Name), cst::TagChild::Span(split.pieces[1][0].clone()));" in body
+        )
         assert "} else if split.alternative == 1 {" in body
-        assert "cst_node.push_child(Some(cst::TagLabel::Name), cst::TagChild::Span(split.spans[0].clone()));" in body
+        assert (
+            "cst_node.push_child(Some(cst::TagLabel::Name), cst::TagChild::Span(split.pieces[0][0].clone()));" in body
+        )
 
     def test_alternatives_pushing_the_same_children_share_one_arm(self) -> None:
         """Identical blocks in one `if` chain are a clippy error under `-D warnings`."""
@@ -1654,7 +1675,17 @@ class TestReverseConverters:
         body = block(leaf_src, "impl Quoted {\n    /// Synthesise")
         assert "let cst_node = cst::Quoted::new" not in body
         assert "let mut cst_node = cst::Quoted::new(::fltk_cst_core::Span::unknown());" in body
-        assert "push_child(Some(cst::QuotedLabel::Content)" in body
+        assert "Some(cst::QuotedLabel::Content)" in body
+
+    def test_a_redirected_rule_gets_a_redirect_table(self, leaf_src: str) -> None:
+        assert (
+            "        ::fltk_ast_core::TerminalAlt::Redirected {\n"
+            '            pattern: "(?P<_ast_g0>[^\\"]*)",\n'
+            '            groups: &[Some("_ast_g0")],\n'
+            "        },\n"
+        ) in leaf_src
+        body = block(leaf_src, "impl Quoted {\n    /// Synthesise")
+        assert "split.pieces[0][0].clone()" in body
 
     def test_an_integer_coercion_renders_natively(self, leaf_src: str) -> None:
         """The member is the width itself, so there is no range left to check."""
@@ -1727,23 +1758,52 @@ class TestReverseConverters:
         # An enum-shaped rule carries no text at all, so it has no table either way.
         assert "_METRIC_TYPE_TERMINALS" not in config_src
 
-    def test_a_shape_no_split_can_rebuild_still_gets_a_table(self) -> None:
-        """A repeated included item leaves no determined split, which the runtime reports."""
+    def test_a_repeated_item_pushes_one_child_per_occurrence(self) -> None:
         src = generate("parts := p:/[a-z]/* ;")
         assert (
             "static _PARTS_TERMINALS: ::fltk_ast_core::TerminalShape =\n"
             "    ::fltk_ast_core::TerminalShape::new(&[\n"
-            "        ::fltk_ast_core::TerminalAlt {\n"
-            "            pattern: None,\n"
-            "            groups: &[],\n"
-            "        },\n"
+            "        ::fltk_ast_core::TerminalAlt::Walk(&[\n"
+            "            ::fltk_ast_core::TerminalStep {\n"
+            '                term: "[a-z]",\n'
+            "                literal: false,\n"
+            "                included: true,\n"
+            "                minimum: 0,\n"
+            "                maximum: ::fltk_ast_core::UNBOUNDED,\n"
+            "            },\n"
+            "        ]),\n"
             "    ]);\n"
         ) in src
         body = block(src, "impl Parts {\n    /// Synthesise")
-        # Nothing is appended, so the node needs no `mut` — and the split still runs, because it
-        # is what refuses the text.
-        assert '        let _split = _PARTS_TERMINALS.split(text, "parts")?;\n' in body
-        assert "        let cst_node = cst::Parts::new(::fltk_ast_core::source_span(text));\n" in body
+        assert (
+            "        for span in &split.pieces[0] {\n"
+            "            cst_node.push_child(Some(cst::PartsLabel::P), cst::PartsChild::Span(span.clone()));\n"
+            "        }\n"
+        ) in body
+
+    def test_an_optional_included_literal_pushes_in_a_loop(self) -> None:
+        """An absent optional item has no occurrence, so even a literal is pushed per occurrence."""
+        body = block(generate('mark := w:/[a-z]+/ . bang:"!"? ;'), "impl Mark {\n    /// Synthesise")
+        assert "cst::MarkChild::Span(split.pieces[0][0].clone())" in body
+        assert "for span in &split.pieces[1] {" in body
+
+    @pytest.mark.parametrize(
+        ("grammar", "rule", "alternative"),
+        [
+            ('mark := %"<" . %/[a-z]+/ . %">" ;', "mark", "::fltk_ast_core::TerminalAlt::Walk(&["),
+            ('mark := ( "a" | "b" ) . %/[0-9]/ ;', "mark", "::fltk_ast_core::TerminalAlt::Unsupported,"),
+        ],
+        ids=["wholly_suppressed", "sub_expression"],
+    )
+    def test_an_alternative_that_pushes_nothing_still_splits(self, grammar: str, rule: str, alternative: str) -> None:
+        """Nothing is appended, so the node needs no `mut` — and the split still runs, because it
+        is what refuses the text."""
+        src = generate(grammar)
+        assert f"        {alternative}\n" in src
+        cls = rule.capitalize()
+        body = block(src, f"impl {cls} {{\n    /// Synthesise")
+        assert f'        let _split = _{rule.upper()}_TERMINALS.split(text, "{rule}")?;\n' in body
+        assert f"        let cst_node = cst::{cls}::new(::fltk_ast_core::source_span(text));\n" in body
 
 
 MERGED_GRAMMAR = 'import := "import" : name:word | "import" : name:word : "as" : alias:word ;\nword := w:/[a-z]+/ ;\n'

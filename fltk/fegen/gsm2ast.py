@@ -81,6 +81,25 @@ def _tuple_literal(members: Sequence[str]) -> str:
     return f"({', '.join(members)},)" if members else "()"
 
 
+def _label_member(label: str | None) -> str:
+    return "None" if label is None else repr(label.upper())
+
+
+def _terminal_alt(plan: am.TerminalPlan) -> str:
+    """One alternative's entry in a terminal-only rule's table: its walk, or its redirect pattern."""
+    if plan.steps is not None:
+        steps = [
+            f"astrt.TerminalStep({step.term!r}, literal={step.literal}, included={step.included}, "
+            f"label={_label_member(step.label)}, minimum={step.minimum}, maximum={_count(step.maximum)})"
+            for step in plan.steps
+        ]
+        return f"astrt.TerminalAlt({_tuple_literal(steps)})"
+    if plan.pattern is None:
+        return "astrt.TerminalAlt(None)"
+    pieces = [f"({_label_member(piece.label)}, {piece.group!r})" for piece in plan.pieces]
+    return f"astrt.TerminalAlt(None, {plan.pattern!r}, {_tuple_literal(pieces)})"
+
+
 def _frozenset_literal(names: Iterable[str]) -> str:
     members = ", ".join(f'"{name}"' for name in sorted(names))
     return f"frozenset({{{members}}})" if members else "frozenset()"
@@ -1288,11 +1307,7 @@ class AstGenerator:
                 self.separate()
                 self.emit(f"{self.terminal_constant(rule_name)} = (")
                 for plan in self.model.plans[rule_name].terminals:
-                    pieces = [
-                        f"({'None' if piece.label is None else repr(piece.label.upper())}, {piece.group!r})"
-                        for piece in plan.pieces
-                    ]
-                    self.emit(f"    astrt.TerminalAlt({plan.pattern!r}, {_tuple_literal(pieces)}),")
+                    self.emit(f"    {_terminal_alt(plan)},")
                 self.emit(")")
 
     def emit_sum_converters(self) -> None:

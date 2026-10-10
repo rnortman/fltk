@@ -125,6 +125,7 @@ _SNIPPETS = [
     ("leading_ws", "7"),
     ("kw_labels", "abc#3"),
     ("quoted", "'ab5'"),
+    ("quoted", "'ab'"),
     ("mixed_opt", "ab3"),
     # Recursion
     ("expr", "1+2+3"),
@@ -411,3 +412,19 @@ def test_the_reverse_direction_builds_python_nodes_from_a_rust_derived_value(lay
     assert isinstance(rebuilt, layer.parser.cst_module.Stmt)
     assert rebuilt.kind == layer.rust_cst("stmt", "x = y").kind
     assert layer.convert("stmt", rebuilt) == from_rust
+
+
+@pytest.mark.parametrize("text", ["'ab5'", "'ab'"], ids=["tail", "no_tail"])
+def test_a_terminal_rule_with_an_optional_item_synthesises_the_parsed_children(layer: Layer, text: str) -> None:
+    """`quoted`'s optional `tail` is rebuilt from the text as the parser reads it, from either backend.
+
+    Both values are Python AST values, so both `to_cst` calls build Python nodes; the parse they
+    are compared with is the Python backend's.
+    """
+    parsed = [(label, child.text()) for label, child in layer.py_cst("quoted", text).children]
+    for value in layer.convert_both("quoted", text):
+        rebuilt = value.to_cst()
+        # A suppressed quote is never a child; every included item is a regex, so every
+        # synthesised child carries its own text.
+        assert [(label, child.text()) for label, child in rebuilt.children] == parsed
+        assert layer.convert("quoted", rebuilt) == value

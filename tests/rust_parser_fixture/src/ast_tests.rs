@@ -5,7 +5,7 @@
 mod tests {
     use crate::ast::{
         self, Atom, Colour, ColourValue, DecimalVal, Entries, MultiEntries, Name, Nest, NestInner, NestSum, NestSumAlt1,
-        Num, SumChain, SumChainBinary, UuidVal, Val,
+        Num, Quoted, SumChain, SumChainBinary, UuidVal, Val,
     };
     use crate::cst;
     use crate::unparser::Unparser;
@@ -194,6 +194,41 @@ mod tests {
         // refusal reaches `unparse_str` naming the rule and the text it could not have matched.
         assert!(error.message.contains("rule \"num\""), "got {:?}", error.message);
         assert!(error.message.contains("\"not a number\""), "got {:?}", error.message);
+    }
+
+    /// The label and text of each child of a `quoted` node, in order.
+    fn quoted_children(node: &fltk_cst_core::Shared<cst::Quoted>) -> Vec<(Option<cst::QuotedLabel>, Option<String>)> {
+        let guard = node.read();
+        guard
+            .children()
+            .iter()
+            .map(|(label, child)| match child {
+                cst::QuotedChild::Span(span) => (label.clone(), span.text().map(|text| text.to_string())),
+            })
+            .collect()
+    }
+
+    #[test]
+    fn a_terminal_rule_with_an_optional_item_synthesises_the_parsed_children() {
+        // `quoted`'s text is one string, so `to_cst` has to replay the parser over it: the
+        // optional `tail` is a child exactly when the text has one.
+        for (text, expected) in [
+            (
+                "'ab5'",
+                vec![
+                    (Some(cst::QuotedLabel::Value), Some("ab".to_string())),
+                    (Some(cst::QuotedLabel::Tail), Some("5".to_string())),
+                ],
+            ),
+            ("'ab'", vec![(Some(cst::QuotedLabel::Value), Some("ab".to_string()))]),
+        ] {
+            let parsed = parse_cst!(text, apply__parse_quoted, "quoted");
+            assert_eq!(quoted_children(&parsed), expected, "the parse of {text:?}");
+            let value = Quoted::from_cst(&parsed).expect("a parsed CST must convert");
+            let node = value.to_cst().expect("a parsed value must synthesise");
+            assert_eq!(quoted_children(&node), expected, "the synthesis of {text:?}");
+            assert_eq!(Quoted::from_cst(&node).expect("a synthesised CST must convert"), value);
+        }
     }
 
     // ------------------------------------------------------------------

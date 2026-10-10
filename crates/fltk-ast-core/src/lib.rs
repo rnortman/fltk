@@ -21,7 +21,8 @@
 //! - [`TerminalPattern`], [`LazyTerminal`] and [`validate_terminal`], which keep serialization
 //!   honest: text that would not re-parse is refused rather than written out.
 //! - [`TerminalShape`], the other half of that honesty in the serialize direction: it splits a
-//!   terminal-only rule's text back across the grammar items it was read from.
+//!   terminal-only rule's text back across the grammar items it was read from, replaying the
+//!   parser item by item.
 //! - [`merged_span`], the lenient covering span a diagnostic over a run of children is
 //!   positioned at.
 //! - The [`dispatch`] tables, which say which alternative of a sum rule a node's labeled
@@ -70,7 +71,7 @@ pub use error::{AstError, ParseToAstError};
 pub use spans::merged_span;
 pub use synth::{
     alternative_fits, check_consumed, check_group, filled, hoisted, multi_values, populated, spelled, unplaceable,
-    unrenderable, wrapper_needed, Cursor, TerminalAlt, TerminalShape, TerminalSplit, UNBOUNDED,
+    unrenderable, wrapper_needed, Cursor, TerminalAlt, TerminalShape, TerminalSplit, TerminalStep, UNBOUNDED,
 };
 pub use terminal::{source_span, text_span, validate_terminal, LazyTerminal, TerminalPattern};
 

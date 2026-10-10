@@ -2965,16 +2965,37 @@ class RustAstGenerator:
             f"    {_RUNTIME}::TerminalShape::new(&[",
         )
         for plan in self.model.plans[rule_name].terminals:
-            groups = ", ".join(
-                "None" if piece.group is None else f"Some({_string(piece.group)})" for piece in plan.pieces
-            )
-            self.emit(
-                f"        {_RUNTIME}::TerminalAlt {{",
-                f"            pattern: {'None' if plan.pattern is None else f'Some({_string(plan.pattern)})'},",
-                f"            groups: &[{groups}],",
-                "        },",
-            )
+            self.emit(*(f"        {line}" for line in self.terminal_alt(plan)))
         self.emit("    ]);")
+
+    @staticmethod
+    def terminal_alt(plan: am.TerminalPlan) -> list[str]:
+        """One alternative's entry in a terminal-only rule's table: its walk, or its redirect."""
+        if plan.steps is not None:
+            lines = [f"{_RUNTIME}::TerminalAlt::Walk(&["]
+            for step in plan.steps:
+                lines.extend(
+                    [
+                        f"    {_RUNTIME}::TerminalStep {{",
+                        f"        term: {_string(step.term)},",
+                        f"        literal: {'true' if step.literal else 'false'},",
+                        f"        included: {'true' if step.included else 'false'},",
+                        f"        minimum: {step.minimum},",
+                        f"        maximum: {_count(step.maximum)},",
+                        "    },",
+                    ]
+                )
+            lines.append("]),")
+            return lines
+        if plan.pattern is None:
+            return [f"{_RUNTIME}::TerminalAlt::Unsupported,"]
+        groups = ", ".join("None" if piece.group is None else f"Some({_string(piece.group)})" for piece in plan.pieces)
+        return [
+            f"{_RUNTIME}::TerminalAlt::Redirected {{",
+            f"    pattern: {_string(plan.pattern)},",
+            f"    groups: &[{groups}],",
+            "},",
+        ]
 
     def terminal_to_cst_body(self, rule_name: str, node: am.TerminalNode, held: _Held) -> list[str]:
         """Statements splitting a terminal-only rule's text back across the grammar's items."""
@@ -3024,12 +3045,25 @@ class RustAstGenerator:
         return _Value(f"{_RUNTIME}::scalar::render_{coercion.name}({held.reference})")
 
     def terminal_arm(self, rule_name: str, plan: am.TerminalPlan) -> list[str]:
-        """Statements appending the children one alternative's items take from the split."""
+        """Statements appending the children one alternative's items take from the split.
+
+        The split holds one entry per included item, in grammar order, with one span per
+        occurrence: an item the grammar requires exactly once has exactly one.
+        """
+        if plan.steps is not None:
+            pieces = [(step.label, (step.minimum, step.maximum) == (1, 1)) for step in plan.steps if step.included]
+        else:
+            pieces = [(piece.label, True) for piece in plan.pieces]
+        text = self.child_variant(rule_name, gshape.TEXT_KIND)
         lines: list[str] = []
-        for index, piece in enumerate(plan.pieces):
-            label = "None" if piece.label is None else self.child_label(rule_name, piece.label)
-            child = f"{self.child_variant(rule_name, gshape.TEXT_KIND)}(split.spans[{index}].clone())"
-            lines.extend(self.push_lines(label, child))
+        for index, (label_name, once) in enumerate(pieces):
+            label = "None" if label_name is None else self.child_label(rule_name, label_name)
+            if once:
+                lines.extend(self.push_lines(label, f"{text}(split.pieces[{index}][0].clone())"))
+                continue
+            lines.append(f"for span in &split.pieces[{index}] {{")
+            lines.extend(f"    {line}" for line in self.push_lines(label, f"{text}(span.clone())"))
+            lines.append("}")
         return lines
 
     def enum_to_cst_body(self, rule_name: str, node: am.EnumNode, held: _Held) -> list[str]:

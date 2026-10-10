@@ -7,9 +7,12 @@
 //! was read from.
 //!
 //! A terminal-only rule carries text and nothing else, so the split is the inverse of reading
-//! the node's own span: the alternative is spelled as one regex with a capture group per
-//! included regex item, and each group's slice becomes a child span carrying its own source.
-//! A literal item's text is a grammar constant, so its child carries position only.
+//! the node's own span: the alternative's items are consumed from the text one at a time, exactly
+//! as the generated parser consumes them — each regex an anchored prefix match at the current
+//! offset, each literal a string comparison, a `+`/`*` item looping until a match fails or makes
+//! no progress, and the first alternative that matches committed to. Each included regex
+//! occurrence becomes a child span carrying its own source. A literal occurrence's text is a
+//! grammar constant, so its child carries position only.
 //!
 //! Every other node form holds fields instead, and the walk hands each field's values to the item
 //! positions that can carry them: [`Cursor`] is that distribution, and [`check_group`],
@@ -22,27 +25,55 @@ use std::fmt::Debug;
 use std::sync::OnceLock;
 
 use fltk_cst_core::Span;
+use regex_automata::meta::Regex;
+use regex_automata::{Anchored, Input};
 
 use crate::error::AstError;
-use crate::terminal::{source_span, TerminalPattern};
+use crate::terminal::{compile_terminal, source_span, TerminalPattern};
 
 /// The upper bound of an item position the grammar sets no limit on.
 pub const UNBOUNDED: usize = usize::MAX;
 
-/// One alternative of a terminal-only rule, as a single regex over the node's text.
+/// One flat item of a terminal-only alternative, consumed the way the generated parser does.
 #[derive(Debug)]
-pub struct TerminalAlt {
-    /// The whole alternative as one regex, or `None` when its shape is not rebuildable.
-    ///
-    /// A repeated included item, a sub-expression or a rule reference leaves no determined split:
-    /// one regex cannot say which slice of the text each occurrence took.
-    pub pattern: Option<&'static str>,
+pub struct TerminalStep {
+    /// The literal's text, or the regex as the grammar spells it.
+    pub term: &'static str,
+    /// `term` is a literal, consumed by string comparison rather than as a regex.
+    pub literal: bool,
+    /// Each occurrence becomes a child; a suppressed step only consumes text.
+    pub included: bool,
+    /// 0 for an optional item, 1 otherwise.
+    pub minimum: usize,
+    /// 1, or [`UNBOUNDED`] for a repeated item.
+    pub maximum: usize,
+}
 
-    /// Per included item, in grammar order, the capture group holding that item's text.
-    ///
-    /// `None` is a literal: its text comes back from the grammar rather than from the value, so
-    /// the child it contributes carries position only.
-    pub groups: &'static [Option<&'static str>],
+/// One alternative of a terminal-only rule.
+#[derive(Debug)]
+pub enum TerminalAlt {
+    /// The alternative's items in grammar order, walked over the node's text.
+    Walk(&'static [TerminalStep]),
+
+    /// A `text_from:` alternative: the redirected text against its own terminal in one group.
+    Redirected {
+        /// The redirected item's terminal, wrapped in a named capture group.
+        pattern: &'static str,
+        /// Per included item, in grammar order, the capture group holding its text; `None` is a
+        /// literal, whose text comes back from the grammar and whose child carries position only.
+        groups: &'static [Option<&'static str>],
+    },
+
+    /// An alternative holding a sub-expression, which is not rebuilt from text.
+    Unsupported,
+}
+
+#[derive(Debug)]
+enum CompiledAlt {
+    /// One prefix-matching regex per step; `None` for a literal step.
+    Walk(Vec<Option<Regex>>),
+    Redirected(TerminalPattern),
+    Unsupported,
 }
 
 /// A terminal-only rule's alternatives, compiled on first use.
@@ -52,7 +83,7 @@ pub struct TerminalAlt {
 #[derive(Debug)]
 pub struct TerminalShape {
     alternatives: &'static [TerminalAlt],
-    compiled: OnceLock<Vec<Option<TerminalPattern>>>,
+    compiled: OnceLock<Vec<CompiledAlt>>,
 }
 
 /// Which alternative a node's text came from, and what each of its items takes.
@@ -61,8 +92,71 @@ pub struct TerminalSplit {
     /// The index of the matched alternative, in grammar order.
     pub alternative: usize,
 
-    /// One span per included item of that alternative, in grammar order.
-    pub spans: Vec<Span>,
+    /// One entry per included item of that alternative, in grammar order, holding one span per
+    /// occurrence of the item.
+    pub pieces: Vec<Vec<Span>>,
+}
+
+/// Where one occurrence of `step` starting at byte `pos` ends, or `None` when it does not match.
+fn consume(step: &TerminalStep, regex: Option<&Regex>, text: &str, pos: usize) -> Option<usize> {
+    match regex {
+        None => text[pos..].starts_with(step.term).then(|| pos + step.term.len()),
+        // The whole text stays the haystack so assertions see what precedes `pos`, as the
+        // parser's own search does.
+        Some(regex) => regex
+            .search(&Input::new(text).anchored(Anchored::Yes).span(pos..text.len()))
+            .map(|found| found.end()),
+    }
+}
+
+fn occurrence_span(step: &TerminalStep, text: &str) -> Span {
+    if step.literal {
+        // TODO(ast-synthesised-literal-spans): a literal occurrence gets no source, and the
+        // generated text accessors panic on it.
+        Span::unknown()
+    } else {
+        source_span(text)
+    }
+}
+
+/// Replay one alternative's items over `text` from its start.
+///
+/// Returns the included occurrences grouped per included step and the byte offset the walk
+/// stopped at, or `None` when the alternative fails. A repeated step loops, stopping at the first
+/// failed or non-advancing match; a single or optional step consumes once and keeps even an empty
+/// match.
+fn walk(steps: &[TerminalStep], regexes: &[Option<Regex>], text: &str) -> Option<(Vec<Vec<Span>>, usize)> {
+    let mut pos = 0;
+    let mut pieces = Vec::new();
+    for (step, regex) in steps.iter().zip(regexes) {
+        let mut occurrences = Vec::new();
+        if step.maximum > 1 {
+            let start = pos;
+            while let Some(end) = consume(step, regex.as_ref(), text, pos) {
+                if end <= pos {
+                    break;
+                }
+                if step.included {
+                    occurrences.push(occurrence_span(step, &text[pos..end]));
+                }
+                pos = end;
+            }
+            if step.minimum > 0 && pos == start {
+                return None;
+            }
+        } else if let Some(end) = consume(step, regex.as_ref(), text, pos) {
+            if step.included {
+                occurrences.push(occurrence_span(step, &text[pos..end]));
+            }
+            pos = end;
+        } else if step.minimum > 0 {
+            return None;
+        }
+        if step.included {
+            pieces.push(occurrences);
+        }
+    }
+    Some((pieces, pos))
 }
 
 impl TerminalShape {
@@ -74,59 +168,92 @@ impl TerminalShape {
         }
     }
 
-    fn compiled(&self) -> &[Option<TerminalPattern>] {
+    fn compiled(&self) -> &[CompiledAlt] {
         self.compiled
             .get_or_init(|| {
                 self.alternatives
                     .iter()
-                    .map(|alternative| alternative.pattern.map(TerminalPattern::new))
+                    .map(|alternative| match alternative {
+                        TerminalAlt::Walk(steps) => CompiledAlt::Walk(
+                            steps
+                                .iter()
+                                .map(|step| (!step.literal).then(|| compile_terminal(step.term, step.term)))
+                                .collect(),
+                        ),
+                        TerminalAlt::Redirected { pattern, .. } => CompiledAlt::Redirected(TerminalPattern::new(pattern)),
+                        TerminalAlt::Unsupported => CompiledAlt::Unsupported,
+                    })
                     .collect()
             })
             .as_slice()
     }
 
-    /// Split `text` across the items of the first alternative that matches all of it.
+    /// Split `text` across the items of the first alternative that matches it.
     ///
-    /// Alternatives are tried in grammar order, which is the order the parser would have tried
-    /// them in, so a text two alternatives could have matched comes back as the one the parse
-    /// would have produced.
+    /// Alternatives are tried in grammar order and the first one that matches is committed to, as
+    /// the parser does: if it leaves text unconsumed, the text is refused rather than offered to
+    /// the next alternative.
     pub fn split(&self, text: &str, rule: &str) -> Result<TerminalSplit, AstError> {
-        if self.alternatives.iter().all(|alternative| alternative.pattern.is_none()) {
+        if self
+            .alternatives
+            .iter()
+            .all(|alternative| matches!(alternative, TerminalAlt::Unsupported))
+        {
             // Must stay on one line: the parity test matches this template verbatim.
             return Err(AstError::new(
-                format!("rule {rule:?}: the rule's shape cannot be rebuilt from text — every alternative holds a repeated terminal, a sub-expression or a rule reference, so no split of the text back into children is determined; restructure the rule or convert it by hand"),
+                format!("rule {rule:?}: the rule's shape cannot be rebuilt from text — every alternative holds a sub-expression, so no split of the text back into children is determined; restructure the rule or convert it by hand"),
                 Span::unknown(),
             ));
         }
         for (index, (alternative, compiled)) in self.alternatives.iter().zip(self.compiled()).enumerate() {
-            let Some(pattern) = compiled else {
-                continue;
-            };
-            let regex = pattern.regex();
-            let mut captures = regex.create_captures();
-            regex.captures(text, &mut captures);
-            if !captures.is_match() {
-                continue;
-            }
-            let spans = alternative
-                .groups
-                .iter()
-                .map(|group| match group {
-                    // TODO(ast-synthesised-literal-spans): a non-captured piece gets no source,
-                    // and the generated text accessors panic on it.
-                    None => Span::unknown(),
-                    Some(name) => {
-                        let matched = captures
-                            .get_group_by_name(name)
-                            .expect("every group the plan names wraps a required item of the same pattern");
-                        source_span(&text[matched.start..matched.end])
+            match (alternative, compiled) {
+                (TerminalAlt::Walk(steps), CompiledAlt::Walk(regexes)) => {
+                    let Some((pieces, end)) = walk(steps, regexes, text) else {
+                        continue;
+                    };
+                    if end != text.len() {
+                        let consumed = text[..end].chars().count();
+                        // Must stay on one line: the parity test matches this template verbatim.
+                        return Err(AstError::new(
+                            format!("rule {rule:?}: text {text:?} is not something the rule could have matched — alternative {index} matches only its first {consumed} codepoint(s), and the parser commits to the first alternative that matches rather than trying the next"),
+                            Span::unknown(),
+                        ));
                     }
-                })
-                .collect();
-            return Ok(TerminalSplit {
-                alternative: index,
-                spans,
-            });
+                    return Ok(TerminalSplit {
+                        alternative: index,
+                        pieces,
+                    });
+                }
+                (TerminalAlt::Redirected { groups, .. }, CompiledAlt::Redirected(pattern)) => {
+                    let regex = pattern.regex();
+                    let mut captures = regex.create_captures();
+                    regex.captures(text, &mut captures);
+                    if !captures.is_match() {
+                        continue;
+                    }
+                    let pieces = groups
+                        .iter()
+                        .map(|group| match group {
+                            // TODO(ast-synthesised-literal-spans): a non-captured piece gets no
+                            // source, and the generated text accessors panic on it.
+                            None => vec![Span::unknown()],
+                            Some(name) => {
+                                let matched = captures
+                                    .get_group_by_name(name)
+                                    .expect("every group the plan names wraps a required item of the same pattern");
+                                vec![source_span(&text[matched.start..matched.end])]
+                            }
+                        })
+                        .collect();
+                    return Ok(TerminalSplit {
+                        alternative: index,
+                        pieces,
+                    });
+                }
+                // TODO(ast-terminal-subexpression-walk): replay a sub-expression alternative as the
+                // parser does instead of passing over it.
+                _ => continue,
+            }
         }
         Err(AstError::new(
             format!("rule {rule:?}: text {text:?} is not something the rule could have matched"),
@@ -365,74 +492,104 @@ mod tests {
         assert!(!spelled("", &["gray"]));
     }
 
-    /// `number := val:/-?[0-9]+/ ;` — one included regex item.
-    static NUMBER: TerminalShape = TerminalShape::new(&[TerminalAlt {
-        pattern: Some("(?P<g0>-?[0-9]+)"),
-        groups: &[Some("g0")],
-    }]);
+    /// An included regex step.
+    const fn re(term: &'static str, minimum: usize, maximum: usize) -> TerminalStep {
+        TerminalStep {
+            term,
+            literal: false,
+            included: true,
+            minimum,
+            maximum,
+        }
+    }
 
-    /// `string_literal := "\"" . content:/[^"]*/ . "\"" ;` — suppressed quotes, so the
-    /// pattern carries them and only the content is a child.
-    static STRING_LITERAL: TerminalShape = TerminalShape::new(&[TerminalAlt {
-        pattern: Some("(?:\")(?P<g0>[^\"]*)(?:\")"),
-        groups: &[Some("g0")],
-    }]);
+    /// An included literal step.
+    const fn lit(term: &'static str, minimum: usize, maximum: usize) -> TerminalStep {
+        TerminalStep {
+            term,
+            literal: true,
+            included: true,
+            minimum,
+            maximum,
+        }
+    }
+
+    /// `step` with its occurrences consumed but not kept.
+    const fn suppressed(step: TerminalStep) -> TerminalStep {
+        TerminalStep {
+            included: false,
+            ..step
+        }
+    }
+
+    /// `number := val:/-?[0-9]+/ ;` — one included regex item.
+    static NUMBER: TerminalShape = TerminalShape::new(&[TerminalAlt::Walk(&[re("-?[0-9]+", 1, 1)])]);
+
+    /// `string_literal := "\"" . content:/[^"]*/ . "\"" ;` — suppressed quotes, so only the content
+    /// is a child.
+    static STRING_LITERAL: TerminalShape = TerminalShape::new(&[TerminalAlt::Walk(&[
+        suppressed(lit("\"", 1, 1)),
+        re("[^\"]*", 1, 1),
+        suppressed(lit("\"", 1, 1)),
+    ])]);
 
     /// `tag := $"#" . name:/[a-z]+/ ;` — an included literal beside an included regex, so the
     /// first child carries position only.
-    static TAG: TerminalShape = TerminalShape::new(&[TerminalAlt {
-        pattern: Some("(?:#)(?P<g0>[a-z]+)"),
-        groups: &[None, Some("g0")],
-    }]);
+    static TAG: TerminalShape = TerminalShape::new(&[TerminalAlt::Walk(&[lit("#", 1, 1), re("[a-z]+", 1, 1)])]);
 
-    /// Two alternatives, the first of which also matches a prefix of the second's texts.
+    /// `either := a:/[a-z]+/ | a:/[a-z]+/ . b:/[0-9]+/ ;` — the first alternative also matches a
+    /// prefix of the second's texts.
     static EITHER: TerminalShape = TerminalShape::new(&[
-        TerminalAlt {
-            pattern: Some("(?P<g0>[a-z]+)"),
-            groups: &[Some("g0")],
-        },
-        TerminalAlt {
-            pattern: Some("(?P<g0>[a-z]+)(?P<g1>[0-9]+)"),
-            groups: &[Some("g0"), Some("g1")],
-        },
+        TerminalAlt::Walk(&[re("[a-z]+", 1, 1)]),
+        TerminalAlt::Walk(&[re("[a-z]+", 1, 1), re("[0-9]+", 1, 1)]),
     ]);
 
-    /// A rule whose every alternative holds a repeated included item.
-    static UNSPLITTABLE: TerminalShape = TerminalShape::new(&[TerminalAlt {
-        pattern: None,
-        groups: &[],
+    /// A rule whose every alternative holds a sub-expression.
+    static UNSPLITTABLE: TerminalShape = TerminalShape::new(&[TerminalAlt::Unsupported]);
+
+    /// `mixed := p:/[a-z]/* | w:/[0-9]+/ ;` — the first alternative matches every text, empty or not.
+    static MIXED: TerminalShape = TerminalShape::new(&[
+        TerminalAlt::Walk(&[re("[a-z]", 0, UNBOUNDED)]),
+        TerminalAlt::Walk(&[re("[0-9]+", 1, 1)]),
+    ]);
+
+    /// `partial := ( "a" | "b" ) . x:/[0-9]/ | w:/[0-9]+/ ;` — a sub-expression alternative, then
+    /// a walked one.
+    static PARTIAL: TerminalShape =
+        TerminalShape::new(&[TerminalAlt::Unsupported, TerminalAlt::Walk(&[re("[0-9]+", 1, 1)])]);
+
+    /// `quoted := "<" . content:/[a-z]+/ . ">" ;` under `text_from: content;`.
+    static REDIRECTED: TerminalShape = TerminalShape::new(&[TerminalAlt::Redirected {
+        pattern: "(?P<g1>[a-z]+)",
+        groups: &[None, Some("g1"), None],
     }]);
 
-    /// `parts := p:/[a-z]/* | w:/[0-9]+/ ;` — one alternative a repeated item leaves
-    /// unrebuildable, one a single regex spells.
-    static MIXED: TerminalShape = TerminalShape::new(&[
-        TerminalAlt {
-            pattern: None,
-            groups: &[],
-        },
-        TerminalAlt {
-            pattern: Some("(?P<g0>[0-9]+)"),
-            groups: &[Some("g0")],
-        },
-    ]);
+    /// Every included piece's occurrence texts, `None` for a sourceless span.
+    fn texts(split: &TerminalSplit) -> Vec<Vec<Option<String>>> {
+        split
+            .pieces
+            .iter()
+            .map(|piece| piece.iter().map(|span| span.text().map(|text| text.to_string())).collect())
+            .collect()
+    }
 
-    fn texts(split: &TerminalSplit) -> Vec<Option<String>> {
-        split.spans.iter().map(|span| span.text().map(|text| text.to_string())).collect()
+    fn one(text: &str) -> Vec<Option<String>> {
+        vec![Some(text.to_string())]
     }
 
     #[test]
     fn one_included_regex_takes_the_whole_text() {
         let split = NUMBER.split("-42", "number").expect("the text is a number");
         assert_eq!(split.alternative, 0);
-        assert_eq!(texts(&split), vec![Some("-42".to_string())]);
+        assert_eq!(texts(&split), vec![one("-42")]);
     }
 
     #[test]
     fn a_child_span_carries_its_own_source() {
         let split = NUMBER.split("7", "number").expect("the text is a number");
-        assert!(split.spans[0].has_source());
-        assert_eq!(split.spans[0].start(), 0);
-        assert_eq!(split.spans[0].end(), 1);
+        assert!(split.pieces[0][0].has_source());
+        assert_eq!(split.pieces[0][0].start(), 0);
+        assert_eq!(split.pieces[0][0].end(), 1);
     }
 
     #[test]
@@ -440,53 +597,81 @@ mod tests {
         let split = STRING_LITERAL
             .split("\"hi\"", "string_literal")
             .expect("the text is a quoted string");
-        assert_eq!(texts(&split), vec![Some("hi".to_string())]);
+        assert_eq!(texts(&split), vec![one("hi")]);
     }
 
     #[test]
     fn an_included_literal_contributes_a_sourceless_child() {
         let split = TAG.split("#host", "tag").expect("the text is a tag");
-        assert_eq!(split.spans[0], Span::unknown());
-        assert_eq!(texts(&split), vec![None, Some("host".to_string())]);
+        assert_eq!(split.pieces[0], vec![Span::unknown()]);
+        assert_eq!(texts(&split), vec![vec![None], one("host")]);
     }
 
     #[test]
-    fn a_group_is_read_by_name_not_by_position() {
-        // The user's own terminal carries a capture group of its own, which shifts every index.
-        static NESTED: TerminalShape = TerminalShape::new(&[TerminalAlt {
-            pattern: Some("(?:(a|b)+)(?P<g0>[0-9]+)"),
-            groups: &[Some("g0")],
-        }]);
+    fn a_terminal_with_groups_of_its_own_is_matched_alone() {
+        static NESTED: TerminalShape =
+            TerminalShape::new(&[TerminalAlt::Walk(&[re("(a|b)+", 1, 1), re("(?P<d>[0-9])+", 1, 1)])]);
         let split = NESTED.split("ab12", "nested").expect("the text matches");
-        assert_eq!(texts(&split), vec![Some("12".to_string())]);
+        assert_eq!(texts(&split), vec![one("ab"), one("12")]);
     }
 
     #[test]
     fn the_split_is_measured_in_codepoints() {
-        static UNICODE: TerminalShape = TerminalShape::new(&[TerminalAlt {
-            pattern: Some("(?P<g0>[^ ]+)(?: )(?P<g1>[^ ]+)"),
-            groups: &[Some("g0"), Some("g1")],
-        }]);
+        static UNICODE: TerminalShape = TerminalShape::new(&[TerminalAlt::Walk(&[
+            re("[^ ]+", 1, 1),
+            suppressed(lit(" ", 1, 1)),
+            re("[^ ]+", 1, 1),
+        ])]);
         let split = UNICODE.split("café bar", "unicode").expect("the text matches");
-        assert_eq!(split.spans[0].end(), 4, "four codepoints, five bytes");
-        assert_eq!(texts(&split), vec![Some("café".to_string()), Some("bar".to_string())]);
+        assert_eq!(split.pieces[0][0].end(), 4, "four codepoints, five bytes");
+        assert_eq!(texts(&split), vec![one("café"), one("bar")]);
+    }
+
+    #[test]
+    fn a_repeated_multibyte_step_takes_one_codepoint_per_occurrence() {
+        static LATIN: TerminalShape = TerminalShape::new(&[TerminalAlt::Walk(&[re("[À-ÿ]", 1, UNBOUNDED)])]);
+        let split = LATIN.split("Àé", "latin").expect("the text matches");
+        assert_eq!(texts(&split), vec![vec![Some("À".to_string()), Some("é".to_string())]]);
+        assert!(split.pieces[0].iter().all(|span| span.end() == 1));
     }
 
     #[test]
     fn alternatives_are_tried_in_grammar_order() {
-        let split = EITHER.split("ab12", "either").expect("the second alternative matches");
-        assert_eq!(split.alternative, 1);
-        assert_eq!(texts(&split), vec![Some("ab".to_string()), Some("12".to_string())]);
         let split = EITHER.split("ab", "either").expect("the first alternative matches");
         assert_eq!(split.alternative, 0);
+        let error = EITHER.split("ab12", "either").expect_err("the first alternative commits");
+        assert_eq!(
+            error.message,
+            "rule \"either\": text \"ab12\" is not something the rule could have matched — alternative 0 matches only its first 2 codepoint(s), and the parser commits to the first alternative that matches rather than trying the next"
+        );
+    }
+
+    #[test]
+    fn a_failed_alternative_falls_through_to_the_next() {
+        static ALTS: TerminalShape = TerminalShape::new(&[
+            TerminalAlt::Walk(&[re("[0-9]+", 1, 1)]),
+            TerminalAlt::Walk(&[re("[a-z]+", 1, 1)]),
+        ]);
+        let split = ALTS.split("abc", "alts").expect("the second alternative matches");
+        assert_eq!(split.alternative, 1);
+        assert_eq!(texts(&split), vec![one("abc")]);
+    }
+
+    #[test]
+    fn the_commitment_counts_codepoints_consumed() {
+        let error = MIXED.split("éa", "mixed").expect_err("alternative 0 matches nothing and commits");
+        assert!(error.message.contains("matches only its first 0 codepoint(s)"), "{}", error.message);
+        static PREFIX: TerminalShape = TerminalShape::new(&[TerminalAlt::Walk(&[re("[^ ]+", 1, 1)])]);
+        let error = PREFIX.split("éé x", "prefix").expect_err("the space is never consumed");
+        assert!(error.message.contains("matches only its first 2 codepoint(s)"), "{}", error.message);
     }
 
     #[test]
     fn a_partial_match_is_not_a_match() {
-        let error = NUMBER.split("42x", "number").expect_err("the terminal does not accept a trailing letter");
+        let error = NUMBER.split("x42", "number").expect_err("the terminal does not accept a leading letter");
         assert_eq!(
             error.message,
-            "rule \"number\": text \"42x\" is not something the rule could have matched"
+            "rule \"number\": text \"x42\" is not something the rule could have matched"
         );
         assert_eq!(error.span, Span::unknown());
     }
@@ -494,38 +679,144 @@ mod tests {
     #[test]
     fn a_shape_no_alternative_can_rebuild_names_the_shape_not_the_text() {
         let error = UNSPLITTABLE.split("anything", "parts").expect_err("no alternative can be rebuilt");
-        assert!(
-            error.message.starts_with("rule \"parts\": the rule's shape cannot be rebuilt from text"),
-            "{}",
-            error.message
+        assert_eq!(
+            error.message,
+            "rule \"parts\": the rule's shape cannot be rebuilt from text — every alternative holds a sub-expression, so no split of the text back into children is determined; restructure the rule or convert it by hand"
         );
-        assert!(error.message.contains("restructure the rule or convert it by hand"));
     }
 
     #[test]
     fn a_rebuildable_alternative_still_serves_the_text_it_matches() {
-        let split = MIXED.split("42", "parts").expect("the second alternative matches");
+        let split = PARTIAL.split("42", "partial").expect("the second alternative matches");
         assert_eq!(split.alternative, 1, "the index counts the unrebuildable alternative too");
-        assert_eq!(texts(&split), vec![Some("42".to_string())]);
+        assert_eq!(texts(&split), vec![one("42")]);
+        assert!(MIXED.split("42", "mixed").is_err(), "alternative 0 matches nothing and commits");
+        let split = MIXED.split("abc", "mixed").expect("alternative 0 matches");
+        assert_eq!(
+            texts(&split),
+            vec![vec![Some("a".to_string()), Some("b".to_string()), Some("c".to_string())]]
+        );
     }
 
     #[test]
     fn text_only_an_unrebuildable_alternative_could_have_matched_names_the_text() {
         // Some alternative can be rebuilt, so the shape is not what is being reported: the text
         // is, even though it is the rule's shape that leaves it nowhere to go.
-        let error = MIXED.split("abc", "parts").expect_err("no rebuildable alternative matches");
+        let error = PARTIAL.split("abc", "partial").expect_err("no rebuildable alternative matches");
         assert_eq!(
             error.message,
-            "rule \"parts\": text \"abc\" is not something the rule could have matched"
+            "rule \"partial\": text \"abc\" is not something the rule could have matched"
         );
     }
 
     #[test]
+    fn a_star_step_may_take_no_occurrence() {
+        static STAR: TerminalShape = TerminalShape::new(&[TerminalAlt::Walk(&[re("[a-z]", 0, UNBOUNDED), re("[0-9]+", 1, 1)])]);
+        let split = STAR.split("42", "star").expect("zero letters, then digits");
+        assert_eq!(texts(&split), vec![vec![], one("42")]);
+    }
+
+    #[test]
+    fn an_optional_step_is_kept_when_present_and_omitted_when_absent() {
+        static OPTIONAL: TerminalShape = TerminalShape::new(&[TerminalAlt::Walk(&[
+            re("[a-z]+", 1, 1),
+            re("[0-9]", 0, 1),
+            lit("!", 0, 1),
+        ])]);
+        let split = OPTIONAL.split("ab5!", "optional").expect("every item is present");
+        assert_eq!(texts(&split), vec![one("ab"), one("5"), vec![None]]);
+        let split = OPTIONAL.split("ab", "optional").expect("the optional items are absent");
+        assert_eq!(texts(&split), vec![one("ab"), vec![], vec![]]);
+    }
+
+    #[test]
+    fn a_nullable_single_step_is_kept_empty() {
+        static NULLABLE: TerminalShape = TerminalShape::new(&[TerminalAlt::Walk(&[re("a*", 1, 1), re("b", 1, 1)])]);
+        let split = NULLABLE.split("b", "nullable").expect("`a*` matches empty");
+        assert_eq!(texts(&split), vec![one(""), one("b")]);
+        static NULLABLE_OPTIONAL: TerminalShape =
+            TerminalShape::new(&[TerminalAlt::Walk(&[re("a*", 0, 1), re("b", 1, 1)])]);
+        let split = NULLABLE_OPTIONAL.split("b", "nullable").expect("`a*?` matches empty");
+        assert_eq!(texts(&split), vec![one(""), one("b")]);
+        static EMPTY: TerminalShape = TerminalShape::new(&[TerminalAlt::Walk(&[re("a*", 1, 1)])]);
+        let split = EMPTY.split("", "empty").expect("the empty text is matched");
+        assert_eq!(texts(&split), vec![one("")]);
+    }
+
+    #[test]
+    fn a_nullable_plus_step_fails_on_no_progress() {
+        static PLUS: TerminalShape = TerminalShape::new(&[TerminalAlt::Walk(&[re("a*", 1, UNBOUNDED)])]);
+        let error = PLUS.split("", "plus").expect_err("`(a*)+` cannot advance");
+        assert_eq!(error.message, "rule \"plus\": text \"\" is not something the rule could have matched");
+    }
+
+    #[test]
+    fn a_repeat_never_gives_back_what_it_took() {
+        static GREEDY: TerminalShape = TerminalShape::new(&[TerminalAlt::Walk(&[re("a+", 1, 1), re("a", 1, 1)])]);
+        let error = GREEDY.split("aa", "greedy").expect_err("`a+` takes both, leaving `a` nothing");
+        assert_eq!(error.message, "rule \"greedy\": text \"aa\" is not something the rule could have matched");
+    }
+
+    #[test]
+    fn a_shorter_first_alternative_commits() {
+        static SHORT: TerminalShape = TerminalShape::new(&[
+            TerminalAlt::Walk(&[re("a", 1, 1)]),
+            TerminalAlt::Walk(&[re("ab", 1, 1)]),
+        ]);
+        let error = SHORT.split("ab", "short").expect_err("the parser commits to `a`");
+        assert!(error.message.contains("alternative 0 matches only its first 1 codepoint(s)"), "{}", error.message);
+    }
+
+    #[test]
+    fn a_repeated_literal_gives_one_sourceless_child_per_occurrence() {
+        static BANGS: TerminalShape = TerminalShape::new(&[TerminalAlt::Walk(&[lit("!", 1, UNBOUNDED), re("[a-z]", 1, 1)])]);
+        let split = BANGS.split("!!!x", "bangs").expect("three bangs and a letter");
+        assert_eq!(texts(&split), vec![vec![None, None, None], one("x")]);
+    }
+
+    #[test]
+    fn a_suppressed_repeat_consumes_without_children() {
+        static SKIP: TerminalShape = TerminalShape::new(&[TerminalAlt::Walk(&[
+            suppressed(re("[0-9]", 0, UNBOUNDED)),
+            re("[a-z]+", 1, 1),
+        ])]);
+        let split = SKIP.split("123ab", "skip").expect("digits, then letters");
+        assert_eq!(texts(&split), vec![one("ab")]);
+    }
+
+    #[test]
+    fn a_later_step_sees_what_precedes_it() {
+        // `^` holds only at the start of the whole text, as in the parser's own search.
+        static ANCHOR: TerminalShape = TerminalShape::new(&[TerminalAlt::Walk(&[re("[a-z]", 1, 1), re("^[0-9]", 1, 1)])]);
+        assert!(ANCHOR.split("a1", "anchor").is_err());
+        static BOUNDARY: TerminalShape = TerminalShape::new(&[TerminalAlt::Walk(&[re("[a-z]+", 1, 1), re(r"\b[0-9]", 0, 1)])]);
+        let split = BOUNDARY.split("ab", "boundary").expect("letters alone");
+        assert_eq!(texts(&split), vec![one("ab"), vec![]]);
+    }
+
+    #[test]
+    fn a_redirected_text_is_matched_whole_against_its_own_terminal() {
+        let split = REDIRECTED.split("abc", "quoted").expect("the content matches");
+        assert_eq!(texts(&split), vec![vec![None], one("abc"), vec![None]]);
+        assert!(REDIRECTED.split("ab1", "quoted").is_err());
+    }
+
+    #[test]
+    fn an_unsupported_alternative_is_passed_over_beside_a_redirect() {
+        static BESIDE: TerminalShape = TerminalShape::new(&[
+            TerminalAlt::Unsupported,
+            TerminalAlt::Redirected {
+                pattern: "(?P<g0>[a-z]+)",
+                groups: &[Some("g0")],
+            },
+        ]);
+        let split = BESIDE.split("abc", "beside").expect("the redirect matches");
+        assert_eq!(split.alternative, 1);
+    }
+
+    #[test]
     fn compilation_happens_once() {
-        static ONCE: TerminalShape = TerminalShape::new(&[TerminalAlt {
-            pattern: Some("(?P<g0>[0-9]+)"),
-            groups: &[Some("g0")],
-        }]);
+        static ONCE: TerminalShape = TerminalShape::new(&[TerminalAlt::Walk(&[re("[0-9]+", 1, 1)])]);
         let first = ONCE.compiled().as_ptr();
         assert!(ONCE.split("1", "once").is_ok());
         assert_eq!(first, ONCE.compiled().as_ptr(), "the compiled alternatives are cached");

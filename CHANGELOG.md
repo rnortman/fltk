@@ -200,6 +200,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- AST: `to_cst` on a *terminal-only* rule (a rule made only of literals and regexes, whose AST
+  node is just its `text`) now works when an included item is optional or repeated —
+  `word := c:/[a-z]/+ ;`, or the `?` in `tail:/[0-9]/?`. These used to convert in fine and then
+  raise `AstError` on the way back out, on both backends. The rebuild now replays the generated
+  parser item by item (greedy, no backtracking, first matching alternative wins), so `to_cst`
+  also refuses text the parser would reject, which it previously sometimes accepted (e.g.
+  `t := a:/a+/ . b:/a/ ;` on `aa`). Still refused: sub-expressions inside a terminal-only rule.
+  Regexes using lookaround or word boundaries cannot be replayed faithfully, since the
+  surrounding source is gone. See `docs/ast-guide.md`. No generated type changes; the internal
+  runtime tables `TerminalAlt` / `TerminalSplit` change shape, which only matters to generated
+  code from a different fltk version.
 - Language server: semantic highlighting no longer slows down quadratically with file size.
   Working out which highlight wins where rules overlap used to rescan every highlighted region
   for every boundary, so a few-thousand-line file under a `.fltklsp` spec with `def`/`ref`
