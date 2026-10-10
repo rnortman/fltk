@@ -1,9 +1,10 @@
 """Unit tests for the resolver plugin loader and contract dataclasses (M5).
 
 ``load_resolver`` must accept both ``module.path:attr`` and ``path/to/file.py:attr`` specs,
-handle a bare instance or a zero-argument factory, default the attribute to ``create_resolver``,
-and fail with an actionable :class:`ResolverError` on every misconfiguration -- so the CLI can
-map it to a stderr message and exit 1 before any protocol I/O.
+classified by the spec text alone, handle a bare instance or a zero-argument factory, default
+the attribute to ``create_resolver``, and fail with an actionable :class:`ResolverError` on
+every misconfiguration -- so the CLI can map it to a stderr message and exit 1 before any
+protocol I/O.
 """
 
 from __future__ import annotations
@@ -86,14 +87,18 @@ def broken_factory():
 """
 
 
-@pytest.fixture
-def resolver_module(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> str:
-    """Write ``_RESOLVER_SRC`` as an importable module on ``sys.path``; return its module name."""
-    module_name = "_fltk_test_resolver_mod"
-    (tmp_path / f"{module_name}.py").write_text(_RESOLVER_SRC)
+def _install_module(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, module_name: str, body: str) -> str:
+    """Write ``body`` as module ``module_name`` importable from ``sys.path``, evicting any cached copy."""
+    (tmp_path / f"{module_name}.py").write_text(body)
     monkeypatch.syspath_prepend(str(tmp_path))
     monkeypatch.delitem(sys.modules, module_name, raising=False)
     return module_name
+
+
+@pytest.fixture
+def resolver_module(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> str:
+    """Write ``_RESOLVER_SRC`` as an importable module on ``sys.path``; return its module name."""
+    return _install_module(tmp_path, monkeypatch, "_fltk_test_resolver_mod", _RESOLVER_SRC)
 
 
 @pytest.fixture
@@ -148,6 +153,88 @@ def test_file_spec_recognized_by_dot_py_even_if_absent() -> None:
     # A '.py' head is a file spec, so a missing file reports a file error (not an import error).
     with pytest.raises(ResolverError, match="does not exist"):
         load_resolver("/no/such/gear_resolver.py:create_resolver")
+
+
+# --- head classification ------------------------------------------------------------------
+
+_HINT = "to load a file instead"
+
+
+def test_bare_module_head_ignores_same_named_cwd_file(
+    resolver_module: str, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # An extension-less cwd file named exactly like the module does not divert a bare head to the
+    # file branch. Success proves import precedence; the body does not prove non-execution, since
+    # the loader would reject the suffix before reading it.
+    monkeypatch.chdir(tmp_path)
+    (tmp_path / resolver_module).write_text("raise SystemExit(3)\n")
+    r = load_resolver(f"{resolver_module}:create_resolver")
+    assert tuple(r.file_suffixes) == (".gear", ".gr")
+
+
+def test_bare_head_naming_cwd_file_is_a_module_error(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.chdir(tmp_path)
+    (tmp_path / "orphan_resolver").write_text(_RESOLVER_SRC)
+    with pytest.raises(ResolverError, match="cannot import module") as excinfo:
+        load_resolver("orphan_resolver")
+    assert _HINT in str(excinfo.value)
+
+
+def test_suffix_signal_alone_loads_file(resolver_file: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.chdir(resolver_file.parent)
+    r = load_resolver(f"{resolver_file.name}:create_resolver")
+    assert tuple(r.file_suffixes) == (".gear", ".gr")
+
+
+def test_separator_signal_alone_routes_to_file() -> None:
+    # No '.py': the separator alone routes to the file branch, whose missing-file guard answers.
+    with pytest.raises(ResolverError, match="does not exist"):
+        load_resolver("./absent.pyc")
+    with pytest.raises(ResolverError, match="does not exist"):
+        load_resolver("sub\\absent.pyc")
+
+
+@pytest.mark.parametrize(
+    ("head", "body", "expect_hint"),
+    [
+        # The head itself is missing.
+        ("fltk_no_such_module_xyz", None, True),
+        # A parent package of a dotted head is missing: the exception names the parent.
+        ("fltk_no_such_pkg_xyz.resolvers", None, True),
+        # The resolver's own dependency is missing.
+        ("_fltk_test_missing_dep_mod", "import fltk_no_such_dep_xyz\n", False),
+        # The missing dependency's name is a prefix of the head without a '.' boundary.
+        ("_fltk_test_dep_prefix_mod", "import _fltk_test_dep\n", False),
+        # A nameless ModuleNotFoundError must not crash the predicate.
+        ("_fltk_test_nameless_mnf_mod", 'raise ModuleNotFoundError("x")\n', False),
+        # A non-import exception from the module body is still a ResolverError.
+        ("_fltk_test_raising_mod", 'raise RuntimeError("boom at import")\n', False),
+    ],
+)
+def test_module_error_hint_only_for_missing_head(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, *, head: str, body: str | None, expect_hint: bool
+) -> None:
+    if body is not None:
+        _install_module(tmp_path, monkeypatch, head, body)
+    # pytest.raises(ResolverError) also asserts nothing else escaped load_resolver.
+    with pytest.raises(ResolverError, match="cannot import module") as excinfo:
+        load_resolver(head)
+    message = str(excinfo.value)
+    assert (_HINT in message) == expect_hint
+    assert f"./{head}" not in message
+
+
+@pytest.mark.parametrize("cwd_file", [False, True])
+def test_leading_dot_head_is_a_resolver_error(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, *, cwd_file: bool
+) -> None:
+    # import_module treats a leading '.' as a relative import and raises TypeError, which must still
+    # surface as a ResolverError whether or not a same-named dotfile sits in cwd.
+    monkeypatch.chdir(tmp_path)
+    if cwd_file:
+        (tmp_path / ".resolvers").write_text(_RESOLVER_SRC)
+    with pytest.raises(ResolverError, match=r"cannot import module '\.resolvers'"):
+        load_resolver(".resolvers:create_resolver")
 
 
 # --- validation failures -------------------------------------------------------------------

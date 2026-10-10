@@ -37,6 +37,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- **Breaking (narrow)** — LSP server: the `--resolver HEAD:attr` flag now decides whether `HEAD`
+  is a file or a Python module from the text alone. It is a file if it ends in `.py` or contains a
+  `/` or `\`; anything else is imported as a module. Before, a bare head like `mylang.resolvers`
+  was treated as a file whenever a file of that exact name happened to sit in the directory the
+  editor started the server in, so one configuration worked in one workspace and failed to start
+  in the next with a misleading error. To load a file without a `.py` suffix (a `.pyc`, say),
+  prefix it with `./`. When a module head cannot be found, the error now suggests this. Any failure
+  while importing a resolver module is now reported as a clean startup error rather than a
+  traceback.
 - **Breaking (narrow)** — AST, both backends: a `transparent;` (erased) product whose one label mixes a literal with a regex or
   rule reference now erases to the same payload a non-erased field of that label would carry —
   text for the literal, not a bare span. Where the label also carries a rule reference, the

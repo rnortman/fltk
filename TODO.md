@@ -39,21 +39,6 @@ bare-asserts). The design's `plumbing.parse_lsp_config` wrapper (not yet built) 
 home for this sequence; fold both helpers onto it once it lands, rather than building a throwaway
 interim shared helper. Location: `fltk/lsp/test_lsp_config.py`, `fltk/lsp/test_lsp_validation.py`.
 
-## `resolver-spec-file-recognition`
-
-`fltk/lsp/resolver.py`'s `_looks_like_path` treats a `--resolver` spec head as a file whenever
-`pathlib.Path(head).is_file()` — a cwd-relative check — even for a head that reads as a plain
-module (no `.py`, no separator). So whether `--resolver mylang.resolvers:create_resolver` imports
-the installed module `mylang.resolvers` or `exec`s a file literally named `mylang.resolvers`
-depends on the server's cwd contents. Editors commonly spawn LSP servers with cwd = workspace
-root, so a hostile project that plants a file matching a known resolver module name could get
-arbitrary Python exec'd at startup for a user who configured a bare-module resolver spec. No
-shipped config is affected (the gear demo and README use explicit `.py` paths). The fix — drop the
-bare `is_file()` recognition, keeping only the unambiguous `.py`/separator signals — contradicts
-the frozen step5 design §4.3 ("a path is recognized by an existing file"), so it requires a design
-delta before landing; do it there, not by editing the frozen doc. Location: `fltk/lsp/resolver.py`
-(`_looks_like_path`).
-
 ## `rename-guard-incomplete-scan`
 
 `ProjectNavigator.rename_hazard` (`fltk/lsp/project.py`) decides whether a same-file rename is safe

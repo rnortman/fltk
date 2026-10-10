@@ -151,10 +151,11 @@ def load_resolver(spec: str) -> Resolver:
     """Load and validate a resolver from ``SPEC``.
 
     ``SPEC`` is ``module.path:attr`` or ``path/to/file.py:attr``; the ``:attr`` is optional and
-    defaults to ``create_resolver``. A head is treated as a filesystem path when it names an
-    existing file, ends in ``.py``, or contains a path separator; otherwise it is an importable
-    module. ``attr`` names either a ``Resolver`` instance or a zero-argument factory returning
-    one -- an object without a ``resolve`` attribute that is callable is invoked.
+    defaults to ``create_resolver``. A head is treated as a filesystem path when it ends in
+    ``.py`` or contains a path separator (``/`` or ``\\``); otherwise it is an importable module.
+    The classification reads the spec text only, so a file whose name has neither signal is
+    given as ``./name.ext``. ``attr`` names either a ``Resolver`` instance or a zero-argument
+    factory returning one -- an object without a ``resolve`` attribute that is callable is invoked.
 
     Raises :class:`ResolverError` (a ``ValueError``) with an actionable message on any failure:
     a bad import, a missing/wrong-typed ``attr``, a missing ``resolve`` method, or empty or
@@ -193,14 +194,21 @@ def _split_spec(spec: str) -> tuple[str, str]:
 def _looks_like_path(head: str) -> bool:
     """Whether ``head`` should be loaded as a file rather than imported as a module.
 
-    TODO(resolver-spec-file-recognition): the bare ``is_file()`` check makes recognition depend on
-    the server's cwd -- a bare module spec (``mylang.resolvers``) is exec'd as a file when a
-    same-named file exists in cwd (e.g. a hostile workspace the editor spawned the server inside),
-    rather than imported. Narrowing recognition to the unambiguous signals (``.py``/separator) would
-    close this, but that contradicts the frozen design's "a path is recognized by an existing file"
-    rule, so it needs a design delta.
+    A head is a file iff it ends in ``.py`` or contains ``/`` or ``\\``. There is deliberately no
+    existence check: the server's cwd is chosen by the editor, so checking for a file there would
+    make the flag's meaning depend on the workspace the server is started in.
     """
-    return pathlib.Path(head).is_file() or head.endswith(".py") or "/" in head or "\\" in head
+    return head.endswith(".py") or "/" in head or "\\" in head
+
+
+def _head_not_found(exc: Exception, head: str) -> bool:
+    """Whether ``exc`` reports ``head`` itself (or a parent package of it) as missing, as opposed
+    to a module the resolver imports, a nameless ``ModuleNotFoundError``, or any other exception."""
+    return (
+        isinstance(exc, ModuleNotFoundError)
+        and exc.name is not None
+        and (exc.name == head or head.startswith(exc.name + "."))
+    )
 
 
 def _import_head(head: str) -> Any:
@@ -209,10 +217,14 @@ def _import_head(head: str) -> Any:
         raise ResolverError(msg)
     if _looks_like_path(head):
         return _import_file(head)
+    # Not just ImportError: a leading-dot head makes import_module raise TypeError (relative import
+    # without a package), and the module body itself can raise anything.
     try:
         return importlib.import_module(head)
-    except ImportError as exc:
+    except Exception as exc:
         msg = f"resolver spec: cannot import module '{head}': {exc}"
+        if _head_not_found(exc, head):
+            msg += " (to load a file instead, give a path containing a separator, such as './name.py')"
         raise ResolverError(msg) from exc
 
 
