@@ -124,7 +124,7 @@ const CONFIGS: &[(usize, usize)] = &[(80, 2), (40, 4)];
 ///
 /// Pass 1 formats the file; pass 2 pipes pass 1's output back in via stdin (which also
 /// exercises the stdin input path end-to-end with a real grammar). For every case the two
-/// passes must be byte-identical — with one documented exception.
+/// passes must be byte-identical.
 #[test]
 fn format_format_is_format() {
     let root = repo_root();
@@ -146,34 +146,10 @@ fn format_format_is_format() {
                 &format!("[{rel} w={w} i={i}] pass 2"),
             );
 
-            // TODO(formatter-group-idempotency): `rust_parser_fixture.fltkg` at 40/4 is not
-            // idempotent today — a grouped alternation re-breaks between pass 1 and pass 2,
-            // converging at pass 2 (a formatter-layout bug present in both backends, out of
-            // scope for this test addition). Pin the current behavior loudly: pass 2 differs
-            // from pass 1 but is itself a fixed point. When the formatter is fixed this
-            // assertion trips, forcing removal of this carve-out and the TODO rather than
-            // letting them go stale. All other cases keep the strict `out2 == out1` contract.
-            if *rel == "fltk/fegen/test_data/rust_parser_fixture.fltkg" && (w, i) == (40, 4) {
-                assert_ne!(
-                    out2, out1,
-                    "[{rel} w={w} i={i}] carve-out expects non-idempotency; if the formatter \
-                     was fixed, remove this carve-out and TODO(formatter-group-idempotency)"
-                );
-                let out3 = run_ok(
-                    &["-w", &ws, "-i", &is],
-                    Some(&out2),
-                    &format!("[{rel} w={w} i={i}] pass 3"),
-                );
-                assert_eq!(
-                    out3, out2,
-                    "[{rel} w={w} i={i}] expected convergence at pass 2 (out3 == out2)"
-                );
-            } else {
-                assert_eq!(
-                    out2, out1,
-                    "[{rel} w={w} i={i}] not idempotent: format(format(x)) != format(x)"
-                );
-            }
+            assert_eq!(
+                out2, out1,
+                "[{rel} w={w} i={i}] not idempotent: format(format(x)) != format(x)"
+            );
         }
     }
 }
@@ -197,7 +173,7 @@ fn golden_fegen_fltkg() {
     assert_eq!(
         out, golden,
         "fegen.fltkg 80/2 output drifted from the committed golden. If this change is \
-         intended, regenerate with:\n  cargo run --manifest-path crates/fltkfmt/Cargo.toml \
+         intended, regenerate with:\n  bazel run --run_under=\"cd $PWD &&\" //crates/fltkfmt:fltkfmt \
          -- fltk/fegen/fegen.fltkg -w 80 -i 2 > crates/fltkfmt/tests/golden/fegen.fltkg.golden"
     );
 }

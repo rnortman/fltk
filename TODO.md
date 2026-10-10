@@ -43,10 +43,6 @@ bare-asserts). The design's `plumbing.parse_lsp_config` wrapper (not yet built) 
 home for this sequence; fold both helpers onto it once it lands, rather than building a throwaway
 interim shared helper. Location: `fltk/lsp/test_lsp_config.py`, `fltk/lsp/test_lsp_validation.py`.
 
-## `formatter-group-idempotency`
-
-The formatter is not idempotent on grouped alternations at narrow widths: `fltk/fegen/test_data/rust_parser_fixture.fltkg` formatted at width 40 / indent 4 changes between pass 1 and pass 2 (a grouped alternation `( inner:rec_via_sub . "+" | inner:atom ) .` re-breaks into a multi-line `(` … `)` block on the second pass), converging only at pass 2. Single-pass cross-backend parity holds, so this is a shared formatter-layout bug present in both the Python and Rust backends, not a backend divergence. Fixing it is a formatter behavior change to both backends and was out of scope for the pure test addition that discovered it (`fltkfmt` integration tests). The idempotency integration test (`crates/fltkfmt/tests/cli.rs`, `format_format_is_format`) carves this one case out explicitly, pinning current behavior (`out2 != out1`, `out3 == out2`); when the formatter is fixed that carve-out's `assert_ne!` trips, forcing its removal alongside this entry. Location: `crates/fltkfmt/tests/cli.rs` (the `TODO(formatter-group-idempotency)` carve-out in `format_format_is_format`); the layout logic lives in the shared unparser/renderer (`fltk/unparse/` and the generated Rust unparser).
-
 ## `resolver-spec-file-recognition`
 
 `fltk/lsp/resolver.py`'s `_looks_like_path` treats a `--resolver` spec head as a file whenever
@@ -540,3 +536,23 @@ formats with the join applied or is rejected with an error, and the `gn` / `ng` 
 same text or one order is rejected. Location: `_process_range_operation` in
 `fltk/unparse/fmt_config.py`, which builds the anchor operation lists both backends' generators
 consume.
+
+## `quality-fit-cursor-hand-mirrors-output-state-machine`
+
+The group fit-check simulates the renderer's output position with its own copy of the cursor
+state machine — `column`, the layout line-start flag, "non-empty content at a line start pays the
+indent first", "a line break re-arms the flag and zeroes the column" — rather than driving the
+renderer's own: `FitCursor` against `Output::append_content` / `Output::break_line` in Rust, and
+`_fits`'s `pay_indent` / `charge` against `render`'s `append_content` / `break_line` in Python.
+Every change to how output advances (tab-width indent, display width instead of code points,
+trailing-whitespace handling) must be made at both sites in both backends, and a miss makes the
+formatter non-idempotent again — which the parity suite cannot catch when both backends drift
+together. Pull the position state into one type both the renderer and the simulation drive, in
+each backend. Needs a design pass: the renderer's cursor is `usize` and writes bytes while the
+simulation's is `isize` and only compares, and the simulation's item traversal (one
+`append_content` per `Text`, one per `Comment` line, `Nest` threading, `HardLine`
+short-circuit) stays hand-mirrored either way, so the shape of the shared type is the open
+question. The design approval for the indent-charging fix set the trigger: the next
+fit-check correction of this kind should do this instead of adding mirrored state. Location:
+`crates/fltk-unparser-core/src/render.rs` (`FitCursor`, `Output`), `fltk/unparse/renderer.py`
+(`_fits`, `render`).

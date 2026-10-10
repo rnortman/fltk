@@ -103,6 +103,33 @@ impl Output {
     }
 }
 
+/// The simulated output position inside [`Renderer::fits`].
+// TODO(quality-fit-cursor-hand-mirrors-output-state-machine): this restates the position
+// state of `Output::append_content` / `Output::break_line` rather than sharing it.
+struct FitCursor {
+    column: isize,
+    at_line_start: bool,
+}
+
+impl FitCursor {
+    /// Mirrors the indent half of [`Output::append_content`]: non-empty content at a layout
+    /// line start pays the item's indent first.
+    fn pay_indent(&mut self, nonempty: bool, indent: usize) {
+        if nonempty && self.at_line_start {
+            self.column += indent as isize;
+            self.at_line_start = false;
+        }
+    }
+
+    /// Mirrors [`Output::append_content`] for `n` columns of content. Returns whether the
+    /// content still fits in `width`.
+    fn charge(&mut self, n: isize, indent: usize, width: isize) -> bool {
+        self.pay_indent(n > 0, indent);
+        self.column += n;
+        self.column <= width
+    }
+}
+
 /// Wadler-Lindig pretty-printer for combinator documents. Port of `Renderer`.
 #[derive(Clone, Copy, Debug, Default)]
 pub struct Renderer {
@@ -183,7 +210,8 @@ impl Renderer {
                         self.config.max_width as isize - out.current_column as isize;
                     let mut test_queue: VecDeque<RenderItem> = VecDeque::new();
                     test_queue.push_back((indent, Mode::Flat, content.clone()));
-                    let chosen = if self.fits(remaining_width, test_queue) {
+                    let at_line_start = out.at_beginning_of_line;
+                    let chosen = if self.fits(remaining_width, test_queue, at_line_start) {
                         Mode::Flat
                     } else {
                         Mode::Break
@@ -210,48 +238,64 @@ impl Renderer {
 
     /// Check whether `items` fit in `width` remaining columns when rendered flat.
     ///
-    /// Port of `Renderer._fits` (`renderer.py:147`). A negative `width` never fits.
-    /// Everything is measured flat: `mode` is carried on each item but never
-    /// consulted, and `indent` is threaded for `Nest` sub-items without affecting the
-    /// column count. Unhandled node types (spacing specs, joins) contribute zero
-    /// width; `fits` is intentionally lenient about them rather than asserting they
-    /// were resolved.
-    fn fits(&self, width: isize, mut items: VecDeque<RenderItem>) -> bool {
+    /// Port of `Renderer._fits`. A negative `width` never fits. Everything is measured
+    /// flat: `mode` is carried on each item but never consulted. Indentation is charged
+    /// exactly where [`Output::append_content`] writes it — once per non-empty call made at
+    /// a layout line start, at the indent of the item making it — and the line-start flag
+    /// is re-armed exactly where [`Output::break_line`] sets it. A `Text` is one
+    /// `append_content` call; a `Comment` is one per line, with a `break_line` between.
+    /// `at_line_start` is the output's `at_beginning_of_line` when the check begins.
+    /// Unhandled node types (spacing specs, joins) contribute zero width; `fits` is
+    /// intentionally lenient about them rather than asserting they were resolved.
+    fn fits(&self, width: isize, mut items: VecDeque<RenderItem>, at_line_start: bool) -> bool {
         if width < 0 {
             return false;
         }
 
-        let mut column: isize = 0;
+        let mut cursor = FitCursor {
+            column: 0,
+            at_line_start,
+        };
 
         while let Some((indent, mode, doc)) = items.pop_front() {
             match &*doc {
                 Doc::Nil => {}
-                Doc::Text(content) | Doc::Comment(content) => {
-                    for (i, line) in content.split('\n').enumerate() {
+                Doc::Text(content) => {
+                    // A non-empty Text at a line start takes the indent once, before its first
+                    // byte, even when that byte is a newline. Continuation segments start at
+                    // physical column 0 and are never charged (`append_text` writes them
+                    // verbatim).
+                    cursor.pay_indent(!content.is_empty(), indent);
+                    for (i, segment) in content.split('\n').enumerate() {
                         if i > 0 {
-                            // Newline resets the column to 0.
-                            column = 0;
+                            cursor.column = 0;
                         }
-                        column += line.chars().count() as isize;
-                        if column > width {
+                        cursor.column += segment.chars().count() as isize;
+                        if cursor.column > width {
                             return false;
                         }
                     }
                 }
-                Doc::Line => {
-                    column += 1; // Space in flat mode.
-                    if column > width {
+                Doc::Comment(content) => {
+                    // Each comment line is its own `append_content`, after a `break_line`.
+                    for (i, comment_line) in content.split('\n').enumerate() {
+                        if i > 0 {
+                            cursor.column = 0;
+                            cursor.at_line_start = true;
+                        }
+                        if !cursor.charge(comment_line.chars().count() as isize, indent, width) {
+                            return false;
+                        }
+                    }
+                }
+                Doc::Line | Doc::Nbsp => {
+                    // One space in flat mode.
+                    if !cursor.charge(1, indent, width) {
                         return false;
                     }
                 }
                 Doc::SoftLine => {
                     // Nothing in flat mode.
-                }
-                Doc::Nbsp => {
-                    column += 1;
-                    if column > width {
-                        return false;
-                    }
                 }
                 Doc::HardLine { .. } => return false, // Forces a break.
                 Doc::Concat(docs) => {
@@ -1179,5 +1223,201 @@ mod tests {
             ),
             "short one\nalso short\ntiny"
         );
+    }
+
+    fn render_i4(max_width: usize, doc: Doc) -> String {
+        render_with(
+            RendererConfig {
+                indent_width: 4,
+                max_width,
+            },
+            doc,
+        )
+    }
+
+    fn abc_def() -> Doc {
+        group(concat(vec![text("abc"), line(), text("def")]))
+    }
+
+    // Group fit-check: indentation is charged on the first non-empty content at a layout line
+    // start, at that item's own nest depth, and on each non-empty Comment continuation line.
+
+    /// First-content charge at the nest depth of the first text, not the group's.
+    #[test]
+    fn fit_nest_before_first_text_i4_w10_and_w11() {
+        let doc = || group(nest(1, concat(vec![text("abc"), line(), text("def")])));
+        assert_eq!(render_i4(10, doc()), "    abc\n    def");
+        assert_eq!(render_i4(11, doc()), "    abc def");
+    }
+
+    /// First-content charge: an outer group never renders flat around a broken inner group.
+    #[test]
+    fn fit_outer_inner_inner_nested_i4_w9_w11_w13() {
+        let doc = || group(concat(vec![nest(1, abc_def()), line(), text("z")]));
+        assert_eq!(render_i4(9, doc()), "    abc\n    def\nz");
+        assert_eq!(render_i4(11, doc()), "    abc def\nz");
+        assert_eq!(render_i4(13, doc()), "    abc def z");
+    }
+
+    /// First-content charge on the outer-FLAT / inner-BREAK shape.
+    #[test]
+    fn fit_outer_flat_inner_break_shape_i4_w11_w14_w15() {
+        let doc = || {
+            nest(
+                1,
+                concat(vec![
+                    hardline(0),
+                    group(concat(vec![text("("), line(), abc_def(), line(), text(")")])),
+                ]),
+            )
+        };
+        assert_eq!(render_i4(11, doc()), "\n    (\n    abc def\n    )");
+        assert_eq!(render_i4(14, doc()), "\n    (\n    abc def\n    )");
+        assert_eq!(render_i4(15, doc()), "\n    ( abc def )");
+    }
+
+    /// First-content charge across two nesting levels.
+    #[test]
+    fn fit_two_nesting_levels_i4_w15_and_w14() {
+        let doc = || nest(2, concat(vec![hardline(0), abc_def()]));
+        assert_eq!(render_i4(15, doc()), "\n        abc def");
+        assert_eq!(render_i4(14, doc()), "\n        abc\n        def");
+    }
+
+    /// Text continuation uncharged: only the first segment
+    /// of a multi-line Text at a line start takes the indent.
+    #[test]
+    fn fit_text_continuation_uncharged_i4_w6_first_segment_charged_i4_w5() {
+        let doc = || {
+            nest(
+                1,
+                concat(vec![
+                    hardline(0),
+                    group(concat(vec![text("ab\ncd"), line(), text("e")])),
+                ]),
+            )
+        };
+        assert_eq!(render_i4(6, doc()), "\n    ab\ncd e");
+        assert_eq!(render_i4(5, doc()), "\n    ab\ncd\n    e");
+    }
+
+    /// Text continuation uncharged: a leading newline puts
+    /// the charge on the empty first segment, never on the continuation.
+    #[test]
+    fn fit_text_leading_newline_charges_empty_first_segment_i4_w5() {
+        let doc = nest(
+            1,
+            concat(vec![
+                hardline(0),
+                group(concat(vec![text("\nab"), line(), text("c")])),
+            ]),
+        );
+        assert_eq!(render_i4(5, doc), "\n    \nab c");
+    }
+
+    /// Text continuation uncharged: a Text of only `\n`
+    /// consumes the charge, so the next item is uncharged.
+    #[test]
+    fn fit_text_newline_only_consumes_charge_i4_w6() {
+        let doc = nest(
+            1,
+            concat(vec![
+                hardline(0),
+                group(concat(vec![text("\n"), text("abcd"), line(), text("e")])),
+            ]),
+        );
+        assert_eq!(render_i4(6, doc), "\n    \nabcd e");
+    }
+
+    /// Mid-line: after a Text ending in `\n` the renderer is not at a layout line
+    /// start, so the group is not charged.
+    #[test]
+    fn fit_group_after_newline_ended_text_i4_w7() {
+        let doc = nest(1, concat(vec![hardline(0), text("a\n"), abc_def()]));
+        assert_eq!(render_i4(7, doc), "\n    a\nabc def");
+    }
+
+    /// Comment continuation charged: each comment line is written at the indent.
+    #[test]
+    fn fit_comment_continuation_charged_i4_w10_and_w11() {
+        let doc = || {
+            nest(
+                1,
+                concat(vec![
+                    hardline(0),
+                    group(concat(vec![comment("// a\n// b"), line(), text("xy")])),
+                ]),
+            )
+        };
+        assert_eq!(render_i4(10, doc()), "\n    // a\n    // b\n    xy");
+        assert_eq!(render_i4(11, doc()), "\n    // a\n    // b xy");
+    }
+
+    /// First-content charge applies to a flat Line as the group's first content.
+    #[test]
+    fn fit_line_first_i4_w9_and_w8() {
+        let doc = || nest(1, concat(vec![hardline(0), group(concat(vec![line(), text("abcd")]))]));
+        assert_eq!(render_i4(9, doc()), "\n     abcd");
+        assert_eq!(render_i4(8, doc()), "\n\n    abcd");
+    }
+
+    /// An empty comment line writes no indentation, so it is not charged. Hand-built: the
+    /// trailing empty line is the one placement where no later content on that physical line
+    /// re-pays the indent, so charging it would break the group at w=8.
+    #[test]
+    fn fit_comment_empty_line_uncharged_i4_w8_and_w7() {
+        let doc = || {
+            nest(
+                1,
+                concat(vec![
+                    hardline(0),
+                    text("x"),
+                    group(concat(vec![text("a"), line(), comment("b\n")])),
+                ]),
+            )
+        };
+        assert_eq!(render_i4(8, doc()), "\n    xa b\n");
+        assert_eq!(render_i4(7, doc()), "\n    xa\n    b\n");
+    }
+
+    /// A leading Nbsp at a line start is charged the indent, like a flat Line. Hand-built: with
+    /// nothing after it in the group, no later content re-pays the charge.
+    #[test]
+    fn fit_nbsp_first_i4_w5_and_w4() {
+        let doc = || {
+            nest(
+                1,
+                concat(vec![hardline(0), group(concat(vec![nbsp(), softline()])), text("abc")]),
+            )
+        };
+        assert_eq!(render_i4(5, doc()), "\n     abc");
+        assert_eq!(render_i4(4, doc()), "\n     \n    abc");
+    }
+
+    /// First-content charge: an empty Text does not consume it; it lands inside the Nest.
+    #[test]
+    fn fit_empty_text_then_nest_i4_w14_and_w13() {
+        let doc = || {
+            nest(
+                1,
+                concat(vec![
+                    hardline(0),
+                    group(concat(vec![
+                        text(""),
+                        nest(1, concat(vec![text("abc"), line(), text("de")])),
+                    ])),
+                ]),
+            )
+        };
+        assert_eq!(render_i4(14, doc()), "\n        abc de");
+        assert_eq!(render_i4(13, doc()), "\n        abc\n        de");
+    }
+
+    /// Mid-line: a group not at a line start is measured from the current column.
+    #[test]
+    fn fit_midline_group_unaffected_i4_w13_and_w12() {
+        let doc = || nest(1, concat(vec![text("xx"), abc_def()]));
+        assert_eq!(render_i4(13, doc()), "    xxabc def");
+        assert_eq!(render_i4(12, doc()), "    xxabc\n    def");
     }
 }

@@ -459,23 +459,23 @@ def test_fits_function_behavior():
 
     # Test empty content
     empty_items = cast(list[tuple[int, Mode, Doc]], [(0, Mode.FLAT, nil())])
-    fits_empty = renderer._fits(0, empty_items.copy())
+    fits_empty = renderer._fits(0, empty_items.copy(), at_line_start=False)
     assert fits_empty, "Nil should fit in width 0"
 
     # Test single character
     single_char_items = cast(list[tuple[int, Mode, Doc]], [(0, Mode.FLAT, text("x"))])
-    fits_single = renderer._fits(0, single_char_items.copy())
+    fits_single = renderer._fits(0, single_char_items.copy(), at_line_start=False)
     assert not fits_single, "Single char should NOT fit in width 0"
 
     # Test empty text
     empty_text_items = cast(list[tuple[int, Mode, Doc]], [(0, Mode.FLAT, text(""))])
-    fits_empty_text = renderer._fits(0, empty_text_items.copy())
+    fits_empty_text = renderer._fits(0, empty_text_items.copy(), at_line_start=False)
     assert fits_empty_text, "Empty text should fit in width 0"
 
     # Test the problematic case: "a" + nil() + "b"
     concat_doc = concat([text("a"), nil(), text("b")])
     concat_items = cast(list[tuple[int, Mode, Doc]], [(0, Mode.FLAT, concat_doc)])
-    fits_concat = renderer._fits(0, concat_items.copy())
+    fits_concat = renderer._fits(0, concat_items.copy(), at_line_start=False)
     assert not fits_concat, "Text 'a' + nil() + 'b' should NOT fit in width 0"
 
 
@@ -795,6 +795,134 @@ def test_break_at_nest_boundaries():
     result2 = renderer.render(doc2)
     expected2 = "outer\n    inner\nafter"  # "inner" gets the Nest indentation
     assert result2 == expected2
+
+
+# Document shapes for the group fit-check tables. Each is rendered at several widths, all with
+# indent_width=4, to pin its exact-fit and one-over thresholds.
+_NESTED_ABC_DEF = group(nest(1, concat([text("abc"), line(), text("def")])))
+_OUTER_INNER_NESTED = group(concat([nest(1, group(concat([text("abc"), line(), text("def")]))), line(), text("z")]))
+_OUTER_FLAT_INNER_BREAK = nest(
+    1,
+    concat(
+        [
+            hardline(),
+            group(
+                concat(
+                    [
+                        text("("),
+                        line(),
+                        group(concat([text("abc"), line(), text("def")])),
+                        line(),
+                        text(")"),
+                    ]
+                )
+            ),
+        ]
+    ),
+)
+_TWO_NESTING_LEVELS = nest(2, concat([hardline(), group(concat([text("abc"), line(), text("def")]))]))
+_AFTER_NEWLINE_ENDED_TEXT = nest(
+    1, concat([hardline(), text("a\n"), group(concat([text("abc"), line(), text("def")]))])
+)
+_COMMENT_CONTINUATION = nest(1, concat([hardline(), group(concat([comment("// a\n// b"), line(), text("xy")]))]))
+_LINE_FIRST = nest(1, concat([hardline(), group(concat([line(), text("abcd")]))]))
+_EMPTY_TEXT_THEN_NEST = nest(
+    1,
+    concat([hardline(), group(concat([text(""), nest(1, concat([text("abc"), line(), text("de")]))]))]),
+)
+_MIDLINE_GROUP = nest(1, concat([text("xx"), group(concat([text("abc"), line(), text("def")]))]))
+# The next two shapes are hand-built docs that pin the fit simulation to `append_content` on
+# its own terms, not formatter output seen in the corpus. Each is the one placement where the
+# indent charge is not re-paid by later content on the same physical line, so moving the charge
+# changes the decision. An empty comment line writes no indentation, so the group is charged
+# only "b" on the mid-line first line: at w=8 it fits with 0 columns to spare.
+_COMMENT_TRAILING_EMPTY_LINE = nest(
+    1, concat([hardline(), text("x"), group(concat([text("a"), line(), comment("b\n")]))])
+)
+# A leading Nbsp at a line start writes the indent before its space, like a flat Line.
+_NBSP_FIRST = nest(1, concat([hardline(), group(concat([nbsp(), softline()])), text("abc")]))
+_TEXT_CONTINUATION = nest(1, concat([hardline(), group(concat([text("ab\ncd"), line(), text("e")]))]))
+_TEXT_LEADING_NEWLINE = nest(1, concat([hardline(), group(concat([text("\nab"), line(), text("c")]))]))
+_TEXT_NEWLINE_ONLY = nest(1, concat([hardline(), group(concat([text("\n"), text("abcd"), line(), text("e")]))]))
+
+
+@pytest.mark.parametrize(
+    ("doc", "max_width", "expected"),
+    [
+        pytest.param(_NESTED_ABC_DEF, 10, "    abc\n    def", id="nest_before_first_text_one_over_i4_w10"),
+        pytest.param(_NESTED_ABC_DEF, 11, "    abc def", id="nest_before_first_text_exact_fit_i4_w11"),
+        pytest.param(_OUTER_INNER_NESTED, 9, "    abc\n    def\nz", id="outer_inner_inner_nested_i4_w9"),
+        pytest.param(_OUTER_INNER_NESTED, 11, "    abc def\nz", id="outer_inner_inner_nested_i4_w11"),
+        pytest.param(_OUTER_INNER_NESTED, 13, "    abc def z", id="outer_inner_inner_nested_fits_i4_w13"),
+        pytest.param(
+            _OUTER_FLAT_INNER_BREAK, 11, "\n    (\n    abc def\n    )", id="outer_flat_inner_break_shape_i4_w11"
+        ),
+        pytest.param(
+            _OUTER_FLAT_INNER_BREAK,
+            14,
+            "\n    (\n    abc def\n    )",
+            id="outer_flat_inner_break_shape_one_under_i4_w14",
+        ),
+        pytest.param(
+            _OUTER_FLAT_INNER_BREAK, 15, "\n    ( abc def )", id="outer_flat_inner_break_shape_exact_fit_i4_w15"
+        ),
+        pytest.param(_TWO_NESTING_LEVELS, 15, "\n        abc def", id="two_nesting_levels_exact_i4_w15"),
+        pytest.param(_TWO_NESTING_LEVELS, 14, "\n        abc\n        def", id="two_nesting_levels_one_over_i4_w14"),
+        pytest.param(
+            _AFTER_NEWLINE_ENDED_TEXT, 7, "\n    a\nabc def", id="group_after_newline_ended_text_uncharged_i4_w7"
+        ),
+        pytest.param(
+            _COMMENT_CONTINUATION, 10, "\n    // a\n    // b\n    xy", id="comment_continuation_charged_i4_w10"
+        ),
+        pytest.param(
+            _COMMENT_CONTINUATION, 11, "\n    // a\n    // b xy", id="comment_continuation_charged_fits_i4_w11"
+        ),
+        pytest.param(_LINE_FIRST, 9, "\n     abcd", id="line_first_fits_i4_w9"),
+        pytest.param(_LINE_FIRST, 8, "\n\n    abcd", id="line_first_breaks_i4_w8"),
+        pytest.param(_COMMENT_TRAILING_EMPTY_LINE, 8, "\n    xa b\n", id="comment_empty_line_uncharged_fits_i4_w8"),
+        pytest.param(
+            _COMMENT_TRAILING_EMPTY_LINE, 7, "\n    xa\n    b\n", id="comment_empty_line_uncharged_breaks_i4_w7"
+        ),
+        pytest.param(_NBSP_FIRST, 5, "\n     abc", id="nbsp_first_fits_i4_w5"),
+        pytest.param(_NBSP_FIRST, 4, "\n     \n    abc", id="nbsp_first_breaks_i4_w4"),
+        pytest.param(_EMPTY_TEXT_THEN_NEST, 14, "\n        abc de", id="empty_text_then_nest_fits_i4_w14"),
+        pytest.param(_EMPTY_TEXT_THEN_NEST, 13, "\n        abc\n        de", id="empty_text_then_nest_breaks_i4_w13"),
+        pytest.param(_MIDLINE_GROUP, 13, "    xxabc def", id="midline_group_unaffected_fits_i4_w13"),
+        pytest.param(_MIDLINE_GROUP, 12, "    xxabc\n    def", id="midline_group_unaffected_breaks_i4_w12"),
+    ],
+)
+def test_group_fit_charges_pending_indent(doc: Doc, max_width: int, expected: str):
+    """The group fit-check charges indentation where the renderer writes it.
+
+    The indent is charged on the first non-empty content at a layout line start, at that item's
+    own nest depth (not the group's), and on each non-empty continuation line of a Comment. A
+    group that starts mid-line, or right after a Text that ended in a newline, is not charged.
+    """
+    renderer = Renderer(RendererConfig(indent_width=4, max_width=max_width))
+    assert renderer.render(doc) == expected
+
+
+@pytest.mark.parametrize(
+    ("doc", "max_width", "expected"),
+    [
+        pytest.param(_TEXT_CONTINUATION, 6, "\n    ab\ncd e", id="continuation_uncharged_i4_w6"),
+        pytest.param(_TEXT_CONTINUATION, 5, "\n    ab\ncd\n    e", id="first_segment_charged_i4_w5"),
+        pytest.param(
+            _TEXT_LEADING_NEWLINE, 5, "\n    \nab c", id="leading_newline_charge_on_empty_first_segment_i4_w5"
+        ),
+        pytest.param(_TEXT_NEWLINE_ONLY, 6, "\n    \nabcd e", id="newline_only_text_consumes_charge_i4_w6"),
+    ],
+)
+def test_group_fit_text_with_newlines(doc: Doc, max_width: int, expected: str):
+    """A Text at a layout line start is charged its indent once, before its first byte.
+
+    Continuation segments of a multi-line Text
+    start at physical column 0 and are never charged, and a Text whose first segment is empty
+    (leading newline) still consumes the charge, so neither its continuation nor the next item is
+    charged.
+    """
+    renderer = Renderer(RendererConfig(indent_width=4, max_width=max_width))
+    assert renderer.render(doc) == expected
 
 
 if __name__ == "__main__":

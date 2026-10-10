@@ -55,6 +55,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `separator_spec()` is unchanged and, with the new one, is the supported way to build the variant;
   code constructing or exhaustively matching the variant literally must add the field. The Python
   `SeparatorSpec` gains the same field, defaulted to `0`.
+- Formatter, both backends: one format pass is now enough for `--check` to accept the result.
+  When deciding whether a group (a run of content the formatter lays out on one line if it
+  fits, else breaks) fits, the formatter now counts the indentation it is about to write before
+  the group's first text; previously it measured against the full `-w` width. Groups whose
+  indented one-line form overran `-w` by up to one indent width now break, and an outer group
+  that now breaks may let an inner one join onto a single line — expect golden diffs where
+  this applies. The in-tree corpus at width 80 / indent 2 is unchanged. Generated CST, parser
+  and AST APIs are untouched.
 - Formatter: a comment just inside a `nest` region — right after the opening delimiter (`{`,
   `(`) or right before the closing one — is now indented with the nest's content instead of
   sitting flush with the delimiter, matching comments between the nest's items. Expect golden
