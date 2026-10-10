@@ -7,7 +7,7 @@ raised at classify_trivia_rules time.
 import pytest
 
 from fltk import plumbing
-from fltk.fegen import gsm
+from fltk.fegen import gsm, naming
 from fltk.fegen.gsm2tree_rs import RustCstGenerator
 
 
@@ -359,3 +359,118 @@ def test_plumbing_capture_trivia_pipeline_passes():
     grammar = plumbing.parse_grammar(grammar_text)
     # Must not raise — _trivia + its 'content' label are auto-added and must pass validation
     plumbing.generate_parser(grammar, capture_trivia=True)
+
+
+# ---------------------------------------------------------------------------
+# Rust `Self` keyword rejection: names whose UpperCamelCase form is `Self`
+# ---------------------------------------------------------------------------
+
+_SELF_KEYWORD_PHRASE = "cannot be written as a raw identifier"
+
+
+def _item(label: str | None, disposition: gsm.Disposition = gsm.Disposition.INCLUDE) -> gsm.Item:
+    return gsm.Item(
+        label=label,
+        disposition=disposition,
+        term=gsm.Regex(r"[a-z]+"),
+        quantifier=gsm.REQUIRED,
+    )
+
+
+def _grammar_of(rule: gsm.Rule) -> gsm.Grammar:
+    return gsm.Grammar(rules=[rule], identifiers={rule.name: rule})
+
+
+def _assert_self_keyword_message(msg: str, original: str) -> None:
+    assert repr(original) in msg
+    assert "'Self'" in msg
+    assert _SELF_KEYWORD_PHRASE in msg
+    suggestion = msg.split("rename it", 1)[1]
+    assert "'self_node'" in suggestion
+    # The repair suggestion must not itself camel-case to `Self`.
+    assert "'self_'" not in suggestion
+
+
+@pytest.mark.parametrize("rule_name", ["self", "_self", "self_", "__self__"])
+def test_rust_rejects_rule_camelling_to_self(rule_name: str) -> None:
+    """A rule whose class name camel-cases to `Self` is refused by the Rust generator."""
+    grammar = _make_simple_grammar(rule_name, label="v")
+    with pytest.raises(ValueError) as exc_info:
+        RustCstGenerator(grammar)
+    _assert_self_keyword_message(str(exc_info.value), rule_name)
+
+
+@pytest.mark.parametrize("label", ["self", "_self", "self_"])
+def test_rust_rejects_label_camelling_to_self(label: str) -> None:
+    """An included label whose enum variant camel-cases to `Self` is refused, naming the rule."""
+    grammar = _make_simple_grammar("x", label=label)
+    with pytest.raises(ValueError) as exc_info:
+        RustCstGenerator(grammar)
+    msg = str(exc_info.value)
+    _assert_self_keyword_message(msg, label)
+    assert "'x'" in msg
+
+
+def test_rust_rejects_nested_self_label() -> None:
+    """A `self` label inside a parenthesized sub-expression is refused like a top-level one.
+
+    Grammar: x := (a:/[a-z]+/ | self:/[a-z]+/)
+    """
+    inner_a = gsm.Items(items=[_item("a")], sep_after=[gsm.Separator.NO_WS])
+    inner_self = gsm.Items(items=[_item("self")], sep_after=[gsm.Separator.NO_WS])
+    rule = gsm.Rule(
+        name="x",
+        alternatives=[
+            gsm.Items(
+                items=[
+                    gsm.Item(
+                        label=None,
+                        disposition=gsm.Disposition.INCLUDE,
+                        term=[inner_a, inner_self],
+                        quantifier=gsm.REQUIRED,
+                    )
+                ],
+                sep_after=[gsm.Separator.NO_WS],
+            )
+        ],
+    )
+    with pytest.raises(ValueError) as exc_info:
+        RustCstGenerator(_grammar_of(rule))
+    msg = str(exc_info.value)
+    _assert_self_keyword_message(msg, "self")
+    assert "'x'" in msg
+
+
+def test_rust_accepts_suppressed_self_label() -> None:
+    """A suppressed `self:` label names nothing in the emitted Rust and stays legal."""
+    rule = gsm.Rule(
+        name="x",
+        alternatives=[
+            gsm.Items(
+                items=[_item("self", gsm.Disposition.SUPPRESS), _item("v")],
+                sep_after=[gsm.Separator.NO_WS, gsm.Separator.NO_WS],
+            )
+        ],
+    )
+    RustCstGenerator(_grammar_of(rule))  # must not raise
+
+
+def test_rust_accepts_s_e_l_f() -> None:
+    """`s_e_l_f` camel-cases to `SELF`, an ordinary identifier: accepted as rule and as label."""
+    assert naming.snake_to_upper_camel("s_e_l_f") == "SELF"
+    RustCstGenerator(_make_simple_grammar("s_e_l_f", label="v"))  # must not raise
+    RustCstGenerator(_make_simple_grammar("x", label="s_e_l_f"))  # must not raise
+
+
+@pytest.mark.parametrize(
+    "grammar_text",
+    [
+        'top := s:self ;\nself := v:"a" ;\n',
+        'expr := self:"a" , other:"b" ;\n',
+    ],
+    ids=["rule", "label"],
+)
+def test_python_backend_accepts_self_names(grammar_text: str) -> None:
+    """The `Self` refusal is Rust-only: the Python backend generates these grammars."""
+    grammar = plumbing.parse_grammar(grammar_text)
+    plumbing.generate_parser(grammar)  # must not raise

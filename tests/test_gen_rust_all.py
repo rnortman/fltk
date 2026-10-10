@@ -335,3 +335,17 @@ def test_a_late_generation_failure_writes_nothing(tmp_path: pathlib.Path, monkey
     )
     assert message in output
     assert list(tmp_path.iterdir()) == []
+
+
+def test_self_rule_name_is_rejected_before_any_write(tmp_path: pathlib.Path) -> None:
+    """A rule whose Rust spelling is the `Self` keyword fails generation with a grammar-level
+    message, and no artifact reaches disk."""
+    grammar = tmp_path / "self.fltkg"
+    grammar.write_text('top := s:self ;\nself := v:"a" ;\n')
+    out = tmp_path / "out"
+    out.mkdir()
+    output = _run_expecting_error("gen-rust-all", str(grammar), "--cst-output", str(out / "cst.rs"))
+    assert "'self'" in output
+    assert "'Self'" in output
+    assert "cannot be written as a raw identifier" in output
+    assert list(out.iterdir()) == []

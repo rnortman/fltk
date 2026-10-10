@@ -52,33 +52,6 @@ subprocess) or a parser-level step/time budget threaded down into the generated 
 work that would dominate this round. Deferred with the stale-token policy covering the degraded mode
 meanwhile. Location: `fltk/lsp/server.py` (`FltkLanguageServer._analyze_blocking`).
 
-## `rust-codegen-self-keyword`
-
-The Rust CST backend emits uncompilable Rust for any grammar label or rule name whose
-UpperCamelCase form is `Self`. `_rust_variant_name` (`fltk/fegen/gsm2tree_rs.py`) and the rule
-class name both route through `naming.snake_to_upper_camel`, which has no keyword handling, and
-`Self` is the only Rust keyword that survives camel-casing. Because `snake_to_upper_camel`
-lowercases first and collapses underscores, the trigger set is `self`, `Self`, `SELF`, `self_`,
-`_self`, `__self__` and friends — not just the literal `self`. A label named `self` emits
-`enum {CN}Label { …, Self }` plus every `{CN}Label::Self` match arm; a rule named `self` emits
-`pub struct Self`, `impl Self` and `NodeKind::Self`. rustc rejects both with "expected identifier,
-found keyword `Self`" pointing into generated code, so a downstream consumer sees a build failure
-in a file they did not write rather than a grammar-level error. The Python backend accepts these
-names (`Label.SELF`, class `Self`) and parses normally, so this is a Rust-backend-only divergence;
-no in-tree grammar uses such a name, which is why nothing catches it today.
-
-`cst_ergonomics.RUST_UNRAWABLE_KEYWORDS` already contains `self` and correctly skips the ergonomic
-bare accessor for such a label, so only the variant/class identifiers lack a guard. Two fix shapes:
-reject at validation time next to the existing `_RESERVED_LABELS` / `_RESERVED_CLASS_NAMES` checks
-in `RustCstGenerator.__init__` (both live in the Rust generator, so a Python-only consumer with a
-`self` label is unaffected), or mangle the emitted Rust identifier while leaving the Python-visible
-name (`SELF`) unchanged. Mangling would normally be a breaking rename of a generated public symbol,
-but no consumer can depend on the current spelling because it does not compile. Whichever is
-chosen, cover both the label path and the rule-name path, and add a fixture case — the Rust fixture
-grammar has keyword labels (`type`, `match`) but nothing that camels to `Self`. Location:
-`fltk/fegen/gsm2tree_rs.py` (`_rust_variant_name`, and the class-name collision check in
-`RustCstGenerator.__init__`).
-
 ## `ast-terminal-repeat-synthesis`
 
 `to_cst` on a terminal-only AST node rebuilds the CST by matching the node's `text` against one

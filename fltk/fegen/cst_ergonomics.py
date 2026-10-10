@@ -307,6 +307,9 @@ RUST_KEYWORDS = frozenset(
 # Rust keywords that cannot be written as raw identifiers at all.
 RUST_UNRAWABLE_KEYWORDS = frozenset({"crate", "self", "super", "Self", "_"})
 
+# Why a name in RUST_UNRAWABLE_KEYWORDS is refused, worded the same by every guard that checks it.
+RUST_UNRAWABLE_REASON = "it is a Rust keyword that cannot be written as a raw identifier"
+
 _QUINTET_PREFIXES = ("append_", "extend_", "children_", "child_", "maybe_")
 
 
@@ -390,7 +393,7 @@ def _unusable_name_reason(name: str) -> str | None:
     if keyword.iskeyword(name):
         return "it is a Python keyword"
     if name in RUST_UNRAWABLE_KEYWORDS:
-        return "it is a Rust keyword that cannot be written as a raw identifier"
+        return RUST_UNRAWABLE_REASON
     return None
 
 

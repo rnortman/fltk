@@ -285,6 +285,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - `Span.spells_at` on a non-ASCII source no longer scans the text from the start on every call:
   the codepoint→byte resolution goes through a table built once per source, as the all-ASCII
   path's identity always did.
+- Rust backend: a grammar rule name or item label that becomes `Self` in Rust (`self`, `_self`,
+  `self_`, …) is now refused by the generator with an error naming the rule and the offending
+  name. Previously generation succeeded and the output failed to compile, with rustc pointing
+  into generated code. `Self` is a Rust keyword with no escaped form, so the only fix is a
+  rename. Labels on suppressed items are still allowed, and the Python backend still accepts
+  these names.
 
 ## [0.5.0] - 2026-08-06
 

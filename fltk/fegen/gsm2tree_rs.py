@@ -56,6 +56,21 @@ _RESERVED_LABELS: dict[str, str] = {
     "children": "extend_children",
 }
 
+
+# A rule name or label whose snake_to_upper_camel form is in
+# `cst_ergonomics.RUST_UNRAWABLE_KEYWORDS` cannot name a struct, enum variant or type: `r#`
+# cannot raw-escape it.  Only `Self` is reachable (`self`, `_self`, `self_`, `__self__` ... all
+# camel to it; the set's other members are not capitalised).  No spelling is both compilable
+# and identical to the Python-visible name, so such a name is refused rather than mangled.
+def _unrawable_type_name_error(kind: str, original: str, rule_name: str | None, ident: str) -> str:
+    """Diagnostic for a rule name or label whose camel form is an unrawable Rust keyword."""
+    where = f"{kind} {original!r}" + (f" in rule {rule_name!r}" if rule_name is not None else "")
+    return (
+        f"{where} derives the Rust identifier {ident!r}: {cst_ergonomics.RUST_UNRAWABLE_REASON}; "
+        f"rename it to something that does not camel-case to {ident!r} (for example 'self_node' or 'this')"
+    )
+
+
 # Rule-derived class names that collide with fixed names in the generated cst module.
 # A rule whose snake_to_upper_camel name is in this set produces either a Python-side
 # clobber (NodeKind) or a Rust E0255 compile error against the use preamble in cst.rs
@@ -182,9 +197,10 @@ def _escape_source_name(s: str) -> str:
 
 
 def _rust_variant_name(label: str) -> str:
-    """Label -> CamelCase Rust enum variant. 'no_ws' -> 'NoWs'."""
-    # TODO(rust-codegen-self-keyword): a label whose camel form is `Self` emits a
-    # reserved-word enum variant, which rustc rejects.
+    """Label -> CamelCase Rust enum variant. 'no_ws' -> 'NoWs'.
+
+    Precondition: the camel form is not `Self`; `RustCstGenerator.__init__` rejects such labels.
+    """
     return naming.snake_to_upper_camel(label)
 
 
@@ -229,8 +245,8 @@ class RustCstGenerator:
                 msg = f"Rule name {rule.name!r} is not a valid identifier (must match {_IDENTIFIER_RE.pattern!r})"
                 raise ValueError(msg)
             class_name = self._py_gen.class_name_for_rule_node(rule.name)
-            # TODO(rust-codegen-self-keyword): a rule whose class name is `Self` is not caught
-            # here and emits `pub struct Self` / `NodeKind::Self`, which rustc rejects.
+            if class_name in cst_ergonomics.RUST_UNRAWABLE_KEYWORDS:
+                raise ValueError(_unrawable_type_name_error("Rule", rule.name, None, class_name))
             collision_target = _RESERVED_CLASS_NAMES.get(class_name) or _RESERVED_CLASS_NAMES_SEEDED.get(class_name)
             if collision_target:
                 msg = f"Rule {rule.name!r} derives class name {class_name!r}, which collides with {collision_target}"
@@ -256,6 +272,9 @@ class RustCstGenerator:
                         f"the fixed method '{colliding_method}'"
                     )
                     raise ValueError(msg)
+                label_ident = naming.snake_to_upper_camel(item.label)
+                if label_ident in cst_ergonomics.RUST_UNRAWABLE_KEYWORDS:
+                    raise ValueError(_unrawable_type_name_error("Item label", item.label, rule_name, label_ident))
 
             for alt in rule.alternatives:
                 gsm.for_each_item(alt, check_label)

@@ -907,7 +907,7 @@ def name_problem(name: str) -> str | None:
     if keyword.iskeyword(name):
         return "it is a Python keyword"
     if name in ce.RUST_UNRAWABLE_KEYWORDS:
-        return "it is a Rust keyword that cannot be written as a raw identifier"
+        return ce.RUST_UNRAWABLE_REASON
     return None
 
 
