@@ -12,7 +12,7 @@ load(
 )
 load("//bzl:cargo_probe.bzl", "cargo_file_probe")
 load("//bzl:gencode_tool.bzl", "GENCODE_TOOL_DATA", "GENCODE_TOOL_DEPS")
-load("//bzl:py_lint.bzl", "ruff_fix", "ruff_lint")
+load("//bzl:py_lint.bzl", "ruff_fix", "ruff_lint", "ruff_tree_check")
 load("//bzl:py_test.bzl", "fltk_py_tests")
 load("//bzl:pyright.bzl", "pyright_lint")
 load("//bzl:pyright_tool.bzl", "PYRIGHT_TOOL_DEPS")
@@ -52,8 +52,8 @@ _GENERATED_PY_TARGETS = GENERATED_PY_TARGETS
 # be a lint rule the generator does not satisfy, reported at a file nobody edits.  pyright
 # still type-checks them — it takes the Bazel-generated copies, below.
 #
-# tests/bazel_consumer is absent because it is .bazelignore'd — see
-# TODO(bazel-lint-consumer-module).
+# tests/bazel_consumer is absent because it is .bazelignore'd; :ruff_check_ignored_dirs below
+# sweeps every .bazelignore entry from the working tree.
 #
 # tests/ is its own package (it holds the per-file py_tests), so the glob below stops at its
 # BUILD file and //tests:lint_py_srcs carries that directory's files instead.
@@ -88,6 +88,20 @@ ruff_lint(
 
 ruff_fix(
     name = "ruff_fix",
+)
+
+# A .bazelignore'd directory (tests/bazel_consumer is its own Bazel module) has no package, so
+# no root-module label can name its files and the build-graph lint targets above cannot reach
+# them.  This is a `bazel run` target instead: it reads the working tree from the repo root —
+# which is what keeps pyproject.toml's `tests/**/*` per-file-ignores applying to those files —
+# and is uncached.  `paths` lists every .bazelignore entry; tests/test_ruff_tree_check.py holds
+# that join.  `make bazel-lint` runs it; see the Makefile.
+ruff_tree_check(
+    name = "ruff_check_ignored_dirs",
+    config = "pyproject.toml",
+    paths = ["tests/bazel_consumer"],
+    # The launcher test under //tests lists this target as data.
+    visibility = ["//tests:__pkg__"],
 )
 
 # Whole-program type check.  include/exclude/extraPaths/pythonVersion mirror the
@@ -314,6 +328,7 @@ exports_files(
 # Repo-root files the pytest targets under //tests read from the runfiles root.
 exports_files(
     [
+        ".bazelignore",
         ".github/workflows/ci.yml",
         "BUILD.bazel",
         "Makefile",

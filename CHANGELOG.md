@@ -331,6 +331,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   into generated code. `Self` is a Rust keyword with no escaped form, so the only fix is a
   rename. Labels on suppressed items are still allowed, and the Python backend still accepts
   these names.
+- Development: the Python smoke tests under `tests/bazel_consumer/` (the in-repo downstream
+  module) are ruff-checked again. They had dropped out of linting when ruff moved into Bazel,
+  because that directory is excluded from the root build. `make bazel-lint` now also runs
+  `bazel run --config lint //:ruff_check_ignored_dirs`, which runs the pinned ruff
+  (`check` and `format --check`) over every directory listed in `.bazelignore`, from the working
+  tree. It is uncached and is not part of `bazel build --config lint //...`.
 
 ## [0.5.0] - 2026-08-06
 

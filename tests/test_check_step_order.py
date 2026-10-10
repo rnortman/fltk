@@ -310,6 +310,15 @@ def test_root_gate_runs_one_configuration() -> None:
     assert "bazel build --config lint //..." in _recipe("bazel-lint"), "bazel-lint must keep the same configuration"
 
 
+def test_the_lint_lane_sweeps_the_ignored_consumer_directory() -> None:
+    """tests/bazel_consumer is .bazelignore'd, so no build-graph lint reaches it; this call is all that does.
+
+    Whether the target gates is proved by executing its launcher (tests/test_ruff_tree_check.py),
+    which runs from runfiles and so stays green if the Makefile stops calling it.
+    """
+    assert "bazel run --config lint //:ruff_check_ignored_dirs" in _recipe("bazel-lint")
+
+
 def test_no_recipe_invokes_uv() -> None:
     """A `uv` call would be a second Python dependency writer."""
     invoking = [line for line in _MAKEFILE.read_text().splitlines() if line.startswith("\t") and names_uv(line)]

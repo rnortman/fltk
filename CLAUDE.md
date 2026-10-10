@@ -41,15 +41,20 @@ bazel test //tests:test_span
 
 ### Linting and Formatting
 
-Ruff and pyright run under Bazel. `bazel build --config lint //...` is the whole lint
-surface — the rules_rust clippy aspect plus `//:ruff_check`, `//:ruff_format_check` and
-`//:pyright` — and it is what `make bazel-lint` runs. The Python lint targets are gated on
+Ruff and pyright run under Bazel. `bazel build --config lint //...` is the lint surface the
+build graph can name — the rules_rust clippy aspect plus `//:ruff_check`, `//:ruff_format_check`
+and `//:pyright` — plus one run target, `bazel run --config lint //:ruff_check_ignored_dirs`,
+for the directory Bazel is told to ignore (`tests/bazel_consumer`, its own module): ruff check
+and format over the working tree from the repo root, uncached. `make bazel-lint` runs both. The Python lint targets are gated on
 `--//bzl:lint` (which `--config lint` sets), so a plain `bazel build //...` skips them
 entirely.
 
 ```bash
-# Everything: clippy + ruff check + ruff format --check + pyright
+# The build graph's lint: clippy + ruff check + ruff format --check + pyright
 bazel build --config lint //...
+
+# ... plus the .bazelignore'd consumer directory (ruff check + format, working tree)
+bazel run --config lint //:ruff_check_ignored_dirs
 
 # Just the Python half
 bazel build --config lint //:ruff_check //:ruff_format_check //:pyright
@@ -139,11 +144,11 @@ None of them is in git — they exist only as build outputs, so there is nothing
 
 Bazel is the build system, and the only one. There is no uv, no maturin and no cargo: no manifest is tracked, nothing in `make check` or CI runs `cargo`, and `tests/test_cargo_retirement.py` is what keeps it that way (no tracked `Cargo.toml` / `Cargo.lock` / `deny.toml` / `rust-toolchain.toml`, no `cargo` invocation in the Makefile, the CI workflow, `.bazelrc`, `.claude/settings.json` or the repo's Starlark, no `requires-cargo` tag). Every crate has Bazel targets in both feature flavors, so `bazel test //...` compiles and runs them and the clippy aspect lints them, over strictly more configurations than the retired cargo lanes covered. Third-party crates come from crate_universe in `from_specs` form — one `crate.spec` tag per direct dependency in `MODULE.bazel`, no manifest to read.
 
-`make check` is four steps, three of them Bazel lanes and one a lock diff. Every step prints a start line and its wall time in both modes — a failing step reports its duration and the gate total too — and the two lanes whose names no longer partition the work say so on those lines: `bazel-test` builds the lint surface as well, which is what makes `bazel-lint`'s seconds a cache-hit confirmation rather than the cost of linting. `VERBOSE=1` additionally streams each step's output as it runs instead of buffering it and printing only on failure. Verbose is the default in CI (GitHub Actions sets `CI=true`) and quiet locally; an explicit `VERBOSE=0`/`VERBOSE=1` overrides in either direction. The step loop and the no-pyo3 guard are `scripts/check-steps` and `scripts/pyo3-guard`, called from the recipes and executed by `tests/test_check_scripts.py` under stub binaries; no test in the repo executes `make`.
+`make check` is four steps, three of them Bazel lanes and one a lock diff. Every step prints a start line and its wall time in both modes — a failing step reports its duration and the gate total too — and the two lanes whose names no longer partition the work say so on those lines: `bazel-test` builds the lint surface as well, which is what makes `bazel-lint`'s seconds a cache-hit confirmation plus the uncached `tests/bazel_consumer` sweep rather than the cost of linting. `VERBOSE=1` additionally streams each step's output as it runs instead of buffering it and printing only on failure. Verbose is the default in CI (GitHub Actions sets `CI=true`) and quiet locally; an explicit `VERBOSE=0`/`VERBOSE=1` overrides in either direction. The step loop and the no-pyo3 guard are `scripts/check-steps` and `scripts/pyo3-guard`, called from the recipes and executed by `tests/test_check_scripts.py` under stub binaries; no test in the repo executes `make`.
 
 - `bazel-toolchain-guard` — the MODULE.bazel mirror check below.
 - `make bazel-test` (`bazel test --config lint //...` plus the no-pyo3 cquery guard) covers fltk's own internal Bazel surface: the `tests/bazel_rules` analysis tests, the codegen smoke targets, the `:native` cdylib, every pytest file as its own `py_test`, and the `rust_test` targets that run each runtime crate's unit tests on its `:no_python` flavor — plus the feature carve-outs nothing else covers: `//crates/fltk-ast-core:no_features_test` (every feature off), `//crates/fltk-cst-core:python_test` (the `python` feature set, including the pyclass ABI-layout probes), and `//crates/fegen-rust:native_parser_test` / `//crates/fltkfmt:cli_test`, which build their crates from Bazel-generated sources. The three fixture extensions under `tests/rust_poc_cst`, `tests/rust_cst_fixture` and `tests/rust_parser_fixture` are Bazel targets too, each hand-assembled from its own codegen targets rather than through `fltk_pyo3_cdylib`. The cquery guard asserts pyo3 is absent from every `:no_python` target's graph, every `rust_binary`'s, and `//tests:rust_gate_lib`'s (which matches neither pattern); it is one union cquery over all of them (`deps(set(...))` is the union of the members' `deps`), with a per-target loop that runs only to attribute a failure. The positive control that keeps that negative assertion from passing vacuously stays per target, through one loading-phase `bazel query "rdeps(set(...), //crates/fltk-cst-core:no_python)"` whose output must name every derived target — a `cquery` there costs ~25s (reverse-dep inversion over the configured graph) to prove a structural fact. Since `query` unions every `select()` branch, the per-target control is an unconfigured fact and no per-target *configured* fact is asserted; that residual is accepted and stated in `scripts/pyo3-guard`'s header. Both this lane's `bazel test` and its cqueries carry `--config lint`, the same configuration `bazel-lint` builds under: alternating configurations mid-gate discards Bazel's in-memory analysis cache and cost the gate tens of seconds on every hot run. The cost of that uniformity is the assertion surface: the root lane's pyo3 check holds at `--//bzl:lint=true`, not at the default configuration a downstream consumer builds, so a pyo3 edge behind a `select()` on the lint setting would be invisible to it. That residual is accepted by design: no `select()` or `config_setting()` exists anywhere in tracked Starlark — the flavours are parallel targets — and `tests/test_check_step_order.py::test_no_select_in_tracked_starlark` holds that text fact. It does not cover the tree's one other configurable edge, the `//crates/fltk-serde-core:serde` `label_flag`, which resolves identically in both graphs only because no `.bazelrc` `build:lint` / `build:clippy` line sets it; the consumer lane asserts pyo3 absence at a configuration without the lint flag and with that `label_flag` repointed. A legitimate `select()`, a lint-config line that sets a flag, or a transition later means revisiting that test and this residual together. The gate's configuration therefore differs from a bare `bazel test //...`, so a dev run and a gate run still thrash each other's analysis cache — type `bazel test --config lint //...` to stay on the gate's.
-- `make bazel-lint` (`bazel build --config lint //...`) runs the rules_rust clippy aspect with `-D warnings` over every Rust target in both of its feature flavors, plus the flag-gated Python lint targets `//:ruff_check`, `//:ruff_format_check` and `//:pyright`.
+- `make bazel-lint` (`bazel build --config lint //...` plus `bazel run --config lint //:ruff_check_ignored_dirs`, the working-tree ruff sweep of the `.bazelignore`d consumer directory; see the Makefile's `bazel-lint` comment) runs the rules_rust clippy aspect with `-D warnings` over every Rust target in both of its feature flavors, plus the flag-gated Python lint targets `//:ruff_check`, `//:ruff_format_check` and `//:pyright`.
 - `make bazel-consumer-check` (`cd tests/bazel_consumer && bazel test //...`) covers the consumer surface — an in-repo downstream module (`tests/bazel_consumer/`) that `bazel_dep`s on `@fltk` via `local_path_override` and loads `@fltk//:rules.bzl` + `@fltk//:rust.bzl` cross-module (the Clockwork path: `generate_parser`, `generate_rust_parser`, `fltk_pyo3_cdylib`), which the same-repo `//` loads of `bazel-test` cannot exercise. Real git-pin consumption is verified downstream by Clockwork's own CI.
 
 The remaining step is `check-bazel-locks`, the lock diff. `docs/bazel-consumer-guide.md` is the consumer-facing recipe book (one recipe per supported configuration, the `:no_python` runtime targets, the one-serde rule for serde-mode pure-Rust consumers, and the no-pyo3 verification queries); keep it in step with `rust.bzl` and the crate BUILD files.
@@ -169,8 +174,10 @@ Rust dependency bumps are manual — edit the spec version, repin, `make check` 
 # Build everything, run every test
 bazel test //...
 
-# The whole lint surface
+# The lint surface the build graph can name
 bazel build --config lint //...
+# ... plus the .bazelignore'd consumer directory
+bazel run --config lint //:ruff_check_ignored_dirs
 ```
 
 No build step precedes the tests. The five extension modules the suite imports (`fltk._native`, `fegen_rust_cst`, `rust_parser_fixture`, `phase4_roundtrip_cst`, `poc_cst`) are Bazel targets named in the deps of the `py_test`s that import them, so a generator change rebuilds exactly the cdylibs it affects before the tests that use them run. The stale-extension false green that the ad-hoc `maturin develop` builds used to allow is gone with them.

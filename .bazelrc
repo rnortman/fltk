@@ -12,7 +12,9 @@ build:clippy --aspects=@rules_rust//rust:defs.bzl%rust_clippy_aspect
 build:clippy --output_groups=+clippy_checks
 build:clippy --@rules_rust//:clippy_flags=-Dwarnings
 
-# The whole linting surface, Rust and Python: `bazel build --config lint //...`.  The clippy
+# The linting surface the build graph can name, Rust and Python: `bazel build --config lint
+# //...` (the .bazelignore'd consumer directory is swept by //:ruff_check_ignored_dirs; see
+# the Makefile's bazel-lint comment).  The clippy
 # half is the config above rather than a copy of its flags, so there is one place to edit
 # when the aspect or the deny gate changes.  --//bzl:lint gates the Python lint targets,
 # which are no-op stamps without it.

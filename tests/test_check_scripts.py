@@ -299,7 +299,10 @@ def test_a_green_gate_reports_every_step_in_order_and_the_trailer_last(tmp_path:
     lines = result.stdout.splitlines()
     notes = {
         "bazel-test": re.escape(" [builds the lint surface too: same --config lint configuration]"),
-        "bazel-lint": re.escape(" [same-configuration cache-hit confirmation; lint's cost is in bazel-test]"),
+        "bazel-lint": re.escape(
+            " [same-configuration cache-hit confirmation plus the uncached ruff sweep of tests/bazel_consumer;"
+            " lint's cost is in bazel-test]"
+        ),
     }
     previous = -1
     for step in _GREEN:

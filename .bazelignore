@@ -3,4 +3,7 @@
 # `bazel test //...` would treat the nested module's packages as its own and fail on
 # the `@fltk//...` loads it cannot resolve from the root module context.  The consumer
 # module is exercised by its own lane: `make bazel-consumer-check`.
+# Ignored directories are outside every root-module lint target; //:ruff_check_ignored_dirs
+# sweeps them from the working tree, and tests/test_ruff_tree_check.py fails while any entry
+# here is missing from that target's `paths`.
 tests/bazel_consumer

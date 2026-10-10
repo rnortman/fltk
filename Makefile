@@ -40,7 +40,8 @@ VERBOSE ?= $(if $(filter true,$(CI)),1,0)
 #
 # Three Bazel lanes plus one lock diff is the whole gate: `bazel test --config lint //...`
 # runs every test (Python, Rust, Starlark) and `bazel build --config lint //...` runs every
-# linter, so a step that duplicates either belongs in the build graph instead of here.  Both
+# linter the build graph can name (the one it cannot, the .bazelignore'd consumer directory,
+# is the `bazel run` line in bazel-lint; see that recipe's comment), so a step that duplicates either belongs in the build graph instead of here.  Both
 # root-workspace lanes run under the SAME configuration on purpose: alternating
 # configurations mid-gate discards Bazel's in-memory analysis cache, which cost this gate
 # tens of seconds on every hot run.
@@ -244,16 +245,22 @@ bazel-test: bazel-toolchain-guard
 	    || { echo "FAIL: these packages declare no cargo_file_probe, so the retirement gate cannot see them:"; echo "$$unprobed"; exit 1; }; \
 	echo "bazel-test: every package declares a cargo_file_probe"
 
-# The whole lint surface, via one Bazel invocation (config in .bazelrc): the rules_rust
-# clippy aspect over every Rust target, plus the flag-gated Python lint targets
-# (//:ruff_check, //:ruff_format_check, //:pyright).  `-D warnings` comes from the
-# clippy_flags setting; without it clippy prints and passes.
+# The lint surface, in two invocations (config in .bazelrc).  The build graph's:
+# `bazel build --config lint //...` — the rules_rust clippy aspect over every Rust target, plus
+# the flag-gated Python lint targets (//:ruff_check, //:ruff_format_check, //:pyright).
+# `-D warnings` comes from the clippy_flags setting; without it clippy prints and passes.  And
+# the one lint the graph cannot carry: tests/bazel_consumer is .bazelignore'd, so no root label
+# names its files, and //:ruff_check_ignored_dirs is a `bazel run` target that runs ruff
+# check and ruff format --check over that directory in the working tree, from the repo root,
+# uncached.  It is not a duplicate of anything the `build` line does.
 #
-# Hot after bazel-test this is a cache-hit confirmation (same --config lint configuration).
-# It stays: it keeps the lint surface addressable on its own (`make bazel-lint`) and is the
-# backstop if `test` ever stops covering an output group the `build` form does.
+# Hot after bazel-test the `build` line is a cache-hit confirmation (same --config lint
+# configuration) and the `run` line is the lane's only real work.  The lane stays: it keeps the
+# lint surface addressable on its own (`make bazel-lint`) and is the backstop if `test` ever
+# stops covering an output group the `build` form does.
 bazel-lint: bazel-toolchain-guard
 	bazel build --config lint //...
+	bazel run --config lint //:ruff_check_ignored_dirs
 
 # Bazel verification lane for fltk's CONSUMER surface: exercises the cross-module
 # @fltk// load path that `bazel test //...` in the root cannot cover (same-repo //).

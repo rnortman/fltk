@@ -21,7 +21,8 @@
 #
 # The per-step notes exist because the step NAMES no longer partition the work: bazel-test's
 # invocation builds the lint surface as well, which makes bazel-lint's time a cache-hit
-# confirmation rather than the cost of linting.  Without the notes the timing surface reads as
+# confirmation plus the uncached tests/bazel_consumer sweep (see the bazel-lint comment in the
+# Makefile) rather than the cost of linting.  Without the notes the timing surface reads as
 # "lint is free", pointing the next person at the wrong lane.
 set -eu
 
@@ -50,7 +51,7 @@ gate_start=$(date +%s)
 for step in "$@"; do
     case "$step" in
         bazel-test) note=" [builds the lint surface too: same --config lint configuration]";;
-        bazel-lint) note=" [same-configuration cache-hit confirmation; lint's cost is in bazel-test]";;
+        bazel-lint) note=" [same-configuration cache-hit confirmation plus the uncached ruff sweep of tests/bazel_consumer; lint's cost is in bazel-test]";;
         *) note="";;
     esac
     echo "check-common: running $step$note"

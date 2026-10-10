@@ -6,6 +6,11 @@ Bazel's action cache makes an unchanged re-run free.  A plain `bazel build //...
 cheap, so with the flag off the rule writes the stamp directly and never reaches for the
 tool at all — with no action consuming them, neither the ruff binary nor the source list is
 staged.
+
+`ruff_tree_check` is the one deliberate exception: a `bazel run` target that checks
+working-tree paths the build graph cannot name (a `.bazelignore`d directory has no package, so
+no label reaches its files).  It reads the developer's tree from the workspace root, is
+uncached, and is not gated on the flag.
 """
 
 load("//bzl:gencode_tool.bzl", "RUFF_WHL_FILES")
@@ -95,12 +100,12 @@ cd "$BUILD_WORKSPACE_DIRECTORY"
 "$ruff" format .
 """
 
-def _ruff_fix_impl(ctx):
+def _write_ruff_launcher(ctx, template, **fields):
     ruff = _ruff_exe(ctx)
     launcher = ctx.actions.declare_file(ctx.label.name + ".sh")
     ctx.actions.write(
         output = launcher,
-        content = _RUFF_FIX_TEMPLATE.format(ruff = ruff.short_path),
+        content = template.format(ruff = ruff.short_path, **fields),
         is_executable = True,
     )
     return [DefaultInfo(
@@ -108,9 +113,64 @@ def _ruff_fix_impl(ctx):
         runfiles = ctx.runfiles(files = [ruff]),
     )]
 
+def _ruff_fix_impl(ctx):
+    return _write_ruff_launcher(ctx, _RUFF_FIX_TEMPLATE)
+
 ruff_fix = rule(
     implementation = _ruff_fix_impl,
     doc = "`bazel run //:ruff_fix` — ruff check --fix + ruff format over the source tree.",
     executable = True,
     attrs = {"_ruff": _RUFF_ATTR},
+)
+
+_RUFF_TREE_CHECK_TEMPLATE = """#!/usr/bin/env bash
+set -uo pipefail
+# The paths this target checks have no Bazel label, so it reads them from the developer's tree,
+# which is what BUILD_WORKSPACE_DIRECTORY points at.  Running from that root is also what makes
+# the config's path-scoped per-file-ignores match them.
+if [[ -z "${{BUILD_WORKSPACE_DIRECTORY:-}}" ]]; then
+  echo "{name} must be invoked via 'bazel run', not executed directly" >&2
+  exit 2
+fi
+ruff="$PWD/{ruff}"
+cd "$BUILD_WORKSPACE_DIRECTORY"
+# No `set -e`: both commands run, and either one failing fails the target.
+status=0
+# `--config=` and `--` keep a value that starts with `-` from being read as an option.
+"$ruff" check --no-cache --config={config} -- {paths} || status=1
+"$ruff" format --check --no-cache --config={config} -- {paths} || status=1
+exit "$status"
+"""
+
+# Single-quotes a value for the launcher: inside '...' the shell expands nothing, and an
+# embedded ' is closed, escaped and reopened.
+def _sh_quote(value):
+    return "'" + value.replace("'", "'\\''") + "'"
+
+def _ruff_tree_check_impl(ctx):
+    return _write_ruff_launcher(
+        ctx,
+        _RUFF_TREE_CHECK_TEMPLATE,
+        name = ctx.label.name,
+        config = _sh_quote(ctx.attr.config),
+        paths = " ".join([_sh_quote(p) for p in ctx.attr.paths]),
+    )
+
+ruff_tree_check = rule(
+    implementation = _ruff_tree_check_impl,
+    doc = "`bazel run` target: ruff check + ruff format --check over working-tree paths the " +
+          "build graph cannot name (a .bazelignore'd directory).  Uncached; reads the tree.",
+    executable = True,
+    attrs = {
+        "config": attr.string(
+            mandatory = True,
+            doc = "Workspace-relative ruff config, read from the working tree after the cd.",
+        ),
+        "paths": attr.string_list(
+            mandatory = True,
+            allow_empty = False,
+            doc = "Workspace-relative paths to check.",
+        ),
+        "_ruff": _RUFF_ATTR,
+    },
 )

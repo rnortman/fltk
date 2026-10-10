@@ -144,20 +144,6 @@ of sites that goes stale as crates are added. `pyproject.toml` is not part of it
 `0.6.0` cut, and `v0.5.0` is left untouched. Location: `bzl/version.bzl` carries the
 `TODO(version-bump-0-6-0)` comment.
 
-## `bazel-lint-consumer-module`
-
-`tests/bazel_consumer/`'s three Python files (`consumer_python_test.py`, `consumer_rust_test.py`,
-`consumer_unparser_test.py`) are no longer ruff-checked. They used to be swept up by `ruff check .`
-from the repo root; the Bazel `//:ruff_check` / `//:ruff_format_check` targets glob the source tree
-instead, and that directory is `.bazelignore`d (it is its own Bazel module, so the root
-`bazel test //...` must not treat its packages as its own). An ignored directory has no package, so
-no root-module target can name its files. Closing this means giving the consumer module its own
-lint targets and running them from `make bazel-consumer-check`, which requires the lint flag and the
-ruff config to be reachable cross-module (`@fltk//bzl:lint` is not currently consumer-visible for
-this purpose, and the module would need its own pip hub entry for ruff). Small, but it is a real
-gap: a style or import-order regression in those files now passes `make check`. Location:
-`BUILD.bazel` (the `_LINT_PY_SRCS` glob), `tests/bazel_consumer/BUILD.bazel`.
-
 ## `bootstrap-fegen-chain`
 
 The four self-hosting seed files (`fltk/fegen/{fltk_cst,fltk_cst_protocol,fltk_parser,

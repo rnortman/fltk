@@ -578,6 +578,16 @@ _TESTS = {
         "data": ["//:fegen_test_data"],
     },
     "test_registry_gc_eviction.py": {"deps": _PHASE4_ROUNDTRIP_CST},
+    # Executes the //:ruff_check_ignored_dirs launcher against a scratch workspace holding
+    # copies of the two ruff config files, and joins its paths to .bazelignore.
+    "test_ruff_tree_check.py": {
+        "data": [
+            "//:.bazelignore",
+            "//:gencode-ruff.toml",
+            "//:pyproject.toml",
+            "//:ruff_check_ignored_dirs",
+        ],
+    },
     "test_rust_cst_poc.py": {"deps": _POC_CST},
     "test_rust_gate_manifest.py": {
         # It reads the declared output list off this BUILD file and derives the same list from
