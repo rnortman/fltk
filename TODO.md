@@ -191,25 +191,44 @@ analysis marks `deep`, in place of the derives. Do it when a consumer actually h
 `PartialEq` walk is the shape to copy. Location: `fltk/fegen/gsm2ast_rs.py` (`_NODE_DERIVES`).
 
 
-## `ast-select-literal-content`
+## `ast-select-count-blind`
 
-Kind-aware `to_cst` alternative selection tests a value's *kind*, and a labeled literal's kind is
-the same TEXT a regex position contributes (`element_types` maps a literal to SPAN, which
-`field_type` coerces to TEXT wherever the label carries anything else). So for a rule whose
-alternatives split a label between a literal and something else — `x := v:"lit" | v:item ;` under a
-`rule x { product; }` sidecar — the literal alternative's selection guard admits *any* string, and
-the literal position then renders the grammar's own text: a hand-built `X(v="xyz")` unparses to
-`lit` on both backends, silently replacing the value. Pre-existing (name-only first-fit chose the
-same alternative and swapped the same way); the kind test narrowed it to strings but not to the
-literal's own string. Closing it means a content test at selection time — `Guard(GuardKind.LITERAL)`
-where the accepted TEXT of a label is contributed by literal positions alone, which Python already
-spells as `astrt.LiteralText` — *and* the matching content test on the Rust side, whose selection
-conjunct is a `matches!` over field enum variants and carries no content today. That second half is
-the design work: `AcceptedKind.guard` is currently the untagged backend's test only, so making
-selection content-aware changes what the tagged backend reads, and it has to be decided against the
-multi-spelling doctrine (`rival_signature` deliberately does not record which literal a value came
-from, so alternatives differing only in literal spelling stay first-fit). Location:
-`fltk/fegen/ast_model.py` (`_kind_guard`), `fltk/fegen/gsm2ast_rs.py` (`kind_condition`).
+`to_cst` alternative selection on a merged product tests which labels are populated
+(`astrt.alternative_fits`, `required <= present <= labels`; `alternative_fits` in
+`fltk-ast-core`), the kinds they carry and, for a literal-only text position, its spelling — but
+never how *many* values a label holds against how many positions the alternative has for it. The
+trial returns the first fitting alternative's body result without trying the next, so a value
+that fits an earlier alternative by name and kind but is too short for it is refused instead of
+reaching a later alternative that would take it. `x := v:"gray" . v:/[0-9]+/ | v:"grey" | v:word ;`
+under `rule x { product; }`: parsed `grey` gives `v=["grey"]`; alternative 0 passes the name and
+`TEXT` kind tests, its literal position takes `"grey"`, its required regex position has nothing,
+and `filled` raises on a value the parser itself produced, on both backends. It predates
+literal-content selection (the older own-text body guard refused `"grey"` one position earlier),
+and it is not `ast-dispatch-order`, which is the `from_cst` sum/product classifier. Closing it
+means a count-aware selection conjunct — per label, the alternative's minimum and maximum
+position counts tested against the field's value count — on both backends, decided against how it
+composes with optional and repeated positions and with hoisted groups. Location:
+`fltk/fegen/gsm2ast.py` and `fltk/fegen/gsm2ast_rs.py` (`trial_lines`).
+
+## `ast-select-untagged-erased-text`
+
+`to_cst` alternative selection on Python cannot tell a `transparent;` rule's erased text from a
+literal spelling or from another erased text: the Python field is a bare `str`, while Rust keeps a
+payload enum whose variant records the alternative that produced the value. `_distinguishable`
+skips the runtime-type overlap check for `LITERAL` and `CONVERTIBLE` guards, so the two backends
+part on parsed input wherever the admitting alternative needs more than the label and the parse
+went through an erased alternative instead. `LITERAL`: `ltail := v:"lit" . ";" | v:tword ;` with
+`tword` transparent, parsed `lit` renders `lit` on Rust and `lit;` on Python (which reads back as
+the same value); pinned at `fltk/fegen/test_gsm2ast.py`
+(`test_an_untagged_spelling_takes_the_literal_alternative`) and `tests/rust_gate_cases.py`
+(`an_untagged_spelling_keeps_its_own_alternative`). `CONVERTIBLE`, which needs two erased rules
+with overlapping languages: `x := v:word . ";" | v:other ;` with `word := w:/[a-z]+/ ;`,
+`other := o:/[a-z]+/ ;`, both transparent, parsed `abc` renders `abc;` on Python; not pinned.
+Dropping the guards instead would send every value of the label to the first alternative on both
+backends. Closing it means the Python backend carrying a tag on erased text, which is a
+generated-type change for every `transparent;` rule that erases to text and has to be decided
+against that break for out-of-tree consumers. Location: `fltk/fegen/ast_model.py`
+(`_distinguishable`).
 
 ## `cst-per-label-mutator-narrow-child-check`
 

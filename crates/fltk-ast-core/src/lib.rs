@@ -69,8 +69,8 @@ pub use fold::{against_direction, check_fold_arity, fold_left, fold_right};
 pub use error::{AstError, ParseToAstError};
 pub use spans::merged_span;
 pub use synth::{
-    alternative_fits, check_consumed, check_group, filled, hoisted, multi_values, populated, unplaceable, unrenderable,
-    wrapper_needed, Cursor, TerminalAlt, TerminalShape, TerminalSplit, UNBOUNDED,
+    alternative_fits, check_consumed, check_group, filled, hoisted, multi_values, populated, spelled, unplaceable,
+    unrenderable, wrapper_needed, Cursor, TerminalAlt, TerminalShape, TerminalSplit, UNBOUNDED,
 };
 pub use terminal::{source_span, text_span, validate_terminal, LazyTerminal, TerminalPattern};
 

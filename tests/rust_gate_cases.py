@@ -40,6 +40,7 @@ from __future__ import annotations
 
 import contextlib
 import dataclasses
+import json
 from collections.abc import Callable, Iterator
 from pathlib import Path
 
@@ -482,12 +483,16 @@ fn a_chain_of_two_hundred_thousand_links_tears_down_without_recursing() {
 # literals are all single-spelling, so the existing byte-parity sweep exercises only the "text
 # matches the one spelling" direction; these grammars reach the multi-spelling and rival-regex
 # paths. An inverted `is_some_and`, or a mis-rendered pattern alternation, passes every
-# emitted-source assertion and fails here.
+# emitted-source assertion and fails here. `tsplit` and `trange` are compile-only: their terminal
+# splits group alternatives pushing identical children into one arm,
+# `matches!(split.alternative, 0 | 1)` and `matches!(split.alternative, 0..=2)`.
 LITERAL_LABEL_GRAMMAR = (
     'val := ( x:"null" | x:/[0-9]+/ ) . u:word ;\n'
     'seq := x:"null"? . x:/[0-9]+/ . u:word ;\n'
     'colour := red:"red" | blue:"blue" | gray:"gray" | gray:"grey" ;\n'
     'sole := v:"null" . u:word ;\n'
+    'tsplit := v:"lit" | v:/[0-9]+/ | w:/[a-z]+/ ;\n'
+    'trange := v:"lit" | v:/[0-9]+/ | v:/[A-Z]+/ | w:/[a-z]+/ ;\n'
     "word := c:/[a-z]+/ ;\n"
 )
 
@@ -2192,6 +2197,162 @@ fn a_union_field_held_through_a_box_is_tested_where_it_lies() {
     assert_eq!(Deep::from_cst(&node).expect("a synthesised CST must convert"), nested);
 }
 """
+
+# Selection by a literal-only label's spelling set, over the grammar the Python suite runs
+# (`ast_test_grammars.LITERAL_SELECT_GRAMMAR`): the parsed inputs of
+# `ast_test_grammars.LITERAL_SELECT_RENDERINGS` round-tripped through `from_cst`, `to_cst` and the
+# compiled unparser, and the same hand-built refusals. A content test the trial omits renders the
+# literal for every text and passes every emitted-source assertion.
+_LITERAL_SELECT_PRELUDE = """//! Text-aware `to_cst` selection, from a real parse back to text.
+
+use super::ast::{
+    Both, BothV, Erased, Etext, Flat, Lit, LitV, Ltail, LwordV, Mixed, MixedV, Optlit, OptlitV,
+    Other, Replit, ReplitV, Seq, Shade, ShadeV, Word,
+};
+use super::parser::Parser;
+use super::unparser::Unparser;
+use ::fltk_cst_core::Span;
+use ::fltk_unparser_core::{resolve_spacing_specs, Renderer, RendererConfig};
+
+/// Synthesise `$value`'s CST and render it through the generated unparser.
+macro_rules! render {
+    ($value:expr, $unparse:ident) => {
+        $value.to_cst().map(|node| {
+            let guard = node.read();
+            let unparsed = Unparser::new()
+                .$unparse(&*guard)
+                .expect("a synthesised CST must unparse");
+            let resolved = resolve_spacing_specs(unparsed.doc());
+            Renderer::new(RendererConfig {
+                indent_width: 2,
+                max_width: 80,
+            })
+            .render(&resolved)
+        })
+    };
+}
+
+/// Parse `$src` as `$type`, convert it, and render the value back to text.
+macro_rules! round_trip {
+    ($src:expr, $parse:ident, $type:ident, $unparse:ident) => {{
+        let src: &str = $src;
+        let mut parser = Parser::new(src, None, false);
+        let parsed = parser.$parse(0).expect("the input must parse");
+        assert!(parsed.pos as usize == src.len(), "the parse must consume {src:?}");
+        let value = $type::from_cst(&parsed.result).expect("a parsed CST must convert");
+        render!(value, $unparse).expect("a parsed value must synthesise")
+    }};
+}
+
+const NO_FIT: &str = "no alternative fits the populated fields";
+
+fn word(text: &str) -> Word {
+    Word {
+        text: text.to_string(),
+        span: Span::unknown(),
+    }
+}
+
+fn other(text: &str) -> Other {
+    Other {
+        text: text.to_string(),
+        span: Span::unknown(),
+    }
+}
+
+"""
+
+
+def _literal_select_renderings() -> str:
+    """One `#[test]` asserting every row of the shared rendering table."""
+    checks = "".join(
+        f"    assert_eq!(round_trip!({json.dumps(text)}, apply__parse_{goal}, {goal.capitalize()}, "
+        f"unparse_{goal}), {json.dumps(rendered)});\n"
+        for goal, text, rendered in fixtures.LITERAL_SELECT_RENDERINGS
+    )
+    return f"#[test]\nfn parsed_input_renders_as_tabled() {{\n{checks}}}\n"
+
+
+_LITERAL_SELECT_CHECKS = """
+#[test]
+fn an_untagged_spelling_keeps_its_own_alternative() {
+    // Parsed `lit` is the erased `tword` (the literal alternative needs a `;`); the variant says
+    // so, and it renders `lit`. Python's `str` carries no variant and renders `lit;`.
+    assert_eq!(round_trip!("lit", apply__parse_ltail, Ltail, unparse_ltail), "lit");
+}
+
+#[test]
+fn hand_built_spellings_and_nodes_render() {
+    let span = Span::unknown;
+    let lit = Lit { v: LitV::Text("lit".into()), span: span() };
+    assert_eq!(render!(lit, unparse_lit).unwrap(), "lit");
+    let lit = Lit { v: LitV::Word(word("abc")), span: span() };
+    assert_eq!(render!(lit, unparse_lit).unwrap(), "abc");
+    let shade = Shade { v: ShadeV::Text("grey".into()), span: span() };
+    assert_eq!(render!(shade, unparse_shade).unwrap(), "gray");
+    let replit = Replit { v: vec![ReplitV::Text("lit".into()), ReplitV::Text("lit".into())], span: span() };
+    assert_eq!(render!(replit, unparse_replit).unwrap(), "litlit");
+    let both = Both { v: vec![BothV::Text("grey".into()), BothV::Text("42".into())], span: span() };
+    assert_eq!(render!(both, unparse_both).unwrap(), "gray42");
+    let erased = Erased { e: LwordV::Text("lit".into()), span: span() };
+    assert_eq!(render!(erased, unparse_erased).unwrap(), "lit");
+    let erased = Erased { e: LwordV::Word(word("abc")), span: span() };
+    assert_eq!(render!(erased, unparse_erased).unwrap(), "abc");
+    let etext = Etext { e: "lit".into(), span: span() };
+    assert_eq!(render!(etext, unparse_etext).unwrap(), "lit");
+}
+
+#[test]
+fn empty_containers_render_empty() {
+    let optlit = Optlit { v: None, span: Span::unknown() };
+    assert_eq!(render!(optlit, unparse_optlit).unwrap(), "");
+    let replit = Replit { v: vec![], span: Span::unknown() };
+    assert_eq!(render!(replit, unparse_replit).unwrap(), "");
+}
+
+#[test]
+fn text_outside_the_spelling_set_is_refused_not_replaced() {
+    // Refused by selection, or where an alternative's regex accepts any text by that terminal
+    // or the literal position's own test; never rendered as the literal.
+    let span = Span::unknown;
+    let lit = Lit { v: LitV::Text("xyz".into()), span: span() };
+    assert!(render!(lit, unparse_lit).is_err());
+    let seq = Seq { v: "xyz".into(), n: word("abc"), span: span() };
+    assert!(render!(seq, unparse_seq).is_err());
+    let mixed = Mixed { v: vec![MixedV::Text("xyz".into()), MixedV::Word(word("abc"))], span: span() };
+    assert!(render!(mixed, unparse_mixed).is_err());
+    let both = Both { v: vec![BothV::Text("xyz".into()), BothV::Text("42".into())], span: span() };
+    assert!(render!(both, unparse_both).is_err());
+    let flat = Flat { v: "xyz".into(), n: word("abc"), t: other("XYZ"), span: span() };
+    assert!(render!(flat, unparse_flat).is_err());
+    let erased = Erased { e: LwordV::Text("xyz".into()), span: span() };
+    assert!(render!(erased, unparse_erased).is_err());
+    let etext = Etext { e: "xyz".into(), span: span() };
+    assert!(render!(etext, unparse_etext).is_err());
+}
+
+#[test]
+fn text_no_alternative_admits_fits_no_alternative() {
+    let span = Span::unknown;
+    let shade = Shade { v: ShadeV::Text("xyz".into()), span: span() };
+    assert!(render!(shade, unparse_shade).unwrap_err().message.ends_with(NO_FIT));
+    let optlit = Optlit { v: Some(OptlitV::Text("xyz".into())), span: span() };
+    assert!(render!(optlit, unparse_optlit).unwrap_err().message.ends_with(NO_FIT));
+    let replit = Replit { v: vec![ReplitV::Text("lit".into()), ReplitV::Text("xyz".into())], span: span() };
+    assert!(render!(replit, unparse_replit).unwrap_err().message.ends_with(NO_FIT));
+}
+
+#[test]
+fn the_content_test_leaves_a_node_kind_beside_it_alone() {
+    // `Word` passes alternative 0's kind test; the literal position then has nothing to take.
+    let mixed = Mixed { v: vec![MixedV::Word(word("abc"))], span: Span::unknown() };
+    let error = render!(mixed, unparse_mixed).unwrap_err();
+    assert!(error.message.contains(r#"needs 1 "v" value"#), "{}", error.message);
+}
+"""
+
+LITERAL_SELECT_RUNTIME = _LITERAL_SELECT_PRELUDE + _literal_select_renderings() + _LITERAL_SELECT_CHECKS
+
 
 # A `multi` keyed collection whose element is the recursive type: the accumulating `from_cst`,
 # the grouped synthesis, and the equality walk's key-then-run arm, which is the one shape a
@@ -3909,6 +4070,14 @@ CASES = [
         "literal_labels",
         LITERAL_LABEL_GRAMMAR,
         runtime=LITERAL_LABEL_RUNTIME,
+        parser=True,
+        unparser=True,
+    ),
+    Case(
+        "literal_select",
+        fixtures.LITERAL_SELECT_GRAMMAR,
+        fixtures.LITERAL_SELECT_SIDECAR,
+        runtime=LITERAL_SELECT_RUNTIME,
         parser=True,
         unparser=True,
     ),

@@ -8,6 +8,7 @@ from dataclasses import dataclass
 from typing import TYPE_CHECKING, Final
 
 from fltk.fegen import gsm, naming
+from fltk.fegen.grammar_shape import spellings_for
 from fltk.iir import model as iir
 from fltk.iir.py import reg as pyreg
 from fltk.unparse.combinators import (
@@ -30,7 +31,7 @@ from fltk.unparse.fmt_config import (
     RenderAs,
     before_spacing_is_tentative,
 )
-from fltk.unparse.literal_labels import check_labeled_literal_texts, spellings_for
+from fltk.unparse.literal_labels import check_labeled_literal_texts
 
 if TYPE_CHECKING:
     from fltk.iir.context import CompilerContext

@@ -667,7 +667,8 @@ class AstGenerator:
 
         Which labels are populated is half the question; a label carrying several types leaves
         the alternatives that accept different ones of them indistinguishable by name, so an
-        alternative accepting fewer kinds than the field holds carries a kind test as well.
+        alternative accepting fewer kinds than the field holds carries a kind test as well, and
+        one whose text at a label comes only from literals carries a test of that text.
         """
         by_label = {field.label: field for field in fields if field.wrapper is None}
         entries = [
@@ -677,6 +678,8 @@ class AstGenerator:
         populated = ", ".join(entries)
         lines = [f"_present = astrt.populated({{{populated}}})"]
         for plan in plans:
+            # TODO(ast-select-count-blind): count each label's values against the alternative's
+            # positions, so an alternative too short for the value falls through to the next.
             fits = f"{_frozenset_literal(plan.required_labels)}, {_frozenset_literal(plan.labels)}"
             conditions = [f"astrt.alternative_fits(_present, {fits})"]
             conditions.extend(
@@ -690,10 +693,11 @@ class AstGenerator:
         return lines
 
     def kind_condition(self, field: am.Field, guard: am.SelectionGuard, values: _Values) -> str:
-        """The test that every value one field holds is a kind this alternative accepts.
+        """The test that every value one field holds is a kind, or text, this alternative accepts.
 
         The value is untagged, so what the kinds are told apart by is the same guard a rival
-        item position would test them with: a class, a text type, or the erased rule's own
+        item position would test them with: a class, a text type, the label's literal spellings
+        where the alternative's text there comes only from literals, or the erased rule's own
         converter where its payload is a bare scalar.
         """
         guards = _tuple_literal([self.guard_expression(kind.guard) for kind in guard.accepted])
@@ -857,7 +861,7 @@ class AstGenerator:
             return "str"
         if guard.kind is am.GuardKind.PATTERN:
             return f"astrt.Pattern({guard.pattern!r})"
-        return f"astrt.LiteralText({guard.literal!r})"
+        return f"astrt.LiteralText({guard.spellings!r})"
 
     def slot_lines(self, rule_name: str, run: am.SlotRun, by_label: dict[str, am.Field]) -> list[str]:
         """Statements appending the children one item position contributes."""

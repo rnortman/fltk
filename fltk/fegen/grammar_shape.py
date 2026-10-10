@@ -1,9 +1,10 @@
 """Grammar-shape analysis shared by the AST model, the ``.fltkast`` validator, and the
-unparse subsystem's labeled-literal analysis (``fltk.unparse.literal_labels``).
+two unparser generators.
 
 Everything here is a pure function of an INLINE-expanded, trivia-classified GSM grammar:
-which child kinds a label can carry, whether two alternatives are told apart by their
-labeled children, and which of the four node forms a rule falls into.
+which child kinds a label can carry, which literal spellings a label carries, whether two
+alternatives are told apart by their labeled children, and which of the four node forms a
+rule falls into.
 
 The sidecar validator and the model both need these answers — the validator to reject an
 annotation against the shape it does not apply to, the model to emit that shape — and they
@@ -54,6 +55,64 @@ def visit_included_items(items: gsm.Items, visitor: Callable[[gsm.Item], None]) 
         elif isinstance(item.term, Sequence):
             for alternative in item.term:
                 visit_included_items(alternative, visitor)
+
+
+@dataclasses.dataclass(frozen=True, slots=True)
+class LabelLiterals:
+    """The literal spellings one label of a rule carries."""
+
+    texts: tuple[str, ...]
+    """The label's distinct literal texts, in grammar order; the first is the canonical one."""
+
+    literal_only: bool
+    """True when no other kind of term carries the label."""
+
+
+def label_literals(rule: gsm.Rule) -> Mapping[str, LabelLiterals]:
+    """Every label of ``rule`` that a literal term carries, with that label's spellings.
+
+    Labels are rule-scoped — a sub-expression's children are inlined into the rule's own node
+    — so the walk covers every alternative at every INCLUDE sub-expression depth.  A label
+    carried by no literal at all is absent from the result.
+    """
+    texts: dict[str, list[str]] = {}
+    other_kinds: set[str] = set()
+
+    def visit(item: gsm.Item) -> None:
+        if item.label is None:
+            return
+        if isinstance(item.term, gsm.Literal):
+            spellings = texts.setdefault(item.label, [])
+            if item.term.value not in spellings:
+                spellings.append(item.term.value)
+        else:
+            other_kinds.add(item.label)
+
+    for alternative in rule.alternatives:
+        visit_included_items(alternative, visit)
+
+    return {
+        label: LabelLiterals(texts=tuple(spellings), literal_only=label not in other_kinds)
+        for label, spellings in texts.items()
+    }
+
+
+def spellings_for(rule: gsm.Rule, item: gsm.Item) -> tuple[str, ...]:
+    """The literal texts a labeled literal item's span child may carry.
+
+    The item's own text is always in the set; a label shared with other literal items adds
+    their spellings, because a shared label declares the spellings equivalent.  An unlabeled
+    literal carries no semantic content — its spellings are equivalent by definition and
+    text-checking one would break keyword evolution — so it gets an empty set, which callers
+    read as "emit no text check".
+
+    ``rule`` is the rule ``item`` belongs to, so ``label_literals`` always knows the label:
+    narrowing a multi-spelling label to one spelling would make every sibling spelling fail
+    the trial, so a lookup that cannot succeed is a defect rather than something to absorb.
+    """
+    if item.label is None or not isinstance(item.term, gsm.Literal):
+        return ()
+    return label_literals(rule)[item.label].texts
 
 
 def label_terms(items: gsm.Items) -> dict[str, tuple[gsm.Term, ...]]:

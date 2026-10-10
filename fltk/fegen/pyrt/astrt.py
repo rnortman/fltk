@@ -634,13 +634,13 @@ class Pattern:
 
 @dataclasses.dataclass(frozen=True)
 class LiteralText:
-    """A guard admitting only a literal's own text.
+    """A guard admitting only the literal texts one label carries in its rule.
 
     A labeled literal renders from the grammar, so a position holding one may take a value
-    only when that value *is* the literal: anything else would come back as different text.
+    only when the value is one of those texts: anything else would come back as different text.
     """
 
-    text: str
+    spellings: tuple[str, ...]
 
 
 @dataclasses.dataclass(frozen=True)
@@ -664,7 +664,7 @@ def accepts(guard: Any, value: Any) -> bool:
     if isinstance(guard, Pattern):
         return isinstance(value, str) and re.fullmatch(guard.pattern, value) is not None
     if isinstance(guard, LiteralText):
-        return value == guard.text
+        return isinstance(value, str) and value in guard.spellings
     if isinstance(guard, Convertible):
         try:
             guard.convert(value)
@@ -866,8 +866,9 @@ def field_fits(value: Any, guards: Sequence[Any]) -> bool:
     """Whether every value a field holds is of a kind an alternative accepts at that label.
 
     The kind half of alternative selection, beside ``alternative_fits``'s name half: a label
-    carrying several types is one field, and which of them a value is decides which
-    alternatives can render it.  An empty field constrains nothing — what an alternative does
+    carrying several types is one field, and which of them a value is — or, for text an
+    alternative renders from its literals, which spelling it is — decides which alternatives
+    can render it.  An empty field constrains nothing — what an alternative does
     with a label it is not given is the name half's question.
     """
     return all(any(accepts(guard, item) for guard in guards) for item in field_values(value))

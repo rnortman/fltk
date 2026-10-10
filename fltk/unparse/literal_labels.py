@@ -2,95 +2,31 @@
 
 A label is a statement about semantic content: labeling a literal encodes a distinction the
 parser is responsible for, and application code recovers that distinction from the label,
-never from the literal's text.  Two consequences live here, and both unparser generators
-(Python and Rust) read them from this one implementation:
-
-``label_literals``
-    The spellings each label of a rule carries.  Alternative spellings under one label
-    (``gray:"gray" | gray:"grey"``) declare the spellings equivalent, so trial matching
-    accepts a span child whose text is any of them while rendering still emits the
-    grammar's first spelling.
+never from the literal's text.  The spellings each label carries
+(``fltk.fegen.grammar_shape.label_literals``) are grammar analysis the AST model shares; the
+refusal here is the unparser's own policy, and both unparser generators (Python and Rust)
+read it from this one implementation:
 
 ``check_labeled_literal_texts``
     Refuses the one mechanically fishy shape: a label that is always present, carries
     literals only, and covers more than one spelling.  Such a label records a bare position
     in the CST while its author almost certainly expected the written word to survive.
 
-Both take a grammar whose INLINE items have already been expanded.
+It takes a grammar whose INLINE items have already been expanded.
 """
 
 from __future__ import annotations
 
-import dataclasses
 from typing import TYPE_CHECKING
 
 from fltk.fegen import cst_ergonomics as ce
-from fltk.fegen import gsm
-from fltk.fegen.grammar_shape import visit_included_items
+from fltk.fegen.grammar_shape import label_literals
 
 if TYPE_CHECKING:
-    from collections.abc import Mapping
+    from fltk.fegen import gsm
 
 # Two spellings under one always-present label is the shape check_labeled_literal_texts refuses.
 MIN_SPELLINGS = 2
-
-
-@dataclasses.dataclass(frozen=True, slots=True)
-class LabelLiterals:
-    """The literal spellings one label of a rule carries."""
-
-    texts: tuple[str, ...]
-    """The label's distinct literal texts, in grammar order; the first is the canonical one."""
-
-    literal_only: bool
-    """True when no other kind of term carries the label."""
-
-
-def label_literals(rule: gsm.Rule) -> Mapping[str, LabelLiterals]:
-    """Every label of ``rule`` that a literal term carries, with that label's spellings.
-
-    Labels are rule-scoped — a sub-expression's children are inlined into the rule's own node
-    — so the walk covers every alternative at every INCLUDE sub-expression depth.  A label
-    carried by no literal at all is absent from the result.
-    """
-    texts: dict[str, list[str]] = {}
-    other_kinds: set[str] = set()
-
-    def visit(item: gsm.Item) -> None:
-        if item.label is None:
-            return
-        if isinstance(item.term, gsm.Literal):
-            spellings = texts.setdefault(item.label, [])
-            if item.term.value not in spellings:
-                spellings.append(item.term.value)
-        else:
-            other_kinds.add(item.label)
-
-    for alternative in rule.alternatives:
-        visit_included_items(alternative, visit)
-
-    return {
-        label: LabelLiterals(texts=tuple(spellings), literal_only=label not in other_kinds)
-        for label, spellings in texts.items()
-    }
-
-
-def spellings_for(rule: gsm.Rule, item: gsm.Item) -> tuple[str, ...]:
-    """The literal texts a labeled literal item's span child may carry.
-
-    The item's own text is always in the set; a label shared with other literal items adds
-    their spellings, because a shared label declares the spellings equivalent.  An unlabeled
-    literal carries no semantic content — its spellings are equivalent by definition and
-    text-checking one would break keyword evolution — so it gets an empty set, which callers
-    read as "emit no text check".
-
-    ``rule`` is the rule ``item`` belongs to, so ``label_literals`` always knows the label:
-    narrowing a multi-spelling label to one spelling would make every sibling spelling fail
-    the trial, so a lookup that cannot succeed is a defect rather than something to absorb.
-    """
-    if item.label is None or not isinstance(item.term, gsm.Literal):
-        return ()
-    return label_literals(rule)[item.label].texts
 
 
 def check_labeled_literal_texts(grammar: gsm.Grammar) -> None:

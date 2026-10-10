@@ -700,7 +700,7 @@ class TestSynthesisPlans:
         assert model_for(body).plans["target"].terminals[0].pattern is None
 
     def test_a_literal_slot_records_the_text_it_renders(self) -> None:
-        """It is the only value the position can carry: the text comes back from the grammar."""
+        """The position renders that text whatever spelling it took: the text comes from the grammar."""
         slots = self.slots('x:"null" . x:/[0-9]+/ . y:item')
         assert [(slot.kind, slot.literal, slot.pattern) for slot in slots] == [
             (am.SlotKind.LITERAL, "null", None),
@@ -1430,6 +1430,28 @@ class TestTransparent:
         )
         assert element_of(model, "target", "w") == am.TransparentType("wrap", am.NodeType("WrapOnly"))
         assert [variant.name for variant in model.field_enums["WrapOnly"].variants] == ["Item", "Other"]
+
+    LWORD = 'target := e:lword ;\nlword := v:"lit" | v:/[0-9]+/ | v:word ;\nword := w:/[a-z]+/ ;\n'
+    LWORD_SIDECAR = "rule lword { product; transparent; }\n"
+
+    def test_a_literal_mixed_into_the_payload_label_carries_text(self) -> None:
+        """As in a field of the same label: the literal contributes its text, not a position."""
+        model = configured_model(self.LWORD, self.LWORD_SIDECAR)
+        assert element_of(model, "target", "e") == am.TransparentType("lword", am.NodeType("LwordV"))
+        assert [variant.name for variant in model.field_enums["LwordV"].variants] == ["Text", "Word"]
+
+    def test_a_literal_mixed_with_regexes_erases_to_text(self) -> None:
+        """Literal text and regex text are one kind, so no payload enum is left to name.
+
+        The suppressed rule reference keeps the rule a product: one of literals and regexes
+        alone is terminal-only, and erases to text without reaching the payload analysis.
+        """
+        model = configured_model(
+            'target := e:ltext ;\nltext := v:"lit" . %semi? | v:/[0-9]+/ ;\nsemi := s:";" ;\n',
+            "rule ltext { product; transparent; }\n",
+        )
+        assert element_of(model, "target", "e") == am.TransparentType("ltext", am.TEXT)
+        assert "LtextV" not in model.field_enums
 
     def test_the_erased_rules_type_name_is_free_for_reuse(self) -> None:
         """Nothing is emitted under it, so another rule may claim the name."""
@@ -2298,7 +2320,15 @@ class TestSynthesisRuns:
     def test_rival_sequential_positions_guard_by_kind(self) -> None:
         """A text position reports its own terminal mismatch; a literal renders from the grammar."""
         assert guards_for('x:"null" . x:/[0-9]+/') == [
-            am.Guard(am.GuardKind.LITERAL, literal="null"),
+            am.Guard(am.GuardKind.LITERAL, spellings=("null",)),
+            am.Guard(am.GuardKind.TEXT),
+        ]
+
+    def test_a_literal_position_admits_every_spelling_its_label_carries_in_the_rule(self) -> None:
+        """The body admits what selection admits for the label, so it never refuses a sibling
+        alternative's spelling that selection routed here; the grammar's own text is rendered."""
+        assert guards_for('x:"gray" . x:/[0-9]+/ | x:"grey"', PRODUCT_SIDECAR) == [
+            am.Guard(am.GuardKind.LITERAL, spellings=("gray", "grey")),
             am.Guard(am.GuardKind.TEXT),
         ]
 
@@ -2443,6 +2473,41 @@ def accepted_elements(guards: tuple[am.SelectionGuard, ...]) -> dict[str, list[a
     return {guard.label: [kind.element for kind in guard.accepted] for guard in guards}
 
 
+def accepted_guards(guards: tuple[am.SelectionGuard, ...]) -> dict[str, list[am.Guard]]:
+    """One alternative's guards as label -> the tests admitting its values, in test order."""
+    return {guard.label: [kind.guard for kind in guard.accepted] for guard in guards}
+
+
+def model_for_product(body: str) -> am.RuleNode:
+    """``target``'s node, kept a merged product."""
+    return configured(body, PRODUCT_SIDECAR).nodes["target"]
+
+
+class TestLabelSpellings:
+    """The spelling set a labeled literal's position and its alternative's selection admit."""
+
+    def test_spellings_span_alternatives_and_sub_expressions_in_grammar_order(self) -> None:
+        model = model_for('( v:"a" | v:"b" ) . w:item | v:"c" . w:other | v:"a" . w:item')
+        literal_slots = [
+            slot
+            for plan in model.plans["target"].alternatives
+            for slot in plan.slots
+            if slot.kind is am.SlotKind.LITERAL
+        ]
+        assert [slot.literal for slot in literal_slots] == ["a", "b", "c", "a"]
+        assert {slot.spellings for slot in literal_slots} == {("a", "b", "c")}
+
+    def test_only_a_literal_slot_carries_spellings(self) -> None:
+        model = model_for('v:"a" . w:item | v:/[0-9]+/ . w:item')
+        slots = [slot for plan in model.plans["target"].alternatives for slot in plan.slots]
+        assert [(slot.kind, slot.spellings) for slot in slots] == [
+            (am.SlotKind.LITERAL, ("a",)),
+            (am.SlotKind.NODE, ()),
+            (am.SlotKind.TEXT, ()),
+            (am.SlotKind.NODE, ()),
+        ]
+
+
 class TestSelectionGuards:
     """What a value's kinds say about which alternative can rebuild it."""
 
@@ -2483,9 +2548,109 @@ class TestSelectionGuards:
 
     def test_a_literal_and_a_node_under_one_label_are_kind_distinct(self) -> None:
         """A labeled literal's element is text where the label also carries nodes."""
-        assert [accepted_elements(guards) for guards in selection_for('v:"lit" | v:item', PRODUCT_SIDECAR)] == [
+        guards = selection_for('v:"lit" | v:item', PRODUCT_SIDECAR)
+        assert [accepted_elements(alternative) for alternative in guards] == [
             {"v": [am.TEXT]},
             {"v": [am.NodeType("Item")]},
+        ]
+        assert [accepted_guards(alternative) for alternative in guards] == [
+            {"v": [am.Guard(am.GuardKind.LITERAL, spellings=("lit",))]},
+            {"v": [am.Guard(am.GuardKind.NODE, rule_name="item")]},
+        ]
+
+    def test_literal_alternatives_admit_the_labels_whole_spelling_set(self) -> None:
+        """Sibling spellings are equivalent: both literal alternatives admit both, the first
+        fits first and renders the canonical spelling, and any other text fits neither."""
+        guards = selection_for('v:"gray" | v:"grey" | v:item', PRODUCT_SIDECAR)
+        assert [accepted_guards(alternative) for alternative in guards] == [
+            {"v": [am.Guard(am.GuardKind.LITERAL, spellings=("gray", "grey"))]},
+            {"v": [am.Guard(am.GuardKind.LITERAL, spellings=("gray", "grey"))]},
+            {"v": [am.Guard(am.GuardKind.NODE, rule_name="item")]},
+        ]
+
+    def test_a_literal_only_text_field_of_one_kind_is_content_tested(self) -> None:
+        """A plain text field holds one kind, so no kind test runs; the literal's alternative
+        still accepts only its spellings, and the regex's alternative stays unguarded."""
+        guards = selection_for('v:"lit" . n:item | v:/[0-9]+/ . n:item', PRODUCT_SIDECAR)
+        assert [accepted_guards(alternative) for alternative in guards] == [
+            {"v": [am.Guard(am.GuardKind.LITERAL, spellings=("lit",))]},
+            {},
+        ]
+        assert accepted_elements(guards[0]) == {"v": [am.TEXT]}
+
+    def test_a_literal_only_text_kind_survives_an_alternative_accepting_every_kind(self) -> None:
+        """The kinds would constrain nothing, but the text does: the node kind is kind-tested
+        beside it, and the other alternative still gets its own kind test."""
+        guards = selection_for('v:"lit" . v:item | v:item', PRODUCT_SIDECAR)
+        assert [accepted_guards(alternative) for alternative in guards] == [
+            {
+                "v": [
+                    am.Guard(am.GuardKind.LITERAL, spellings=("lit",)),
+                    am.Guard(am.GuardKind.NODE, rule_name="item"),
+                ]
+            },
+            {"v": [am.Guard(am.GuardKind.NODE, rule_name="item")]},
+        ]
+
+    def test_only_the_text_kind_of_a_mixed_accepted_set_is_content_tested(self) -> None:
+        """The node position beside the literal does not count against its text being literal."""
+        guards = selection_for('v:"lit" . v:item | v:/[0-9]+/ | v:other', PRODUCT_SIDECAR)
+        assert [accepted_guards(alternative) for alternative in guards] == [
+            {
+                "v": [
+                    am.Guard(am.GuardKind.LITERAL, spellings=("lit",)),
+                    am.Guard(am.GuardKind.NODE, rule_name="item"),
+                ]
+            },
+            {"v": [am.Guard(am.GuardKind.TEXT)]},
+            {"v": [am.Guard(am.GuardKind.NODE, rule_name="other")]},
+        ]
+
+    def test_text_a_regex_contributes_beside_a_literal_is_not_content_tested(self) -> None:
+        """The regex position takes any text, so the alternative is not literal-only there."""
+        guards = selection_for('v:"gray" . v:/[0-9]+/ | v:"grey" . v:/[0-9]+/ | v:item', PRODUCT_SIDECAR)
+        assert [accepted_guards(alternative) for alternative in guards] == [
+            {"v": [am.Guard(am.GuardKind.TEXT)]},
+            {"v": [am.Guard(am.GuardKind.TEXT)]},
+            {"v": [am.Guard(am.GuardKind.NODE, rule_name="item")]},
+        ]
+
+    def test_a_literal_only_position_label_carries_no_text_to_test(self) -> None:
+        """A bare position: choosing between its alternatives is position-only."""
+        guards = selection_for('v:"gray" . w:item | v:"grey" . w:item', PRODUCT_SIDECAR)
+        node = model_for_product('v:"gray" . w:item | v:"grey" . w:item')
+        assert fields_by_name(node)["v"].element == am.SPAN
+        assert guards == [(), ()]
+
+    def test_a_literal_only_presence_label_carries_no_text_to_test(self) -> None:
+        guards = selection_for('v:"yes"? . w:item | w:other', PRODUCT_SIDECAR)
+        node = model_for_product('v:"yes"? . w:item | w:other')
+        assert fields_by_name(node)["v"].element == am.BOOL
+        assert all(guard.label != "v" for alternative in guards for guard in alternative)
+
+    def test_an_erased_text_rival_no_longer_hides_a_literal_alternative(self) -> None:
+        """Both are a bare string on a backend without tags, but the literal's test is its text,
+        which is exact there too; the erased rule keeps its converter probe."""
+        guards = selection_for(
+            'v:"lit" | v:word',
+            "rule word { transparent; }\n" + PRODUCT_SIDECAR,
+            "word := w:/[a-z]+/ ;\n",
+        )
+        assert [accepted_guards(alternative) for alternative in guards] == [
+            {"v": [am.Guard(am.GuardKind.LITERAL, spellings=("lit",))]},
+            {"v": [am.Guard(am.GuardKind.CONVERTIBLE, rule_name="word")]},
+        ]
+
+    def test_an_erased_products_literal_alternative_is_content_tested(self) -> None:
+        """The erased payload's literal is text, so its alternative admits only its spelling."""
+        model = configured_model(TestTransparent.LWORD, TestTransparent.LWORD_SIDECAR)
+        node = model.nodes["lword"]
+        assert isinstance(node, am.ProductNode)
+        guards = [am.selection_guards(model, node.fields, plan) for plan in model.plans["lword"].alternatives]
+        assert [accepted_guards(alternative) for alternative in guards] == [
+            {"v": [am.Guard(am.GuardKind.LITERAL, spellings=("lit",))]},
+            {"v": [am.Guard(am.GuardKind.TEXT)]},
+            {"v": [am.Guard(am.GuardKind.NODE, rule_name="word")]},
         ]
 
     def test_a_hoisted_field_is_not_kind_tested(self) -> None:

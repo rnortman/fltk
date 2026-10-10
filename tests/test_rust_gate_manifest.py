@@ -91,6 +91,7 @@ _RUNTIME_TEST_COUNTS = {
     "config": 30,
     "fold": 18,
     "literal_labels": 6,
+    "literal_select": 7,
     "merged": 7,
     "multi_tree": 5,
     "no_ast": 2,

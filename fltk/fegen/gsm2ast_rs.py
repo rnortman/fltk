@@ -307,6 +307,30 @@ def _binding(target: str, body: Sequence[str]) -> list[str]:
     return [f"let {target} = {{", *_indent(body, 4), "};"]
 
 
+_SHORTEST_RANGE = 3
+
+
+def _alternative_test(indices: Sequence[int]) -> str:
+    """The test that a terminal split matched one of ``indices`` (ascending).
+
+    A run of three or more adjacent indices is written as an inclusive range: clippy's
+    `manual_range_patterns` rejects an OR pattern of three or more contiguous integers.
+    """
+    if len(indices) == 1:
+        return f"split.alternative == {indices[0]}"
+    runs: list[list[int]] = []
+    for index in indices:
+        if runs and index == runs[-1][-1] + 1:
+            runs[-1].append(index)
+        else:
+            runs.append([index])
+    patterns = [
+        f"{run[0]}..={run[-1]}" if len(run) >= _SHORTEST_RANGE else " | ".join(str(index) for index in run)
+        for run in runs
+    ]
+    return f"matches!(split.alternative, {' | '.join(patterns)})"
+
+
 def _if_chain(clauses: Sequence[tuple[str, Sequence[str]]], otherwise: Sequence[str] | None = None) -> list[str]:
     """One ``if`` / ``else if`` chain, with an optional trailing ``else``."""
     lines: list[str] = []
@@ -2243,7 +2267,8 @@ class RustAstGenerator:
 
         Which labels are populated is half the question; a label carrying several types leaves the
         alternatives that accept different ones of them indistinguishable by name, so an
-        alternative accepting fewer kinds than the field holds carries a kind test as well.
+        alternative accepting fewer kinds than the field holds carries a kind test as well, and
+        one whose text at a label comes only from literals carries a test of that text.
         """
         by_label = {field.label: field for field in fields if field.wrapper is None}
         entries = [
@@ -2252,6 +2277,8 @@ class RustAstGenerator:
         entries.extend(f"({_string(hoist.label)}, {self.hoist_present(hoist, body.values)})" for hoist in hoists)
         lines = [f"let present = {_RUNTIME}::populated(&[{', '.join(entries)}]);"]
         for plan in plans:
+            # TODO(ast-select-count-blind): count each label's values against the alternative's
+            # positions, so an alternative too short for the value falls through to the next.
             conditions = [
                 (
                     f"{_RUNTIME}::alternative_fits(&present, {_str_slice(sorted(plan.required_labels))},"
@@ -2268,30 +2295,68 @@ class RustAstGenerator:
         return lines
 
     def kind_condition(self, body: _Body, field: am.Field, guard: am.SelectionGuard) -> str:
-        """The test that every value one field holds is a kind this alternative accepts.
+        """The test that every value one field holds is a kind, or text, this alternative accepts.
 
-        The value carries its own kind as the field enum variant wrapping it, and the variants
-        are read off the enum's own declaration, so a test and the type it reads cannot drift
-        apart.  A field holding no value passes: what an alternative does with a label it is not
-        given is the name test's question.
+        The variant is the kind half: the value carries its own kind as the field enum variant
+        wrapping it, and the variants are read off the enum's own declaration, so a test and the
+        type it reads cannot drift apart.  ``kind.guard``'s content test is the rest — a ``LITERAL``
+        spelling set, applied to the ``Text`` variant only — and a plain text field, which has no
+        variant, is tested by its content alone.  A field holding no value passes: what an
+        alternative does with a label it is not given is the name test's question.
 
         A keyed map is not spelled here: a label whose values are keyed carries one element type,
-        which is a field of its own type rather than a field enum, and a single-element field is
-        never kind-tested at all.
+        a node, which is neither a field enum nor text.
         """
-        field_enum = self.field_enum_of(field)
-        assert field_enum is not None
-        by_element = {variant.element: variant.name for variant in field_enum.variants}
-        patterns = " | ".join(f"{field_enum.name}::{by_element[kind.element]}(_)" for kind in guard.accepted)
         place = body.values(field)
+        field_enum = self.field_enum_of(field)
+        if field_enum is None:
+            # A text field of one kind is selection-tested only for its literal spellings.
+            (kind,) = guard.accepted
+            assert kind.element == am.TEXT and kind.guard.kind is am.GuardKind.LITERAL
+
+            def test(value: str) -> str:
+                return f"{self.content_test(kind.guard, value)}"
+
+            return self.every_value(field, place, test, place.reference)
+        enum_name = field_enum.name
+        by_element = {variant.element: variant.name for variant in field_enum.variants}
+        content = any(kind.guard.kind is am.GuardKind.LITERAL for kind in guard.accepted)
+
+        def kinds_test(scrutinee: str) -> str:
+            if not content:
+                patterns = " | ".join(f"{enum_name}::{by_element[kind.element]}(_)" for kind in guard.accepted)
+                return f"matches!({scrutinee}, {patterns})"
+            # A binding cannot sit in an or-pattern, so each kind is its own `matches!`, and only
+            # the one carrying a content test binds its text.
+            tests = [
+                self.variant_test(
+                    scrutinee,
+                    f"{enum_name}::{by_element[kind.element]}",
+                    self.content_test(kind.guard, _TEXT) if kind.guard.kind is am.GuardKind.LITERAL else None,
+                )
+                for kind in guard.accepted
+            ]
+            return f"({' || '.join(tests)})" if len(tests) > 1 else tests[0]
+
+        boxed = self.is_boxed_element(body.owner, field.type.element)
+        if not content:
+            # A pattern that binds nothing reads the value where it lies, so a member held through
+            # an indirection is dereferenced rather than moved out of.
+            scalar = f"*{place.value}" if boxed else place.value
+        else:
+            # A pattern binding the text reads the value by reference, so the binding borrows
+            # rather than moving a `String` out of `&self`; match ergonomics do not see through a
+            # `Box`.
+            scalar = f"&*{place.value}" if boxed else place.reference
+        return self.every_value(field, place, kinds_test, scalar)
+
+    def every_value(self, field: am.Field, place: _Place, test: Callable[[str], str], scalar: str) -> str:
+        """``test`` applied to every value one field holds; ``scalar`` is a single value as it reads."""
         if field.type.container is am.Container.OPTIONAL:
-            return f"{place.optional}.into_iter().all(|{_ITEM}| matches!({_ITEM}, {patterns}))"
+            return f"{place.optional}.into_iter().all(|{_ITEM}| {test(_ITEM)})"
         if field.type.container is am.Container.COLLECTION:
-            return f"{place.value}.iter().all(|{_ITEM}| matches!({_ITEM}, {patterns}))"
-        # A pattern that binds nothing reads the value where it lies, so a member held through
-        # an indirection is dereferenced rather than moved out of.
-        held = f"*{place.value}" if self.is_boxed_element(body.owner, field.type.element) else place.value
-        return f"matches!({held}, {patterns})"
+            return f"{place.value}.iter().all(|{_ITEM}| {test(_ITEM)})"
+        return test(scalar)
 
     def alternative_lines(
         self,
@@ -2546,8 +2611,10 @@ class RustAstGenerator:
             return self.content_test(guard, _ITEM)
         variant = self.field_enum_variant(field_enum, placement.slot)
         pattern = f"{field_enum.name}::{variant.name}"
-        content = self.content_test(guard, _TEXT)
-        scrutinee = self.scrutinee(body, field, _ITEM)
+        return self.variant_test(self.scrutinee(body, field, _ITEM), pattern, self.content_test(guard, _TEXT))
+
+    def variant_test(self, scrutinee: str, pattern: str, content: str | None) -> str:
+        """Whether ``scrutinee`` is the field enum variant ``pattern`` and, given ``content``, its text passes it."""
         if content is None:
             return f"matches!({scrutinee}, {pattern}(_))"
         return f"matches!({scrutinee}, {pattern}({_TEXT}) if {content})"
@@ -2558,8 +2625,10 @@ class RustAstGenerator:
             return f"{self.terminal_reference(guard.pattern or '')}.matches({value})"
         if guard.kind is am.GuardKind.LITERAL:
             # A labeled literal renders from the grammar, so a position holding one may take a
-            # value only where that value *is* the literal: anything else would come back changed.
-            return f"{value} == {_string(guard.literal or '')}"
+            # value only where that value is one of its label's spellings: anything else would
+            # come back changed.
+            spellings = ", ".join(_string(text) for text in guard.spellings or ())
+            return f"{_RUNTIME}::spelled({value}, &[{spellings}])"
         if guard.kind is am.GuardKind.CONVERTIBLE:
             # Two rules erased to one type leave nothing on the value to tell their positions
             # apart; what distinguishes them is which terminal accepts the rendering, and that is
@@ -2650,10 +2719,15 @@ class RustAstGenerator:
         span = f"{_SPAN_TYPE}::unknown()" if node.text_from is not None else f"{_RUNTIME}::source_span({text})"
         binding = "let cst_node" if not pushes else "let mut cst_node"
         lines.append(f"{binding} = {self.cst_node_type(rule_name)}::new({span});")
-        if len(arms) == 1:
-            lines.extend(arms[0][1])
+        # Alternatives pushing the same children share one arm: two identical blocks in one chain
+        # are a clippy error in a consumer building under `-D warnings`.
+        grouped: dict[tuple[str, ...], list[int]] = {}
+        for plan, arm in pushes:
+            grouped.setdefault(tuple(arm), []).append(plan.index)
+        if len(grouped) == 1 and len(pushes) == len(arms):
+            lines.extend(pushes[0][1])
         elif pushes:
-            lines.extend(_if_chain([(f"split.alternative == {plan.index}", arm) for plan, arm in pushes]))
+            lines.extend(_if_chain([(_alternative_test(indices), list(arm)) for arm, indices in grouped.items()]))
         lines.append("Ok(cst_node.into())")
         return lines
 

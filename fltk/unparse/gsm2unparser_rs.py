@@ -24,6 +24,7 @@ from collections.abc import Sequence
 from typing import Literal
 
 from fltk.fegen import gsm, naming
+from fltk.fegen.grammar_shape import spellings_for
 from fltk.fegen.gsm2parser_rs import cst_module_import
 from fltk.fegen.gsm2tree_rs import RustCstGenerator
 from fltk.fegen.rust_emit import rust_str_lit
@@ -38,7 +39,7 @@ from fltk.unparse.fmt_config import (
     RenderAs,
     before_spacing_is_tentative,
 )
-from fltk.unparse.literal_labels import check_labeled_literal_texts, spellings_for
+from fltk.unparse.literal_labels import check_labeled_literal_texts
 
 
 class RustUnparserGenerator:
@@ -1509,7 +1510,7 @@ class RustUnparserGenerator:
         a catch-all, an ``unreachable_patterns`` error.
 
         A *labeled* literal item additionally accepts the child only when the span's text is
-        one of the label's literal spellings (:func:`fltk.unparse.literal_labels.spellings_for`),
+        one of the label's literal spellings (:func:`fltk.fegen.grammar_shape.spellings_for`),
         a sourceless span being accepted unconditionally.  Rendering is
         unchanged -- the grammar's literal text is always emitted -- so this decides only which
         trial branch wins: a rival regex under the same label takes a child whose text no

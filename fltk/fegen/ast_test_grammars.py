@@ -188,6 +188,95 @@ CUSTOM_FOLD_SIDECAR = 'rule expr { fold_left: op; }\nrule atom { custom(python: 
 the model naming no witness and the emitter writing no ``Drop`` — are checked against one input.
 """
 
+LITERAL_SELECT_GRAMMAR = (
+    'lit := v:"lit" | v:/[0-9]+/ | v:word ;\n'
+    'seq := v:"lit" . n:word | v:/[0-9]+/ . n:word ;\n'
+    'shade := v:"gray" | v:"grey" | v:word ;\n'
+    'mixed := v:"lit" . v:word | v:/[0-9]+/ | v:other ;\n'
+    'optlit := v:other | v:"lit"? ;\n'
+    'replit := v:other+ | v:"lit"* ;\n'
+    'both := v:"gray" . v:/[0-9]+/ | v:"grey" . v:/[0-9]+/ | v:word ;\n'
+    "flat := f:lseq . t:other ;\n"
+    'lseq := v:"lit" . n:word | v:/[0-9]+/ . n:word ;\n'
+    "erased := e:lword ;\n"
+    'lword := v:"lit" | v:/[0-9]+/ | v:word ;\n'
+    "etext := e:ltext ;\n"
+    'ltext := v:"lit" . %semi? | v:/[0-9]+/ ;\n'
+    'ltail := v:"lit" . ";" | v:tword ;\n'
+    "word := w:/[a-z]+/ ;\n"
+    "tword := t:/[a-z]+/ ;\n"
+    "other := o:/[A-Z]+/ ;\n"
+    'semi := s:";" ;\n'
+)
+"""Product rules splitting one label between a labeled literal and a regex or rule reference.
+
+``to_cst`` has to choose the alternative by the value's text, not just its kind: a literal
+position renders the grammar's text, so an alternative whose text at the label comes only from
+literals may take a string only when it is one of the label's spellings.  One rule per shape —
+a field enum (``lit``), a plain text field (``seq``), sibling spellings (``shade``), a literal
+beside a node under one label (``mixed``), the optional and repeated containers, a literal whose
+alternative also carries a regex under the label (``both``), a flattened wrapper's helper
+converter (``lseq``), and erased payloads beside a node (``lword``) and beside a regex only
+(``ltext``, whose payload is plain text; the suppressed ``semi`` reference keeps it a product,
+since a rule of literals and regexes alone is terminal-only and erases to text through the
+terminal path).  ``ltail`` is a literal alternative needing more than its label beside a rival
+erased to text: there the backends part, since a Python value does not record which kind it was.
+The optional and repeated shapes put the literal last: an alternative that can match nothing
+comes first in ordered choice only if nothing after it is meant to parse.
+"""
+
+LITERAL_SELECT_SIDECAR = (
+    "rule lit { product; }\n"
+    "rule seq { product; }\n"
+    "rule shade { product; }\n"
+    "rule mixed { product; }\n"
+    "rule optlit { product; }\n"
+    "rule replit { product; }\n"
+    "rule both { product; }\n"
+    "rule lseq { product; flatten; }\n"
+    "rule lword { product; transparent; }\n"
+    "rule ltext { product; transparent; }\n"
+    "rule ltail { product; }\n"
+    "rule tword { transparent; }\n"
+)
+"""Keeps every multi-alternative rule of ``LITERAL_SELECT_GRAMMAR`` a merged product."""
+
+LITERAL_SELECT_RENDERINGS: tuple[tuple[str, str, str], ...] = (
+    ("lit", "42", "42"),
+    ("lit", "lit", "lit"),
+    ("lit", "abc", "abc"),
+    ("seq", "42abc", "42abc"),
+    ("seq", "litabc", "litabc"),
+    ("shade", "gray", "gray"),
+    ("shade", "grey", "gray"),
+    ("shade", "abc", "abc"),
+    ("mixed", "litabc", "litabc"),
+    ("mixed", "42", "42"),
+    ("mixed", "ABC", "ABC"),
+    ("optlit", "lit", "lit"),
+    ("optlit", "ABC", "ABC"),
+    ("replit", "litlit", "litlit"),
+    ("replit", "ABC", "ABC"),
+    ("both", "gray42", "gray42"),
+    ("both", "grey42", "gray42"),
+    ("flat", "42abcXYZ", "42abcXYZ"),
+    ("flat", "litabcXYZ", "litabcXYZ"),
+    ("erased", "42", "42"),
+    ("erased", "lit", "lit"),
+    ("erased", "abc", "abc"),
+    ("etext", "42", "42"),
+    ("etext", "lit", "lit"),
+    ("ltail", "lit;", "lit;"),
+    ("ltail", "abc", "abc"),
+)
+"""``(rule, source, rendering)``: what parsing ``source`` as ``rule``, converting it to the AST and
+rendering it back yields, on both backends.
+
+Byte-exact except where a sibling spelling canonicalises to the first (``grey`` renders
+``gray``).  The Python suite parametrizes over it and the Rust gate case generates its round trips
+from it, so the two backends are held to one list.
+"""
+
 EXAMPLES: tuple[tuple[str, str, str], ...] = (
     ("config", CONFIG_GRAMMAR, KEYED_SIDECAR),
     ("fold", FOLD_GRAMMAR, FOLD_SIDECAR),

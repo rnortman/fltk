@@ -211,6 +211,14 @@ pub fn alternative_fits(present: &[&str], required: &[&str], labels: &[&str]) ->
     required.iter().all(|label| present.contains(label)) && present.iter().all(|label| labels.contains(label))
 }
 
+/// Whether `text` is one of a label's literal spellings.
+///
+/// Taken as `&str` so a `&String` member, a `&str` parameter and an `Option<&str>` item all
+/// coerce at the call: one emitted form serves every place a reverse converter reads text from.
+pub fn spelled(text: &str, spellings: &[&str]) -> bool {
+    spellings.contains(&text)
+}
+
 /// The values an item position took, once its own lower bound is known to be met.
 ///
 /// A required position left empty would put a CST missing a required child in front of the
@@ -347,6 +355,15 @@ pub fn check_group(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn spelled_admits_exactly_the_label_spellings() {
+        assert!(spelled("gray", &["gray", "grey"]));
+        assert!(spelled("grey", &["gray", "grey"]));
+        assert!(!spelled("xyz", &["gray", "grey"]));
+        assert!(!spelled("Gray", &["gray", "grey"]));
+        assert!(!spelled("", &["gray"]));
+    }
 
     /// `number := val:/-?[0-9]+/ ;` — one included regex item.
     static NUMBER: TerminalShape = TerminalShape::new(&[TerminalAlt {

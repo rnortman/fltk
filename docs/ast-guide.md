@@ -251,7 +251,7 @@ Element types:
 | The label carries | Rust | Python |
 |---|---|---|
 | A regex terminal | `String` | `str` |
-| A literal terminal, required | `Span` | `SpanProtocol` |
+| A literal terminal, required, alone under its label | `Span` | `SpanProtocol` |
 | A literal terminal, optional | `bool` (presence) | `bool` |
 | A rule reference | that rule's type | that rule's type |
 | A `transparent;` rule reference | the erased payload | the erased payload |
@@ -270,6 +270,10 @@ pub enum ValItem { Num(Num), Name(Name), Text(String) }
 ```
 
 Python spells the same thing as a union alias.
+
+A literal under a label that also carries a regex or rule reference contributes its **text** —
+`Text(String)` / `str` as a variant, or a plain `String` / `str` when the only other kind is a
+regex — never a `Span`; this applies equally to the payload a `transparent;` rule erases to.
 
 ### Sum rules
 
@@ -708,6 +712,18 @@ generates for such grammars.
 
 A label that is sometimes absent is left alone — there, presence is the datum and several
 spellings are legitimate.
+
+`to_cst` applies the same rule when it chooses an alternative. Where a label's text in some
+alternative comes only from literals, that alternative accepts a text value there only when it is
+one of the label's spellings in the rule — `v:"gray" | v:"grey" | v:item` takes `"grey"` through
+the first alternative and renders `gray`, and refuses `"xyz"` with `AstError`. The value you
+built is either rendered as a spelling of that label or refused, never replaced.
+
+One Python-only exception: where the label's other kind is a `transparent;` rule erased to text,
+a Python `str` does not record which kind it is. A value equal to a spelling then takes the
+literal alternative even if the parse read it through the erased rule — under
+`x := v:"lit" . ";" | v:word ;` with `word` transparent, parsed `lit` renders `lit;` in Python,
+which reads back as the same value. Rust reads the variant and renders `lit`.
 
 ## Float widths in Python
 

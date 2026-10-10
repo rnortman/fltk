@@ -1361,6 +1361,23 @@ class TestReverseConverters:
         assert "} else if split.alternative == 1 {" in body
         assert "cst_node.push_child(Some(cst::TagLabel::Name), cst::TagChild::Span(split.spans[0].clone()));" in body
 
+    def test_alternatives_pushing_the_same_children_share_one_arm(self) -> None:
+        """Identical blocks in one `if` chain are a clippy error under `-D warnings`."""
+        src = generate('top := v:"lit" | v:/[0-9]+/ | w:/[a-z]+/ ;\n')
+        body = block(src, "impl Top {\n    /// Synthesise")
+        assert "if matches!(split.alternative, 0 | 1) {" in body
+        assert "} else if split.alternative == 2 {" in body
+        # Three or more adjacent indices are a range: their OR pattern is clippy's `manual_range_patterns`.
+        ranged = block(
+            generate('top := v:"lit" | v:/[0-9]+/ | v:/[A-Z]+/ | w:/[a-z]+/ | v:/_+/ ;\n'),
+            "impl Top {\n    /// Synthesise",
+        )
+        assert "if matches!(split.alternative, 0..=2 | 4) {" in ranged
+        assert "} else if split.alternative == 3 {" in ranged
+        every = block(generate('top := v:"lit" | v:/[0-9]+/ ;\n'), "impl Top {\n    /// Synthesise")
+        assert "split.alternative" not in every
+        assert every.count("cst_node.push_child(") == 1
+
     def test_a_redirected_text_leaves_the_node_span_unknown(self, leaf_src: str) -> None:
         """``from_cst`` reads the text off the named child there, not off the node's own span."""
         body = block(leaf_src, "impl Quoted {\n    /// Synthesise")
@@ -1581,11 +1598,90 @@ class TestReverseProducts:
 
     def test_a_literal_and_a_regex_position_place_through_one_scalar_variant(self) -> None:
         body = block(generate(self.SCALAR_VARIANT_GRAMMAR), "impl Doc {\n    /// Synthesise")
-        assert 'let taken = cursor_a.take_if(1, 0, |item| matches!(item, DocA::Text(text) if text == "lit"));' in body
+        assert (
+            "let taken = cursor_a.take_if(1, 0, |item| matches!(item, DocA::Text(text)"
+            ' if ::fltk_ast_core::spelled(text, &["lit"])));'
+        ) in body
         assert "let taken = cursor_a.take_if(1, 0, |item| matches!(item, DocA::Text(_)));" in body
         assert "let taken = cursor_a.take_if(1, 0, |item| matches!(item, DocA::Item(_)));" in body
         # The literal renders from the grammar; only the regex position reads the text it took.
         assert body.count("let DocA::Text(inner) = item else {") == 1
+
+    @staticmethod
+    def literal_select_src() -> str:
+        return generate(fixtures.LITERAL_SELECT_GRAMMAR, fixtures.LITERAL_SELECT_SIDECAR)
+
+    def test_a_literal_only_text_kind_is_tested_against_the_spelling_set(self) -> None:
+        """The scalar is borrowed, so the text binding never moves a `String` out of `&self`."""
+        body = block(self.literal_select_src(), "impl Shade {\n    /// Synthesise a")
+        assert (
+            body.count('&& matches!(&self.v, ShadeV::Text(text) if ::fltk_ast_core::spelled(text, &["gray", "grey"]))')
+            == 2
+        )
+        # A kind with no content test keeps the by-value or-pattern form.
+        assert "&& matches!(self.v, ShadeV::Word(_)) {" in body
+
+    def test_an_optional_and_a_repeated_field_enum_test_each_value_by_its_spelling(self) -> None:
+        src = self.literal_select_src()
+        assert (
+            "&& self.v.as_ref().into_iter().all(|item| matches!(item, OptlitV::Text(text)"
+            ' if ::fltk_ast_core::spelled(text, &["lit"])))'
+        ) in block(src, "impl Optlit {\n    /// Synthesise a")
+        assert (
+            "&& self.v.iter().all(|item| matches!(item, ReplitV::Text(text)"
+            ' if ::fltk_ast_core::spelled(text, &["lit"])))'
+        ) in block(src, "impl Replit {\n    /// Synthesise a")
+
+    def test_a_mixed_accepted_set_tests_the_text_variant_only(self) -> None:
+        """A binding cannot sit in an or-pattern, so the kinds become a disjunction."""
+        assert (
+            "&& self.v.iter().all(|item| (matches!(item, MixedV::Text(text)"
+            ' if ::fltk_ast_core::spelled(text, &["lit"])) || matches!(item, MixedV::Word(_))))'
+        ) in block(self.literal_select_src(), "impl Mixed {\n    /// Synthesise a")
+
+    def test_a_plain_text_field_is_tested_by_its_spelling_alone(self) -> None:
+        body = block(self.literal_select_src(), "impl Seq {\n    /// Synthesise a")
+        assert '&& ::fltk_ast_core::spelled(&self.v, &["lit"])' in body
+        assert body.count("::fltk_ast_core::spelled") == 1
+
+    def test_a_flattened_helper_tests_its_text_parameter(self) -> None:
+        assert '&& ::fltk_ast_core::spelled(v0, &["lit"]) {' in self.literal_select_src()
+
+    def test_an_erased_helper_tests_its_payload_parameter(self) -> None:
+        """The enum payload arrives as `&LwordV`, which the per-kind patterns match directly."""
+        assert (
+            'matches!(value, LwordV::Text(text) if ::fltk_ast_core::spelled(text, &["lit"]))'
+            in self.literal_select_src()
+        )
+
+    def test_a_literal_beside_regexes_only_erases_to_plain_text(self) -> None:
+        """No enum is left, and the `&str` payload parameter is tested by its spelling alone."""
+        src = self.literal_select_src()
+        assert "enum LtextV" not in src
+        body = block(src, "fn _erased_ltext_to_cst(value: &str)")
+        assert '&& ::fltk_ast_core::spelled(value, &["lit"]) {' in body
+        assert body.count("::fltk_ast_core::spelled") == 1
+
+    @pytest.mark.parametrize(
+        ("quantifier", "test"),
+        [
+            ("?", 'self.v.as_deref().into_iter().all(|item| ::fltk_ast_core::spelled(item, &["lit"]))'),
+            ("*", 'self.v.iter().all(|item| ::fltk_ast_core::spelled(item, &["lit"]))'),
+        ],
+    )
+    def test_a_plain_text_container_tests_every_value(self, quantifier: str, test: str) -> None:
+        src = generate(
+            f'top := v:"lit"{quantifier} . n:word | v:/[0-9]+/ . n:word ;\nword := w:/[a-z]+/ ;\n',
+            "rule top { product; }\n",
+        )
+        assert f"&& {test}" in block(src, "impl Top {\n    /// Synthesise a")
+
+    def test_a_boxed_member_is_borrowed_through_its_box(self) -> None:
+        """Match ergonomics do not see through a `Box`, so the scrutinee is reborrowed."""
+        src = generate('top := v:"lit" | v:wrap ;\nwrap := "(" . t:top . ")" ;\n', "rule top { product; }\n")
+        body = block(src, "impl Top {\n    /// Synthesise a")
+        assert '&& matches!(&*self.v, TopV::Text(text) if ::fltk_ast_core::spelled(text, &["lit"]))' in body
+        assert "&& matches!(*self.v, TopV::Wrap(_)) {" in body
 
     def test_an_optional_union_field_passes_the_kind_test_when_it_is_absent(self) -> None:
         src = generate(

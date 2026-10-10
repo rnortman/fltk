@@ -681,7 +681,14 @@ class Slot:
     """
 
     literal: str | None = None
-    """The text a ``LITERAL`` slot renders, which is the only value it can carry."""
+    """The text a ``LITERAL`` slot renders, whichever of its label's spellings it was given."""
+
+    spellings: tuple[str, ...] = ()
+    """For a ``LITERAL`` slot, every literal text its label carries in the rule, in grammar order.
+
+    The labeled-literal spelling set: the texts are equivalent, the first is canonical, and a
+    value is one the slot can take exactly when it is one of them.  Empty for any other kind.
+    """
 
 
 @dataclasses.dataclass(frozen=True, slots=True)
@@ -768,8 +775,11 @@ def _item_bounds(item: gsm.Item) -> tuple[int, float]:
     return minimum, maximum
 
 
-def _slots_for_alternative(items: gsm.Items) -> list[Slot]:
+def _slots_for_alternative(items: gsm.Items, literals: Mapping[str, gshape.LabelLiterals]) -> list[Slot]:
     """The slots one alternative contributes, descending into INCLUDE sub-expressions.
+
+    ``literals`` is ``label_literals`` of the rule the alternative belongs to, which is where a
+    literal slot's spelling set comes from.
 
     A sub-expression's own quantifier multiplies the bounds of every slot inside it.  The
     branches of an alternation are laid out consecutively and share a ``group`` id, each slot
@@ -805,7 +815,20 @@ def _slots_for_alternative(items: gsm.Items) -> list[Slot]:
                 slots.append(Slot(kind, item.label, None, term.value, minimum, maximum, *shared))
             elif isinstance(term, gsm.Literal):
                 kind = SlotKind.LITERAL if item.label is not None else SlotKind.UNLABELED
-                slots.append(Slot(kind, item.label, None, None, minimum, maximum, *shared, literal=term.value))
+                spellings = literals[item.label].texts if item.label is not None else ()
+                slots.append(
+                    Slot(
+                        kind,
+                        item.label,
+                        None,
+                        None,
+                        minimum,
+                        maximum,
+                        *shared,
+                        literal=term.value,
+                        spellings=spellings,
+                    )
+                )
             elif isinstance(term, Sequence):
                 inner = alternation
                 if inner is None and len(term) >= _MIN_ALTERNATIVES:
@@ -821,10 +844,15 @@ def _slots_for_alternative(items: gsm.Items) -> list[Slot]:
     return walk(items, 1, 1, None)
 
 
-def _alt_plan(index: int, items: gsm.Items, arities: Mapping[str, ce.LabelCount]) -> AltPlan:
+def _alt_plan(
+    index: int,
+    items: gsm.Items,
+    arities: Mapping[str, ce.LabelCount],
+    literals: Mapping[str, gshape.LabelLiterals],
+) -> AltPlan:
     return AltPlan(
         index=index,
-        slots=tuple(_slots_for_alternative(items)),
+        slots=tuple(_slots_for_alternative(items, literals)),
         labels=frozenset(arities),
         required_labels=frozenset(label for label, count in arities.items() if count.min >= 1),
     )
@@ -1068,7 +1096,7 @@ class GuardKind(enum.Enum):
     """Text the position's own terminal matches."""
 
     LITERAL = "literal"
-    """Exactly the position's own literal text."""
+    """One of the literal texts the position's label carries in its rule."""
 
 
 @dataclasses.dataclass(frozen=True, slots=True)
@@ -1080,7 +1108,8 @@ class Guard:
     """The referenced rule, for a ``NODE`` or ``CONVERTIBLE`` guard."""
 
     pattern: str | None = None
-    literal: str | None = None
+    spellings: tuple[str, ...] | None = None
+    """The literal texts a ``LITERAL`` guard admits, in grammar order; the first is canonical."""
 
 
 NO_GUARD = Guard(GuardKind.NONE)
@@ -1153,8 +1182,8 @@ def rival_signature(slot: Slot) -> tuple[object, ...]:
     A regex position's own pattern is part of the answer: two branches of an alternation may
     share a label and a kind and still take different text, and telling them apart is what a
     dispatch run's content guards are for.  A labeled literal's text is deliberately left out
-    — the AST records a bare position for it, so which literal a value came from is not
-    recoverable and no guard could route it.
+    — every literal position of a label accepts the label's whole spelling set and renders its
+    own text, so two literal branches take the same values and are not rivals.
     """
     return (slot.kind, slot.rule_name, slot.pattern)
 
@@ -1332,6 +1361,11 @@ def accepted_identities(model: AstModel, rule_name: str) -> frozenset[tuple[str,
     return _identities(instance_elements(model, rule_name))
 
 
+def _literal_guard(slot: Slot) -> Guard:
+    """The guard a literal position applies: the value must be one of its label's spellings."""
+    return Guard(GuardKind.LITERAL, spellings=slot.spellings)
+
+
 def _dispatch_guard(model: AstModel, slot: Slot) -> Guard:
     """The guard one branch of a dispatch run applies.
 
@@ -1343,7 +1377,7 @@ def _dispatch_guard(model: AstModel, slot: Slot) -> Guard:
         return node_guard(model, slot.rule_name or "")
     if slot.kind is SlotKind.TEXT:
         return Guard(GuardKind.PATTERN, pattern=slot.pattern)
-    return Guard(GuardKind.LITERAL, literal=slot.literal)
+    return _literal_guard(slot)
 
 
 def _slot_guard(model: AstModel, slot: Slot, plan: AltPlan) -> Guard:
@@ -1351,8 +1385,9 @@ def _slot_guard(model: AstModel, slot: Slot, plan: AltPlan) -> Guard:
 
     Sequential positions are served in grammar order, so a text position takes whatever text
     arrives and reports a terminal mismatch against its own pattern.  A literal position is the
-    exception: it renders from the grammar, so taking anything but the literal's own text would
-    silently replace the value.
+    exception: it renders from the grammar, so taking anything but one of its label's spellings
+    would silently replace the value.  The whole spelling set, not the position's own text, is
+    what selection admits for the label too, so the body never refuses what selection chose.
     """
     siblings = [other for other in plan.slots if other.label == slot.label]
     if len({(other.kind, other.rule_name) for other in siblings}) < _RIVAL_SLOTS:
@@ -1361,7 +1396,7 @@ def _slot_guard(model: AstModel, slot: Slot, plan: AltPlan) -> Guard:
         return node_guard(model, slot.rule_name or "")
     if slot.kind is SlotKind.TEXT:
         return Guard(GuardKind.TEXT)
-    return Guard(GuardKind.LITERAL, literal=slot.literal)
+    return _literal_guard(slot)
 
 
 def _slot_precedence(model: AstModel, slot: Slot) -> int:
@@ -1436,8 +1471,9 @@ class AcceptedKind:
     """One kind an alternative accepts at a label, and the test admitting its values.
 
     ``element`` is the field's own element type, which is the field enum variant holding it
-    on a backend that tags its values; ``guard`` is the test a backend without tags applies
-    to the value itself.
+    on a backend that tags its values; ``guard`` is the test both backends apply where the
+    field's tag is not enough — the whole test on a backend without tags, the content half (a
+    ``LITERAL`` spelling set) on one that reads the variant.
     """
 
     element: ElementType
@@ -1449,9 +1485,12 @@ class SelectionGuard:
     """The kinds one alternative's item positions accept at one label.
 
     A precondition on choosing that alternative: every value the label carries must be of a
-    kind listed here.  ``accepted`` is in the order the kinds are tested, and is always a
-    proper subset of what the field can hold — an alternative accepting everything the field
-    holds constrains nothing and gets no guard at all.
+    kind listed here and pass its guard.  ``accepted`` is in the order the kinds are tested.
+    It restricts *kinds*, or the *content* of the one kind ``TEXT`` where every position
+    contributing the label's ``TEXT`` in this alternative is a literal (other positions of the
+    label — a node reference in ``v:"lit" . v:item`` — do not count against it); then that
+    kind's guard admits only the label's spellings.  An alternative that constrains neither
+    gets no guard at all.
     """
 
     label: str
@@ -1515,22 +1554,24 @@ def _element_identities(model: AstModel, element: ElementType) -> frozenset[tupl
     return _identities(payload_elements(model, element))
 
 
-def _kind_guard(model: AstModel, element: ElementType) -> Guard | None:
+def _kind_guard(model: AstModel, element: ElementType, spellings: tuple[str, ...] | None) -> Guard | None:
     """The test admitting the values of one field element, or ``None`` where none exists.
 
     The same guards a dispatch run's branches use, chosen the same way, so a value routed
     into an alternative here is one that alternative's item positions also accept.
 
-    The element is all there is to go on, and a labeled literal's element is the same TEXT a
-    regex position contributes, so an alternative whose only position for the label is a
-    literal admits any text and then renders the literal.
+    ``spellings`` is the label's spelling set when every position contributing the alternative's
+    ``TEXT`` at the label is a literal: those positions render the grammar's text, so ``TEXT``
+    is admitted only as one of those spellings rather than as any string.
     """
-    # TODO(ast-select-literal-content): a literal-only accepted TEXT wants the literal's own
-    # text as its test, on both backends.
     rule_name = element_rule(model, element)
     if rule_name is not None:
         return node_guard(model, rule_name)
-    return Guard(GuardKind.TEXT) if element == TEXT else None
+    if element != TEXT:
+        return None
+    if spellings is not None:
+        return Guard(GuardKind.LITERAL, spellings=spellings)
+    return Guard(GuardKind.TEXT)
 
 
 def _element_rank(model: AstModel, element: ElementType) -> int:
@@ -1558,12 +1599,19 @@ def _distinguishable(model: AstModel, accepted: Sequence[AcceptedKind], excluded
     Failing either question the answer is no on both, because a guard only one backend can
     evaluate would route one value two ways.
 
-    What the probe answers is membership of the rule's terminal language, not identity, so two
-    erased terminals whose languages overlap are separated by it only up to that overlap: a
-    tagged backend routes an overlapping value by its tag, an untagged one by the first probe
-    that accepts.  The two agree on every value a parse produced — the alternatives are tried
-    in grammar order on both sides, which is the order the parse itself chose from — and
-    differ only for a value hand-built with a tag an untagged backend has no spelling for.
+    A ``LITERAL`` guard skips the runtime-type question the same way: the tagged backend tests
+    the variant and the text, the untagged one the text against the label's spellings.
+
+    Neither test is identity.  The probe answers membership of the rule's terminal language and
+    the spelling set membership of a few texts, so where an excluded kind can hold the same text
+    — an erased terminal whose language overlaps, an erased rule whose payload is text — a
+    tagged backend routes the value by its tag and an untagged one to the first alternative
+    whose test admits it.  The two differ for a value hand-built with a tag the untagged backend
+    has no spelling for, and for a parsed one whose parse passed over the admitting alternative
+    for something outside the label (``v:"lit" . ";" | v:word`` with ``word`` erased to text
+    reads ``lit`` as a ``word``).  The untagged backend then renders through that alternative,
+    which reads back as the value it was given; refusing the guard instead would send every
+    value of the label there on both backends.
     """
     excluded_variants = {_field_enum_variant_name(element) for element in excluded}
     excluded_identities = frozenset(
@@ -1572,7 +1620,8 @@ def _distinguishable(model: AstModel, accepted: Sequence[AcceptedKind], excluded
     for kind in accepted:
         if _field_enum_variant_name(kind.element) in excluded_variants:
             return False
-        if kind.guard.kind is GuardKind.CONVERTIBLE:
+        if kind.guard.kind in (GuardKind.CONVERTIBLE, GuardKind.LITERAL):
+            # TODO(ast-select-untagged-erased-text): the untagged backend admits erased text here.
             continue
         if _element_identities(model, kind.element) & excluded_identities:
             return False
@@ -1580,17 +1629,21 @@ def _distinguishable(model: AstModel, accepted: Sequence[AcceptedKind], excluded
 
 
 def selection_guards(model: AstModel, fields: Sequence[Field], plan: AltPlan) -> tuple[SelectionGuard, ...]:
-    """What one alternative demands of the *kinds* its populated fields carry.
+    """What one alternative demands of the kinds, or text, its populated fields carry.
 
     Which alternative of a multi-alternative rule can rebuild a value is decided by the
     labels the value populates, and label names under-determine it: alternatives that label
     their positions identically but accept different kinds are indistinguishable that way, so
     the first one wins and the rest can render nothing.  The value itself carries what is
     missing, and this is the analysis that reads it — one guard per label whose positions in
-    this alternative accept fewer kinds than the field can hold.
+    this alternative accept fewer kinds than the field can hold, or where every position
+    contributing the label's ``TEXT`` in this alternative is a literal (other positions of the
+    label do not count against it).  Those positions render the grammar's own text, so the
+    alternative accepts that ``TEXT`` only as one of the label's spellings in the rule; any
+    other string is refused rather than silently replaced.
 
-    A label whose positions accept everything the field holds gets no guard: the test would
-    be vacuous, and its absence is what keeps every shape that is discriminated by names
+    Otherwise, a label whose positions accept everything the field holds gets no guard: the
+    test would be vacuous, and its absence is what keeps every shape that is discriminated by names
     alone generating exactly the code it did before.  So does a label whose kinds one backend
     cannot tell apart, which degrades to the name-only choice rather than to two backends
     disagreeing.  Hoisted fields are left out — a flattened wrapper occupies one position and
@@ -1602,18 +1655,23 @@ def selection_guards(model: AstModel, fields: Sequence[Field], plan: AltPlan) ->
         if field.hoist or field.label not in plan.labels:
             continue
         elements = field_elements(model, field)
-        if len(elements) < _RIVAL_SLOTS:
-            continue
         slots = [slot for slot in plan.slots if slot.label == field.label]
         resolved = [slot_element(model, slot, elements) for slot in slots]
         if not resolved or any(element is None for element in resolved):
             continue
         accepted = _dedupe([element for element in resolved if element is not None])
-        if len(accepted) == len(elements):
+        text_slots = [slot for slot, element in zip(slots, resolved, strict=True) if element == TEXT]
+        # Every literal position of one label in one rule carries the same spelling set.
+        spellings = (
+            text_slots[0].spellings
+            if text_slots and all(slot.kind is SlotKind.LITERAL for slot in text_slots)
+            else None
+        )
+        if spellings is None and (len(elements) < _RIVAL_SLOTS or len(accepted) == len(elements)):
             continue
         tests: list[AcceptedKind] = []
         for element in _kind_test_order(model, accepted):
-            guard = _kind_guard(model, element)
+            guard = _kind_guard(model, element, spellings)
             if guard is None:
                 break
             tests.append(AcceptedKind(element=element, guard=guard))
@@ -2637,9 +2695,10 @@ class _ModelBuilder:
                 for plan in terminals:
                     self.check_terminal_pattern(rule.name, plan)
             arities = self.rule_arities(rule)
+            literals = gshape.label_literals(rule)
             plans[rule.name] = SynthesisPlan(
                 alternatives=tuple(
-                    _alt_plan(index, alt, arities[index]) for index, alt in enumerate(rule.alternatives)
+                    _alt_plan(index, alt, arities[index], literals) for index, alt in enumerate(rule.alternatives)
                 ),
                 terminals=terminals,
             )
@@ -2773,6 +2832,9 @@ class _ModelBuilder:
         elements = self.element_types(rule, label, terms[label])
         if elements is None:
             return None
+        if len(elements) > 1 and SPAN in elements:
+            # As for a field: a literal beside other kinds carries its text, not a bare position.
+            elements = _dedupe([TEXT if element == SPAN else element for element in elements])
         element = (
             elements[0]
             if len(elements) == 1
@@ -2912,8 +2974,9 @@ class _ModelBuilder:
 
     def check_hoist_position(self, rule: gsm.Rule, label: str, wrapper: str) -> bool:
         """A hoisted wrapper is rebuilt at one item position, so its label needs exactly one."""
+        literals = gshape.label_literals(rule)
         for alternative in rule.alternatives:
-            if sum(1 for slot in _slots_for_alternative(alternative) if slot.label == label) > 1:
+            if sum(1 for slot in _slots_for_alternative(alternative, literals) if slot.label == label) > 1:
                 self.error(
                     f"Rule {rule.name!r}: the label {label!r} of the flattened rule {wrapper!r} is "
                     f"matched by more than one item position, so the hoisted fields have no single "
@@ -3413,7 +3476,7 @@ class _ModelBuilder:
         one label render as *one* of the two literals whichever value arrived, which for a fold
         operator silently rewrites the expression.
         """
-        slots = _slots_for_alternative(rule.alternatives[0])
+        slots = _slots_for_alternative(rule.alternatives[0], gshape.label_literals(rule))
         if any(slot.label is None for slot in slots):
             self.error(
                 f"Rule {rule.name!r}: a fold re-interleaves its operands and operators one at a time, "

@@ -3463,3 +3463,120 @@ class TestProtocolTypedBackpointer:
         source = build_roundtrip(BACKPOINTER_GRAMMAR, "top", config_text="option cst = true;").source
         assert "cst: cstp.Top | None = dataclasses.field(default=None, compare=False, repr=False)" in source
         assert "cst: cst.Top | None" not in source
+
+
+class TestLiteralSelection:
+    """An alternative whose text at a label comes only from literals takes only their spellings.
+
+    The literal position renders the grammar's text, so admitting any other string there would
+    silently replace it.  ``LITERAL_SELECT_GRAMMAR`` is the same input the Rust gate crate runs.
+    """
+
+    _built: typing.ClassVar[dict[str, Generated]] = {}
+
+    @classmethod
+    def generated(cls, goal: str) -> Generated:
+        if goal not in cls._built:
+            cls._built[goal] = build_roundtrip(
+                fixtures.LITERAL_SELECT_GRAMMAR, goal, config_text=fixtures.LITERAL_SELECT_SIDECAR
+            )
+        return cls._built[goal]
+
+    @staticmethod
+    def round_trip(generated: Generated, text: str, goal: str) -> str:
+        return generated.ast.unparse(generated.convert(text, goal))
+
+    @pytest.mark.parametrize(("goal", "text", "rendered"), fixtures.LITERAL_SELECT_RENDERINGS)
+    def test_parsed_input_renders_as_tabled(self, goal: str, text: str, rendered: str) -> None:
+        """Byte-exact, or the first sibling spelling; the Rust gate case runs the same table."""
+        assert self.round_trip(self.generated(goal), text, goal) == rendered
+
+    def test_an_untagged_spelling_takes_the_literal_alternative(self) -> None:
+        """Parsed ``lit`` is the erased ``tword`` (the literal alternative needs a ``;``), but a
+        Python ``str`` does not record that, so selection takes the literal alternative.  The
+        rendering reads back as the same value.  Rust reads the variant and renders ``lit``."""
+        generated = self.generated("ltail")
+        assert self.round_trip(generated, "lit", "ltail") == "lit;"
+        assert generated.convert("lit;", "ltail") == generated.convert("lit", "ltail")
+
+    def test_hand_built_spellings_and_nodes_render_as_before(self) -> None:
+        ast = self.generated("lit").ast
+        assert ast.unparse(ast.Lit(v="lit")) == "lit"
+        assert ast.unparse(ast.Lit(v=ast.Word(text="abc"))) == "abc"
+        shade = self.generated("shade").ast
+        assert shade.unparse(shade.Shade(v="grey")) == "gray"
+        replit = self.generated("replit").ast
+        assert replit.unparse(replit.Replit(v=["lit", "lit"])) == "litlit"
+        both = self.generated("both").ast
+        assert both.unparse(both.Both(v=["grey", "42"])) == "gray42"
+        erased = self.generated("erased").ast
+        assert erased.unparse(erased.Erased(e="lit")) == "lit"
+        assert erased.unparse(erased.Erased(e=erased.Word(text="abc"))) == "abc"
+        etext = self.generated("etext").ast
+        assert etext.unparse(etext.Etext(e="lit")) == "lit"
+
+    def test_empty_containers_render_empty(self) -> None:
+        optlit = self.generated("optlit").ast
+        assert optlit.unparse(optlit.Optlit(v=None)) == ""
+        replit = self.generated("replit").ast
+        assert replit.unparse(replit.Replit(v=[])) == ""
+
+    @pytest.mark.parametrize(
+        ("goal", "build"),
+        [
+            ("lit", lambda ast: ast.Lit(v="xyz")),
+            ("seq", lambda ast: ast.Seq(v="xyz", n=ast.Word(text="abc"))),
+            ("shade", lambda ast: ast.Shade(v="xyz")),
+            ("mixed", lambda ast: ast.Mixed(v=["xyz", ast.Word(text="abc")])),
+            ("optlit", lambda ast: ast.Optlit(v="xyz")),
+            ("replit", lambda ast: ast.Replit(v=["lit", "xyz"])),
+            ("both", lambda ast: ast.Both(v=["xyz", "42"])),
+            ("flat", lambda ast: ast.Flat(v="xyz", n=ast.Word(text="abc"), t=ast.Other(text="XYZ"))),
+            ("erased", lambda ast: ast.Erased(e="xyz")),
+            ("etext", lambda ast: ast.Etext(e="xyz")),
+        ],
+    )
+    def test_text_outside_the_spelling_set_is_refused_not_replaced(
+        self, goal: str, build: typing.Callable[[types.ModuleType], typing.Any]
+    ) -> None:
+        """Refused by selection, or — where an alternative's regex accepts any text — by that
+        terminal or by the literal position's own guard; never rendered as the literal."""
+        ast = self.generated(goal).ast
+        with pytest.raises(astrt.AstError):
+            ast.unparse(build(ast))
+
+    @pytest.mark.parametrize(
+        ("goal", "build"),
+        [
+            ("shade", lambda ast: ast.Shade(v="xyz")),
+            ("optlit", lambda ast: ast.Optlit(v="xyz")),
+            ("replit", lambda ast: ast.Replit(v=["lit", "xyz"])),
+        ],
+    )
+    def test_text_no_alternative_admits_fits_no_alternative(
+        self, goal: str, build: typing.Callable[[types.ModuleType], typing.Any]
+    ) -> None:
+        ast = self.generated(goal).ast
+        with pytest.raises(astrt.AstError, match="no alternative fits the populated fields"):
+            build(ast).to_cst()
+
+    def test_the_content_test_leaves_a_node_kind_beside_it_alone(self) -> None:
+        """``Word`` passes alternative 0's kind test; the literal position then has nothing to take."""
+        ast = self.generated("mixed").ast
+        with pytest.raises(astrt.AstError, match="needs 1 'v' value"):
+            ast.Mixed(v=[ast.Word(text="abc")]).to_cst()
+
+    def test_a_field_enum_trial_tests_the_spelling_set(self) -> None:
+        source = self.generated("shade").source
+        assert source.count("astrt.field_fits(self.v, (astrt.LiteralText(('gray', 'grey')),))") == 2
+        assert "astrt.field_fits(self.v, (Word,))" in source
+
+    def test_an_erased_payloads_literal_is_text(self) -> None:
+        """A literal beside a node erases to a text variant; beside regexes only, to plain text."""
+        assert 'LwordV: typing.TypeAlias = "str | Word"' in self.generated("erased").source
+        assert "LtextV" not in self.generated("etext").source
+        assert "astrt.field_fits(value, (astrt.LiteralText(('lit',)),))" in self.generated("etext").source
+
+    def test_a_plain_text_trial_tests_the_spelling_set(self) -> None:
+        source = self.generated("seq").source
+        assert "astrt.field_fits(self.v, (astrt.LiteralText(('lit',)),))" in source
