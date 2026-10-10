@@ -167,6 +167,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- Language server: rename no longer goes ahead when the server could not check every project
+  file. With a cross-file resolver active (such as the gear example's), a rename inside one file
+  is allowed only after the server searches the rest of the workspace for references to the
+  symbol. Files it could not read or parse — a neighbor with a syntax error, an unreadable file,
+  a directory it could not list — used to be skipped without notice, so the rename could break a
+  reference in a file that was never checked. The rename is now refused, and the refusal names up
+  to five of those files and why each failed; the server log lists them all. Open buffers not yet
+  saved to disk are now searched too. One side effect: a project that keeps intentionally
+  invalid files of its own language (parse-error test fixtures, for example) under the workspace
+  root will have rename refused until those files move into a dot-directory or out of the root.
 - AST converters, both backends: `to_cst` on a product rule whose alternatives split one label
   between a labeled literal and a regex or rule reference now selects by the value's text. A
   parsed `42` under `x := v:"lit" | v:/[0-9]+/ | v:item` used to render as `lit`; it round-trips

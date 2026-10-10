@@ -27,6 +27,11 @@ Resolver-author guidance:
   your own recursion -- import cycles are the normal state of a live-edited project.
 - Missing/unparsable import targets should yield no entry (silent degradation), matching the
   same-file unresolved-reference policy.
+  The rename guard independently refuses when a file in its scan universe could not be
+  analyzed, so a resolver need not (and cannot) signal completeness. That universe is every
+  file with a resolver suffix under the workspace root outside dot-directories, so a workspace
+  that commits intentionally-unparseable files of its language (parse-error test fixtures)
+  has rename refused until they live under a dot-directory or outside the root.
 - Import-path segments come from untrusted document text. Validate them before touching the
   filesystem -- reject path separators, ``..``, and absolute parts (or confirm the resolved
   target stays under ``host.root_path()``) so a hostile file cannot traverse out of the

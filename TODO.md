@@ -39,21 +39,6 @@ bare-asserts). The design's `plumbing.parse_lsp_config` wrapper (not yet built) 
 home for this sequence; fold both helpers onto it once it lands, rather than building a throwaway
 interim shared helper. Location: `fltk/lsp/test_lsp_config.py`, `fltk/lsp/test_lsp_validation.py`.
 
-## `rename-guard-incomplete-scan`
-
-`ProjectNavigator.rename_hazard` (`fltk/lsp/project.py`) decides whether a same-file rename is safe
-by scanning the workspace for cross-file references. When that scan is incomplete -- a directory
-`os.walk` error (surfaced only as an advisory `window/logMessage` warning), or a neighbor file that
-is unreadable/unparseable and therefore dropped by `host.document()` -- the guard still returns
-`Hazard.NONE` and permits the rename, so a cross-file reference hiding in the skipped file goes
-undetected and the rename can silently break another file. This is the one fail-closed path (frozen
-step5 design §4.6) meeting the read path's deliberate silent-degradation policy (§5:
-transiently-broken neighbors are the normal state of live editing); the design did not resolve the
-tension. Refusing on any imperfect scan would make rename nearly unusable during editing; permitting
-weakens the guard. Reconciling requires a design delta (e.g. refuse only on walk/IO errors while
-tolerating unparseable neighbors, or track scan completeness explicitly), not a respond-mode patch.
-Location: `fltk/lsp/project.py` (`ProjectNavigator.rename_hazard`).
-
 ## `lsp-analysis-watchdog`
 
 `fltk/lsp/server.py`'s analysis runs on a single-worker `ThreadPoolExecutor`, and Python worker
@@ -537,3 +522,17 @@ question. The design approval for the indent-charging fix set the trigger: the n
 fit-check correction of this kind should do this instead of adding mirrored state. Location:
 `crates/fltk-unparser-core/src/render.rs` (`FitCursor`, `Output`), `fltk/unparse/renderer.py`
 (`_fits`, `render`).
+
+## `correctness-persistently-broken-project-files-disable-rename-permanently`
+
+The LSP rename guard (under a resolver) refuses whenever any file in its scan universe — every
+file with a resolver suffix under the workspace root, outside dot-directories — fails to read or
+parse. A consumer project that commits intentionally-invalid files of its own language (parse-error
+test fixtures, an error-recovery corpus) therefore has cross-file-aware rename refused in every file
+for as long as those fixtures exist; the only workaround is moving them under a dot-directory or out
+of the root (documented in `fltk/lsp/resolver.py`'s module docstring). Fixing it means an exclusion
+mechanism that the directory walk and the open-buffer term of the universe both honour, and that
+find-references honours too (one project boundary, not two) — e.g. an optional `Resolver`
+attribute, an ignore file, or a server flag. Each is a new configuration surface on the provisional
+resolver protocol or the server CLI and needs a design cycle. Location: `fltk/lsp/project.py`
+(`_is_project_dir`, `ProjectHost.workspace_files`, `ProjectHost.open_documents`).

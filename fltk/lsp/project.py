@@ -14,6 +14,7 @@ concurrently.
 
 from __future__ import annotations
 
+import dataclasses
 import enum
 import logging
 import os
@@ -74,15 +75,31 @@ class _CachedDoc(NamedTuple):
     line_index: LineIndex
 
 
+@dataclasses.dataclass(frozen=True)
+class _Unavailable:
+    """Why a URI could not be analyzed; the text is what the warning and the refusal show.
+
+    ``logged`` is set when this failure has already been reported to the client log.
+    """
+
+    reason: str
+    logged: bool = False
+
+
 class ProjectHost:
     """The server's :class:`~fltk.lsp.resolver.ResolverHost`, over a snapshot + disk.
 
     ``open_docs`` maps a URI to ``(version, text)`` for every document the client currently has
     open; it is a point-in-time snapshot the server copies on the loop thread and never mutates.
     ``root_path`` is the workspace root captured at ``initialize`` (``None`` if the client
-    provided none). Analysis reuses the single ``engine``; only complete analyses are cached and
-    returned -- a partial or failed parse yields ``None`` and is not cached, so a later fix
-    re-analyzes.
+    provided none). Analysis reuses the single ``engine``; only complete analyses are returned. Both
+    outcomes are cached under the file's version key, so an unchanged broken file is parsed once
+    however many lookups reach it, and a fix (a new version key) re-analyzes.
+
+    A URI that cannot be analyzed (non-``file:``, unstattable, unreadable, partial or failed parse)
+    has two lookups: ``document()`` returns ``None`` and is silent about why; ``scan_document()``
+    also records the reason in ``scan_omissions()`` and warns. A directory-walk error in
+    ``workspace_files()`` is recorded the same way, whoever called it.
     """
 
     def __init__(
@@ -100,10 +117,13 @@ class ProjectHost:
             {canonical_uri(uri): value for uri, value in open_docs.items()} if open_docs else {}
         )
         self._cache: dict[str, _CachedDoc] = {}
+        self._failed: dict[str, tuple[_VersionKey, _Unavailable]] = {}
         self._warned_unreadable: set[str] = set()
         # Client-surfacable warnings (unreadable workspace files, directory-scan errors) accumulated
         # since the last drain; the server emits them as ``window/logMessage``.
         self._warnings: list[str] = []
+        # Files and directories a scan could not analyze, ``name -> reason``.
+        self._omissions: dict[str, str] = {}
 
     def drain_warnings(self) -> list[str]:
         """Return and clear the client-surfacable warnings gathered while serving requests."""
@@ -113,35 +133,82 @@ class ProjectHost:
 
     def document(self, uri: str) -> ResolvedDocument | None:
         entry = self._ensure(uri)
-        return entry.document if entry is not None else None
+        return entry.document if isinstance(entry, _CachedDoc) else None
+
+    def scan_document(self, uri: str) -> ResolvedDocument | None:
+        """``document()`` for a URI a scan enumerated: a failure is recorded, not just skipped.
+
+        The reason lands in ``scan_omissions()`` under the canonical URI, and a warning naming the
+        URI is queued unless this failure is already in the log.
+        """
+        entry = self._ensure(uri)
+        if isinstance(entry, _CachedDoc):
+            return entry.document
+        key = canonical_uri(uri)
+        if key not in self._omissions:
+            self._omissions[key] = entry.reason
+            if not entry.logged:
+                self._warnings.append(f"fltk-lsp: could not analyze workspace file {uri}: {entry.reason}")
+        return None
+
+    def scan_omissions(self) -> Mapping[str, str]:
+        """Every file or directory a scan could not analyze, ``name -> reason``."""
+        return self._omissions
 
     def line_index(self, uri: str) -> LineIndex | None:
         """The cached line table for ``uri``, analyzing it if needed; ``None`` when unavailable."""
         entry = self._ensure(uri)
-        return entry.line_index if entry is not None else None
+        return entry.line_index if isinstance(entry, _CachedDoc) else None
 
     def workspace_files(self) -> Sequence[str]:
         if self._root_path is None:
             return ()
-        suffixes = tuple(self._resolver.file_suffixes)
 
         def _on_scan_error(error: OSError) -> None:
             # os.walk otherwise swallows a permission/vanished-directory error, silently dropping a
             # whole subtree; record it so the omission is at least visible in the client's log.
+            # The dropped subtree makes the listing incomplete, so it is also a scan omission.
             where = getattr(error, "filename", None) or self._root_path
             self._warnings.append(f"fltk-lsp: could not scan {where}: {error}")
+            self._omissions[str(where)] = f"directory scan error: {error}"
 
         result: list[str] = []
         for dirpath, dirnames, filenames in os.walk(self._root_path, onerror=_on_scan_error):
-            dirnames[:] = [d for d in dirnames if not d.startswith(".")]
+            dirnames[:] = [d for d in dirnames if _is_project_dir(d)]
             for filename in filenames:
-                if filename.endswith(suffixes):
+                # Only regular files (or symlinks to one): a dangling symlink -- an editor lock
+                # file such as Emacs's ``.#name`` -- or a FIFO is not a project file.
+                if self._is_project_file(filename) and os.path.isfile(os.path.join(dirpath, filename)):
                     result.append(self.path_to_uri(pathlib.Path(dirpath) / filename))
+        result.sort()
+        return tuple(result)
+
+    def open_documents(self) -> Sequence[str]:
+        """The open buffers ``workspace_files()`` would list if they were saved, sorted.
+
+        A ``file:`` URI under the root whose directories below the root and whose file name pass
+        the same predicates the walk prunes and filters with. Lexical, like the walk (no symlink
+        resolution); ``()`` with no root.
+        """
+        if self._root_path is None:
+            return ()
+        result: list[str] = []
+        for uri in self._open_docs:
+            path = uri_to_path(uri)
+            if path is None or not path.is_relative_to(self._root_path):
+                continue
+            below_root = path.relative_to(self._root_path).parent.parts
+            if all(_is_project_dir(part) for part in below_root) and self._is_project_file(path.name):
+                result.append(uri)
         result.sort()
         return tuple(result)
 
     def root_path(self) -> pathlib.Path | None:
         return self._root_path
+
+    def _is_project_file(self, name: str) -> bool:
+        """Whether a file named ``name`` in a project directory is a project file."""
+        return name.endswith(tuple(self._resolver.file_suffixes))
 
     def uri_to_path(self, uri: str) -> pathlib.Path | None:
         return uri_to_path(uri)
@@ -156,25 +223,32 @@ class ProjectHost:
         """
         return uris.from_fs_path(str(path)) or ""
 
-    def _ensure(self, uri: str) -> _CachedDoc | None:
+    def _ensure(self, uri: str) -> _CachedDoc | _Unavailable:
         """Return the cached analysis for ``uri``, (re)analyzing on a version-key mismatch.
 
-        Open-buffer text wins over disk. Only a complete analysis is cached and returned; a
-        partial/failed parse or an unreadable file yields ``None``.
+        Open-buffer text wins over disk. Only a complete analysis is returned; a partial/failed
+        parse or an unavailable file yields the reason as ``_Unavailable``. A parse failure is
+        cached under its version key like a success.
         """
         uri = canonical_uri(uri)
         source = self._source(uri)
-        if source is None:
-            return None
+        if isinstance(source, _Unavailable):
+            return source
         text, version_key = source
 
         cached = self._cache.get(uri)
         if cached is not None and cached.version_key == version_key:
             return cached
+        failed = self._failed.get(uri)
+        if failed is not None and failed[0] == version_key:
+            return failed[1]
 
         analysis = self._engine.analyze(text)
-        if analysis.error is not None or analysis.tree is None or analysis.symbols is None:
-            return None
+        if analysis.error is not None:
+            first_line = analysis.error.message.partition("\n")[0]
+            return self._fail(uri, version_key, f"parse error: {first_line}" if first_line else "parse error")
+        if analysis.tree is None or analysis.symbols is None:
+            return self._fail(uri, version_key, "analysis incomplete")
 
         entry = _CachedDoc(
             version_key=version_key,
@@ -184,12 +258,17 @@ class ProjectHost:
         self._cache[uri] = entry
         return entry
 
-    def _source(self, uri: str) -> tuple[str, _VersionKey] | None:
-        """The current ``(text, version_key)`` for ``uri`` -- open buffer or disk -- or ``None``.
+    def _fail(self, uri: str, version_key: _VersionKey, reason: str) -> _Unavailable:
+        """Cache and return a failed analysis of ``uri`` at ``version_key``."""
+        failure = _Unavailable(reason)
+        self._failed[uri] = (version_key, failure)
+        return failure
+
+    def _source(self, uri: str) -> tuple[str, _VersionKey] | _Unavailable:
+        """The current ``(text, version_key)`` for ``uri`` -- open buffer or disk -- or why not.
 
         A disk file whose ``(mtime_ns, size)`` still matches the cache is not re-read; the caller
-        short-circuits on the matching key. An unreadable or non-UTF-8 file logs once and yields
-        ``None``.
+        short-circuits on the matching key. An unreadable or non-UTF-8 file logs once.
         """
         open_entry = self._open_docs.get(uri)
         if open_entry is not None:
@@ -198,11 +277,11 @@ class ProjectHost:
 
         path = self.uri_to_path(uri)
         if path is None:
-            return None
+            return _Unavailable("not a file: URI")
         try:
             stat = path.stat()
-        except OSError:
-            return None
+        except OSError as exc:
+            return _Unavailable(f"cannot stat: {exc}")
         version_key: _VersionKey = ("disk", stat.st_mtime_ns, stat.st_size)
 
         cached = self._cache.get(uri)
@@ -215,8 +294,15 @@ class ProjectHost:
                 self._warned_unreadable.add(uri)
                 _LOGGER.warning("fltk-lsp: could not read workspace file %s as UTF-8; skipping", uri)
                 self._warnings.append(f"fltk-lsp: could not read workspace file {uri}; skipping ({exc})")
-            return None
+            return _Unavailable(f"could not read as UTF-8: {exc}", logged=True)
         return text, version_key
+
+
+def _is_project_dir(name: str) -> bool:
+    """Whether a directory named ``name`` below the workspace root is part of the project."""
+    # TODO(correctness-persistently-broken-project-files-disable-rename-permanently): no way to
+    # exclude intentionally-unparseable files (error-test fixtures) from the project boundary.
+    return not name.startswith(".")
 
 
 def _identity(target: ExternalTarget) -> tuple[str, int, int]:
@@ -227,14 +313,21 @@ def _identity(target: ExternalTarget) -> tuple[str, int, int]:
 class Hazard(enum.Enum):
     """Why a same-file rename must be refused while a resolver is active.
 
-    ``NONE`` is the only value that permits the rename; every other value (and, in the server
-    layer, any exception raised while computing the hazard) refuses it -- fail-closed by
-    construction, so a new value can never accidentally take the permit path.
+    - ``NONE``: nothing found; the only value that permits the rename.
+    - ``IMPORT_BINDING``: the symbol redirects to a declaration in another file.
+    - ``CROSS_FILE``: an occurrence of the symbol lives in another file.
+    - ``INCOMPLETE_SCAN``: the scan of the guard's universe dropped at least one file or
+      directory; which ones is in ``ProjectHost.scan_omissions()``.
+
+    The server permits only on ``hazard is Hazard.NONE``; every other value, and any exception
+    raised while computing the hazard, refuses -- so a new value refuses even before the server
+    has a message for it.
     """
 
     NONE = "none"
     IMPORT_BINDING = "import_binding"
     CROSS_FILE = "cross_file"
+    INCOMPLETE_SCAN = "incomplete_scan"
 
 
 class ProjectNavigator:
@@ -262,30 +355,27 @@ class ProjectNavigator:
         both same-file and cross-file references to the target are always included. ``None`` when
         the cursor addresses nothing resolvable.
         """
-        return self._references(doc, offset, include_declaration=include_declaration, resolutions={})
+        return self._references(doc, offset, include_declaration=include_declaration, resolutions={}, record=False)
 
     def rename_hazard(self, doc: ResolvedDocument, symbol: Symbol, offset: int) -> Hazard:
         """Whether renaming ``symbol`` (under ``offset``) same-file would break the project.
 
         ``IMPORT_BINDING`` when the symbol redirects elsewhere (renaming it locally would detach it
-        from its import); ``CROSS_FILE`` when any occurrence lives in another file; else ``NONE``.
-        The requesting document is resolved once and that resolution is reused for the global scan,
-        so the canonical-target rule matches the read-side references query exactly.
+        from its import); ``CROSS_FILE`` when any occurrence lives in another file;
+        ``INCOMPLETE_SCAN`` when any file in the scan universe (see ``_scan_docs``) could not be
+        analyzed or the directory walk failed; else ``NONE``. The scan always runs to completion,
+        so ``ProjectHost.scan_omissions()`` lists every omission. The requesting document is
+        resolved once and that resolution is reused for the global scan, so the canonical-target
+        rule matches the read-side references query exactly.
         """
         resolutions: dict[str, CrossFileResolution] = {}
         if self._resolution(doc, resolutions).symbol_targets.get(symbol) is not None:
             return Hazard.IMPORT_BINDING
-        # TODO(rename-guard-incomplete-scan): an incomplete workspace scan -- a directory-walk error,
-        # or a neighbor that is unreadable or unparseable and so dropped from the reference scan --
-        # lets this return NONE (permit) even though an undetected cross-file reference may live in
-        # the skipped file. The scan surfaces the omission only as an advisory warning; whether the
-        # guard should instead refuse on any imperfect scan is an unresolved policy question (refusing
-        # on every transiently unparseable neighbor would gut rename during live editing).
-        occurrences = self._references(doc, offset, include_declaration=True, resolutions=resolutions)
-        if occurrences is not None:
-            for occ_uri, _start, _end in occurrences:
-                if occ_uri != doc.uri:
-                    return Hazard.CROSS_FILE
+        occurrences = self._references(doc, offset, include_declaration=True, resolutions=resolutions, record=True)
+        if occurrences is not None and any(occ_uri != doc.uri for occ_uri, _start, _end in occurrences):
+            return Hazard.CROSS_FILE
+        if self._host.scan_omissions():
+            return Hazard.INCOMPLETE_SCAN
         return Hazard.NONE
 
     def _references(
@@ -295,6 +385,7 @@ class ProjectNavigator:
         *,
         include_declaration: bool,
         resolutions: dict[str, CrossFileResolution],
+        record: bool,
     ) -> list[Occurrence] | None:
         target = self._target_for(doc, offset, resolutions)
         if target is None:
@@ -302,7 +393,7 @@ class ProjectNavigator:
         target_id = _identity(target)
         declaration = (target.name_start, target.name_end)
         results: set[Occurrence] = set()
-        for scanned in self._scan_docs(doc, target):
+        for scanned in self._scan_docs(doc, target, record=record):
             resolution = self._resolution(scanned, resolutions)
             for symbol in scanned.symbols.symbols:
                 if self._canonical_identity(scanned, symbol, resolution) != target_id:
@@ -319,22 +410,26 @@ class ProjectNavigator:
                         results.add((scanned.uri, ref.start, ref.end))
         return sorted(results)
 
-    def _scan_docs(self, doc: ResolvedDocument, target: ExternalTarget) -> Iterator[ResolvedDocument]:
-        """The target's home document, the requesting document, and every workspace file, once each.
+    def _scan_docs(self, doc: ResolvedDocument, target: ExternalTarget, *, record: bool) -> Iterator[ResolvedDocument]:
+        """Every analyzable document in the scan universe, once each.
 
-        The requesting document is served from the passed-in ``doc`` (the server's
-        current-or-last-good snapshot), never re-read from the host, so the read-only stale-serving
-        policy holds for it while other documents come from the host cache.
+        The universe is the target's home URI, the requesting URI, ``workspace_files()``, and the
+        open buffers the walk would list if saved (``open_documents()``). The requesting document is
+        served from the passed-in ``doc`` (the server's current-or-last-good snapshot), never re-read
+        from the host, so the read-only stale-serving policy holds for it while other documents come
+        from the host cache. With ``record`` an unanalyzable URI is recorded as a scan omission
+        (``scan_document``); without it, it is skipped silently (``document``).
         """
+        lookup = self._host.scan_document if record else self._host.document
         seen: set[str] = set()
-        for uri in (target.uri, doc.uri, *self._host.workspace_files()):
+        for uri in (target.uri, doc.uri, *self._host.workspace_files(), *self._host.open_documents()):
             if uri in seen:
                 continue
             seen.add(uri)
             if uri == doc.uri:
                 yield doc
             else:
-                scanned = self._host.document(uri)
+                scanned = lookup(uri)
                 if scanned is not None:
                     yield scanned
 

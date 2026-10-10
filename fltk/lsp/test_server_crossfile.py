@@ -14,6 +14,7 @@ The gear artifacts live outside the ``fltk`` package, so this suite skips at mod
 from __future__ import annotations
 
 import contextlib
+import shutil
 import sys
 from collections.abc import Sequence
 from pathlib import Path
@@ -30,8 +31,10 @@ from lsprotocol import types as t  # noqa: E402
 from pygls import uris  # noqa: E402
 from pytest_lsp import ClientServerConfig, LanguageClient  # noqa: E402
 
+from fltk.lsp import server  # noqa: E402
 from fltk.lsp.conftest import nth_offset  # noqa: E402
 from fltk.lsp.positions import LineIndex, PositionEncoding  # noqa: E402
+from fltk.lsp.project import Hazard  # noqa: E402
 
 _DATA = Path(__file__).parent / "test_data"
 _GRAMMAR = str(_GEAR / "gear.fltkg")
@@ -83,13 +86,26 @@ _COMMAND_RAISING = _base_command("--resolver", _RAISING_RESOLVER)
 _COMMAND_NO_RESOLVER = _base_command()
 
 
-def _init_params() -> t.InitializeParams:
+def _init_params(root_uri: str = _ROOT_URI) -> t.InitializeParams:
     return t.InitializeParams(
         capabilities=t.ClientCapabilities(
             general=t.GeneralClientCapabilities(position_encodings=[t.PositionEncodingKind.Utf32])
         ),
-        root_uri=_ROOT_URI,
+        root_uri=root_uri,
     )
+
+
+def _workspace(tmp_path: Path) -> tuple[Path, str, str, str]:
+    """A writable copy of the gear sample: ``(root, root_uri, main_uri, shapes_uri)``."""
+    root = tmp_path / "sample"
+    shutil.copytree(_SAMPLE, root)
+    for path in (root, *root.rglob("*")):
+        path.chmod(0o755 if path.is_dir() else 0o644)  # the runfiles copy is read-only
+    return root, _uri(root), _uri(root / "main.gear"), _uri(root / "lib" / "shapes.gear")
+
+
+def _warnings_naming(client: LanguageClient, needle: str) -> list[str]:
+    return [m.message for m in client.log_messages if m.type == t.MessageType.Warning and needle in m.message]
 
 
 def _pos(text: str, offset: int) -> t.Position:
@@ -352,3 +368,109 @@ async def test_no_resolver_rename_exported_shape_succeeds(plain_client: Language
     edits = (result.changes or {}).get(_MAIN_URI, [])
     assert len(edits) >= 1
     assert {e.new_text for e in edits} == {"Gear"}
+
+
+# --- Rename guard: scan completeness ----------------------------------------------------------
+
+_BROKEN = "\nshape {"  # unterminated -> parse error
+
+
+@pytest.mark.asyncio
+async def test_rename_refused_when_referencing_neighbor_is_broken_on_disk_control(
+    client: LanguageClient, tmp_path: Path
+) -> None:
+    # Control for the paired witness below: with main.gear healthy, the reference is found.
+    _root, root_uri, _main_uri, shapes_uri = _workspace(tmp_path)
+    await client.initialize_session(_init_params(root_uri))
+    await _open(client, shapes_uri, _SHAPES_TEXT)
+    with pytest.raises(Exception, match="other files"):
+        await _rename(client, shapes_uri, _pos(_SHAPES_TEXT, _SHAPES_TEXT.index("Circle") + 1), "Ring")
+
+
+@pytest.mark.asyncio
+async def test_rename_refused_when_referencing_neighbor_is_broken_on_disk(
+    client: LanguageClient, tmp_path: Path
+) -> None:
+    # The same reference in main.gear, hidden behind a parse error: the scan cannot see it, so the
+    # rename refuses, naming the file it could not analyze, and the log says the same.
+    root, root_uri, main_uri, shapes_uri = _workspace(tmp_path)
+    (root / "main.gear").write_text(_MAIN_TEXT + _BROKEN)
+    await client.initialize_session(_init_params(root_uri))
+    await _open(client, shapes_uri, _SHAPES_TEXT)
+    with pytest.raises(Exception, match="could not analyze") as excinfo:
+        await _rename(client, shapes_uri, _pos(_SHAPES_TEXT, _SHAPES_TEXT.index("Circle") + 1), "Ring")
+    assert main_uri in str(excinfo.value)
+    assert _warnings_naming(client, main_uri)
+
+
+@pytest.mark.asyncio
+async def test_rename_import_binding_refused_when_target_broken_on_disk(client: LanguageClient, tmp_path: Path) -> None:
+    # A clean importer of a broken module: the resolver builds no redirect, so the binding looks
+    # local -- but the scan visits shapes.gear itself and refuses.
+    root, root_uri, main_uri, shapes_uri = _workspace(tmp_path)
+    (root / "lib" / "shapes.gear").write_text(_SHAPES_TEXT + _BROKEN)
+    await client.initialize_session(_init_params(root_uri))
+    await _open(client, main_uri, _MAIN_TEXT)
+    with pytest.raises(Exception, match="could not analyze") as excinfo:
+        await _rename(client, main_uri, _pos(_MAIN_TEXT, nth_offset(_MAIN_TEXT, "Circle", 0) + 1), "Ring")
+    assert shapes_uri in str(excinfo.value)
+
+
+@pytest.mark.asyncio
+async def test_rename_refused_when_neighbor_buffer_broken(client: LanguageClient, tmp_path: Path) -> None:
+    # Disk is healthy; the open shapes buffer is broken, and the open buffer is what the scan reads.
+    _root, root_uri, main_uri, shapes_uri = _workspace(tmp_path)
+    await client.initialize_session(_init_params(root_uri))
+    await _open(client, main_uri, _MAIN_TEXT)
+    await _open(client, shapes_uri, _SHAPES_TEXT)
+    await _change(client, shapes_uri, _SHAPES_TEXT + _BROKEN, version=2)
+    with pytest.raises(Exception, match="could not analyze") as excinfo:
+        await _rename(client, main_uri, _pos(_MAIN_TEXT, nth_offset(_MAIN_TEXT, "Circle", 0) + 1), "Ring")
+    assert shapes_uri in str(excinfo.value)
+
+
+@pytest.mark.asyncio
+async def test_rename_refused_when_unsaved_neighbor_references_symbol(client: LanguageClient, tmp_path: Path) -> None:
+    # The only reference to `Circle` lives in a new, never-saved buffer under the root.
+    root, root_uri, _main_uri, shapes_uri = _workspace(tmp_path)
+    (root / "main.gear").unlink()
+    await client.initialize_session(_init_params(root_uri))
+    await _open(client, _uri(root / "new.gear"), "use lib::shapes::{ Circle };\nshape Rim { c: Circle; }\n")
+    await _open(client, shapes_uri, _SHAPES_TEXT)
+    with pytest.raises(Exception, match="other files"):
+        await _rename(client, shapes_uri, _pos(_SHAPES_TEXT, _SHAPES_TEXT.index("Circle") + 1), "Ring")
+
+
+@pytest.mark.asyncio
+async def test_rename_local_permitted_despite_missing_import_target(client: LanguageClient) -> None:
+    # A `use` of a module that does not exist is resolver speculation, not a dropped project file.
+    first_use = _MAIN_TEXT.index("use ")
+    text = _MAIN_TEXT[:first_use] + "use lib::nothere::{ Nope };\n" + _MAIN_TEXT[first_use:]
+    await client.initialize_session(_init_params())
+    await _open(client, _MAIN_URI, text)
+    result = await _rename(client, _MAIN_URI, _pos(text, text.index("Wheel") + 1), "Gear")
+    assert result is not None
+    changes = result.changes or {}
+    assert set(changes) == {_MAIN_URI}
+    assert changes[_MAIN_URI]
+    assert not _warnings_naming(client, "nothere")
+
+
+def test_every_hazard_has_a_refusal() -> None:
+    assert {h for h in Hazard if h is not Hazard.NONE} | {None} <= set(server._RENAME_REFUSALS)
+
+
+def test_incomplete_scan_refusal_names_file_and_reason() -> None:
+    message = server._refusal_message(Hazard.INCOMPLETE_SCAN, {"file:///a": "parse error: x"})
+    assert "file:///a" in message
+    assert "parse error: x" in message
+
+
+def test_incomplete_scan_refusal_shows_first_five_sorted_names() -> None:
+    # Inserted out of order, as a scan (target, requester, walk) would record them.
+    order = [5, 2, 0, 4, 1, 3]
+    omissions = {f"file:///f{i}": "parse error" for i in order}
+    capped = server._refusal_message(Hazard.INCOMPLETE_SCAN, omissions)
+    assert [f"file:///f{i}" in capped for i in range(6)] == [True] * 5 + [False]
+    assert capped.index("file:///f0") < capped.index("file:///f4")
+    assert capped.endswith(", and 1 more")

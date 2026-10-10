@@ -37,6 +37,8 @@ from fltk.lsp.project import Hazard, ProjectHost, ProjectNavigator, canonical_ur
 from fltk.lsp.resolver import ResolvedDocument
 
 if TYPE_CHECKING:
+    from collections.abc import Mapping
+
     from fltk.lsp import symbols
     from fltk.lsp.engine import AnalysisEngine, DocumentAnalysis
     from fltk.lsp.resolver import Resolver
@@ -592,12 +594,14 @@ class FltkLanguageServer(LanguageServer):
         offset: int,
         open_docs: dict[str, tuple[int, str]],
         root: pathlib.Path | None,
-    ) -> tuple[Hazard | None, list[tuple[lsp.MessageType, str]]]:
+    ) -> tuple[Hazard | None, Mapping[str, str], list[tuple[lsp.MessageType, str]]]:
         """The cross-file rename hazard on the worker; fails closed.
 
-        Returns the :class:`Hazard`, or ``None`` when the global query raised (a buggy or
-        transiently-failing resolver refuses rather than degrading). Only ``Hazard.NONE`` lets the
-        caller proceed -- every other value, and ``None``, refuses.
+        Returns ``(hazard, omissions, logs)``: the :class:`Hazard`, or ``None`` when the global query
+        raised (a buggy or transiently-failing resolver refuses rather than degrading); the host's
+        scan omissions (``name -> reason``), which the refusal names for ``INCOMPLETE_SCAN``; and the
+        log messages. Only ``Hazard.NONE`` lets the caller proceed -- every other value, and
+        ``None``, refuses.
         """
         logs: list[tuple[lsp.MessageType, str]] = []
         host, navigator = self._project(open_docs, root)
@@ -608,9 +612,9 @@ class FltkLanguageServer(LanguageServer):
                 (lsp.MessageType.Error, f"fltk-lsp: rename guard query failed; refusing:\n{traceback.format_exc()}")
             )
             _drain(host, logs)
-            return None, logs
+            return None, host.scan_omissions(), logs
         _drain(host, logs)
-        return hazard, logs
+        return hazard, host.scan_omissions(), logs
 
     async def definition_crossfile(self, uri: str, position: lsp.Position) -> lsp.Location | None:
         """Resolver-path go-to-definition: cross-file target, degrading to same-file on failure."""
@@ -726,23 +730,24 @@ class FltkLanguageServer(LanguageServer):
             )
         if self._resolver is not None:
             # Cross-file refusal guard: a same-file rename of a symbol other files reference (or an
-            # import binding) would silently corrupt the project. Fails closed -- any query failure
-            # refuses rather than degrading, so a transient resolver fault cannot reopen the hazard.
+            # import binding) would silently corrupt the project, and so might one whose workspace
+            # scan could not analyze some file. Fails closed -- any query failure refuses rather than
+            # degrading, so a transient resolver fault cannot reopen the hazard.
             doc = ResolvedDocument(uri=canonical_uri(uri), text=text, tree=analysis.tree, symbols=analysis.symbols)
             open_docs = self._open_docs_snapshot()
             root = self._workspace_root()
             self._maybe_warn_no_root(root)
             guard_loop = asyncio.get_running_loop()
-            hazard, guard_logs = await guard_loop.run_in_executor(
+            hazard, omissions, guard_logs = await guard_loop.run_in_executor(
                 self._executor, self._rename_guard_blocking, doc, symbol, offset, open_docs, root
             )
             for level, message in guard_logs:
                 self.window_log_message(lsp.LogMessageParams(type=level, message=message))
-            # Fail-closed: only Hazard.NONE proceeds; every other hazard (and None, a query failure)
-            # refuses, so a resolver fault or a future hazard value cannot silently permit the rename.
-            refusal = _RENAME_REFUSALS.get(hazard)
-            if refusal is not None:
-                raise JsonRpcException(refusal, code=lsp.LSPErrorCodes.RequestFailed)
+            # Fail-closed: only Hazard.NONE proceeds; every other hazard (an incomplete scan
+            # included, and None, a query failure) refuses. The warnings above reach the client
+            # before the refusal, so the log names every file the refusal names.
+            if hazard is not Hazard.NONE:
+                raise JsonRpcException(_refusal_message(hazard, omissions), code=lsp.LSPErrorCodes.RequestFailed)
             if self.workspace.get_text_document(uri).version != version:
                 # The guard's global query awaited on the worker; a didChange may have landed since.
                 msg = "document changed during rename; retry"
@@ -844,13 +849,35 @@ class FltkLanguageServer(LanguageServer):
         return edits
 
 
-# Fail-closed rename verdicts: a hazard not in this map (only ``Hazard.NONE``) permits the rename.
-# ``None`` is the query-failure sentinel and must refuse.
+# Refusal messages per hazard; ``None`` is the query-failure sentinel. The permit decision is
+# ``hazard is Hazard.NONE``, never membership here; ``INCOMPLETE_SCAN``'s entry is a prefix that
+# ``_refusal_message`` completes with the names of the files it could not analyze.
 _RENAME_REFUSALS: dict[Hazard | None, str] = {
     Hazard.CROSS_FILE: "cannot rename: symbol is referenced in other files",
     Hazard.IMPORT_BINDING: "cannot rename: symbol is an import binding",
+    Hazard.INCOMPLETE_SCAN: "cannot rename: could not analyze",
     None: "cannot rename: could not verify cross-file references",
 }
+
+# How many omissions an incomplete-scan refusal names before summarizing the rest as a count.
+_REFUSAL_NAME_CAP = 5
+
+
+def _refusal_message(hazard: Hazard | None, omissions: Mapping[str, str]) -> str:
+    """The refusal text for ``hazard``; for ``INCOMPLETE_SCAN``, naming the omitted files.
+
+    Names are sorted and capped at ``_REFUSAL_NAME_CAP``, the rest summarized as ``and N more``;
+    every omission is also in the client log, warned by the host.
+    """
+    message = _RENAME_REFUSALS[hazard]
+    if hazard is not Hazard.INCOMPLETE_SCAN:
+        return message
+    names = sorted(omissions)
+    shown = ", ".join(f"{name} ({omissions[name]})" for name in names[:_REFUSAL_NAME_CAP])
+    rest = len(names) - _REFUSAL_NAME_CAP
+    if rest > 0:
+        shown += f", and {rest} more"
+    return f"{message} {shown}"
 
 
 def _drain(host: ProjectHost, logs: list[tuple[lsp.MessageType, str]]) -> None:

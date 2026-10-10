@@ -107,9 +107,12 @@ workspace folder:
    lands in `lib/shapes.gear`.
 5. **Find-references**: **Shift+F12** on a shape definition in `lib/shapes.gear` lists
    locations in `main.gear` — including when `main.gear` was never opened this session.
-6. **Live degradation**: introduce a syntax error → a diagnostic appears and highlighting
-   stays fresh on the still-valid prefix; **rename** an exported shape → a refusal message
-   (cross-file rename is not supported); rename a local `let` binding → succeeds.
+6. **Live degradation**: introduce a syntax error in `lib/shapes.gear` → a diagnostic
+   appears and highlighting stays fresh on the still-valid prefix; in `main.gear`, rename
+   a local `let` binding → a refusal naming `shapes.gear` (rename refuses while any file in
+   the project could not be analyzed; the server log says why); fix the error → the same
+   rename succeeds; **rename** an exported shape → a refusal message (cross-file rename is
+   not supported).
 
 The samples ship healthy (no deliberate errors or unresolved references); step 6 has you
 introduce breakage live.
