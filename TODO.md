@@ -1,8 +1,10 @@
 # TODOs
 
-## `example-placeholder`
-
-This is a placeholder entry. Leave it here so the file is never empty. It is not a real TODO. You would reference it in code with `// TODO(example-placeholder)` comments. This is the basic TODO system design: An entry here with a slug used to join to code comments. Add real TODOs below this one in this format.
+Each entry below is a `## ` heading carrying a backticked slug, followed by a
+paragraph describing one concrete piece of work and the context in which it
+was deferred. The slug is the join key to `TODO(slug)` comments in code, which
+mark where the work happens; the full convention, including what qualifies as
+a TODO, is the `## TODO System` section of `CLAUDE.md`.
 
 ## `extend-children-owned`
 

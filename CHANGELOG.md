@@ -229,6 +229,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   sub-rule split first. The guide also corrects its claim about the three-`item` example: left
   as a sum it is a duplicate-variant-name error, not three variants called `Item`. Generated
   output is unchanged.
+- `TODO.md` no longer opens with a placeholder entry (`example-placeholder`) that was not real
+  work. A short intro paragraph now explains the entry format and points to the TODO System
+  section of `CLAUDE.md`. Tools that list entries no longer count it as backlog or warn that it
+  has no matching `TODO(...)` comment in the code.
 
 ### Fixed
 
