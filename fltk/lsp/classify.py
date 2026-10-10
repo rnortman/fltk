@@ -10,6 +10,7 @@ its whole span. The explicit-paint painter layer is layered on top of this elsew
 from __future__ import annotations
 
 import dataclasses
+import heapq
 import itertools
 import re
 import typing
@@ -19,7 +20,7 @@ from fltk.fegen.pyrt.span_protocol import SpanKind
 from fltk.lsp import lsp_config
 
 if typing.TYPE_CHECKING:
-    from collections.abc import Iterator, Mapping
+    from collections.abc import Iterable, Iterator, Mapping
 
     from fltk.lsp.symbols import SymbolTable
 
@@ -304,21 +305,35 @@ def _winner_segments(intervals: list[_Interval]) -> list[tuple[int, int, lsp_con
 
     Between consecutive interval endpoints the covering set is constant; the max-key interval wins
     (including a ``none`` paint, which still occupies the segment so it occludes losers and
-    suppresses defaults). Adjacent segments with the same paint are merged.
+    suppresses defaults). Among intervals with equal keys the first-listed one wins. Adjacent
+    segments with the same paint are merged.
+
+    A sweep over the sorted endpoints keeps the active intervals in a min-heap of precedence ranks
+    (rank 0 is the max key, first-listed on ties); intervals already ended are discarded lazily when
+    they reach the top. O(n log n) in the number of intervals.
     """
-    # TODO(lsp-classify-hotpath): this rescans all intervals per boundary pair (O(n^2)); a
-    # sweep line maintaining the active set would reach the intended O(n log n).
     if not intervals:
         return []
+    count = len(intervals)
+    # Stable descending sort: equal keys keep list order, so the lower rank is the first-listed.
+    order = sorted(range(count), key=lambda i: intervals[i][3], reverse=True)
+    rank = [0] * count
+    for r, i in enumerate(order):
+        rank[i] = r
+    by_start = sorted(range(count), key=lambda i: intervals[i][0])
     boundaries = sorted({b for start, end, _, _ in intervals for b in (start, end)})
+
+    heap: list[int] = []
+    next_start = 0
     segments: list[tuple[int, int, lsp_config.Paint]] = []
     for a, b in itertools.pairwise(boundaries):
-        best: tuple[_Key, lsp_config.Paint] | None = None
-        for start, end, paint, key in intervals:
-            if start <= a and b <= end and (best is None or key > best[0]):
-                best = (key, paint)
-        if best is not None:
-            paint = best[1]
+        while next_start < count and intervals[by_start[next_start]][0] <= a:
+            heapq.heappush(heap, rank[by_start[next_start]])
+            next_start += 1
+        while heap and intervals[order[heap[0]]][1] <= a:
+            heapq.heappop(heap)
+        if heap:
+            paint = intervals[order[heap[0]]][2]
             if segments and segments[-1][2] == paint and segments[-1][1] == a:
                 prev_start = segments[-1][0]
                 segments[-1] = (prev_start, b, paint)
@@ -340,22 +355,33 @@ def _merge_ranges(ranges: list[tuple[int, int]]) -> list[tuple[int, int]]:
     return merged
 
 
-def _subtract(interval: tuple[int, int], covered: list[tuple[int, int]]) -> Iterator[tuple[int, int]]:
-    """Yield the parts of ``interval`` not overlapping any range in sorted, merged ``covered``."""
-    start, end = interval
-    cursor = start
-    for cstart, cend in covered:
-        if cend <= cursor:
-            continue
-        if cstart >= end:
-            break
-        if cstart > cursor:
-            yield (cursor, min(cstart, end))
-        cursor = max(cursor, cend)
-        if cursor >= end:
-            return
-    if cursor < end:
-        yield (cursor, end)
+def _clip_defaults(
+    defaults: list[tuple[int, int, str]], covered: list[tuple[int, int]]
+) -> Iterator[tuple[int, int, str]]:
+    """Yield the parts of each default interval not overlapping any range in ``covered``.
+
+    ``defaults`` must be sorted by start; ``covered`` is sorted, merged coverage. Because default
+    starts never decrease, a coverage range ending at or before one default's start is never needed
+    again, so the cursor into ``covered`` only advances: O(defaults + ranges) for non-overlapping
+    defaults.
+    """
+    first = 0
+    n_covered = len(covered)
+    for start, end, token_type in defaults:
+        while first < n_covered and covered[first][1] <= start:
+            first += 1
+        cursor = start
+        idx = first
+        while idx < n_covered and covered[idx][0] < end:
+            cstart, cend = covered[idx]
+            if cstart > cursor:
+                yield (cursor, cstart, token_type)
+            cursor = max(cursor, cend)
+            if cursor >= end:
+                break
+            idx += 1
+        if cursor < end:
+            yield (cursor, end, token_type)
 
 
 def _merge_tokens(tokens: list[Token]) -> list[Token]:
@@ -405,18 +431,21 @@ def classify(
     _explicit_intervals(tree, 0, tables=tables, resolved=resolved_config, text=text, out=explicit)
     if symbol_table is not None:
         _ref_intervals(symbol_table, explicit)
+    return _resolve(explicit, _default_intervals(tree, tables, text))
+
+
+def _resolve(explicit: list[_Interval], defaults: Iterable[tuple[int, int, str]]) -> list[Token]:
+    """Layer the winning explicit paints over the defaults into the final token stream.
+
+    Coverage is taken over every explicit interval, ``none`` paints included, so a ``none`` still
+    occludes the defaults beneath it while emitting no token itself.
+    """
     covered = _merge_ranges([(start, end) for start, end, _, _ in explicit])
-
-    tokens: list[Token] = []
-    for start, end, paint in _winner_segments(explicit):
-        if paint.token != "none":
-            tokens.append(Token(start, end, paint.token, paint.modifiers))
-
-    # TODO(lsp-classify-hotpath): second full tree traversal; fold default emission into the
-    # explicit walk above. With symbol extraction (symbols.extract) this is the third O(tree)
-    # walk per analysis (extraction, explicit paints, defaults); the same unification folds it in.
-    for start, end, token_type in _default_intervals(tree, tables, text):
-        for dstart, dend in _subtract((start, end), covered):
-            tokens.append(Token(dstart, dend, token_type, ()))
-
+    tokens = [
+        Token(start, end, paint.token, paint.modifiers)
+        for start, end, paint in _winner_segments(explicit)
+        if paint.token != "none"
+    ]
+    ordered = sorted(defaults, key=lambda d: (d[0], d[1]))
+    tokens.extend(Token(start, end, token_type, ()) for start, end, token_type in _clip_defaults(ordered, covered))
     return _merge_tokens(tokens)

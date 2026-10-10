@@ -52,22 +52,6 @@ subprocess) or a parser-level step/time budget threaded down into the generated 
 work that would dominate this round. Deferred with the stale-token policy covering the degraded mode
 meanwhile. Location: `fltk/lsp/server.py` (`FltkLanguageServer._analyze_blocking`).
 
-## `lsp-classify-hotpath`
-
-`fltk/lsp/classify.py`'s `classify` / `default_tokens` are the per-document hot path the M2
-server will sit on. The once-per-grammar table build is now hoisted: `AnalysisEngine` builds a
-`_GrammarTables` once in `__init__` and threads it into `classify` via the optional `tables`
-parameter, so `highlight` no longer re-walks the grammar and recompiles every terminal regex per
-call. Two internal inefficiencies remain, both confined to `classify.py` and neither forcing a
-change to the engine seam's signature: (1) `_winner_segments` rescans all intervals per boundary
-pair (O(n^2)); a sweep line maintaining the active set reaches the intended O(n log n); (2)
-`classify` walks the analysis tree twice (`_explicit_intervals` then `_default_intervals`) — fold
-default emission into the explicit walk. Both are the design-stage sweep-line/walk-fusion rewrite
-of the interval-resolution core, best batched (shared walk/segment logic). Address before the M2
-server ships (it drives `classify` per keystroke), or when profiling on a real grammar shows
-`classify` latency dominates. Location: `fltk/lsp/classify.py` (`_winner_segments`, the second
-`_default_intervals` loop in `classify`).
-
 ## `rust-codegen-self-keyword`
 
 The Rust CST backend emits uncompilable Rust for any grammar label or rule name whose

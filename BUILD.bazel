@@ -806,6 +806,7 @@ _FLTK_TESTS = {
     "fltk/lsp/test_analysis.py": {"deps": _LSP_DEPS},
     "fltk/lsp/test_classify.py": {"deps": _LSP_DEPS},
     "fltk/lsp/test_classify_painter.py": {"deps": _LSP_DEPS},
+    "fltk/lsp/test_classify_resolution.py": {"deps": _LSP_DEPS},
     "fltk/lsp/test_dogfood.py": {"deps": _LSP_DEPS},
     "fltk/lsp/test_engine.py": {"deps": _LSP_DEPS},
     "fltk/lsp/test_engine_analyze.py": {"deps": _LSP_DEPS},

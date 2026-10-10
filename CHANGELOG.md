@@ -182,6 +182,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- Language server: semantic highlighting no longer slows down quadratically with file size.
+  Working out which highlight wins where rules overlap used to rescan every highlighted region
+  for every boundary, so a few-thousand-line file under a `.fltklsp` spec with `def`/`ref`
+  statements took a second or more per edit — and stalled every other request, since the server
+  analyses on one worker thread. That step now scales near-linearly (a 3,400-line sample drops
+  from ~860 ms to ~70 ms). Highlighting output is unchanged, including which rule wins a tie.
+
 - Rust AST backend, fold chain types: `Clone` and `Debug` on a fold's link struct
   (`<Rule>Binary`) and its operand-or-link enum are now bounded-stack at any parsed depth, as
   `PartialEq` already was and as `Drop` is for every fold with a drop witness. `.clone()` or
