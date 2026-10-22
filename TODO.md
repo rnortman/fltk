@@ -332,3 +332,55 @@ find-references honours too (one project boundary, not two) — e.g. an optional
 attribute, an ignore file, or a server flag. Each is a new configuration surface on the provisional
 resolver protocol or the server CLI and needs a design cycle. Location: `fltk/lsp/project.py`
 (`_is_project_dir`, `ProjectHost.workspace_files`, `ProjectHost.open_documents`).
+
+## `unparse-document-leading-gap`
+
+Both unparser backends resolve and render the gap before a document's first token as if a left
+neighbour existed, so configured spacing leaks to byte 0. The shape that hits it is a rule whose
+first item is an absent optional under a rule-level `ws_allowed`: for
+`section := doc:doc? , kindword:name , …` with `rule section { ws_allowed: nbsp; … }`, the `,`
+separator after the absent `doc?` is still emitted (`_gen_alternative_body` in
+`fltk/unparse/gsm2unparser_rs.py`, `gen_alternative_unparser` in `fltk/unparse/gsm2unparser.py`)
+and becomes the rule's leading-gap separator carrying `nbsp`. Everywhere else an anchor or hard
+break from the preceding token beats it; at document start nothing does, and the resolver
+(`crates/fltk-unparser-core/src/resolve.rs` `resolve_spacing_specs` / `resolve_rc`,
+`fltk/unparse/resolve_specs.py` `resolve_spacing_specs`) trims nothing, so a document whose first
+token is that rule's second item renders with a leading space — which a formatter then writes
+in place and certifies as canonical. No `.fltkfmt` spec can say "nothing before the first token":
+a `before` on the second item cancels the separator spacing between consecutive instances of the
+rule, an `after` anchor puts a space before the next token, and `nil` never beats an opposite
+anchor; reshaping the grammar so the separator is emitted only when the optional is present is a
+per-consumer workaround for an edge the resolver mishandles for every consumer with a rule-leading
+optional. Found by brenn (`brenn-ops` ADR `2026/10/21-brenn-core--todo-dsl-fmt-trivia-placement`,
+design-delta-3 §2b-i), whose `dsl-fmt-orphan-terminator` entry waits on an fltk `main` commit
+carrying this fix.
+Fix: before pattern resolution, filter the document's leading run — what boundary extraction
+floats out of the root — to drop every `BeforeSpec` and every `SeparatorSpec` whose
+`preserved_trivia` is `None`. A separator carrying a leading `//` or `///` comment stays, with
+whatever that comment's own trivia resolves to; a separator carrying only a source-written newline
+or blank-line count (emitted with `preserved_trivia_expr=None`, as a `HardLine` or a
+`preserved_blank_lines` count) is dropped, so a document opening with blank lines formats with
+its first token on line 1. The trailing run is untouched (the final `after ";" { hard; }` newline
+must survive); no interior gap is touched, including the trivia sub-documents of interior
+comment-bearing separators. The filter runs exactly once per document, at the root, never inside
+the recursive resolution of a separator's preserved trivia — in Rust `resolve_spacing_specs` is
+already a root-only wrapper over `resolve_rc` and the filter belongs there; in Python
+`resolve_spacing_specs` is both the root entry and the recursion target (four recursive call
+sites), so either split it into a root entry plus an internal core, or filter at the one
+pipeline call in `fltk/plumbing.py` (`unparse_cst`'s `return
+resolve_spacing_specs(result.accumulator.doc)`). Tests, each as a Rust/Python parity case: the
+`doc? , kindword` shape with a rule-level `nbsp` renders with no leading whitespace; the same
+document opening with a `//` comment keeps the comment on line 1 and the token on line 2; the
+same document opening with a blank line renders with the token on line 1; a document with a
+comment-bearing *interior* gap whose trivia sub-document begins with a non-trivia spec renders
+identically before and after (so a filter placed at the wrong Python site fails it). One
+sentence in `docs/format-specs.md` under Positional Spacing / Default Spacing: before a
+document's first token only source comments are rendered; configured spacing and source blank
+lines there are dropped. (That doc's absent-optional paragraph also overstates the rule — the
+separator after an absent item still emits; worth correcting in the same pass.) Not part of
+this: the trailing-gap twin — a document with no final newline renders a trailing space — since
+a blanket drop of the trailing run would eat the final hard break; it needs its own thought.
+Done = the four parity cases pass on both backends and the doc sentence is in. Location:
+`crates/fltk-unparser-core/src/resolve.rs` (`resolve_spacing_specs`),
+`fltk/unparse/resolve_specs.py` (`resolve_spacing_specs`), `fltk/plumbing.py` (`unparse_cst`'s
+`resolve_spacing_specs` call).
